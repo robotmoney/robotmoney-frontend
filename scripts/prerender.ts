@@ -88,8 +88,8 @@ function routeDataBlock(route: string): string {
     .join("\n");
 
   const lead = endpoints.length
-    ? `<p>This page is rendered in the browser, so the HTML you are reading carries no data. The values on it come from these public JSON endpoints, which need no key and answer a plain GET:</p>\n        <ul>\n${items}\n        </ul>`
-    : `<p>This page is rendered in the browser, so the HTML you are reading carries no data.</p>`;
+    ? `<p>The text of this page is in the HTML you are reading. Its live figures are filled in by the browser from these public JSON endpoints, which need no key and answer a plain GET:</p>\n        <ul>\n${items}\n        </ul>`
+    : `<p>Everything on this page is in the HTML you are reading.</p>`;
 
   return [
     "<noscript>",

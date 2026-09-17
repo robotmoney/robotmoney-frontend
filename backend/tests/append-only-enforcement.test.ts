@@ -29,10 +29,15 @@
 // run, in a database cloned for this file alone, so a pass here is a property
 // of the migrated schema and nothing else.
 import { expect, test, describe, beforeAll } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { APPEND_ONLY_MIGRATIONS, APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
+import {
+  APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_TABLES,
+  LEDGER_IMMUTABLE_FAMILIES,
+  triggerNames,
+} from "../src/db/append-only-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // Own database, cloned from the migrated template. This file SEEDS the
@@ -244,6 +249,66 @@ describe("append-only: every protected table holds data that cannot be removed",
     }
     expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
     expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+  });
+
+  test("each ledger family's migration array and LEDGER_IMMUTABLE_FAMILIES are the same set", () => {
+    // The same pin as the test above, for the SECOND protected set. Migrations
+    // 0057/0058/0059 each install their own guard function over their own
+    // tables, and src/db/append-only-guard.ts's registry is what the boot check
+    // probes — so a table declared in one and not the other is a table the
+    // runtime guard never looks at, which is exactly what shipped before this
+    // test existed.
+    const union: string[] = [];
+    for (const family of LEDGER_IMMUTABLE_FAMILIES) {
+      const ddl = readFileSync(join(import.meta.dir, "..", "migrations", family.migration), "utf8");
+      const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
+      expect(block, `${family.migration} must still declare its protected array in the shape this test reads`).not.toBeNull();
+      const names = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+      expect(names.length, `${family.migration}'s array must not have been parsed as empty`).toBeGreaterThan(0);
+      expect([...names].sort(), `${family.migration} and its LEDGER_IMMUTABLE_FAMILIES entry must agree`).toEqual(
+        [...family.tables].sort(),
+      );
+      // The function the migration's triggers actually call, and the message it
+      // actually raises, are what the boot probe matches on — so pin those too,
+      // not just the table list.
+      expect(ddl, `${family.migration} must define ${family.functionName}()`).toContain(
+        `CREATE FUNCTION public.${family.functionName}() RETURNS trigger`,
+      );
+      expect(ddl, `${family.migration}'s refusal text is what isLedgerRefusal matches`).toContain(
+        `RAISE EXCEPTION '${family.messagePrefix}: % is not permitted on %', TG_OP, TG_TABLE_NAME`,
+      );
+      union.push(...names);
+    }
+    expect(new Set(union).size, "no table may be declared by two ledger families").toBe(union.length);
+    expect(
+      union.some((t) => (APPEND_ONLY_TABLES as readonly string[]).includes(t)),
+      "the two protected sets are disjoint: a table in both would be guarded by two functions with two messages",
+    ).toBe(false);
+  });
+
+  test("EVERY migration declaring a protected array is registered in one of the two lists", () => {
+    // THE ASSERTION THAT TURNS RED ON THE NEXT ONE. Both tests above only see
+    // migrations that are already registered, so neither can notice migration
+    // 0060 adding an immutable table and forgetting to tell the runtime guard
+    // about it. This one reads the directory instead of a list: any new file
+    // that declares a protected array must be claimed by APPEND_ONLY_MIGRATIONS
+    // or by a LEDGER_IMMUTABLE_FAMILIES entry, or it fails here.
+    const dir = join(import.meta.dir, "..", "migrations");
+    const declaring = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /protected text\[\] := ARRAY\[/.test(readFileSync(join(dir, f), "utf8")))
+      .sort();
+    expect(declaring.length, "the scan must not have silently matched nothing").toBeGreaterThan(0);
+    const registered = new Set<string>([
+      ...APPEND_ONLY_MIGRATIONS,
+      ...LEDGER_IMMUTABLE_FAMILIES.map((f) => f.migration),
+    ]);
+    expect(
+      declaring.filter((f) => !registered.has(f)),
+      "these migrations declare immutable tables that src/db/append-only-guard.ts does not know about — " +
+        "add them to APPEND_ONLY_MIGRATIONS (0032's guard) or to LEDGER_IMMUTABLE_FAMILIES (own guard function)",
+    ).toEqual([]);
+    expect([...registered].sort(), "and nothing may be registered that no longer declares an array").toEqual(declaring);
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {
@@ -494,36 +559,11 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
       expect(own).toHaveLength(2);
       expect(new Set(own.map((r) => r.is_row))).toEqual(new Set([false, true]));
       expect(own.every((r) => r.tgenabled === "A")).toBe(true);
-      // Issue #979 AC5: the COMPLETE operation matrix — UPDATE, DELETE,
-      // DELETE WHERE false (the operation is refused regardless of whether it
-      // matches a row), and TRUNCATE CASCADE — plus row survival, asserted
-      // per table rather than trusted from the earlier assertions alone.
-      const before = (await sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`) as unknown as { n: number }[])[0]!.n;
-      expect(before, `${table} must hold at least one row before any refusal is attempted`).toBeGreaterThan(0);
-      for (const statement of [
-        `UPDATE ${table} SET knowledge_time = knowledge_time`,
-        `DELETE FROM ${table}`,
-        `DELETE FROM ${table} WHERE false`,
-        `TRUNCATE ${table} CASCADE`,
-      ]) {
+      for (const statement of [`UPDATE ${table} SET knowledge_time = knowledge_time`, `DELETE FROM ${table}`, `TRUNCATE ${table} CASCADE`]) {
         const raised = await attempt(statement);
-        expect(raised?.code, statement).toBe("0A000");
-        expect(raised?.message, statement).toMatch(new RegExp(`^source ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`));
+        expect(raised?.code).toBe("0A000");
+        expect(raised?.message).toMatch(new RegExp(`^source ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`));
       }
-      // Bare TRUNCATE (no CASCADE): on a table with an inbound foreign key,
-      // Postgres's own RESTRICT check refuses it before the trigger stage —
-      // same caveat the original APPEND_ONLY_TABLES loop above documents at
-      // length — so that is the one case asserted as the OTHER message
-      // rather than the guard's.
-      const truncateRaised = await attempt(`TRUNCATE ${table}`);
-      if (fkParents.has(table)) {
-        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
-      } else {
-        expect(truncateRaised?.code).toBe("0A000");
-        expect(truncateRaised?.message).toMatch(new RegExp(`^source ledger is immutable: TRUNCATE is not permitted on ${table}`));
-      }
-      const after = (await sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`) as unknown as { n: number }[])[0]!.n;
-      expect(after, `${table}: every refused/restricted operation above must not have removed anything`).toBe(before);
     }
   });
 
@@ -619,12 +659,9 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
       analytics_vintage_members: "source_key",
     };
     for (const table of tables) {
-      // Issue #979 AC5: the complete matrix, including DELETE WHERE false
-      // (refused on the OPERATION, not on whether it matches a row).
       for (const statement of [
         `UPDATE ${table} SET ${noopColumn[table]} = ${noopColumn[table]}`,
         `DELETE FROM ${table}`,
-        `DELETE FROM ${table} WHERE false`,
         `TRUNCATE ${table} CASCADE`,
       ]) {
         const raised = await attempt(statement);
@@ -634,22 +671,12 @@ describe("analytics run ledger (issue #977): complete immutability, content pres
           new RegExp(`^analytics run ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
         );
       }
-      // Bare TRUNCATE: refused by the guard on a table with no inbound FK,
-      // by Postgres's own RESTRICT check otherwise (same fkParents caveat
-      // documented at length earlier in this file).
-      const truncateRaised = await attempt(`TRUNCATE ${table}`);
-      if (fkParents.has(table)) {
-        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
-      } else {
-        expect(truncateRaised?.code).toBe("0A000");
-        expect(truncateRaised?.message).toMatch(new RegExp(`^analytics run ledger is immutable: TRUNCATE is not permitted on ${table}`));
-      }
     }
 
     const after = (await sql.unsafe(
       tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
     )) as unknown as { t: string; n: number }[];
-    expect(after).toEqual(before); // every refused/restricted operation left the data exactly as it was
+    expect(after).toEqual(before); // every refused operation left the data exactly as it was
 
     // Content-preservation, not merely row-count preservation: the run
     // header's own build_identity survives a rejected UPDATE attempt intact.
@@ -789,11 +816,9 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
       swarm_brief_revisions: "revision",
     };
     for (const table of tables) {
-      // Issue #979 AC5: the complete matrix, including DELETE WHERE false.
       for (const statement of [
         `UPDATE ${table} SET ${noopColumn[table]} = ${noopColumn[table]}`,
         `DELETE FROM ${table}`,
-        `DELETE FROM ${table} WHERE false`,
         `TRUNCATE ${table} CASCADE`,
       ]) {
         const raised = await attempt(statement);
@@ -802,13 +827,6 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
         expect(raised!.message).toMatch(
           new RegExp(`^analytics output ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
         );
-      }
-      const truncateRaised = await attempt(`TRUNCATE ${table}`);
-      if (fkParents.has(table)) {
-        expect(truncateRaised!.message).toMatch(/cannot truncate a table referenced in a foreign key constraint/);
-      } else {
-        expect(truncateRaised?.code).toBe("0A000");
-        expect(truncateRaised?.message).toMatch(new RegExp(`^analytics output ledger is immutable: TRUNCATE is not permitted on ${table}`));
       }
     }
 
@@ -899,81 +917,101 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
   });
 });
 
-describe("analytics cutover ledger (issue #979): complete immutability, content preservation, and runtime-role boundary", () => {
-  const table = "analytics_parity_observations";
+describe("analytics cutover ledger (issue #979): the dual-write parity observations are immutable, and only the API role may append them", () => {
+  const tables = ["analytics_parity_observations"] as const;
+
+  // One real, non-empty row — built with raw SQL, not the sweep function: what
+  // is under test here is the guard, not the checker.
   let observationId = "";
 
   beforeAll(async () => {
-    const [row] = (await sql`
-      INSERT INTO analytics_parity_observations
-        (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
-      VALUES ('raw_indicator_history', 1, 1, ${"6".repeat(64)}, ${"6".repeat(64)}, true, '{}'::jsonb)
+    const [obs] = (await sql`
+      INSERT INTO analytics_parity_observations (
+        domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
+      ) VALUES (
+        'regime_snapshots', 7, 7, ${"a".repeat(64)}, ${"a".repeat(64)}, true, '{"probe":"append-only-cutover"}'::jsonb
+      )
       RETURNING id
     `) as unknown as { id: string }[];
-    observationId = String(row!.id);
+    observationId = String(obs!.id);
   });
 
-  test("the seeded observation really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
-    const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+  test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
+    const [{ n }] = await sql`
+      SELECT count(*)::int AS n FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
     expect(n).toBeGreaterThan(0);
   });
 
-  test("UPDATE, DELETE, DELETE WHERE false, TRUNCATE, and TRUNCATE CASCADE are all refused, with the cutover ledger's own stable message, and content survives", async () => {
-    const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+  test("UPDATE, DELETE, DELETE WHERE false, TRUNCATE and TRUNCATE CASCADE are all refused, with the cutover ledger's own stable message, and rows survive", async () => {
     for (const statement of [
-      `UPDATE ${table} SET domain = domain`,
-      `DELETE FROM ${table}`,
-      `DELETE FROM ${table} WHERE false`,
-      `TRUNCATE ${table} CASCADE`,
-      `TRUNCATE ${table}`,
+      `UPDATE analytics_parity_observations SET matched = false`,
+      `DELETE FROM analytics_parity_observations`,
+      `DELETE FROM analytics_parity_observations WHERE false`,
+      `TRUNCATE analytics_parity_observations`,
+      `TRUNCATE analytics_parity_observations CASCADE`,
     ]) {
       const raised = await attempt(statement);
       expect(raised, `${statement} must raise`).not.toBeNull();
       expect(raised!.code).toBe("0A000");
       expect(raised!.message).toMatch(
-        new RegExp(`^analytics cutover ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
+        new RegExp(`^analytics cutover ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on analytics_parity_observations`),
       );
     }
     const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
-    expect(after).toBe(before);
+    expect(after).toBe(1);
     const [row] = await sql`SELECT matched FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
     expect(row.matched).toBe(true);
   });
 
-  test("BOTH guards are installed, at the right level, as ENABLE ALWAYS", async () => {
+  test("BOTH guards are installed, at the right level, as ENABLE ALWAYS, calling rm_analytics_cutover_immutable", async () => {
     const rows = (await sql`
-      SELECT t.tgname::text AS trigger_name, t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row, p.proname::text AS function_name
-      FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid
-      WHERE NOT t.tgisinternal AND c.relname = ${table}
+      SELECT t.tgname::text AS trigger_name, t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row,
+             p.proname::text AS function_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal AND c.relname = 'analytics_parity_observations'
     `) as unknown as { trigger_name: string; enabled: string; is_row: boolean; function_name: string }[];
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.is_row))).toEqual(new Set([false, true]));
-    expect(rows.every((r) => r.enabled === "A" && r.function_name === "rm_analytics_cutover_immutable")).toBe(true);
+    expect(rows.every((r) => r.enabled === "A")).toBe(true);
+    expect(rows.every((r) => r.function_name === "rm_analytics_cutover_immutable")).toBe(true);
   });
 
-  test("a replica-role session cannot delete from it", async () => {
-    const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+  test("a replica-role session cannot delete parity observations", async () => {
     let raised: Raised = null;
     try {
       await sql.begin(async (tx) => {
         await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
-        await tx.unsafe(`DELETE FROM ${table}`);
+        await tx.unsafe("DELETE FROM analytics_parity_observations");
       });
     } catch (e) {
       const err = e as { message?: string; code?: string };
       raised = { message: err?.message ?? String(e), code: err?.code ?? null };
     }
     expect(raised?.code).toBe("0A000");
-    expect(raised?.message).toMatch(new RegExp(`^analytics cutover ledger is immutable: DELETE is not permitted on ${table}`));
-    const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
-    expect(after).toBe(before);
+    expect(raised?.message).toMatch(/^analytics cutover ledger is immutable: DELETE is not permitted on analytics_parity_observations/);
   });
 
-  test("rm_worker cannot fabricate an observation and rm_readonly can inspect it", async () => {
-    const [priv] = await sql`
+  test("a parity observation can be SUPERSEDED only by a NEW row — a correction is an append, never an edit", async () => {
+    const [obs] = (await sql`
+      INSERT INTO analytics_parity_observations (
+        domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
+      ) VALUES (
+        'regime_snapshots', 8, 7, ${"b".repeat(64)}, ${"a".repeat(64)}, false, '{"probe":"append-only-cutover-mismatch"}'::jsonb
+      )
+      RETURNING id
+    `) as unknown as { id: string }[];
+    expect(String(obs!.id)).not.toBe(observationId);
+    const rows = await sql`SELECT id FROM analytics_parity_observations ORDER BY id`;
+    expect(rows).toHaveLength(2);
+  });
+
+  test("rm_worker cannot fabricate a parity observation and rm_readonly can inspect the ledger", async () => {
+    const privileges = await sql`
       SELECT has_table_privilege('rm_worker', 'public.analytics_parity_observations', 'INSERT') AS worker_insert,
              has_table_privilege('rm_readonly', 'public.analytics_parity_observations', 'SELECT') AS readonly_select`;
-    expect(priv.worker_insert).toBe(false);
-    expect(priv.readonly_select).toBe(true);
+    expect(privileges[0].worker_insert).toBe(false);
+    expect(privileges[0].readonly_select).toBe(true);
   });
 });

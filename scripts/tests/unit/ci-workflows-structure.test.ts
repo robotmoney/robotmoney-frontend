@@ -51,7 +51,7 @@ const PATH_GATED_WORKFLOWS = [
   "backend.yml",
   "contract.yml",
   "integration.yml",
-  "frontend.yml",
+  "web-client.yml",
   "research-pipeline.yml",
   "onboarding-eval-rails.yml",
 ];

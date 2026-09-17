@@ -8,10 +8,10 @@
 //
 // No API calls: the fixture is pure static/local Alpine state, so — like
 // every other spec in this directory — it still needs the SPA shell + static
-// assets served by the real backend at baseURL (only `preview-smoke.spec.ts`
-// runs backend-free; see frontend.yml's header comment), so this spec stays
-// in the e2e workflow's full `test:browser` run rather than the fast
-// frontend.yml lane.
+// assets served by the real backend at baseURL (only preview-smoke.spec.ts,
+// api-unreachable.spec.ts and preview-routes.spec.ts run backend-free; see
+// web-client.yml's header comment), so this spec stays in the e2e workflow's
+// full `test:browser` run rather than the fast web-client.yml lane.
 //
 // Generate/refresh the visual baseline with:
 //   bun run test:browser -- --update-snapshots dash-styleguide

@@ -208,10 +208,11 @@ export async function runAnalytics(
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
   let vintage: Awaited<ReturnType<AnalyticsPersistence["freezeVintage"]>> | null = null;
   // Issue #978: the complete regime-snapshot rows and research-signal
-  // payloads THIS run actually computed and persisted — captured here (not
-  // recomputed) so the terminal run package submitted at the end below is
-  // exactly what saveRegimeSnapshots/saveResearchSignal above already wrote,
-  // never a second, possibly-divergent serialization.
+  // payloads THIS run computed — captured here (not recomputed) and published
+  // NOWHERE ELSE. The terminal run package submitted at the end below is the
+  // only writer of both the immutable artifact and the current-view
+  // projection, so the two can never disagree and a failed run publishes
+  // neither (AC2).
   let regimeSnapshotRows: RegimeSnapshotRow[] | null = null;
   const researchSignalArtifacts: ResearchSignalArtifact[] = [];
 
@@ -331,10 +332,18 @@ export async function runAnalytics(
     const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel);
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
+    // ISSUE #978 AC2: the current projection is NOT published here. The rows
+    // are only CAPTURED for this run's terminal package; the single publisher
+    // of regime_snapshots is applyCurrentProjections, inside
+    // submitTerminalRunPackage's transaction, and it runs only for a run that
+    // reached a usable terminal outcome. Writing here as well meant a run that
+    // threw AFTER this point (e.g. in freezeVintage below) left its numbers in
+    // the current view while its terminal package froze only
+    // warnings/logs/exceptions — the ledger and the current view disagreeing
+    // with nothing red.
     t0 = new Date();
-    await persistence.saveRegimeSnapshots(rows);
-    collector.stage("store", "ok", `persisted ${rows.length} regime snapshot row(s)`, t0);
     regimeSnapshotRows = rows;
+    collector.stage("store", "ok", `captured ${rows.length} regime snapshot row(s) for the terminal run package`, t0);
 
     results.regime = {
       asof,
@@ -383,11 +392,11 @@ export async function runAnalytics(
       collector.stage("analyze", "ok", "computed channel-divergence signal", t0);
       collector.artifact("report", "channel-divergence-signal", payload);
 
+      // Captured, not published — see the regime branch above (issue #978 AC2).
       t0 = new Date();
-      await persistence.saveResearchSignal("channel-divergence", asof, payload);
-      collector.stage("store", "ok", "persisted channel-divergence research signal", t0);
-
       researchSignalArtifacts.push({ key: "channel-divergence", date: asof, payload });
+      collector.stage("store", "ok", "captured channel-divergence research signal for the terminal run package", t0);
+
       results["channel-divergence"] = payload;
     }
 
@@ -457,10 +466,10 @@ export async function runAnalytics(
         collector.stage("analyze", "ok", "computed late-cycle-signals signal", t0);
         collector.artifact("report", "late-cycle-signals-signal", payload);
 
+        // Captured, not published — see the regime branch above (issue #978 AC2).
         t0 = new Date();
-        await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
-        collector.stage("store", "ok", "persisted late-cycle-signals research signal", t0);
         researchSignalArtifacts.push({ key: "late-cycle-signals", date: asof, payload });
+        collector.stage("store", "ok", "captured late-cycle-signals research signal for the terminal run package", t0);
         results["late-cycle-signals"] = payload;
       }
     }
@@ -521,10 +530,21 @@ export async function runAnalytics(
   // ── ISSUE #978: freeze the terminal output/report snapshot ──────────────
   // Mandatory, NOT best-effort like telemetry above — mirrors freezeVintage:
   // every run that reaches a terminal outcome (succeeded, degraded, or
-  // failed) submits ONE complete package bound to this run's id, so
-  // analytics_output_snapshots/analytics_report_snapshots are never empty
-  // for a real run and swarm_briefs.report_snapshot_id can resolve to a real
-  // row. `overallStatus` (computed above, before the mandatory ledger event
+  // failed) submits ONE complete package bound to this run's id, so a run that
+  // completes leaves a real artifact for swarm_briefs.report_snapshot_id to
+  // resolve to.
+  //
+  // NOT "never empty for a real run": this single submit is the run's only
+  // chance to record anything, and analyticsApiClient.call has no timeout and
+  // no retry, so a submit that fails (network, API down) leaves the run with
+  // no artifact at all — the succeeded-shape package failed and no
+  // failed-shape package is submitted in its place. That fails SAFE rather
+  // than silently: the error escalates into `runFailed` below, the run throws
+  // red, and the current-view projections keep their last good state because
+  // applyCurrentProjections rides inside the very transaction that did not
+  // commit. The gap is an absent record, never a wrong one.
+  //
+  // `overallStatus` (computed above, before the mandatory ledger event
   // that may have since escalated `runFailed`) decides the shape: a
   // "degraded" run still produced real regime/research outputs, so it
   // freezes exactly like a "succeeded" one — only a run whose OWN stages

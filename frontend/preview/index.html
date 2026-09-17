@@ -30,6 +30,9 @@
       z-index: 999999;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
+    #watermark.live {
+      background: linear-gradient(to right, #2f6fed, #4f8bff);
+    }
     #frame {
       position: absolute;
       top: 40px;
@@ -43,20 +46,63 @@
   </style>
 </head>
 <body>
-  <div id="watermark">PREVIEW — snapshot data (not current)</div>
+  <div id="watermark">PREVIEW</div>
   <iframe id="frame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-presentation"></iframe>
 
   <script>
-    // Load goldens asynchronously
+    // The wrapper runs the production SPA inside an iframe and decides, per
+    // request, who answers GET /api/*:
+    //
+    //   ?api=fixtures   (default) committed goldens, loaded into memory here.
+    //   ?api=prod       the production api.
+    //   ?api=stage      the stage api.
+    //   ?api=<origin>   any http(s) origin — a developer's own stack.
+    //
+    // Live modes forward READS only: non-GET /api/* calls are answered with the
+    // same {ok:true, mocked:true} no-op as fixtures mode, so a preview can
+    // never write to a live api. The SPA is untouched either way — it keeps
+    // calling same-origin /api/* (config.js's API_BASE_URL: "") and this
+    // interceptor rewrites the origin.
     (async () => {
-      let goldens = { routes: {} };
-      try {
-        const response = await fetch("/goldens/api-goldens.json");
-        if (response.ok) {
-          goldens = await response.json();
+      const LIVE_ORIGINS = {
+        prod: "https://robotmoney.network",
+        stage: "https://stage.robotmoney-labs.dev",
+      };
+      const requested = new URLSearchParams(location.search).get("api") || "fixtures";
+      let liveOrigin = null;
+      let modeNote = "";
+      if (requested !== "fixtures") {
+        const candidate = LIVE_ORIGINS[requested] ?? requested;
+        try {
+          const u = new URL(candidate);
+          if (!/^https?:$/.test(u.protocol)) throw new Error("not http(s)");
+          liveOrigin = u.origin;
+        } catch (e) {
+          modeNote = ` — unknown api "${requested}", using fixtures`;
         }
-      } catch (e) {
-        console.warn("Failed to load goldens:", e);
+      }
+      document.documentElement.dataset.previewApi = liveOrigin ?? "fixtures";
+
+      const watermark = document.getElementById("watermark");
+      const [goldens, version] = await Promise.all([
+        liveOrigin
+          ? Promise.resolve({ routes: {} })
+          : fetch("/goldens/api-goldens.json")
+              .then((r) => (r.ok ? r.json() : { routes: {} }))
+              .catch((e) => {
+                console.warn("Failed to load goldens:", e);
+                return { routes: {} };
+              }),
+        fetch("/version.json")
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+      ]);
+      const versionLabel = version ? ` ${version.name}@${version.version}` : "";
+      if (liveOrigin) {
+        watermark.classList.add("live");
+        watermark.textContent = `PREVIEW${versionLabel} — live API: ${liveOrigin} (reads only)`;
+      } else {
+        watermark.textContent = `PREVIEW${versionLabel} — snapshot data (not current)${modeNote}`;
       }
 
       const frame = document.getElementById("frame");
@@ -69,9 +115,14 @@
         const url = new URL(typeof resource === "string" ? resource : resource.url, frameWin.location.href);
         const path = url.pathname + url.search;
 
-        // GET /api/* requests: serve from goldens
         if (url.origin === frameWin.location.origin && path.startsWith("/api/")) {
           if (!init || !init.method || init.method === "GET") {
+            if (liveOrigin) {
+              // Reads go to the live api. No credentials: the public read
+              // surface answers cross-origin with `*`, and a preview must never
+              // carry a session anywhere.
+              return originalFetch.call(frameWin, liveOrigin + path, { ...init, credentials: "omit" });
+            }
             // Match by pathname, ignoring query string (goldens are point-in-time snapshots)
             const routePath = url.pathname;
             if (routePath in goldens.routes) {
@@ -90,7 +141,7 @@
               })
             );
           }
-          // Non-GET requests: no-op success
+          // Non-GET requests: no-op success, in every mode
           return Promise.resolve(
             new Response(JSON.stringify({ ok: true, mocked: true }), {
               status: 200,
@@ -103,33 +154,24 @@
         return originalFetch.call(frameWin, resource, init);
       };
 
-      // Patch history.pushState to update parent hash (deep-link mirroring)
+      // Mirror the iframe's navigation into the parent hash (deep-link mirroring)
+      const mirror = (url) => {
+        if (!url) return;
+        const href = new URL(url, frameWin.location.href).href;
+        const iframeOrigin = frameWin.location.origin;
+        if (href.startsWith(iframeOrigin)) {
+          window.parent.location.hash = href.slice(iframeOrigin.length);
+        }
+      };
       const originalPushState = frameWin.history.pushState;
       frameWin.history.pushState = function (state, title, url) {
         originalPushState.call(this, state, title, url);
-        // Extract path from the iframe's location and mirror to parent hash
-        if (url) {
-          const href = new URL(url, frameWin.location.href).href;
-          const iframeOrigin = frameWin.location.origin;
-          if (href.startsWith(iframeOrigin)) {
-            const path = href.slice(iframeOrigin.length);
-            window.parent.location.hash = path;
-          }
-        }
+        mirror(url);
       };
-
-      // Patch history.replaceState similarly
       const originalReplaceState = frameWin.history.replaceState;
       frameWin.history.replaceState = function (state, title, url) {
         originalReplaceState.call(this, state, title, url);
-        if (url) {
-          const href = new URL(url, frameWin.location.href).href;
-          const iframeOrigin = frameWin.location.origin;
-          if (href.startsWith(iframeOrigin)) {
-            const path = href.slice(iframeOrigin.length);
-            window.parent.location.hash = path;
-          }
-        }
+        mirror(url);
       };
 
       // Fetch the production SPA HTML
@@ -150,17 +192,19 @@
       frameWin.document.write(indexHtml);
       frameWin.document.close();
 
-      // After document is loaded, restore hash-based routing if present
-      // (e.g., if user came in with #/allocation)
+      // Replay a deep link (#/allocation) into the iframe BEFORE the SPA's
+      // module script boots, so its router's first render reads the route.
       if (window.location.hash) {
-        const hash = window.location.hash.slice(1); // remove leading #
+        const hash = window.location.hash.slice(1);
         frameWin.history.replaceState({}, "", hash || "/");
       }
 
-      // Listen for hash changes in the parent and update the iframe's location
+      // A later hash change in the parent is a navigation: push it and tell
+      // the router (which listens for popstate, not for pushState) to render.
       window.addEventListener("hashchange", () => {
         const hash = window.location.hash.slice(1);
         frameWin.history.pushState({}, "", hash || "/");
+        frameWin.dispatchEvent(new frameWin.PopStateEvent("popstate"));
       });
     })();
   </script>

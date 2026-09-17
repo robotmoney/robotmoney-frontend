@@ -282,7 +282,7 @@ test(
       }
 
       // Every persistence call went over HTTP with the bearer credential.
-      expect(requests.length).toBeGreaterThanOrEqual(4); // floor read(s), floor write, snapshots, research signals
+      expect(requests.length).toBeGreaterThanOrEqual(4); // floor read(s), floor write, run ledger, terminal run package
       for (const r of requests) {
         expect(r.path.startsWith("/api/analytics/")).toBe(true);
         expect(r.auth).toBe(`Bearer ${TOKEN}`);
@@ -290,8 +290,11 @@ test(
       const paths = new Set(requests.map((r) => `${r.method} ${r.path}`));
       expect(paths.has("GET /api/analytics/raw-history")).toBe(true);
       expect(paths.has("POST /api/analytics/raw-history")).toBe(true);
-      expect(paths.has("POST /api/analytics/regime-snapshots")).toBe(true);
-      expect(paths.has("POST /api/analytics/research-signals")).toBe(true);
+      // Since issue #978 the terminal run package is the ONE call that
+      // publishes regime_snapshots AND research_signals — the orchestrator no
+      // longer writes either projection mid-run, so a run that fails partway
+      // cannot leave the current view ahead of the immutable ledger.
+      expect(paths.has("POST /api/analytics/run-packages")).toBe(true);
 
       // Analytical rows changed through the API service.
       const [{ snaps }] = await sql`SELECT COUNT(*)::int AS snaps FROM regime_snapshots`;

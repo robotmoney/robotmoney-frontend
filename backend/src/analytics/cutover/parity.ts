@@ -43,22 +43,22 @@ function checksumOf(rows: readonly Record<string, unknown>[]): string {
   return sha256Hex(canonicalStringify(rows));
 }
 
-// Issue #979 fix: close the mid-run false-mismatch race. regime_snapshots and
-// research_signals are dual-written in TWO separate steps of the SAME
-// runAnalytics execution — the compatibility row lands first
-// (saveRegimeSnapshots/saveResearchSignal, mid-run, analytics/index.ts), and
-// the ledger-derived reconstruction only gains that content once
-// submitTerminalRunPackage freezes the run's output artifacts, at the very
-// end of that SAME run (output-snapshot-store.ts's insertOutputSnapshots).
-// The two reads checkRegimeSnapshotsParity/checkResearchSignalsParity take
-// are not one consistent snapshot — no transaction isolation level fixes
-// that, since the two writes are genuinely minutes-to-hours apart in wall
-// clock, not concurrent — so a sweep landing inside that window would
-// legitimately see the fresh compat row and no ledger counterpart yet, and
-// record a spurious matched:false. Because analytics_parity_observations is
-// append-only (migration 0060) and evaluateCutoverGate treats ANY
-// matched:false in its whole history as a permanent blocker, that one
-// transient collision would permanently prevent cutover.
+// Issue #979 fix: close the mid-run false-mismatch race. In the issue #978
+// architecture, a regime_snapshots/research_signals current-view row and its
+// ledger freeze are written by ONE transaction (submitTerminalRunPackage →
+// applyCurrentProjections, output-snapshot-store.ts's insertOutputSnapshots),
+// so the live producer has no split window — but compat-only rows whose date
+// was never frozen still exist out-of-band (the v0-seed archive,
+// db/import-regime-eq.ts, a legacy/smoke subject). The two reads
+// checkRegimeSnapshotsParity/checkResearchSignalsParity take are not one
+// consistent snapshot — no transaction isolation level fixes that, since
+// out-of-band content and its reconciliation genuinely arrive at different
+// times — so a sweep landing in that window would legitimately see the fresh
+// compat row and no ledger counterpart yet, and record a spurious
+// matched:false. Because analytics_parity_observations is append-only
+// (migration 0060) and evaluateCutoverGate treats ANY matched:false in its
+// whole history as a permanent blocker, that one transient collision would
+// permanently prevent cutover.
 //
 // The fix: a given calendar date is only safe to compare once a terminal run
 // package has ACTUALLY been frozen for it (analytics_report_snapshots holds

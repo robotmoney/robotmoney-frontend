@@ -25,7 +25,18 @@ async function activeMember() {
   return { id, token: r.token, privateKey };
 }
 
-async function freezeReportSnapshot(asof: string, toolId: string): Promise<string> {
+// Freeze one terminal run's report snapshot the way applyCurrentProjections
+// does: the immutable regime artifact AND, unless `publishCurrentView` is
+// false, the current-view `regime_snapshots` row it wrote in the same
+// transaction. publishBrief derives its binding from the MAX-dated
+// regime_snapshots row, so `publishCurrentView: false` models a run whose
+// numbers never reached the current view — a report that exists and satisfies
+// the foreign key, but is not a binding candidate.
+async function freezeReportSnapshot(
+  asof: string,
+  toolId: string,
+  { publishCurrentView = true }: { publishCurrentView?: boolean } = {},
+): Promise<string> {
   const [methodology] = (await sql`
     INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
     VALUES (${toolId}, 'v-test', '{"k":"v"}'::jsonb, ${"9".repeat(64)})
@@ -36,6 +47,17 @@ async function freezeReportSnapshot(asof: string, toolId: string): Promise<strin
     VALUES (${crypto.randomUUID()}, ${asof}::date, ${toolId}, 'fixture', ${methodology!.id}::bigint, 'take-signing-test')
     RETURNING id
   `) as unknown as { id: string }[];
+  const regimeBytes = new TextEncoder().encode(`[{"date":"${asof}","tool":"${toolId}"}]`);
+  await sql`
+    INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
+    VALUES (${run!.id}::bigint, 'regime_snapshots', ${Buffer.from(regimeBytes)},
+            ${new Bun.CryptoHasher("sha256").update(regimeBytes).digest("hex")})`;
+  if (publishCurrentView) {
+    await sql`
+      INSERT INTO regime_snapshots (date, composite, composite_percentile, regime, percentiles, indicators)
+      VALUES (${asof}::date, 12, 0.5, 'risk_on', '{}'::jsonb, '[]'::jsonb)
+      ON CONFLICT (date) DO UPDATE SET composite = EXCLUDED.composite`;
+  }
   const bytes = new TextEncoder().encode(`report for ${toolId}`);
   const checksum = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   const [report] = (await sql`
@@ -133,4 +155,56 @@ test("a session with NO analytics report snapshot bound accepts a legacy (schema
   const m = await activeMember();
   const res = await submitSigned(m, date, subj, undefined);
   expect((res as { status?: number }).status).toBe(201);
+});
+
+// The other half of AC6, and the case the unbound brief used to wave through:
+// the guard only fired when the brief HAD a binding, so a session published
+// before that date's analytics run (report_snapshot_id NULL — the normal
+// morning case) accepted a take naming ANY real snapshot. The signature
+// verifies over schema 2.0's canonical bytes, so the arbitrary binding was
+// stored `verified = true` and carried into the consensus receipt.
+test("a session with NO analytics report snapshot bound REJECTS (409) a take that nonetheless names one", async () => {
+  // A real, FK-satisfying snapshot from a run whose numbers never reached the
+  // current view, so this session's brief has nothing to bind to and the
+  // refusal is the business rule rather than an incidental foreign-key error.
+  const otherDate = "2026-01-15";
+  const foreignReportSnapshotId = await freezeReportSnapshot(otherDate, rid("take-sig-foreign-tool"), { publishCurrentView: false });
+
+  const subj = rid("take-sig-unbound-with-id");
+  await ic.ensureSubject(subj, "unbound brief subject");
+  const s = await ic.openSession(subj);
+  await ic.publishBrief(s.id, 60);
+  const date = sessionDate(s);
+  const [brief] = await sql`SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${s.id}`;
+  expect(brief.report_snapshot_id).toBeNull(); // the precondition this test is about
+
+  const m = await activeMember();
+  const res = await submitSigned(m, date, subj, foreignReportSnapshotId);
+  expect((res as { ok: boolean }).ok).toBe(false);
+  expect((res as { status: number }).status).toBe(409);
+  expect((res as { error: string }).error).toMatch(/bound to no analytics report snapshot/);
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM swarm_recommendations WHERE session_id = ${s.id}`;
+  expect(n).toBe(0); // nothing was stored, so nothing can reach a receipt
+});
+
+// The secondary half of the same finding — a nonexistent id reaching the
+// INSERT and raising FK error 23503 as a 500 — is now unreachable through
+// this path rather than merely mapped: with both branches of the guard armed,
+// the only value that can reach the INSERT is `null` or the brief's OWN bound
+// id, which swarm_briefs' own foreign key already proved exists. This test
+// pins that closure, so a future relaxation of the guard fails here first.
+test("no reportSnapshotId that the session's brief does not already vouch for can reach the INSERT", async () => {
+  const { subj, session, date, reportSnapshotId } = await openSessionBoundToReport("take-sig-fk-closed");
+  const [{ max }] = await sql`SELECT COALESCE(MAX(id), 0)::text AS max FROM analytics_report_snapshots`;
+  const ghostId = String(Number(max) + 1000); // no such row: the FK would raise 23503
+  const m = await activeMember();
+  const res = await submitSigned(m, date, subj, ghostId);
+  // Refused by the business rule, BEFORE the database is asked — a 409, never
+  // the 500 an unhandled 23503 produced.
+  expect((res as { status: number }).status).toBe(409);
+  const [{ n }] = await sql`SELECT count(*)::int AS n FROM swarm_recommendations WHERE session_id = ${session.id}`;
+  expect(n).toBe(0);
+  // And the honest submission — the brief's own id — still lands.
+  const ok = await submitSigned(await activeMember(), date, subj, reportSnapshotId);
+  expect((ok as { status?: number }).status).toBe(201);
 });

@@ -30,6 +30,19 @@ async function freezeReportSnapshot(asof: string, toolId: string, reportText: st
     VALUES (${crypto.randomUUID()}, ${asof}::date, ${toolId}, 'fixture', ${methodology!.id}::bigint, 'brief-revision-test')
     RETURNING id
   `) as unknown as { id: string }[];
+  // The regime output artifact this run froze AND the current-view row it
+  // published in the same transaction — the two halves applyCurrentProjections
+  // always writes together. publishBrief derives its binding from the
+  // MAX-dated regime_snapshots row's date, so a report snapshot standing alone
+  // (no published row) is correctly not a binding candidate. See publishBrief.
+  const regimeBytes = new TextEncoder().encode(`[{"date":"${asof}","tool":"${toolId}"}]`);
+  await sql`
+    INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
+    VALUES (${run!.id}::bigint, 'regime_snapshots', ${Buffer.from(regimeBytes)}, ${sha256Hex(regimeBytes)})`;
+  await sql`
+    INSERT INTO regime_snapshots (date, composite, composite_percentile, regime, percentiles, indicators)
+    VALUES (${asof}::date, 12, 0.5, 'risk_on', '{}'::jsonb, '[]'::jsonb)
+    ON CONFLICT (date) DO UPDATE SET composite = EXCLUDED.composite`;
   const bytes = new TextEncoder().encode(reportText);
   const [report] = (await sql`
     INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)

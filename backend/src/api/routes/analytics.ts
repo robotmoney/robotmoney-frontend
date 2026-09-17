@@ -27,8 +27,7 @@ import type { RegimeSnapshotRow, JsonValue } from "../../analytics/report/regime
 import type { ResearchPayload } from "../../analytics/analyze/research.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../../analytics/store/raw-history-store.ts";
 import { applyRawFloorSeed } from "../../analytics/store/floor-seed.ts";
-import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
-import { persistResearchSignal, loadRecentResearchSignalDates } from "../../analytics/store/research-store.ts";
+import { loadRecentResearchSignalDates } from "../../analytics/store/research-store.ts";
 import { saveTelemetryRun } from "../../analytics/store/telemetry-store.ts";
 import { saveSourceAcquisition } from "../../analytics/store/source-ledger-store.ts";
 import type { SourceAcquisitionEvidence } from "../../analytics/source-ledger.ts";
@@ -201,10 +200,10 @@ function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
   };
 }
 
-// Exported (issue #361 Phase 4): POST /api/swarm/regime is now a genuine
-// SUBMISSION gate that accepts the same { snapshots } payload this boundary's
-// own regime-snapshots route accepts — one parser, two role-gated doors, zero
-// server-side recomputation on either.
+// Exported (issue #361 Phase 4): POST /api/swarm/regime is a genuine
+// SUBMISSION gate that accepts the same { snapshots } payload this boundary
+// parses inside a terminal run package (parseTerminalRunPackage below) — one
+// parser, two role-gated doors, zero server-side recomputation on either.
 export function parseSnapshots(body: unknown): RegimeSnapshotRow[] | Invalid {
   if (!isPlainObject(body) || !Array.isArray(body.snapshots)) return invalid("body must be { snapshots: RegimeSnapshotRow[] }");
   if (body.snapshots.length > MAX_SNAPSHOT_ROWS) return invalid(`payload exceeds ${MAX_SNAPSHOT_ROWS} snapshot rows`);
@@ -602,8 +601,6 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     p === A.readiness ||
     p === A.rawHistory ||
     p === A.rawHistorySeed ||
-    p === A.regimeSnapshots ||
-    p === A.researchSignals ||
     p === A.researchSignalDates ||
     p === A.rawHistoryGaps ||
     p === A.sourceAcquisitions ||
@@ -665,22 +662,18 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     return { status: 200, body: { ok: true, ...res } };
   }
 
-  if (m === "POST" && p === A.regimeSnapshots) {
-    const parsed = parseSnapshots(await req.json().catch(() => null));
-    if (isInvalid(parsed)) return { status: 400, body: parsed };
-    await sql.begin((tx) => saveRegimeSnapshots(parsed, tx));
-    return { status: 200, body: { ok: true, rows: parsed.length } };
-  }
-
-  if (m === "POST" && p === A.researchSignals) {
-    const parsed = parseSignals(await req.json().catch(() => null));
-    if (isInvalid(parsed)) return { status: 400, body: parsed };
-    await sql.begin(async (tx) => {
-      for (const s of parsed) await persistResearchSignal(s.key, s.date, s.payload, tx);
-    });
-    return { status: 200, body: { ok: true, rows: parsed.length } };
-  }
-
+  // RETIRED (issue #978): `POST /api/analytics/regime-snapshots` and
+  // `POST /api/analytics/research-signals`. Both upserted straight into the
+  // current views with no run_id, no immutable output artifact and no report
+  // snapshot, so anything holding ANALYTICS_TOKEN could publish regime rows
+  // that no frozen report ever contained — and publishBrief, which derives its
+  // binding from those rows, would then bind a signed brief to some OTHER
+  // run's report. `POST /api/analytics/run-packages` is now the sole HTTP
+  // publisher of both projections (see submitTerminalRunPackage). The only
+  // in-process writers left are the store functions themselves, reached
+  // directly by `db/import-regime-eq.ts` (the offline eq-snapshot import) and
+  // `POST /api/swarm/regime` — neither of which ever went through these routes.
+  //
   // GET /api/analytics/research-signals/dates?since=YYYY-MM-DD (issue #614
   // AC4) — the read side of the producer's catch-up mechanism: no payload
   // content, just which (signal_key, date) pairs already exist, so a
@@ -781,7 +774,7 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     return { status: 200, body: { vintage } };
   }
 
-  // ── issue #978: the immutable analytics output/report snapshot layer ─────
+// ── issue #978: the immutable analytics output/report snapshot layer ─────
   if (m === "POST" && p === A.runPackage) {
     const parsed = parseTerminalRunPackage(await req.json().catch(() => null));
     if (isInvalid(parsed)) return { status: 400, body: parsed };

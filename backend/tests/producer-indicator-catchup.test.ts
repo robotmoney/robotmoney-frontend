@@ -34,8 +34,6 @@ function fakePersistence(overrides: Partial<AnalyticsPersistence> = {}): Analyti
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [],
     loadRawHistoryGapDates: async () => [],
     ...overrides,

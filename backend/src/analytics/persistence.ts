@@ -98,10 +98,11 @@ export interface AnalyticsPersistence {
   // Cold-DB gap-fill: write only (date, indicator) points NOT already persisted
   // (existing rows always win). Idempotent — a warm floor makes this a no-op.
   seedRawHistory(byIndicator: RawIndicatorHistory): Promise<FloorSeedResult>;
-  // Upsert regime snapshot rows on (date).
-  saveRegimeSnapshots(rows: RegimeSnapshotRow[]): Promise<void>;
-  // Upsert one research signal payload on (signal_key, date).
-  saveResearchSignal(key: string, asof: string, payload: ResearchPayload): Promise<void>;
+  // RETIRED (issue #978): saveRegimeSnapshots / saveResearchSignal. Publishing
+  // regime_snapshots or research_signals outside a terminal run package is no
+  // longer expressible through this port — submitTerminalRunPackage above is
+  // the single publisher, and it writes the immutable artifacts and the report
+  // snapshot in the same transaction as the current-view rows.
   // Which (signal_key, date) pairs are persisted on/after `sinceDate` (issue
   // #614 AC4): the independent producer has no DATABASE_URL, so this is the
   // ONLY way it can tell which recent days it needs to catch up — the read

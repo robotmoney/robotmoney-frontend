@@ -342,49 +342,75 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
   });
 });
 
-// Issue #979 fix: the mid-run false-mismatch race. checkRegimeSnapshotsParity/
-// checkResearchSignalsParity's two reads are not one consistent snapshot — the
-// compatibility row (saveRegimeSnapshots/saveResearchSignal, A.regimeSnapshots/
-// A.researchSignals below) lands mid-run, while the ledger-derived
-// reconstruction only gains that date's content once submitTerminalRunPackage
-// freezes it, at the very end of the SAME run. These reproduce exactly that
-// window — a compat write with NO terminal package (A.runPackage) ever
-// submitted for that date — and prove the sweep does not record a false
-// matched:false for it, while a genuinely persistent divergence on an
+// Issue #979 fix: the mid-run false-mismatch race. With issue #978's terminal
+// package, a regime/research CURRENT-VIEW row and its ledger freeze arrive in
+// ONE transaction (submitTerminalRunPackage → applyCurrentProjections), so the
+// same-run split-window this issue originally fixed is gone by construction for
+// the live producer. But compat-only rows whose date was NEVER frozen still
+// exist out-of-band — the v0-seed archive, db/import-regime-eq.ts, a
+// smoke/legacy subject — and checkRegimeSnapshotsParity/checkResearchSignals
+// Parity's two reads are not one consistent snapshot. If an unsettled date were
+// compared, the sweep would record a spurious — and, because
+// analytics_parity_observations is append-only, PERMANENT — matched:false.
+// These reproduce exactly that window (compat rows with NO terminal package
+// ever submitted for their date) and prove the sweep does not record a false
+// matched:false for them, while a genuinely persistent divergence on an
 // ALREADY-settled date still correctly does.
 describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
-  test("RACE: a compat-only write with no terminal package yet is not compared, so it cannot false-mismatch", async () => {
+  test("RACE: compat-only current rows with no frozen terminal package yet are not compared, so they cannot false-mismatch", async () => {
     prodAuth();
     const date = "2024-04-01";
 
-    // Exactly the mid-run call shape (analytics/index.ts's
-    // persistence.saveRegimeSnapshots/saveResearchSignal): the compat row
-    // lands, but no A.runPackage submission has EVER frozen this asof, so
-    // analytics_report_snapshots has no row for it — the date is "in-flight".
-    const regimeRes = await call(req("POST", A.regimeSnapshots, { snapshots: [regimeFixture(date, 99)] }));
-    expect(regimeRes!.status, JSON.stringify(regimeRes)).toBe(200);
-    const researchRes = await call(
-      req("POST", A.researchSignals, { signals: [researchFixture("race-signal", date, "in-flight")] }),
-    );
-    expect(researchRes!.status, JSON.stringify(researchRes)).toBe(200);
+    // The standalone `POST /api/analytics/regime-snapshots` /
+    // `.../research-signals` routes are RETIRED (issue #978, see analytics.ts's
+    // "RETIRED" comment) — a regime/research compat row now only ever arrives
+    // inside a terminal package, which writes current-view AND ledger
+    // atomically. An unsettled, compat-only row therefore has exactly one
+    // honest shape in the merged model: a direct, out-of-band INSERT (the
+    // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
+    // the rows publishBrief deliberately does NOT bind).
+    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+    await sql`
+      INSERT INTO research_signals (signal_key, date, payload)
+      VALUES ('race-signal', ${date}, ${sql.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
 
-    // The compat write really landed — this is not a no-op test.
+    // The compat rows really landed — this is not a no-op test.
     const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
     expect(compatRegime.length).toBe(1);
     const compatResearch = await sql`SELECT payload FROM research_signals WHERE signal_key = 'race-signal' AND date = ${date}`;
     expect(compatResearch.length).toBe(1);
 
-    // No analytics_report_snapshots row exists for this asof — genuinely unsettled.
+    // No analytics_report_snapshots row exists for this asof — genuinely
+    // unsettled, so the comparison must not even look at the date.
     const settled = await sql`SELECT 1 FROM analytics_report_snapshots WHERE asof = ${date}`;
     expect(settled.length).toBe(0);
 
     const regime = await checkRegimeSnapshotsParity();
     expect(regime.matched, JSON.stringify(regime.mismatches)).toBe(true);
     expect(regime.mismatches.some((m) => m.naturalKey === date)).toBe(false);
+    const regimeRowsWhileInFlight = regime.legacyRowCount;
 
     const research = await checkResearchSignalsParity();
     expect(research.matched, JSON.stringify(research.mismatches)).toBe(true);
     expect(research.mismatches.some((m) => m.naturalKey === `race-signal ${date}`)).toBe(false);
+    const researchRowsWhileInFlight = research.legacyRowCount;
+
+    // And the filter is per-date, not permanent: once a terminal package
+    // freezes this asof FOR REAL, the same date enters the comparison, and the
+    // current rows it dual-writes agree with its frozen artifacts — nothing
+    // dangles, nothing mismatches, the row counts advance.
+    await submitRegimeAndResearch(date, 99, "race-signal", "in-flight");
+    expect((await sql`SELECT 1 FROM analytics_report_snapshots WHERE asof = ${date}`).length).toBe(1);
+
+    const regimeSettled = await checkRegimeSnapshotsParity();
+    expect(regimeSettled.matched, JSON.stringify(regimeSettled.mismatches)).toBe(true);
+    expect(
+      regimeSettled.legacyRowCount,
+      "the settled date must now be IN the comparison",
+    ).toBe(regimeRowsWhileInFlight + 1);
+    const researchSettled = await checkResearchSignalsParity();
+    expect(researchSettled.matched, JSON.stringify(researchSettled.mismatches)).toBe(true);
+    expect(researchSettled.legacyRowCount).toBe(researchRowsWhileInFlight + 1);
   });
 
   test("PERSISTENT MISMATCH: a genuine divergence on an already-SETTLED date still records matched:false", async () => {

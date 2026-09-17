@@ -651,7 +651,7 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
-  // Issue #979: in ledger mode, `body` is read from swarm_brief_revisions
+// Issue #979: in ledger mode, `body` is read from swarm_brief_revisions
   // (the immutable ledger) instead of swarm_briefs.body directly — `id` still
   // comes from swarm_briefs because it is an opaque handle with no ledger
   // equivalent, not a fact the ledger vs. compatibility split is about (both
@@ -771,7 +771,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
 
-  // Report-snapshot binding (issue #978 AC6). Once this session's brief is
+// Report-snapshot binding (issue #978 AC6). Once this session's brief is
   // bound to an analytics report snapshot, every take must name the SAME
   // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
   // Ed25519 verify (same "cheap refusals first" discipline as the checks
@@ -779,19 +779,31 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   // itself failing to verify (schema 2.0's canonical bytes include it), so
   // this check exists for the HONEST-but-wrong case, not the forged one.
   // A brief with no bound report snapshot (report_snapshot_id NULL — no
-  // analytics run has submitted a report for this session's date) imposes
-  // no requirement, so a schema-1.0 (legacy) submission keeps working.
+  // analytics run has submitted a report for this session's date) names
+  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
+  // keeps working — but a submission that DOES name one is refused rather
+  // than waved through. The skipped-when-unbound version of this check let a
+  // take signed under schema 2.0 carry a cryptographically-signed binding to
+  // an arbitrary report (another date's, say) that the brief never
+  // referenced, straight into the consensus receipt.
   const brief = (await sql<{ report_snapshot_id: string | null }[]>`
     SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
   const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
-  if (boundReportSnapshotId !== null && sub.reportSnapshotId !== boundReportSnapshotId) {
+  if (boundReportSnapshotId === null) {
+    if (sub.reportSnapshotId != null) {
+      return {
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+      };
+    }
+  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
     return {
       ok: false,
       status: 409,
       error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
     };
   }
-
   // Roster gate (issue #152, AC6): sessions created through the admin surface
   // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
   // the canonical swarm_session_members table (issue #150's migration),
@@ -960,6 +972,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
   } catch (e: any) {
     const message = String(e?.message ?? e);
+    // A reportSnapshotId naming a row that does not exist trips the FK on
+    // swarm_recommendations.report_snapshot_id. That is a caller bug, not a
+    // server fault, so it is a 400 — never the 500 an unhandled 23503 became.
+    if (e?.code === "23503" && `${e?.constraint_name ?? e?.constraint ?? ""} ${message}`.includes("report_snapshot")) {
+      return { ok: false, status: 400, error: "reportSnapshotId does not name an existing analytics report snapshot" };
+    }
     if (message.includes("duplicate") || e?.code === "23505") {
       // Which constraint lost tells the agent what to do next, and the two
       // answers are opposite: re-mint a nonce, or simply retry.
@@ -1737,17 +1755,63 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     },
     windowClosesAt,
   };
-
-  // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
-  // report snapshot for the session's market date — the newest one frozen,
-  // if any run has submitted a terminal package for this date at all. A
-  // session whose date has no analytics report yet (or ever, e.g. a
-  // smoke/legacy subject) gets `report_snapshot_id = NULL`, same cutover
-  // shape as migration 0049's signing_key_id.
-  const [report] = await sql`
-    SELECT id FROM analytics_report_snapshots WHERE asof = ${s.date}::date ORDER BY id DESC LIMIT 1`;
+// Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
+  // report snapshot that produced the regime numbers this brief BODY shows —
+  // derived from the embedded `regime` row above, NOT from the session's own
+  // market date.
+  //
+  // NOT the newest snapshot for the date. The producer arms TWO runs per
+  // `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) — and
+  // each freezes its own report snapshot, so a plain `ORDER BY id DESC`
+  // always won the research run, whose report bytes contain no regime data at
+  // all. Hence the join: only a run that froze a NON-EMPTY `regime_snapshots`
+  // output artifact is a candidate. Since issue #978 that artifact and the
+  // current-view projection are written by one transaction
+  // (applyCurrentProjections), so "froze regime rows" and "published the
+  // regime rows the brief reads" are the same run.
+  //
+  // NOT `rs.asof = s.date` either, which is what the committed schedules make
+  // permanently unsatisfiable: a session convenes 06:00 and publishes its
+  // brief 07:00 UTC on day D (SWARM_OPEN_SESSION_CRON / SWARM_PUBLISH_BRIEF_
+  // CRON, config.ts), but day D's regime run does not fire until 22:30 UTC
+  // (PRODUCER_REGIME_CRON) — 15.5 hours after the session is over. Keying on
+  // the session date bound every real brief to NULL, and NULL is
+  // indistinguishable from the legitimate "this subject has no analytics
+  // report" case, so nothing went red while every schema-2.0 take was 409'd.
+  //
+  // Keying on `regime.date` is correct under ANY schedule because it is a
+  // derivation rather than a guess: `buildDateAxis(BACKFILL_START, asof)`
+  // (analytics/index.ts) always ends the published row set exactly at the
+  // run's own `asof`, so the MAX-dated row in `regime_snapshots` — the one
+  // line 1700 reads into the body — is by construction the newest
+  // regime-bearing run's `asof`. Looking that date up in
+  // `analytics_report_snapshots.asof` therefore names that run's report, the
+  // one whose bytes contain the exact numbers displayed. `ORDER BY rs.id
+  // DESC` breaks a same-date re-run tie toward the last writer, which is the
+  // run whose rows actually won the upsert.
+  //
+  // A brief with no regime row at all to show (a fresh database, a
+  // smoke/legacy subject), or one whose newest regime row predates the
+  // snapshot layer / was seeded outside it (import-regime-eq.ts), gets
+  // `report_snapshot_id = NULL` — the same documented cutover shape as
+  // migration 0049's signing_key_id, and honest: there is no frozen report
+  // holding those numbers.
+  const regimeDate: string | null = regime
+    ? regime.date instanceof Date
+      ? regime.date.toISOString().slice(0, 10)
+      : String(regime.date).slice(0, 10)
+    : null;
+  const [report] = regimeDate === null
+    ? []
+    : await sql`
+        SELECT rs.id FROM analytics_report_snapshots rs
+        JOIN analytics_output_snapshots os
+          ON os.run_id = rs.run_id
+         AND os.artifact_kind = 'regime_snapshots'
+         AND os.payload_bytes <> convert_to('[]', 'UTF8')
+        WHERE rs.asof = ${regimeDate}::date
+        ORDER BY rs.id DESC LIMIT 1`;
   const reportSnapshotId: string | null = report ? String(report.id) : null;
-
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
