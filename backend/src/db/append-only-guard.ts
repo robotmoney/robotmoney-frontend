@@ -1,6 +1,15 @@
 // The append-only guard's RUNTIME verification — the half migration 0032
 // cannot do for itself — plus the canonical list of what it protects.
 //
+// TWO PROTECTED SETS, ONE CHECK. `APPEND_ONLY_TABLES` is migration 0032's set,
+// guarded by `rm_append_only_guard()`. `LEDGER_IMMUTABLE_FAMILIES` is the
+// immutable-ledger set — migrations 0057/0058/0059, each with its own guard
+// function, its own refusal text and its own trigger names, and each refusing
+// UPDATE as well. They are separate registries because nothing about them is
+// interchangeable, and they run through the SAME two halves below and the same
+// boot call, because a trigger installed by a migration is a trigger a restore
+// can leave out no matter which migration installed it.
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY A RUNTIME CHECK EXISTS AT ALL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +283,114 @@ export function triggerNames(table: string): { statement: string; row: string } 
 }
 
 /**
+ * THE LEDGER-IMMUTABILITY FAMILIES — the SECOND protected set, and the reason
+ * it is separate from APPEND_ONLY_TABLES rather than merged into it.
+ *
+ * Migrations 0057, 0058 and 0059 each install their OWN guard function with its
+ * OWN refusal text, its own trigger-name suffixes (`_immutable`,
+ * `_immutable_row` rather than `_append_only`), and a STRICTER rule than 0032's:
+ * they refuse UPDATE as well as DELETE and TRUNCATE, because a ledger row is
+ * never rewritten — a correction is a new row. `APPEND_ONLY_TABLES` cannot
+ * absorb them: every consumer of that list (triggerNames above,
+ * isAppendOnlyRefusal below, and the pinned message in
+ * backend/tests/append-only-enforcement.test.ts) is bound to migration 0032's
+ * `rm_append_only_guard()` name and its exact sentence.
+ *
+ * WHAT THIS REGISTRY IS FOR. Without it these tables had the trigger half of
+ * the guarantee and none of the runtime half: `assertAppendOnlyGuardArmed()`
+ * verified nothing about them at boot, so the partial-`pg_restore` /
+ * `DROP TRIGGER` failure mode this whole module exists for (see the header) was
+ * unguarded for exactly the tables three features were built to freeze. It is
+ * also what the migration/registry union test keys off, so a later migration
+ * that declares an immutable table and forgets its triggers goes red instead of
+ * shipping green.
+ *
+ * Each entry is the complete description of one family: the migration that
+ * installs it (as `schema_migrations` records it), the function both its
+ * triggers must call, the two trigger-name suffixes, the prefix of its refusal
+ * message, and the tables it covers — the same array its migration declares.
+ */
+export interface LedgerImmutableFamily {
+  /** The migration filename, as `schema_migrations` records it. */
+  readonly migration: string;
+  /** The plpgsql function both of this family's triggers must call. */
+  readonly functionName: string;
+  /** The literal start of the guard's RAISE, before `<TG_OP> is not permitted
+   *  on <table>`. Distinct per family on purpose, so an operator can tell which
+   *  layer refused. */
+  readonly messagePrefix: string;
+  /** Suffix of the FOR EACH STATEMENT trigger's name. */
+  readonly statementSuffix: string;
+  /** Suffix of the FOR EACH ROW trigger's name. */
+  readonly rowSuffix: string;
+  /** The tables this family freezes — the same set its migration's
+   *  `protected text[] := ARRAY[...]` block declares, pinned by an executed
+   *  test. */
+  readonly tables: readonly string[];
+}
+
+export const LEDGER_IMMUTABLE_FAMILIES: readonly LedgerImmutableFamily[] = [
+  {
+    migration: "0057_source_acquisition_ledger.sql",
+    functionName: "rm_source_ledger_immutable",
+    messagePrefix: "source ledger is immutable",
+    statementSuffix: "_immutable",
+    rowSuffix: "_immutable_row",
+    tables: [
+      "source_acquisitions",
+      "source_acquisition_events",
+      "source_payloads",
+      "source_fetches",
+      "source_value_versions",
+    ],
+  },
+  {
+    migration: "0058_analytics_run_ledger.sql",
+    functionName: "rm_analytics_run_ledger_immutable",
+    messagePrefix: "analytics run ledger is immutable",
+    statementSuffix: "_immutable",
+    rowSuffix: "_immutable_row",
+    tables: [
+      "analytics_ledger_methodology_versions",
+      "analytics_ledger_runs",
+      "analytics_ledger_run_events",
+      "analytics_data_vintages",
+      "analytics_vintage_members",
+    ],
+  },
+  {
+    migration: "0059_analytics_output_and_report_snapshots.sql",
+    functionName: "rm_analytics_output_ledger_immutable",
+    messagePrefix: "analytics output ledger is immutable",
+    statementSuffix: "_immutable",
+    rowSuffix: "_immutable_row",
+    tables: ["analytics_output_snapshots", "analytics_report_snapshots", "swarm_brief_revisions"],
+  },
+];
+
+/** The two trigger names a ledger family installs on each of its tables. */
+export function ledgerTriggerNames(family: LedgerImmutableFamily, table: string): { statement: string; row: string } {
+  return { statement: `${table}${family.statementSuffix}`, row: `${table}${family.rowSuffix}` };
+}
+
+/**
+ * A ledger family's OWN refusal, recognised by its text and not merely its
+ * SQLSTATE — for the same reason isAppendOnlyRefusal is (see below): these
+ * guards also raise `feature_not_supported` (0A000), and so does PostgreSQL's
+ * own TRUNCATE-RESTRICT cross-check on any table with an inbound foreign key.
+ */
+export function isLedgerRefusal(
+  err: unknown,
+  family: LedgerImmutableFamily,
+  table: string,
+  op: "DELETE" | "UPDATE" | "TRUNCATE" = "DELETE",
+): boolean {
+  const e = err as { message?: string; code?: string } | null;
+  if (e?.code !== "0A000") return false;
+  return String(e?.message ?? "").startsWith(`${family.messagePrefix}: ${op} is not permitted on ${table}`);
+}
+
+/**
  * The guard's own refusal, recognised by its TEXT and not merely its SQLSTATE.
  *
  * SQLSTATE ALONE IS A FALSE GREEN. `heap_truncate_check_FKs()` raises
@@ -313,13 +430,49 @@ interface TriggerRow {
 /** Which protected tables this database actually has. A deployment mid-way
  *  through the migration series legitimately has only some of them, and
  *  migration 0032 skips the rest for the same reason. */
-async function existingTables(db: AppendOnlyDb): Promise<string[]> {
+async function existingTables(db: AppendOnlyDb, tables: readonly string[]): Promise<string[]> {
   const rows = (await db`
     SELECT t AS table_name
-    FROM unnest(${[...APPEND_ONLY_TABLES] as string[]}::text[]) AS t
+    FROM unnest(${[...tables] as string[]}::text[]) AS t
     WHERE to_regclass('public.' || t) IS NOT NULL
   `) as unknown as { table_name: string }[];
   return rows.map((r) => r.table_name);
+}
+
+/**
+ * ONE guard's description, so the two halves below are written once and run
+ * against migration 0032's guard and against each ledger family's.
+ */
+interface GuardSpec {
+  migration: string;
+  functionName: string;
+  triggerNames(table: string): { statement: string; row: string };
+  isRefusal(err: unknown, table: string): boolean;
+  /** What to tell an operator to do about a missing or altered trigger. */
+  repair(table: string, trigger: string): string;
+}
+
+const APPEND_ONLY_SPEC: GuardSpec = {
+  migration: APPEND_ONLY_MIGRATION,
+  functionName: "rm_append_only_guard",
+  triggerNames,
+  isRefusal: isAppendOnlyRefusal,
+  repair: () => `re-apply backend/migrations/${APPEND_ONLY_MIGRATION} (it is idempotent)`,
+};
+
+function ledgerSpec(family: LedgerImmutableFamily): GuardSpec {
+  return {
+    migration: family.migration,
+    functionName: family.functionName,
+    triggerNames: (table) => ledgerTriggerNames(family, table),
+    isRefusal: (err, table) => isLedgerRefusal(err, family, table),
+    // NOT "re-apply the migration": unlike 0032 these files use bare
+    // CREATE FUNCTION / CREATE TRIGGER, so re-running one fails on the object
+    // that is still there instead of repairing the one that is gone.
+    repair: (table, trigger) =>
+      `re-create it with the CREATE TRIGGER + ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER ${trigger} ` +
+      `statements from backend/migrations/${family.migration}'s DO block (that file is NOT idempotent — do not re-run it whole)`,
+  };
 }
 
 /**
@@ -328,7 +481,7 @@ async function existingTables(db: AppendOnlyDb): Promise<string[]> {
  * silently skipped under `session_replication_role = 'replica'`), 'D'
  * (disabled), 'R' (replica only) or 'A' (always).
  */
-async function triggerInventory(db: AppendOnlyDb, tables: string[]): Promise<string[]> {
+async function triggerInventory(db: AppendOnlyDb, tables: string[], spec: GuardSpec): Promise<string[]> {
   if (tables.length === 0) return [];
   const rows = (await db`
     SELECT c.relname::text AS table_name,
@@ -346,18 +499,15 @@ async function triggerInventory(db: AppendOnlyDb, tables: string[]): Promise<str
 
   const problems: string[] = [];
   for (const table of tables) {
-    const names = triggerNames(table);
+    const names = spec.triggerNames(table);
     for (const [level, name] of [["statement", names.statement], ["row", names.row]] as const) {
       const row = byName.get(`${table}.${name}`);
       if (!row) {
-        problems.push(
-          `${table}: the ${level}-level trigger '${name}' is MISSING — repair: re-apply ` +
-            `backend/migrations/${APPEND_ONLY_MIGRATION} (it is idempotent).`,
-        );
+        problems.push(`${table}: the ${level}-level trigger '${name}' is MISSING — repair: ${spec.repair(table, name)}.`);
         continue;
       }
-      if (row.function_name !== "rm_append_only_guard") {
-        problems.push(`${table}: trigger '${name}' calls '${row.function_name}()', not rm_append_only_guard().`);
+      if (row.function_name !== spec.functionName) {
+        problems.push(`${table}: trigger '${name}' calls '${row.function_name}()', not ${spec.functionName}().`);
       }
       if ((level === "row") !== row.is_row) {
         problems.push(`${table}: trigger '${name}' is ${row.is_row ? "ROW" : "STATEMENT"} level, expected ${level.toUpperCase()}.`);
@@ -428,7 +578,7 @@ function isInconclusive(err: unknown): boolean {
  * rest: under a lock every remaining table would pay the same timeout, turning
  * a bounded check into fourteen of them.
  */
-async function deleteProbe(db: AppendOnlyDb, tables: string[]): Promise<string[]> {
+async function deleteProbe(db: AppendOnlyDb, tables: string[], spec: GuardSpec): Promise<string[]> {
   const problems: string[] = [];
   for (const table of tables) {
     let raised: unknown = null;
@@ -439,22 +589,22 @@ async function deleteProbe(db: AppendOnlyDb, tables: string[]): Promise<string[]
     }
     if (raised === null) {
       problems.push(
-        `${table}: a DELETE was ACCEPTED — the append-only guard is not refusing anything on this table. ` +
-          `The trigger may still exist and still look correct; check rm_append_only_guard()'s BODY ` +
-          `(\\sf rm_append_only_guard) — replacing it is one statement and disarms every table at once. ` +
-          `Repair: re-apply backend/migrations/${APPEND_ONLY_MIGRATION}.`,
+        `${table}: a DELETE was ACCEPTED — ${spec.functionName}() is not refusing anything on this table. ` +
+          `The trigger may still exist and still look correct; check the function's BODY ` +
+          `(\\sf ${spec.functionName}) — replacing it is one statement and disarms every table at once. ` +
+          `Repair: ${spec.repair(table, spec.triggerNames(table).statement)}.`,
       );
       continue;
     }
-    if (isAppendOnlyRefusal(raised, table)) continue;
+    if (spec.isRefusal(raised, table)) continue;
     const e = raised as { message?: string; code?: string };
     const first = String(e?.message ?? raised).split("\n")[0];
     if (isInconclusive(raised)) {
       throw new GuardCheckInconclusive(`probing ${table}: ${e?.code ?? "no SQLSTATE"}: ${first}`);
     }
     problems.push(
-      `${table}: a DELETE was refused, but NOT by the append-only guard — got ${e?.code ?? "?"}: ` +
-        `${first}. Only rm_append_only_guard()'s own message counts as evidence.`,
+      `${table}: a DELETE was refused, but NOT by the guard — got ${e?.code ?? "?"}: ` +
+        `${first}. Only ${spec.functionName}()'s own message counts as evidence.`,
     );
   }
   return problems;
@@ -464,14 +614,73 @@ async function deleteProbe(db: AppendOnlyDb, tables: string[]): Promise<string[]
  *  legitimately predates the guard (a first boot, a partially-migrated
  *  deployment) and its absence is not a violation — `migrate()` will install it.
  *  `true` with the guard missing is the case worth refusing over. */
-async function migrationRecorded(db: AppendOnlyDb): Promise<boolean> {
+async function migrationRecorded(db: AppendOnlyDb, migration: string): Promise<boolean> {
   const [{ present }] = (await db`
     SELECT (
       to_regclass('public.schema_migrations') IS NOT NULL
-      AND EXISTS (SELECT 1 FROM schema_migrations WHERE name = ${APPEND_ONLY_MIGRATION})
+      AND EXISTS (SELECT 1 FROM schema_migrations WHERE name = ${migration})
     ) AS present
   `) as unknown as { present: boolean }[];
   return present;
+}
+
+/**
+ * Which of `tables` the CURRENT ROLE could actually issue a DELETE against.
+ *
+ * WHY THE PROBE IS FILTERED AT ALL, AND WHY THAT IS A FIX AND NOT A WEAKENING.
+ * The api connects as `rm_app`. Migrations 0056, 0057, 0058 and 0059 all grant
+ * that role SELECT and INSERT on their tables and NOT DELETE, so an unfiltered
+ * probe takes `42501 insufficient_privilege` there — which INCONCLUSIVE_CODES
+ * correctly classifies as "this database did not answer", and ONE such throw
+ * turns the WHOLE check "unavailable". That is not hypothetical and it is not
+ * new to the ledger families: `analytics_overwrite_events` (migration 0056) is
+ * already in APPEND_ONLY_TABLES with the same grant, so on the production role
+ * this check has been returning "unavailable" — verifying NOTHING, on every
+ * boot, including 0032's own tables — since 0056 landed. It is measured by an
+ * executed test (backend/tests/append-only-guard-check.test.ts, the rm_app
+ * describe), not reasoned about.
+ *
+ * Skipping the probe where the role cannot reach the trigger stage costs
+ * nothing real: a role without DELETE is refused by the executor before any
+ * trigger runs (42501 — a refusal no trigger edit can disarm), and the role
+ * that could replace a guard function is not the one the api connects as. Those
+ * tables keep the catalog half here, and their behavioural half is executed in
+ * CI as the owner, which does hold DELETE.
+ */
+async function probeTables(db: AppendOnlyDb, tables: string[]): Promise<string[]> {
+  if (tables.length === 0) return tables;
+  const rows = (await db`
+    SELECT t AS table_name
+    FROM unnest(${tables}::text[]) AS t
+    WHERE has_table_privilege(current_user, 'public.' || quote_ident(t), 'DELETE')
+  `) as unknown as { table_name: string }[];
+  return rows.map((r) => r.table_name);
+}
+
+/**
+ * One ledger family's half of the check: the same catalog inventory and the
+ * same behavioural probe, against its own function name and its own refusal
+ * text.
+ *
+ * A family whose migration is not recorded contributes nothing — that is a
+ * database legitimately part-way through the series, exactly as "not_applied"
+ * means for 0032. A family whose migration IS recorded must have every one of
+ * its tables, because one migration creates them all.
+ */
+async function checkLedgerFamily(db: AppendOnlyDb, family: LedgerImmutableFamily): Promise<string[]> {
+  if (!(await migrationRecorded(db, family.migration))) return [];
+  const spec = ledgerSpec(family);
+  const present = await existingTables(db, family.tables);
+  const problems = family.tables
+    .filter((t) => !present.includes(t))
+    .map(
+      (t) =>
+        `${t}: ${family.migration} is recorded in schema_migrations, and it CREATES this table — ` +
+        `but the table is not there. The ledger and the schema disagree.`,
+    );
+  problems.push(...(await triggerInventory(db, present, spec)));
+  problems.push(...(await deleteProbe(db, await probeTables(db, present), spec)));
+  return problems;
 }
 
 /**
@@ -483,8 +692,8 @@ async function migrationRecorded(db: AppendOnlyDb): Promise<boolean> {
  */
 export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<AppendOnlyGuardCheck> {
   try {
-    const applied = await migrationRecorded(db);
-    const tables = await existingTables(db);
+    const applied = await migrationRecorded(db, APPEND_ONLY_MIGRATION);
+    const tables = await existingTables(db, APPEND_ONLY_TABLES);
     if (!applied) {
       // Not "clean" and not "disarmed": nothing has claimed to install this yet.
       return { status: "not_applied", problems: [] };
@@ -498,7 +707,16 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
         ],
       };
     }
-    const problems = [...(await triggerInventory(db, tables)), ...(await deleteProbe(db, tables))];
+    const problems = [
+      ...(await triggerInventory(db, tables, APPEND_ONLY_SPEC)),
+      ...(await deleteProbe(db, await probeTables(db, tables), APPEND_ONLY_SPEC)),
+    ];
+    // The ledger families (0057/0058/0059) are checked on the SAME boot path,
+    // because a trigger that only a migration installs is a trigger a restore
+    // can leave out — the reason this module exists at all.
+    for (const family of LEDGER_IMMUTABLE_FAMILIES) {
+      problems.push(...(await checkLedgerFamily(db, family)));
+    }
     return problems.length > 0 ? { status: "disarmed", problems } : { status: "armed", problems: [] };
   } catch (err) {
     // Every failure lands here as "unavailable", never as "disarmed": a
@@ -516,10 +734,13 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
  *
  * MUCH SHORTER than the handle-namespace guard's 8000ms, and deliberately so:
  * this check runs AFTER that one, so its budget is added to the same boot, and
- * unlike that one it issues a statement per protected table. Its own client
- * bounds each statement at the server (statement_timeout and lock_timeout), so
- * the realistic worst case is one timed-out probe — the loop stops at the first
- * inconclusive answer rather than paying the timeout fourteen times.
+ * unlike that one it issues a statement per probed table plus a handful of
+ * catalog queries per ledger family. Its own client bounds each statement at
+ * the server (statement_timeout and lock_timeout), so the realistic worst case
+ * is one timed-out probe — the loop stops at the first inconclusive answer
+ * rather than paying the timeout once per table. On the production role the
+ * ledger tables are not probed at all (probeTables), so what the second
+ * protected set adds to a boot is catalog reads, not DELETEs.
  */
 export const APPEND_ONLY_GUARD_BUDGET_MS = 2_000;
 
@@ -540,12 +761,13 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
  */
 export function appendOnlyRefusalLines(problems: readonly string[], prefix: string): string[] {
   return [
-    `${prefix} REFUSING the boot: the append-only guard (migration 0032) is NOT armed on this database.`,
-    `${prefix} ${APPEND_ONLY_MIGRATION} is recorded as applied, so something removed or disarmed it AFTER`,
-    `${prefix} it was installed — a partial pg_restore, a DROP/DISABLE TRIGGER, or a replaced`,
-    `${prefix} rm_append_only_guard() function body. Rows in these tables can be deleted right now:`,
+    `${prefix} REFUSING the boot: a history guard is NOT armed on this database — migration 0032's`,
+    `${prefix} append-only guard, one of the immutable-ledger guards (0057/0058/0059), or both.`,
+    `${prefix} The migration that installs it is recorded as applied, so something removed or disarmed`,
+    `${prefix} it AFTER it was installed — a partial pg_restore, a DROP/DISABLE TRIGGER, or a replaced`,
+    `${prefix} guard function body. Rows in these tables can be removed right now:`,
     ...problems.map((p) => `${prefix}   ${p}`),
-    `${prefix} Re-apply backend/migrations/${APPEND_ONLY_MIGRATION} (it is idempotent) and re-boot.`,
+    `${prefix} Each line above names its own repair. Apply them and re-boot.`,
   ];
 }
 
@@ -589,6 +811,10 @@ export function appendOnlyGuardOutcome(): AppendOnlyGuardStatus {
  *   4. IT CANNOT SEE THE ROW-LEVEL TRIGGER FIRE. Its presence is checked in the
  *      catalog; its behaviour is proved by
  *      backend/tests/append-only-replication.test.ts. See the header.
+ *   5. A TABLE THE CONNECTING ROLE CANNOT DELETE FROM GETS THE CATALOG HALF
+ *      ONLY. `rm_app` holds no DELETE on the 0056–0059 tables, so the probe is
+ *      skipped there (probeTables) — the executor's own 42501 is what stands in
+ *      for it. CI probes them as the owner.
  */
 export async function assertAppendOnlyGuardArmed(db?: AppendOnlyDb): Promise<void> {
   // createNamespaceGuardClient is reused rather than re-implemented: it is

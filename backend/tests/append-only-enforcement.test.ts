@@ -29,10 +29,15 @@
 // run, in a database cloned for this file alone, so a pass here is a property
 // of the migrated schema and nothing else.
 import { expect, test, describe, beforeAll } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { APPEND_ONLY_MIGRATIONS, APPEND_ONLY_TABLES, triggerNames } from "../src/db/append-only-guard.ts";
+import {
+  APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_TABLES,
+  LEDGER_IMMUTABLE_FAMILIES,
+  triggerNames,
+} from "../src/db/append-only-guard.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 // Own database, cloned from the migrated template. This file SEEDS the
@@ -244,6 +249,66 @@ describe("append-only: every protected table holds data that cannot be removed",
     }
     expect(new Set(inMigrations).size, "no table may be declared by two migrations").toBe(inMigrations.length);
     expect([...inMigrations].sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+  });
+
+  test("each ledger family's migration array and LEDGER_IMMUTABLE_FAMILIES are the same set", () => {
+    // The same pin as the test above, for the SECOND protected set. Migrations
+    // 0057/0058/0059 each install their own guard function over their own
+    // tables, and src/db/append-only-guard.ts's registry is what the boot check
+    // probes — so a table declared in one and not the other is a table the
+    // runtime guard never looks at, which is exactly what shipped before this
+    // test existed.
+    const union: string[] = [];
+    for (const family of LEDGER_IMMUTABLE_FAMILIES) {
+      const ddl = readFileSync(join(import.meta.dir, "..", "migrations", family.migration), "utf8");
+      const block = ddl.match(/protected text\[\] := ARRAY\[([\s\S]*?)\];/);
+      expect(block, `${family.migration} must still declare its protected array in the shape this test reads`).not.toBeNull();
+      const names = [...block![1]!.replace(/--.*$/gm, "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+      expect(names.length, `${family.migration}'s array must not have been parsed as empty`).toBeGreaterThan(0);
+      expect([...names].sort(), `${family.migration} and its LEDGER_IMMUTABLE_FAMILIES entry must agree`).toEqual(
+        [...family.tables].sort(),
+      );
+      // The function the migration's triggers actually call, and the message it
+      // actually raises, are what the boot probe matches on — so pin those too,
+      // not just the table list.
+      expect(ddl, `${family.migration} must define ${family.functionName}()`).toContain(
+        `CREATE FUNCTION public.${family.functionName}() RETURNS trigger`,
+      );
+      expect(ddl, `${family.migration}'s refusal text is what isLedgerRefusal matches`).toContain(
+        `RAISE EXCEPTION '${family.messagePrefix}: % is not permitted on %', TG_OP, TG_TABLE_NAME`,
+      );
+      union.push(...names);
+    }
+    expect(new Set(union).size, "no table may be declared by two ledger families").toBe(union.length);
+    expect(
+      union.some((t) => (APPEND_ONLY_TABLES as readonly string[]).includes(t)),
+      "the two protected sets are disjoint: a table in both would be guarded by two functions with two messages",
+    ).toBe(false);
+  });
+
+  test("EVERY migration declaring a protected array is registered in one of the two lists", () => {
+    // THE ASSERTION THAT TURNS RED ON THE NEXT ONE. Both tests above only see
+    // migrations that are already registered, so neither can notice migration
+    // 0060 adding an immutable table and forgetting to tell the runtime guard
+    // about it. This one reads the directory instead of a list: any new file
+    // that declares a protected array must be claimed by APPEND_ONLY_MIGRATIONS
+    // or by a LEDGER_IMMUTABLE_FAMILIES entry, or it fails here.
+    const dir = join(import.meta.dir, "..", "migrations");
+    const declaring = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /protected text\[\] := ARRAY\[/.test(readFileSync(join(dir, f), "utf8")))
+      .sort();
+    expect(declaring.length, "the scan must not have silently matched nothing").toBeGreaterThan(0);
+    const registered = new Set<string>([
+      ...APPEND_ONLY_MIGRATIONS,
+      ...LEDGER_IMMUTABLE_FAMILIES.map((f) => f.migration),
+    ]);
+    expect(
+      declaring.filter((f) => !registered.has(f)),
+      "these migrations declare immutable tables that src/db/append-only-guard.ts does not know about — " +
+        "add them to APPEND_ONLY_MIGRATIONS (0032's guard) or to LEDGER_IMMUTABLE_FAMILIES (own guard function)",
+    ).toEqual([]);
+    expect([...registered].sort(), "and nothing may be registered that no longer declares an array").toEqual(declaring);
   });
 
   test("a DELETE through an INHERITANCE PARENT is refused (the row-level trigger's other job)", async () => {
