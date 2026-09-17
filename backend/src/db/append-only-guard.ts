@@ -3,7 +3,7 @@
 //
 // TWO PROTECTED SETS, ONE CHECK. `APPEND_ONLY_TABLES` is migration 0032's set,
 // guarded by `rm_append_only_guard()`. `LEDGER_IMMUTABLE_FAMILIES` is the
-// immutable-ledger set — migrations 0057/0058/0059, each with its own guard
+// immutable-ledger set — migrations 0057/0058/0059/0060, each with its own guard
 // function, its own refusal text and its own trigger names, and each refusing
 // UPDATE as well. They are separate registries because nothing about them is
 // interchangeable, and they run through the SAME two halves below and the same
@@ -286,7 +286,7 @@ export function triggerNames(table: string): { statement: string; row: string } 
  * THE LEDGER-IMMUTABILITY FAMILIES — the SECOND protected set, and the reason
  * it is separate from APPEND_ONLY_TABLES rather than merged into it.
  *
- * Migrations 0057, 0058 and 0059 each install their OWN guard function with its
+ * Migrations 0057, 0058, 0059 and 0060 each install their OWN guard function with its
  * OWN refusal text, its own trigger-name suffixes (`_immutable`,
  * `_immutable_row` rather than `_append_only`), and a STRICTER rule than 0032's:
  * they refuse UPDATE as well as DELETE and TRUNCATE, because a ledger row is
@@ -365,6 +365,21 @@ export const LEDGER_IMMUTABLE_FAMILIES: readonly LedgerImmutableFamily[] = [
     statementSuffix: "_immutable",
     rowSuffix: "_immutable_row",
     tables: ["analytics_output_snapshots", "analytics_report_snapshots", "swarm_brief_revisions"],
+  },
+  {
+    // Issue #979: the analytics dual-write CUTOVER ledger. `analytics_read_mode`
+    // (the operator switch) is deliberately NOT in the family — it is mutable,
+    // one-row configuration, like swarm_judge_config; the record of who flipped
+    // it lives in audit_log. `analytics_parity_observations` is the immutable
+    // evidence the cutover gate reads; an observation that could be edited or
+    // deleted after the fact would let a failed check be erased rather than
+    // superseded by a later, real one.
+    migration: "0060_analytics_ledger_cutover.sql",
+    functionName: "rm_analytics_cutover_immutable",
+    messagePrefix: "analytics cutover ledger is immutable",
+    statementSuffix: "_immutable",
+    rowSuffix: "_immutable_row",
+    tables: ["analytics_parity_observations"],
   },
 ];
 
@@ -628,7 +643,7 @@ async function migrationRecorded(db: AppendOnlyDb, migration: string): Promise<b
  * Which of `tables` the CURRENT ROLE could actually issue a DELETE against.
  *
  * WHY THE PROBE IS FILTERED AT ALL, AND WHY THAT IS A FIX AND NOT A WEAKENING.
- * The api connects as `rm_app`. Migrations 0056, 0057, 0058 and 0059 all grant
+ * The api connects as `rm_app`. Migrations 0056, 0057, 0058, 0059 and 0060 all grant
  * that role SELECT and INSERT on their tables and NOT DELETE, so an unfiltered
  * probe takes `42501 insufficient_privilege` there — which INCONCLUSIVE_CODES
  * correctly classifies as "this database did not answer", and ONE such throw
@@ -711,7 +726,7 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
       ...(await triggerInventory(db, tables, APPEND_ONLY_SPEC)),
       ...(await deleteProbe(db, await probeTables(db, tables), APPEND_ONLY_SPEC)),
     ];
-    // The ledger families (0057/0058/0059) are checked on the SAME boot path,
+    // The ledger families (0057/0058/0059/0060) are checked on the SAME boot path,
     // because a trigger that only a migration installs is a trigger a restore
     // can leave out — the reason this module exists at all.
     for (const family of LEDGER_IMMUTABLE_FAMILIES) {
@@ -762,7 +777,7 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
 export function appendOnlyRefusalLines(problems: readonly string[], prefix: string): string[] {
   return [
     `${prefix} REFUSING the boot: the append-only guard is NOT armed on this database — migration 0032's`,
-    `${prefix} guard, one of the immutable-ledger guards (0057/0058/0059), or both.`,
+    `${prefix} guard, one of the immutable-ledger guards (0057/0058/0059/0060), or both.`,
     `${prefix} The migration that installs it is recorded as applied, so something removed or disarmed`,
     `${prefix} it AFTER it was installed — a partial pg_restore, a DROP/DISABLE TRIGGER, or a replaced`,
     `${prefix} guard function body. Rows in these tables can be removed right now:`,
@@ -812,7 +827,7 @@ export function appendOnlyGuardOutcome(): AppendOnlyGuardStatus {
  *      catalog; its behaviour is proved by
  *      backend/tests/append-only-replication.test.ts. See the header.
  *   5. A TABLE THE CONNECTING ROLE CANNOT DELETE FROM GETS THE CATALOG HALF
- *      ONLY. `rm_app` holds no DELETE on the 0056–0059 tables, so the probe is
+ *      ONLY. `rm_app` holds no DELETE on the 0056–0060 tables, so the probe is
  *      skipped there (probeTables) — the executor's own 42501 is what stands in
  *      for it. CI probes them as the owner.
  */

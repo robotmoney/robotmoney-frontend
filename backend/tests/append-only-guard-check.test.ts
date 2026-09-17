@@ -218,7 +218,7 @@ describe("the append-only guard's runtime check", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE SECOND PROTECTED SET (migrations 0057/0058/0059).
+// THE SECOND PROTECTED SET (migrations 0057/0058/0059/0060).
 //
 // These tables are frozen by their own guard functions, with their own trigger
 // names and their own refusal text, so 0032's probe says nothing about them.
@@ -233,6 +233,38 @@ describe("the runtime check covers the immutable-ledger families too", () => {
     (f) => f.migration === "0059_analytics_output_and_report_snapshots.sql",
   )!;
   const RUN_FAMILY = LEDGER_IMMUTABLE_FAMILIES.find((f) => f.migration === "0058_analytics_run_ledger.sql")!;
+  // Issue #979's cutover ledger (migration 0060): the parity-observation table
+  // an edited-away failed check would let the cutover gate be gamed.
+  const CUTOVER_FAMILY = LEDGER_IMMUTABLE_FAMILIES.find(
+    (f) => f.migration === "0060_analytics_ledger_cutover.sql",
+  )!;
+
+  test("a DROPPED cutover trigger is caught — erasing one parity-observation guard is a refused boot", async () => {
+    const names = ledgerTriggerNames(CUTOVER_FAMILY, "analytics_parity_observations");
+    await sql.unsafe(`DROP TRIGGER ${names.row} ON analytics_parity_observations`);
+    try {
+      const result = await checkAppendOnlyGuard(sql);
+      expect(result.status, "parity observations with a missing row-level trigger must refuse the boot").toBe(
+        "disarmed",
+      );
+      expect(
+        result.problems.some((p) =>
+          p.startsWith(
+            `analytics_parity_observations: the row-level trigger '${names.row}' is MISSING`,
+          ),
+        ),
+        `problems were: ${result.problems.join(" | ")}`,
+      ).toBe(true);
+      // Only the cutover family was dragged in.
+      expect(result.problems.every((p) => p.startsWith("analytics_parity_observations:"))).toBe(true);
+    } finally {
+      await sql.unsafe(
+        `CREATE TRIGGER ${names.row} BEFORE UPDATE OR DELETE ON public.analytics_parity_observations
+         FOR EACH ROW EXECUTE FUNCTION public.${CUTOVER_FAMILY.functionName}()`,
+      );
+      await sql.unsafe(`ALTER TABLE public.analytics_parity_observations ENABLE ALWAYS TRIGGER ${names.row}`);
+    }
+  });
 
   test("a DROPPED ledger trigger is caught — the case a partial pg_restore produces", async () => {
     const names = ledgerTriggerNames(OUTPUT_FAMILY, "analytics_output_snapshots");

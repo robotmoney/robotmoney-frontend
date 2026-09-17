@@ -57,23 +57,34 @@ export function assertAnalyticsUpdaterCredentials(cfg: {
   }
 }
 
-export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): AnalyticsPersistence {
+// The one authenticated-HTTP call shape every analytics-boundary caller in
+// this codebase shares: analyticsApiClient() below (the producer/updater's
+// AnalyticsPersistence port) AND triggerParitySweep() (the worker's #979-fix
+// call to POST A.paritySweep) both go through this — one fetch/header/error
+// implementation, not two.
+async function analyticsApiCall<T>(
+  cfg: AnalyticsApiConfig,
+  method: "GET" | "POST",
+  route: string,
+  body?: unknown,
+): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
-
-  async function call<T>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${cfg.baseUrl}${route}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-      // Surface the server's error text but NEVER the credential.
-      const detail = await res.text().catch(() => "");
-      throw new Error(`analytics API ${method} ${route} failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
-    }
-    return (await res.json()) as T;
+  const res = await fetch(`${cfg.baseUrl}${route}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    // Surface the server's error text but NEVER the credential.
+    const detail = await res.text().catch(() => "");
+    throw new Error(`analytics API ${method} ${route} failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
   }
+  return (await res.json()) as T;
+}
+
+export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): AnalyticsPersistence {
+  const call = <T>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> => analyticsApiCall<T>(cfg, method, route, body);
 
   return {
     async beginRun(input) {
@@ -138,4 +149,23 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       return dates;
     },
   };
+}
+
+export interface ParitySweepSummary {
+  domains: number;
+  matched: string[];
+  mismatched: string[];
+}
+
+// Issue #979 fix: the worker's ONLY legitimate way to run the dual-write
+// parity sweep. runParitySweep() (analytics/cutover/parity.ts) reads/writes
+// Postgres directly through db/client.ts's rm_app-credentialed pool, which
+// worker/** must never import — even transitively (that was exactly the
+// regression this fixes: worker/handlers/index.ts importing parity.ts
+// directly, which pulled db/client.ts into every worker container). This
+// goes over the SAME authenticated HTTP boundary as analyticsApiClient()
+// above, POSTing to A.paritySweep, which runs the sweep INSIDE the API
+// process instead.
+export async function triggerParitySweep(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<ParitySweepSummary> {
+  return await analyticsApiCall<ParitySweepSummary>(cfg, "POST", ROUTES.analytics.paritySweep);
 }

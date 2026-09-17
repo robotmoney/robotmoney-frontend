@@ -94,8 +94,19 @@ export async function fetchOne(ind: Indicator, logger: Logger = console): Promis
 // Fetch every registry indicator's raw history concurrently. A failed/empty
 // series returns [] (logged loudly) — the orchestrator falls back to persisted
 // history for that id. Returns { [indicatorId]: Point[] }.
+// `provenance` (issue #979) is the data-source label these values carry into
+// source_value_versions.provenance. Omitted means 'live', matching both
+// captureSourceAcquisition()'s and saveRawIndicatorHistory()'s defaults; the
+// producer's gap catch-up passes 'seed' because it writes the same points into
+// raw_indicator_history through the 'seed'-tagged floor writer.
 export async function fetchAll(
-  opts: { logger?: Logger; indicators?: Indicator[]; acquisitionSink?: AcquisitionSink; requestedByRunId?: number | null } = {},
+  opts: {
+    logger?: Logger;
+    indicators?: Indicator[];
+    acquisitionSink?: AcquisitionSink;
+    requestedByRunId?: number | null;
+    provenance?: string;
+  } = {},
 ): Promise<Record<string, Point[]>> {
   const logger = opts.logger ?? console;
   const inds = opts.indicators ?? INDICATORS;
@@ -110,6 +121,7 @@ export async function fetchAll(
               parserVersion: `${ind.source}:1`,
               cacheIdentity: JSON.stringify(ind.series ?? null),
               requestedByRunId: opts.requestedByRunId,
+              provenance: opts.provenance,
             }, opts.acquisitionSink, operation)
           : await operation();
         return [ind.id, points];

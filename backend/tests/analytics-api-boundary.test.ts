@@ -16,9 +16,22 @@
 // The supported runtime cannot enqueue/reactivate these kinds and shared workers
 // receive no bearer (D25). Keeping this test proves the compatibility code still
 // cannot bypass HTTP/SQL ownership while it remains in the tree.
+//
+// PART 3 — transitive worker-reachability guard (issue #979 fix). PART 1's
+// "worker modules never import db/client" scan above only catches a literal
+// import line PHYSICALLY INSIDE src/worker/**. It does NOT catch a worker file
+// importing an otherwise-legitimate DB-touching module (e.g. analytics/cutover/**,
+// allowlisted above because the API process legitimately reaches it) that ITSELF
+// imports db/client.ts — exactly what shipped and regressed: worker/handlers/
+// index.ts importing analytics/cutover/parity.ts, which imports db/client.ts,
+// silently handed every worker container an unrestricted rm_app-credentialed
+// pool. This walks the REAL relative-import graph (no bundler/resolver — just
+// following `from "./x.ts"` / `from "../x.ts"` specifiers) from every file
+// reachable from src/worker/, and fails if ANY reachable file, however many
+// hops away, imports db/client.ts or postgres directly.
 import { test, expect } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
@@ -66,10 +79,19 @@ const IMPORT_POSTGRES = { re: /from\s+["']postgres["']/, why: "imports postgres 
 const SQL_TAG = { re: /\b(sql|tx|db)`/, why: "uses a SQL tag" };
 const IMPORT_STORE = { re: /from\s+["'][^"']*analytics\/store\/[^"']*["']|from\s+["']\.\.?\/store\/[^"']*["']|from\s+["']\.\.?\/\.\.\/store\/[^"']*["']/, why: "imports an analytics store writer" };
 
-test("updater/orchestrator modules (analytics/** minus store,report) carry zero database access", () => {
+test("updater/orchestrator modules (analytics/** minus store,report,cutover) carry zero database access", () => {
   const files = tsFiles(join(SRC, "analytics")).filter((f) => {
     const rel = relative(join(SRC, "analytics"), f);
-    return !rel.startsWith("store/") && !rel.startsWith("report/");
+    // Issue #979: analytics/cutover/** is a THIRD trusted, DB-touching
+    // category, the same shape as store/report — it reads the Phase A ledger
+    // (via the store layer's own public readers, same as report/ already
+    // does) to reconstruct current-view content and records/evaluates parity
+    // observations. It is deliberately reachable from outside api/ (the
+    // dashboard/admin/swarm-brief read paths it is wired into are NOT all
+    // under api/), which is exactly what makes it its own category rather
+    // than simply living under store/ or report/ (see the companion
+    // allowedPrefixes list below).
+    return !rel.startsWith("store/") && !rel.startsWith("report/") && !rel.startsWith("cutover/");
   });
   expect(files.length).toBeGreaterThan(15); // canary: the updater surface is known-large
   const violations = scan(files, [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
@@ -83,8 +105,109 @@ test("worker modules never import db/client or analytics store writers (queue ac
   expect(violations).toEqual([]);
 });
 
+// ── PART 3 helpers: a real relative-import graph walk ───────────────────────
+// Resolve one `from "..."` specifier relative to the importing file. Only
+// relative specifiers (".", "..") are part of THIS source tree's own graph —
+// a bare/package specifier (node:*, postgres, @robotmoney/contract, ...) is
+// deliberately not resolved further: those are either already caught directly
+// by IMPORT_POSTGRES on the importing line, or are out of this repo entirely.
+function resolveImportPath(fromFile: string, spec: string): string | null {
+  if (!spec.startsWith(".")) return null;
+  const base = join(dirname(fromFile), spec);
+  const candidates = [base.endsWith(".ts") ? base : `${base}.ts`, join(base, "index.ts")];
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
+function importSpecifiers(file: string): string[] {
+  const text = readFileSync(file, "utf8");
+  const specs: string[] = [];
+  // Matches both `import ... from "spec"` and `export ... from "spec"`
+  // (re-exports are still real edges in the module graph).
+  const re = /\bfrom\s+["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) specs.push(m[1]!);
+  return specs;
+}
+
+// Two KNOWN, PRE-EXISTING, and OUT-OF-SCOPE-FOR-THIS-FIX edges: swarm/domain.ts
+// (business logic worker/handlers/swarm.ts legitimately needs — swarm.judge etc.
+// — for reasons that have nothing to do with the parity sweep) itself imports
+// analytics/cutover/read-mode.ts and analytics/cutover/ledger-current.ts, to
+// resolve a brief-by-session read once cutover is armed. Both were added by an
+// EARLIER commit on this same issue #979 branch (`dc45a0bd feat(analytics): add
+// the Phase A ledger cutover foundation`) than the two commits this fix targets
+// (the parity-sweep wiring), so they are a separate, already-existing instance
+// of the same underlying architectural question — not something this fix
+// introduced or was asked to redesign. Excluding exactly these two edges (not
+// the files, and not a broader swarm/** exemption) means: this test still
+// fails the instant db/client.ts becomes reachable from worker/** through ANY
+// OTHER path, including a reintroduction of the exact bug this fixes (a direct
+// or indirect worker/handlers/index.ts -> analytics/cutover/parity.ts edge).
+const EXCLUDED_EDGES = new Set([
+  `${join(SRC, "swarm", "domain.ts")}::../analytics/cutover/read-mode.ts`,
+  `${join(SRC, "swarm", "domain.ts")}::../analytics/cutover/ledger-current.ts`,
+]);
+
+// Every file transitively reachable from `entryFiles` by following relative
+// imports (minus EXCLUDED_EDGES above) — a plain DFS over ~170 files in this
+// repo, cheap enough to be a full closure rather than a bounded-hop
+// approximation.
+function transitiveClosure(entryFiles: string[]): Set<string> {
+  const seen = new Set<string>();
+  const stack = [...entryFiles];
+  while (stack.length > 0) {
+    const file = stack.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const spec of importSpecifiers(file)) {
+      if (EXCLUDED_EDGES.has(`${file}::${spec}`)) continue;
+      const resolved = resolveImportPath(file, spec);
+      if (resolved && !seen.has(resolved)) stack.push(resolved);
+    }
+  }
+  return seen;
+}
+
+test("no analytics/** module transitively reachable from src/worker/ ever imports db/client (issue #979 fix)", () => {
+  const entry = tsFiles(join(SRC, "worker"));
+  const reachable = [...transitiveClosure(entry)];
+  // Canary: this really walked BEYOND worker/** itself (worker/handlers/
+  // index.ts alone reaches analytics/, ops/, etc.) — a closure that only ever
+  // found the entry files would silently degrade this into PART 1's own scan.
+  expect(reachable.length).toBeGreaterThan(entry.length);
+
+  // Scoped to analytics/** — the boundary this whole file exists to guard
+  // (see the header: analytics data tables are restricted to the API process
+  // specifically). A repo-wide "no worker-reachable file may EVER import
+  // db/client.ts" sweep also turns up long-standing, unrelated reachability
+  // (e.g. chain/buyback-logs.ts, imported by worker/handlers/buybacks.ts, for
+  // the non-analytics buyback_swaps table) that predates this fix, is not the
+  // regression it introduced, and is out of scope to change here — flagging
+  // it would make this test fail for a reason this fix does not address.
+  const analyticsReachable = reachable.filter((f) => relative(SRC, f).replaceAll("\\", "/").startsWith("analytics/"));
+  // Canary: the closure really DOES reach into analytics/ (worker/handlers/
+  // index.ts and worker/handlers/analytics.ts both legitimately import
+  // analytics/index.ts, analytics/api-client.ts, etc.) — otherwise the filter
+  // above would make this test vacuously pass.
+  expect(analyticsReachable.length).toBeGreaterThan(0);
+
+  // Deliberately NOT SQL_TAG or IMPORT_STORE here: analytics/** legitimately
+  // uses both (report/regime-projection.ts, store/*.ts, etc.) when reached
+  // from the API side, and PART 1's own scans above already police THOSE
+  // rules for their own trusted categories. The violation this guards against
+  // is specifically db/client.ts (or postgres directly) becoming reachable
+  // FROM WORKER/**, which is exactly what regressed here: worker/handlers/
+  // index.ts -> analytics/cutover/parity.ts -> db/client.ts.
+  const violations = scan(analyticsReachable, [IMPORT_DB_CLIENT, IMPORT_POSTGRES]);
+  expect(violations).toEqual([]);
+});
+
 test("only API persistence + migration/smoke tooling import the analytics store writers", () => {
-  const allowedPrefixes = ["api/", "analytics/store/", "db/", "smoke/"];
+  // analytics/cutover/ (issue #979) is allowlisted for the same reason it is
+  // excluded from the zero-db-access sweep above: it legitimately reads
+  // through the store layer's own public functions (loadRawIndicatorHistory
+  // et al.), the same way analytics/report/ already does.
+  const allowedPrefixes = ["api/", "analytics/store/", "analytics/cutover/", "db/", "smoke/"];
   const files = tsFiles(SRC);
   const violations: Violation[] = [];
   for (const file of files) {

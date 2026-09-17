@@ -28,6 +28,11 @@ import {
 // stored checksum recomputes clean from the retrieved bytes" is one proof
 // technique across both ledgers.
 import { canonicalStringify, sha256Hex } from "../analytics/run-ledger.ts";
+// Issue #979: once cutover is armed, a brief-by-session read resolves the
+// body from swarm_brief_revisions (never swarm_briefs) — see
+// analytics/cutover/ledger-current.ts's header.
+import { getAnalyticsReadMode } from "../analytics/cutover/read-mode.ts";
+import { ledgerCurrentBriefBySession } from "../analytics/cutover/ledger-current.ts";
 // Issue #562: a new member's public handle comes from its name, not from the
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
@@ -657,6 +662,26 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
+// Issue #979: in ledger mode, `body` is read from swarm_brief_revisions
+  // (the immutable ledger) instead of swarm_briefs.body directly — `id` still
+  // comes from swarm_briefs because it is an opaque handle with no ledger
+  // equivalent, not a fact the ledger vs. compatibility split is about (both
+  // modes keep dual-writing swarm_briefs; only which table SUPPLIES the body
+  // differs).
+  if ((await getAnalyticsReadMode()) === "ledger") {
+    const ledger = await ledgerCurrentBriefBySession(sessionId);
+    if (!ledger) return null;
+    const [row] = await sql`SELECT id, created_at FROM swarm_briefs WHERE session_id = ${sessionId} LIMIT 1`;
+    return toBrief({
+      id: row?.id ?? null,
+      date: ledger.date,
+      subject_id: ledger.subjectId,
+      session_id: ledger.sessionId,
+      report_snapshot_id: ledger.reportSnapshotId,
+      body: ledger.body,
+      created_at: row?.created_at ?? ledger.createdAt,
+    });
+  }
   const r = await sql`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
@@ -759,7 +784,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
 
-  // Report-snapshot binding (issue #978 AC6). Once this session's brief is
+// Report-snapshot binding (issue #978 AC6). Once this session's brief is
   // bound to an analytics report snapshot, every take must name the SAME
   // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
   // Ed25519 verify (same "cheap refusals first" discipline as the checks
@@ -792,7 +817,6 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
       error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
     };
   }
-
   // Roster gate (issue #152, AC6): sessions created through the admin surface
   // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
   // the canonical swarm_session_members table (issue #150's migration),
@@ -1772,8 +1796,7 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     },
     windowClosesAt,
   };
-
-  // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
+// Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
   // report snapshot that produced the regime numbers this brief BODY shows —
   // derived from the embedded `regime` row above, NOT from the session's own
   // market date.
@@ -1830,7 +1853,6 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
         WHERE rs.asof = ${regimeDate}::date
         ORDER BY rs.id DESC LIMIT 1`;
   const reportSnapshotId: string | null = report ? String(report.id) : null;
-
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
