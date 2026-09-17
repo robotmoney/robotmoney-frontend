@@ -310,3 +310,55 @@ test("an empty response is recorded as a successful fetch with zero values, not 
     SELECT count(*)::int AS values FROM source_value_versions WHERE source_key = 'series:empty'`;
   expect(values).toBe(0);
 });
+
+test("a sweep-sized acquisition persists in a handful of statements, not two per fetch", async () => {
+  // THE FAILURE THIS GUARDS
+  // The api serves this submission on the same event loop it serves the site
+  // from. When each fetch cost its own INSERT round trip, one EDGAR sweep held
+  // that loop long enough for Bun.serve to cut the request at its 10s idle
+  // timeout, and every page behind it answered 502. Volume here is a real
+  // sweep's shape: many requests, bodies that repeat, one acquisition.
+  const payloads = Array.from({ length: 8 }, (_, i) => `{"filing":"${"x".repeat(20_000)}-${i}"}`);
+  const fetches = Array.from({ length: 300 }, (_, i) => {
+    const body = new TextEncoder().encode(payloads[i % payloads.length]!);
+    return {
+      id: randomUUID(),
+      sequence: i + 1,
+      requestIdentity: { method: "GET" as const, url: `https://sec.test/archives/${i}`, headers: {} },
+      cacheStatus: "miss" as const,
+      responseStatus: 200,
+      responseChecksum: payloadChecksum(body),
+      payloadBase64: Buffer.from(body).toString("base64"),
+      providerReleaseId: null,
+      errorDetail: null,
+    };
+  });
+
+  const startedAt = Date.now();
+  await saveSourceAcquisition({
+    id: randomUUID(),
+    provider: "edgar",
+    parserVersion: "edgar:1",
+    cacheIdentity: "sweep",
+    requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }],
+    fetches,
+    values: [],
+  });
+  const elapsed = Date.now() - startedAt;
+
+  const [{ fetchRows, payloadRows }] = await sql`
+    SELECT (SELECT count(*)::int FROM source_fetches f
+              JOIN source_acquisitions a ON a.id = f.acquisition_id
+             WHERE a.cache_identity = 'sweep') AS "fetchRows",
+           (SELECT count(*)::int FROM source_payloads
+             WHERE checksum = ANY(${payloads.map((p) => payloadChecksum(new TextEncoder().encode(p)))}::text[])) AS "payloadRows"`;
+  // Every attempt still gets its own row — batching changes how the write is
+  // issued, never what is recorded.
+  expect(fetchRows).toBe(300);
+  // Content-addressed: 300 fetches over 8 distinct bodies store 8 payloads.
+  expect(payloadRows).toBe(8);
+  // Far below the 10s the api would be cut off at. Generous on purpose: this
+  // is a floor against the per-row regression, not a benchmark.
+  expect(elapsed).toBeLessThan(5_000);
+});
