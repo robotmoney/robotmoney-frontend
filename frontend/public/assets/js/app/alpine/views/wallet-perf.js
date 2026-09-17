@@ -44,6 +44,13 @@ export function registerWalletPerfView(Alpine) {
     // computed from the dense-calendar gap count, drives seamMessage() below
     // rather than overloading `source`'s existing meaning.
     gapDayCount: 0,
+    // issue #862 (RM-116): the SP500 leg's `sizeVerifiedAt` (backend
+    // config.ts SP500_SIZE_VERIFIED_AT), echoed from holdings[] when present.
+    // Unlike every other series in this total, SP500's position SIZE is an
+    // owner-asserted constant, never read from a wallet or venue API — this
+    // drives the same seam disclosure below so the Wallet Total figure never
+    // silently presents that asserted number as a live one.
+    sp500VerifiedAt: null,
     init() { this.load(); },
     // ISO calendar day ("2026-03-18") → the compact "Mar 18" label.
     _fmtDay(iso) {
@@ -85,6 +92,9 @@ export function registerWalletPerfView(Alpine) {
         // Unrecoverable window (Class C, D16): dense calendar days minus
         // persisted days = days this pipeline has no row for at all.
         this.gapDayCount = days.length - history.length;
+        // issue #862: absent on every holding except SP500 (config.ts's
+        // `config` valuationKind) — see WalletHolding.sizeVerifiedAt.
+        this.sp500VerifiedAt = holdings.find((h) => h.symbol === "SP500")?.sizeVerifiedAt ?? null;
 
         this.labels = days.map((d) => this._fmtDay(d));
         this.totalAum = days.map((d) => byDate.get(d)?.totalUsd ?? null);
@@ -111,6 +121,14 @@ export function registerWalletPerfView(Alpine) {
         this.$nextTick(() => this.draw());
       }
     },
+    // issue #862 (RM-116): "SP500 position size is asserted, not read — last
+    // confirmed <Month Year>." Null once no held asset carries sizeVerifiedAt.
+    sp500Message() {
+      if (!this.sp500VerifiedAt) return null;
+      const asOf = new Date(this.sp500VerifiedAt + "T00:00:00Z")
+        .toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+      return `SP500 position size is asserted, not read from a live position — last confirmed ${asOf}.`;
+    },
     // issue #614 AC5: a non-null return renders the seam banner
     // (performance.html).
     seamMessage() {
@@ -118,6 +136,8 @@ export function registerWalletPerfView(Alpine) {
       if (this.gapDayCount > 0) {
         parts.push(`${this.gapDayCount} day${this.gapDayCount === 1 ? "" : "s"} in this range ${this.gapDayCount === 1 ? "is" : "are"} in process of being retrieved from the blockchain.`);
       }
+      const sp500 = this.sp500Message();
+      if (sp500) parts.push(sp500);
       return parts.length ? parts.join(" ") : null;
     },
     // Collapsed = last 5 snapshots; "Show All" expands to the full series.

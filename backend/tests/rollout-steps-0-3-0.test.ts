@@ -186,12 +186,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // tripwire on the roster's terminal entry, so that growing the release is a
   // deliberate act somebody had to write down here as well as in release.ts —
   // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
-  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, and 0048 via #796:
-  // in each case the drift guard below named the landed file as undeclared,
-  // and the fix was to DECLARE it (never to raise the numeric floor).
+  // via #761, 0045 via #760, 0046 via #849, 0047 via #779, 0048 via #796,
+  // 0049/0050 via #697, 0051 via #780, and 0052 via #829: in each case the
+  // drift guard below named the landed file as undeclared, and the fix was to
+  // DECLARE it (never to raise the numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(17);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0048_swarm_judge_third_party_flag.sql");
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(21);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0052_swarm_judgement_digest_scheme.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");
@@ -224,6 +225,19 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     // half applies as written, unlike `swarm_judge_config`.
     expect(NEW_TABLES).toContain("swarm_consensus_receipts");
     expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_consensus_receipts");
+    // 0049 (issue #697): a nullable foreign key to swarm_member_keys, recording
+    // which key actually signed a take. Locks swarm_recommendations briefly;
+    // validates trivially since every existing row's value is NULL.
+    expect(NEW_COLUMNS).toContainEqual({ table: "swarm_recommendations", column: "signing_key_id" });
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_recommendations");
+    // 0050 (issue #697): swarm_member_keys joins the append-only roster — the
+    // first table in this release to gain protection while ALREADY populated,
+    // rather than one this release creates fresh.
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_member_keys");
+    expect(APPEND_ONLY_TABLES).toContain("swarm_member_keys");
+    // 0051 (issue #780): repairs the two subjects ensureSmokeSubjectFixtures's
+    // pre-fix upsert clobbered to recommendation_type = 'position_actions'.
+    expect(MIGRATION_TOUCHED_TABLES).toContain("swarm_subjects");
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -265,7 +279,7 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
 
   test("no migration on disk is left undeclared by the release rosters", () => {
     const onDisk = readdirSync(join(repoRoot, "backend", "migrations"))
-      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => f.endsWith(".sql") && migrationNumber(f) <= 52)
       .sort();
     // Vacuity guards: a check that grades an empty directory, or an empty
     // roster, passes while protecting nothing.

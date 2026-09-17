@@ -42,7 +42,25 @@ function walletPayload(provenance: "live" | "stub" = "live", legOverrides: Recor
   };
 }
 
-function startStubBackend(rewrites: Rewrites = {}, wallet: ReturnType<typeof walletPayload> = walletPayload("live")) {
+// The /regime dashboard's data source (issue #967). `spa-shell` is the answer
+// the reported incident produced: a proxy or static fallback served the SPA
+// shell with HTTP 200 and text/html, so a consumer that only checks the status
+// code sails past it and then fails on parse.
+type RegimeAnswer = "ok" | "spa-shell";
+
+function regimePayload() {
+  return {
+    latest: { asof: "2026-09-11", composite: 0.42, regime: "neutral", macroIndex: 0.5, onchainIndex: 0.4 },
+    history: [{ date: "2026-09-10", composite: 0.41, regime: "neutral" }],
+    staleness: { asof: "2026-09-11", ageDays: 0, stale: false, thresholdDays: 3 },
+  };
+}
+
+function startStubBackend(
+  rewrites: Rewrites = {},
+  wallet: ReturnType<typeof walletPayload> = walletPayload("live"),
+  regime: RegimeAnswer = "ok",
+) {
   return Bun.serve({
     port: 0,
     async fetch(req) {
@@ -52,6 +70,14 @@ function startStubBackend(rewrites: Rewrites = {}, wallet: ReturnType<typeof wal
       }
       if (url.pathname === ROUTES.dashboards.walletBalances) {
         return Response.json(wallet);
+      }
+      if (url.pathname === ROUTES.dashboards.regimeSnapshots) {
+        if (regime === "spa-shell") {
+          return new Response(await Bun.file(join(publicDir, "index.html")).text(), {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        return Response.json(regimePayload());
       }
       const rel = url.pathname === "/" ? "/index.html" : url.pathname;
       const safe = normalize(decodeURIComponent(rel)).replace(/^(\.\.(\/|\\|$))+/, "");
@@ -91,6 +117,21 @@ describe("scripts/smoke-frontend-check.ts (smoke readiness gate self-test)", () 
         console.error(stderr);
       }
       expect(exitCode).toBe(0);
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  // THE REPORTED INCIDENT, at the gate that should have caught it: /regime
+  // answered with the SPA shell at HTTP 200. A status-only check passes here,
+  // which is why the check parses the body and requires application/json.
+  test("exits non-zero when the regime endpoint answers with the SPA shell at 200", async () => {
+    const backend = startStubBackend({}, walletPayload("live"), "spa-shell");
+    try {
+      const { exitCode, stdout } = await runCheck(backend);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toContain(ROUTES.dashboards.regimeSnapshots);
+      expect(stdout).toContain("text/html");
     } finally {
       backend.stop(true);
     }

@@ -483,6 +483,16 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       .toContain("compose defaults this variable to '1'");
   });
 
+  // Issue #888: the refusal used to name the fix ("intends '0'") without
+  // saying WHERE to make it. An operator reading this in a deploy log has no
+  // shell open on the box that ran the boot — the message must name the file.
+  test("the refusal message names the repo-root .env, not just the intended value", () => {
+    const message = productionConstantMismatches(realistic, {}, { production: true }).join(" ");
+    expect(message).toContain("repo-root .env");
+    expect(() => assertProductionConstants(realistic, {}, { production: true }))
+      .toThrow(/repo-root \.env/);
+  });
+
   // The red control: the ONLY value that satisfies it is the intended one, so
   // the check above cannot be green for the wrong reason.
   test("exactly one value passes the schedules check", () => {

@@ -6,6 +6,7 @@ import { emitReceipt, gitFacts, deriveHostRole } from "../../lib/rollout-receipt
 import { resolveBackupFiles, restoreBackupIntoContainer, teardownContainer } from "../../../../scripts/lib/restore-container.ts";
 import { runChecks } from "./preflight.ts";
 import { TAG_GLOB } from "./release.ts";
+import { COMMITTED_EVIDENCE_DIR } from "./steps.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -28,6 +29,6 @@ const startedAt = new Date().toISOString();
 const code = await run(backupDir);
 if (process.argv.includes("--emit-receipt")) {
   const backup = resolveBackupFiles(backupDir);
-  emitReceipt({ step: "P3.gate-c", exit: code, verdict: code === 0 ? "DUMP SAFE TO UPGRADE" : "DUMP BLOCKED", startedAt, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, git: gitFacts(repoRoot, TAG_GLOB), backupDir, artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc] });
+  emitReceipt({ step: "P3.gate-c", exit: code, verdict: code === 0 ? "DUMP SAFE TO UPGRADE" : "DUMP BLOCKED", startedAt, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role, git: gitFacts(repoRoot, TAG_GLOB), backupDir, artifactPaths: "error" in backup ? [] : [backup.dumpEnc, backup.globalsEnc], committedEvidenceDir: COMMITTED_EVIDENCE_DIR });
 }
 process.exitCode = code;

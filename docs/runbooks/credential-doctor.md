@@ -84,7 +84,9 @@ Credentials flow through three layers:
 | `DO_API_TOKEN` | Manual entry | DigitalOcean `/account` |
 | `DO_SPACES_KEY` | Created via DO API from `DO_API_TOKEN` or manual | ≥16 chars |
 | `DO_SPACES_SECRET` | Created alongside `DO_SPACES_KEY` or manual | ≥32 chars |
-| `DATABASE_URL` | Manual entry | Postgres URL + `sslmode=require` |
+| `DATABASE_URL` | Manual entry | `rm_app` Postgres URL + `sslmode=require` |
+| `WORKER_DATABASE_URL` | Manual entry | `rm_worker` Postgres URL + `sslmode=require` |
+| `MIGRATE_DATABASE_URL` | Manual entry | short-lived bootstrap URL; never droplet-resident |
 | `DO_DB_CA_CERT` (optional) | File | PEM certificate |
 | `FRED_API_KEY` (optional) | Manual entry | 32-char format + live FRED API check |
 

@@ -75,6 +75,13 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   Object.freeze({ memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0, present: demoAttends("boreas") }),
   Object.freeze({ memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") }),
   Object.freeze({ memberId: "draco", name: "Draco", lens: "contrarian", bias: 0, present: demoAttends("draco") }),
+  // Issue #922: the smoke-local named-judge persona. Handle 'themis' (derived
+  // from this display name by the same slugifyMemberName algorithm every other
+  // member's handle goes through) so #918's judgeSessionAdmin — which resolves
+  // its judgeMemberId by looking up the HANDLE 'themis', not by role — actually
+  // finds her. Absent by the shared DEMO_NO_SHOWS rule, same as draco: a
+  // judge-role member cannot hold a take in the session it judges.
+  Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
 
 /** The boot-step names the TUI/step list carries, per mode. Smoke runs ONE

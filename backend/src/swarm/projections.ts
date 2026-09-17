@@ -12,6 +12,7 @@ import type {
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 import { isV0ArchiveNonce } from "./v0-archive.ts";
+import { normalizedTakeWeights } from "./domain.ts";
 
 type Row = Record<string, any>;
 
@@ -43,6 +44,10 @@ export function toMember(row: Row): SwarmMember {
     avatar: row.avatar ?? null,
     appliedAt: instant(row.applied_at),
     activatedAt: instant(row.activated_at),
+    // Issue #782: null until a member's first take, and null (rather than
+    // omitted) for any row read by a query that never joined it — same
+    // fallback convention `instant` already gives every other field here.
+    lastTakeAt: instant(row.last_take_at),
   };
 }
 
@@ -150,7 +155,8 @@ export function toTake(row: Row): SwarmTake {
     confidence: row.confidence == null ? null : Number(row.confidence),
     body: row.body ?? null,
     memoUrl: row.memo_url ?? null,
-    ...(Array.isArray(row.payload?.weights) ? { weights: row.payload.weights } : {}),
+    weights: normalizedTakeWeights(row.payload?.weights) ?? null,
+    ...(Array.isArray(row.payload?.cites) ? { cites: row.payload.cites } : {}),
     verified: Boolean(row.verified),
     // WHY `verified` ALONE IS NOT ENOUGH. It answers one question — "did this
     // member's signature check out against their registered key" — and the
@@ -212,6 +218,7 @@ export function toBrief(row: Row): SwarmBrief {
     // backfill note. Exposing it is what lets a caller that read a day-scoped
     // brief tell WHICH of the day's sessions it actually got.
     sessionId: row.session_id ?? null,
+    reportSnapshotId: row.report_snapshot_id != null ? String(row.report_snapshot_id) : null,
     body: row.body ?? null,
     createdAt: instant(row.created_at) ?? "",
   };

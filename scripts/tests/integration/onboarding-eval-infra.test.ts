@@ -300,9 +300,14 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       ];
 
       for (const asset of assets) {
+        // website-server, not api directly (issue #892): the api process ships
+        // no static-serving code at all now, so these paths only resolve
+        // through website-server's nginx (which proxies /api/ and /health to
+        // api, and serves everything else — including these assets — from
+        // _static/).
         const r = stack!.compose([
           "run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent",
-          "-fsS", `http://api:8787${asset.path}`,
+          "-fsS", `http://website-server:8080${asset.path}`,
         ]);
         expect(r.exitCode, `${asset.path}: ${r.stderr}`).toBe(0);
         expect(r.stdout).toContain(asset.marker);

@@ -34,6 +34,7 @@ import { fetchBlockchainComChart } from "./blockchain-com.ts";
 import { fetchCoinmetrics } from "./coinmetrics.ts";
 import { fetchGeckoTerminalNewPools } from "./geckoterminal.ts";
 import { fetchShillerCape, fetchMultplShillerCape } from "./shiller.ts";
+import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
 
 type Logger = {
   log?: (m: string) => void;
@@ -94,14 +95,24 @@ export async function fetchOne(ind: Indicator, logger: Logger = console): Promis
 // series returns [] (logged loudly) — the orchestrator falls back to persisted
 // history for that id. Returns { [indicatorId]: Point[] }.
 export async function fetchAll(
-  opts: { logger?: Logger; indicators?: Indicator[] } = {},
+  opts: { logger?: Logger; indicators?: Indicator[]; acquisitionSink?: AcquisitionSink; requestedByRunId?: number | null } = {},
 ): Promise<Record<string, Point[]>> {
   const logger = opts.logger ?? console;
   const inds = opts.indicators ?? INDICATORS;
   const results = await Promise.all(
     inds.map(async (ind): Promise<[string, Point[]]> => {
       try {
-        return [ind.id, await fetchOne(ind, logger)];
+        const operation = () => fetchOne(ind, logger);
+        const points = opts.acquisitionSink
+          ? await captureSourceAcquisition({
+              provider: ind.source,
+              sourceKey: `raw_indicator_history:${ind.id}`,
+              parserVersion: `${ind.source}:1`,
+              cacheIdentity: JSON.stringify(ind.series ?? null),
+              requestedByRunId: opts.requestedByRunId,
+            }, opts.acquisitionSink, operation)
+          : await operation();
+        return [ind.id, points];
       } catch (e: any) {
         logger.error?.(`[extract] fetch ${ind.id} (${ind.source}) FAILED: ${e?.message ?? e}`);
         return [ind.id, []];

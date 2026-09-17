@@ -27,7 +27,7 @@ import {
   STAGE_WEB_PORT,
   type CommandResult,
 } from "../../stack/ports.ts";
-import { API_CONTAINER_PORT, portArgs, POSTGRES_CONTAINER_PORT, STAGE_COMPOSE_FILE } from "../../stack/config.ts";
+import { API_CONTAINER_PORT, portArgs, POSTGRES_CONTAINER_PORT, STAGE_COMPOSE_FILE, WEBSITE_SERVER_CONTAINER_PORT } from "../../stack/config.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
@@ -284,17 +284,19 @@ describe("no host port is named anywhere except the stage overlay", () => {
     expect(composeLines.filter((l) => /^\s*API_PORT:/.test(l))).toEqual([]);
   });
 
-  test("the stage overlay declares EXACTLY ONE api mapping, and does it with !override", () => {
+  test("the stage overlay declares EXACTLY ONE website-server mapping, and does it with !override", () => {
     // Compose merges `ports` by APPENDING. A plain `ports:` here would publish
     // BOTH the base file's ephemeral binding and 48787 — verified against real
     // `docker compose config` output, which emits two entries without the tag.
     const portLines = stageLines.filter((l) => l.includes("ports:"));
     expect(portLines).toHaveLength(1);
     expect(portLines[0]).toContain("!override");
-    expect(portLines[0]).toContain(`"${STAGE_WEB_PORT}:${API_CONTAINER_PORT}"`);
-    // ...and it pins the api ONLY: postgres stays Docker-assigned under --stage
-    // because nothing external routes to the database.
-    expect(stageLines.filter((l) => /^\s{2}\S+:\s*$/.test(l)).map((l) => l.trim())).toEqual(["api:"]);
+    expect(portLines[0]).toContain(`"${STAGE_WEB_PORT}:${WEBSITE_SERVER_CONTAINER_PORT}"`);
+    // ...and it pins website-server ONLY (issue #892 — the tunnel serves the
+    // public HTML/static/API origin, proxied through to api by
+    // website-server/nginx.conf): postgres and api stay Docker-assigned under
+    // --stage because nothing external routes to either directly.
+    expect(stageLines.filter((l) => /^\s{2}\S+:\s*$/.test(l)).map((l) => l.trim())).toEqual(["website-server:"]);
   });
 
   test(".env.example ships no host-port pin (an operator copying it must not re-create the outage)", () => {

@@ -36,6 +36,19 @@
 # Checks API, so requiring this workflow directly carries no deadlock risk.
 # `push` to `main` is never path-filtered (see the job `if:` below), so a
 # merge to main always runs this in full.
+#
+# PACKAGING (issue #884). D43 designs the eventual frontend/backend split
+# around `contract/` published as a versioned package (D10); this job packages
+# `contract/` (`bun pm pack`) on every run, so "a CI job packages contract/ and
+# this succeeds without any monorepo-relative path error" is verified on every
+# PR touching contract/, not only at publish time.
+# contract/tests/unit/contract-package.test.ts (run by the "Contract tests
+# (unit)" step below) is what actually asserts the resulting tarball is valid
+# and, installed outside the monorepo, resolves its documented main export.
+# The actual publish-on-tag step lives in the separate
+# .github/workflows/contract-publish.yml — ci-workflows-structure.test.ts
+# requires this (PATH_GATED_WORKFLOWS) workflow to declare exactly one
+# non-"changes" job, so a tag-triggered publish job cannot live here too.
 name: contract
 env:
   CI_CLASS: feature-correctness
@@ -99,3 +112,11 @@ jobs:
       - name: Contract tests (live URLs)
         working-directory: contract
         run: bun run test:live
+      # Packaging (issue #884 AC2/scope): the literal in-scope "CI step that
+      # packages contract/" deliverable, run on every trigger this job has, not
+      # only a release tag. contract-package.test.ts above already exercises
+      # `bun pm pack` and asserts a valid tarball; this step is the same
+      # command run for real, outside a test process. dist/ is repo-gitignored.
+      - name: Package contract
+        working-directory: contract
+        run: bun pm pack --destination dist

@@ -1,0 +1,15 @@
+{
+  "name": "@robotmoney/web-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The static web client: frontend/public (the SPA) and frontend/preview (the fixture-mode wrapper). Versioned and merge-gated independently of the api/backend and of the contract.",
+  "scripts": {
+    "test": "bun ../scripts/web-client/unit.ts",
+    "preview": "bun ../scripts/preview-server.ts",
+    "assemble": "bash ../scripts/static-assembly.sh",
+    "check": "bun ../scripts/web-client/browser.ts",
+    "check:prod": "bun ../scripts/web-client/browser.ts --api prod",
+    "check:stage": "bun ../scripts/web-client/browser.ts --api stage",
+    "version:json": "bun ../scripts/web-client/version.ts"
+  }
+}

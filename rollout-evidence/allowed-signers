@@ -1,0 +1,30 @@
+# The trust root for rollout evidence. PUBLIC KEYS ONLY.
+#
+# One line per ENVIRONMENT PRINCIPAL, in OpenSSH allowed_signers format
+# (`ssh-keygen -Y verify -f <this file>`, and `git verify-tag` under
+# gpg.format=ssh). backend/scripts/lib/rollout-signing.ts is the only reader.
+#
+# WHY ONE KEY PER ENVIRONMENT, NOT ONE PER PERSON. The question a receipt has to
+# answer is "which environment agent ran this step", because that is what
+# rollout-procedure.md's host split turns on: the stage host cannot run the
+# cutover, and a receipt claiming it did is the failure mode worth catching. A
+# distinct key per environment means a stage key CANNOT sign a production step —
+# that separation is the file's whole content, and it is why these are never one
+# shared key with two names.
+#
+# NEVER a private key. `id_ed25519` (no `.pub`) or a line containing
+# "PRIVATE KEY" is a leak, and scripts/tests/unit/rollout-receipt-redaction.test.ts
+# reads this exact file on every PR to say so.
+#
+# BOOTSTRAP ENTRIES. The two keys below were generated when this file was
+# created, so the allow-list has a well-formed, distinct entry per environment
+# from its first commit — their private halves were never written down and no
+# agent holds them, so nothing can sign as either principal yet. That is the
+# intended state: provisioning the real host keys is deliberately a separate
+# change (see the "Receipts" subsection of docs/runbooks/rollout-procedure.md,
+# which documents the host-side setup). Registering a real key means replacing
+# that principal's line with the contents of the host's own `.pub` file, in a
+# reviewed commit — the review IS the key-distribution ceremony.
+
+rollout-stage@robotmoney ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIpoZG95+h9D/Pj+iYNKnuXTEewOxyQuPmfF9sZAl4Ac
+rollout-production@robotmoney ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0GvDI8vsN5APfqhleLLNxND+M7anXDfPXQNF9AUn1L

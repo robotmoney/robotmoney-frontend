@@ -303,6 +303,26 @@ export function inputsDigest(input: JudgeInput): string {
   return sha256(canonicalizeDigestInputs(input));
 }
 
+/**
+ * WHICH CANONICAL FORM `canonicalizeDigestInputs()` currently implements
+ * (issue #829, D44). `#808` changed the covered field set with nothing
+ * recording which reading produced a given stored `inputs_digest` — so a
+ * later audit recomputing under TODAY's formula could not tell "this row was
+ * written under a different rule and a raw comparison was never going to
+ * match" from "this row claims today's rule and no longer reproduces". This
+ * string is that record: `judge-session.ts` stamps it onto
+ * `swarm_session_judgements.digest_scheme` on every write, and
+ * `judge-replay.ts` compares a row's stamped value against this constant
+ * before deciding whether a digest mismatch is a real finding or expected
+ * history.
+ *
+ * BUMP THIS — to a new, still-unique string — every time
+ * `canonicalizeDigestInputs()`'s covered field set changes, in the SAME
+ * change that edits it. Forgetting to bump it makes the two schemes
+ * indistinguishable to the audit, exactly the gap this issue closes.
+ */
+export const DIGEST_SCHEME = "derivation-v1" as const;
+
 // The fence around member-authored content. Same idea as
 // scripts/lib/contribution-reviewer-diff.ts's UNTRUSTED_DIFF markers: a take
 // body is text a third party wrote, and the model is told exactly where the

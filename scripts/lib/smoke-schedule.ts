@@ -228,8 +228,19 @@ export interface ProductionCadenceIntent {
    * The backend's swarm CRON master switch. It must be OFF in production: the
    * shipped crons are subject-blind (resolveSwarmSchedules emits no subjectId,
    * so the handler calls openSession("") and hits a foreign-key violation) and
-   * the host driver is the real scheduler. docker-compose.smoke.yml pins "0";
-   * this asserts a production boot carries EXACTLY that.
+   * the host driver is the real scheduler.
+   *
+   * docker-compose.smoke.yml ALSO pins the CONTAINER's own copy of this
+   * variable to "0", unconditionally — no shell export can change what the
+   * api process inside the container sees, on any boot that includes that
+   * overlay (every boot through smoke-main.ts does). So this check is not
+   * what stops the container from running the cron cadence; that hazard is
+   * already foreclosed by the overlay pin before this ever runs. What this
+   * buys instead: it runs HOST-side, before the container starts, against
+   * whatever the operator's own repo-root `.env` actually exports — so that
+   * file (and every runbook/dashboard that reads it) can never silently
+   * disagree with what the container is really doing, and the check keeps
+   * working as a safety net even if the overlay pin is ever refactored away.
    *
    * Absent is not acceptable (issue #806): docker-compose.yml declares
    * `SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}`, so an unset
@@ -297,7 +308,8 @@ export function productionConstantMismatches(
       problems.push(
         `SWARM_SCHEDULES_ENABLED=${schedules === undefined ? "(unset)" : `'${schedules}'`} in a production boot; ` +
           `production intends '${PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled}' (the host driver is the ` +
-          "scheduler, and compose defaults this variable to '1' when it is not exported)",
+          "scheduler, and compose defaults this variable to '1' when it is not exported). Export " +
+          "SWARM_SCHEDULES_ENABLED=0 in the repo-root .env.",
       );
     }
   } else {

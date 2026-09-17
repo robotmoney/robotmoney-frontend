@@ -12,11 +12,23 @@ const persistence = {} as AnalyticsPersistence;
 // this keeps the check free of SQL/HTTP without mocking away the subject.
 function recordingPersistence(): AnalyticsPersistence {
   return {
+    async beginRun() { return { runId: "0", methodologyVersionId: "0", replayed: false }; },
+    async appendRunEvent() {},
+    async freezeVintage() {
+      return {
+        vintageId: "0",
+        manifest: {
+          methodologyVersionId: "0", buildIdentity: "test", knowledgeTimeCutoff: "", marketTimeCutoff: "",
+          seriesCount: 0, memberCount: 0, seriesFingerprints: {}, manifestDigest: "",
+        },
+        memberCount: 0,
+        replayed: false,
+      };
+    },
+    async submitTerminalRunPackage() { return { outputSnapshots: [], reportSnapshotId: null, replayed: false }; },
     async loadRawHistory() { return {}; },
     async saveRawHistory() {},
     async seedRawHistory() { return { seededPoints: 0, existingPoints: 0, indicators: 0 }; },
-    async saveRegimeSnapshots() {},
-    async saveResearchSignal() {},
     async loadResearchSignalDates() { return []; },
     async loadRawHistoryGapDates() { return []; },
   };

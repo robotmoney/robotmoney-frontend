@@ -68,6 +68,13 @@ async function statusOfHandle(handle: string): Promise<string | null> {
   return rows.length ? rows[0]!.status : null;
 }
 
+// Issue #918: role is now an explicit LIVE_ROSTER field, and this reads back
+// what seedLiveRoster() actually wrote for it.
+async function roleOfHandle(handle: string): Promise<string | null> {
+  const rows = await sql<{ role: string }[]>`SELECT role FROM swarm_members WHERE handle = ${handle}`;
+  return rows.length ? rows[0]!.role : null;
+}
+
 // The id this deployment generated for a roster handle. Every assertion about a
 // roster member's id has to go through here — asserting against the handle
 // string itself would be vacuous now that the two namespaces are disjoint
@@ -141,6 +148,17 @@ test("seeding seats the roster with the published profile copy", async () => {
   expect(rm.tagline).toBe("Reads chain. Cites mechanism. Closes positions.");
   expect(rm.mode).toBe("hybrid");
   expect((rm.biases as string[]).slice(0, 3)).toEqual(["pro-mechanism", "pro-receipt", "anti-narrative-only"]);
+
+  const themis = served.find((m) => m.handle === "themis")!;
+  expect(themis.name).toBe("Themis");
+  expect(themis.lens).toBe("consensus arbitration");
+  expect(themis.tagline).toBe("Consensus judge. Reads every take. Names what still disagrees.");
+
+  // Issue #918: role is seated explicitly, and a re-seed must never revert it
+  // (see RosterSeedMember.role's doc comment).
+  expect(await roleOfHandle("themis")).toBe("judge");
+  expect(await roleOfHandle("athena")).toBe("member");
+  expect(await roleOfHandle("robot-money")).toBe("member");
 });
 
 test("re-seeding is idempotent and repairs drifted copy", async () => {
@@ -157,6 +175,16 @@ test("re-seeding is idempotent and repairs drifted copy", async () => {
   const athena = (await readLiveRoster()).find((m) => m.handle === "athena")!;
   expect(athena.tagline).toBe("Risk officer. Reads the composite. Looks for what breaks.");
   expect(athena.status).toBe("active");
+
+  // Issue #918: a re-seed writes `role` on every run (it is a profile column
+  // now, not a one-time default), but must never REVERT an operator's later
+  // role grant — an admin promoting a live-roster member is exactly the
+  // scenario RosterSeedMember.role's doc comment warns about.
+  expect(await roleOfHandle("themis")).toBe("judge");
+  expect(await roleOfHandle("athena")).toBe("member");
+  await seedLiveRoster();
+  expect(await roleOfHandle("themis")).toBe("judge");
+  expect(await roleOfHandle("athena")).toBe("member");
 });
 
 test("seeding leaves credentials and lifecycle timestamps alone", async () => {

@@ -596,6 +596,11 @@ function baseJudgements() {
     release_safety: { release: "hold", concerns: ["one dissent unresolved"], take_count: 3, min_takes: 3 },
   });
   return {
+    // Issue #922: judgedByMemberId "athena" resolves through the mocked admin
+    // members route (MEMBER_ACTIVE, below) to a display name — the NAMED-judge
+    // case. judgedBy carries the same id judged_by_member_id does when a
+    // judging is named (judge-session.ts's INSERT: `judged_by_member_id ??
+    // null` is the id, `judged_by` is the same id or the anonymous default).
     inForce: {
       id: "2", mode: "enforce", source: "model", fallbackReason: null,
       applied: false, appliedSkippedReason: "session_no_longer_writable",
@@ -607,7 +612,10 @@ function baseJudgements() {
       dropped: { positions: 0, disagreements: 0 }, partiallyDegraded: false,
       opinion: opinion("The enforce opinion that missed its session."),
       createdAt: "2026-07-20T19:00:00.000Z",
+      judgedBy: "athena", judgedByMemberId: "athena",
     },
+    // The ANONYMOUS default (issue #922): judgedByMemberId null, judgedBy the
+    // literal 'robotmoney-in-house' string every unnamed judging carries.
     older: {
       id: "1", mode: "shadow", source: "model", fallbackReason: null,
       applied: false, appliedSkippedReason: null,
@@ -616,6 +624,7 @@ function baseJudgements() {
       dropped: { positions: 2, disagreements: 1 }, partiallyDegraded: true,
       opinion: opinion("The shadow opinion whose response was trimmed."),
       createdAt: "2026-07-20T18:00:00.000Z",
+      judgedBy: "robotmoney-in-house", judgedByMemberId: null,
     },
   };
 }
@@ -1366,11 +1375,20 @@ test("swarm admin: the consensus-judge panel names what the judge said, whether 
   await expect(inForce).toContainText("enforce");
   await expect(inForce).toContainText("NOT applied");
   await expect(inForce).toContainText("session_no_longer_writable");
+  // Issue #922: the in-force judgement's judgedByMemberId ("athena") resolves
+  // through the mocked admin members route to a display name, not the raw id.
+  await expect(page.getByTestId("judgement-in-force-judged-by")).toHaveText("Athena (athena)");
 
   const rows = page.getByTestId("judgements-table").locator("tbody tr");
   // 2 judgement rows + 2 (initially hidden) detail rows.
   await expect(rows).toHaveCount(4);
   await expect(page.getByTestId("judgements-empty")).toBeHidden();
+
+  // The NAMED row (issue #922) — same resolution as the in-force summary above.
+  await expect(page.getByTestId("judgement-judged-by-2")).toHaveText("Athena (athena)");
+  // The ANONYMOUS row falls back to the raw judgedBy string: there is no
+  // member id to resolve, and 'robotmoney-in-house' is not itself a member.
+  await expect(page.getByTestId("judgement-judged-by-1")).toHaveText("robotmoney-in-house");
 
   // The trimmed shadow run reads as a MODEL answer that lost material — not as
   // a fallback, and not as a clean one.

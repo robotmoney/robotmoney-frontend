@@ -22,7 +22,8 @@
 // pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
-import { judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import { DIGEST_SCHEME, judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
 
@@ -32,12 +33,19 @@ export interface JudgeConfig {
   /** The model the judge reaches, or null — see migration 0039 on why this is a row. */
   model: string | null;
   /**
-   * Issue #796. Global switch: may a graduated judge member (a `judgeSession()`
-   * call carrying `judgeMemberId`) author a judgement at all. Off by default,
-   * independent of `mode` — the built-in worker (no `judgeMemberId`) is
-   * unaffected either way. Same "database row, not env var, no redeploy to
-   * flip" posture as `mode` (migration 0039's own reasoning, extended by
-   * migration 0048).
+   * Issue #796, amended by #918, re-keyed by #925. Global switch: may an
+   * EXTERNALLY-OPERATED graduated judge member (a `judgeSession()` call
+   * carrying a `judgeMemberId` whose `handle` is not in `LIVE_ROSTER_HANDLES`)
+   * author a judgement at all. Off by default, independent of `mode`. Two
+   * classes are unaffected by this flag either way: the built-in worker (no
+   * `judgeMemberId`), and an IN-HOUSE named judge (Themis, seated by
+   * roster-seed.ts and therefore on `LIVE_ROSTER_HANDLES`) — the rollout plan
+   * this flag implements is explicit that the in-house judge goes live FIRST,
+   * "before third-party judges are allowed at all" (docs/decisions.md), so
+   * folding it under the same gate would make the in-house stage depend on
+   * the third-party one it is supposed to precede. Same "database row, not
+   * env var, no redeploy to flip" posture as `mode` (migration 0039's own
+   * reasoning, extended by migration 0048).
    */
   thirdPartyEnabled: boolean;
   updatedAt: string | null;
@@ -173,6 +181,8 @@ export interface JudgeSessionResult {
 export interface JudgeSessionOptions extends JudgeOptions {
   /** Existing member acting as judge. Omit only for the built-in worker. */
   judgeMemberId?: string;
+  /** Explicit forced re-judging (e.g. manual lever in #806). Bypasses already-judged retry short-circuit. */
+  force?: boolean;
   /**
    * The mode/threshold/model, read ONCE by the caller and passed down. Without
    * this the config is read twice — by the caller's gate and again here — and
@@ -215,10 +225,61 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   if (config.mode === "off") {
     return { ok: false, status: 409, error: "judge_disabled", sessionId, mode: config.mode };
   }
+
+  // Idempotent retry on an already-judged session (issue #928).
+  // When a retry or re-dequeue occurs (e.g. worker restart after commit or admin retry),
+  // return the existing judgement without calling the model again or inserting a duplicate row.
+  // We check before the model call: if the session is already in 'judged' state, has a judgement
+  // recorded by the same judging party, AND the mode matches the current config mode, return it.
+  // A differing mode (e.g. enforce -> shadow) or opts.force indicates an intentional re-judging.
+  const checkParty = async () => {
+    if (opts.force) return null;
+    const sessionRow = (await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+    if (sessionRow?.state === "judged") {
+      const existingJudgement = await latestJudgement(sessionId);
+      if (existingJudgement && existingJudgement.mode === config.mode) {
+        const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
+        const partyMatches = existingJudgement.judged_by === expectedJudgedBy ||
+          (judgeMemberId != null && existingJudgement.judged_by_member_id === judgeMemberId);
+        if (partyMatches) {
+          return existingJudgement;
+        }
+      }
+    }
+    return null;
+  };
+
+  const existingBefore = await checkParty();
+  if (existingBefore) {
+    return {
+      ok: true,
+      status: 200,
+      sessionId,
+      mode: existingBefore.mode as JudgeMode,
+      judgementId: String(existingBefore.id),
+      applied: existingBefore.applied === true,
+      ...(existingBefore.applied_skipped_reason ? { appliedSkippedReason: String(existingBefore.applied_skipped_reason) } : {}),
+      outcome: {
+        opinion: existingBefore.opinion as any,
+        source: existingBefore.source as any,
+        ...(existingBefore.fallback_reason ? { fallbackReason: String(existingBefore.fallback_reason) } : {}),
+        model: (existingBefore.model as string | null) ?? null,
+        promptHash: String(existingBefore.prompt_hash),
+        inputsDigest: String(existingBefore.inputs_digest),
+        takeCount: Number(existingBefore.take_count),
+        minTakes: Number(existingBefore.min_takes),
+        drops: {
+          positions: Number(existingBefore.dropped_positions ?? 0),
+          disagreements: Number(existingBefore.dropped_disagreements ?? 0),
+        },
+      },
+    };
+  }
+
   const input = await buildJudgeInput(sessionId, config.minTakes);
   if (!input) return { ok: false, status: 404, error: "session not found", sessionId, mode: config.mode };
 
-  const outcome = await judge(input, { model: config.model, ...judgeOpts });
+  let outcome = await judge(input, { model: config.model, ...judgeOpts });
 
   let refusal: { ok: boolean; status: number; error?: string } | undefined;
   let recorded: { id: string | number; applied: boolean; skipped?: string } | undefined;
@@ -228,25 +289,50 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // `_xact_` form releases at COMMIT/ROLLBACK, so a crashed judge cannot leave
     // a session locked.
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
-    if (judgeMemberId) {
-      // Issue #796. Read inside the write transaction, same reason as the
-      // member/role check below: an admin turning third-party judging off
-      // while the model was thinking must be observed before any judgement
-      // row can land, not merely before the next call. This is the
-      // admin-flippable gate the line below used to call "#796's future
-      // transport" — third-party judging is refused as a class, independent
-      // of whether the named member still holds the judge role.
-      const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
-        SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
-      if (!flagRow?.third_party_enabled) {
-        refusal = { ok: false, status: 403, error: "third_party_judging_disabled" };
-        throw new JudgeRollback();
+
+    // Re-check inside the lock in case a concurrent judge committed while the model was thinking
+    const sessionInLock = (await tx<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+    if (!opts.force && sessionInLock?.state === "judged") {
+      const existingInLock = (await tx`
+        SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+               take_count, min_takes, applied, applied_skipped_reason,
+               dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
+        FROM swarm_session_judgements WHERE session_id = ${sessionId}
+        ORDER BY id DESC LIMIT 1`)[0] as Record<string, unknown> | undefined;
+      if (existingInLock && existingInLock.mode === config.mode) {
+        const expectedJudgedBy = judgeMemberId ?? "robotmoney-in-house";
+        const partyMatches = existingInLock.judged_by === expectedJudgedBy ||
+          (judgeMemberId != null && existingInLock.judged_by_member_id === judgeMemberId);
+        if (partyMatches) {
+          outcome = {
+            opinion: existingInLock.opinion as any,
+            source: existingInLock.source as any,
+            ...(existingInLock.fallback_reason ? { fallbackReason: String(existingInLock.fallback_reason) } : {}),
+            model: (existingInLock.model as string | null) ?? null,
+            promptHash: String(existingInLock.prompt_hash),
+            inputsDigest: String(existingInLock.inputs_digest),
+            takeCount: Number(existingInLock.take_count),
+            minTakes: Number(existingInLock.min_takes),
+            drops: {
+              positions: Number(existingInLock.dropped_positions ?? 0),
+              disagreements: Number(existingInLock.dropped_disagreements ?? 0),
+            },
+          };
+          recorded = {
+            id: existingInLock.id as string | number,
+            applied: existingInLock.applied === true,
+            ...(existingInLock.applied_skipped_reason ? { skipped: String(existingInLock.applied_skipped_reason) } : {}),
+          };
+          return;
+        }
       }
+    }
+    if (judgeMemberId) {
       // Read inside the write transaction: an admin revocation that committed
       // while the model was thinking is observed before any judgement row can
       // land.
-      const member = (await tx<{ status: string; role: string }[]>`
-        SELECT status, role FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
+      const member = (await tx<{ status: string; role: string; handle: string }[]>`
+        SELECT status, role, handle FROM swarm_members WHERE id = ${judgeMemberId} FOR UPDATE`)[0];
       if (!member || member.status !== "active") {
         refusal = { ok: false, status: 403, error: "judge_member_inactive" };
         throw new JudgeRollback();
@@ -254,6 +340,36 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
       if (member.role !== "judge") {
         refusal = { ok: false, status: 403, error: "judge_role_required" };
         throw new JudgeRollback();
+      }
+      // Issue #796, amended by #918, re-keyed by #925. The gate is named
+      // "third-party" and the rollout plan it implements (docs/decisions.md)
+      // is explicit: "a single in-house judge first... before third-party
+      // judges are allowed at all" — an in-house judge is the thing that plan
+      // says goes live FIRST, not the thing this flag exists to hold back.
+      //
+      // #925: THIS USED TO CHECK `member.operator !== "robotmoney"`.
+      // `operator` is a free-text, self-service-writable display column
+      // (validateMemberProfile — any active member can POST
+      // `{"operator": "robotmoney"}` to its own profile), so that check
+      // collapsed the "in-house" exemption into a string an ordinary member
+      // already controlled: grant it `role: 'judge'` (a real admin
+      // prerequisite, but a disjoint one that never reads `operator`) and it
+      // could forge its way past the third-party gate at judging time. The
+      // exemption is re-keyed off `handle` instead — a member CANNOT set its
+      // own handle (validateMemberProfile refuses it outright, issue #593) —
+      // checked against `LIVE_ROSTER_HANDLES`, the compile-time list of
+      // handles roster-seed.ts actually seats (Themis included). Read inside
+      // the write transaction, same reason as the checks above: an admin
+      // turning third-party judging off while the model was thinking must be
+      // observed before any judgement row can land, not merely before the
+      // next call.
+      if (!LIVE_ROSTER_HANDLES.includes(member.handle)) {
+        const flagRow = (await tx<{ third_party_enabled: boolean }[]>`
+          SELECT third_party_enabled FROM swarm_judge_config WHERE id = 1`)[0];
+        if (!flagRow?.third_party_enabled) {
+          refusal = { ok: false, status: 403, error: "third_party_judging_disabled" };
+          throw new JudgeRollback();
+        }
       }
       const take = (await tx`SELECT 1 FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${judgeMemberId} LIMIT 1`)[0];
       if (take) {
@@ -297,11 +413,11 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
 
     const inserted = (await tx`
       INSERT INTO swarm_session_judgements
-        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, take_count, min_takes,
+        (session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
          applied, applied_skipped_reason, dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion)
       VALUES (
         ${sessionId}, ${config.mode}, ${outcome.source}, ${outcome.fallbackReason ?? null}, ${outcome.model},
-        ${outcome.promptHash}, ${outcome.inputsDigest}, ${outcome.takeCount}, ${outcome.minTakes},
+        ${outcome.promptHash}, ${outcome.inputsDigest}, ${DIGEST_SCHEME}, ${outcome.takeCount}, ${outcome.minTakes},
         ${applied}, ${appliedSkippedReason},
         ${outcome.drops?.positions ?? 0}, ${outcome.drops?.disagreements ?? 0},
         ${judgeMemberId ?? "robotmoney-in-house"}, ${judgeMemberId ?? null},
@@ -425,7 +541,7 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
  * exists to keep honest.
  */
 export async function sessionJudgeFingerprint(
-  handle: DbHandle,
+  handle: DbHandle = sql,
   sessionId: string,
 ): Promise<{ promptHash: string; inputsDigest: string } | null> {
   const row = (await handle`
@@ -447,10 +563,10 @@ export async function sessionJudgeFingerprint(
 // latestJudgement() names a different opinion than the one on the session,
 // which is exactly the disagreement prompt_hash/inputs_digest exists to rule
 // out.
-export async function listJudgements(sessionId: string, limit = 50) {
+export async function listJudgements(sessionId: string, limit = 50, db: DbHandle = sql) {
   const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
-  return (await sql`
-    SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest,
+  return (await db`
+    SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
            take_count, min_takes, applied, applied_skipped_reason,
            dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
     FROM swarm_session_judgements WHERE session_id = ${sessionId}
@@ -458,6 +574,7 @@ export async function listJudgements(sessionId: string, limit = 50) {
 }
 
 /** The opinion IN FORCE — the newest row, by the ordering argued above. */
-export async function latestJudgement(sessionId: string) {
-  return (await listJudgements(sessionId, 1))[0] ?? null;
+export async function latestJudgement(sessionId: string, db: DbHandle = sql) {
+  return (await listJudgements(sessionId, 1, db))[0] ?? null;
 }
+

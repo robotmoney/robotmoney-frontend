@@ -18,6 +18,14 @@
     "./fixtures/consensus-receipt.*": "./src/__fixtures__/consensus-receipt.*"
   },
   "files": ["src"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robotmoney/robotmoney-frontend.git",
+    "directory": "contract"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "scripts": {
     "test": "bun test tests/unit",
     "test:live": "bun test tests/live"

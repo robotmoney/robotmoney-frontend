@@ -19,14 +19,27 @@ bun run preview      # serves the live SPA; open the URL it prints
   port** (printed on start) — no copying, no build: edit a file and refresh.
 - The wrapper (`frontend/preview/index.html`) runs the live SPA inside an iframe
   and intercepts `/api/*` calls client-side, answering them from committed
-  goldens (`goldens/api-goldens.json`). No backend needed. The experience is
-  identical to the hosted branch preview (push to a `preview/*` branch —
-  Cloudflare Pages' Git integration builds and hosts it; see the preview
-  section of [`docs/architecture.md`](docs/architecture.md)).
+  goldens (`goldens/api-goldens.json`) by default. No backend needed; see the
+  preview section of [`docs/architecture.md`](docs/architecture.md).
+- Add `?api=prod` or `?api=stage` to the preview URL to answer `/api/*` from a
+  live api instead — reads only, never writes, so it's safe to point at
+  production. Useful for checking a client-only change against real data
+  before it ships.
 
 **Agent note:** to let a contributor view the site, start `bun run preview` and
 give them the printed URL. It runs in the foreground — keep it running while they
 review; stop it with Ctrl-C.
+
+## Web client versioning
+
+The static client (`frontend/public` + `frontend/preview`) has its own
+manifest and version, `frontend/package.json` (`@robotmoney/web-client`) —
+independent of `backend/package.json` and `contract/package.json`. Its merge
+gate is `.github/workflows/web-client.yml`, not `backend.yml`/`e2e.yml`: only
+the client's own unit tests, the static assembly build, and a fixtures-mode
+Playwright sweep of every route can block a client PR. See
+[decisions.md D45](./docs/decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)
+for the full rationale.
 
 ## Update the site
 

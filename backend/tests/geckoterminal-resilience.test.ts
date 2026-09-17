@@ -20,13 +20,11 @@ import { mergeSeries } from "../src/analytics/transform/math.ts";
 const NOW = Date.parse("2026-07-15T12:00:00Z");
 
 function throttled(retryAfter?: string) {
-  return {
-    ok: false,
+  return new Response(null, {
     status: 429,
     statusText: "Too Many Requests",
-    headers: new Headers(retryAfter !== undefined ? { "retry-after": retryAfter } : {}),
-    json: async () => ({}),
-  } as unknown as Response;
+    headers: retryAfter !== undefined ? { "retry-after": retryAfter } : {},
+  });
 }
 
 // One in-window entry + one stale entry → countNewPools24h stops after page 1
@@ -36,13 +34,7 @@ function okLastPage() {
     { attributes: { pool_created_at: new Date(NOW - 3600_000).toISOString() } },
     { attributes: { pool_created_at: new Date(NOW - 30 * 3600_000).toISOString() } },
   ];
-  return {
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: new Headers(),
-    json: async () => ({ data: entries }),
-  } as unknown as Response;
+  return Response.json({ data: entries });
 }
 
 const silent = { warn: () => {} };
@@ -150,18 +142,27 @@ test("throttleWaitMs: honors Retry-After up to the budget, clamps hostile values
   expect(throttleWaitMs(3, null, 10_000)).toBe(4000);
 });
 
+test("throttleWaitMs: #935 minimum backoff floor — a Retry-After of 0 (or an already-past date) never produces a near-instant retry", () => {
+  // Retry-After: 0 (delta-seconds form) is floored, not honored literally.
+  expect(throttleWaitMs(1, "0", 10_000)).toBe(500);
+  // An already-past HTTP-date (negative wait before clamping) is floored the same way.
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  expect(throttleWaitMs(1, new Date(now - 5000).toUTCString(), 10_000, now)).toBe(500);
+  // A Retry-After at/above the floor is still respected verbatim (not overridden).
+  expect(throttleWaitMs(1, "1", 10_000)).toBe(1000);
+  expect(throttleWaitMs(1, "3", 10_000)).toBe(3000);
+  // The floor itself must still respect the remaining sweep budget: a
+  // degenerate Retry-After with almost no budget left still gives up (null),
+  // it is not force-slept past the deadline.
+  expect(throttleWaitMs(1, "0", 100)).toBe(null);
+});
+
 test("non-transient status: throws immediately with no retries (no backoff time wasted)", async () => {
   const orig = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
-    return {
-      ok: false,
-      status: 404,
-      statusText: "Not Found",
-      headers: new Headers(),
-      json: async () => ({}),
-    } as unknown as Response;
+    return new Response(null, { status: 404, statusText: "Not Found" });
   }) as any;
   const sleeps: number[] = [];
   try {

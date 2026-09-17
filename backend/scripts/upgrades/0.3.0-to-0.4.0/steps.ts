@@ -4,6 +4,16 @@ import { TAG_GLOB } from "./release.ts";
 
 const DIR = "0.3.0-to-0.4.0";
 export { TAG_GLOB };
+/**
+ * This release commits SIGNED, REDACTED receipts under `rollout-evidence/<DIR>/`
+ * in addition to the host-local ones.
+ *
+ * Exported ONLY here. v0.2.2 and v0.3.0 do not export it, so their probes take
+ * exactly the path they always took — `receiptsDir()` under $RM_BACKUP_DIR and
+ * nothing else. Opting a shipped release in retroactively would repoint evidence
+ * that has already been executed and graded.
+ */
+export const COMMITTED_EVIDENCE_DIR = DIR;
 export const STEPS: RolloutStep[] = [
   { id: "P2.rc-tag", phase: "P2 release identity", section: "§1", title: "an RC tag points at HEAD", hostRole: "any", actor: "operator", requires: [], dependsOn: [], derived: true, verify: "git tag --points-at HEAD -l 'v0.4.0-rc.*'" },
   { id: "P3.backup", phase: "P3 backup", section: "§3", title: "encrypted replica dump captured", hostRole: "stage", actor: "agent", requires: [], dependsOn: [], artifacts: ["rm-preupgrade-<STAMP>.dump.gpg", "rm-globals-<STAMP>.sql.gpg"], ttlHours: 48, verify: "bun run smoke:capture" },

@@ -64,10 +64,12 @@ test("updateMemberProfile writes only the fields present in the patch, leaving t
   expect((first as any).member.mandate).toBeNull(); // untouched
 
   // A second, disjoint patch must not clobber the first write's fields.
+  // `operator` here is an ordinary display value, not the reserved in-house
+  // one (see the dedicated test below for that refusal) — issue #925.
   const second = await ic.updateMemberProfile(member.token, member.id, {
     mandate: "Read the subject's portfolio for what breaks.",
     mode: "pull",
-    operator: "robotmoney",
+    operator: "peaq",
   });
   expect(second.status).toBe(200);
   const after = await ic.getMember(member.id);
@@ -75,7 +77,46 @@ test("updateMemberProfile writes only the fields present in the patch, leaving t
   expect(after?.biases).toEqual(["pro-diversification", "anti-reflexivity"]); // still there
   expect(after?.mandate).toBe("Read the subject's portfolio for what breaks.");
   expect(after?.mode).toBe("pull");
-  expect(after?.operator).toBe("robotmoney");
+  expect(after?.operator).toBe("peaq");
+});
+
+// Issue #925: defense in depth. Once judge-session.ts's in-house exemption is
+// re-keyed off `handle` (which self-service can never set), a self-declared
+// `operator: 'robotmoney'` no longer gates anything security-relevant — but
+// GET /api/swarm/members still renders `operator` verbatim (#918), so the
+// literal in-house value is refused here to close the cosmetic forgery angle.
+test("POST /api/swarm/members/:id/profile refuses a self-service operator write of 'robotmoney' (any case), but an ordinary value still succeeds", async () => {
+  const member = await activeMember();
+
+  // Exercised over the real route: the refusal lives in validateMemberProfile,
+  // which the route calls BEFORE ic.updateMemberProfile ever sees a patch —
+  // calling the domain function directly would skip validation entirely.
+  for (const forged of ["robotmoney", "RobotMoney", "ROBOTMONEY"]) {
+    const rejected = await postProfile(member.id, member.token, { operator: forged });
+    expect(rejected?.status).toBe(400);
+    expect((rejected?.body as any).error).toContain("robotmoney");
+  }
+  const row = await ic.getMember(member.id);
+  expect(row?.operator).toBeNull(); // none of the rejected attempts wrote anything
+
+  const ok = await postProfile(member.id, member.token, { operator: "self" });
+  expect(ok?.status).toBe(200);
+  expect((ok?.body as any).member.operator).toBe("self");
+});
+
+// Issue #925: the audit trail gap. Previously the self-service update_profile
+// audit row logged only `{ memberId }`; an admin investigating a suspected
+// forgery after the fact had no record of which fields were ever touched.
+test("updateMemberProfile's audit row names the changed fields, mirroring the admin path's style", async () => {
+  const member = await activeMember();
+  await ic.updateMemberProfile(member.token, member.id, { tagline: "hello", mode: "pull" });
+
+  const rows = await sql`
+    SELECT scope FROM audit_log WHERE actor = ${member.id} AND action = 'update_profile' ORDER BY id DESC LIMIT 1`;
+  expect(rows).toHaveLength(1);
+  const scope = (rows[0] as any).scope;
+  expect(scope.memberId).toBe(member.id);
+  expect(new Set(scope.fields)).toEqual(new Set(["tagline", "mode"]));
 });
 
 test("updateMemberProfile rejects an unknown/invalid token (401) and a token/member mismatch (403)", async () => {

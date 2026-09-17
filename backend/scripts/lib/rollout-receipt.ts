@@ -25,6 +25,12 @@
 // one, so the receipts directory itself needs no encryption. `collectDbIdentity`
 // is the only thing that touches a connection, and it selects nothing else.
 //
+// NO SECRETS IS NOT THE SAME AS PUBLISHABLE. A database endpoint is identity,
+// not a credential, and this repository is public — so the FULL receipt stays on
+// its own host, and the copy committed to the tree is a positive-allow-list
+// projection of it (see "Committed evidence" at the foot of this file). Two
+// artefacts, two audiences, one writer.
+//
 // Standalone for the same reason as preflight-utils.ts: node builtins and Bun
 // only, nothing from src/, so a receipt can be written by a script that must
 // never open the application's pool.
@@ -33,6 +39,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { allowedSignersPath, committedReceiptsDir, resolveSigner, signDetached } from "./rollout-signing.ts";
 
 /** Default backup directory — the same one restore-container.ts resolves. */
 /**
@@ -200,9 +207,27 @@ export interface EmitReceiptSpec {
   artifactPaths?: string[];
   attested?: boolean;
   note?: string;
+  /**
+   * OPT-IN, per release: also write a REDACTED, SIGNED copy of this receipt
+   * into the checkout, at `<repoRoot>/rollout-evidence/<committedEvidenceDir>/`.
+   *
+   * Absent = the host-local receipt is the only one written, which is what every
+   * shipped release does and must keep doing. The signing key is named by
+   * ROLLOUT_SIGNING_KEY; with no key the committed copy is SKIPPED rather than
+   * written unsigned, because an unsigned committed receipt is not weaker
+   * evidence, it is no evidence at all, and writing one would only mislead.
+   */
+  committedEvidenceDir?: string;
 }
 
-export function emitReceipt(spec: EmitReceiptSpec): { path: string; receipt: RolloutReceipt } {
+/** Where writeCommittedReceipt() looks for the environment agent's private key. */
+export const SIGNING_KEY_ENV = "ROLLOUT_SIGNING_KEY";
+
+export function emitReceipt(spec: EmitReceiptSpec): {
+  path: string;
+  receipt: RolloutReceipt;
+  committed?: { json: string; sig: string };
+} {
   const g = spec.git ?? gitFacts(spec.repoRoot, spec.tagGlob);
   const receipt: RolloutReceipt = {
     step: spec.step,
@@ -226,7 +251,263 @@ export function emitReceipt(spec: EmitReceiptSpec): { path: string; receipt: Rol
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${spec.step}.json`);
   writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
-  return { path, receipt };
+
+  if (!spec.committedEvidenceDir) return { path, receipt };
+  const written = writeCommittedReceipt({
+    repoRoot: spec.repoRoot,
+    releaseDir: spec.committedEvidenceDir,
+    receipt,
+    keyPath: process.env[SIGNING_KEY_ENV]?.trim() || undefined,
+  });
+  if ("error" in written) {
+    // Never fatal: the host-local receipt is already on disk, and the step's own
+    // exit code is what completes it. A step must not fail because a key was
+    // missing on the box that ran it.
+    console.error(`[rollout-receipt] no committed copy written for ${spec.step}: ${written.error}`);
+    return { path, receipt };
+  }
+  return { path, receipt, committed: written };
+}
+
+// ── Committed evidence: the redacted copy that lives in the tree ─────────────
+//
+// THE PUBLIC-REPO PROBLEM. This repository is public, and a receipt records
+// DbIdentity — the server address, port, database name and user of the
+// production primary — plus the hostname of the box that ran the step.
+// Committing that verbatim publishes production's database endpoint, which is
+// the same objection that ruled out posting receipts as issue comments.
+//
+// THE PROJECTION IS A POSITIVE ALLOW-LIST, not a deny-list, and that is the
+// whole design. A deny-list leaks by DEFAULT: add a field to RolloutReceipt and
+// it ships to a public repo unless somebody remembers to redact it. Here every
+// field must be classified, `Record<keyof RolloutReceipt, Disclosure>` makes an
+// unclassified field a TYPE error, projectForCommit() makes it a RUNTIME error,
+// and scripts/tests/unit/rollout-receipt-redaction.test.ts makes it a TEST
+// failure — so the new field fails three ways before it can leak once.
+//
+// IT COSTS NOTHING MECHANICALLY. rollout-where.ts's evaluate() grades on
+// `r.db.in_recovery` alone; server/port/database/user appear only inside a
+// human-readable `because` string. The full-fidelity receipt keeps every field
+// and stays on its own host in $RM_BACKUP_DIR — the committed copy is a
+// projection of it, never a replacement for it.
+
+/** `public` = committed verbatim. `redacted` = never committed. `projected` =
+ *  committed through its own nested allow-list (only `db`). */
+export type Disclosure = "public" | "redacted" | "projected";
+
+/**
+ * Every field of RolloutReceipt, classified. The `Record<keyof RolloutReceipt,
+ * …>` type is load-bearing: adding a field to RolloutReceipt without adding it
+ * here fails `bun run typecheck` before any test runs.
+ */
+export const RECEIPT_DISCLOSURE: Readonly<Record<keyof RolloutReceipt, Disclosure>> = Object.freeze({
+  step: "public",
+  exit: "public",
+  verdict: "public",
+  started_at: "public",
+  at: "public",
+  // The one field of the receipt proper that is withheld. A hostname names a
+  // real box on a real network and is not needed to grade anything: the probe
+  // re-derives host ROLE from the checkout it is run in, never from a receipt.
+  host: "redacted",
+  host_role: "public",
+  repo_sha: "public",
+  repo_branch: "public",
+  rc_tag: "public",
+  repo_dirty: "public",
+  db: "projected",
+  checks: "public",
+  artifacts: "public",
+  attested: "public",
+  note: "public",
+});
+
+/** Only `in_recovery` survives. Everything else identifies a live database. */
+export const DB_IDENTITY_DISCLOSURE: Readonly<Record<keyof DbIdentity, Disclosure>> = Object.freeze({
+  server: "redacted",
+  port: "redacted",
+  database: "redacted",
+  user: "redacted",
+  in_recovery: "public",
+});
+
+/** The only part of DbIdentity a committed receipt carries. */
+export interface CommittedDbIdentity {
+  in_recovery: boolean;
+}
+
+/** A receipt as committed: the allow-list projection of RolloutReceipt. */
+export interface CommittedReceipt extends Omit<RolloutReceipt, "host" | "db"> {
+  db?: CommittedDbIdentity;
+}
+
+function projectDbIdentity(db: DbIdentity): CommittedDbIdentity {
+  for (const key of Object.keys(db)) {
+    if (!(key in DB_IDENTITY_DISCLOSURE)) {
+      throw new Error(
+        `database identity field "${key}" is not classified in DB_IDENTITY_DISCLOSURE — classify it before a receipt carrying it can be committed`,
+      );
+    }
+  }
+  return { in_recovery: db.in_recovery };
+}
+
+/**
+ * The committed projection of a receipt.
+ *
+ * Throws on an unclassified field rather than emitting it. Output key order is
+ * RECEIPT_DISCLOSURE's, not the input object's, so the same receipt serialises
+ * to the same bytes no matter how it was built — which matters because those
+ * bytes are what gets signed.
+ */
+export function projectForCommit(receipt: RolloutReceipt): CommittedReceipt {
+  for (const key of Object.keys(receipt)) {
+    if (!(key in RECEIPT_DISCLOSURE)) {
+      throw new Error(
+        `rollout receipt field "${key}" is not classified in RECEIPT_DISCLOSURE — classify it public or redacted before it can be committed to a public repository`,
+      );
+    }
+  }
+  const source = receipt as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(RECEIPT_DISCLOSURE) as (keyof RolloutReceipt)[]) {
+    const disclosure = RECEIPT_DISCLOSURE[key];
+    if (disclosure === "redacted") continue;
+    const value = source[key];
+    if (value === undefined) continue;
+    if (disclosure === "projected") {
+      if (key !== "db") throw new Error(`"${key}" is marked projected but has no nested allow-list`);
+      out[key] = projectDbIdentity(value as DbIdentity);
+      continue;
+    }
+    out[key] = value;
+  }
+  return out as unknown as CommittedReceipt;
+}
+
+/** The exact bytes that are committed AND signed. One function, so the writer
+ *  and the verifier can never disagree about a trailing newline. */
+export function serialiseCommittedReceipt(receipt: CommittedReceipt): string {
+  return `${JSON.stringify(receipt, null, 2)}\n`;
+}
+
+/** Writes `<step>.json` plus its detached `<step>.json.sig` into the tree. */
+export function writeCommittedReceipt(spec: {
+  repoRoot: string;
+  releaseDir: string;
+  receipt: RolloutReceipt;
+  keyPath?: string;
+}): { json: string; sig: string } | { error: string } {
+  if (!spec.keyPath) return { error: `${SIGNING_KEY_ENV} is not set — see rollout-procedure.md §1 "Receipts"` };
+  let payload: string;
+  try {
+    payload = serialiseCommittedReceipt(projectForCommit(spec.receipt));
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  const signature = signDetached(payload, spec.keyPath);
+  if (!signature) return { error: `ssh-keygen -Y sign failed with key ${spec.keyPath}` };
+  const dir = committedReceiptsDir(spec.repoRoot, spec.releaseDir);
+  mkdirSync(dir, { recursive: true });
+  const json = join(dir, `${spec.receipt.step}.json`);
+  const sig = `${json}.sig`;
+  writeFileSync(json, payload);
+  writeFileSync(sig, signature);
+  return { json, sig };
+}
+
+export interface CommittedEvidence {
+  receipt: CommittedReceipt;
+  /** The allowed-signers principal whose key signed these exact bytes. */
+  signer: string;
+  path: string;
+}
+
+export interface CommittedEvidenceSet {
+  /** Step id -> evidence, for receipts whose signature verified. */
+  verified: Map<string, CommittedEvidence>;
+  /**
+   * Step id -> why it was thrown away. A committed receipt that does not verify
+   * is NOT the same as no committed receipt: the caller reports it as "no
+   * evidence", so a tampered or unsigned file reads as a deliberate blank rather
+   * than as an absence nobody noticed.
+   */
+  rejected: Map<string, string>;
+}
+
+/**
+ * Every committed receipt for a release, verified fail-closed.
+ *
+ * Unsigned, tampered, wrongly-namespaced, unknown-signer, malformed-.sig and a
+ * missing allowed-signers file all land in `rejected`. Nothing here throws: see
+ * rollout-signing.ts's header on why the probe must survive every one of them.
+ */
+export function readCommittedEvidence(repoRoot: string, releaseDir: string): CommittedEvidenceSet {
+  const verified = new Map<string, CommittedEvidence>();
+  const rejected = new Map<string, string>();
+  const dir = committedReceiptsDir(repoRoot, releaseDir);
+  if (!existsSync(dir)) return { verified, rejected };
+  const allowed = allowedSignersPath(repoRoot);
+  const haveAllowList = existsSync(allowed);
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return { verified, rejected };
+  }
+
+  for (const file of entries) {
+    if (!file.endsWith(".json")) continue;
+    // The id comes from the FILENAME, so a receipt whose JSON will not even
+    // parse still reports against the step it claims to be.
+    const id = file.slice(0, -".json".length);
+    if (!haveAllowList) {
+      rejected.set(id, `no allowed-signers file at ${allowed}`);
+      continue;
+    }
+    let payload: string;
+    try {
+      payload = readFileSync(join(dir, file), "utf8");
+    } catch {
+      rejected.set(id, "unreadable");
+      continue;
+    }
+    let signature = "";
+    try {
+      const sigPath = join(dir, `${file}.sig`);
+      signature = existsSync(sigPath) ? readFileSync(sigPath, "utf8") : "";
+    } catch {
+      signature = "";
+    }
+    if (!signature.trim()) {
+      rejected.set(id, "unsigned");
+      continue;
+    }
+    const signer = resolveSigner({ payload, signature, allowedSigners: allowed });
+    if (!signer) {
+      rejected.set(id, "signature does not verify against the allowed-signers file");
+      continue;
+    }
+    let parsed: CommittedReceipt;
+    try {
+      parsed = JSON.parse(payload) as CommittedReceipt;
+    } catch {
+      rejected.set(id, "signed, but not parseable JSON");
+      continue;
+    }
+    // A receipt is filed under its own `step`, exactly as readReceipts() does.
+    // A file whose name and content disagree is filed under neither.
+    if (!parsed?.step || parsed.step !== id) {
+      rejected.set(id, "filename does not match the receipt's own step id");
+      continue;
+    }
+    const prev = verified.get(parsed.step);
+    if (!prev || parsed.at > prev.receipt.at) {
+      verified.set(parsed.step, { receipt: parsed, signer, path: join(dir, file) });
+    }
+  }
+  return { verified, rejected };
 }
 
 /** Reads every receipt in the directory, newest-wins per step id. Unparseable

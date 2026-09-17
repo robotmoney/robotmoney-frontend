@@ -73,7 +73,7 @@ describe("scripts/stack purity", () => {
       { hooks: { onEvent: (e) => events.push(e) } },
     );
     expect(events).toEqual([]);
-    expect(stack.services).toEqual(["postgres", "api"]);
+    expect(stack.services).toEqual(["postgres", "api", "website-server"]);
     expect(() => stack.backendUrl).toThrow("stack.backendUrl was read before the host port was discovered");
   });
 

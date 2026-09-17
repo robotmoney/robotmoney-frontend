@@ -399,6 +399,16 @@ export function warnIfStrategyVaultsUnconfigured(
 export const SP500_SIZE = 0.6330; // contracts held; owner-stated, last set 2026-03
 export const SP500_TICKER = "^GSPC";
 
+// issue #862 (RM-116), option 3 — the floor. SP500_SIZE is ASSERTED owner data,
+// never read from a wallet or venue API (the `config` valuationKind above), and
+// nothing detects when it goes stale. This is not a fix for that: it is a
+// timestamp of when the size was last confirmed, serialised per-holding
+// (WalletHolding.sizeVerifiedAt) so a reader can see the leg is stated, not
+// read, instead of a live-looking dollar figure with no provenance at all.
+// Bump this date by hand, in a reviewed diff, whenever SP500_SIZE is next
+// reconfirmed against the venue — same rule as the size itself.
+export const SP500_SIZE_VERIFIED_AT = "2026-03-01";
+
 // --- ROBOTMONEY token / WETH / buyback feed ----------------------------------
 // Exposed to the token-metrics + token-buyback dashboards (and any other module)
 // so the real Base addresses live in ONE place. All baked as real defaults so a
@@ -696,6 +706,10 @@ const RM_ENV = process.env.RM_ENV ?? "prod";
 if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
   throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
 }
+const databaseUrl = required("DATABASE_URL");
+if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
+  throw new Error("DATABASE_URL must use the rm_app runtime role in production, never doadmin");
+}
 
 export const config = {
   env: RM_ENV as (typeof VALID_ENVS)[number],
@@ -704,11 +718,8 @@ export const config = {
   allowInsecure: process.env.RM_ALLOW_INSECURE === "1" || RM_ENV === "ephemeral",
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
-  databaseUrl: required("DATABASE_URL"),
+  databaseUrl,
   apiPort: Number(process.env.API_PORT ?? 8787),
-  // If set, the API process also serves this static directory (the built
-  // frontend) — a single-box deployment with no reverse proxy.
-  staticDir: process.env.STATIC_DIR || null,
   // Origins allowed to call this API cross-origin (issue #871): a split-repo
   // frontend deployed as its own container is no longer same-origin, so it
   // needs CORS. Empty by default — the single-box same-origin deployment

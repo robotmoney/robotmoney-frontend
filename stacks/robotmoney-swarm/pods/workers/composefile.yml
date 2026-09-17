@@ -1,0 +1,111 @@
+# workers pod: the three task-queue lanes plus the independent analytics
+# producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env anchor
+# pattern — worker-swarm / worker-analytics / worker-research share the same
+# api image and differ only by WORKER_LANE (and, for worker-swarm, the judge
+# credential — see that service's own block, same reasoning as
+# docker-compose.yml: analytics/research never call a model, so the shared
+# anchor omits it).
+#
+# Images are referenced by tag only — never `build:` here (field guide §3).
+#
+# SECRET FORWARDING: see pods/app/composefile.yml's header for why every
+# secret here uses ${STACK_SECRET_<NAME>:-}, not bare ${<NAME>:-}.
+x-worker-base: &worker-base
+  image: robotmoney/robotmoney-api:stack
+  command: ["bun", "run", "src/worker/index.ts"]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]
+    interval: 15s
+    timeout: 10s
+    retries: 3
+    start_period: 40s
+
+x-worker-env: &worker-env
+  DATABASE_URL: ${STACK_SECRET_DATABASE_URL:-}
+  # Optional queue-scoped restricted role (migrations/0016_worker_role.sql).
+  # Not a stack secret: it names the same external Postgres via a different
+  # role, so it carries no separate credential of its own here.
+  WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
+  # No non-empty inline default here (or anywhere below) — docker-compose.yml
+  # defaults this to smoke; forwarding-only means an operator must set it via
+  # --config, so an inline literal here can never shadow that (field guide §5).
+  RM_ENV: ${RM_ENV:-}
+  PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+  HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+  TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+  # Shared rate-budget knobs (issue #709 / #651). BASE_RPC_URL itself is
+  # deliberately not forwarded here, same as docker-compose.yml: its absence
+  # from this allowlist is the pre-existing defect tracked in #641/#643, out
+  # of scope for this issue even though BASE_RPC_URL IS declared as a stack
+  # secret (stack.yml) ahead of that fix landing.
+  BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
+  BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
+  WALLET_BACKFILL_MAX_DAYS_PER_RUN: ${WALLET_BACKFILL_MAX_DAYS_PER_RUN:-}
+  WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
+  GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
+  # Declared with a NULL value, not ${OPENCODE_TIMEOUT_MS:-}: `:-` resolves to
+  # the empty string when unset, and Number(process.env.OPENCODE_TIMEOUT_MS ??
+  # 120000) treats '' as 0 (an instant timeout), not as absent. The null form
+  # omits the variable entirely when the host value is unset, preserving the
+  # committed default. Verified against this stack version (2.0.0-47a4772):
+  # the compose target passes composefiles through to `docker compose`
+  # unmodified, so this is the same omit-when-unset behavior
+  # scripts/tests/integration/demo-compose-config.test.ts already asserts for
+  # docker-compose.yml's identical declaration.
+  OPENCODE_TIMEOUT_MS:
+  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
+  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
+  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
+
+services:
+  worker-swarm:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: swarm
+      # Consensus judge (issue #752) — THIS LANE ONLY, same reasoning as
+      # docker-compose.yml: worker-analytics/worker-research never run
+      # swarm.judge, so the shared worker-env anchor omits the credential.
+      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
+      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+
+  worker-analytics:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: analytics
+
+  worker-research:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: research
+
+  # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
+  # queue access, no ADMIN_TOKEN.
+  analytics-producer:
+    image: robotmoney/robotmoney-producer:stack
+    command: ["bun", "run", "src/producer/index.ts", "serve"]
+    environment:
+      ANALYTICS_API_URL: http://api:8787
+      # Plain env var, not ANALYTICS_TOKEN_FILE: stack has no docker-secrets-
+      # file mechanism, and producer/index.ts:23 already accepts either form
+      # (stack-orchestrator.md §6).
+      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      # No inline default — docker-compose.yml defaults these two crons;
+      # forwarding-only here, same reasoning as RM_ENV above.
+      PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-}
+      PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      # Longer than the lanes': startProducerSchedules blocks on waitForApi
+      # for up to 120s before the first heartbeat.
+      start_period: 180s

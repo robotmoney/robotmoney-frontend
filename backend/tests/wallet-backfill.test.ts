@@ -113,7 +113,7 @@ test("a repaired day lands in BOTH series, tagged 'backfilled', at the block's o
   expect(result.balanceRows).toBeGreaterThan(0);
   expect(result.sleeveRows).toBeGreaterThan(0);
 
-  const balances = await sql<{ symbol: string; amount: string; price_usd: string; value_usd: string; provenance: string; sampled_at: Date }[]>`
+  const balances = await sql<{ symbol: string; amount: string; price_usd: string | null; value_usd: string; provenance: string; sampled_at: Date }[]>`
     SELECT symbol, amount, price_usd, value_usd, provenance, sampled_at
       FROM wallet_balance_samples WHERE sample_date = ${D1} ORDER BY symbol
   `;
@@ -123,7 +123,9 @@ test("a repaired day lands in BOTH series, tagged 'backfilled', at the block's o
     // must stay distinguishable from a sample taken on the day, forever.
     expect(row.provenance).toBe("backfilled");
     expect(Number(row.amount)).toBe(5);
-    expect(Number(row.price_usd)).toBe(2);
+    // D41 phase 4 (markets §5.6): the window executor no longer writes
+    // price_usd on repair — asset_prices is the sole write target now.
+    expect(row.price_usd).toBeNull();
     expect(Number(row.value_usd)).toBe(10);
     // sampled_at is the BLOCK's timestamp — the real observation time — not now.
     expect(Math.floor(new Date(row.sampled_at).getTime() / 1000)).toBe(BLOCK_TS);
@@ -359,13 +361,14 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
   const result = await backfillWalletDay(sql, D2, happyDeps(), NOW);
   expect(result.status).toBe("filled");
 
-  const [replacement] = await sql<{ amount: string; price_usd: string; provenance: string }[]>`
+  const [replacement] = await sql<{ amount: string; price_usd: string | null; provenance: string }[]>`
     SELECT amount, price_usd, provenance
       FROM wallet_balance_samples
      WHERE sample_date = ${D2} AND symbol = 'WETH'
   `;
   expect(Number(replacement!.amount)).toBe(5);
-  expect(Number(replacement!.price_usd)).toBe(2);
+  // D41 phase 4 (markets §5.6): the repair path no longer writes price_usd.
+  expect(replacement!.price_usd).toBeNull();
   expect(replacement!.provenance).toBe("backfilled");
 
   const [evidence] = await sql<{ price_usd: string; provenance: string; evidence_reason: string }[]>`
@@ -376,14 +379,15 @@ test("quarantined rows remain immutable evidence and their logical keys accept v
   expect(Number(evidence!.price_usd)).toBe(50000);
   expect(evidence!.provenance).toBe(QUARANTINED_PROVENANCE);
   expect(evidence!.evidence_reason).toBe("quarantined-replacement");
-  const [sleeveReplacement] = await sql<{ price_usd: string; provenance: string }[]>`
+  const [sleeveReplacement] = await sql<{ price_usd: string | null; provenance: string }[]>`
     SELECT price_usd, provenance
       FROM wallet_sleeve_samples
      WHERE sample_date = ${D2}
        AND wallet_address = ${sleeveTarget.walletAddress}
        AND symbol = ${sleeveTarget.asset.symbol}
   `;
-  expect(Number(sleeveReplacement!.price_usd)).toBe(2);
+  // D41 phase 4 (markets §5.6): the repair path no longer writes price_usd.
+  expect(sleeveReplacement!.price_usd).toBeNull();
   expect(sleeveReplacement!.provenance).toBe("backfilled");
   const [sleeveEvidence] = await sql<{ price_usd: string; evidence_reason: string }[]>`
     SELECT price_usd, evidence_reason

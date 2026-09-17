@@ -21,6 +21,15 @@
 export const REGIME_RISK_OFF = 0.33;
 export const REGIME_RISK_ON = 0.67;
 
+export const REGIME_METHOD = /** @type {const} */ ({
+  id: "composite-v1",
+  inputs: ["macro", "onchain"],
+  context: "trailing-3y-rolling-percentile",
+  basis: "utc-daily-close",
+  cuts: { risk_off: REGIME_RISK_OFF, risk_on: REGIME_RISK_ON },
+});
+
+
 /**
  * Classify a regime composite score into its canonical label.
  * composite < 0.33 → "risk_off"; composite >= 0.67 → "risk_on"; else "neutral".

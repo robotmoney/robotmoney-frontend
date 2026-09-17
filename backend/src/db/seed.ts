@@ -83,6 +83,18 @@ export const SCHEDULES: SeedSchedule[] = [
   // reads BASE_RPC_SOURCE=stub, so its sweep costs no provider budget.
   // Handler: worker/handlers/repair.ts.
   { kind: "ops.repair_gaps", cron: "*/5 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Retroactive asset_prices coverage backfill (issue #927, markets §8.1). The
+  // live sampler's forward dual-write (worker/handlers/wallet.ts) only covers
+  // days sampled after that change deployed; this cron is what closes the gap
+  // for history that predates it, and for any day whose forward dual-write
+  // failed (e.g. a pool-resolution hiccup) — same "converges over successive
+  // runs, bounded per run" shape as ops.repair_gaps, not a one-shot script.
+  // Every 15 minutes: less urgent than chain-derived wallet gaps above (a
+  // day's asset_prices row does not block a read — the three join sites still
+  // fall back to the sample row's own price/value while it is missing), and
+  // the anti-join query is cheap to run against a caught-up deployment.
+  // Handler: worker/handlers/index.ts → ops/asset-prices.ts::backfillAssetPricesForCleanDays.
+  { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via
   // resolveSwarmSchedules(), and (unlike every other row here) their

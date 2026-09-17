@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -118,6 +119,27 @@ test("POST /api/swarm/apply rejects malformed Ed25519 keys and an invalid signat
   const goodRes = await callApply(good.body);
   expect(goodRes?.status).toBe(201);
   expect((goodRes?.body as { memberId: string }).memberId).toBeString();
+});
+
+// #848: applying is deliberately not a role-claim path. The public parser
+// admits only the signed application fields, and a client-supplied role cannot
+// change the database default. Judge/Validator assignment remains on the
+// privileged admin review/role routes (admin-swarm.test.ts).
+test("POST /api/swarm/apply cannot self-assign the judge role", async () => {
+  const applied = await signedApply({ name: "No Self-Assigned Judge", contact: `${rid("judge")}@example.test` });
+  const req = new Request("http://test/api/swarm/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // `role` is intentionally outside the canonical signed application shape.
+    body: JSON.stringify({ ...applied.body, role: "judge" }),
+  });
+
+  const result = await handleSwarm(req, new URL(req.url));
+  expect(result?.status).toBe(201);
+  const memberId = (result!.body as { memberId: string }).memberId;
+  const member = (await sql<{ role: string; status: string }[]>`
+    SELECT role, status FROM swarm_members WHERE id = ${memberId}`)[0];
+  expect(member).toEqual({ role: "member", status: "applied" });
 });
 
 // Issue #789, second half. `canonicalPublicKeyBytes()` gates every path that
@@ -372,8 +394,10 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
   expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief!.body!.windowClosesAt);
+  expect((brief?.body?.regime as any)?.method).toBe(REGIME_METHOD.id);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
+
   const submit = async (stance: string, confidence: number) => {
     const m = await activeMember();
     const sub = {
@@ -410,6 +434,8 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(typeof rs.history[0].composite).toBe("number");
   expect(rs).toHaveProperty("macro_percentile");
   expect(rs).toHaveProperty("onchain_regime");
+  expect(rs.method).toBe(REGIME_METHOD.id);
+
 
   // subject snapshot total flowed onto the session.
   expect(s.subjectSnapshotTotalValueUsd).toBeGreaterThan(0);
@@ -475,18 +501,21 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
       confidence: 0.9,
       body: "Member one supports the submitted allocation because liquidity is observable.",
       weights: [{ bucket: "alpha", weight: 2 }, { bucket: "beta", weight: 1 }],
+      cites: ["signal_a"],
     },
     {
       stance: "cautious",
       confidence: 0.6,
       body: "Member two prefers a larger beta sleeve until volatility settles.",
       weights: [{ bucket: "alpha", weight: 1 }, { bucket: "beta", weight: 3 }, { bucket: "gamma", weight: 1 }],
+      cites: ["signal_a", "signal_b"],
     },
     {
       stance: "neutral",
       confidence: 0.3,
       body: "",
       weights: [{ bucket: "beta", weight: 1 }, { bucket: "gamma", weight: 1 }],
+      cites: ["signal_b", "signal_c"],
     },
   ];
   for (let index = 0; index < fixtures.length; index++) {
@@ -543,7 +572,11 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
   expect(recommendation.disagreements[0].topic).not.toMatch(/^Submitted views on/);
   expect(recommendation.disagreements[0].what_settles).not.toBe("");
   expect(recommendation.stances.neutral).toBe(1);
-  expect(detail?.takes[2].weights).toEqual(fixtures[2].weights);
+  expect(detail?.takes[2].weights).toEqual([
+    { bucket: "beta", weight: 0.5 },
+    { bucket: "gamma", weight: 0.5 }
+  ]);
+  expect(recommendation.citedSignals).toEqual({ signal_a: 2, signal_b: 2, signal_c: 1 });
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
@@ -708,10 +741,8 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
 
 test("GET /api/swarm/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
-  await ic.ensureSubject(subj, "Full Projection Subject");
+  await ic.ensureSmokeSubjectFixtures(subj, "Full Projection Subject", "2026-07-05");
   const session = await ic.openSession(subj);
-  // The DATABASE dates the session (migration 0022) — read it back rather
-  // than asserting a date this test chose.
   const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
   const m = await activeMember();
@@ -938,6 +969,100 @@ test("GET /api/swarm/members exposes rosterCap, seatsFilled, and seatsAvailable,
   expect(afterDeactivate.members.length).toBe(0);
   expect(afterDeactivate.seatsFilled).toBe(0);
   expect(afterDeactivate.seatsAvailable).toBe(ic.SWARM_ROSTER_CAP);
+});
+
+test("GET /api/swarm/members exposes lastTakeAt (#782): null until a member's first take, then the newest received_at across revisions — not status:'active' or the session's convened_at", async () => {
+  const getMembersRoute = async () => {
+    const req = new Request(`http://test${ROUTES.swarm.members}`);
+    const res = await handleSwarm(req, new URL(req.url));
+    expect(res?.status).toBe(200);
+    return (res!.body as { members: any[] }).members;
+  };
+
+  const subj = rid("lastTake");
+  await ic.ensureSubject(subj, "Last Take Subject");
+  const m = await activeMember();
+
+  // A live seat with zero takes must not be confused with a participating one.
+  const before = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(before.status).toBe("active");
+  expect(before.lastTakeAt).toBeNull();
+
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  await ic.publishBrief(session.id, 60);
+  const first = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "x".repeat(80) };
+  const firstSig = await signMessage(canonicalizeSubmission(first), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...first, signature: firstSig })).status).toBe(201);
+
+  const firstReceivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+  const afterFirst = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(afterFirst.lastTakeAt).toBe(firstReceivedAt.toISOString());
+
+  // An amendment (issue #573 revision, same session) is a NEW row with its own
+  // received_at — lastTakeAt must track the newest one, not the first.
+  const amendment = { ...first, nonce: rid("n2"), stance: "bullish" };
+  const amendmentSig = await signMessage(canonicalizeSubmission(amendment), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...amendment, signature: amendmentSig })).status).toBe(201);
+
+  const latestReceivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+  expect(latestReceivedAt.getTime()).toBeGreaterThan(firstReceivedAt.getTime());
+  const afterAmendment = (await getMembersRoute()).find((x) => x.id === m.id);
+  expect(afterAmendment.lastTakeAt).toBe(latestReceivedAt.toISOString());
+});
+
+// Issue #782 follow-up (review finding DATA_STALE_DERIVED_STATE-1): getMembers()'s
+// LEFT JOIN LATERAL only ever ran on the roster-list query. getMember() (via
+// resolveMemberRow) and updateMemberProfile()'s UPDATE...RETURNING never
+// selected last_take_at at all, so instant(undefined) silently produced
+// lastTakeAt: null for every single-member read regardless of real take
+// history — indistinguishable from "never took a position". This exercises
+// both call sites, over the real routes, the same way the getMembers test
+// above exercises that one.
+test("GET /api/swarm/members/:id and the profile-update RETURNING path also expose a real lastTakeAt (#782 follow-up), not just getMembers()", async () => {
+  const subj = rid("lastTakeSingle");
+  await ic.ensureSubject(subj, "Last Take Single Subject");
+  const m = await activeMember();
+
+  // Before any take, both single-member paths agree with getMembers(): null.
+  const beforeGet = await ic.getMember(m.id);
+  expect(beforeGet?.lastTakeAt).toBeNull();
+  const beforeRoute = await handleSwarm(
+    new Request(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+    new URL(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+  );
+  expect(beforeRoute?.status).toBe(200);
+  expect((beforeRoute!.body as any).lastTakeAt).toBeNull();
+
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  await ic.publishBrief(session.id, 60);
+  const take = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "x".repeat(80) };
+  const sig = await signMessage(canonicalizeSubmission(take), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...take, signature: sig })).status).toBe(201);
+
+  const receivedAt = (
+    await sql<{ t: Date }[]>`SELECT max(received_at) AS t FROM swarm_recommendations WHERE member_id = ${m.id}`
+  )[0].t;
+
+  // getMember() / GET /api/swarm/members/:id — resolveMemberRow's join.
+  const afterGet = await ic.getMember(m.id);
+  expect(afterGet?.lastTakeAt).toBe(receivedAt.toISOString());
+  const afterRoute = await handleSwarm(
+    new Request(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+    new URL(`http://test${routePath(ROUTES.swarm.member, { id: m.id })}`),
+  );
+  expect((afterRoute!.body as any).lastTakeAt).toBe(receivedAt.toISOString());
+
+  // updateMemberProfile()'s UPDATE...RETURNING path — a disjoint FROM-subquery
+  // join, not the resolveMemberRow one above, so it needs its own assertion.
+  const updated = await ic.updateMemberProfile(m.token, m.id, { tagline: "still taking positions" });
+  expect(updated.status).toBe(200);
+  expect((updated as any).member.lastTakeAt).toBe(receivedAt.toISOString());
 });
 
 test("POST /api/swarm/signing-payload and submit reject unknown stances and unknown top-level fields with 400 and clear error string", async () => {
@@ -1268,4 +1393,62 @@ test("GET subject snapshots: omitting limit/before returns everything; both are 
   const before = await get(`${routePath(ROUTES.swarm.subjectSnapshots, { id: subj })}?before=2026-08-03`);
   const beforeBody = before?.body as { snapshots: { date: string }[] };
   expect(beforeBody.snapshots.map((s) => s.date)).toEqual(["2026-08-02", "2026-08-01"]);
+});
+
+test("normalizedTakeWeights gates malformed weights (negative weight, non-array)", () => {
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: -1 }])).toBeNull();
+  expect(ic.normalizedTakeWeights({ bucket: "b", weight: 1 })).toBeNull();
+  expect(ic.normalizedTakeWeights("not an array")).toBeNull();
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 0 }])).toBeNull(); // 0 total weight is invalid
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 1 }])).toEqual([{ bucket: "b", weight: 1 }]);
+});
+
+test("ordinal string formatting for percentiles in buildRationale and buildConsensus", () => {
+  const cases = [
+    { n: 1, suffix: "1st" },
+    { n: 2, suffix: "2nd" },
+    { n: 3, suffix: "3rd" },
+    { n: 11, suffix: "11th" },
+    { n: 12, suffix: "12th" },
+    { n: 13, suffix: "13th" },
+    { n: 21, suffix: "21st" },
+    { n: 22, suffix: "22nd" },
+    { n: 23, suffix: "23rd" },
+    { n: 83, suffix: "83rd" },
+  ];
+  const byStance = { neutral: 1 };
+  
+  for (const c of cases) {
+    const rs = { composite_percentile: c.n / 100, regime: "bullish" };
+    const rationale = ic.buildRationale("Subject", byStance, 1, null, rs);
+    expect(rationale).toContain(`regime composite at the ${c.suffix} percentile`);
+    
+    const consensus = ic.buildConsensus(1, 1, 1, byStance, null, rs);
+    const found = consensus.some((pt: string) => pt.includes(`Regime composite at the ${c.suffix} percentile`));
+    expect(found).toBe(true);
+  }
+});
+
+import { toTake } from "../src/swarm/projections.ts";
+
+test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
+  const row = {
+    id: "fake-id",
+    member_id: "fake-member",
+    member_handle: "fake-handle",
+    member_name: "Fake Member",
+    stance: "bullish",
+    confidence: 0.8,
+    body: "fake body",
+    memo_url: null,
+    verified: true,
+    payload: { weights: [{ bucket: "b", weight: -1 }] }, // Malformed!
+  };
+  const takeDto = toTake(row as any);
+  expect(takeDto.weights).toBeNull();
+
+  // And test valid weights just in case
+  const rowValid = { ...row, payload: { weights: [{ bucket: "b", weight: 1 }] } };
+  const takeDtoValid = toTake(rowValid as any);
+  expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
 });

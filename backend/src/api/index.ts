@@ -1,9 +1,10 @@
-// HTTP entrypoint. Uses Bun's native server (Bun.serve) — no framework. It both
-// answers the JSON API and serves the static frontend (STATIC_DIR), so a
-// single-box deployment needs no reverse proxy.
+// HTTP entrypoint. Uses Bun's native server (Bun.serve) — no framework. This
+// process answers the JSON API ONLY: the marketing/SPA/docs site is served by
+// the sibling `website-server` nginx image (issue #892), which proxies /api/
+// and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
-import { sql } from "../db/client.ts";
+import { isDatabaseUnavailable, sql } from "../db/client.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
@@ -14,8 +15,8 @@ import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
-import { serveStatic } from "./static.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
+import { resolveClientIp } from "./client-ip.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -97,16 +98,11 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
-    // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
-    // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
-    // (taking the last hop = the proxy's view of the peer); otherwise the raw
-    // socket address. Prevents trivial rate-limit evasion via spoofed XFF.
+    // Client ip for rate limiting. See client-ip.ts's resolveClientIp() for
+    // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
+    // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    let clientIp = peer;
-    if (config.trustProxy) {
-      const fwd = req.headers.get("x-forwarded-for");
-      if (fwd) clientIp = fwd.split(",").map((s) => s.trim()).filter(Boolean).pop() || peer;
-    }
+    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
 
     try {
       return withCors(await route(req, url, pathname, clientIp), req, pathname);
@@ -114,6 +110,18 @@ const server = Bun.serve({
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
       if (err instanceof URIError) return withCors(json({ error: "bad request" }, 400), req, pathname);
+      // The database being unreachable is not a handler bug, and answering it
+      // as one (`500 internal error`) told nobody anything: the page printed
+      // the envelope verbatim, and an operator could not tell an outage from a
+      // defect without shelling into the container (issue #968). 503 is the
+      // honest status — the condition is transient and the api itself is fine
+      // — and the reason is named so the SPA can say "database unavailable"
+      // rather than "internal error". Narrow by construction: a bad query
+      // still reports as a 500 (see isDatabaseUnavailable).
+      if (isDatabaseUnavailable(err)) {
+        console.error("api error (database unavailable):", err);
+        return withCors(json({ error: "database unavailable" }, 503), req, pathname);
+      }
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
     }
@@ -330,13 +338,12 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       if (r) return json(r.body, r.status);
     }
 
-    // Unmatched API path → 404 JSON (never fall through to static).
+    // Unmatched API path → 404 JSON.
     if (pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
 
-    const stat = await serveStatic(pathname, config.staticDir);
-    if (stat) return stat;
+    // Everything else is the website-server nginx image's job now (issue
+    // #892) — this process ships no static-serving code at all.
     return new Response("Not found", { status: 404 });
 }
 
 console.log(`api listening on :${server.port} (env=${config.env})`);
-if (config.staticDir) console.log(`serving static frontend from ${config.staticDir}`);

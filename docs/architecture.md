@@ -126,7 +126,7 @@ network, or a real model call never shares a directory with a pure unit test.
 **CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
 (issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
 `integration` (the `scripts/tests/integration` cost class), `backend`,
-`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`. Each of
+`research-pipeline`, `web-client`, `onboarding-eval-rails`, and `e2e`. Each of
 these is **directly required** in branch protection — there is no fan-in/gate
 workflow aggregating them (see "No fan-in gate" below for why, and for what
 used to be here).
@@ -166,7 +166,7 @@ job-level-skip property above. Issue #348 tracks investigating a structurally
 sounder fan-in replacement (likely `workflow_run`-based, avoiding the
 polling-for-an-external-commit class of bug entirely) for if/when one is
 needed again. Flipping the actual branch-protection required-check list to
-list these workflows individually (`unit`, `backend`, `contract`, `frontend`,
+list these workflows individually (`unit`, `backend`, `contract`, `web-client`,
 `integration`, `e2e`, `repo-guards`, `research-pipeline`,
 `onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
 the GitHub UI, not something automatable from this repo.
@@ -198,15 +198,30 @@ the GitHub UI, not something automatable from this repo.
   model token) stays inside `e2e.yml`'s "Full-stack smoke" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
-- `frontend` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
-  above for what backed this requirement before it was removed) is a genuine,
-  dedicated workflow (`.github/workflows/frontend.yml`, `name: frontend`). It
-  runs ONLY the Playwright specs that don't need a live backend — today exactly
-  `frontend/test/browser/preview-smoke.spec.ts`, which spawns its own
-  `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
-  feature-correctness-class addition, not a substitute: `e2e.yml`'s
+- `web-client` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
+  above for what backed this requirement before it was removed; superseded and
+  renamed from `frontend.yml`/`name: frontend`, 2026-09-17, D45) is the web
+  client's OWN merge gate and CI/CD policy, versioned independently of the
+  api/backend and the contract via `frontend/package.json`'s
+  `@robotmoney/web-client` manifest. Only four things block a client merge:
+  the client's unit tests (`bun run --cwd frontend test`, the subset of
+  `scripts/tests/unit/` named in `frontend/test/unit.list`), the static
+  assembly/prerender failing to build, the preview page failing to load at
+  all, or a Chrome console error while Playwright loads it. The last two are
+  both covered by `frontend/test/browser/preview-routes.spec.ts`, which sweeps
+  every `sitemap.xml` route inside the FIXTURES-mode preview (goldens answer
+  `/api/*`, `scripts/preview-server.ts` — no `BACKEND_URL`, no Docker), plus
+  the pre-existing `preview-smoke.spec.ts` and `api-unreachable.spec.ts` — a
+  fast, feature-correctness-class addition, not a substitute: `e2e.yml`'s
   `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
   including specs that need the live backend the full smoke boot provides.
+  The preview wrapper's `?api=` switch can also point `/api/*` at a live prod
+  or stage api instead of goldens (mainly a developer tool — `bun run --cwd
+  frontend check:prod` / `check:stage`); `web-client.yml` runs that sweep too,
+  but ADVISORY only (`continue-on-error: true`, reported in the job summary) —
+  a live host being unreachable says nothing about the PR's client code, so it
+  can never block the merge. Backend/db/api changes get their own coverage of
+  the client surfaces in `backend.yml`/`integration.yml`/`e2e.yml`, unchanged.
 
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
@@ -335,7 +350,9 @@ Hand-written, no Tailwind, in three files:
 > This section is the **canonical, complete spec** of the preview feature
 > (decisions [D14](./decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file),
 > [D19](./decisions.md#d19--hosted-preview-urls-on-cloudflare-pages-revises-d14-and-d13),
-> [D20](./decisions.md#d20--no-bake-preview-hosting-via-cloudflare-git-integration-revises-d19);
+> [D20](./decisions.md#d20--no-bake-preview-hosting-via-cloudflare-git-integration-revises-d19),
+> [D45](./decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)
+> (the `?api=` live switch, `/version.json`, and the `web-client.yml` gate);
 > the former `preview-server-spec.md` is retired).
 
 Lightweight hosting for **agentic development of the marketing surface** (the
@@ -363,14 +380,22 @@ that fetches `/index.html` (the production SPA), runs it inside a same-origin
 iframe, and **patches the iframe's fetch and history BEFORE document.open()** so
 the interception is in place when the SPA's HTML runs. The SPA is **unmodified**
 — it still requests same-origin `/api/*` as normal, unaware of any interception.
-GET `/api/*` calls are answered from goldens fetched from
-`/goldens/api-goldens.json` into JS memory (query string dropped — a golden is
-one point in time; an un-goldened route 404s); non-GET requests
-(POST/PUT/DELETE) return `{ok: true, mocked: true}` no-ops. A red "PREVIEW"
-watermark remains permanently visible. SPA navigation
-(`history.pushState`/`replaceState`) mirrors to the parent URL's hash so deep
-links are shareable: `/#/allocation` loads that view. The mocking is entirely
-client-side — no backend, no reverse proxy, no server-side `/api` replay.
+By default (`?api=fixtures`, or no `?api=` at all) GET `/api/*` calls are
+answered from goldens fetched from `/goldens/api-goldens.json` into JS memory
+(query string dropped — a golden is one point in time; an un-goldened route
+404s). `?api=prod`, `?api=stage`, or any `?api=<http(s) origin>` instead
+forwards GET `/api/*` to that live api (`credentials: "omit"` — no session is
+ever attached). **Every non-GET request** (POST/PUT/DELETE) returns
+`{ok: true, mocked: true}` **in every mode, live included** — a preview can
+never write to a live api. A watermark remains permanently visible, red for
+`fixtures` and blue for a live `?api=`, naming which mode is active and the
+client's own `name@version` (read from `/version.json`,
+[D45](./decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)).
+SPA navigation (`history.pushState`/`replaceState`) mirrors to the parent
+URL's hash so deep links are shareable: `/#/allocation` loads that view. The
+mocking is entirely client-side — no backend, no reverse proxy, no
+server-side `/api` replay (`?api=` excepted, which is a same-origin-fetch
+rewrite, not a server-side proxy either).
 
 **URL space contract** (local `bun run preview` only — there is no hosted
 deployment of this space, see below):
@@ -381,6 +406,7 @@ deployment of this space, see below):
 | `/index.html`, `/assets/*`, everything else | the SPA (`frontend/public/*`) at the root, so its absolute asset paths work natively — no rewrite rules |
 | `/goldens/api-goldens.json` | the goldens |
 | `/preview/index.html` | the wrapper (direct path) |
+| `/version.json` | the web client's identity: `{name, version, commit}` from `frontend/package.json` + `HEAD` |
 | miss (incl. direct `/api/*`) | 404 via `404.html`, which bounces back to `/#<path>` |
 
 **Local: `bun run preview`** (`scripts/preview-server.ts`). A minimal in-place
@@ -412,14 +438,20 @@ fixtures, so the shapes stay faithful to what the backend actually returns.
 
 **Enforcement: every-PR CI, author-owned currency.** Keeping the preview current
 is the **PR author's responsibility** — there is no nightly regeneration and no
-deploy-side check. Two gates run in the normal PR suite:
+deploy-side check. Three gates run in the normal PR suite:
 
 - **Preview smoke** — `frontend/test/browser/preview-smoke.spec.ts` spawns the
   real `bun run preview` server and asserts the wrapper renders the SPA,
   goldens-backed GET mocking, non-GET no-ops, the 404 behavior, and hash deep
-  links. It runs in the regular Playwright suite (`bun run test:browser`),
-  executed by the **`e2e` workflow's `e2e` job** (smoke readiness gate) on every
-  ready PR.
+  links. It runs in the regular Playwright suite (`bun run test:browser`,
+  executed by the **`e2e` workflow's `e2e` job**, smoke readiness gate, on every
+  ready PR) AND, backend-free, in `web-client.yml` on every client-touching PR
+  including drafts (D45).
+- **Preview route sweep** — `frontend/test/browser/preview-routes.spec.ts`
+  loads every `sitemap.xml` route in the fixtures-mode preview and blocks the
+  merge on any console error or failed load; the same sweep against
+  `?api=prod`/`?api=stage` is advisory only. Runs in **`web-client.yml`**
+  (`bun run --cwd frontend check`).
 - **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
   `bun test scripts/tests` in the **`integration` workflow's
@@ -444,15 +476,18 @@ TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
   (`comments`, `dashboards`, `swarm`, `projects`, `admin`, `analytics`), using
-  `postgres` (postgres.js) with raw SQL.
-- **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
-  serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
-  deep links — so the SPA and its API are **same-origin** (no CORS) with no
-  reverse proxy. In production this surface is its own subdomain
-  (`swarm.robotmoney.net`), Cloudflare-proxied for TLS (see the
-  topology's [subdomain map](#3-the-surfaces--subdomain-map)); CORS headers remain for an optional split-origin
-  setup.
+  `postgres` (postgres.js) with raw SQL. This process ships **no static-serving
+  code at all** (issue #892) — see `website-server/` below.
 - `src/worker/` — the always-on task-queue worker (see §7).
+
+**`website-server/`** — a plain `nginx:alpine` image (`website-server/Dockerfile`
++ `website-server/nginx.conf`), split out of the api image (issue #892). Serves
+the assembled `_static/` (bind-mounted, never baked into the image) with a
+`try_files` fallback rule replicating the old `routeShell()`'s order
+(`<route>/index.html` → `_shell.html` → `index.html`), and proxies `/api/` +
+`/health` through to the `api` service so the pair still present as one
+same-origin surface (no CORS, no client change) wherever nothing else fronts
+them — this repo's own local dev/smoke/e2e harness included.
 - `src/db/` — connection pools (`client.ts` for the API/migrations;
   `worker-client.ts` for the worker's queue-scoped access, honoring
   `WORKER_DATABASE_URL` → the restricted `rm_worker` role of migration
@@ -703,7 +738,18 @@ read/write goes through the `AnalyticsPersistence` port
 (`analytics/persistence.ts`). The independent `analytics-producer` uses the HTTP
 implementation (`analytics/api-client.ts`), submitting through authenticated typed routes
 `GET/POST /api/analytics/raw-history`, `POST /api/analytics/raw-history/seed`,
-`POST /api/analytics/regime-snapshots`, and `POST /api/analytics/research-signals`
+and — since issue #978 — `POST /api/analytics/run-packages`, the terminal run
+package that is the SOLE publisher of `regime_snapshots` and `research_signals`
+(the orchestrator no longer writes either projection mid-run, so a run that
+fails partway can never leave the current view ahead of the immutable ledger).
+The standalone `POST /api/analytics/regime-snapshots` and
+`POST /api/analytics/research-signals` upserts were RETIRED by issue #978 —
+they wrote the current views with no run, no immutable artifact and no report
+snapshot, so any `ANALYTICS_TOKEN` holder could publish regime rows no frozen
+report contained and a signed brief would then bind to some other run's report.
+Nothing called them: the offline eq-snapshot import (`db/import-regime-eq.ts`)
+and `POST /api/swarm/regime` reach `store/regime-store.ts` in process and never
+went through the HTTP boundary
 (`api/routes/analytics.ts`) with the analytics-provider bearer
 (`ANALYTICS_TOKEN_FILE`; wiring: `ANALYTICS_API_URL`). Only the producer and API
 verifier mount that secret; the producer has no `DATABASE_URL` or admin token.
@@ -932,17 +978,18 @@ covers what *this repo* ships.
 
 **CI & smoke — single box**, `docker-compose.yml`:
 
-- `postgres` + `api` + the three worker lanes (`worker-swarm` /
-  `worker-analytics` / `worker-research`, §7). The `api` process **also serves
-  the static frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
-  `/srv/frontend` is a bind mount of `_static/`, an **assembled** directory
-  (`scripts/static-assembly.sh`: `frontend/public` plus the per-route
-  `<route>/index.html` `scripts/prerender.ts` writes from `seo.js`'s table), not
-  the raw source tree — so a plain `curl` of any sitemap route returns that
-  route's own `<title>`/`og:*` and link unfurlers stop reading every URL as the
-  home page (D29). `scripts/stack/stack.ts`'s `up()` runs the assembly before
-  `docker compose up`; a hand-run `docker compose up` needs
-  `bun run static:assemble` first.
+- `postgres` + `api` + `website-server` + the three worker lanes (`worker-swarm`
+  / `worker-analytics` / `worker-research`, §7). `website-server` (a plain
+  `nginx:alpine`, issue #892) serves the static frontend and proxies `/api/` +
+  `/health` to `api`, so the pair still present as **one origin, no app-level
+  proxy needed by the client**. Its bind mount (`/srv/frontend`) is `_static/`,
+  an **assembled** directory (`scripts/static-assembly.sh`: `frontend/public`
+  plus the per-route `<route>/index.html` `scripts/prerender.ts` writes from
+  `seo.js`'s table), not the raw source tree — so a plain `curl` of any sitemap
+  route returns that route's own `<title>`/`og:*` and link unfurlers stop
+  reading every URL as the home page (D29). `scripts/stack/stack.ts`'s `up()`
+  runs the assembly before `docker compose up`; a hand-run `docker compose up`
+  needs `bun run static:assemble` first.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *smoke*: named `pgdata` volume persists across restarts.
@@ -951,16 +998,17 @@ covers what *this repo* ships.
 credentials in [deployment.md](./runbooks/deployment.md)):
 
 - **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
-  (`swarm.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
-  subdomain root. Cloudflare-proxied; a DO Cloud Firewall limits ingress to
-  Cloudflare IPs.
+  (`swarm.robotmoney.net`); `website-server` co-serves this surface's SPA
+  assets at the subdomain root (issue #892), proxying `/api/` through to `api`.
+  Cloudflare-proxied; a DO Cloud Firewall limits ingress to Cloudflare IPs.
 - **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
   (no `postgres` container).
 - **Static tier** — marketing's intended end-state is a **DO Spaces CDN** on the
-  apex/`www`, served separately from this `api` (D13). It is not wired yet, so
-  the **cutover host for `robotmoney.net` is the `api` process's assembled
-  `STATIC_DIR`** (D29, [deployment.md](./runbooks/deployment.md) §2.1); the
-  Spaces migration uploads that same assembly and inherits its prerender.
+  apex/`www`, served separately from `api` (D13). It is not wired yet, so the
+  **cutover host for `robotmoney.net` is the assembled `STATIC_DIR`**, now
+  served by `website-server` rather than the `api` process itself (D29,
+  [deployment.md](./runbooks/deployment.md) §2.1); the Spaces migration
+  uploads that same assembly and inherits its prerender.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
   Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;
@@ -1593,7 +1641,7 @@ re-read the SAME COLUMN and compared the two. A value compared against itself
 across a call that cannot write is TRUE BY CONSTRUCTION; the only defect it
 could ever report was `judge()` starting to write, and this section presented it
 as the evidence that judging never moves a vector against real history. It was
-not evidence of anything. What the tool proves now, three assertions kept
+not evidence of anything. What the tool proves now, four assertions kept
 separate because they fail for different reasons:
 
 | Assertion | What it establishes | Effect on the exit code |
@@ -1601,6 +1649,7 @@ separate because they fail for different reasons:
 | **Reproducibility** — stored `weights` vs `meanTakeWeights()` over the session's CURRENT frozen take set | D4 puts the signed number on `meanTakeWeights`, so this is "anyone holding the take set can recompute the vector" — the property the receipt rests on, and the one nothing asserted against real history before. It is the check that would have surfaced the `judged`-state amendment defect PR #757 fixed | `MISMATCH` → non-zero |
 | **The judge wrote nothing** — the column, byte-identical either side of the `judge()` call | Kept, and named for what it is: a guard on THIS path, not a fact about history. Worth having, not the headline | written → non-zero |
 | **D42 tie-break drift** — published sessions whose stored TEMPLATE rationale names a majority the fixed ladder would not elect | The enumeration D42 promises (see below). Deliberately reported and not repaired | none — reporting only |
+| **inputs_digest reproducibility** (issue #829) — the session's latest judgement's stored `inputs_digest` vs a fresh recomputation over the same frozen set | The claim `inputs_digest` exists to let anyone check: "given exactly these inputs, this recorded opinion follows". Until #829 the tool printed the recomputed value and never compared it to the stored one at all — a printed column that reads as a check that ran. See D44 for the `digest_scheme` discriminator this needs | `mismatch` (current scheme) → non-zero; `historical_divergence` (an earlier scheme) → none, reporting only |
 
 A session carrying no vector legitimately — a `position_actions` subject, or a
 `bucket_weights` session in which no member filed one — reports `n/a`, not a
@@ -1629,6 +1678,35 @@ Both halves are pinned by paired tests in `backend/tests/swarm-judge.test.ts`
 (§9b) — a constructed defect the tool must name AND a healthy session it must
 leave alone, for each half — because a tool that reports nothing on healthy data
 is indistinguishable from a tool that cannot report.
+
+**The replay now COMPARES `inputs_digest`, and a discriminator says what a
+divergence means** (issue #829, D44; §9c). Before #829, the script printed the
+freshly computed `inputsDigest` on every row and never once read
+`swarm_session_judgements.inputs_digest` to compare against it — the third
+instance of the shape #766 fixed, and the worst: a printed digest column reads
+as a check that ran, next to a session, in a tool whose whole purpose is
+verifying reproducibility. #808 made a divergence genuinely ambiguous on top of
+that: it widened what the digest commits to, so a judgement written before that
+change is EXPECTED to fail a raw comparison against today's formula, and one
+written after it is not. `swarm_session_judgements.digest_scheme` (migration
+0052) is the discriminator — every row is stamped, at write time, with
+`judge.ts`'s `DIGEST_SCHEME` constant — so the replay can tell them apart
+without guessing from a timestamp:
+
+- the row's own stored `inputs_digest` reproduces exactly → `reproduced`
+- it does not, and the row is stamped with the scheme this code implements
+  right now → `mismatch`, a real finding, fails the run
+- it does not, and the row is stamped with anything else (an older scheme, or
+  one this deployment has never written) → `historical_divergence`, expected
+  history, reports and exits 0 — the same split D42's drift uses, for the same
+  reason: a run permanently red on history it may not repair is a report
+  nobody reads
+
+A session never judged reports `not_applicable`, not a false mismatch. The
+recomputation uses the judgement's OWN recorded `min_takes`, not the caller's
+current config, because `inputsDigest()` covers `minTakes` (issue #765) and an
+operator changing the threshold is a different fact from a take set moving
+under a published opinion.
 
 **The consensus receipt carries the opinion, not a paraphrase of it** (issue
 #775). The receipt is the signed, publicly-anchored artifact — the thing
@@ -4992,7 +5070,7 @@ transitions, and explain every mutation from the audit log.
 
 ## Network topology — DNS, origins & vendors
 
-How `robotmoney.net` presents several independent product surfaces as one
+How `robotmoney.network` presents several independent product surfaces as one
 seamless site, organized by a clean **separation of concerns** — both across
 infrastructure tiers and across **two vendors**. This document is cross-cutting:
 it spans the **marketing** site, **this repo** (Investment Swarm + analytics),
@@ -5086,7 +5164,7 @@ Each surface is its own hostname, resolved by a plain DNS record:
 
 | Hostname | Surface | Tier → home | Source |
 |----------|---------|-------------|--------|
-| `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
+| `robotmoney.network`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
 | `swarm.robotmoney.net` | IC + analytics (REST — the only member surface, D21) | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
 | `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
@@ -5106,7 +5184,7 @@ within a surface).
 
 ## 4. DNS & TLS — how each hostname resolves
 
-- **Marketing** (`robotmoney.net` via CNAME-flattening, and `www`) → a **DNS-only**
+- **Marketing** (`robotmoney.network` via CNAME-flattening, and `www`) → a **DNS-only**
   (grey-cloud) CNAME to the **DO Spaces CDN endpoint**. This is the CDN's native
   host-based usage: DO delivers, caches, and terminates TLS with its **custom-domain
   certificate**. Cloudflare does *not* sit in the data path here, so there is **no
@@ -5139,8 +5217,9 @@ must **degrade gracefully**; the page never hard-depends on the API.
 Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
-- **`swarm.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
-  surface's SPA assets (`STATIC_DIR`) same-origin at the subdomain root.
+- **`swarm.`** — this repo's Bun `api` + `worker`; `website-server` (issue
+  #892) co-serves this surface's SPA assets (`STATIC_DIR`) same-origin at the
+  subdomain root, proxying `/api/` through to `api`.
 - **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
 Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall

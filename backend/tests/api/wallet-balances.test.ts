@@ -18,6 +18,7 @@ import {
   config,
   SP500_SIZE,
   SP500_TICKER,
+  SP500_SIZE_VERIFIED_AT,
 } from "../../src/config.ts";
 import {
   fetchWalletBalances,
@@ -31,9 +32,10 @@ import {
   type Aggregate3Result,
 } from "../../src/chain/base-rpc-client.ts";
 import { getWalletBalances } from "../../src/api/routes/dashboards.ts";
-import { sampleWalletBalances } from "../../src/worker/handlers/wallet.ts";
+import { sampleWalletBalances, sampleWalletSleeves } from "../../src/worker/handlers/wallet.ts";
 import { backfillWalletHistory } from "../../src/db/seed.ts";
 import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
+import { getWalletSleeves, _resetWalletSleevesCacheForTests } from "../../src/chain/wallet-sleeves.ts";
 import { withFrozenClock } from "../support/fixed-clock.ts";
 
 const realFetch = globalThis.fetch;
@@ -89,7 +91,9 @@ function setBaseEnv(extra: Record<string, string> = {}) {
 
 beforeEach(async () => {
   await sql`DELETE FROM wallet_balance_samples`;
+  await sql`DELETE FROM wallet_sleeve_samples`;
   _resetWalletBalancesCacheForTests();
+  _resetWalletSleevesCacheForTests();
   _resetRpcConcurrencyForTests();
   // The GeckoTerminal price cache (chain/token-prices.ts) is a MODULE-LEVEL,
   // process-wide cache (30s TTL) keyed by token address, so it survives across
@@ -101,11 +105,13 @@ beforeEach(async () => {
   // cache, bypassing that test's mock entirely.
   _resetTokenPriceCacheForTests();
 });
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = realFetch;
   _resetWalletBalancesCacheForTests();
+  _resetWalletSleevesCacheForTests();
   _resetRpcConcurrencyForTests();
   _resetTokenPriceCacheForTests();
+  await sql`DELETE FROM wallet_sleeve_samples`;
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -342,6 +348,25 @@ test("AC2: each valuation kind is exercised per-asset — erc20, native, aave aT
   expect(bySym.SP500!.amount).toBeCloseTo(0.633, 6);
   expect(bySym.SP500!.priceUsd).toBeCloseTo(4600, 6);
   expect(bySym.SP500!.valueUsd).toBeCloseTo(0.633 * 4600, 6);
+});
+
+test("issue #862: only the config-valued SP500 leg carries sizeVerifiedAt — every read leg leaves it absent", async () => {
+  setBaseEnv();
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain(stubFixtures());
+
+  const r = await fetchWalletBalances();
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+
+  // SP500's amount is asserted, never read — sizeVerifiedAt discloses the last
+  // confirmation date so a consumer can render "position size as of <date>".
+  expect(bySym.SP500!.sizeVerifiedAt).toBe(SP500_SIZE_VERIFIED_AT);
+  // Every other leg's amount really is READ (erc20/native/aave/strategy) — the
+  // field must stay absent, never `null`/`false`-by-omission-confused-with-set.
+  for (const sym of ["USDC", "WETH", "ETH", "ROBOTMONEY", "BNKR", "ZYFAI-SS1", "GIZA-SS1"]) {
+    expect(bySym[sym]!.sizeVerifiedAt).toBeUndefined();
+  }
 });
 
 test("AC3: a forced single-leg failure degrades that holding to its last-persisted sample marked 'stale'; other legs stay live", async () => {
@@ -685,6 +710,13 @@ test("AC8 (issue #118): the request path serves PERSISTED samples and makes ZERO
     expect(bySym[sym]!.provenance).toBe("stale");
     expect(bySym[sym]!.valueUsd).toBeNull();
   }
+  // issue #862: sizeVerifiedAt is derived from config, not the samples table —
+  // it is disclosed even here, where SP500 has no persisted row at all and its
+  // VALUE is honestly null/stale. Every other leg (a real read) leaves it
+  // absent, on the request path exactly as on the live path.
+  expect(bySym.SP500!.sizeVerifiedAt).toBe(SP500_SIZE_VERIFIED_AT);
+  expect(bySym.WETH!.sizeVerifiedAt).toBeUndefined();
+  expect(bySym.USDC!.sizeVerifiedAt).toBeUndefined();
   // Ordering + metadata come from resolveTrackedAssets (samples table has neither).
   expect(r.holdings.map((h) => h.symbol)).toEqual(resolveTrackedAssets().map((a) => a.symbol));
   expect(r.holdings).toHaveLength(8);
@@ -708,6 +740,28 @@ test("AC8b (issue #118): the request path reflects the LATEST scheduled sample p
   const weth = r.holdings.find((h) => h.symbol === "WETH")!;
   expect(weth.provenance).toBe("stale"); // the newer row
   expect(weth.valueUsd).toBeCloseTo(15500, 6);
+});
+
+// Issue #927: sampleWalletBalances stopped writing price_usd on ordinary
+// samples, so the latest row for a symbol is now typically the post-#927
+// shape (price_usd NULL, value_usd/amount both present). This zero-RPC
+// request path (issue #118) has no live read to fall back to, so it must
+// derive priceUsd from value_usd/amount rather than reporting it null next to
+// a perfectly good value — RED CONTROL: fails against a tree that reads
+// price_usd off the row unconditionally.
+test("issue #927 regression: fetchPersistedWalletBalances derives priceUsd from value_usd/amount when the persisted row's own price_usd is NULL", async () => {
+  setBaseEnv();
+  const today = new Date().toISOString().slice(0, 10);
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${today}, 'WETH', 10, NULL, 17000, 'live', now())
+  `;
+  const r = await fetchPersistedWalletBalances();
+  const weth = r.holdings.find((h) => h.symbol === "WETH")!;
+  expect(weth.provenance).toBe("live");
+  expect(weth.amount).toBeCloseTo(10, 6);
+  expect(weth.priceUsd).toBeCloseTo(1700, 6); // derived: 17000 / 10
+  expect(weth.valueUsd).toBeCloseTo(17000, 6);
 });
 
 // issue #614 AC6: this test was previously named "...returns it as
@@ -950,6 +1004,35 @@ test("issue #294 regression: fetchWalletBalances degrade path is unchanged — a
   }
 });
 
+// Issue #927: sampleWalletBalances stopped writing price_usd on ordinary
+// samples, so the most recent persisted row for a symbol now typically has it
+// NULL. lastPersistedHolding() must still recover a usable price for the
+// #294 stale-degrade above (a live price-fetch failure with a successful
+// chain read) — it derives one from value_usd/amount rather than reporting
+// priceUsd: null next to a perfectly good valueUsd. RED CONTROL: fails
+// against a tree that reads price_usd off the row unconditionally.
+test("issue #927 regression: lastPersistedHolding() derives priceUsd from value_usd/amount when the persisted row's own price_usd is NULL", async () => {
+  setBaseEnv();
+  const fx = stubFixtures();
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.geckoOmit = [A.BNKR];
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  // A recent persisted BNKR row shaped like a post-#927 sampleWalletBalances
+  // write: price_usd NULL, value_usd/amount both present and non-zero.
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES ('2026-06-25', 'BNKR', 15000, NULL, 6, 'live', now())
+  `;
+
+  const r = await fetchWalletBalances();
+  const bnkr = r.holdings.find((h) => h.symbol === "BNKR")!;
+  expect(bnkr.provenance).toBe("stale");
+  expect(bnkr.amount).toBeCloseTo(15000, 6);
+  expect(bnkr.priceUsd).toBeCloseTo(6 / 15000, 9); // derived, not NULL
+  expect(bnkr.valueUsd).toBeCloseTo(6, 6);
+});
 
 // ── issue #642 ────────────────────────────────────────────────────────────────
 // Two defects, one root cause. The strategy vault list was reached through five
@@ -1130,4 +1213,101 @@ test("#642 / D37: an empty position list WARNS at boot and never throws", () => 
   const quiet: string[] = [];
   expect(warnIfStrategyVaultsUnconfigured(process.env, (m) => quiet.push(m))).toBeNull();
   expect(quiet).toEqual([]);
+});
+
+// ── issue #861 ────────────────────────────────────────────────────────────────
+// SLEEVE_DEFS used to fix a per-symbol WHITELIST per wallet: the two strategy
+// wallets were read ONLY for their own strategy leg (ZYFAI-SS1 / GIZA-SS1),
+// so a strategy wallet's holding of any OTHER tracked asset (e.g. WETH) never
+// appeared in the per-wallet feed at all, while fetchWalletBalances() — which
+// reads every tracked asset across every wallet — counted it. That produced a
+// live $28,042.84 gap between /allocation's per-wallet breakdown (and
+// /performance's wallet table) and the aggregate total on the same page. This
+// is the acceptance test the issue names: for every chain-readable symbol at
+// one asOf, Σ wallet-sleeves must equal wallet-balances. It fails red against
+// pre-#861 SLEEVE_DEFS (a per-wallet whitelist) and passes once every wallet is
+// read for every chain-readable tracked asset (discovery, not a whitelist).
+test("acceptance (#861): Σ wallet-sleeves == wallet-balances for every erc20/native symbol at one asOf", async () => {
+  const wallets = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20)];
+  process.env.PROP_WALLET_ADDRESSES = wallets.join(",");
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  // Deliberately NOT setBaseEnv(): that fixture overrides every tracked-asset
+  // address to a REPEATING-DIGIT pattern (e.g. A.WETH = 0x6666…6666), which
+  // isPlaceholderAddress() treats as unconfigured — chain/wallet-sleeves.ts
+  // (and the manifest it shares with the backfill) filters those OUT of a
+  // sleeve's read set. fetchWalletBalances() has no such filter, which is
+  // exactly why the two feeds' own totals could disagree in the first place.
+  // This test needs REAL-shaped addresses so the sleeve discovery filter is
+  // actually exercised, so it reads the live default addresses instead.
+  const assets = resolveTrackedAssets();
+  const usdc = assets.find((a) => a.symbol === "USDC")!.address!;
+  const weth = assets.find((a) => a.symbol === "WETH")!.address!;
+  const robotmoney = assets.find((a) => a.symbol === "ROBOTMONEY")!.address!;
+  const bnkr = assets.find((a) => a.symbol === "BNKR")!.address!;
+  const zyfai = assets.find((a) => a.symbol === "ZYFAI-SS1")!.address!;
+  const giza = assets.find((a) => a.symbol === "GIZA-SS1")!.address!;
+
+  const fx: ChainFixtures = {
+    balanceOf: {
+      [usdc]: 9052n * E6,
+      [robotmoney]: 3_000_000_000n * E18,
+      [bnkr]: 20000n * E18,
+      [V.gtUSDCp]: 0n,
+      [V.steakUSDC]: 0n,
+      [V.aBasUSDC]: 0n,
+    },
+    balanceOfByHolder: {
+      [usdc]: {
+        [zyfai]: 4538n * E6, // ZYFAI-SS1 account idle USDC (strategy leg)
+        [giza]: 4524n * E6, // GIZA-SS1 account idle USDC (strategy leg)
+      },
+      // Reproduce the RM-116 shape: most of the tracked WETH sits in the
+      // STRATEGY wallet (wallets[1], "Stablecoin Strategy 1"), not the
+      // primary. Before #861 the per-wallet feed never looked at wallets[1]
+      // for WETH at all — SLEEVE_DEFS whitelisted that wallet to ZYFAI-SS1
+      // only.
+      [weth]: {
+        [wallets[0]!]: 1n * E18, // Bankr: 1 WETH
+        [wallets[1]!]: 9n * E18, // Stablecoin Strategy 1: 9 WETH — the wallet the whitelist blinded
+        [wallets[2]!]: 0n, // Stablecoin Strategy 2: none
+      },
+    },
+    native: 500000000000000000n, // 0.5 ETH, every wallet (mock ignores holder for getEthBalance)
+  };
+  mockChain(fx);
+
+  await sampleWalletBalances({});
+  _resetWalletBalancesCacheForTests();
+  mockChain(fx);
+  const balances = await fetchWalletBalances();
+
+  mockChain(fx);
+  await sampleWalletSleeves({});
+  _resetWalletSleevesCacheForTests();
+  const sleeves = await getWalletSleeves();
+
+  // The general invariant, for every chain-readable (erc20/native) symbol —
+  // not just WETH: before #861, USDC/ROBOTMONEY/ETH/BNKR were ALSO invisible
+  // in the strategy sleeves (Bankr-only whitelist), so the aggregate (summed
+  // across all 3 wallets) would have exceeded Σ sleeves (Bankr-only) for
+  // those symbols too.
+  for (const symbol of ["USDC", "WETH", "ETH", "ROBOTMONEY", "BNKR"]) {
+    const balanceValue = balances.holdings.find((h) => h.symbol === symbol)!.valueUsd!;
+    const sleeveSum = sleeves.wallets.reduce(
+      (sum, w) => sum + (w.holdings.find((h) => h.symbol === symbol)?.valueUsd ?? 0),
+      0,
+    );
+    expect(sleeveSum).toBeCloseTo(balanceValue, 6);
+  }
+
+  // The specific gap this issue was filed from is closed: the strategy
+  // wallet's 9 WETH now shows up in ITS OWN sleeve, not just the aggregate.
+  const strategy1 = sleeves.wallets.find((w) => w.name === "Stablecoin Strategy 1")!;
+  const strategy1Weth = strategy1.holdings.find((h) => h.symbol === "WETH")!;
+  expect(strategy1Weth.amount).toBeCloseTo(9, 9);
+  expect(strategy1Weth.valueUsd).toBeCloseTo(9 * 1600, 6); // stub WETH price
+  // ...and the strategy leg itself is still present alongside it (discovery
+  // adds symbols, it does not replace the wallet-specific strategy read).
+  expect(strategy1.holdings.map((h) => h.symbol)).toContain("ZYFAI-SS1");
 });

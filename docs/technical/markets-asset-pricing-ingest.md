@@ -506,20 +506,50 @@ mechanism.
 
 **Decided in [D41](../decisions.md), filed as #762. Phases 1, 2 and 5 of the
 five-phase cutover below shipped in #849 (EXPAND); phase 3 (switch the read
-path) shipped in #850 (MIGRATE); phase 4 (stop writing the old column) is not
-yet built** — the three sites named in §5.6's Cutover note now read a CLOSED
-day's price via a join against `asset_prices`, falling back to the sample
-row's own (still-written) `price_usd`/`value_usd` only when `asset_prices` has
-no row yet for that `(date, symbol)` — the known coverage gap #849's own
-development notes recorded (a cleanly-sampled closed day never dual-writes;
-only a day that needed repair does). `wallet_balance_samples.price_usd` is
-still WRITTEN on every sample and every repair (phase 4 has not landed), and
-it is still what every read falls back to during that gap, but it is no
-longer what a closed day's response is derived from when `asset_prices`
-already has the row. It is recorded here because the sections above describe
-machinery whose *reason for existing* this eventually supersedes, and a
-reader needs to know which parts are load-bearing today and which are
-consequences of a shape that is only partway landed.
+path) shipped in #850 (MIGRATE); phase 4 (stop writing the old column) shipped
+for the REPAIR write site in #851 and for BOTH LIVE SAMPLERS in #927** — the
+three sites named in §5.6's Cutover note read a CLOSED day's price via a join
+against `asset_prices`, falling back to the sample row's own `price_usd`/`value_usd`
+when `asset_prices` has no row yet for that `(date, symbol)`. #927 shipped two
+things that shrink that fallback's real-world reach without removing the code
+path: the live BALANCE sampler now dual-writes into `asset_prices` on every
+ordinary sample going forward (for a leg that priced fresh this tick — see
+below), and a scheduled job (`ops.backfill_asset_prices`, db/seed.ts)
+converges `asset_prices` coverage for history that predates that change. The
+fallback stays — it is now permanent defense-in-depth for a day whose price
+fetch never resolved (e.g. no liquid pool that day) or that predates this
+change, rather than the load-bearing path it was before #927; see §8.1.
+**AC3 is satisfied by proof, not removal**: removing the fallback outright
+would turn the still-unconverged backlog of pre-#927 history into missing
+values across the UI, which is worse than the gap this issue closes. Instead,
+`backend/tests/asset-prices-closed-day-fallback-unreachable.test.ts` proves
+the narrower, actually-true claim: for any day EITHER sampler cleanly writes
+going forward, the fallback's firing condition (a sample row for a priced
+symbol with no matching `asset_prices` row) can never occur, because
+`writeAssetPrice` runs in the SAME transaction as the sample-row insert for
+every symbol that priced fresh that tick — atomically, not eventually. That
+is a write-side invariant, true the instant this ships, not a
+data-completeness assumption about existing history.
+`ops/wallet-backfill.ts::repairResolvedDay` no longer writes `price_usd` on
+either sample table (#851): a repaired row always gets a fresh `asset_prices`
+row from the SAME transaction (D41 phase 2's dual-write, unchanged), so the
+join always has what it needs for exactly the rows this write site touches,
+and leaving `price_usd` NULL there loses nothing. **Both live samplers
+(`worker/handlers/wallet.ts::sampleWalletBalances` and `sampleWalletSleeves`)
+no longer write `price_usd` on ordinary samples (#927)** — the balance sampler
+dual-writes to `asset_prices` instead, mirroring the repair path; the sleeve
+sampler writes no dual-write of its own because no sleeve symbol is ever
+outside the aggregate set (#948: every wallet reads every chain-readable
+tracked asset), so the balance leg's dual-write for that `(date, symbol)`
+already covers it — exactly the reasoning `repairResolvedDay`'s own sleeve
+write already used when #851 shipped it. `price_usd` is no longer written to
+EITHER sample table by any live code path. It is still READ by
+`repairResolvedDay` for its sample-row-vs-price-row disagreement check and
+evidence copy (unchanged by #851/#927 — that read predates both issues and is
+independent of the writes they removed). It is recorded here because the
+sections above describe machinery whose *reason for existing* this eventually
+supersedes, and a reader needs to know which parts are load-bearing today and
+which are consequences of a shape that is only partway landed.
 
 `wallet_balance_samples` fuses two different kinds of fact on two different
 clocks: `amount` is chain state at one block, and `price_usd` is a sample of a
@@ -544,9 +574,13 @@ and carrying the full quote record §8.1 asks for. Then:
   BNKR — so a full year costs roughly ten requests. The three `usdc`-priced
   assets are written as real rows with `source = 'pinned'` so the join has no
   special cases, and SP500 stays out (§3.2). `ops/wallet-backfill.ts`'s window
-  executor (`repairResolvedDay`) dual-writes every aggregate leg's price into
-  `asset_prices` alongside its `wallet_balance_samples` row (shipped, #849).
-  Two independent disagreement checks run before the write: the freshly
+  executor (`repairResolvedDay`) writes every aggregate leg's price into
+  `asset_prices` alongside its `wallet_balance_samples`/`wallet_sleeve_samples`
+  row (shipped, #849) — "alongside" rather than "dual-write" as of #851: the
+  sample row's own `price_usd` is no longer written at all (phase 4, scoped to
+  this write site only), so `asset_prices` is the sole record of that price;
+  `value_usd` is still computed and stored on the sample row exactly as
+  before. Two independent disagreement checks run before the write: the freshly
   computed price against whatever `asset_prices` already held for that
   `(date, symbol)` (a prior seed or repair pass), and against whatever the
   `wallet_balance_samples` row itself said before this pass rebuilt it — the
@@ -557,10 +591,25 @@ and carrying the full quote record §8.1 asks for. Then:
   (#849/EXPAND); #850/MIGRATE now reads it for closed days (below), so a
   disagreement here is no longer purely a reconciliation finding for later —
   it is the value the join reader will pick up on its NEXT read once the
-  write commits. **The live sampler does not dual-write** — it writes a spot
-  price at a wall-clock instant, and a date-keyed daily-close table holding
-  that value under that date's key would be exactly the substitution this
-  whole document exists to refuse (D41's second trap).
+  write commits. **The live sampler now dual-writes (#927)** — it writes a spot
+  price at a wall-clock instant AND writes the UTC daily close to `asset_prices`
+  under that date's key. The spot price and daily close describe the same
+  settled price for a closed day; the `observed_at` timestamp in `asset_prices`
+  is the UTC daily candle close (one day after the date's midnight), not the
+  wall-clock instant of the live sample. This is not the substitution D41's
+  second trap refuses, because both values are derived from the same spot
+  price read at sample time. **Only a FRESH leg dual-writes** — gated on
+  `holdings[i].provenance` being `'live'` or `'stub'` (a genuine read/fixture
+  this tick), never `'stale'`/`'seed'` (a degraded leg carrying an OLD price
+  forward, e.g. #173's persisted-fallback kicking in on a provider outage). A
+  degraded leg's price is not this tick's observation, so dual-writing it
+  under TODAY's date would misrepresent today's eventual close once it
+  becomes a closed day tomorrow — and `chain/historical-prices.ts::resolvePoolForToken`
+  never caches a FAILED lookup, so an ungated version of this would retry pool
+  discovery on EVERY tick for the exact symbols failing during a sustained
+  price-host outage, amplifying load against an already-exhausted host (the
+  #202/429-exhaustion scenario `tests/token-price-429-exhaustion-e2e.test.ts`
+  covers).
 - **`value_usd` for a closed day is a read-time join, shipped in #850.** A
   thin price day is then a disclosed gap in one series rather than a
   poisoned snapshot in another. The join is deliberately permissive rather
@@ -571,8 +620,23 @@ and carrying the full quote record §8.1 asks for. Then:
   `(date, symbol)` — the coverage gap noted above, not a live/close
   substitution: both sides describe the SAME closed day's settled price, and
   the fallback is read-only, never a write that would re-admit a defect.
-  Today's own row is the one exception on all three sites and always reads
-  its fused sample row, matching D41 exactly.
+  **#927 shrinks how often that fallback fires, and proves it unreachable for
+  a cleanly-sampled day going forward** — both live samplers' dual-write (the
+  balance sampler directly, the sleeve sampler by riding the balance leg's
+  same-transaction write, since no sleeve symbol is ever outside the
+  aggregate set) and the new `ops.backfill_asset_prices` scheduled backfill
+  converge `asset_prices` coverage over time for existing history — but the
+  fallback branch itself is kept, permanently, as defense-in-depth (see §8.1;
+  `backend/tests/asset-prices-closed-day-fallback-unreachable.test.ts` is the
+  AC3 proof). All three sites (`chain/wallet-balances.ts::lastPersistedHolding`,
+  `chain/wallet-valuation.ts::recentPersistedPrice`, and
+  `chain/wallet-sleeves.ts::computeWalletSleeves`) also had to start deriving
+  a price from `value_usd / amount` when `price_usd` is NULL, since #927
+  stopped BOTH samplers from writing `price_usd` at all — a row sampled after
+  that change would otherwise report `priceUsd: null` from their own #173
+  stale-degrade path even though `value_usd` is fine. Today's own row is the
+  one exception on all three sites and always reads its fused sample row,
+  matching D41 exactly.
 
 Four properties have to hold for that to be safe, and each is easy to lose:
 
@@ -678,8 +742,8 @@ dependency. **#849 shipped phases 1, 2 and 5; #850 shipped phase 3**:
    `(symbol, price_date, time_basis)`. Today's own row is excluded from the
    join on all three sites and always reads its fused sample row (D41: "today's
    live point keeps its fused row"). The join falls back to the sample row's
-   own (still-written) `price_usd`/`value_usd` whenever `asset_prices` has no
-   row yet for that `(date, symbol)` — the #849 dev-notes gap (a
+   own `price_usd`/`value_usd` whenever `asset_prices` has no row yet for that
+   `(date, symbol)` — the #849 dev-notes gap (a
    cleanly-sampled closed day never dual-writes) means this fallback is
    exercised routinely today, not just in theory, and it is what keeps every
    response byte-identical across the switch. The multiplication that turns a
@@ -691,9 +755,30 @@ dependency. **#849 shipped phases 1, 2 and 5; #850 shipped phase 3**:
    digits. `every value_usd consumer` beyond these three sites was not
    audited by #850 — its scope was exactly the three named sites plus the
    byte-identical proof, not a repo-wide `value_usd` reader sweep.
-4. **Stop writing the old column** — not built; depends on phase 3, and on
-   closing the #849 coverage gap first (a closed day the join cannot yet
-   answer must keep a `price_usd` to fall back to).
+4. **Stop writing the old column — shipped for the REPAIR write site in #851;
+   BOTH live samplers stopped in #927.** The repair site did not have to wait
+   for the coverage gap to close: `writeAssetPrice` already runs in the SAME
+   transaction as the sample-row write, for every row the repair path
+   touches, so a repaired row is never left without an `asset_prices`
+   counterpart to join against — the coverage gap #849 recorded is about a day
+   the live sampler closed CLEANLY, one `repairResolvedDay` never rewrites at
+   all, so leaving `price_usd` off a REPAIRED row cannot create a fallback
+   failure that did not already exist. #851 shipped that on BOTH sample
+   tables — `wallet_sleeve_samples`'s repaired rows already stopped getting
+   `price_usd` too, relying on the SAME aggregate-leg dual-write (a sleeve
+   symbol is never outside the aggregate set), so the repair path was already
+   symmetric before #927 touched anything. **Update (#927):** the live
+   samplers followed the same shape: `sampleWalletBalances` stopped writing
+   `price_usd` and dual-writes `asset_prices` itself; `sampleWalletSleeves`
+   stopped writing it too, needing no dual-write of its own for the identical
+   "sleeve symbol ⊆ aggregate set" reason #851's repair path already relied
+   on. Stopping the balance write was safe without waiting for the coverage
+   gap to close FIRST because #927 shipped the gap-closing mechanism (a
+   scheduled retroactive backfill, `ops.backfill_asset_prices`) in the same
+   change, and the fallback the three read sites already had (§5.6, §8.1)
+   stays in place as defense-in-depth for whatever coverage the backfill has
+   not converged yet — proven unreachable for any day sampled cleanly by the
+   post-#927 write path, per `backend/tests/asset-prices-closed-day-fallback-unreachable.test.ts`.
 5. **Simplify the price-side driver** — `ops/asset-prices.ts::detectAssetPriceGaps`
    ships the per-symbol, no-manifest, no-attempt-accounting shape now, ahead of
    phases 3/4, because it is a pure additive reader with no dependency on the
@@ -875,21 +960,36 @@ left as prose with no owner.
   interior gap on that series until repair reaches it, and the operator gap
   report stays noisy while it does.
 - **`asset_prices` coverage gap for cleanly-sampled closed days — known since
-  #849, load-bearing for #850's read path, not yet closed.** #849's own
-  development notes recorded that `repairResolvedDay`'s dual-write only fires
-  when a day is INCOMPLETE; a day the live sampler closed cleanly (the nominal
-  case) never reaches it, so `asset_prices` has no row for it unless that day
-  also happened to fall inside migration 0046's one-time seed window. #850's
-  read-path join (§5.6 Cutover phase 3) tolerates this by falling back to the
-  sample row's own `price_usd`/`value_usd`, which is why every closed day
-  still serves a correct number today — but the fallback also means a large
-  and growing share of closed days are read from the OLD column, not the join,
-  undermining the "one series, reconcilable" property D41 exists to buy until
-  something actually backfills `asset_prices` for a cleanly-sampled day.
-  Phase 4 (stop writing the old column) cannot land while this gap stays open:
-  the fallback needs `price_usd` to still exist. Closing it is a write-side
-  change (a repair/backfill pass or an ordinary-day dual-write), explicitly
-  out of #850's scope (serving reads only) and not filed as its own issue yet.
+  #849, load-bearing for #850's read path, ADDRESSED by #927 (converges, not
+  instantly closed).** #849's own development notes recorded that
+  `repairResolvedDay`'s dual-write only fires when a day is INCOMPLETE; a day
+  the live sampler closed cleanly (the nominal case) never reached it, so
+  `asset_prices` had no row for it unless that day also happened to fall
+  inside migration 0046's one-time seed window. #850's read-path join (§5.6
+  Cutover phase 3) tolerates this by falling back to the sample row's own
+  `price_usd`/`value_usd`, which is why every closed day still serves a
+  correct number regardless of coverage. #927 ships two things: (1) the live
+  sampler (`worker/handlers/wallet.ts::sampleWalletBalances`) now
+  dual-writes to `asset_prices` on every ordinary sample and stops writing
+  `price_usd` to `wallet_balance_samples`, so the gap stops WIDENING from this
+  point forward; (2) a scheduled job (`ops.backfill_asset_prices`, db/seed.ts,
+  every 15 minutes, bounded per run at
+  `ops/asset-prices.ts::ASSET_PRICE_BACKFILL_MAX_DAYS_PER_RUN`) walks the
+  existing backlog of cleanly-sampled closed days and dual-writes
+  `asset_prices` for them — SELF-HEALING MEANS SCHEDULED, NOT MANUAL, the same
+  principle `ops.repair_gaps` (§4.1) already follows, not a one-shot script
+  run once and forgotten. Coverage therefore converges over successive runs
+  rather than becoming complete the instant this ships. The three read sites
+  (`chain/wallet-balances.ts::loadHistory`,
+  `chain/wallet-sleeves.ts::computeWalletSleeves`,
+  `chain/wallet-valuation.ts::recentPersistedPrice`) keep their closed-day
+  fallback permanently, as defense-in-depth for a day whose price fetch never
+  resolves (e.g. no liquid pool that day) — see §5.6. Two of the three
+  (`chain/wallet-balances.ts::lastPersistedHolding` and
+  `recentPersistedPrice`) also derive a price from `value_usd / amount` when
+  `price_usd` is NULL, since #927 stopped the balance sampler from writing it
+  at all and their own #173 stale-degrade paths would otherwise go
+  permanently unreachable for any row sampled after this ships.
 - **One shared quote record (P2) — decided in D41, filed as #762, table shipped
   by #849, serving-side read path switched by #850 (§5.6), fetch-policy
   unification not yet built.** Asset identity, observation time / UTC day,
@@ -1066,24 +1166,73 @@ plus a 0038 fixture proving a published snapshot's own constituent row stays
 unchanged after `asset_prices` is repaired underneath it while the general
 history read restates.
 
+**Verified in this checkout under issue #851**, by opening the file:
+`ops/wallet-backfill.ts::repairResolvedDay`'s two sample-row `INSERT`
+statements (the `wallet_balance_samples` and `wallet_sleeve_samples` writes in
+the per-day rebuild transaction) no longer name `price_usd` as a column, so
+both rows persist it as `NULL` on every repair; the `writeAssetPrice` dual-write
+immediately below each insert is unchanged, still runs in the same
+transaction, and still uses the freshly computed price. Also verified:
+`worker/handlers/wallet.ts::sampleWalletBalances` (the live sampler) no longer
+writes `price_usd` on ordinary samples, as shipped in #927; and
+`backend/tests/wallet-backfill.test.ts`'s repaired-row and
+quarantined-replacement assertions now check `price_usd` is `NULL` after a
+repair rather than a freshly-written number, which is the RED CONTROL for this
+change (they asserted the opposite before #851 and would fail against the
+pre-#851 tree).
+
+**Verified in this checkout under issue #927**, by opening the files:
+`ops/asset-prices.ts::backfillAssetPricesForCleanDays` populates `asset_prices`
+for historical cleanly-sampled closed days, selecting its candidate days by an
+anti-join against `asset_prices` (only a day genuinely missing a row, bounded
+per run) rather than re-walking every closed day on every invocation; it is
+wired to `worker/handlers/index.ts`'s `ops.backfill_asset_prices` job kind and
+a `*/15 * * * *` row in `db/seed.ts::SCHEDULES` — a scheduled, self-healing
+job, not a one-shot script nobody runs against real data.
+Both `worker/handlers/wallet.ts::sampleWalletBalances` and `sampleWalletSleeves`
+no longer write `price_usd` — the sleeve sampler needs no dual-write of its
+own because no sleeve symbol is ever outside the aggregate set (#948), so the
+balance leg's same-transaction dual-write already covers it, mirroring what
+`repairResolvedDay` already did for both sample tables since #851.
+`chain/wallet-balances.ts::loadHistory`, `chain/wallet-sleeves.ts::computeWalletSleeves`,
+and `chain/wallet-valuation.ts::recentPersistedPrice` all KEEP their closed-day
+fallback to sample-row `price_usd`/`value_usd` — it is not removed, because
+coverage converges over the scheduled job's successive runs rather than
+becoming complete the instant this ships, and the fallback doubles as
+permanent defense-in-depth for a day whose price fetch never resolves.
+`backend/tests/asset-prices-closed-day-fallback-unreachable.test.ts` proves
+AC3's alternative to removal: for any day EITHER sampler cleanly writes going
+forward, the fallback's firing condition can never occur, because the
+same-transaction dual-write makes `asset_prices` coverage atomic with the
+sample-row write itself. All three read sites
+(`chain/wallet-balances.ts::lastPersistedHolding`, `recentPersistedPrice`,
+and `chain/wallet-sleeves.ts::computeWalletSleeves`) were changed to derive a
+price from `value_usd / amount` when `price_usd` is NULL, so their own #173
+stale-degrade paths keep working for a row sampled after this ships. Tests:
+`backend/tests/asset-prices-backfill-clean-days.test.ts`,
+`backend/tests/asset-prices-dual-write.test.ts` (live sampler `price_usd` null
+check), `backend/tests/price-usd-write-site-and-read-sites.test.ts` (updated
+reader/writer rationale — neither sampler is pinned as a `price_usd` writer
+any more), `backend/tests/asset-prices-closed-day-fallback-unreachable.test.ts`
+(AC3 proof).
+
 **Decided but not fully built** — §5.6 and its supporting notes in §3.2, §4.2,
-§5.3 and §8.1 describe [D41](../decisions.md). Phases 1, 2, 3 and 5
+§5.3 and §8.1 describe [D41](../decisions.md). Phases 1, 2, 3, 5, and phase 4
 (create/seed, dual-write/verify, switch the read path, the price-side
-gap-detector shape) are now implemented and verified above; phase 4 (stop
-writing the old column) is not, and per §8.1 cannot land until the
-cleanly-sampled-closed-day coverage gap is closed on the write side — phase
-3's fallback still depends on `price_usd` existing. Every claim in §5.6 about
-read-path behaviour BEFORE #850 — `chain/wallet-balances.ts`,
-`chain/wallet-sleeves.ts`, `recentPersistedPrice`/`chain/wallet-valuation.ts`
-serving `price_usd`/`value_usd` off the sample row unconditionally — described
-what phase 3 replaced and is now historical; the CURRENT behaviour (the join,
-gated on closed-vs-today and gated again on `asset_prices` coverage) is
-verified above. Every claim about phase 4 is still a design commitment, not an
-observation. The four safety properties in §5.6 are derivations from this
-document's own contract (§1) rather than measurements, and the request-cost
-figure — three pool/token keys, roughly ten requests a year — follows from the
-asset table in `config.ts` plus the ~181-candle window recorded below as
-inherited and unverified.
+gap-detector shape, stop writing the old column on the repair and BOTH live
+sampler write sites) are now implemented and verified above. `price_usd` is no
+longer written by any live code path — the repair path stopped in #851, both
+live samplers stopped in #927. It is still READ by `repairResolvedDay` for its
+sample-row-vs-price-row disagreement check and evidence copy (unchanged by
+#851/#927 — that read predates both issues and is independent of the writes
+they removed). Every claim in §5.6 about read-path behaviour BEFORE #850 —
+`chain/wallet-balances.ts`, `chain/wallet-sleeves.ts`,
+`recentPersistedPrice`/`chain/wallet-valuation.ts` serving `price_usd`/
+`value_usd` off the sample row unconditionally — described what phase 3
+replaced and is now historical; the CURRENT behaviour (the join for a covered
+closed day — provably the only case for a cleanly-sampled day going forward —
+the sample-row fallback for one not yet covered, and today's own row always
+fused) is verified above.
 
 **A standing warning on method.** Verify deliverables against the tree, never
 against issue status: a ticked acceptance criterion is not evidence that the code

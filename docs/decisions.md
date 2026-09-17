@@ -1681,6 +1681,21 @@ for `preview/*` hosting, unchanged.
 - **Leave `docker-compose.yml` mounting `frontend/public` and rely only on the
   handler change** — the handler can only serve a per-route file that exists;
   with the raw source tree mounted, none ever would.
+
+**Amendment (2026-09-10, issue #892).** The `api` process no longer serves
+`STATIC_DIR` at all — `serveStatic`/`routeShell`/`docsShell` and
+`backend/src/api/static.ts` are deleted. A sibling `website-server` service
+(plain `nginx:alpine`, `website-server/Dockerfile` +
+`website-server/nginx.conf`) now owns the bind mount and replicates
+`routeShell`'s fallback order (`<route>/index.html` → `_shell.html` →
+`index.html`) as a `try_files` rule, proxying `/api/` and `/health` through to
+`api` so a single-box deployment still presents as one origin. This decision's
+core claim — one prerender, one metadata table, `STATIC_DIR` is an assembled
+directory never the raw source tree — is unchanged; only WHICH process serves
+it changed. `docsShell`'s docs-fragment inlining turned out to already be
+redundant with the general per-route prerender loop (every docs route has
+been in `sitemap.xml` since before this amendment), so no prerender behavior
+changed either — deleting it removed dead request-time code, not a feature.
 ---
 
 ## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
@@ -3221,10 +3236,19 @@ a deliberate act.
 
 **One operator action this requires.** With the production assertion now strict,
 a `--static-port` boot whose environment does not export
-`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix in its message.
-`.env.example` ships the value (`0`). This is the intended trade: a one-time,
-loud, self-describing boot failure in exchange for never again running a third
-cadence that cannot judge.
+`SWARM_SCHEDULES_ENABLED` refuses to start, naming the fix — and the repo-root
+`.env` to make it in — in its message. `.env.example` ships the value (`0`).
+
+This strictness is not what stands between production and the third-cadence
+hazard: `docker-compose.smoke.yml` pins the api container's own
+`SWARM_SCHEDULES_ENABLED` to `"0"` unconditionally, and no shell export can
+override it, so that hazard is already foreclosed before this check ever runs.
+What the check actually buys is parity and overlay-independence — it keeps the
+operator's own `.env` (the surface every runbook and credential check reads)
+from silently disagreeing with what the container is really running, and it
+keeps working as a safety net even if that overlay pin is ever refactored
+away. The trade is a one-time, loud, self-describing boot failure in exchange
+for an `.env` that is never quietly out of sync with reality.
 
 ### Amendment (issue #817) — the soak's one live surface reports the judging
 
@@ -3405,7 +3429,157 @@ wins when it matches; the wildcard is the fallback for everyone else.
 
 **Not yet done (tracked in issue #871).** `WEBAUTHN_ORIGIN`/`WEBAUTHN_RP_ID`
 still need to be pointed at the frontend's real deployed domain once it is no
-longer same-origin; `contract/` still needs to actually be published as a
-versioned package; the frontend's sibling container, its DO placement, and its
+longer same-origin; the frontend's sibling container, its DO placement, and its
 DNS record are still design, not shipped; and the `git filter-repo` split
 itself has not been executed.
+
+**Amendment (issue #884).** `contract/` now has a real publish path, ahead of
+and independent from the split itself. `contract/package.json` declares
+`publishConfig.registry` (GitHub Packages, `npm.pkg.github.com`) and
+`contract/.npmrc` carries the scope->registry mapping and `_authToken`
+interpolation that `bun publish` (unlike npm, it does not read
+`publishConfig.registry`) actually uses. `.github/workflows/contract.yml`
+packages `contract/` (`bun pm pack`) on every run — a required check, not
+schedule-only — and `contract-package.test.ts` installs the produced tarball
+into a directory outside the monorepo and imports its main export, so a
+monorepo-relative path or a missing `files`/`exports` entry fails loudly
+before it could reach a real consumer. The actual publish step lives in the
+separate `.github/workflows/contract-publish.yml`, triggered only by a
+`contract-v*` tag push (its own namespace, independent of this repo's
+whole-app `v*` release tags) — nothing publishes on a PR or a plain merge.
+`backend/` and `frontend/` still import `contract/` via the in-repo `file:`
+path (out of scope here, tracked with the rest of the split in issue #871);
+this only makes the published artifact available, it does not yet have any
+consumer.
+
+---
+
+## D44 — `digest_scheme`: a recorded marker, not a cutover date, discriminates which canonical form wrote an `inputs_digest` (issue #829, third instance of the shape #766 fixed)
+
+**Decision.** `swarm_session_judgements` gains a `digest_scheme` column
+(migration 0052), written on every insert with `judge.ts`'s new `DIGEST_SCHEME`
+constant. `swarm-judge-replay` (`judge-replay.ts`) uses it, not a hardcoded
+merge-commit timestamp, to decide whether a recomputed `inputs_digest` that
+fails to match the stored value is a real finding or expected history: a row
+stamped with the scheme this code implements right now is `mismatch` (fails
+the run); a row stamped with anything else is `historical_divergence` (reports
+and exits 0). A row with no judgement at all is `not_applicable`.
+
+**Why a marker and not a cutover rule.** The issue text offered both as
+acceptable. A `created_at`-before-a-fixed-instant rule would have worked for
+*this* boundary — `#808` (`b8cd15a7`, 2026-08-31) is the only canonicalization
+change so far, and `swarm_judge_config.mode` ships `off`, so #808's own gate
+already established that no default deployment had ever written a row at all,
+under either reading, before that commit. But a hardcoded instant answers
+exactly one question: "is this row older than THIS ONE change". The next
+change to `canonicalizeDigestInputs()`'s covered field set — and there will be
+one; `#765` and `#808` are the second and third field-set changes this digest
+has already had — would need a SECOND hardcoded instant, then a chain of
+`if (before A) … else if (before B) …` that the audit has to keep in sync with
+git history by hand. A column stamped by the writer answers the general
+question once: "which scheme produced this row", by construction, forever,
+for every future change to the digest's covered fields — the writer and the
+constant it reads change together, in the same commit, and the audit's
+comparison logic never has to change again.
+
+**Why NOT NULL DEFAULT is safe on an ALTER against a live table.** As of this
+migration, `digest_scheme` defaults to the CURRENT scheme name
+(`derivation-v1`) rather than `NULL`. That is only safe because — per the
+paragraph above — no row in this table, on any default deployment, predates
+`#808`: `mode` has always shipped `off`, so every row that exists anywhere was
+already written under the post-#808 formula before this migration ran. The
+column exists for the NEXT change, not this one. A future canonicalization
+change must bump `judge.ts`'s `DIGEST_SCHEME` to a new, still-unique string IN
+THE SAME CHANGE that edits `canonicalizeDigestInputs()` — the two are
+documented as one obligation at the constant's definition, not left to be
+rediscovered.
+
+**What this is not.** It does not attempt to make an old-scheme row's digest
+verifiable again — an append-only row written under a scheme this code no
+longer implements is, and stays, non-recomputable under today's formula; that
+consequence was already accepted and recorded when `#808` merged. This
+decision is only about NAMING that fact so an operator reading the replay's
+output can tell it apart from a row that claims today's rule and genuinely no
+longer reproduces — which prior to `#829` the tool could not do at all, because
+it never compared the two values in the first place.
+
+## D45 — The web client gets its own manifest, version, and merge gate — narrow and fast, separate from api/backend CI (Lucas, 2026-09-17)
+
+**Decision.** `frontend/package.json` (`@robotmoney/web-client`) versions the
+static web client — `frontend/public` (the SPA) and `frontend/preview` (the
+fixture-mode wrapper) — independently of `backend/package.json` and
+`contract/package.json`. `scripts/web-client/version.ts` reads it (plus the
+current commit) and `scripts/static-assembly.sh` writes the result to
+`/version.json` in every assembled site, so a deployed client can name its own
+version apart from whatever api version it happens to be served alongside.
+
+`.github/workflows/frontend.yml` is retired and replaced by
+`.github/workflows/web-client.yml` (same taxonomy slot, same cron minute:
+issue #275 addendum's "genuine, dedicated frontend domain" requirement,
+renamed to track the client's own identity rather than the repo's directory
+layout). Only four things block a client PR's merge:
+
+1. the client's unit tests fail (`bun run --cwd frontend test` — the subset of
+   `scripts/tests/unit/` listed in `frontend/test/unit.list`, itself kept
+   honest by `scripts/tests/unit/web-client-unit-list.test.ts`);
+2. the static assembly/prerender does not build (`bun run --cwd frontend
+   assemble`);
+3. the preview page cannot load at all; or
+4. the Chrome console logs an error while Playwright loads it.
+
+(3) and (4) are `frontend/test/browser/preview-routes.spec.ts`, which sweeps
+every `sitemap.xml` route inside the FIXTURES-mode preview — goldens answer
+`/api/*`, `scripts/preview-server.ts` serves the working tree, no Docker, no
+network beyond localhost — alongside the pre-existing `preview-smoke.spec.ts`
+and `api-unreachable.spec.ts`. `web-client.yml` is path-gated on
+`frontend/**`, `goldens/**`, and `playwright.config.ts`; a client-only PR never
+waits on `e2e.yml`'s live smoke boot.
+
+The preview wrapper (`frontend/preview/index.html`) gains a `?api=` switch:
+`fixtures` (default) answers `/api/*` from goldens as before; `prod`, `stage`,
+or any `http(s)://` origin instead forwards **reads only** to that live api
+(`credentials: "omit"`; every non-GET call still gets the existing
+`{ok:true, mocked:true}` no-op, in every mode). This is primarily a developer
+tool (`bun run --cwd frontend check:prod` / `check:stage`), but `web-client.yml`
+runs the same sweep against production and stage on every PR too — **advisory
+only** (`continue-on-error: true`, reported in the job summary).
+
+**Why narrow and fast, not "robust like backend CI."** The client is meant to
+ship often and quickly; a merge-blocking dependency on a live backend (prod,
+stage, or the ~40-minute `e2e` smoke boot) would defeat that on every PR,
+including ones that touch no api behavior at all. Backend/db/api changes
+already get their own thorough coverage of the client surfaces in
+`backend.yml`/`integration.yml`/`e2e.yml` — this workflow is deliberately the
+narrow half of that asymmetry, not a second copy of it.
+
+**Why advisory, never blocking, for prod/stage.** A live host being
+unreachable, slow, or mid-deploy is a fact about that host, not about the
+client code in the PR. Blocking the merge on it would fail PRs for reasons
+their author cannot fix by editing anything in the diff — exactly the
+loud-skip-vs-flaky-red distinction this repo's CI taxonomy already protects
+elsewhere (contract's live `SWARM_ONBOARDING_SKILL_URL` check is the one
+existing exception, and it stays required precisely because that URL has no
+committed fallback to fall back to; the client's route sweep does, in
+goldens).
+
+**Why reads only, never writes, against a live api from a preview.** A
+preview session — local or a CI run — has no user consent and no session of
+its own attached to it; forwarding a write would let anyone who can open the
+preview URL mutate production state through it. The wrapper's existing
+mocked-write no-op (`{ok:true, mocked:true}`) already covered fixtures mode;
+extending it to cover every non-GET call in live mode too, rather than only
+intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
+
+**Alternatives rejected.**
+- **One shared version for frontend + backend** (status quo before this
+  decision, `package.json`'s `0.1.0` at the repo root) — ties a client-only
+  change to the api's release cadence and vice versa, and gives a deployed
+  static bundle no way to say which of its own revisions it is independently
+  of the api it happens to be co-deployed with today (D13's eventual
+  vendor-split tiered topology assumes exactly this independence).
+- **Keep `frontend.yml`'s scope (two backend-free specs) and add the route
+  sweep to `e2e.yml` instead** — re-couples the fast client signal to the live
+  smoke boot's ~40-minute latency, which is the dependency this decision
+  exists to remove.
+- **Block the merge on the prod/stage sweep too** — rejected above; a live
+  host's availability is not a property of the PR's diff.

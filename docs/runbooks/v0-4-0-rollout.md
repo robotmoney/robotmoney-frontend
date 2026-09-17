@@ -108,6 +108,8 @@ smoke test). Expected new files (additive migrations per R1):
 0042_swarm_consensus_receipts.sql
 0043_swarm_member_judges.sql
 0044_wallet_backfill_leg_terminal.sql
+0053_database_role_taxonomy.sql
+0054_rm_worker_allowlist.sql
 ```
 
 Before any write, use the read-only replica procedure from `rollout-procedure.md`
@@ -177,11 +179,11 @@ bun backend/scripts/upgrades/0.3.0-to-0.4.0/stage-rehearsal.ts "$RM_BACKUP_DIR" 
 ```
 
 The restore check validates the v0.3.0 starting state. The rehearsal applies
-the six migrations to the restored smoke-twin, boots real services, and
+the eight migrations to the restored smoke-twin, boots real services, and
 executes the release postflight before teardown. It proves conformance to the
 release acceptance criteria — §4.4 gate.
 
-1. All six full migration filenames appear once in `schema_migrations` — §4.4
+1. All eight full migration filenames appear once in `schema_migrations` — §4.4
    criterion.
 2. `swarm_sessions_state_check` admits `judged`; `swarm_judge_config` contains
    exactly `id=1, mode='off'` with a positive `min_takes` and `model=NULL`; and
@@ -218,7 +220,7 @@ bun backend/scripts/upgrades/0.3.0-to-0.4.0/preflight.ts --emit-receipt
 3. Deploy in provider order: database migration, API and every worker lane,
    then static frontend. Do not publish the new SPA before its API — R4 (deploy
    provider before consumer).
-4. Confirm the migration log names all six new files exactly once — per R1
+4. Confirm the migration log names all eight new files exactly once — per R1
    (additive only).
 5. Do **not** enable the judge during cutover. Verify its config after the API
    is serving:

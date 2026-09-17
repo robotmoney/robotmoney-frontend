@@ -50,6 +50,17 @@ import {
   type TelemetryRunStatus,
 } from "./telemetry.ts";
 import { telemetryHttpSink } from "./telemetry-client.ts";
+import { randomUUID } from "node:crypto";
+import { resolveBuildIdentity } from "./build-identity.ts";
+import type { MethodologyIdentity } from "./run-ledger.ts";
+import { canonicalStringify } from "./output-snapshots.ts";
+import type {
+  TerminalRunPackageInput,
+  ResearchSignalArtifact,
+  WarningArtifact,
+  LogArtifact,
+  ExceptionArtifact,
+} from "./output-snapshots.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
 // R6 follow-up (two-tier EDGAR refresh, see edgar-incremental-refresh.ts):
@@ -162,12 +173,48 @@ export async function runAnalytics(
   const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
   const results: Record<string, unknown> = {};
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
+  const acquisitionSink = persistence.saveSourceAcquisition
+    ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
+    : undefined;
   const collector = new TelemetryCollector();
   let runFailed: unknown = null;
+
+  // ── ISSUE #977: the immutable run ledger ────────────────────────────────
+  // beginRun MUST succeed BEFORE `source` (the injected AnalyticsDataSource)
+  // is ever called — its failure is fatal and prevents both acquisition and
+  // every canonical output write below (AC1/AC10). Deliberately outside the
+  // try/catch: a begin-run failure is not "this run degraded", it is "this
+  // run never started", and it propagates to the caller unchanged.
+  const runToolId = toolId ?? "suite";
+  const buildIdentity = resolveBuildIdentity();
+  const methodology: MethodologyIdentity = {
+    toolId: runToolId,
+    versionLabel: CURRENT_REGIME_VERSION,
+    config: { toolId: runToolId, regimeVersion: CURRENT_REGIME_VERSION },
+  };
+  const { runId, methodologyVersionId } = await persistence.beginRun({
+    runKey: randomUUID(),
+    asof,
+    toolId: runToolId,
+    sourceLabel,
+    methodology,
+    buildIdentity,
+    jobId: jobId ?? null,
+  });
+  await persistence.appendRunEvent(runId, "started", null);
 
   let persisted: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
   const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
+  let vintage: Awaited<ReturnType<AnalyticsPersistence["freezeVintage"]>> | null = null;
+  // Issue #978: the complete regime-snapshot rows and research-signal
+  // payloads THIS run computed — captured here (not recomputed) and published
+  // NOWHERE ELSE. The terminal run package submitted at the end below is the
+  // only writer of both the immutable artifact and the current-view
+  // projection, so the two can never disagree and a failed run publishes
+  // neither (AC2).
+  let regimeSnapshotRows: RegimeSnapshotRow[] | null = null;
+  const researchSignalArtifacts: ResearchSignalArtifact[] = [];
 
   try {
   // ── REGIME ────────────────────────────────────────────────────────────────
@@ -188,7 +235,7 @@ export async function runAnalytics(
     }
     let t0 = new Date();
     const floor = await getPersisted();
-    const fetched = await source.fetchIndicators(INDICATORS, logger);
+    const fetched = await source.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
     collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
     t0 = new Date();
@@ -256,7 +303,7 @@ export async function runAnalytics(
     // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
     // extras fetch degrades to []: correlations/backtest simply carry fewer/no
     // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
-    const extras = await source.fetchBacktestExtras(logger);
+    const extras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";
@@ -285,9 +332,18 @@ export async function runAnalytics(
     const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel);
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
+    // ISSUE #978 AC2: the current projection is NOT published here. The rows
+    // are only CAPTURED for this run's terminal package; the single publisher
+    // of regime_snapshots is applyCurrentProjections, inside
+    // submitTerminalRunPackage's transaction, and it runs only for a run that
+    // reached a usable terminal outcome. Writing here as well meant a run that
+    // threw AFTER this point (e.g. in freezeVintage below) left its numbers in
+    // the current view while its terminal package froze only
+    // warnings/logs/exceptions — the ledger and the current view disagreeing
+    // with nothing red.
     t0 = new Date();
-    await persistence.saveRegimeSnapshots(rows);
-    collector.stage("store", "ok", `persisted ${rows.length} regime snapshot row(s)`, t0);
+    regimeSnapshotRows = rows;
+    collector.stage("store", "ok", `captured ${rows.length} regime snapshot row(s) for the terminal run package`, t0);
 
     results.regime = {
       asof,
@@ -315,7 +371,7 @@ export async function runAnalytics(
     const inputs = await source.fetchResearchInputs(asof, logger, {
       persistedMna: floor.MNA ?? [],
       deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
-    });
+    }, acquisitionSink, jobId ?? null);
     collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
 
     if (want("channel-divergence")) {
@@ -336,9 +392,10 @@ export async function runAnalytics(
       collector.stage("analyze", "ok", "computed channel-divergence signal", t0);
       collector.artifact("report", "channel-divergence-signal", payload);
 
+      // Captured, not published — see the regime branch above (issue #978 AC2).
       t0 = new Date();
-      await persistence.saveResearchSignal("channel-divergence", asof, payload);
-      collector.stage("store", "ok", "persisted channel-divergence research signal", t0);
+      researchSignalArtifacts.push({ key: "channel-divergence", date: asof, payload });
+      collector.stage("store", "ok", "captured channel-divergence research signal for the terminal run package", t0);
 
       results["channel-divergence"] = payload;
     }
@@ -409,13 +466,29 @@ export async function runAnalytics(
         collector.stage("analyze", "ok", "computed late-cycle-signals signal", t0);
         collector.artifact("report", "late-cycle-signals-signal", payload);
 
+        // Captured, not published — see the regime branch above (issue #978 AC2).
         t0 = new Date();
-        await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
-        collector.stage("store", "ok", "persisted late-cycle-signals research signal", t0);
+        researchSignalArtifacts.push({ key: "late-cycle-signals", date: asof, payload });
+        collector.stage("store", "ok", "captured late-cycle-signals research signal for the terminal run package", t0);
         results["late-cycle-signals"] = payload;
       }
     }
   }
+
+  // ── ISSUE #977: freeze the data vintage ─────────────────────────────────
+  // Everything this run acquired (and everything already in the ledger) is
+  // frozen as of NOW (knowledge-time cutoff) and `asof` (market-time cutoff)
+  // — the complete, reproducible input universe this run's outputs above
+  // were computed against. A freeze failure fails the WHOLE run: it is part
+  // of the mandatory ledger, not best-effort telemetry.
+  vintage = await persistence.freezeVintage({
+    runId,
+    toolId: runToolId,
+    knowledgeTimeCutoff: new Date().toISOString(),
+    marketTimeCutoff: asof,
+    methodologyVersionId,
+    buildIdentity,
+  });
   } catch (e) {
     runFailed = e;
   }
@@ -438,6 +511,91 @@ export async function runAnalytics(
   // Non-enumerable so `Object.keys(results)`/JSON-shape assertions of the
   // canonical tool outputs are never affected by telemetry outcome exposure.
   Object.defineProperty(results, "__telemetry", { value: telemetryOutcome, enumerable: false, writable: true, configurable: true });
+
+  // Mandatory ledger event — NOT best-effort like telemetry above. Its own
+  // failure escalates the run to failed even when everything else succeeded:
+  // a run whose outcome the ledger could not record must not read as quiet
+  // success (issue #977 AC5/AC10).
+  // overallStatus is computed above as one of "failed" | "degraded" |
+  // "succeeded" only (never "running", the fourth TelemetryRunStatus value,
+  // which does not apply once this function is about to return) — narrow it
+  // to RunLifecycleEvent's smaller set for the ledger event below.
+  const eventStatus = overallStatus as "succeeded" | "degraded" | "failed";
+  try {
+    await persistence.appendRunEvent(runId, eventStatus, runFailed ? String((runFailed as any)?.message ?? runFailed) : null);
+  } catch (ledgerEventError) {
+    if (!runFailed) runFailed = ledgerEventError;
+  }
+
+  // ── ISSUE #978: freeze the terminal output/report snapshot ──────────────
+  // Mandatory, NOT best-effort like telemetry above — mirrors freezeVintage:
+  // every run that reaches a terminal outcome (succeeded, degraded, or
+  // failed) submits ONE complete package bound to this run's id, so a run that
+  // completes leaves a real artifact for swarm_briefs.report_snapshot_id to
+  // resolve to.
+  //
+  // NOT "never empty for a real run": this single submit is the run's only
+  // chance to record anything, and analyticsApiClient.call has no timeout and
+  // no retry, so a submit that fails (network, API down) leaves the run with
+  // no artifact at all — the succeeded-shape package failed and no
+  // failed-shape package is submitted in its place. That fails SAFE rather
+  // than silently: the error escalates into `runFailed` below, the run throws
+  // red, and the current-view projections keep their last good state because
+  // applyCurrentProjections rides inside the very transaction that did not
+  // commit. The gap is an absent record, never a wrong one.
+  //
+  // `overallStatus` (computed above, before the mandatory ledger event
+  // that may have since escalated `runFailed`) decides the shape: a
+  // "degraded" run still produced real regime/research outputs, so it
+  // freezes exactly like a "succeeded" one — only a run whose OWN stages
+  // never reached a usable output freezes its warnings/logs/exceptions
+  // instead.
+  const terminalPackage: TerminalRunPackageInput =
+    overallStatus === "failed"
+      ? {
+          runId,
+          asof,
+          status: "failed",
+          warnings: collector.warnings as WarningArtifact[],
+          logs: collector.stages.map(
+            (s): LogArtifact => ({
+              level: s.status === "error" ? "error" : s.status === "warn" ? "warn" : "info",
+              message: `[${s.stage}] ${s.summary}`,
+              at: s.finishedAt,
+            }),
+          ),
+          exceptions: [
+            {
+              message: String((runFailed as any)?.message ?? runFailed),
+              stack: (runFailed as any)?.stack ?? null,
+            } satisfies ExceptionArtifact,
+          ],
+        }
+      : {
+          runId,
+          asof,
+          status: "succeeded",
+          regimeSnapshots: regimeSnapshotRows ?? [],
+          researchSignals: researchSignalArtifacts,
+          // The report IS this run's own complete structured output — not a
+          // second, independently-generated document — so a byte-exact
+          // retrieval of it is exactly what runAnalytics computed and
+          // returned, canonicalized the same way the run/vintage ledger
+          // above canonicalizes its own evidence.
+          reportBytes: new TextEncoder().encode(canonicalStringify({ asof, toolId: runToolId, results })),
+        };
+  try {
+    await persistence.submitTerminalRunPackage(terminalPackage);
+  } catch (packageError) {
+    if (!runFailed) runFailed = packageError;
+  }
+
+  Object.defineProperty(results, "__runLedger", {
+    value: { runId, methodologyVersionId, buildIdentity, vintage },
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 
   if (runFailed) throw runFailed;
   return results;

@@ -33,6 +33,8 @@ interface ComposeConfig {
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
     logging?: { driver?: string; options?: Record<string, string> };
     healthcheck?: { test?: string[]; interval?: string; timeout?: string; retries?: number; start_period?: string; disable?: boolean };
+    deploy?: { replicas?: number };
+    scale?: number;
     restart?: string;
     profiles?: string[];
   }>;
@@ -191,6 +193,9 @@ const PREWARM: readonly RenderArgs[] = [
       knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1", PG_NAMESPACE_GUARD_TIMEOUT_MS: "15000" },
       files,
     },
+    // "TRUST_PROXY reaches the api container" — a host shell trying to
+    // override the hardcoded literal back off.
+    { knobs: { TRUST_PROXY: "0" }, files },
   ]),
   // "production capability TTLs" — explicit TTLs, base composition only.
   {
@@ -744,6 +749,151 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
     }
   });
 });
+
+// TRUST_PROXY must reach the api container in every composition (issue #892
+// follow-up: a PR #954 pre-merge review finding). website-server (nginx) sits
+// in front of `api` for EVERY request in base, smoke AND stage — see this
+// file's `docker-compose.yml` comment on the api service's TRUST_PROXY key —
+// so backend/src/config.ts's `trustProxy` must resolve true in all three, or
+// backend/src/api/index.ts silently falls back to the raw TCP peer (now
+// website-server's own docker-network address for every request), collapsing
+// per-IP rate limiting and the comments/submissions ip_hash audit field to one
+// shared identity. Same rationale as the boot-guard operator controls above:
+// only a rendered `docker compose config` proves the value is actually
+// DELIVERED, since the api service's `environment:` block is an allowlist and
+// a key missing from it is never sent to the container regardless of what the
+// host shell exports.
+describe("TRUST_PROXY reaches the api container in every composition (issue #892 finding)", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", BASE_COMPOSE_FILES],
+    ["smoke", DEMO_COMPOSE_FILES],
+    ["stage", STAGE_COMPOSE_FILES],
+  ];
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition resolves TRUST_PROXY=1 on the api service`, () => {
+      const env = serviceEnv(composeConfig({}, files), "api");
+      expect(env.TRUST_PROXY).toBe("1");
+    });
+
+    test(`the ${label} composition still resolves TRUST_PROXY=1 even if the host shell tries to unset it`, () => {
+      // A hardcoded literal in docker-compose.yml, not an interpolated
+      // `${TRUST_PROXY:-1}` passthrough — an ambient TRUST_PROXY=0 in the
+      // invoking shell must never be able to turn this back off, since
+      // website-server fronting api is a property of the topology, not an
+      // operator choice.
+      const env = serviceEnv(composeConfig({ TRUST_PROXY: "0" }, files), "api");
+      expect(env.TRUST_PROXY).toBe("1");
+    });
+  }
+});
+
+// Exactly one swarm-lane worker requirement (docs/architecture.md, issue #806 / #891).
+// `FOR UPDATE SKIP LOCKED` hands `swarm.judge` to one worker and `swarm.publish` to
+// another the instant both are due, and the judge holds its worker for up to 60s
+// on the model call — so with two `worker-swarm` containers the publish overtakes
+// the judging on the ADMIN cadence. No compose file may declare replicas > 1 or
+// scale > 1 for worker-swarm.
+export function assertSingleSwarmWorker(cfg: ComposeConfig, label = "config"): void {
+  const worker = cfg.services?.["worker-swarm"];
+  if (!worker) return;
+
+  const replicas = worker.deploy?.replicas;
+  if (replicas !== undefined && replicas > 1) {
+    throw new Error(
+      `[${label}] worker-swarm has deploy.replicas=${replicas}; docs/architecture.md requires exactly 1 swarm-lane worker`,
+    );
+  }
+
+  const scale = worker.scale;
+  if (scale !== undefined && scale > 1) {
+    throw new Error(
+      `[${label}] worker-swarm has scale=${scale}; docs/architecture.md requires exactly 1 swarm-lane worker`,
+    );
+  }
+}
+
+describe("single-swarm-worker requirement is enforced across compose files (issue #891)", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", BASE_COMPOSE_FILES],
+    ["smoke", DEMO_COMPOSE_FILES],
+    ["stage", STAGE_COMPOSE_FILES],
+  ];
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition declares at most 1 replica/scale for worker-swarm`, () => {
+      const cfg = composeConfig({}, files);
+      const worker = cfg.services?.["worker-swarm"];
+      expect(worker).toBeDefined();
+
+      const replicas = worker?.deploy?.replicas;
+      if (replicas !== undefined) {
+        expect(replicas).toBeLessThanOrEqual(1);
+      } else {
+        expect(replicas).toBeUndefined();
+      }
+
+      const scale = worker?.scale;
+      if (scale !== undefined) {
+        expect(scale).toBeLessThanOrEqual(1);
+      } else {
+        expect(scale).toBeUndefined();
+      }
+
+      expect(() => assertSingleSwarmWorker(cfg, label)).not.toThrow();
+    });
+  }
+
+  test("assertion helper rejects replicas > 1 and scale > 1", () => {
+    expect(() =>
+      assertSingleSwarmWorker({
+        services: {
+          "worker-swarm": {
+            deploy: { replicas: 2 },
+          },
+        },
+      }),
+    ).toThrow(/worker-swarm has deploy\.replicas=2/);
+
+    expect(() =>
+      assertSingleSwarmWorker({
+        services: {
+          "worker-swarm": {
+            scale: 3,
+          },
+        },
+      }),
+    ).toThrow(/worker-swarm has scale=3/);
+
+    expect(() =>
+      assertSingleSwarmWorker({
+        services: {
+          "worker-swarm": {
+            deploy: { replicas: 1 },
+            scale: 1,
+          },
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertSingleSwarmWorker({
+        services: {
+          "worker-swarm": {},
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  test("raw compose source files contain no scale or replica multipliers for worker-swarm", async () => {
+    for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"]) {
+      const text = await Bun.file(join(repoRoot, file)).text();
+      expect(`${file}:replicas:${/replicas\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:replicas:false`);
+      expect(`${file}:scale:${/scale\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:scale:false`);
+    }
+  });
+});
+
 
 // Issue #809's regression guard. Every case above reads its compose
 // configuration through `composeConfig`, which serves it from the prewarmed

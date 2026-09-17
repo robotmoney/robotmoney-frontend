@@ -16,6 +16,7 @@ import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
+  getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   countActiveMembersTx,
@@ -25,7 +26,7 @@ import { deriveMemberHandle } from "./handle.ts";
 // Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
 // an env var, because the swarm is live and an operator must be able to take
 // the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, latestJudgement, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
@@ -1204,15 +1205,37 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
 //
 // A judge that falls back to template prose is still a successful judging — see
 // swarm/judge.ts on why failure is an outcome here rather than an error.
-export async function judgeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
+export async function judgeSessionAdmin(
+  sessionId: string,
+  expectedVersion: number | undefined,
+  actor: Actor = ADMIN_ACTOR,
+  opts: { force?: boolean } = {},
+) {
   const config = await getJudgeConfig();
   if (config.mode === "off") return err(409, "judge_disabled");
   const pre = await preflightTransition(sessionId, "judged", expectedVersion);
   if (!pre.ok) return pre;
 
+  // Named-judge attribution (issue #918). Resolved by HANDLE, not hardcoded to
+  // an id, because the id is generated per deployment (roster-seed.ts). An
+  // environment that has not run seedLiveRoster() — most of this repo's own
+  // tests — resolves nothing here, and `judgeMemberId` MUST then stay
+  // `undefined` (never `""`) so judgeSession() takes its unnamed-judge path
+  // and every judgement keeps naming 'robotmoney-in-house', unchanged.
+  //
+  // NO STATUS/ROLE/CONFLICT CHECK HERE. judgeSession() already runs all three
+  // — active-status, role==='judge', and the take-conflict check — inside its
+  // own transaction once `judgeMemberId` is passed (judge-session.ts). Redoing
+  // any of them here would be a second, separately-maintained copy of a rule
+  // that must have exactly one source.
+  const namedJudge = await getMember("themis");
+  const judgeMemberId = namedJudge?.id;
+
   let t: GuardedTransitionResult | undefined;
   const result = await judgeSession(sessionId, {
     config,
+    judgeMemberId,
+    force: opts.force,
     // Runs inside the judge's transaction, after its advisory lock and before
     // the judgement row is written. A refusal here rolls the whole thing back.
     beforeRecord: async (tx) => {
@@ -1380,6 +1403,13 @@ function toJudgementAdmin(
     dropped,
     partiallyDegraded: dropped.positions > 0 || dropped.disagreements > 0,
     opinion: r.opinion ?? null,
+    // Who judged (issue #918/#922): a free-text label plus, when the judge is a
+    // known swarm member (e.g. the seeded Themis identity), the member id it
+    // resolved to. `judgedByMemberId` is null for the anonymous in-house
+    // default ('robotmoney-in-house') and for any judgement recorded before
+    // migration 0043 added the columns.
+    judgedBy: (r.judged_by as string | null) ?? null,
+    judgedByMemberId: (r.judged_by_member_id as string | null) ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     // Reconciliation against the session as it stands NOW (issue #806).
     carriedBySession,
@@ -1392,34 +1422,36 @@ function toJudgementAdmin(
 }
 
 export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): Promise<AdminResult> {
-  const session = (await sql`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { id: string; state: string }
-    | undefined;
-  if (!session) return err(404, "session not found");
-  const rows = await listJudgements(sessionId, limit);
-  // `latestJudgement()` and nothing else decides which opinion is IN FORCE —
-  // its ORDER BY id (not created_at) is the only ordering that agrees with the
-  // order the session was actually written in, and re-deriving that here would
-  // be a second copy of a rule that has already been got wrong once.
-  const latest = await latestJudgement(sessionId);
-  // …but "newest row" is not "what the session carries" (issue #806). The
-  // append-only record and the session are two different stores, and the
-  // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
-  // second without touching the first. Read the session's own fingerprint once
-  // and reconcile every row against it, so `inForce` can report SUPERSEDED
-  // rather than "applied to the session" for prose the session no longer has.
-  const carried = await sessionJudgeFingerprint(sql, sessionId);
-  return {
-    ok: true,
-    status: 200,
-    sessionId,
-    state: session.state,
-    // What the session itself carries, so an operator can see the two stores
-    // side by side rather than inferring the disagreement from a boolean.
-    sessionJudge: carried,
-    inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
-    judgements: rows.map((r) => toJudgementAdmin(r, carried)),
-  };
+  return sql.begin(async (tx) => {
+    const session = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+      | { id: string; state: string }
+      | undefined;
+    if (!session) return err(404, "session not found");
+    const rows = await listJudgements(sessionId, limit, tx);
+    // `listJudgements(sessionId, limit)` already returns the newest rows sorted
+    // by `id DESC` (the only ordering that agrees with the order the session was
+    // actually written in), so `latest` is simply `rows[0] ?? null` rather than
+    // a separate query.
+    const latest = rows[0] ?? null;
+    // …but "newest row" is not "what the session carries" (issue #806). The
+    // append-only record and the session are two different stores, and the
+    // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
+    // second without touching the first. Read the session's own fingerprint once
+    // and reconcile every row against it, so `inForce` can report SUPERSEDED
+    // rather than "applied to the session" for prose the session no longer has.
+    const carried = await sessionJudgeFingerprint(tx, sessionId);
+    return {
+      ok: true,
+      status: 200,
+      sessionId,
+      state: session.state,
+      // What the session itself carries, so an operator can see the two stores
+      // side by side rather than inferring the disagreement from a boolean.
+      sessionJudge: carried,
+      inForce: latest ? toJudgementAdmin(latest as Record<string, unknown>, carried) : null,
+      judgements: rows.map((r) => toJudgementAdmin(r, carried)),
+    };
+  });
 }
 
 // Publish the consensus receipt for a judged session (issue #754).

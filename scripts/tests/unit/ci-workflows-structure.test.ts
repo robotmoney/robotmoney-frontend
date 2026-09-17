@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EVIDENCE_DIR } from "../../../backend/scripts/lib/rollout-signing.ts";
 
 const root = join(import.meta.dir, "../../..");
 const workflows = join(root, ".github/workflows");
@@ -50,7 +51,7 @@ const PATH_GATED_WORKFLOWS = [
   "backend.yml",
   "contract.yml",
   "integration.yml",
-  "frontend.yml",
+  "web-client.yml",
   "research-pipeline.yml",
   "onboarding-eval-rails.yml",
 ];
@@ -264,6 +265,69 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       );
       expect(researchYml, `research-pipeline.yml runs ${file}`).toContain(file);
     }
+  });
+
+  // ── tag-triggered publish provenance (issue #884 SEC-1 fix) ────────────────
+  test("contract-publish.yml refuses to publish a tag whose commit isn't reachable from origin/main", () => {
+    // Tag creation only requires repo write access, not a review, so any
+    // contributor with write access could point a `contract-v*` tag at a
+    // commit that never went through a PR/branch protection. The publish job
+    // must fetch full history (fetch-depth: 0) and hard-fail (::error + a
+    // non-zero exit, not a skip) before the `bun publish` step if the tagged
+    // commit is not an ancestor of origin/main.
+    const wf = read("contract-publish.yml");
+    expect(
+      wf,
+      "contract-publish.yml's checkout uses fetch-depth: 0 so the ancestor check below has origin/main + full history available",
+    ).toMatch(/uses:\s*actions\/checkout@v4[\s\S]*?fetch-depth:\s*0/);
+    expect(
+      wf,
+      "contract-publish.yml checks the tagged commit is an ancestor of origin/main",
+    ).toMatch(/git merge-base --is-ancestor .*origin\/main/);
+    expect(
+      wf,
+      "contract-publish.yml fails loudly (::error + exit) rather than skipping when the ancestor check fails",
+    ).toMatch(/::error::[\s\S]*?\n\s*exit 1/);
+
+    const publishStepIndex = wf.indexOf("bun publish");
+    const ancestorCheckIndex = wf.indexOf("--is-ancestor");
+    expect(
+      ancestorCheckIndex,
+      "contract-publish.yml's ancestor check appears before its bun publish step",
+    ).toBeGreaterThan(-1);
+    expect(
+      publishStepIndex,
+      "contract-publish.yml's ancestor check appears before its bun publish step",
+    ).toBeGreaterThan(ancestorCheckIndex);
+  });
+
+  // ── committed rollout evidence (issue #937) ────────────────────────────────
+  test("backend.yml's pull_request paths-filter names the committed-evidence tree", () => {
+    // The evidence tree lives OUTSIDE backend/ by construction: it must match no
+    // rollout step's dependsOn glob, or recording one step's receipt would count
+    // as code drift and invalidate the next one. That also puts it outside
+    // backend.yml's original `backend/**` filter — so a PR that changed only a
+    // committed receipt, or the allowed-signers file that is the entire trust
+    // root, would skip the suite that verifies signatures
+    // (backend/tests/rollout-receipt-repo-source.test.ts) and merge unverified.
+    //
+    // Asserted against rollout-signing.ts's own EVIDENCE_DIR constant rather
+    // than a literal, so renaming the directory breaks this test instead of
+    // silently un-gating the verifier.
+    const filters = (parse("backend.yml").jobs?.changes?.steps ?? []).find((s) =>
+      (s.uses ?? "").startsWith("dorny/paths-filter@"),
+    ) as (WorkflowStep & { with?: { filters?: string } }) | undefined;
+    expect(filters?.with?.filters, "backend.yml's changes job has a dorny/paths-filter step").toBeTruthy();
+    const patterns = Object.values(
+      Bun.YAML.parse(filters!.with!.filters!) as Record<string, string[]>,
+    ).flat();
+    expect(
+      patterns.filter((p) => p.startsWith(`${EVIDENCE_DIR}/`)),
+      `backend.yml's filter names ${EVIDENCE_DIR}/ — patterns were [${patterns.join(", ")}]`,
+    ).not.toEqual([]);
+    // The pattern must be recursive: the allowed-signers file sits at the root
+    // of the tree and the receipts one level down, and both have to select the job.
+    expect(patterns).toContain(`${EVIDENCE_DIR}/**`);
   });
 });
 

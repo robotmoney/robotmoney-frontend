@@ -1,7 +1,18 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import {
+  canonicalizeApplication,
+  classifyRegime,
+  REGIME_METHOD,
+  type RegimeLabel,
+  type RegimeSummary,
+  SWARM_ROSTER_CAP,
+  SWARM_TAKE_REVISION_CAP,
+  path as routePath,
+  ROUTES,
+  STANCES,
+} from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -11,6 +22,12 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
+// Pure canonicalization shared with the #977/#978 analytics ledgers — no DB
+// import, so pulling it in here carries no cycle risk. Every brief revision's
+// body is hashed the SAME way an analytics report/output snapshot is, so "the
+// stored checksum recomputes clean from the retrieved bytes" is one proof
+// technique across both ledgers.
+import { canonicalStringify, sha256Hex } from "../analytics/run-ledger.ts";
 // Issue #562: a new member's public handle comes from its name, not from the
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
@@ -64,11 +81,43 @@ export async function memberIdForToken(token: string): Promise<string | null> {
   return rows[0]?.member_id ?? null;
 }
 
-async function publicKeyFor(memberId: string): Promise<string | null> {
-  const rows = await sql<{ public_key: string }[]>`
-    SELECT public_key FROM swarm_member_keys
+// Issue #697: a take's public key must be resolved by the key that ACTUALLY
+// SIGNED IT (`signing_key_id`, recorded on the row at submission time — see
+// submitRecommendation), never by whichever key happens to be active NOW.
+// The active key can rotate (or be re-registered) long after an already
+// stored, append-only take was written, and re-resolving "currently active"
+// at read time silently starts checking history against the wrong key.
+//
+// Rows written before `signing_key_id` existed have it NULL and fall back to
+// that older "currently active key" lookup — a documented cutover point
+// (migration 0049's header), not a claim that those older rows are correctly
+// attributed. A fresh Fragment per call, not a shared constant, so embedding
+// it in several independent queries below cannot share state between them.
+// Every caller embeds it with the recommendation row aliased as `r`.
+function signingPublicKeySql() {
+  return sql`
+  COALESCE(
+    (SELECT k.public_key FROM swarm_member_keys k WHERE k.id = r.signing_key_id),
+    (SELECT k.public_key FROM swarm_member_keys k
+     WHERE k.member_id = r.member_id AND k.active
+     ORDER BY k.created_at DESC LIMIT 1)
+  )`;
+}
+
+// Issue #697: callers need BOTH the key material (to verify against) and the
+// key's own row id (to record, at write time, which exact key verified a
+// take — see submitRecommendation's INSERT). A bare public_key string cannot
+// answer "which row was this" once a member has rotated more than once.
+// `id` is typed `string`, not `number` — swarm_member_keys.id is `bigserial`,
+// and postgres.js returns bigint columns as strings to avoid silent precision
+// loss (the same convention swarm_session_judgements.id is read under
+// elsewhere in this codebase). It is never arithmetic here, only threaded
+// through to another query parameter.
+async function activeKeyFor(memberId: string): Promise<{ id: string; publicKey: string } | null> {
+  const rows = await sql<{ id: string; public_key: string }[]>`
+    SELECT id, public_key FROM swarm_member_keys
     WHERE member_id = ${memberId} AND active ORDER BY created_at DESC LIMIT 1`;
-  return rows[0]?.public_key ?? null;
+  return rows[0] ? { id: rows[0].id, publicKey: rows[0].public_key } : null;
 }
 
 // Fixed maximum size for the standing swarm. HARD-ENFORCED at every
@@ -120,8 +169,26 @@ export const TAKES_AMENDABLE_STATES: ReadonlySet<string> = new Set([
 ]);
 
 // ── Reads ─────────────────────────────────────────────────────────────────
+// Issue #782: `status: 'active'` on a member row means the SEAT is live, not
+// that the agent is participating — the members table needs a real activity
+// signal to tell a live swarm from a static roster. The lateral gives each
+// member its own newest take instant without a second round trip per member
+// or a GROUP BY over the whole roster; `received_at` (not the session's
+// convened_at) because the question is when the agent acted, and max() over
+// it already collapses revisions (`r.revision`) to the latest one.
+// swarm_recommendations_member_received_idx (migration 0055) keeps this cheap
+// as the take count grows.
 export async function getMembers() {
-  const rows = await sql`SELECT * FROM swarm_members WHERE status = 'active' ORDER BY id`;
+  const rows = await sql`
+    SELECT m.*, t.last_take_at
+      FROM swarm_members m
+      LEFT JOIN LATERAL (
+        SELECT max(received_at) AS last_take_at
+          FROM swarm_recommendations
+         WHERE member_id = m.id
+      ) t ON true
+     WHERE m.status = 'active'
+     ORDER BY m.id`;
   return rows.map(toMember);
 }
 export async function countActiveMembers(): Promise<number> {
@@ -196,12 +263,22 @@ export async function assertRosterCapacity(
  * `(id = $ref) DESC`: that one asks "is this proposed NAME already spoken for",
  * and it deliberately prefers the id namespace to tell the two 409s apart.
  */
+// Issue #782 follow-up: this row feeds toMember() directly via getMember(),
+// so it needs the same last_take_at lateral getMembers() joins — otherwise
+// a single-member lookup silently reports lastTakeAt: null regardless of
+// actual take history, indistinguishable from "never took a position".
 async function resolveMemberRow(ref: string) {
   return (await sql`
-    SELECT * FROM swarm_members
-    WHERE handle = ${ref} OR id = ${ref}
-    ORDER BY (handle = ${ref}) DESC
-    LIMIT 1`)[0];
+    SELECT m.*, t.last_take_at
+      FROM swarm_members m
+      LEFT JOIN LATERAL (
+        SELECT max(received_at) AS last_take_at
+          FROM swarm_recommendations
+         WHERE member_id = m.id
+      ) t ON true
+     WHERE m.handle = ${ref} OR m.id = ${ref}
+     ORDER BY (m.handle = ${ref}) DESC
+     LIMIT 1`)[0];
 }
 export async function getMember(id: string) {
   const row = await resolveMemberRow(id);
@@ -418,9 +495,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
              s.date AS session_date, s.generated_at AS session_generated_at,
              s.subject_id, s.subject_name, s.state AS session_state,
-             (SELECT k.public_key FROM swarm_member_keys k
-              WHERE k.member_id = r.member_id AND k.active
-              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+             ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_sessions s ON s.id = r.session_id
       JOIN swarm_members m ON m.id = r.member_id
@@ -502,9 +577,7 @@ async function withTakes(s: Record<string, unknown>) {
              r.id, r.member_id, m.handle AS member_handle, m.name AS member_name,
              r.stance, r.confidence, r.body,
              r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-             (SELECT k.public_key FROM swarm_member_keys k
-              WHERE k.member_id = r.member_id AND k.active
-              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+             ${signingPublicKeySql()} AS public_key
       FROM swarm_recommendations r
       JOIN swarm_members m ON m.id = r.member_id
       WHERE r.session_id = ${s.id as string}
@@ -530,9 +603,7 @@ export async function getTakeReceipt(id: string) {
     SELECT r.id, r.session_id, r.member_id, m.handle AS member_handle, m.name AS member_name,
            r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at, r.nonce, r.revision,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
+           ${signingPublicKeySql()} AS public_key
     FROM swarm_recommendations r
     JOIN swarm_members m ON m.id = r.member_id
     WHERE r.id = ${id} LIMIT 1`)[0];
@@ -586,7 +657,7 @@ export async function getBriefBySession(sessionId: string) {
   // `session_id` is a uuid column, so a non-uuid handle would make Postgres
   // throw rather than return no rows; screen it here (mirrors getSessionById).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) return null;
-  const r = await sql`SELECT id, date, subject_id, session_id, body, created_at FROM swarm_briefs
+  const r = await sql`SELECT id, date, subject_id, session_id, report_snapshot_id, body, created_at FROM swarm_briefs
                       WHERE session_id = ${sessionId} LIMIT 1`;
   return r[0] ? toBrief(r[0]) : null;
 }
@@ -615,7 +686,7 @@ export async function getBrief(date: string, subjectId: string) {
   // 0028 deliberately preserved v0-archived briefs whose session was never
   // archived, and an inner join would silently hide them. `NULLS LAST` ranks a
   // real session's brief above such a row when both exist for a day.
-  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.body, b.created_at
+  const r = await sql`SELECT b.id, b.date, b.subject_id, b.session_id, b.report_snapshot_id, b.body, b.created_at
                       FROM swarm_briefs b
                       LEFT JOIN swarm_sessions s ON s.id = b.session_id
                       WHERE b.date = ${date} AND b.subject_id = ${subjectId}
@@ -627,7 +698,15 @@ export async function getBrief(date: string, subjectId: string) {
 export interface SubmissionInput {
   memberId: string; date: string; subjectId: string; nonce: string;
   stance: string; confidence: number; body?: string; memoUrl?: string;
-  weights?: { bucket: string; weight: number }[]; signature: string;
+  // Issue #978 AC6: naming a reportSnapshotId signs schema 2.0
+  // (canonicalizeSubmission) and binds the take to the exact analytics
+  // report snapshot its author saw. Optional so a schema-1.0 (legacy)
+  // submission still verifies unchanged; submitRecommendation below rejects
+  // one that does not match the session's OWN brief.
+  reportSnapshotId?: string;
+  weights?: { bucket: string; weight: number }[];
+  cites?: string[];
+  signature: string;
 }
 
 export async function submitRecommendation(token: string, sub: SubmissionInput) {
@@ -679,6 +758,40 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   }
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
+
+  // Report-snapshot binding (issue #978 AC6). Once this session's brief is
+  // bound to an analytics report snapshot, every take must name the SAME
+  // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
+  // Ed25519 verify (same "cheap refusals first" discipline as the checks
+  // below): a genuinely tampered id is instead caught by the signature
+  // itself failing to verify (schema 2.0's canonical bytes include it), so
+  // this check exists for the HONEST-but-wrong case, not the forged one.
+  // A brief with no bound report snapshot (report_snapshot_id NULL — no
+  // analytics run has submitted a report for this session's date) names
+  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
+  // keeps working — but a submission that DOES name one is refused rather
+  // than waved through. The skipped-when-unbound version of this check let a
+  // take signed under schema 2.0 carry a cryptographically-signed binding to
+  // an arbitrary report (another date's, say) that the brief never
+  // referenced, straight into the consensus receipt.
+  const brief = (await sql<{ report_snapshot_id: string | null }[]>`
+    SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
+  const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
+  if (boundReportSnapshotId === null) {
+    if (sub.reportSnapshotId != null) {
+      return {
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+      };
+    }
+  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
+    return {
+      ok: false,
+      status: 409,
+      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
+    };
+  }
 
   // Roster gate (issue #152, AC6): sessions created through the admin surface
   // (swarm/admin.ts createSessionAdmin) carry a FROZEN expected roster in
@@ -773,9 +886,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
   }
 
-  const pub = await publicKeyFor(memberId);
-  if (!pub) return { ok: false, status: 403, error: "no registered key for member" };
-  const verified = await verifySubmissionSignature(sub, sub.signature, pub);
+  const key = await activeKeyFor(memberId);
+  if (!key) return { ok: false, status: 403, error: "no registered key for member" };
+  const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
   if (!verified) {
     // Agent-health surface (issue #208, scout #214): a rejected/tampered
     // signature was previously visible only in the submitting agent's own
@@ -814,11 +927,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // the two-statement path explainable in the audit row.
     const rows = await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified, revision, signing_key_id, report_snapshot_id)
       SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true,
              (SELECT coalesce(max(r.revision), 0) + 1 FROM swarm_recommendations r
-              WHERE r.session_id = s.id AND r.member_id = ${memberId})
+              WHERE r.session_id = s.id AND r.member_id = ${memberId}),
+             ${key.id}, ${sub.reportSnapshotId ?? null}::bigint
       FROM swarm_sessions s
       WHERE s.id = ${session.id}
         AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
@@ -847,6 +961,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
   } catch (e: any) {
     const message = String(e?.message ?? e);
+    // A reportSnapshotId naming a row that does not exist trips the FK on
+    // swarm_recommendations.report_snapshot_id. That is a caller bug, not a
+    // server fault, so it is a 400 — never the 500 an unhandled 23503 became.
+    if (e?.code === "23503" && `${e?.constraint_name ?? e?.constraint ?? ""} ${message}`.includes("report_snapshot")) {
+      return { ok: false, status: 400, error: "reportSnapshotId does not name an existing analytics report snapshot" };
+    }
     if (message.includes("duplicate") || e?.code === "23505") {
       // Which constraint lost tells the agent what to do next, and the two
       // answers are opposite: re-mint a nonce, or simply retry.
@@ -1311,7 +1431,19 @@ export async function registerMember(input: { memberId: string; name: string; le
         const handle = await deriveMemberHandle(tx, { memberId: input.memberId, name: input.name });
         await tx`UPDATE swarm_members SET handle = ${handle} WHERE id = ${input.memberId}`;
       }
-      await tx`DELETE FROM swarm_member_keys WHERE member_id = ${input.memberId}`;
+      // DEACTIVATE, never delete (issue #697) — matching every admin rotation
+      // path (deactivateMemberAdmin, reactivateMemberAdmin, rotateMemberKeyAdmin
+      // in swarm/admin.ts), all of which retain the prior row as
+      // `active = false` rather than removing it. This used to be a hard
+      // DELETE, which is exactly what made a re-registered member's PAST takes
+      // stop being verifiable: their `public_key` resolves through a lookup
+      // scoped to this member's key rows, and a deleted row is gone for that
+      // lookup no matter what a take's `signing_key_id` points at.
+      // `swarm_member_keys` now also carries its own append-only guard
+      // (migration 0050), so a stray DELETE here would be refused at the
+      // database regardless — this UPDATE is the correct operation, not a
+      // workaround for the guard.
+      await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${input.memberId} AND active = true`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
                VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
       return { memberId: input.memberId, token };
@@ -1489,15 +1621,25 @@ function subjectBasket(subjectId: string): Basket {
 // smoke session opens. `date` defaults to today; the snapshot is dated on-or-before
 // the session date so the frontend snapshot picker selects it.
 export async function ensureSmokeSubjectFixtures(subjectId: string, name: string, date?: string) {
+  const existing = (await sql<{ id: string; source: any }[]>`
+    SELECT id, source FROM swarm_subjects WHERE id = ${subjectId}
+  `)[0];
+  const sourceType = typeof existing?.source === "string"
+    ? JSON.parse(existing.source)?.type
+    : existing?.source?.type;
+  if (sourceType === "framework") {
+    return { skipped: true, reason: "framework_subject", subjectId, name };
+  }
+
   const snapDate = date ?? new Date().toISOString().slice(0, 10);
   const recommendationType = "position_actions";
   const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
   await sql`INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type)
             VALUES (${subjectId}, 'active', ${name}, ${thesis}, ${recommendationType})
             ON CONFLICT (id) DO UPDATE SET
-              name = EXCLUDED.name,
+              name = COALESCE(swarm_subjects.name, EXCLUDED.name),
               thesis_blurb = COALESCE(swarm_subjects.thesis_blurb, EXCLUDED.thesis_blurb),
-              recommendation_type = EXCLUDED.recommendation_type`;
+              recommendation_type = COALESCE(swarm_subjects.recommendation_type, EXCLUDED.recommendation_type)`;
 
   const basket = subjectBasket(subjectId);
   await sql`INSERT INTO swarm_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
@@ -1553,18 +1695,54 @@ export async function openSession(subjectId: string) {
   return r;
 }
 
+// Append one immutable brief revision — never edits a prior one. Exported on
+// its own (issue #978), same reason output-snapshot-store.ts exports
+// insertOutputSnapshots/insertReportSnapshot/applyCurrentProjections
+// separately: a test can compose this with a deliberately injected failure
+// in its OWN sql.begin to prove the whole publish rolls back atomically,
+// using the exact production code path rather than a duplicated copy of it.
+export async function appendBriefRevision(
+  sessionId: string,
+  body: Record<string, unknown>,
+  reportSnapshotId: string | null,
+  tx: DbHandle,
+): Promise<{ revision: number; checksum: string }> {
+  const bodyBytes = Buffer.from(canonicalStringify(body), "utf8");
+  const checksum = sha256Hex(bodyBytes);
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_brief_revisions:' || ${sessionId}, 0))`;
+  const [{ next }] = await tx`
+    SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM swarm_brief_revisions WHERE session_id = ${sessionId}`;
+  await tx`
+    INSERT INTO swarm_brief_revisions (session_id, revision, body_bytes, checksum, report_snapshot_id)
+    VALUES (${sessionId}, ${next}, ${bodyBytes}, ${checksum}, ${reportSnapshotId}::bigint)`;
+  return { revision: Number(next), checksum };
+}
+
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
-  const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
+  const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
+  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 5`;
+
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  const framework =
+    (subject?.source as { type?: string } | null)?.type === "framework"
+      ? (await sql<{ asof: Date | string; buckets: unknown[] }[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
+      : null;
+  const existing = (await sql<{ body?: { allocation?: unknown } }[]>`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`)[0];
+  const allocation = existing
+    ? existing.body?.allocation ?? null
+    : framework
+      ? { asof: day(framework.asof), buckets: framework.buckets }
+      : null;
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   const windowClosesAt = closes.toISOString();
   const body = {
+    ...(allocation ? { allocation } : {}),
     regime,
     subject,
     recentSessions: recent,
@@ -1586,19 +1764,94 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
           weight: { type: "number", minimum: 0 },
         },
       },
+      cites: {
+        type: "array",
+        optional: true,
+        items: { type: "string" },
+      },
     },
     windowClosesAt,
   };
+
+  // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
+  // report snapshot that produced the regime numbers this brief BODY shows —
+  // derived from the embedded `regime` row above, NOT from the session's own
+  // market date.
+  //
+  // NOT the newest snapshot for the date. The producer arms TWO runs per
+  // `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) — and
+  // each freezes its own report snapshot, so a plain `ORDER BY id DESC`
+  // always won the research run, whose report bytes contain no regime data at
+  // all. Hence the join: only a run that froze a NON-EMPTY `regime_snapshots`
+  // output artifact is a candidate. Since issue #978 that artifact and the
+  // current-view projection are written by one transaction
+  // (applyCurrentProjections), so "froze regime rows" and "published the
+  // regime rows the brief reads" are the same run.
+  //
+  // NOT `rs.asof = s.date` either, which is what the committed schedules make
+  // permanently unsatisfiable: a session convenes 06:00 and publishes its
+  // brief 07:00 UTC on day D (SWARM_OPEN_SESSION_CRON / SWARM_PUBLISH_BRIEF_
+  // CRON, config.ts), but day D's regime run does not fire until 22:30 UTC
+  // (PRODUCER_REGIME_CRON) — 15.5 hours after the session is over. Keying on
+  // the session date bound every real brief to NULL, and NULL is
+  // indistinguishable from the legitimate "this subject has no analytics
+  // report" case, so nothing went red while every schema-2.0 take was 409'd.
+  //
+  // Keying on `regime.date` is correct under ANY schedule because it is a
+  // derivation rather than a guess: `buildDateAxis(BACKFILL_START, asof)`
+  // (analytics/index.ts) always ends the published row set exactly at the
+  // run's own `asof`, so the MAX-dated row in `regime_snapshots` — the one
+  // line 1700 reads into the body — is by construction the newest
+  // regime-bearing run's `asof`. Looking that date up in
+  // `analytics_report_snapshots.asof` therefore names that run's report, the
+  // one whose bytes contain the exact numbers displayed. `ORDER BY rs.id
+  // DESC` breaks a same-date re-run tie toward the last writer, which is the
+  // run whose rows actually won the upsert.
+  //
+  // A brief with no regime row at all to show (a fresh database, a
+  // smoke/legacy subject), or one whose newest regime row predates the
+  // snapshot layer / was seeded outside it (import-regime-eq.ts), gets
+  // `report_snapshot_id = NULL` — the same documented cutover shape as
+  // migration 0049's signing_key_id, and honest: there is no frozen report
+  // holding those numbers.
+  const regimeDate: string | null = regime
+    ? regime.date instanceof Date
+      ? regime.date.toISOString().slice(0, 10)
+      : String(regime.date).slice(0, 10)
+    : null;
+  const [report] = regimeDate === null
+    ? []
+    : await sql`
+        SELECT rs.id FROM analytics_report_snapshots rs
+        JOIN analytics_output_snapshots os
+          ON os.run_id = rs.run_id
+         AND os.artifact_kind = 'regime_snapshots'
+         AND os.payload_bytes <> convert_to('[]', 'UTF8')
+        WHERE rs.asof = ${regimeDate}::date
+        ORDER BY rs.id DESC LIMIT 1`;
+  const reportSnapshotId: string | null = report ? String(report.id) : null;
+
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
   // that session had already advertised to its members. Re-publishing the SAME
-  // session still updates in place (the brief driver may retry), but a second
-  // session on the same day now INSERTs its own row.
-  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
-            VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
-            ON CONFLICT (session_id) DO UPDATE SET body = EXCLUDED.body`;
-  await sql`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  // session still updates swarm_briefs (the current-view projection) in place
+  // (the brief driver may retry), but a second session on the same day now
+  // INSERTs its own row.
+  //
+  // ISSUE #978: every publish call also APPENDS a new, immutable
+  // swarm_brief_revisions row via appendBriefRevision — never edits a prior
+  // one — in the SAME transaction as the current-view update, so a failure
+  // partway (see appendBriefRevision's header) leaves neither side changed.
+  await sql.begin(async (tx) => {
+    await appendBriefRevision(sessionId, body, reportSnapshotId, tx);
+    await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
+              VALUES (${sessionId}, ${s.date}, ${s.subject_id}, ${tx.json(jsonValue(body))}, ${reportSnapshotId}::bigint)
+              ON CONFLICT (session_id) DO UPDATE SET
+                body = (EXCLUDED.body - 'allocation') || CASE WHEN swarm_briefs.body ? 'allocation' THEN jsonb_build_object('allocation', swarm_briefs.body->'allocation') ELSE '{}'::jsonb END,
+                report_snapshot_id = EXCLUDED.report_snapshot_id`;
+    await tx`UPDATE swarm_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
+  });
   return { sessionId, state: "collecting", windowClosesAt };
 }
 
@@ -1689,75 +1942,58 @@ export async function closeWindow(sessionId: string) {
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime
-// snapshots (with deterministic IN-MEMORY padding so history.length >= 8). Kept
-// separate so tests and aggregation share one code path.
+// snapshots. Kept separate so tests and aggregation share one code path.
 //
 // LIVE-PATH honesty (finding 009): this is the live aggregation path, so it
 // never writes to regime_snapshots — stored labels are READ as-is (the
 // classifier owns them) and classifyRegime is only a fallback for rows whose
-// label is null. Sparse histories are padded in memory, not persisted; smoke
-// deployments get their >= 8 persisted points from ensureSmokeSubjectFixtures.
-export async function buildRegimeSummary(endDate: string, minPoints = 8) {
+// label is null. History is unpadded and emits only real points.
+export async function buildRegimeSummary(endDate: string, minPoints = 8): Promise<RegimeSummary> {
   const rows = await sql`
     SELECT date, composite, composite_percentile, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
            macro_percentile, onchain_percentile, factor_percentile
-    FROM regime_snapshots ORDER BY date DESC LIMIT 14`;
+    FROM regime_snapshots
+    WHERE date <= ${endDate}
+    ORDER BY date DESC
+    LIMIT 14`;
   const chrono = rows.slice().reverse(); // chronological
-  const numOr = (v: unknown, fallback: number) => (v == null ? fallback : Number(v));
-  // Percentile fallback: use stored percentile else the value itself clamped 0..1.
-  const pct = (v: unknown, base: unknown) => {
-    const p = v == null ? null : Number(v);
-    if (p != null && Number.isFinite(p)) return round(Math.max(0, Math.min(1, p)));
-    const b = base == null ? 0.5 : Number(base);
-    return round(Math.max(0, Math.min(1, b)));
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return typeof n === "number" && Number.isFinite(n) ? round(n) : null;
   };
-  let history = chrono.map((r: any) => ({
-    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
-    composite: numOr(r.composite, 0.5),
-    regime: r.regime ?? classifyRegime(numOr(r.composite, 0.5)),
-    macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
-    onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
-    factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
-  }));
-
-  // Guarantee >= minPoints even if real rows exist but are sparse: prepend
-  // deterministic synthetic leading points dated before the earliest real one.
-  if (history.length < minPoints) {
-    const need = minPoints - history.length;
-    const anchor = history[0]?.date ?? endDate;
-    const rng = seeded(`pad:${anchor}`);
-    const pad = [];
-    for (let i = need; i >= 1; i--) {
-      const t = (need - i) / Math.max(1, need + history.length - 1);
-      pad.push(syntheticRegimePoint(shiftDay(anchor, -i), t, rng));
-    }
-    history = [...pad, ...history];
-  }
+  const history: RegimeSummary["history"] = chrono.map((r: any) => {
+    const c = num(r.composite);
+    return {
+      date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
+      composite: c,
+      composite_percentile: num(r.composite_percentile),
+      regime: (r.regime ?? (c != null ? classifyRegime(c) : "neutral")) as RegimeLabel,
+      macro_percentile: num(r.macro_percentile),
+      onchain_percentile: num(r.onchain_percentile),
+      factor_percentile: num(r.factor_percentile),
+    };
+  });
 
   const latest = chrono[chrono.length - 1] as any;
-  const lc = latest ? numOr(latest.composite, 0.5) : history[history.length - 1].composite;
+  const lc = latest ? num(latest.composite) ?? 0.5 : 0.5;
   return {
     composite: round(lc),
-    composite_percentile: pct(latest?.composite_percentile, lc),
-    regime: latest?.regime ?? classifyRegime(lc),
-    macro_regime: latest?.macro_regime ?? classifyRegime(history[history.length - 1].macro),
-    onchain_regime: latest?.onchain_regime ?? classifyRegime(history[history.length - 1].onchain),
-    factor_regime: latest?.factor_regime ?? classifyRegime(history[history.length - 1].factor),
-    macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
-    onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
-    factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
-    history: history.map((h) => ({
-      date: h.date,
-      composite: round(h.composite),
-      regime: h.regime,
-      macro: round(h.macro),
-      onchain: round(h.onchain),
-      factor: round(h.factor),
-    })),
+    composite_percentile: num(latest?.composite_percentile),
+    regime: (latest?.regime ?? classifyRegime(lc)) as RegimeLabel,
+    macro_regime: (latest?.macro_regime ?? (num(latest?.macro_percentile ?? latest?.macro_index) != null ? classifyRegime(num(latest?.macro_percentile ?? latest?.macro_index)!) : "neutral")) as RegimeLabel,
+    onchain_regime: (latest?.onchain_regime ?? (num(latest?.onchain_percentile ?? latest?.onchain_index) != null ? classifyRegime(num(latest?.onchain_percentile ?? latest?.onchain_index)!) : "neutral")) as RegimeLabel,
+    factor_regime: (latest?.factor_regime ?? (num(latest?.factor_percentile ?? latest?.factor_index) != null ? classifyRegime(num(latest?.factor_percentile ?? latest?.factor_index)!) : "neutral")) as RegimeLabel,
+    macro_percentile: num(latest?.macro_percentile),
+    onchain_percentile: num(latest?.onchain_percentile),
+    factor_percentile: num(latest?.factor_percentile),
+    history,
+    method: REGIME_METHOD.id,
   };
 }
+
 
 // Deterministic rollup over the takes ACTUALLY posted, ENRICHED into the
 // reference session shape (regime_summary + rich swarm_recommendation +
@@ -1851,6 +2087,17 @@ function stanceBreakdown(byStance: Record<string, number>): string {
 // re-elect the majority for an ALREADY-PUBLISHED session to enumerate the set
 // D42 promises to report. Re-implementing the ladder there would give the
 // enumeration its own chance to disagree with the rule it is auditing against.
+export function ordinal(n: number): string {
+  const v = Math.abs(Math.round(n)) % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  switch (v % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
+}
+
 export function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
   const entries = Object.entries(byStance);
   if (!entries.length) return null;
@@ -1869,7 +2116,7 @@ export function majorityStance(byStance: Record<string, number>): { stance: stri
 export function buildConsensus(
   active: number, submitted: number, participation: number,
   byStance: Record<string, number>, meanConfidence: number | null,
-  regimeSummary: { composite_percentile?: number; regime?: string } | null,
+  regimeSummary: { composite_percentile?: number | null; regime?: string } | null,
 ): string[] {
   if (submitted === 0) return [];
   const points: string[] = [`${submitted} of ${active} members submitted (${Math.round(participation * 100)}% participation).`];
@@ -1877,7 +2124,7 @@ export function buildConsensus(
   if (breakdown) points.push(`Stance split: ${breakdown}.`);
   if (meanConfidence != null) points.push(`Mean confidence ${meanConfidence.toFixed(2)} across submitted takes.`);
   if (regimeSummary?.composite_percentile != null) {
-    points.push(`Regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile (${regimeSummary.regime ?? "unclassified"}).`);
+    points.push(`Regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile (${regimeSummary.regime ?? "unclassified"}).`);
   }
   return points;
 }
@@ -1887,13 +2134,13 @@ export function buildConsensus(
 // the two can never collide (cheap check: rationale !== synthesis).
 export function buildRationale(
   subjectLabel: string, byStance: Record<string, number>, submitted: number,
-  meanConfidence: number | null, regimeSummary: { composite_percentile?: number } | null,
+  meanConfidence: number | null, regimeSummary: { composite_percentile?: number | null } | null,
 ): string {
   const majority = majorityStance(byStance);
   const parts: string[] = [];
   if (majority) parts.push(`Majority stance is ${majority.stance} (${majority.count} of ${submitted} submitted takes)`);
   if (meanConfidence != null) parts.push(`mean confidence ${meanConfidence.toFixed(2)}`);
-  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile`);
+  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile`);
   return `${parts.length ? parts.join(", ") : "No stance data available"} on ${subjectLabel}.`;
 }
 
@@ -2057,10 +2304,19 @@ export async function aggregateSession(sessionId: string) {
   const submittedCount = submitted.size;
 
   const byStance: Record<string, number> = {};
+  const citedSignals: Record<string, number> = {};
   let confSum = 0;
   for (const t of takes) {
     byStance[t.stance] = (byStance[t.stance] ?? 0) + 1;
     confSum += Number(t.confidence ?? 0);
+    const cites = t.payload?.cites;
+    if (Array.isArray(cites)) {
+      for (const cite of cites) {
+        if (typeof cite === "string") {
+          citedSignals[cite] = (citedSignals[cite] ?? 0) + 1;
+        }
+      }
+    }
   }
   const participation = activeMembers.length ? submittedCount / activeMembers.length : 0;
   const meanConfidence = submittedCount ? confSum / submittedCount : null;
@@ -2118,6 +2374,7 @@ export async function aggregateSession(sessionId: string) {
     type: recType,
     consensus,
     disagreements,
+    citedSignals,
   };
   if (rationale) rec.rationale = rationale;
   if (weights) rec.weights = weights;
@@ -2219,13 +2476,26 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
     operator: patch.operator !== undefined ? patch.operator : row.operator,
     avatar: patch.avatar !== undefined ? patch.avatar : row.avatar,
   };
+  // Issue #782 follow-up: RETURNING * only ever sees swarm_members columns, so
+  // without this FROM-subquery join the response's lastTakeAt was silently
+  // always null (see resolveMemberRow's note above — this RETURNING row, not
+  // that resolver's, is what toMember() below actually serializes).
   const updated = await sql`
-    UPDATE swarm_members SET
+    UPDATE swarm_members m SET
       tagline = ${merged.tagline}, mandate = ${merged.mandate}, biases = ${sql.json(merged.biases as any)},
       voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
       avatar = ${sql.json(merged.avatar as any)}, updated_at = now()
-    WHERE id = ${memberId}
-    RETURNING *`;
-  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId } as any)})`;
+    FROM (
+      SELECT max(received_at) AS last_take_at
+        FROM swarm_recommendations
+       WHERE member_id = ${memberId}
+    ) t
+    WHERE m.id = ${memberId}
+    RETURNING m.*, t.last_take_at`;
+  // Issue #925: name the changed fields, matching admin.ts's updateMemberAdminTx
+  // audit style. Previously this logged only `{ memberId }` — an admin
+  // investigating a suspected self-service forgery after the fact had no
+  // record of which field, if any, had ever held a different value.
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId, fields: Object.keys(patch) } as any)})`;
   return { ok: true, status: 200, member: toMember(updated[0]) };
 }

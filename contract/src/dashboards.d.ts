@@ -143,6 +143,16 @@ export interface WalletHolding {
   // own field and not a new WalletHoldingProvenance value — see docs
   // decisions.md D35.
   strategyNavIdleOnly?: boolean;
+  // issue #862 (RM-116) — set ONLY on the SP500 `config` leg, to the ISO date
+  // (YYYY-MM-DD) its position size was last confirmed against the venue.
+  // Unlike every other holding, SP500's `amount` is never READ from a wallet
+  // or venue API — it is an owner-asserted constant, and nothing detects when
+  // it goes stale. `provenance` still reports 'live'/'stub' for the (real,
+  // live) PRICE read; this field is the separate disclosure that the SIZE is
+  // stated, not read, so a consumer can render "position size as of <date>"
+  // instead of presenting an asserted six-month-old figure identically to a
+  // live one. Absent on every other holding.
+  sizeVerifiedAt?: string | null;
 }
 
 // One PERSISTED day of history — the series is deliberately sparse over the

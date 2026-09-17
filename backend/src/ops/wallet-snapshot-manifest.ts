@@ -4,7 +4,7 @@ import {
   resolveTrackedAssets,
   type TrackedAsset,
 } from "../config.ts";
-import { SLEEVE_DEFS } from "../chain/wallet-valuation.ts";
+import { SLEEVE_DEFS, sleeveSymbols } from "../chain/wallet-valuation.ts";
 import type postgresTypes from "postgres";
 import { createHash } from "node:crypto";
 
@@ -56,7 +56,7 @@ export function resolveWalletSnapshotManifest(
 
   for (let walletIndex = 0; walletIndex < SLEEVE_DEFS.length && walletIndex < wallets.length; walletIndex++) {
     const walletAddress = wallets[walletIndex]!.toLowerCase();
-    for (const symbol of SLEEVE_DEFS[walletIndex]!.symbols) {
+    for (const symbol of sleeveSymbols(SLEEVE_DEFS[walletIndex]!)) {
       const asset = bySymbol.get(symbol);
       if (!asset) continue;
       if (asset.valuationKind !== "native" && isPlaceholderAddress(asset.address)) continue;

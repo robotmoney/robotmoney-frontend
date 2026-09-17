@@ -29,6 +29,24 @@
  * guard fires BEFORE DELETE OR TRUNCATE only, so none can trip it. preflight's
  * append-only-safety check draws that distinction from the migrations' own SQL
  * rather than from the roster below — see runbook §2.2.1.
+ *
+ * 0049/0050 (issue #697) add a FOURTEENTH and FIFTEENTH lock: `0049` declares
+ * a nullable foreign key from `swarm_recommendations` (protected) to
+ * `swarm_member_keys`, validated against every existing row's NULL — trivial,
+ * no scan needed. `0050` installs the append-only guard pair on
+ * `swarm_member_keys` itself, the FIRST case in this release of protecting a
+ * table that already exists AND already holds rows on the v0.2.2 database,
+ * rather than one this release creates fresh. `CREATE TRIGGER` is
+ * catalog-only DDL — it reads and rewrites no row — so this is still a lock,
+ * never a write.
+ *
+ * `0051` (issue #780) is a plain `UPDATE` on `swarm_subjects` — the same shape
+ * as `0047`'s backfill on `swarm_sessions` — repairing the two subjects
+ * (`robotmoney-vault`, `robotmoney-allocation`) that
+ * `ensureSmokeSubjectFixtures`'s pre-fix upsert clobbered to
+ * `recommendation_type = 'position_actions'`. `rm_append_only_guard()` fires
+ * BEFORE DELETE OR TRUNCATE only, so an UPDATE on an already-protected table
+ * cannot trip it.
  */
 export const THIS_RELEASE_MIGRATIONS = [
   "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
@@ -48,6 +66,16 @@ export const THIS_RELEASE_MIGRATIONS = [
   "0046_asset_prices.sql",
   "0047_swarm_session_subject_name_backfill.sql",
   "0048_swarm_judge_third_party_flag.sql",
+  "0049_swarm_recommendations_signing_key.sql",
+  "0050_swarm_member_keys_append_only.sql",
+  "0051_swarm_vault_recommendation_type_repair.sql",
+  // 0052 (issue #829, D44): `swarm_session_judgements.digest_scheme`, a
+  // NOT NULL DEFAULT'd column on the same already-protected table 0040/0041/
+  // 0043 alter. A constant default does not rewrite on PG 11+ (same shape the
+  // note above already argues for the other ADD COLUMNs in this release), and
+  // it removes no row, so it is a lock in exactly the sense already established
+  // here — never a write.
+  "0052_swarm_judgement_digest_scheme.sql",
 ] as const;
 
 /**
@@ -155,6 +183,17 @@ export const NEW_COLUMNS = [
   // 0048 (issue #796): the admin-flippable, no-redeploy gate for third-party
   // (graduated-member) judging, layered onto 0043's role/attribution columns.
   { table: "swarm_judge_config", column: "third_party_enabled" },
+  // 0049 (issue #697): the exact swarm_member_keys row that verified a take at
+  // submission time. Nullable, no default, no backfill — every row written
+  // before this migration keeps NULL and falls back to the pre-#697 lookup
+  // (see the migration's own header for why a backfill is not attempted).
+  { table: "swarm_recommendations", column: "signing_key_id" },
+  // 0052 (issue #829, D44): which canonical form produced a row's
+  // inputs_digest. NOT NULL DEFAULT'd to the current scheme rather than
+  // nullable-no-backfill like the column above — safe because no row on any
+  // v0.2.2 database predates it (swarm_judge_config.mode ships `off`; see the
+  // migration's own header).
+  { table: "swarm_session_judgements", column: "digest_scheme" },
 ] as const;
 
 /** Every table this release creates, alters, locks, or writes: the roster of the
@@ -178,6 +217,19 @@ export const MIGRATION_TOUCHED_TABLES = [
   // here is what keeps that visible; under-declaring to quiet a check is what
   // #807 exists to prevent.
   "swarm_sessions",
+  // 0049 (issue #697) adds a nullable foreign key from swarm_recommendations
+  // to swarm_member_keys; 0050 installs the append-only guard pair directly on
+  // swarm_member_keys. Neither removes a row — the first is a LOCK on an
+  // already-protected table (same shape as swarm_sessions above), the second
+  // is catalog-only trigger DDL on a table that is not YET on the append-only
+  // roster when the migration runs, so the guard cannot fire on either.
+  "swarm_recommendations",
+  "swarm_member_keys",
+  // 0051 (issue #780): UPDATEs the two rows ensureSmokeSubjectFixtures's
+  // pre-fix upsert clobbered. Already append-only protected (0032); the same
+  // "locked, not written" shape as swarm_sessions above — the guard only
+  // fires on DELETE/TRUNCATE, so an UPDATE cannot trip it.
+  "swarm_subjects",
 ] as const;
 
 /**
@@ -286,11 +338,21 @@ export const APPEND_ONLY_TABLES = [
   // Opted in by migration 0042 (issue #754's published consensus receipt),
   // for the same reason and on the same terms as the judgement record above.
   "swarm_consensus_receipts",
+  // Opted in by migration 0050 (issue #697). UNLIKE every entry above it, this
+  // table already exists AND already holds rows on the v0.2.2 database — the
+  // append-only pair is not being installed on a table this release creates
+  // fresh. See MIGRATION_TOUCHED_TABLES' note on 0049 for why that is still a
+  // lock (catalog-only `CREATE TRIGGER`) and never a write.
+  "swarm_member_keys",
   "swarm_applications",
   "audit_log",
   "agent_activity_log",
   "regime_snapshots",
   "schema_migrations",
+  // Opted in by migration 0056 (issue #974). The migration is outside this
+  // historical release's delta, but postflight's live-schema roster is kept
+  // byte-identical to the runtime guard as the drift test requires.
+  "analytics_overwrite_events",
 ] as const;
 
 /** Exact custom guards added by the AUM P0/P1 migrations. Unlike the shared

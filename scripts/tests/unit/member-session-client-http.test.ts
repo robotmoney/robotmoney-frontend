@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import {
   fetchSigningPayload,
+  reportSnapshotIdFromBrief,
   restJson,
 } from "../../agent/member-session-client.ts";
 
@@ -91,4 +92,10 @@ describe("fetchSigningPayload", () => {
       /without a non-empty \.canonical string/,
     );
   });
+});
+
+test("a member carries the brief's report binding into its signed draft", () => {
+  expect(reportSnapshotIdFromBrief({ reportSnapshotId: "42" })).toBe("42");
+  expect(reportSnapshotIdFromBrief({ reportSnapshotId: null })).toBeUndefined();
+  expect(reportSnapshotIdFromBrief(undefined)).toBeUndefined();
 });

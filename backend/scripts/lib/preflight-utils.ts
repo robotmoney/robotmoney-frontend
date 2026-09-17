@@ -268,6 +268,9 @@ export interface PreflightReceiptSpec {
   tagGlob: string;
   hostRole: string;
   backupDir?: string;
+  /** OPT-IN, set by the release that commits signed receipts into the tree.
+   *  See EmitReceiptSpec.committedEvidenceDir — this is passed straight through. */
+  committedEvidenceDir?: string;
 }
 
 /** Mutable per-run sink: the wrapper needs the connection identity and the

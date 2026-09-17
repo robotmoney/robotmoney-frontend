@@ -137,10 +137,14 @@ import type { HarnessFault, OnboardingOutcome, OutcomeBranch, TranscriptLiveness
 import { explainOutcome } from "../agent/classify-outcome.ts";
 export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
 // The swarm REST API the member-agent container reaches over the compose
-// network — the `api` service on its internal port. D21 retired the `mcp`
-// service; the agent applies over this REST surface (POST /api/swarm/apply)
-// directly, following the swarm-onboarding skill.
-export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
+// network. D21 retired the `mcp` service; the agent applies over this REST
+// surface (POST /api/swarm/apply) directly, following the swarm-onboarding
+// skill. Points at `website-server`, not `api` directly (issue #892):
+// website-server/nginx.conf proxies /api/ through to the api service, and
+// this same base also has to answer LOCAL_SWARM_ONBOARDING_SKILL_PATH below
+// with the actual skill file — a static asset the api process no longer
+// serves at all.
+export const DEFAULT_API_URL_INTERNAL = "http://website-server:8080";
 export const LOCAL_SWARM_ONBOARDING_SKILL_PATH = new URL(SWARM_ONBOARDING_SKILL_URL).pathname;
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and

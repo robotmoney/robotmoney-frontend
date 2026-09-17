@@ -22,14 +22,25 @@
 //      driver SHAPE (no manifest, no attempt accounting for price failures),
 //      not a new scheduled job, which stays a later issue's scope.
 //
-// THE LIVE SAMPLER NEVER CALLS ANYTHING IN THIS FILE. It writes a spot price at
-// a wall-clock instant; this table holds UTC daily closes. Writing a live spot
-// under a date key here would be exactly the substitution D41 exists to
-// refuse (markets §5.6 point 1) — see backend/tests/asset-prices-dual-write.test.ts's
-// "the live sampler never writes to asset_prices" case.
+// UPDATE (issue #927): the live BALANCE sampler now calls `writeAssetPrice`
+// too, alongside its ordinary `wallet_balance_samples` write — see
+// `worker/handlers/wallet.ts::sampleWalletBalances`. This is still not the
+// live/close substitution D41 exists to refuse (markets §5.6 point 1): the
+// sampler stamps `observed_at` at the UTC daily candle close for the date it
+// just sampled (one day after that date's midnight), not the wall-clock
+// instant of the sample — see `dayCloseInstant` in that file. Before #927,
+// this file's only callers were the repair path (`ops/wallet-backfill.ts`)
+// and this file's own retroactive backfill (`backfillAssetPricesForCleanDays`,
+// below) — see backend/tests/asset-prices-dual-write.test.ts's "the live
+// sampler never writes a LIVE-SPOT price under today's date" case, which the
+// distinction above still holds.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
 import type { TrackedAsset } from "../config.ts";
 import type { AssetPriceFloor, AssetPriceFloorCache } from "../chain/asset-price-floor.ts";
+import { loadHistoricalPrices, resolvePoolForToken, type HistoricalPriceTable } from "../chain/historical-prices.ts";
+import { resolveTrackedAssets, resolvePropWallets, pinnedPoolForToken } from "../config.ts";
+import { resolveWalletSnapshotManifest } from "./wallet-snapshot-manifest.ts";
+import { QUARANTINED_PROVENANCE } from "../chain/wallet-valuation.ts";
 
 export type AssetPriceSource = "geckoterminal" | "pinned";
 export const ASSET_PRICE_TIME_BASIS = "utc-daily-close" as const;
@@ -239,4 +250,195 @@ export async function detectAssetPriceGaps(
     });
   }
   return out;
+}
+
+function dayCloseInstant(date: string): Date {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000);
+}
+
+/**
+ * Backfill asset_prices for cleanly-sampled closed days.
+ *
+ * A "cleanly-sampled closed day" is a day that:
+ * - Is fully closed (before today UTC)
+ * - Has a complete wallet_balance_samples snapshot (all expected symbols present, no quarantined rows)
+ * - Has a complete wallet_sleeve_samples snapshot
+ * - Is missing from asset_prices for one or more priced symbols
+ *
+ * This closes the coverage gap described in docs/technical/markets-asset-pricing-ingest.md §8.1:
+ * the live sampler never dual-writes, and repairResolvedDay only writes for incomplete days.
+ * So a day that was sampled cleanly never gets asset_prices rows unless it falls inside
+ * migration 0046's one-time seed window.
+ *
+ * Returns a summary of what was backfilled.
+ */
+export interface AssetPriceBackfillResult {
+  daysProcessed: number;
+  rowsWritten: number;
+  rowsSkipped: number;
+  errors: { date: string; symbol: string; error: string }[];
+}
+
+export interface AssetPriceBackfillDeps {
+  /** Load historical prices for assets over a date range. */
+  loadPrices(assets: readonly TrackedAsset[], fromDate: string, toDate: string): Promise<HistoricalPriceTable>;
+}
+
+const defaultBackfillDeps: AssetPriceBackfillDeps = {
+  loadPrices: loadHistoricalPrices,
+};
+
+// Bounds one run's work the same way wallet backfill's own per-run day cap
+// (ops/wallet-backfill.ts::maxDaysPerRun) does: this job is scheduled (issue
+// #927; db/seed.ts's `ops.backfill_asset_prices` row), so an unbounded
+// backlog converges over successive runs instead of one run trying to walk
+// the whole history — and never blocking the shared analytics lane while it
+// does.
+const ASSET_PRICE_BACKFILL_MAX_DAYS_PER_RUN = 30;
+
+export async function backfillAssetPricesForCleanDays(
+  db: DbHandle = defaultSql,
+  now: Date = new Date(),
+  deps: AssetPriceBackfillDeps = defaultBackfillDeps,
+): Promise<AssetPriceBackfillResult> {
+  const assets = resolveTrackedAssets();
+  const wallets = resolvePropWallets();
+  const pricedAssets = assets.filter((a) => a.priceKind !== "yahoo");
+  const pricedSymbols = pricedAssets.map((a) => a.symbol);
+  const cutoff = lastClosedPriceDay(now);
+
+  // Find closed days that have at least one PRICED symbol's
+  // wallet_balance_samples row with no matching asset_prices row yet — the
+  // actual coverage gap, not merely "every day that has ever been sampled".
+  // An anti-join (rather than "every closed day, always") keeps a caught-up
+  // deployment's run cheap: once a day is covered it is never re-selected,
+  // re-fetched, or re-written on a later tick.
+  const candidateDays = await db<{ sample_date: Date }[]>`
+    SELECT DISTINCT wbs.sample_date
+      FROM wallet_balance_samples wbs
+     WHERE wbs.sample_date < ${cutoff}
+       AND wbs.symbol = ANY(${pricedSymbols})
+       AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
+       AND NOT EXISTS (
+             SELECT 1 FROM asset_prices ap
+              WHERE ap.symbol = wbs.symbol
+                AND ap.price_date = wbs.sample_date
+                AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
+           )
+     ORDER BY wbs.sample_date ASC
+     LIMIT ${ASSET_PRICE_BACKFILL_MAX_DAYS_PER_RUN}
+  `;
+
+  const result: AssetPriceBackfillResult = {
+    daysProcessed: 0,
+    rowsWritten: 0,
+    rowsSkipped: 0,
+    errors: [],
+  };
+
+  for (const { sample_date } of candidateDays) {
+    const date = sample_date.toISOString().slice(0, 10);
+    result.daysProcessed += 1;
+
+    // Check if this day has a complete snapshot (both balance and sleeve)
+    const manifest = resolveWalletSnapshotManifest(assets, wallets, date);
+    const [balanceResult] = await db<{
+      balance_symbols: string[];
+      balance_rows: number;
+    }[]>`
+      SELECT
+        ARRAY_AGG(DISTINCT symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS balance_symbols,
+        COUNT(DISTINCT symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS balance_rows
+      FROM wallet_balance_samples
+      WHERE sample_date = ${date}
+    `;
+    const [sleeveResult] = await db<{
+      sleeve_keys: string[];
+      sleeve_rows: number;
+    }[]>`
+      SELECT
+        ARRAY_AGG(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS sleeve_keys,
+        COUNT(DISTINCT wallet_address || '|' || symbol) FILTER (WHERE provenance <> ${QUARANTINED_PROVENANCE}) AS sleeve_rows
+      FROM wallet_sleeve_samples
+      WHERE sample_date = ${date}
+        AND lower(wallet_address) = ANY(${wallets.map((w) => w.toLowerCase())}::text[])
+    `;
+
+    const balanceSymbols = balanceResult?.balance_symbols ?? [];
+    const sleeveKeys = sleeveResult?.sleeve_keys ?? [];
+
+    const missingBalance = manifest.balanceAssets
+      .map((a) => a.symbol)
+      .filter((s) => !balanceSymbols.includes(s));
+    const missingSleeve = manifest.sleeveKeys
+      .map((k) => `${k.walletAddress.toLowerCase()}|${k.asset.symbol}`)
+      .filter((k) => !sleeveKeys.includes(k));
+
+    if (missingBalance.length > 0 || missingSleeve.length > 0) {
+      // Day is incomplete, skip — repairResolvedDay will handle it when/if it runs
+      result.rowsSkipped += manifest.balanceAssets.length + manifest.sleeveKeys.length;
+      continue;
+    }
+
+    // Day is complete — load historical prices for this date
+    let prices;
+    try {
+      prices = await deps.loadPrices(pricedAssets, date, date);
+    } catch (err) {
+      for (const asset of pricedAssets) {
+        result.errors.push({ date, symbol: asset.symbol, error: String(err) });
+      }
+      continue;
+    }
+
+    // Write asset_prices rows for each priced symbol that has a price
+    for (const asset of pricedAssets) {
+      const price = prices.get(asset.symbol)?.get(date);
+      if (price === undefined) {
+        // No price available for this symbol on this day (thin candle or pool refusal)
+        result.rowsSkipped += 1;
+        continue;
+      }
+      if (!Number.isFinite(price) || price <= 0) {
+        result.errors.push({ date, symbol: asset.symbol, error: `non-finite or non-positive price: ${price}` });
+        continue;
+      }
+
+      const source: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+      let poolKey: string | null = null;
+      if (source === "geckoterminal" && asset.address) {
+        const pinned = pinnedPoolForToken(asset.address);
+        if (pinned) {
+          poolKey = pinned;
+        } else {
+          try {
+            poolKey = await resolvePoolForToken(asset.address);
+          } catch {
+            poolKey = null;
+          }
+        }
+      }
+
+      try {
+        await writeAssetPrice(db, {
+          priceDate: date,
+          symbol: asset.symbol,
+          priceUsd: price,
+          source,
+          poolKey,
+          tokenAddress: source === "pinned" ? null : asset.address,
+          observedAt: dayCloseInstant(date),
+          fetchedAt: now,
+          configIdentity: source === "pinned"
+            ? "pinned:usd:1.00"
+            : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+        });
+        result.rowsWritten += 1;
+      } catch (err) {
+        result.errors.push({ date, symbol: asset.symbol, error: String(err) });
+      }
+    }
+  }
+
+  return result;
 }

@@ -1,5 +1,18 @@
 # Release process — foundational runbook policy
 
+> **Agent Note:** To find info quickly, see the TOC below. If you are starting to document or create tooling for an upcoming upgrade that doesn't have a version number yet, jump immediately to **§9. Tracking Unnumbered Upcoming Upgrades**.
+>
+> **Table of Contents:**
+> - [1. Scope and authority](#1-scope-and-authority)
+> - [2. Release branch](#2-release-branch)
+> - [3. Version tags and release candidates](#3-version-tags-and-release-candidates)
+> - [4. Foundational release workflow](#4-foundational-release-workflow)
+> - [5. Per-release runbook format](#5-per-release-runbook-format)
+> - [6. Per-release GitHub tracking issue](#6-per-release-github-tracking-issue)
+> - [7. Backporting](#7-backporting)
+> - [8. Compatibility contract](#8-compatibility-contract--how-the-components-are-allowed-to-drift)
+> - [9. Tracking Unnumbered Upcoming Upgrades](#9-tracking-unnumbered-upcoming-upgrades)
+
 > **Status: in effect.** This document defines the foundational release-runbook
 > policy that every per-release runbook must follow. It is not itself a
 > runnable checklist; concrete rollouts are executed from per-release runbooks
@@ -636,3 +649,26 @@ that means the expand/contract window (§8.2). Communicating a deprecation
 today has no established channel — no changelog, no deprecation-header
 convention in the API responses. The concrete window length and the
 communication mechanism are both left open (left open in that proposal).
+
+## 9. Tracking Unnumbered Upcoming Upgrades
+
+Currently, migrations and runbook steps shouldn't be added directly to a target version directory (e.g. `0.4.0`) when the next version number is undecided. To prevent test drift and version guessing, we use a rolling `next` target.
+
+### 9.1 The `next` Directory and Runbook
+
+All upcoming migrations, upgrades, and runbook instructions go into a generic "next" placeholder:
+- **Runbook:** `docs/runbooks/<next>-rollout.md`
+- **Release Manifest:** `backend/scripts/upgrades/<next>/release.ts`
+- **Rollout Tests:** `backend/tests/rollout-steps-<next>.test.ts`
+
+### 9.2 Migration Accumulation
+
+As features merge into `main`, their migrations must be declared in the `<next>/release.ts` manifest and any operational steps added to `<next>-rollout.md`. The `rollout-steps-<next>.test.ts` suite is the **only** test that performs the `onDisk` drift check against `backend/migrations/`. 
+
+### 9.3 The Numbering Step (Cutting a Release)
+
+When it is time to cut a release (e.g. `v0.5.0`), the release PR executes the versioning:
+1. Rename `docs/runbooks/next-rollout.md` to `docs/runbooks/v0-5-0-rollout.md`.
+2. Rename `backend/scripts/upgrades/next/` to `backend/scripts/upgrades/0.4.0-to-0.5.0/` (or applicable versions).
+3. Rename `rollout-steps-<next>.test.ts` to `rollout-steps-0-5-0.test.ts` and **remove its `onDisk` drift check** (the test is frozen to only assert the static manifest).
+4. Re-create a fresh, empty `next/` directory and test files to track the subsequent cycle.
