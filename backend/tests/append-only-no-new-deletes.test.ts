@@ -71,6 +71,10 @@ const ALLOWED: Record<string, string> = {
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
 
+  // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
+  "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
+    "cleans up fabricated snapshots on framework subjects (issue #960)",
+
   // The runtime check. Its probe statement is built by interpolation, so it
   // carries no literal table name — but the list of protected tables lives here
   // and a future edit that spells one out next to a DELETE should not have to
