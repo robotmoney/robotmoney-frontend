@@ -1,5 +1,5 @@
 // Postflight for the v0.4.1 -> v0.4.2 rollout. All database checks are
-// SELECT-only; migrations 0045-0059 already ran (at boot, via migrate.ts)
+// SELECT-only; migrations 0045-0061 already ran (at boot, via migrate.ts)
 // by the time this runs.
 
 import { dirname, join } from "node:path";

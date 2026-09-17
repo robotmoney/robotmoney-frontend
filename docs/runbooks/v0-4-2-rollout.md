@@ -9,8 +9,8 @@
 This runbook implements the foundational policy in
 [`docs/technical/release-runbooks.md`](../technical/release-runbooks.md) and
 the shared mechanics in [`rollout-procedure.md`](./rollout-procedure.md).
-v0.4.2 is **not** code-only: it carries sixteen additive migration files
-(`0045`-`0059`) and switches production's closed-day price reads onto a new
+v0.4.2 is **not** code-only: it carries eighteen additive migration files
+(`0045`-`0061`) and switches production's closed-day price reads onto a new
 table (D41). Do not run this as a no-op cutover.
 
 ## 1. Release identity and objective
@@ -21,7 +21,7 @@ invariants:
 
 - retain all six v0.4.0 migrations, v0.4.1's code-only state, and the
   v0.4.0/v0.4.1 judge/receipt invariants;
-- apply the sixteen additive v0.4.2 migration files and land the new tables
+- apply the eighteen additive v0.4.2 migration files and land the new tables
   they create;
 - switch closed-day allocation/performance price reads to the `asset_prices`
   join (D41 MIGRATE step) while today's live point keeps its existing fused
@@ -65,6 +65,8 @@ The release contains the following changes relative to `v0.4.1`:
 | `backend/migrations/0058_analytics_run_ledger.sql`, `backend/src/analytics/run-ledger.ts`, `backend/src/analytics/store/run-ledger-store.ts` | Analytics runs | Five immutable tables (`analytics_ledger_methodology_versions`, `analytics_ledger_runs`, `analytics_ledger_run_events`, `analytics_data_vintages`, `analytics_vintage_members`) freezing per-run methodology, a write-once run header, lifecycle events, and frozen data vintages | Run headers are immutable by design; a code path trying to update a run fails loudly, never silently mutates | Postflight confirms the tables exist |
 | `backend/migrations/0059_analytics_output_and_report_snapshots.sql`, `backend/src/analytics/store/output-snapshot-store.ts`, `backend/src/swarm/domain.ts` | Analytics outputs, report snapshots, swarm briefs | `analytics_output_snapshots`/`analytics_report_snapshots` keep byte-exact, checksummed outputs and reports per run; new `swarm_brief_revisions` makes brief bodies append-only; `swarm_briefs`/`swarm_recommendations` gain nullable `report_snapshot_id` (no backfill — same documented cutover shape as 0049) | Every pre-cutover brief/take stays NULL-report, and report bytes are stored once per run (never overwritten) | Postflight confirms the tables exist |
 | `backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql` | Swarm subject history | Deletes fabricated `swarm_subject_snapshots` for framework subjects (no real book to scrape) by temporarily disabling the append-only triggers inside the migration transaction, then re-enabling them `ENABLE ALWAYS` | The delete touches only rows whose subject's `source->>'type'` is `framework`; a future framework subject would match, but the guard is fully restored before the transaction commits | Idempotent — reruns match 0 rows once cleaned |
+| `backend/migrations/0060_analytics_ledger_cutover.sql`, `backend/src/analytics/cutover/*`, `backend/src/db/analytics-ledger-guard.ts`, `backend/scripts/analytics-ledger-cutover-gate.ts` | Analytics reads (issue #979/#988) | Two new tables: the single-row `analytics_read_mode` operator switch (seeded `compatibility` — the mode every consumer has always used) and the immutable `analytics_parity_observations` evidence ledger (blocked from UPDATE/DELETE/TRUNCATE, `rm_app`-only append, `rm_worker` revoked). Dual-write parity checks run automatically (§6.1); flipping the switch to `ledger` is the operator-run cutover gate CLI, refused until a matching observation window exists | Reads silently resolve from the wrong side after a bad flip | The flip is gate-refused until every domain has a fresh, unbroken, sufficiently long/large matching window; rollback is the same non-destructive single UPDATE (§6.1) |
+| `backend/migrations/0061_source_value_provenance.sql`, `backend/src/analytics/source-ledger.ts` | Raw-history provenance | Adds nullable `source_value_versions.provenance` text carrying the data source label (`live`/`seed`) at acquisition time, so ledger-mode raw-series reads return the same provenance the compatibility tables do | Pre-0061 rows stay NULL by design — the append-only trigger forbids the backfill | Postflight confirms the migration is recorded; NULL is the honest "not recorded" label, never a fabrication |
 | `frontend/public/assets/js/app/alpine/views/allocation.js`, `frontend/public/views/allocation.html`, `frontend/public/assets/js/app/lib/allocation-subject.js` | `/allocation` frontend | `/vault` is retired and its route repointed to the rebuilt `/allocation` policy page (RM-115); the hero switches from a fan chart to a donut | A route rename that silently breaks bookmarked links or e2e coverage of the old `/vault` view | `scripts/tests/unit/e2e-route-rename-guard.test.ts` and `frontend/test/browser/allocation-view.spec.ts` are part of CI on this branch |
 
 Systems that are **not** upgraded by this release:
@@ -194,8 +196,8 @@ The preflight is blocking if any of these occur:
 
 - one of the six v0.4.0 migration filenames is absent;
 - an unexpected migration is pending — i.e. anything pending other than the
-  sixteen v0.4.2 migration files (`0045`-`0059`);
-- one of `0045`-`0059` is already recorded (the target is not a clean
+  eighteen v0.4.2 migration files (`0045`-`0061`);
+- one of `0045`-`0061` is already recorded (the target is not a clean
   pre-migration v0.4.1 database);
 - one of the tables v0.4.2 creates already exists;
 - the database contains a migration absent from the checkout;
@@ -216,7 +218,7 @@ The preflight is blocking if any of these occur:
   operator confirms these before §6 and records the confirmation in the
   stage report.
 
-`0045`-`0059` pending is the expected, safe state to deploy from. Any other
+`0045`-`0061` pending is the expected, safe state to deploy from. Any other
 migration drift has no safe interpretation here: stop and resolve the target
 or branch mismatch instead of allowing the application boot to perform an
 unplanned schema change.
@@ -225,7 +227,7 @@ unplanned schema change.
 
 Use the same RC, forced installs, backup, and deployment environment intended
 for production. The release-specific rehearsal restores the backup into a
-local smoke-twin, boots the real stack (which applies `0045`-`0059` via
+local smoke-twin, boots the real stack (which applies `0045`-`0061` via
 `migrate.ts` on the way up), runs the frontend checks, and runs the
 0.4.2 postflight — and the §5 criterion 9 allocation comparison — before
 teardown:
@@ -252,14 +254,15 @@ The rehearsal is a pass only when all of the following are true:
 3. Static assembly reaches prerender with a fresh contract dependency.
 4. The archive-shaped command is present and correctly named:
    `bun run smoke:archive`.
-5. All twenty-two migration files are recorded — `0039`-`0048` plus
-   `0049`-`0058` plus both `0059` files — and the v0.4.0
-   runtime tables remain intact after boot.
+5. All twenty-four migration files are recorded — `0039`-`0048` plus
+   `0049`-`0058` plus both `0059` files plus `0060` and `0061` — and the
+   v0.4.0 runtime tables remain intact after boot.
 6. `chain_address_floors`, `asset_prices`, and `asset_price_floors` exist
    with `asset_prices` non-empty, and the analytics/source/snapshot tables
-   0056-0059 create (e.g. `analytics_overwrite_events`,
+   0056-0061 create (e.g. `analytics_overwrite_events`,
    `source_value_versions`, `analytics_ledger_runs`,
-   `analytics_output_snapshots`, `swarm_brief_revisions`) are present.
+   `analytics_output_snapshots`, `swarm_brief_revisions`,
+   `analytics_read_mode`, `analytics_parity_observations`) are present.
 7. Zero `swarm_sessions` rows still show a `subject_name` that disagrees with
    their subject's current name.
 8. `swarm_judge_config.third_party_enabled` is `false`.
@@ -293,7 +296,7 @@ authority. Do not manually edit `schema_migrations` at any point.
    backup.
 2. Reconfirm the live preflight receipt is current and passed.
 3. Deploy in provider order: the v0.4.2 backend/API first (its boot applies
-   `0045`-`0059` via `migrate.ts` before it starts serving — run it with
+   `0045`-`0061` via `migrate.ts` before it starts serving — run it with
    `MIGRATE_DATABASE_URL` set to the §4.1 bootstrap login for that run
    only), then every worker lane (with `WORKER_DATABASE_URL` = `rm_worker`
    set, per §4.1), then static frontend last. Do not publish the new SPA
@@ -302,13 +305,48 @@ authority. Do not manually edit `schema_migrations` at any point.
    `bun install --force --cwd backend` in the deployment checkout.
 5. Start the backend and workers; wait for `/health` and the normal readiness
    gates.
-6. Confirm the migration log records each of the sixteen v0.4.2 migration
-   files (`0045`-`0059`; both `0059` files) exactly once, and that
+6. Confirm the migration log records each of the eighteen v0.4.2 migration
+   files (`0045`-`0061`; both `0059` files) exactly once, and that
    `0039`-`0044` are unchanged — per the additive-only contract.
 7. Run static assembly/prerender and publish the frontend only after the API
    is healthy.
 8. Do **not** flip `swarm_judge_config.third_party_enabled` during cutover;
    verify it stayed `false` after the API is serving.
+
+**6.1 — Analytics ledger read cutover (operator-run, hours after deploy).**
+Issue #979/#988's `analytics_read_mode` ships seeded to `compatibility` (the
+mode every current-view consumer has always used), so boot is **not** a
+cutover: nothing flips automatically, and the release is fully functional on
+the compatibility tables. The dual-write parity evidence
+(`analytics_parity_observations`) accrues **automatically** once the worker
+is up: the hourly `analytics.parity_sweep` cron row (`backend/src/db/seed.ts`)
+calls `POST /api/analytics/parity-sweep` through the API's `rm_app` pool, and
+each sweep appends one immutable observation per domain (`raw_indicator_history`,
+`regime_snapshots`, `research_signals`, `swarm_briefs`). No operator action
+populates it.
+
+Arming ledger-mode reads **is** operator-run, by the cutover gate CLI
+(`backend/scripts/analytics-ledger-cutover-gate.ts`), and only after the gate
+passes — an unbroken run of `matched=true` observations across every domain
+spanning at least 24h and 12 observations, newest within 2h (defaults;
+env-tunable via `ANALYTICS_CUTOVER_MIN_WINDOW_MS`,
+`ANALYTICS_CUTOVER_MIN_OBSERVATIONS`, `ANALYTICS_CUTOVER_MAX_STALENESS_MS`):
+
+```bash
+# Check only — exit 0 iff ledger-mode reads are permitted; prints every reason otherwise:
+bun backend/scripts/analytics-ledger-cutover-gate.ts
+# Arm ledger-mode reads (REFUSED, exit 1, unless the gate passes):
+bun backend/scripts/analytics-ledger-cutover-gate.ts --switch ledger
+```
+
+The flip is one `UPDATE` on the single-row switch table and is
+non-destructive in both directions: `--switch compatibility` is the always
+allowed rollback, never gated, and touches no ledger table
+(`backend/src/analytics/cutover/read-mode.ts`). Record the gate output and
+the switch in the stage report; the release does not require arming
+ledger-mode reads to complete, so a team that wants to hold compatibility
+mode longer is fine to — the gate keeps passing and the parity sweep keeps
+appending.
 
 ## 7. Production postflight
 
@@ -319,8 +357,8 @@ Load and assert the writer `DATABASE_URL` as described in
 bun backend/scripts/upgrades/0.4.1-to-0.4.2/postflight.ts --emit-receipt=P8.postflight-prod
 ```
 
-The script performs SELECT-only checks: all twenty-two migration files
-recorded (`0039`-`0059`), v0.4.0 runtime tables intact, the seventeen new
+The script performs SELECT-only checks: all twenty-four migration files
+recorded (`0039`-`0061`), v0.4.0 runtime tables intact, the nineteen new
 tables present and `asset_prices` non-empty, zero drifted `subject_name`
 rows, `third_party_enabled = false`, and contract freshness in the deployed
 checkout. Also verify manually from the deployed origin:

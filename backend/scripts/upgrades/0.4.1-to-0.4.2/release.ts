@@ -12,7 +12,7 @@ export const PRIOR_RELEASE_MIGRATIONS = [
 ] as const;
 
 /**
- * The sixteen additive migration files v0.4.2 ships (0045-0059; 0059 numbers
+ * The eighteen additive migration files v0.4.2 ships (0045-0061; 0059 numbers
  * two files). Unlike the original four, this set was aligned to the full
  * v0.4.2 merge of main, so it spans every migration the release tree carries
  * beyond PRIOR_RELEASE_MIGRATIONS. None touches the v0.4.0 tables above: it
@@ -21,8 +21,11 @@ export const PRIOR_RELEASE_MIGRATIONS = [
  * (#796), take/key integrity and subject repairs (#697/#780), the judgement
  * digest scheme (#829, D44), the database role taxonomy and worker
  * allow-list (#692), a take-lookup index (#782), the Phase A research
- * integrity ledgers and output/run snapshots (#974/#976/#977/#978), and the
- * framework-subject snapshot cleanup (#960). All are additive: new tables,
+ * integrity ledgers and output/run snapshots (#974/#976/#977/#978), the
+ * framework-subject snapshot cleanup (#960), and the analytics dual-write
+ * parity + cutover switch (#979): the analytics_read_mode operator switch
+ * and its immutable analytics_parity_observations evidence, plus
+ * source_value_versions provenance (#988). All are additive: new tables,
  * new nullable/defaulted columns, new roles and grants, an append-only guard
  * on swarm_member_keys, one index, and idempotent one-time data fixes.
  */
@@ -43,6 +46,8 @@ export const RELEASE_MIGRATIONS = [
   "0058_analytics_run_ledger.sql",
   "0059_analytics_output_and_report_snapshots.sql",
   "0059_swarm_framework_subject_snapshot_cleanup.sql",
+  "0060_analytics_ledger_cutover.sql",
+  "0061_source_value_provenance.sql",
 ] as const;
 
 export const REQUIRED_TABLES = [
@@ -70,4 +75,6 @@ export const NEW_RELEASE_TABLES = [
   "analytics_output_snapshots",
   "analytics_report_snapshots",
   "swarm_brief_revisions",
+  "analytics_read_mode",
+  "analytics_parity_observations",
 ] as const;
