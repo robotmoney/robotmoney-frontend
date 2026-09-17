@@ -3502,3 +3502,84 @@ decision is only about NAMING that fact so an operator reading the replay's
 output can tell it apart from a row that claims today's rule and genuinely no
 longer reproduces — which prior to `#829` the tool could not do at all, because
 it never compared the two values in the first place.
+
+## D45 — The web client gets its own manifest, version, and merge gate — narrow and fast, separate from api/backend CI (Lucas, 2026-09-17)
+
+**Decision.** `frontend/package.json` (`@robotmoney/web-client`) versions the
+static web client — `frontend/public` (the SPA) and `frontend/preview` (the
+fixture-mode wrapper) — independently of `backend/package.json` and
+`contract/package.json`. `scripts/web-client/version.ts` reads it (plus the
+current commit) and `scripts/static-assembly.sh` writes the result to
+`/version.json` in every assembled site, so a deployed client can name its own
+version apart from whatever api version it happens to be served alongside.
+
+`.github/workflows/frontend.yml` is retired and replaced by
+`.github/workflows/web-client.yml` (same taxonomy slot, same cron minute:
+issue #275 addendum's "genuine, dedicated frontend domain" requirement,
+renamed to track the client's own identity rather than the repo's directory
+layout). Only four things block a client PR's merge:
+
+1. the client's unit tests fail (`bun run --cwd frontend test` — the subset of
+   `scripts/tests/unit/` listed in `frontend/test/unit.list`, itself kept
+   honest by `scripts/tests/unit/web-client-unit-list.test.ts`);
+2. the static assembly/prerender does not build (`bun run --cwd frontend
+   assemble`);
+3. the preview page cannot load at all; or
+4. the Chrome console logs an error while Playwright loads it.
+
+(3) and (4) are `frontend/test/browser/preview-routes.spec.ts`, which sweeps
+every `sitemap.xml` route inside the FIXTURES-mode preview — goldens answer
+`/api/*`, `scripts/preview-server.ts` serves the working tree, no Docker, no
+network beyond localhost — alongside the pre-existing `preview-smoke.spec.ts`
+and `api-unreachable.spec.ts`. `web-client.yml` is path-gated on
+`frontend/**`, `goldens/**`, and `playwright.config.ts`; a client-only PR never
+waits on `e2e.yml`'s live smoke boot.
+
+The preview wrapper (`frontend/preview/index.html`) gains a `?api=` switch:
+`fixtures` (default) answers `/api/*` from goldens as before; `prod`, `stage`,
+or any `http(s)://` origin instead forwards **reads only** to that live api
+(`credentials: "omit"`; every non-GET call still gets the existing
+`{ok:true, mocked:true}` no-op, in every mode). This is primarily a developer
+tool (`bun run --cwd frontend check:prod` / `check:stage`), but `web-client.yml`
+runs the same sweep against production and stage on every PR too — **advisory
+only** (`continue-on-error: true`, reported in the job summary).
+
+**Why narrow and fast, not "robust like backend CI."** The client is meant to
+ship often and quickly; a merge-blocking dependency on a live backend (prod,
+stage, or the ~40-minute `e2e` smoke boot) would defeat that on every PR,
+including ones that touch no api behavior at all. Backend/db/api changes
+already get their own thorough coverage of the client surfaces in
+`backend.yml`/`integration.yml`/`e2e.yml` — this workflow is deliberately the
+narrow half of that asymmetry, not a second copy of it.
+
+**Why advisory, never blocking, for prod/stage.** A live host being
+unreachable, slow, or mid-deploy is a fact about that host, not about the
+client code in the PR. Blocking the merge on it would fail PRs for reasons
+their author cannot fix by editing anything in the diff — exactly the
+loud-skip-vs-flaky-red distinction this repo's CI taxonomy already protects
+elsewhere (contract's live `SWARM_ONBOARDING_SKILL_URL` check is the one
+existing exception, and it stays required precisely because that URL has no
+committed fallback to fall back to; the client's route sweep does, in
+goldens).
+
+**Why reads only, never writes, against a live api from a preview.** A
+preview session — local or a CI run — has no user consent and no session of
+its own attached to it; forwarding a write would let anyone who can open the
+preview URL mutate production state through it. The wrapper's existing
+mocked-write no-op (`{ok:true, mocked:true}`) already covered fixtures mode;
+extending it to cover every non-GET call in live mode too, rather than only
+intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
+
+**Alternatives rejected.**
+- **One shared version for frontend + backend** (status quo before this
+  decision, `package.json`'s `0.1.0` at the repo root) — ties a client-only
+  change to the api's release cadence and vice versa, and gives a deployed
+  static bundle no way to say which of its own revisions it is independently
+  of the api it happens to be co-deployed with today (D13's eventual
+  vendor-split tiered topology assumes exactly this independence).
+- **Keep `frontend.yml`'s scope (two backend-free specs) and add the route
+  sweep to `e2e.yml` instead** — re-couples the fast client signal to the live
+  smoke boot's ~40-minute latency, which is the dependency this decision
+  exists to remove.
+- **Block the merge on the prod/stage sweep too** — rejected above; a live
+  host's availability is not a property of the PR's diff.

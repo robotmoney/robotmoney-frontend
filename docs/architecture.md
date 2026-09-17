@@ -126,7 +126,7 @@ network, or a real model call never shares a directory with a pure unit test.
 **CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
 (issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
 `integration` (the `scripts/tests/integration` cost class), `backend`,
-`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`. Each of
+`research-pipeline`, `web-client`, `onboarding-eval-rails`, and `e2e`. Each of
 these is **directly required** in branch protection — there is no fan-in/gate
 workflow aggregating them (see "No fan-in gate" below for why, and for what
 used to be here).
@@ -166,7 +166,7 @@ job-level-skip property above. Issue #348 tracks investigating a structurally
 sounder fan-in replacement (likely `workflow_run`-based, avoiding the
 polling-for-an-external-commit class of bug entirely) for if/when one is
 needed again. Flipping the actual branch-protection required-check list to
-list these workflows individually (`unit`, `backend`, `contract`, `frontend`,
+list these workflows individually (`unit`, `backend`, `contract`, `web-client`,
 `integration`, `e2e`, `repo-guards`, `research-pipeline`,
 `onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
 the GitHub UI, not something automatable from this repo.
@@ -198,15 +198,30 @@ the GitHub UI, not something automatable from this repo.
   model token) stays inside `e2e.yml`'s "Full-stack smoke" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
-- `frontend` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
-  above for what backed this requirement before it was removed) is a genuine,
-  dedicated workflow (`.github/workflows/frontend.yml`, `name: frontend`). It
-  runs ONLY the Playwright specs that don't need a live backend — today exactly
-  `frontend/test/browser/preview-smoke.spec.ts`, which spawns its own
-  `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
-  feature-correctness-class addition, not a substitute: `e2e.yml`'s
+- `web-client` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
+  above for what backed this requirement before it was removed; superseded and
+  renamed from `frontend.yml`/`name: frontend`, 2026-09-17, D45) is the web
+  client's OWN merge gate and CI/CD policy, versioned independently of the
+  api/backend and the contract via `frontend/package.json`'s
+  `@robotmoney/web-client` manifest. Only four things block a client merge:
+  the client's unit tests (`bun run --cwd frontend test`, the subset of
+  `scripts/tests/unit/` named in `frontend/test/unit.list`), the static
+  assembly/prerender failing to build, the preview page failing to load at
+  all, or a Chrome console error while Playwright loads it. The last two are
+  both covered by `frontend/test/browser/preview-routes.spec.ts`, which sweeps
+  every `sitemap.xml` route inside the FIXTURES-mode preview (goldens answer
+  `/api/*`, `scripts/preview-server.ts` — no `BACKEND_URL`, no Docker), plus
+  the pre-existing `preview-smoke.spec.ts` and `api-unreachable.spec.ts` — a
+  fast, feature-correctness-class addition, not a substitute: `e2e.yml`'s
   `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
   including specs that need the live backend the full smoke boot provides.
+  The preview wrapper's `?api=` switch can also point `/api/*` at a live prod
+  or stage api instead of goldens (mainly a developer tool — `bun run --cwd
+  frontend check:prod` / `check:stage`); `web-client.yml` runs that sweep too,
+  but ADVISORY only (`continue-on-error: true`, reported in the job summary) —
+  a live host being unreachable says nothing about the PR's client code, so it
+  can never block the merge. Backend/db/api changes get their own coverage of
+  the client surfaces in `backend.yml`/`integration.yml`/`e2e.yml`, unchanged.
 
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
@@ -335,7 +350,9 @@ Hand-written, no Tailwind, in three files:
 > This section is the **canonical, complete spec** of the preview feature
 > (decisions [D14](./decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file),
 > [D19](./decisions.md#d19--hosted-preview-urls-on-cloudflare-pages-revises-d14-and-d13),
-> [D20](./decisions.md#d20--no-bake-preview-hosting-via-cloudflare-git-integration-revises-d19);
+> [D20](./decisions.md#d20--no-bake-preview-hosting-via-cloudflare-git-integration-revises-d19),
+> [D45](./decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)
+> (the `?api=` live switch, `/version.json`, and the `web-client.yml` gate);
 > the former `preview-server-spec.md` is retired).
 
 Lightweight hosting for **agentic development of the marketing surface** (the
@@ -363,14 +380,22 @@ that fetches `/index.html` (the production SPA), runs it inside a same-origin
 iframe, and **patches the iframe's fetch and history BEFORE document.open()** so
 the interception is in place when the SPA's HTML runs. The SPA is **unmodified**
 — it still requests same-origin `/api/*` as normal, unaware of any interception.
-GET `/api/*` calls are answered from goldens fetched from
-`/goldens/api-goldens.json` into JS memory (query string dropped — a golden is
-one point in time; an un-goldened route 404s); non-GET requests
-(POST/PUT/DELETE) return `{ok: true, mocked: true}` no-ops. A red "PREVIEW"
-watermark remains permanently visible. SPA navigation
-(`history.pushState`/`replaceState`) mirrors to the parent URL's hash so deep
-links are shareable: `/#/allocation` loads that view. The mocking is entirely
-client-side — no backend, no reverse proxy, no server-side `/api` replay.
+By default (`?api=fixtures`, or no `?api=` at all) GET `/api/*` calls are
+answered from goldens fetched from `/goldens/api-goldens.json` into JS memory
+(query string dropped — a golden is one point in time; an un-goldened route
+404s). `?api=prod`, `?api=stage`, or any `?api=<http(s) origin>` instead
+forwards GET `/api/*` to that live api (`credentials: "omit"` — no session is
+ever attached). **Every non-GET request** (POST/PUT/DELETE) returns
+`{ok: true, mocked: true}` **in every mode, live included** — a preview can
+never write to a live api. A watermark remains permanently visible, red for
+`fixtures` and blue for a live `?api=`, naming which mode is active and the
+client's own `name@version` (read from `/version.json`,
+[D45](./decisions.md#d45--the-web-client-gets-its-own-manifest-version-and-merge-gate--narrow-and-fast-separate-from-apibackend-ci-lucas-2026-09-17)).
+SPA navigation (`history.pushState`/`replaceState`) mirrors to the parent
+URL's hash so deep links are shareable: `/#/allocation` loads that view. The
+mocking is entirely client-side — no backend, no reverse proxy, no
+server-side `/api` replay (`?api=` excepted, which is a same-origin-fetch
+rewrite, not a server-side proxy either).
 
 **URL space contract** (local `bun run preview` only — there is no hosted
 deployment of this space, see below):
@@ -381,6 +406,7 @@ deployment of this space, see below):
 | `/index.html`, `/assets/*`, everything else | the SPA (`frontend/public/*`) at the root, so its absolute asset paths work natively — no rewrite rules |
 | `/goldens/api-goldens.json` | the goldens |
 | `/preview/index.html` | the wrapper (direct path) |
+| `/version.json` | the web client's identity: `{name, version, commit}` from `frontend/package.json` + `HEAD` |
 | miss (incl. direct `/api/*`) | 404 via `404.html`, which bounces back to `/#<path>` |
 
 **Local: `bun run preview`** (`scripts/preview-server.ts`). A minimal in-place
@@ -412,14 +438,20 @@ fixtures, so the shapes stay faithful to what the backend actually returns.
 
 **Enforcement: every-PR CI, author-owned currency.** Keeping the preview current
 is the **PR author's responsibility** — there is no nightly regeneration and no
-deploy-side check. Two gates run in the normal PR suite:
+deploy-side check. Three gates run in the normal PR suite:
 
 - **Preview smoke** — `frontend/test/browser/preview-smoke.spec.ts` spawns the
   real `bun run preview` server and asserts the wrapper renders the SPA,
   goldens-backed GET mocking, non-GET no-ops, the 404 behavior, and hash deep
-  links. It runs in the regular Playwright suite (`bun run test:browser`),
-  executed by the **`e2e` workflow's `e2e` job** (smoke readiness gate) on every
-  ready PR.
+  links. It runs in the regular Playwright suite (`bun run test:browser`,
+  executed by the **`e2e` workflow's `e2e` job**, smoke readiness gate, on every
+  ready PR) AND, backend-free, in `web-client.yml` on every client-touching PR
+  including drafts (D45).
+- **Preview route sweep** — `frontend/test/browser/preview-routes.spec.ts`
+  loads every `sitemap.xml` route in the fixtures-mode preview and blocks the
+  merge on any console error or failed load; the same sweep against
+  `?api=prod`/`?api=stage` is advisory only. Runs in **`web-client.yml`**
+  (`bun run --cwd frontend check`).
 - **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
   `bun test scripts/tests` in the **`integration` workflow's

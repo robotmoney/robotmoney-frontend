@@ -1,0 +1,44 @@
+# The web client's unit tests, one repo-relative path per line.
+#
+# These files stay in scripts/tests/unit/ (the root unit tier still runs every
+# one of them); this list is the SUBSET the web-client merge gate runs on its
+# own (`bun run --cwd frontend test`, .github/workflows/frontend.yml). A file
+# here either executes client JS from frontend/public/assets/js or asserts on
+# the shipped client files (views, css, skills, docs fragments).
+#
+# scripts/tests/unit/web-client-unit-list.test.ts keeps this list honest: every
+# path must exist, and every unit test that imports client JS must be listed.
+# Add a line when you add such a test; the guard tells you if you forget.
+
+# Executes client JS
+scripts/tests/unit/admin-api-error-text.test.ts
+scripts/tests/unit/ask-roboto-matcher.test.ts
+scripts/tests/unit/dash-color-css-lockstep.test.ts
+scripts/tests/unit/dash-format.test.ts
+scripts/tests/unit/docs-parity-354.test.ts
+scripts/tests/unit/e2e-route-rename-guard.test.ts
+scripts/tests/unit/frontend-routes.test.ts
+scripts/tests/unit/member-avatar-precedence.test.ts
+scripts/tests/unit/member-mark-distinctness.test.ts
+scripts/tests/unit/prerender-content.test.ts
+scripts/tests/unit/prerender-routes.test.ts
+scripts/tests/unit/seo-legacy-aliases.test.ts
+scripts/tests/unit/sparkline.test.ts
+scripts/tests/unit/swarm-apply-form-and-status.test.ts
+scripts/tests/unit/swarm-initials-fallback-pin.test.ts
+scripts/tests/unit/swarm-initials-lockstep.test.ts
+scripts/tests/unit/swarm-synthesis-preview.test.ts
+
+# Asserts on shipped client files
+scripts/tests/unit/admin-webauthn-local-assets.test.ts
+scripts/tests/unit/agent-surface.test.ts
+scripts/tests/unit/api-client-unreachable.test.ts
+scripts/tests/unit/api-reference-no-dead-hosts.test.ts
+scripts/tests/unit/css-duplicate-selectors.test.ts
+scripts/tests/unit/docs-rmpc-cli-surface.test.ts
+scripts/tests/unit/no-baked-allocation-literals.test.ts
+scripts/tests/unit/no-client-side-feeds.test.ts
+scripts/tests/unit/onboarding-skill-rmpc-install-verified.test.ts
+scripts/tests/unit/regime-indicator-glossary-links.test.ts
+scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts
+scripts/tests/unit/swarm-session-take-key.test.ts
