@@ -501,18 +501,21 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
       confidence: 0.9,
       body: "Member one supports the submitted allocation because liquidity is observable.",
       weights: [{ bucket: "alpha", weight: 2 }, { bucket: "beta", weight: 1 }],
+      cites: ["signal_a"],
     },
     {
       stance: "cautious",
       confidence: 0.6,
       body: "Member two prefers a larger beta sleeve until volatility settles.",
       weights: [{ bucket: "alpha", weight: 1 }, { bucket: "beta", weight: 3 }, { bucket: "gamma", weight: 1 }],
+      cites: ["signal_a", "signal_b"],
     },
     {
       stance: "neutral",
       confidence: 0.3,
       body: "",
       weights: [{ bucket: "beta", weight: 1 }, { bucket: "gamma", weight: 1 }],
+      cites: ["signal_b", "signal_c"],
     },
   ];
   for (let index = 0; index < fixtures.length; index++) {
@@ -569,7 +572,11 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
   expect(recommendation.disagreements[0].topic).not.toMatch(/^Submitted views on/);
   expect(recommendation.disagreements[0].what_settles).not.toBe("");
   expect(recommendation.stances.neutral).toBe(1);
-  expect(detail?.takes[2].weights).toEqual(fixtures[2].weights);
+  expect(detail?.takes[2].weights).toEqual([
+    { bucket: "beta", weight: 0.5 },
+    { bucket: "gamma", weight: 0.5 }
+  ]);
+  expect(recommendation.citedSignals).toEqual({ signal_a: 2, signal_b: 2, signal_c: 1 });
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
@@ -1386,4 +1393,62 @@ test("GET subject snapshots: omitting limit/before returns everything; both are 
   const before = await get(`${routePath(ROUTES.swarm.subjectSnapshots, { id: subj })}?before=2026-08-03`);
   const beforeBody = before?.body as { snapshots: { date: string }[] };
   expect(beforeBody.snapshots.map((s) => s.date)).toEqual(["2026-08-02", "2026-08-01"]);
+});
+
+test("normalizedTakeWeights gates malformed weights (negative weight, non-array)", () => {
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: -1 }])).toBeNull();
+  expect(ic.normalizedTakeWeights({ bucket: "b", weight: 1 })).toBeNull();
+  expect(ic.normalizedTakeWeights("not an array")).toBeNull();
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 0 }])).toBeNull(); // 0 total weight is invalid
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 1 }])).toEqual([{ bucket: "b", weight: 1 }]);
+});
+
+test("ordinal string formatting for percentiles in buildRationale and buildConsensus", () => {
+  const cases = [
+    { n: 1, suffix: "1st" },
+    { n: 2, suffix: "2nd" },
+    { n: 3, suffix: "3rd" },
+    { n: 11, suffix: "11th" },
+    { n: 12, suffix: "12th" },
+    { n: 13, suffix: "13th" },
+    { n: 21, suffix: "21st" },
+    { n: 22, suffix: "22nd" },
+    { n: 23, suffix: "23rd" },
+    { n: 83, suffix: "83rd" },
+  ];
+  const byStance = { neutral: 1 };
+  
+  for (const c of cases) {
+    const rs = { composite_percentile: c.n / 100, regime: "bullish" };
+    const rationale = ic.buildRationale("Subject", byStance, 1, null, rs);
+    expect(rationale).toContain(`regime composite at the ${c.suffix} percentile`);
+    
+    const consensus = ic.buildConsensus(1, 1, 1, byStance, null, rs);
+    const found = consensus.some((pt: string) => pt.includes(`Regime composite at the ${c.suffix} percentile`));
+    expect(found).toBe(true);
+  }
+});
+
+import { toTake } from "../src/swarm/projections.ts";
+
+test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
+  const row = {
+    id: "fake-id",
+    member_id: "fake-member",
+    member_handle: "fake-handle",
+    member_name: "Fake Member",
+    stance: "bullish",
+    confidence: 0.8,
+    body: "fake body",
+    memo_url: null,
+    verified: true,
+    payload: { weights: [{ bucket: "b", weight: -1 }] }, // Malformed!
+  };
+  const takeDto = toTake(row as any);
+  expect(takeDto.weights).toBeNull();
+
+  // And test valid weights just in case
+  const rowValid = { ...row, payload: { weights: [{ bucket: "b", weight: 1 }] } };
+  const takeDtoValid = toTake(rowValid as any);
+  expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
 });

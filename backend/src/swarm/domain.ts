@@ -704,7 +704,9 @@ export interface SubmissionInput {
   // submission still verifies unchanged; submitRecommendation below rejects
   // one that does not match the session's OWN brief.
   reportSnapshotId?: string;
-  weights?: { bucket: string; weight: number }[]; signature: string;
+  weights?: { bucket: string; weight: number }[];
+  cites?: string[];
+  signature: string;
 }
 
 export async function submitRecommendation(token: string, sub: SubmissionInput) {
@@ -1762,6 +1764,11 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
           weight: { type: "number", minimum: 0 },
         },
       },
+      cites: {
+        type: "array",
+        optional: true,
+        items: { type: "string" },
+      },
     },
     windowClosesAt,
   };
@@ -2080,6 +2087,17 @@ function stanceBreakdown(byStance: Record<string, number>): string {
 // re-elect the majority for an ALREADY-PUBLISHED session to enumerate the set
 // D42 promises to report. Re-implementing the ladder there would give the
 // enumeration its own chance to disagree with the rule it is auditing against.
+export function ordinal(n: number): string {
+  const v = Math.abs(Math.round(n)) % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  switch (v % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
+}
+
 export function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
   const entries = Object.entries(byStance);
   if (!entries.length) return null;
@@ -2106,7 +2124,7 @@ export function buildConsensus(
   if (breakdown) points.push(`Stance split: ${breakdown}.`);
   if (meanConfidence != null) points.push(`Mean confidence ${meanConfidence.toFixed(2)} across submitted takes.`);
   if (regimeSummary?.composite_percentile != null) {
-    points.push(`Regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile (${regimeSummary.regime ?? "unclassified"}).`);
+    points.push(`Regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile (${regimeSummary.regime ?? "unclassified"}).`);
   }
   return points;
 }
@@ -2122,7 +2140,7 @@ export function buildRationale(
   const parts: string[] = [];
   if (majority) parts.push(`Majority stance is ${majority.stance} (${majority.count} of ${submitted} submitted takes)`);
   if (meanConfidence != null) parts.push(`mean confidence ${meanConfidence.toFixed(2)}`);
-  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile`);
+  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile`);
   return `${parts.length ? parts.join(", ") : "No stance data available"} on ${subjectLabel}.`;
 }
 
@@ -2286,10 +2304,19 @@ export async function aggregateSession(sessionId: string) {
   const submittedCount = submitted.size;
 
   const byStance: Record<string, number> = {};
+  const citedSignals: Record<string, number> = {};
   let confSum = 0;
   for (const t of takes) {
     byStance[t.stance] = (byStance[t.stance] ?? 0) + 1;
     confSum += Number(t.confidence ?? 0);
+    const cites = t.payload?.cites;
+    if (Array.isArray(cites)) {
+      for (const cite of cites) {
+        if (typeof cite === "string") {
+          citedSignals[cite] = (citedSignals[cite] ?? 0) + 1;
+        }
+      }
+    }
   }
   const participation = activeMembers.length ? submittedCount / activeMembers.length : 0;
   const meanConfidence = submittedCount ? confSum / submittedCount : null;
@@ -2347,6 +2374,7 @@ export async function aggregateSession(sessionId: string) {
     type: recType,
     consensus,
     disagreements,
+    citedSignals,
   };
   if (rationale) rec.rationale = rationale;
   if (weights) rec.weights = weights;
