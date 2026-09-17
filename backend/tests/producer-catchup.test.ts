@@ -202,7 +202,7 @@ test("missing-day indicator repair persists an acquisition independent of an ana
       const evidence = {
         id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "catch-up",
         requestedByRunId: requestedByRunId ?? null, events: [{ type: "started" as const, detail: null }, { type: "succeeded" as const, detail: null }],
-        fetches: [], values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 5 }],
+        fetches: [], values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 5, provenance: "live" }],
       };
       await acquisitionSink!.saveSourceAcquisition(evidence);
       return { [indicators[0]!.id]: [{ date: iso(1), value: 5 }] };
@@ -230,7 +230,7 @@ test("missing-day repair never persists fetched values when acquisition evidence
       await acquisitionSink!.saveSourceAcquisition({
         id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "refused", requestedByRunId: null,
         events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }], fetches: [],
-        values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 99 }],
+        values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 99, provenance: "live" }],
       });
       return { [indicators[0]!.id]: [{ date: iso(1), value: 99 }] };
     },

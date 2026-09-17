@@ -397,6 +397,17 @@ services:
     environment:
       <<: *worker-env
       WORKER_LANE: analytics
+      # `analytics.parity_sweep` (issue #979 fix) claims on this lane and now
+      # calls the API process over authenticated HTTP (analytics/api-client.ts
+      # triggerParitySweep()) instead of holding its own rm_app-credentialed
+      # pool — same ANALYTICS_API_URL + analytics_token wiring as
+      # analytics-producer below, declared HERE (not the shared *worker-env
+      # anchor) so worker-swarm/worker-research never receive a credential
+      # they have no job kind that needs.
+      ANALYTICS_API_URL: http://api:8787
+      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
+    secrets:
+      - analytics_token
 
   worker-research:
     <<: *worker-base

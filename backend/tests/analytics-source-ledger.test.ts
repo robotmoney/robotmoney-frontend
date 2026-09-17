@@ -163,6 +163,7 @@ test("large historical acquisitions split value inserts below PostgreSQL's param
     marketDate: new Date(Date.UTC(2000, 0, i + 1)).toISOString().slice(0, 10),
     marketInstant: null,
     value: i,
+    provenance: "live",
   }));
   await saveSourceAcquisition({
     id: randomUUID(),

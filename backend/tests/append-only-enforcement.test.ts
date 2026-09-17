@@ -916,3 +916,102 @@ describe("analytics output/report snapshots and swarm brief revisions (issue #97
     expect(privileges.every((r) => r.worker_insert === false && r.readonly_select === true)).toBe(true);
   });
 });
+
+describe("analytics cutover ledger (issue #979): the dual-write parity observations are immutable, and only the API role may append them", () => {
+  const tables = ["analytics_parity_observations"] as const;
+
+  // One real, non-empty row — built with raw SQL, not the sweep function: what
+  // is under test here is the guard, not the checker.
+  let observationId = "";
+
+  beforeAll(async () => {
+    const [obs] = (await sql`
+      INSERT INTO analytics_parity_observations (
+        domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
+      ) VALUES (
+        'regime_snapshots', 7, 7, ${"a".repeat(64)}, ${"a".repeat(64)}, true, '{"probe":"append-only-cutover"}'::jsonb
+      )
+      RETURNING id
+    `) as unknown as { id: string }[];
+    observationId = String(obs!.id);
+  });
+
+  test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
+    const [{ n }] = await sql`
+      SELECT count(*)::int AS n FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+    expect(n).toBeGreaterThan(0);
+  });
+
+  test("UPDATE, DELETE, DELETE WHERE false, TRUNCATE and TRUNCATE CASCADE are all refused, with the cutover ledger's own stable message, and rows survive", async () => {
+    for (const statement of [
+      `UPDATE analytics_parity_observations SET matched = false`,
+      `DELETE FROM analytics_parity_observations`,
+      `DELETE FROM analytics_parity_observations WHERE false`,
+      `TRUNCATE analytics_parity_observations`,
+      `TRUNCATE analytics_parity_observations CASCADE`,
+    ]) {
+      const raised = await attempt(statement);
+      expect(raised, `${statement} must raise`).not.toBeNull();
+      expect(raised!.code).toBe("0A000");
+      expect(raised!.message).toMatch(
+        new RegExp(`^analytics cutover ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on analytics_parity_observations`),
+      );
+    }
+    const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_parity_observations`;
+    expect(after).toBe(1);
+    const [row] = await sql`SELECT matched FROM analytics_parity_observations WHERE id = ${observationId}::bigint`;
+    expect(row.matched).toBe(true);
+  });
+
+  test("BOTH guards are installed, at the right level, as ENABLE ALWAYS, calling rm_analytics_cutover_immutable", async () => {
+    const rows = (await sql`
+      SELECT t.tgname::text AS trigger_name, t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row,
+             p.proname::text AS function_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal AND c.relname = 'analytics_parity_observations'
+    `) as unknown as { trigger_name: string; enabled: string; is_row: boolean; function_name: string }[];
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.is_row))).toEqual(new Set([false, true]));
+    expect(rows.every((r) => r.enabled === "A")).toBe(true);
+    expect(rows.every((r) => r.function_name === "rm_analytics_cutover_immutable")).toBe(true);
+  });
+
+  test("a replica-role session cannot delete parity observations", async () => {
+    let raised: Raised = null;
+    try {
+      await sql.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
+        await tx.unsafe("DELETE FROM analytics_parity_observations");
+      });
+    } catch (e) {
+      const err = e as { message?: string; code?: string };
+      raised = { message: err?.message ?? String(e), code: err?.code ?? null };
+    }
+    expect(raised?.code).toBe("0A000");
+    expect(raised?.message).toMatch(/^analytics cutover ledger is immutable: DELETE is not permitted on analytics_parity_observations/);
+  });
+
+  test("a parity observation can be SUPERSEDED only by a NEW row — a correction is an append, never an edit", async () => {
+    const [obs] = (await sql`
+      INSERT INTO analytics_parity_observations (
+        domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail
+      ) VALUES (
+        'regime_snapshots', 8, 7, ${"b".repeat(64)}, ${"a".repeat(64)}, false, '{"probe":"append-only-cutover-mismatch"}'::jsonb
+      )
+      RETURNING id
+    `) as unknown as { id: string }[];
+    expect(String(obs!.id)).not.toBe(observationId);
+    const rows = await sql`SELECT id FROM analytics_parity_observations ORDER BY id`;
+    expect(rows).toHaveLength(2);
+  });
+
+  test("rm_worker cannot fabricate a parity observation and rm_readonly can inspect the ledger", async () => {
+    const privileges = await sql`
+      SELECT has_table_privilege('rm_worker', 'public.analytics_parity_observations', 'INSERT') AS worker_insert,
+             has_table_privilege('rm_readonly', 'public.analytics_parity_observations', 'SELECT') AS readonly_select`;
+    expect(privileges[0].worker_insert).toBe(false);
+    expect(privileges[0].readonly_select).toBe(true);
+  });
+});

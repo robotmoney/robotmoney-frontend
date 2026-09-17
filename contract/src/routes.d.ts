@@ -118,6 +118,7 @@ export const ROUTES: {
     vintage: string;
     runPackage: string;
     reportSnapshot: string;
+    paritySweep: string;
   };
   admin: {
     auth: string;

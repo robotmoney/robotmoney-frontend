@@ -57,6 +57,11 @@ import type {
 } from "../../analytics/output-snapshots.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
+// Issue #979 fix: runParitySweep() touches Postgres directly (db/client.ts's
+// rm_app pool) via analytics/cutover/parity.ts. It may only ever be called
+// from HERE — the API process — never from worker/**, even transitively.
+// See POST A.paritySweep below.
+import { runParitySweep } from "../../analytics/cutover/parity.ts";
 import type {
   TelemetryArtifact,
   TelemetryRunStatus,
@@ -123,11 +128,6 @@ function parseRawHistory(body: unknown): RawIndicatorHistory | Invalid {
       // Non-finite values are REJECTED (not skipped): an updater must never
       // smuggle NaN/Infinity (JSON `1e999`) or nulls into the persisted-real floor.
       if (!isFiniteNumber(p.value)) return invalid(`history[${indicator}][${p.date}] value must be a finite number`);
-      // '|' separator, deliberately PRINTABLE: a literal NUL here made this
-      // file diff as binary in git, so it could never be reviewed in a pull
-      // request. `indicator` is caller-supplied, but `p.date` is already
-      // validated as YYYY-MM-DD above, so no '|'-bearing indicator can forge
-      // a collision with a different (indicator, date) pair.
       const key = `${indicator}|${p.date}`;
       if (seen.has(key)) return invalid(`duplicate (indicator, date) in payload: (${indicator}, ${p.date})`);
       seen.add(key);
@@ -308,7 +308,15 @@ function parseSourceAcquisition(body: unknown): SourceAcquisitionEvidence | Inva
     const hasDate = isIsoDate(v.marketDate);
     const hasInstant = typeof v.marketInstant === "string" && !Number.isNaN(Date.parse(v.marketInstant));
     if (Number(hasDate) + Number(hasInstant) !== 1) return invalid(`values[${i}] must have exactly one market time`);
-    values.push(v as unknown as SourceAcquisitionEvidence["values"][number]);
+    // Issue #979: `provenance` mirrors raw_indicator_history.source into the
+    // ledger (migration 0061). Absent means "no label observed" -> null; it is
+    // never defaulted here, because inventing a label the submitter did not
+    // send is the fabrication the ledger exists to prevent.
+    const provenance = v.provenance ?? null;
+    if (provenance !== null && (typeof provenance !== "string" || !provenance || provenance.length > 64)) {
+      return invalid(`values[${i}].provenance is invalid`);
+    }
+    values.push({ ...(v as unknown as SourceAcquisitionEvidence["values"][number]), provenance });
   }
   return { id: a.id, provider: a.provider, parserVersion: a.parserVersion, cacheIdentity: a.cacheIdentity,
     requestedByRunId: a.requestedByRunId as number | null, events, fetches, values };
@@ -603,7 +611,8 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     p === A.vintages ||
     p === A.vintage ||
     p === A.runPackage ||
-    p === A.reportSnapshot;
+    p === A.reportSnapshot ||
+    p === A.paritySweep;
   if (!isAnalyticsRoute) return null;
 
   // Authenticate FIRST — reads and mutations alike are analytics-provider-only.
@@ -765,7 +774,7 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     return { status: 200, body: { vintage } };
   }
 
-  // ── issue #978: the immutable analytics output/report snapshot layer ─────
+// ── issue #978: the immutable analytics output/report snapshot layer ─────
   if (m === "POST" && p === A.runPackage) {
     const parsed = parseTerminalRunPackage(await req.json().catch(() => null));
     if (isInvalid(parsed)) return { status: 400, body: parsed };
@@ -799,6 +808,24 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
           byteLength: report.byteLength,
           reportBase64: Buffer.from(report.bytes).toString("base64"),
         },
+      },
+    };
+  }
+
+  // Issue #979 fix: the dual-write parity sweep's ONLY legitimate entry
+  // point. The worker's `analytics.parity_sweep` handler (worker/handlers/
+  // index.ts) calls this over authenticated HTTP instead of importing
+  // analytics/cutover/parity.ts (and therefore db/client.ts) itself — the
+  // API process is the only runtime component allowed to hold the
+  // rm_app-credentialed pool.
+  if (m === "POST" && p === A.paritySweep) {
+    const results = await runParitySweep();
+    return {
+      status: 200,
+      body: {
+        domains: results.length,
+        matched: results.filter((r) => r.matched).map((r) => r.domain),
+        mismatched: results.filter((r) => !r.matched).map((r) => r.domain),
       },
     };
   }

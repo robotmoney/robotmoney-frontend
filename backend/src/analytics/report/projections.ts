@@ -7,6 +7,13 @@ import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
 import { rowToSnapshot, forHistory, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
+// Issue #979: once cutover is armed (analytics_read_mode = 'ledger'), these
+// two reads resolve from the immutable Phase A ledger instead of the mutable
+// regime_snapshots/research_signals tables — see cutover/ledger-current.ts's
+// header for the replay rule that makes the two reads equivalent.
+import { getAnalyticsReadMode } from "../cutover/read-mode.ts";
+import { ledgerCurrentLatestResearchSignal, ledgerCurrentRegimeSnapshots } from "../cutover/ledger-current.ts";
+import type { RegimeSnapshotRow } from "./regime-projection.ts";
 
 // The read an agent actually makes: today's classifier read without the ~500
 // KB of backtests/correlations/indicators/percentiles that ride along on the
@@ -44,12 +51,53 @@ export function toRegimeSummary(latest: RegimeSnapshot | null, staleness: Regime
 }
 
 // Latest research-signal payload for a key (or null).
+//
+// Issue #979: when analytics_read_mode is 'ledger', this is derived PURELY
+// from analytics_output_snapshots (never from research_signals) — see
+// cutover/ledger-current.ts's replay rule. The compatibility table keeps
+// being dual-written either way; only the READ resolves differently.
 export async function fetchLatestResearchSignal(key: string) {
+  if ((await getAnalyticsReadMode()) === "ledger") {
+    const signal = await ledgerCurrentLatestResearchSignal(key);
+    return signal ? { signalKey: signal.signalKey, date: signal.date, payload: signal.payload } : null;
+  }
   const rows = await sql`SELECT signal_key, date, payload FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
   const r = rows[0];
   if (!r) return null;
   const date = typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10);
   return { signalKey: r.signal_key, date, payload: r.payload };
+}
+
+// Normalize a ledger-replayed store row (camelCase, JS numbers already —
+// JSON.parse's inverse of the exact canonicalStringify the ledger writer
+// serialized) into the same DTO shape rowToSnapshot produces from a raw SQL
+// row, so a caller cannot tell which mode answered it.
+function ledgerRowToSnapshot(r: RegimeSnapshotRow): RegimeSnapshot {
+  return {
+    date: r.date,
+    composite: r.composite,
+    compositePercentile: r.compositePercentile,
+    regime: r.regime,
+    macroRegime: r.macroRegime,
+    onchainRegime: r.onchainRegime,
+    factorRegime: r.factorRegime,
+    macroIndex: r.macroIndex ?? null,
+    onchainIndex: r.onchainIndex ?? null,
+    factorIndex: r.factorIndex ?? null,
+    macroPercentile: r.macroPercentile ?? null,
+    onchainPercentile: r.onchainPercentile ?? null,
+    factorPercentile: r.factorPercentile ?? null,
+    panelWeights: r.panelWeights ?? null,
+    version: r.version ?? null,
+    source: r.source ?? null,
+    percentiles: r.percentiles ?? {},
+    indicators: r.indicators ?? [],
+    panels: r.panels ?? null,
+    bucketThresholds: r.bucketThresholds ?? null,
+    backtest: r.backtest ?? null,
+    correlations: r.correlations ?? null,
+    extras: r.extras ?? null,
+  } as unknown as RegimeSnapshot;
 }
 
 // The most recent `range` regime snapshots → { latest, history, staleness }
@@ -80,13 +128,24 @@ export async function fetchRegimeSnapshots(
   includeBacktest = false,
 ): Promise<{ latest: RegimeSnapshot | null; history: RegimeHistoryPoint[]; staleness: RegimeStaleness }> {
   const today = new Date().toISOString().slice(0, 10);
-  const rows = await sql`
+  // Issue #979: ledger mode derives the exact same rows PURELY from
+  // analytics_output_snapshots (never from regime_snapshots) — see
+  // cutover/ledger-current.ts. The compatibility table keeps being
+  // dual-written either way; only the READ resolves differently.
+  const full =
+    (await getAnalyticsReadMode()) === "ledger"
+      ? (await ledgerCurrentRegimeSnapshots())
+          .filter((r) => r.date <= today)
+          .slice(-range)
+          .map(ledgerRowToSnapshot)
+      : (
+          await sql`
     SELECT * FROM regime_snapshots
     WHERE date <= ${today}
     ORDER BY date DESC
     LIMIT ${range}
-  `;
-  const full = rows.map(rowToSnapshot).reverse(); // chronological
+  `
+        ).map(rowToSnapshot).reverse(); // chronological
   const latestFull = full.length ? full[full.length - 1] : null;
   const staleness = computeRegimeSnapshotStaleness(latestFull?.indicators ?? null, today);
   // `latest` keeps every field except backtest, opt-in via includeBacktest
