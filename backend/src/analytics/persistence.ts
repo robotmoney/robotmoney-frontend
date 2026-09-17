@@ -15,6 +15,7 @@ import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
+import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -22,7 +23,43 @@ export interface FloorSeedResult {
   indicators: number; // distinct indicators touched by the seed
 }
 
+export interface BeginRunResult {
+  runId: string;
+  methodologyVersionId: string;
+  replayed: boolean;
+}
+
+export interface FreezeVintageResult {
+  vintageId: string;
+  manifest: VintageManifest;
+  memberCount: number;
+  replayed: boolean;
+}
+
 export interface AnalyticsPersistence {
+  // Issue #977: the immutable run-ledger surface. `beginRun` MUST be called,
+  // and MUST succeed, before an AnalyticsDataSource is ever called — its
+  // failure is fatal and prevents both acquisition and every canonical
+  // output write. `appendRunEvent`/`freezeVintage` are likewise mandatory
+  // (never best-effort like telemetry submission below).
+  beginRun(input: {
+    runKey: string;
+    asof: string;
+    toolId: string;
+    sourceLabel: string;
+    methodology: MethodologyIdentity;
+    buildIdentity: string;
+    jobId?: number | string | null;
+  }): Promise<BeginRunResult>;
+  appendRunEvent(runId: string, eventType: RunLifecycleEvent, detail: string | null): Promise<void>;
+  freezeVintage(input: {
+    runId: string;
+    toolId: string;
+    knowledgeTimeCutoff: string;
+    marketTimeCutoff: string;
+    methodologyVersionId: string;
+    buildIdentity: string;
+  }): Promise<FreezeVintageResult>;
   // Append one complete provider acquisition atomically. The producer-generated
   // UUID is the replay key; prior evidence is never mutated on replay.
   saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;

@@ -13,8 +13,12 @@ import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal, loadRecentResearchSignalDates } from "./research-store.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
+import { beginRun, appendRunEvent, freezeVintage } from "./run-ledger-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
+  beginRun,
+  appendRunEvent,
+  freezeVintage,
   saveSourceAcquisition,
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),

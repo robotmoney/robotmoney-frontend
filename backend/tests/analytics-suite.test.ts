@@ -171,9 +171,33 @@ test(
         return { spx: [], eth: [], tbill3m: [] };
       },
     };
-    await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
+    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
     const [{ n: t10After }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'T10Y2Y'`;
     expect(t10After).toBe(t10Rows); // floor intact — nothing erased by an empty fetch
+
+    // ── (5) issue #977 AC9: every execution has a run identifier bound to
+    // exactly one frozen data vintage, and NONE of this landed persisted
+    // regime/backtest/research-signal output above was perturbed by it. ──
+    const firstLedger = (results as any).__runLedger as { runId: string; vintage: { vintageId: string } | null };
+    const secondLedger = (secondResults as any).__runLedger as { runId: string; vintage: { vintageId: string } | null };
+    expect(firstLedger.runId).toBeTruthy();
+    expect(secondLedger.runId).toBeTruthy();
+    expect(secondLedger.runId).not.toBe(firstLedger.runId); // two executions, two distinct run identifiers
+
+    for (const ledger of [firstLedger, secondLedger]) {
+      expect(ledger.vintage).not.toBeNull();
+      const [{ n: vintagesForRun }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_data_vintages WHERE run_id = ${ledger.runId}::bigint`;
+      expect(vintagesForRun).toBe(1); // exactly one frozen vintage per run
+      expect(String((ledger.vintage as { vintageId: string }).vintageId)).toBeTruthy();
+    }
+
+    // The as-of regime row this whole test already validated above is
+    // unchanged by having the run ledger wired in.
+    const [latestAfterLedger] = await sql`
+      SELECT composite, regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+    expect(Math.abs(Number(latestAfterLedger.composite) - gt.composite)).toBeLessThan(TOL);
+    expect(latestAfterLedger.regime).toBe(gt.regime);
   },
   { timeout: 180_000 },
 );

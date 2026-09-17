@@ -511,3 +511,174 @@ describe("source acquisition ledger: complete immutability and runtime-role boun
     expect(privileges.every((r) => r.worker_insert === false && r.readonly_select === true)).toBe(true);
   });
 });
+
+describe("analytics run ledger (issue #977): complete immutability, content preservation, and runtime-role boundary", () => {
+  const tables = [
+    "analytics_ledger_methodology_versions", "analytics_ledger_runs", "analytics_ledger_run_events",
+    "analytics_data_vintages", "analytics_vintage_members",
+  ] as const;
+
+  // One real, non-empty row per protected table (an empty table proves
+  // nothing — see the header). Built with raw SQL, not the store functions:
+  // what is under test here is the guard, not the writer.
+  let methodologyId = "";
+  let runId = "";
+  let vintageId = "";
+  let sourceValueVersionId = "";
+
+  beforeAll(async () => {
+    const [methodology] = (await sql`
+      INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
+      VALUES ('append-only-test', 'v-test', '{"k":"v"}'::jsonb, ${"0".repeat(64)})
+      RETURNING id
+    `) as unknown as { id: string }[];
+    methodologyId = String(methodology!.id);
+
+    const [run] = (await sql`
+      INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity)
+      VALUES (${crypto.randomUUID()}, '2031-01-02', 'append-only-test', 'fixture', ${methodologyId}::bigint, 'append-only-build')
+      RETURNING id
+    `) as unknown as { id: string }[];
+    runId = String(run!.id);
+
+    await sql`
+      INSERT INTO analytics_ledger_run_events (run_id, sequence, event_type)
+      VALUES (${runId}::bigint, 1, 'started')`;
+
+    const [svv] = (await sql`
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
+      VALUES ('append-only-run-ledger:probe', '2031-01-02', 1, 'legacy_baseline')
+      RETURNING id
+    `) as unknown as { id: string }[];
+    sourceValueVersionId = String(svv!.id);
+
+    const [vintage] = (await sql`
+      INSERT INTO analytics_data_vintages
+        (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id, build_identity, manifest, manifest_digest, member_count)
+      VALUES (${runId}::bigint, 'append-only-test', now(), '2031-01-02', ${methodologyId}::bigint, 'append-only-build',
+              '{"seriesFingerprints":{}}'::jsonb, ${"1".repeat(64)}, 1)
+      RETURNING id
+    `) as unknown as { id: string }[];
+    vintageId = String(vintage!.id);
+
+    await sql`
+      INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
+      VALUES (${vintageId}::bigint, ${sourceValueVersionId}::bigint, 'append-only-run-ledger:probe')`;
+  });
+
+  test("every row seeded above really exists (a fixture that failed to insert would pass every refusal test for free)", async () => {
+    const counts = (await sql`
+      SELECT
+        (SELECT count(*)::int FROM analytics_ledger_methodology_versions WHERE id = ${methodologyId}::bigint) AS methodology,
+        (SELECT count(*)::int FROM analytics_ledger_runs WHERE id = ${runId}::bigint) AS run,
+        (SELECT count(*)::int FROM analytics_ledger_run_events WHERE run_id = ${runId}::bigint) AS event,
+        (SELECT count(*)::int FROM analytics_data_vintages WHERE id = ${vintageId}::bigint) AS vintage,
+        (SELECT count(*)::int FROM analytics_vintage_members WHERE vintage_id = ${vintageId}::bigint) AS member
+    `) as unknown as Record<string, number>[];
+    for (const [key, n] of Object.entries(counts[0]!)) expect(n, `${key} must have been seeded`).toBeGreaterThan(0);
+  });
+
+  test("UPDATE, DELETE, TRUNCATE are all refused on every table, with the run-ledger's own stable message, and content survives", async () => {
+    const before = (await sql.unsafe(
+      tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
+    )) as unknown as { t: string; n: number }[];
+
+    // A harmless, non-generated column per table (never the identity PK,
+    // which Postgres itself refuses to self-assign before the trigger stage
+    // is ever reached).
+    const noopColumn: Record<(typeof tables)[number], string> = {
+      analytics_ledger_methodology_versions: "version_label",
+      analytics_ledger_runs: "build_identity",
+      analytics_ledger_run_events: "detail",
+      analytics_data_vintages: "build_identity",
+      analytics_vintage_members: "source_key",
+    };
+    for (const table of tables) {
+      for (const statement of [
+        `UPDATE ${table} SET ${noopColumn[table]} = ${noopColumn[table]}`,
+        `DELETE FROM ${table}`,
+        `TRUNCATE ${table} CASCADE`,
+      ]) {
+        const raised = await attempt(statement);
+        expect(raised, `${statement} must raise`).not.toBeNull();
+        expect(raised!.code).toBe("0A000");
+        expect(raised!.message).toMatch(
+          new RegExp(`^analytics run ledger is immutable: (UPDATE|DELETE|TRUNCATE) is not permitted on ${table}`),
+        );
+      }
+    }
+
+    const after = (await sql.unsafe(
+      tables.map((t) => `SELECT '${t}' AS t, count(*)::int AS n FROM ${t}`).join(" UNION ALL "),
+    )) as unknown as { t: string; n: number }[];
+    expect(after).toEqual(before); // every refused operation left the data exactly as it was
+
+    // Content-preservation, not merely row-count preservation: the run
+    // header's own build_identity survives a rejected UPDATE attempt intact.
+    const [run] = await sql`SELECT build_identity FROM analytics_ledger_runs WHERE id = ${runId}::bigint`;
+    expect(run.build_identity).toBe("append-only-build");
+  });
+
+  test("BOTH guards are installed on every table, at the right level, as ENABLE ALWAYS", async () => {
+    const rows = (await sql`
+      SELECT c.relname::text AS table_name, t.tgname::text AS trigger_name,
+             t.tgenabled::text AS enabled, (t.tgtype & 1) = 1 AS is_row, p.proname::text AS function_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal AND c.relname = ANY(${[...tables]}::text[])
+    `) as unknown as { table_name: string; trigger_name: string; enabled: string; is_row: boolean; function_name: string }[];
+    for (const table of tables) {
+      const own = rows.filter((r) => r.table_name === table);
+      expect(own).toHaveLength(2);
+      expect(new Set(own.map((r) => r.is_row))).toEqual(new Set([false, true]));
+      expect(own.every((r) => r.enabled === "A")).toBe(true);
+      expect(own.every((r) => r.function_name === "rm_analytics_run_ledger_immutable")).toBe(true);
+    }
+  });
+
+  test("a DELETE through an INHERITANCE PARENT is refused", async () => {
+    await sql.unsafe(`CREATE TABLE rm_run_ledger_inherit_probe (LIKE analytics_ledger_run_events)`);
+    await sql.unsafe(`ALTER TABLE analytics_ledger_run_events INHERIT rm_run_ledger_inherit_probe`);
+    try {
+      const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
+      const raised = await attempt(`DELETE FROM rm_run_ledger_inherit_probe`);
+      expect(raised?.code).toBe("0A000");
+      expect(raised?.message).toMatch(/^analytics run ledger is immutable: DELETE is not permitted on analytics_ledger_run_events/);
+      const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_run_events`;
+      expect(after).toBe(before);
+    } finally {
+      await sql.unsafe(`ALTER TABLE analytics_ledger_run_events NO INHERIT rm_run_ledger_inherit_probe`);
+      await sql.unsafe(`DROP TABLE rm_run_ledger_inherit_probe`);
+    }
+  });
+
+  test("a replica-role session cannot delete from any run-ledger table", async () => {
+    for (const table of tables) {
+      const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      let raised: Raised = null;
+      try {
+        await sql.begin(async (tx) => {
+          await tx.unsafe("SET LOCAL session_replication_role = 'replica'");
+          await tx.unsafe(`DELETE FROM ${table}`);
+        });
+      } catch (e) {
+        const err = e as { message?: string; code?: string };
+        raised = { message: err?.message ?? String(e), code: err?.code ?? null };
+      }
+      expect(raised?.code, `replica-role DELETE FROM ${table}`).toBe("0A000");
+      expect(raised?.message).toMatch(new RegExp(`^analytics run ledger is immutable: DELETE is not permitted on ${table}`));
+      const [{ n: after }] = await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+      expect(after).toBe(before);
+    }
+  });
+
+  test("rm_worker cannot fabricate a run/vintage and rm_readonly can inspect the ledger", async () => {
+    const privileges = await sql`
+      SELECT table_name,
+             has_table_privilege('rm_worker', 'public.' || table_name, 'INSERT') AS worker_insert,
+             has_table_privilege('rm_readonly', 'public.' || table_name, 'SELECT') AS readonly_select
+      FROM unnest(${[...tables]}::text[]) AS table_name`;
+    expect(privileges.every((r) => r.worker_insert === false && r.readonly_select === true)).toBe(true);
+  });
+});

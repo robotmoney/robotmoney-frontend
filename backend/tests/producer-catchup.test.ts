@@ -18,6 +18,23 @@ const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-10T12:00:00Z");
 const iso = (offsetDays: number) => new Date(NOW.getTime() - offsetDays * DAY_MS).toISOString().slice(0, 10);
 
+// These fixtures test the PRODUCER's catch-up scheduling, never runAnalytics
+// itself — none of them are ever wired through the issue #977 run ledger, so
+// this stub only needs to satisfy AnalyticsPersistence's shape.
+const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage"> = {
+  beginRun: async () => ({ runId: "0", methodologyVersionId: "0", replayed: false }),
+  appendRunEvent: async () => {},
+  freezeVintage: async () => ({
+    vintageId: "0",
+    manifest: {
+      methodologyVersionId: "0", buildIdentity: "test", knowledgeTimeCutoff: "", marketTimeCutoff: "",
+      seriesCount: 0, memberCount: 0, seriesFingerprints: {}, manifestDigest: "",
+    },
+    memberCount: 0,
+    replayed: false,
+  }),
+};
+
 test("computeMissingResearchDays: a fully-populated window reports nothing missing", () => {
   const present: { signalKey: string; date: string }[] = [];
   for (let i = 1; i <= 14; i++) {
@@ -63,6 +80,7 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
     { signalKey: "late-cycle-signals", date: iso(2) },
   ];
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
@@ -92,6 +110,7 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
 
 test("catchUpMissedResearchDays: a repair failure for one day does not stop the rest, and is reported as still missing", async () => {
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
@@ -113,6 +132,7 @@ test("catchUpMissedResearchDays: a repair failure for one day does not stop the 
 
 test("catchUpMissedResearchDays: a read failure is swallowed — never throws, returns no missing days", async () => {
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
@@ -134,6 +154,7 @@ test("catchUpMissedResearchDays: a read failure is swallowed — never throws, r
 test("catchUpMissedResearchDays: running it twice converges — the second pass repairs nothing new", async () => {
   const store = new Set<string>(); // "signalKey|date"
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
@@ -175,6 +196,7 @@ test("missing-day indicator repair persists an acquisition independent of an ana
   const acquisitions: any[] = [];
   let seeded: Record<string, { date: string; value: number }[]> | null = null;
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     saveSourceAcquisition: async (e) => { acquisitions.push(e); return { acquisitionId: e.id, replayed: false }; },
     loadRawHistory: async () => ({}), saveRawHistory: async () => {},
     seedRawHistory: async (history) => { seeded = history; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
@@ -205,6 +227,7 @@ test("missing-day indicator repair persists an acquisition independent of an ana
 test("missing-day repair never persists fetched values when acquisition evidence persistence fails", async () => {
   let currentViewWrites = 0;
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     saveSourceAcquisition: async () => { throw new Error("evidence store unavailable"); },
     loadRawHistory: async () => ({}), saveRawHistory: async () => { currentViewWrites++; },
     seedRawHistory: async () => { currentViewWrites++; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },

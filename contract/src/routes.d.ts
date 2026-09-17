@@ -114,6 +114,10 @@ export const ROUTES: {
     rawHistoryGaps: string;
     researchEligibility: string;
     telemetry: string;
+    runs: string;
+    runEvents: string;
+    vintages: string;
+    vintage: string;
   };
   admin: {
     auth: string;

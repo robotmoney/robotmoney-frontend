@@ -17,6 +17,19 @@ const iso = (offsetDays: number) => new Date(NOW.getTime() - offsetDays * DAY_MS
 
 function fakePersistence(overrides: Partial<AnalyticsPersistence> = {}): AnalyticsPersistence {
   return {
+    // This suite tests the producer's Class A catch-up, never runAnalytics
+    // itself — the run ledger is never actually invoked here.
+    beginRun: async () => ({ runId: "0", methodologyVersionId: "0", replayed: false }),
+    appendRunEvent: async () => {},
+    freezeVintage: async () => ({
+      vintageId: "0",
+      manifest: {
+        methodologyVersionId: "0", buildIdentity: "test", knowledgeTimeCutoff: "", marketTimeCutoff: "",
+        seriesCount: 0, memberCount: 0, seriesFingerprints: {}, manifestDigest: "",
+      },
+      memberCount: 0,
+      replayed: false,
+    }),
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
