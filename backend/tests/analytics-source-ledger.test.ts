@@ -4,9 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
 import { fetchFred } from "../src/analytics/extract/fred.ts";
+import { fetchJson } from "../src/analytics/extract/http.ts";
+import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckoterminal.ts";
 import { captureSourceAcquisition, payloadChecksum, type AcquisitionSink } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
@@ -26,6 +28,16 @@ afterEach(() => {
 
 const sink: AcquisitionSink = { saveSourceAcquisition };
 
+/** The source variants fetchOne actually branches on, read from its own switch
+ *  so this file cannot drift out of step with the adapter registry. */
+async function enumeratedSourceVariants(): Promise<string[]> {
+  const src = await Bun.file(new URL("../src/analytics/extract/sources.ts", import.meta.url)).text();
+  const body = src.slice(src.indexOf("export async function fetchOne"), src.indexOf("export async function fetchAll"));
+  const variants = [...body.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]!);
+  expect(variants.length).toBeGreaterThan(7);
+  return variants;
+}
+
 function providerResponse(url: string): Response {
   if (url.includes("fredgraph.csv")) return new Response("DATE,VALUE\n2024-01-01,1.25\n", { headers: { etag: "fred-release-1" } });
   if (url.includes("query2.finance.yahoo.com")) return Response.json({ chart: { result: [{ timestamp: [1704067200], indicators: { adjclose: [{ adjclose: [2] }] } }] } });
@@ -44,15 +56,28 @@ function providerResponse(url: string): Response {
 
 test("every sources.ts provider variant records requests, ratio/fallback legs, pagination, releases, normalized values, and exact payload bytes", async () => {
   globalThis.fetch = ((input: URL | RequestInfo) => Promise.resolve(providerResponse(String(input)))) as typeof fetch;
-  const output = await fetchAll({ indicators: INDICATORS, acquisitionSink: sink, requestedByRunId: 42 });
-  expect(Object.keys(output)).toHaveLength(INDICATORS.length);
+  const enumerated = await enumeratedSourceVariants();
+  // The registry happens not to use multpl_shiller_cape today, so INDICATORS
+  // alone leaves that branch of fetchOne unexercised and its evidence unproven.
+  // A synthetic indicator reaches it through the same production path.
+  const indicators: Indicator[] = [
+    ...INDICATORS,
+    ...enumerated.filter((source) => !INDICATORS.some((i) => i.source === source))
+      .map((source): Indicator => ({
+        id: `synthetic_${source}`, name: source, panel: INDICATORS[0]!.panel,
+        source, sign: 1, transform: INDICATORS[0]!.transform, unit: "index",
+      })),
+  ];
+  const output = await fetchAll({ indicators, acquisitionSink: sink, requestedByRunId: 42 });
+  expect(Object.keys(output)).toHaveLength(indicators.length);
 
   const acquisitions = await sql`SELECT id, provider, requested_by_run_id FROM source_acquisitions`;
-  expect(acquisitions).toHaveLength(INDICATORS.length);
-  expect(new Set(acquisitions.map((r) => r.provider))).toEqual(new Set([
-    "fred", "yahoo", "defillama_tvl", "defillama_stables", "blockchain_com",
-    "coinmetrics", "geckoterminal_newpools", "shiller_cape",
-  ]));
+  expect(acquisitions).toHaveLength(indicators.length);
+  // ENUMERATED, not listed by hand. AC1 is "every source variant enumerated by
+  // sources.ts", so the expectation is read out of that switch: adding a
+  // provider there and no evidence for it has to fail here, which a literal
+  // set written in this file would never do.
+  expect(new Set(acquisitions.map((r) => r.provider))).toEqual(new Set(enumerated));
   expect(acquisitions.every((r) => Number(r.requested_by_run_id) === 42)).toBe(true);
 
   const [{ ratioFetches }] = await sql`
@@ -180,4 +205,198 @@ test("evidence persistence failure is fatal and returns no fetched values to the
   await expect(captureSourceAcquisition({ provider: "fixture", sourceKey: "fatal", parserVersion: "1", cacheIdentity: "fatal" }, refusingSink,
     async () => { received = [{ date: "2024-01-01", value: 99 }]; return received as any; })).rejects.toThrow("ledger unavailable");
   expect(received).not.toBeNull(); // provider completed, but capture never returned it
+});
+
+// ── Attempt-level evidence (AC1/AC2/AC6) ────────────────────────────────────
+// The cases above drive the happy path of every provider. These drive the legs
+// that only appear when a request goes wrong — a retry, an empty body, a
+// terminal failure — because those are the ones whose evidence a reader most
+// needs and the ones an adapter most easily forgets to record.
+
+test("every retry attempt is its own immutable fetch row, numbered in order, carrying that attempt's own status", async () => {
+  const statuses = [429, 503, 200];
+  let call = 0;
+  globalThis.fetch = (() => {
+    const status = statuses[Math.min(call++, statuses.length - 1)]!;
+    const body = JSON.stringify({ data: [{ attributes: { pool_created_at: new Date().toISOString() } }] });
+    return Promise.resolve(new Response(body, { status, headers: { "retry-after": "0" } }));
+  }) as unknown as typeof fetch;
+
+  await captureSourceAcquisition(
+    { provider: "geckoterminal_newpools", sourceKey: "series:retry", parserVersion: "geckoterminal:1", cacheIdentity: "retry" },
+    sink,
+    () => fetchGeckoTerminalNewPools(Date.now(), 5_000, { sleep: async () => {}, logger: { warn: () => {} } }),
+  );
+
+  const rows = await sql`
+    SELECT f.sequence, f.response_status, f.error_detail, f.cache_status
+    FROM source_fetches f JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity = 'retry' ORDER BY f.sequence`;
+  // Three attempts against ONE page: two refusals then the success. Collapsing
+  // them into a single row would erase the throttling the ledger exists to show.
+  const firstPage = rows.slice(0, 3);
+  expect(firstPage.map((r) => Number(r.response_status))).toEqual([429, 503, 200]);
+  // Contiguous from 1: the sequence is what orders attempts, so a gap or a
+  // repeat would make the attempt history unreadable.
+  expect(rows.map((r) => Number(r.sequence))).toEqual(rows.map((_, i) => i + 1));
+  // Each refused attempt carries its OWN failure, and the success carries none.
+  expect(firstPage[0]!.error_detail).toContain("429");
+  expect(firstPage[1]!.error_detail).toContain("503");
+  expect(firstPage[2]!.error_detail).toBeNull();
+  // AC1 names cache_status on every fetch, not only on the cache-hit case.
+  expect(rows.every((r) => ["disabled", "hit", "miss"].includes(r.cache_status))).toBe(true);
+});
+
+test("a terminal failure persists its redacted error, a failed event, and no values at all", async () => {
+  globalThis.fetch = (() => Promise.resolve(new Response("upstream is down", { status: 500 }))) as unknown as typeof fetch;
+  await expect(captureSourceAcquisition(
+    { provider: "fixture", sourceKey: "series:terminal", parserVersion: "fixture:terminal", cacheIdentity: "terminal" },
+    sink,
+    () => fetchJson("https://x.test/feed?api_key=sentinel-credential", 5_000, { authorization: "Bearer secret-token" }),
+  )).rejects.toThrow();
+
+  const [fetchRow] = await sql`
+    SELECT f.response_status, f.error_detail, f.provider_release_id, f.request_identity, a.parser_version
+    FROM source_fetches f JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity = 'terminal' ORDER BY f.sequence`;
+  expect(Number(fetchRow!.response_status)).toBe(500);
+  expect(fetchRow!.error_detail).toContain("500");
+  // AC1 names parser version and request identity as persisted columns — the
+  // in-memory redaction case above cannot speak for what reached the database.
+  expect(fetchRow!.parser_version).toBe("fixture:terminal");
+  const identity = JSON.stringify(fetchRow!.request_identity);
+  expect(identity).not.toContain("sentinel-credential");
+  expect(identity).not.toContain("secret-token");
+  expect(identity).toContain("[REDACTED]");
+  // AC6: null is preserved, never a fabricated release identifier. This
+  // response carries no etag or last-modified, so there is nothing to record.
+  expect(fetchRow!.provider_release_id).toBeNull();
+
+  const events = await sql`
+    SELECT e.event_type, e.detail FROM source_acquisition_events e
+    JOIN source_acquisitions a ON a.id = e.acquisition_id
+    WHERE a.cache_identity = 'terminal' ORDER BY e.sequence`;
+  expect(events.map((r) => r.event_type)).toEqual(["started", "failed"]);
+  expect(JSON.stringify(events)).not.toContain("secret-token");
+  // A failed acquisition must contribute nothing to analytics (Behaviour:
+  // "values from that request cannot feed analytics").
+  const [{ values }] = await sql`
+    SELECT count(*)::int AS values FROM source_value_versions WHERE source_key = 'series:terminal'`;
+  expect(values).toBe(0);
+});
+
+test("an empty response is recorded as a successful fetch with zero values, not as a missing acquisition", async () => {
+  globalThis.fetch = (() => Promise.resolve(new Response("[]", { status: 200 }))) as unknown as typeof fetch;
+  await captureSourceAcquisition(
+    { provider: "fixture", sourceKey: "series:empty", parserVersion: "fixture:1", cacheIdentity: "empty" },
+    sink,
+    async () => (await fetchJson("https://x.test/empty", 5_000)) as { date: string; value: number }[],
+  );
+  const [row] = await sql`
+    SELECT f.response_status, f.response_checksum, f.error_detail
+    FROM source_fetches f JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity = 'empty'`;
+  // The request happened and the bytes are retained. "No data" is a finding
+  // the ledger has to be able to prove, and it is not the same as "no fetch".
+  expect(Number(row!.response_status)).toBe(200);
+  expect(row!.response_checksum).toBe(payloadChecksum(new TextEncoder().encode("[]")));
+  expect(row!.error_detail).toBeNull();
+  const events = await sql`
+    SELECT e.event_type FROM source_acquisition_events e
+    JOIN source_acquisitions a ON a.id = e.acquisition_id
+    WHERE a.cache_identity = 'empty' ORDER BY e.sequence`;
+  expect(events.map((r) => r.event_type)).toEqual(["started", "succeeded"]);
+  const [{ values }] = await sql`
+    SELECT count(*)::int AS values FROM source_value_versions WHERE source_key = 'series:empty'`;
+  expect(values).toBe(0);
+});
+
+test("a sweep-sized acquisition persists in a handful of statements, not two per fetch", async () => {
+  // THE FAILURE THIS GUARDS
+  // The api serves this submission on the same event loop it serves the site
+  // from. When each fetch cost its own INSERT round trip, one EDGAR sweep held
+  // that loop long enough for Bun.serve to cut the request at its 10s idle
+  // timeout, and every page behind it answered 502. Volume here is a real
+  // sweep's shape: many requests, bodies that repeat, one acquisition.
+  const payloads = Array.from({ length: 8 }, (_, i) => `{"filing":"${"x".repeat(20_000)}-${i}"}`);
+  const fetches = Array.from({ length: 300 }, (_, i) => {
+    const body = new TextEncoder().encode(payloads[i % payloads.length]!);
+    return {
+      id: randomUUID(),
+      sequence: i + 1,
+      requestIdentity: { method: "GET" as const, url: `https://sec.test/archives/${i}`, headers: {} },
+      cacheStatus: "miss" as const,
+      responseStatus: 200,
+      responseChecksum: payloadChecksum(body),
+      payloadBase64: Buffer.from(body).toString("base64"),
+      providerReleaseId: null,
+      errorDetail: null,
+    };
+  });
+
+  const startedAt = Date.now();
+  await saveSourceAcquisition({
+    id: randomUUID(),
+    provider: "edgar",
+    parserVersion: "edgar:1",
+    cacheIdentity: "sweep",
+    requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }],
+    fetches,
+    values: [],
+  });
+  const elapsed = Date.now() - startedAt;
+
+  const [{ fetchRows, payloadRows }] = await sql`
+    SELECT (SELECT count(*)::int FROM source_fetches f
+              JOIN source_acquisitions a ON a.id = f.acquisition_id
+             WHERE a.cache_identity = 'sweep') AS "fetchRows",
+           (SELECT count(*)::int FROM source_payloads
+             WHERE checksum = ANY(${payloads.map((p) => payloadChecksum(new TextEncoder().encode(p)))}::text[])) AS "payloadRows"`;
+  // Every attempt still gets its own row — batching changes how the write is
+  // issued, never what is recorded.
+  expect(fetchRows).toBe(300);
+  // Content-addressed: 300 fetches over 8 distinct bodies store 8 payloads.
+  expect(payloadRows).toBe(8);
+  // Far below the 10s the api would be cut off at. Generous on purpose: this
+  // is a floor against the per-row regression, not a benchmark.
+  expect(elapsed).toBeLessThan(5_000);
+});
+
+test("re-acquiring a series stays fast as its revision history deepens", async () => {
+  // THE FAILURE THIS GUARDS
+  // Each re-acquisition of a series adds another generation of rows under the
+  // same source_key. If the prior-revision lookup cannot use the index, every
+  // value rescans every generation, so acquisition N costs N times acquisition
+  // 1 — fine at fixture scale, quadratic in production, and slow enough to hold
+  // a pooled api connection while the site waits behind it.
+  const POINTS = 2_000;
+  const points = Array.from({ length: POINTS }, (_, i) => ({
+    date: new Date(Date.UTC(2015, 0, i + 1)).toISOString().slice(0, 10),
+    value: i,
+  }));
+  const acquire = async (generation: number) => {
+    const startedAt = Date.now();
+    await captureSourceAcquisition(
+      { provider: "fixture", sourceKey: "series:deep", parserVersion: "fixture:1", cacheIdentity: `gen-${generation}` },
+      sink,
+      async () => points.map((p) => ({ ...p, value: p.value + generation })),
+    );
+    return Date.now() - startedAt;
+  };
+
+  const first = await acquire(0);
+  for (let generation = 1; generation <= 5; generation++) await acquire(generation);
+  const sixth = await acquire(6);
+
+  const [{ versions }] = await sql`
+    SELECT count(*)::int AS versions FROM source_value_versions WHERE source_key = 'series:deep'`;
+  // Nothing is collapsed: seven generations of every point are all retained.
+  expect(versions).toBe(POINTS * 7);
+
+  // The seventh acquisition searches seven generations instead of one. With an
+  // index-searchable lookup that is roughly flat; with a scan it grows with the
+  // history. 4x the first acquisition is far looser than the ~7x a linear scan
+  // would cost here, so this fails on the regression without being timing-flaky.
+  expect(sixth).toBeLessThan(Math.max(first * 4, 1_500));
 });
