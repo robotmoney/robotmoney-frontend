@@ -249,8 +249,10 @@ export const ROUTES = {
     rawHistory: "/api/analytics/raw-history", // GET → persisted floor; POST — batch upsert on (date, indicator)
     sourceAcquisitions: "/api/analytics/source-acquisitions", // POST — immutable provider fetch/value evidence
     rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
-    regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
-    researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
+    // RETIRED (issue #978): regimeSnapshots ("/api/analytics/regime-snapshots")
+    // and researchSignals ("/api/analytics/research-signals"). Both wrote the
+    // current views with no run, no immutable artifact and no report snapshot.
+    // runPackage below is the sole HTTP publisher of either projection.
     // GET ?since=YYYY-MM-DD — which (signal_key, date) pairs exist on/after
     // `since` (issue #614 AC4). No payload content, just presence — the
     // producer's own read side for catch-up: it has no DATABASE_URL, so this
