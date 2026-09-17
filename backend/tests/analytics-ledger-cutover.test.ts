@@ -165,6 +165,7 @@ async function insertObservation(domain: ParityDomain, observedAt: Date, matched
             ${checksum}, ${matched ? checksum : "f".repeat(64)}, ${matched}, '{}'::jsonb)`;
 }
 
+const RAW_SOURCE = "cutover-dto-provenance";
 const DOMAINS: ParityDomain[] = ["raw_indicator_history", "regime_snapshots", "research_signals", "swarm_briefs"];
 const TEST_GATE: CutoverGateConfig = { minWindowMs: 60_000, minObservations: 3, maxStalenessMs: 30_000 };
 
@@ -284,6 +285,9 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
 
     await submitRawHistoryPoint(indicator, date, 3.25);
     await submitRegimeAndResearch(date, 55, signalKey, "cutover-dto-check");
+    // Real provenance on the legacy row, so the one documented DTO divergence
+    // below (`source`) is a genuine difference rather than null on both sides.
+    await sql`UPDATE raw_indicator_history SET source = ${RAW_SOURCE} WHERE indicator = ${indicator}`;
 
     const subjectId = `cutover-subject-${crypto.randomUUID()}`;
     await ensureSubject(subjectId, "Cutover DTO Subject");
@@ -296,7 +300,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     const compatSummary = await getRegimeSnapshotsSummary();
     const compatSignal = await getResearchSignal(signalKey);
     const compatRawSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
-      points: { date: string; value: number }[];
+      points: { date: string; value: number; source: string | null }[];
     };
     const compatSignalSeries = (await callAdmin(adminReq(`/api/admin/research/signals/${signalKey}`)))!.body as {
       points: { date: string; payload: unknown }[];
@@ -330,7 +334,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     const ledgerSummary = await getRegimeSnapshotsSummary();
     const ledgerSignal = await getResearchSignal(signalKey);
     const ledgerRawSeries = (await callAdmin(adminReq(`/api/admin/research/raw-series/${indicator}`)))!.body as {
-      points: { date: string; value: number }[];
+      points: { date: string; value: number; source: string | null }[];
     };
     const ledgerSignalSeries = (await callAdmin(adminReq(`/api/admin/research/signals/${signalKey}`)))!.body as {
       points: { date: string; payload: unknown }[];
@@ -342,12 +346,21 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     expect(ledgerSignal).toEqual(compatSignal);
     expect(ledgerSignalSeries).toEqual(compatSignalSeries);
     expect(ledgerBrief).toEqual(compatBrief);
-    // raw-history's `source` provenance column has no ledger equivalent
-    // (documented in api/routes/admin.ts) — compare date/value, the fields
-    // that ARE ledger-derived.
+    // raw-history is the ONE consumer whose DTO is not identical field for
+    // field: `source` is dual-write provenance metadata with no ledger
+    // equivalent, and the ledger branch returns null rather than fabricating
+    // it (api/routes/admin.ts). Pin that down instead of merely excluding the
+    // field — the DTO SHAPE must match, the ledger-derived fields must match
+    // exactly, and `source` must be the only difference, with a real non-null
+    // legacy value on one side so the divergence is genuine and not an
+    // artifact of both being null.
+    expect(ledgerRawSeries.points.map((p) => Object.keys(p).sort()))
+      .toEqual(compatRawSeries.points.map((p) => Object.keys(p).sort()));
     expect(ledgerRawSeries.points.map((p) => ({ date: p.date, value: p.value }))).toEqual(
       compatRawSeries.points.map((p) => ({ date: p.date, value: p.value })),
     );
+    expect(compatRawSeries.points.every((p) => p.source === RAW_SOURCE), "the legacy fixture must carry real provenance").toBe(true);
+    expect(ledgerRawSeries.points.every((p) => p.source === null), "ledger mode must return null, never a fabricated source").toBe(true);
 
     // ── AC4: rollback to compatibility, non-destructively ────────────────────
     //
