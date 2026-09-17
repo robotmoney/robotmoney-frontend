@@ -27,8 +27,7 @@ import type { RegimeSnapshotRow, JsonValue } from "../../analytics/report/regime
 import type { ResearchPayload } from "../../analytics/analyze/research.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../../analytics/store/raw-history-store.ts";
 import { applyRawFloorSeed } from "../../analytics/store/floor-seed.ts";
-import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
-import { persistResearchSignal, loadRecentResearchSignalDates } from "../../analytics/store/research-store.ts";
+import { loadRecentResearchSignalDates } from "../../analytics/store/research-store.ts";
 import { saveTelemetryRun } from "../../analytics/store/telemetry-store.ts";
 import { saveSourceAcquisition } from "../../analytics/store/source-ledger-store.ts";
 import type { SourceAcquisitionEvidence } from "../../analytics/source-ledger.ts";
@@ -42,6 +41,20 @@ import {
   VintageConflictError,
 } from "../../analytics/store/run-ledger-store.ts";
 import type { MethodologyIdentity, RunLifecycleEvent } from "../../analytics/run-ledger.ts";
+import {
+  submitTerminalRunPackage,
+  loadReportSnapshot,
+  TerminalRunPackageConflictError,
+  RunAsofMismatchError,
+} from "../../analytics/store/output-snapshot-store.ts";
+import type {
+  ExceptionArtifact,
+  LogArtifact,
+  ResearchSignalArtifact,
+  TerminalRunPackageInput,
+  TerminalRunStatus,
+  WarningArtifact,
+} from "../../analytics/output-snapshots.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
 import type {
@@ -187,10 +200,10 @@ function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
   };
 }
 
-// Exported (issue #361 Phase 4): POST /api/swarm/regime is now a genuine
-// SUBMISSION gate that accepts the same { snapshots } payload this boundary's
-// own regime-snapshots route accepts — one parser, two role-gated doors, zero
-// server-side recomputation on either.
+// Exported (issue #361 Phase 4): POST /api/swarm/regime is a genuine
+// SUBMISSION gate that accepts the same { snapshots } payload this boundary
+// parses inside a terminal run package (parseTerminalRunPackage below) — one
+// parser, two role-gated doors, zero server-side recomputation on either.
 export function parseSnapshots(body: unknown): RegimeSnapshotRow[] | Invalid {
   if (!isPlainObject(body) || !Array.isArray(body.snapshots)) return invalid("body must be { snapshots: RegimeSnapshotRow[] }");
   if (body.snapshots.length > MAX_SNAPSHOT_ROWS) return invalid(`payload exceeds ${MAX_SNAPSHOT_ROWS} snapshot rows`);
@@ -485,6 +498,93 @@ function parseFreezeVintage(body: unknown): FreezeVintageDto | Invalid {
   };
 }
 
+// ── terminal run package payloads (issue #978) ──────────────────────────────
+const MAX_LOG_MESSAGE = 4000;
+const MAX_EXCEPTION_MESSAGE = 4000;
+const MAX_EXCEPTION_STACK = 20_000;
+const MAX_LOGS = 5000;
+const MAX_EXCEPTIONS = 500;
+const MAX_REPORT_BYTES = 20_000_000;
+
+function parseWarningArtifact(v: unknown, i: number): WarningArtifact | Invalid {
+  if (!isPlainObject(v)) return invalid(`warnings[${i}] must be an object`);
+  if (typeof v.stage !== "string" || v.stage.length > MAX_KIND) return invalid(`warnings[${i}].stage must be a short string`);
+  if (typeof v.message !== "string" || !v.message || v.message.length > MAX_WARNING_MESSAGE) return invalid(`warnings[${i}].message must be a non-empty string (≤${MAX_WARNING_MESSAGE})`);
+  return { stage: v.stage, message: v.message };
+}
+
+function parseLogArtifact(v: unknown, i: number): LogArtifact | Invalid {
+  if (!isPlainObject(v)) return invalid(`logs[${i}] must be an object`);
+  if (typeof v.level !== "string" || !v.level || v.level.length > MAX_KIND) return invalid(`logs[${i}].level must be a non-empty short string`);
+  if (typeof v.message !== "string" || !v.message || v.message.length > MAX_LOG_MESSAGE) return invalid(`logs[${i}].message must be a non-empty string (≤${MAX_LOG_MESSAGE})`);
+  if (!isIsoDateTime(v.at)) return invalid(`logs[${i}].at must be a valid timestamp`);
+  return { level: v.level, message: v.message, at: v.at };
+}
+
+function parseExceptionArtifact(v: unknown, i: number): ExceptionArtifact | Invalid {
+  if (!isPlainObject(v)) return invalid(`exceptions[${i}] must be an object`);
+  if (typeof v.message !== "string" || !v.message || v.message.length > MAX_EXCEPTION_MESSAGE) return invalid(`exceptions[${i}].message must be a non-empty string (≤${MAX_EXCEPTION_MESSAGE})`);
+  if (v.stack !== null && v.stack !== undefined && (typeof v.stack !== "string" || v.stack.length > MAX_EXCEPTION_STACK)) {
+    return invalid(`exceptions[${i}].stack must be a string (≤${MAX_EXCEPTION_STACK}) or null`);
+  }
+  return { message: v.message, stack: (v.stack ?? null) as string | null };
+}
+
+function parseResearchSignalArtifacts(v: unknown): ResearchSignalArtifact[] | Invalid {
+  const parsed = parseSignals({ signals: v });
+  if (isInvalid(parsed)) return parsed;
+  return parsed.map((s) => ({ key: s.key, date: s.date, payload: s.payload }));
+}
+
+// Whole-body validation, strictly before submitTerminalRunPackage opens its
+// transaction (issue #978 AC1's malformed-payload-never-reaches-Postgres
+// discipline, same as every other route in this file).
+function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Invalid {
+  const v = isPlainObject(body) ? body.package : null;
+  if (!isPlainObject(v)) return invalid("body must be { package: {...} }");
+  if (!isBigIntString(String(v.runId ?? ""))) return invalid("package.runId must be a positive integer id");
+  if (!isIsoDate(v.asof)) return invalid("package.asof must be a valid YYYY-MM-DD date");
+  if (v.status !== "succeeded" && v.status !== "failed") return invalid(`package.status must be one of succeeded, failed`);
+  const status = v.status as TerminalRunStatus;
+
+  if (status === "succeeded") {
+    if (!Array.isArray(v.regimeSnapshots)) return invalid("package.regimeSnapshots must be an array");
+    const regimeSnapshots = parseSnapshots({ snapshots: v.regimeSnapshots });
+    if (isInvalid(regimeSnapshots)) return regimeSnapshots;
+    if (!Array.isArray(v.researchSignals)) return invalid("package.researchSignals must be an array");
+    const researchSignals = parseResearchSignalArtifacts(v.researchSignals);
+    if (isInvalid(researchSignals)) return researchSignals;
+    if (typeof v.reportBase64 !== "string" || !v.reportBase64) return invalid("package.reportBase64 must be a non-empty base64 string");
+    const reportBytes = new Uint8Array(Buffer.from(v.reportBase64, "base64"));
+    if (reportBytes.length === 0) return invalid("package.reportBase64 decodes to zero bytes");
+    if (reportBytes.length > MAX_REPORT_BYTES) return invalid(`package.reportBase64 decodes to more than ${MAX_REPORT_BYTES} bytes`);
+    return { runId: String(v.runId), asof: v.asof, status, regimeSnapshots, researchSignals, reportBytes };
+  }
+
+  if (!Array.isArray(v.warnings) || v.warnings.length > MAX_WARNINGS) return invalid(`package.warnings must be an array (≤${MAX_WARNINGS})`);
+  const warnings: WarningArtifact[] = [];
+  for (let i = 0; i < v.warnings.length; i++) {
+    const w = parseWarningArtifact(v.warnings[i], i);
+    if (isInvalid(w)) return w;
+    warnings.push(w);
+  }
+  if (!Array.isArray(v.logs) || v.logs.length > MAX_LOGS) return invalid(`package.logs must be an array (≤${MAX_LOGS})`);
+  const logs: LogArtifact[] = [];
+  for (let i = 0; i < v.logs.length; i++) {
+    const l = parseLogArtifact(v.logs[i], i);
+    if (isInvalid(l)) return l;
+    logs.push(l);
+  }
+  if (!Array.isArray(v.exceptions) || v.exceptions.length > MAX_EXCEPTIONS) return invalid(`package.exceptions must be an array (≤${MAX_EXCEPTIONS})`);
+  const exceptions: ExceptionArtifact[] = [];
+  for (let i = 0; i < v.exceptions.length; i++) {
+    const e = parseExceptionArtifact(v.exceptions[i], i);
+    if (isInvalid(e)) return e;
+    exceptions.push(e);
+  }
+  return { runId: String(v.runId), asof: v.asof, status, warnings, logs, exceptions };
+}
+
 // Returns { status, body } or null if the path isn't an analytics route.
 export async function handleAnalytics(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
@@ -493,8 +593,6 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     p === A.readiness ||
     p === A.rawHistory ||
     p === A.rawHistorySeed ||
-    p === A.regimeSnapshots ||
-    p === A.researchSignals ||
     p === A.researchSignalDates ||
     p === A.rawHistoryGaps ||
     p === A.sourceAcquisitions ||
@@ -503,7 +601,9 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     p === A.runs ||
     p === A.runEvents ||
     p === A.vintages ||
-    p === A.vintage;
+    p === A.vintage ||
+    p === A.runPackage ||
+    p === A.reportSnapshot;
   if (!isAnalyticsRoute) return null;
 
   // Authenticate FIRST — reads and mutations alike are analytics-provider-only.
@@ -553,22 +653,18 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     return { status: 200, body: { ok: true, ...res } };
   }
 
-  if (m === "POST" && p === A.regimeSnapshots) {
-    const parsed = parseSnapshots(await req.json().catch(() => null));
-    if (isInvalid(parsed)) return { status: 400, body: parsed };
-    await sql.begin((tx) => saveRegimeSnapshots(parsed, tx));
-    return { status: 200, body: { ok: true, rows: parsed.length } };
-  }
-
-  if (m === "POST" && p === A.researchSignals) {
-    const parsed = parseSignals(await req.json().catch(() => null));
-    if (isInvalid(parsed)) return { status: 400, body: parsed };
-    await sql.begin(async (tx) => {
-      for (const s of parsed) await persistResearchSignal(s.key, s.date, s.payload, tx);
-    });
-    return { status: 200, body: { ok: true, rows: parsed.length } };
-  }
-
+  // RETIRED (issue #978): `POST /api/analytics/regime-snapshots` and
+  // `POST /api/analytics/research-signals`. Both upserted straight into the
+  // current views with no run_id, no immutable output artifact and no report
+  // snapshot, so anything holding ANALYTICS_TOKEN could publish regime rows
+  // that no frozen report ever contained — and publishBrief, which derives its
+  // binding from those rows, would then bind a signed brief to some OTHER
+  // run's report. `POST /api/analytics/run-packages` is now the sole HTTP
+  // publisher of both projections (see submitTerminalRunPackage). The only
+  // in-process writers left are the store functions themselves, reached
+  // directly by `db/import-regime-eq.ts` (the offline eq-snapshot import) and
+  // `POST /api/swarm/regime` — neither of which ever went through these routes.
+  //
   // GET /api/analytics/research-signals/dates?since=YYYY-MM-DD (issue #614
   // AC4) — the read side of the producer's catch-up mechanism: no payload
   // content, just which (signal_key, date) pairs already exist, so a
@@ -667,6 +763,44 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
     if (!found) return { status: 404, body: { error: "no vintage frozen for this (runId, toolId)" } };
     const vintage = await loadFrozenVintage(found.vintageId);
     return { status: 200, body: { vintage } };
+  }
+
+  // ── issue #978: the immutable analytics output/report snapshot layer ─────
+  if (m === "POST" && p === A.runPackage) {
+    const parsed = parseTerminalRunPackage(await req.json().catch(() => null));
+    if (isInvalid(parsed)) return { status: 400, body: parsed };
+    try {
+      const result = await submitTerminalRunPackage(parsed);
+      return { status: 200, body: result };
+    } catch (err) {
+      if (err instanceof TerminalRunPackageConflictError) {
+        return { status: 409, body: { error: err.message, existing: err.existing } };
+      }
+      if (err instanceof RunAsofMismatchError) {
+        return { status: 400, body: { error: err.message } };
+      }
+      throw err;
+    }
+  }
+
+  if (m === "GET" && p === A.reportSnapshot) {
+    const id = url.searchParams.get("id");
+    if (!id || !isBigIntString(id)) return { status: 400, body: { error: "id query param must be a positive integer" } };
+    const report = await loadReportSnapshot(id);
+    if (!report) return { status: 404, body: { error: "no report snapshot for this id" } };
+    return {
+      status: 200,
+      body: {
+        report: {
+          id: report.id,
+          runId: report.runId,
+          asof: report.asof,
+          checksum: report.checksum,
+          byteLength: report.byteLength,
+          reportBase64: Buffer.from(report.bytes).toString("base64"),
+        },
+      },
+    };
   }
 
   return { status: 405, body: { error: "method not allowed" } };

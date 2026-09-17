@@ -9,24 +9,23 @@ import type { AnalyticsPersistence } from "../persistence.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./raw-history-store.ts";
 import { saveSourceAcquisition } from "./source-ledger-store.ts";
 import { applyRawFloorSeed } from "./floor-seed.ts";
-import { saveRegimeSnapshots } from "./regime-store.ts";
-import { persistResearchSignal, loadRecentResearchSignalDates } from "./research-store.ts";
+import { loadRecentResearchSignalDates } from "./research-store.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
 import { beginRun, appendRunEvent, freezeVintage } from "./run-ledger-store.ts";
+import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   beginRun,
   appendRunEvent,
   freezeVintage,
+  submitTerminalRunPackage,
   saveSourceAcquisition,
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a
   // partially-seeded floor.
   seedRawHistory: (byIndicator) => sql.begin((tx) => applyRawFloorSeed(byIndicator, tx)),
-  saveRegimeSnapshots: (rows) => saveRegimeSnapshots(rows),
-  saveResearchSignal: (key, asof, payload) => persistResearchSignal(key, asof, payload),
   loadResearchSignalDates: (sinceDate) => loadRecentResearchSignalDates(sinceDate),
   // Issue #646: bypasses the HTTP route for tests/smoke tooling that already
   // hold DB credentials, same split as every other method above.

@@ -384,6 +384,8 @@ export interface SwarmBrief {
    * pre-0028 archived rows whose session was never archived.
    */
   sessionId: string | null;
+  /** Immutable analytics report snapshot bound when this brief was published. */
+  reportSnapshotId: string | null;
   body: SwarmBriefBody | null;
   createdAt: string;
 }
