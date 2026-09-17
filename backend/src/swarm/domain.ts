@@ -1,7 +1,7 @@
 // Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { canonicalizeApplication, classifyRegime, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { canonicalizeApplication, classifyRegime, REGIME_METHOD, SWARM_ROSTER_CAP, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config, resolveSwarmNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -1707,8 +1707,10 @@ export async function appendBriefRevision(
 
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
-  const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
   const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
+
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
@@ -1976,8 +1978,10 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
       onchain: round(h.onchain),
       factor: round(h.factor),
     })),
+    method: REGIME_METHOD.id,
   };
 }
+
 
 // Deterministic rollup over the takes ACTUALLY posted, ENRICHED into the
 // reference session shape (regime_summary + rich swarm_recommendation +
