@@ -225,10 +225,17 @@ test(
         SELECT COUNT(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${ledger.runId}::bigint`;
       expect(reportRowsForRun).toBe(1);
     }
-    // publishBrief resolves to the NEWEST report snapshot for the session's
-    // date — the second run's, per its own `ORDER BY id DESC LIMIT 1`.
+    // publishBrief resolves to the newest report snapshot for the session's
+    // date whose run also FROZE regime rows — the run that published the
+    // regime projection the brief body reads. Both runs here are regime runs,
+    // so that is the second one. (A research-only run for the same date is
+    // deliberately NOT a candidate; see analytics-output-snapshots.test.ts.)
     const [newestReportForAsof] = await sql`
-      SELECT id::text AS id FROM analytics_report_snapshots WHERE asof = ${ASOF}::date ORDER BY id DESC LIMIT 1`;
+      SELECT rs.id::text AS id FROM analytics_report_snapshots rs
+      JOIN analytics_output_snapshots os
+        ON os.run_id = rs.run_id AND os.artifact_kind = 'regime_snapshots'
+       AND os.payload_bytes <> convert_to('[]', 'UTF8')
+      WHERE rs.asof = ${ASOF}::date ORDER BY rs.id DESC LIMIT 1`;
 
     // publishBrief for a session dated ASOF resolves swarm_briefs.report_snapshot_id
     // to that REAL, non-null row — not NULL, which is what the review found in

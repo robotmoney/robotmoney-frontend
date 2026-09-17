@@ -30,6 +30,13 @@ async function freezeReportSnapshot(asof: string, toolId: string, reportText: st
     VALUES (${crypto.randomUUID()}, ${asof}::date, ${toolId}, 'fixture', ${methodology!.id}::bigint, 'brief-revision-test')
     RETURNING id
   `) as unknown as { id: string }[];
+  // The regime output artifact this run froze — publishBrief binds to the run
+  // that PUBLISHED the regime projection the brief reads, so a report snapshot
+  // standing alone is (correctly) not a binding candidate. See publishBrief.
+  const regimeBytes = new TextEncoder().encode(`[{"date":"${asof}","tool":"${toolId}"}]`);
+  await sql`
+    INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
+    VALUES (${run!.id}::bigint, 'regime_snapshots', ${Buffer.from(regimeBytes)}, ${sha256Hex(regimeBytes)})`;
   const bytes = new TextEncoder().encode(reportText);
   const [report] = (await sql`
     INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)

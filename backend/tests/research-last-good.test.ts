@@ -216,7 +216,7 @@ test(
 
 // AC4's last failure-matrix case ("API rejection") + advisory: a genuine
 // mid-operation failure BETWEEN the sequential saveRawHistory and
-// saveResearchSignal submissions (not just "fail before any write").
+// terminal-run-package submissions (not just "fail before any write").
 test(
   "API rejection: a fully validated EDGAR batch that the analytics API itself rejects changes NOTHING and throws; a rejection on the LATER signal submission still leaves the just-committed floor write in place but never publishes a signal against it",
   async () => {
@@ -265,8 +265,8 @@ test(
       fetchDouble = null;
       disarm();
 
-      // NOTHING changed: the rejected submission never touched the DB, and
-      // saveResearchSignal was never reached (the throw happened first).
+      // NOTHING changed: the rejected submission never touched the DB, and the
+      // terminal run package was never reached (the throw happened first).
       const floorAfterB = await mnaRows();
       expect(floorAfterB).toEqual(floorAfterA);
       const [sigAfterB] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
@@ -274,9 +274,13 @@ test(
 
       // ── RUN C: the raw-history submission SUCCEEDS this time (a real,
       // durable write with a NEW deterministic value), but the LATER
-      // research-signals submission is what the API rejects — a genuine
-      // mid-operation failure BETWEEN the two sequential writes.
-      armFailure("POST", "/api/analytics/research-signals");
+      // terminal-run-package submission is what the API rejects — a genuine
+      // mid-operation failure BETWEEN the two sequential writes. Since issue
+      // #978 the run package IS the publisher of research_signals (the
+      // mid-run saveResearchSignal write is gone, so a failed run can never
+      // leave the current view ahead of the ledger), which makes this the
+      // endpoint that publishes the signal.
+      armFailure("POST", "/api/analytics/run-packages");
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 17);
       await expect(runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient())).rejects.toThrow();
       fetchDouble.restore();

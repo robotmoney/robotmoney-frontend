@@ -754,12 +754,25 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   // itself failing to verify (schema 2.0's canonical bytes include it), so
   // this check exists for the HONEST-but-wrong case, not the forged one.
   // A brief with no bound report snapshot (report_snapshot_id NULL — no
-  // analytics run has submitted a report for this session's date) imposes
-  // no requirement, so a schema-1.0 (legacy) submission keeps working.
+  // analytics run has submitted a report for this session's date) names
+  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
+  // keeps working — but a submission that DOES name one is refused rather
+  // than waved through. The skipped-when-unbound version of this check let a
+  // take signed under schema 2.0 carry a cryptographically-signed binding to
+  // an arbitrary report (another date's, say) that the brief never
+  // referenced, straight into the consensus receipt.
   const brief = (await sql<{ report_snapshot_id: string | null }[]>`
     SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
   const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
-  if (boundReportSnapshotId !== null && sub.reportSnapshotId !== boundReportSnapshotId) {
+  if (boundReportSnapshotId === null) {
+    if (sub.reportSnapshotId != null) {
+      return {
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+      };
+    }
+  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
     return {
       ok: false,
       status: 409,
@@ -935,6 +948,12 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: true, status: 201, recommendationId: rows[0].id, verified: true, revision };
   } catch (e: any) {
     const message = String(e?.message ?? e);
+    // A reportSnapshotId naming a row that does not exist trips the FK on
+    // swarm_recommendations.report_snapshot_id. That is a caller bug, not a
+    // server fault, so it is a 400 — never the 500 an unhandled 23503 became.
+    if (e?.code === "23503" && `${e?.constraint_name ?? e?.constraint ?? ""} ${message}`.includes("report_snapshot")) {
+      return { ok: false, status: 400, error: "reportSnapshotId does not name an existing analytics report snapshot" };
+    }
     if (message.includes("duplicate") || e?.code === "23505") {
       // Which constraint lost tells the agent what to do next, and the two
       // answers are opposite: re-mint a nonce, or simply retry.
@@ -1714,13 +1733,36 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   };
 
   // Issue #978 AC5/AC6: bind this brief to the exact, immutable analytics
-  // report snapshot for the session's market date — the newest one frozen,
-  // if any run has submitted a terminal package for this date at all. A
-  // session whose date has no analytics report yet (or ever, e.g. a
-  // smoke/legacy subject) gets `report_snapshot_id = NULL`, same cutover
-  // shape as migration 0049's signing_key_id.
+  // report snapshot for the session's market date.
+  //
+  // NOT simply the newest snapshot for the date. The producer arms TWO runs
+  // per `asof` — regime (22:30) and research (23:00, RESEARCH_TOOL_GROUP) —
+  // and each freezes its own report snapshot, so a plain `ORDER BY id DESC`
+  // always won the research run, whose report bytes contain no regime data
+  // at all. The brief's headline numbers come from `regime_snapshots`
+  // (above), so every take then signed a binding to a report containing none
+  // of the numbers the brief showed.
+  //
+  // The binding therefore names the run that actually PUBLISHED the regime
+  // projection this brief reads: the newest report snapshot for the date
+  // whose run also froze a non-empty `regime_snapshots` output artifact.
+  // Since issue #978 that artifact and the current-view projection are
+  // written by one transaction (applyCurrentProjections), so "froze regime
+  // rows" and "published the regime rows the brief reads" are the same run.
+  // A whole-suite run satisfies this and covers the research signals too; a
+  // research-only run does not (its regime artifact is the empty array).
+  //
+  // A session whose date has no such report yet (or ever, e.g. a smoke/legacy
+  // subject) gets `report_snapshot_id = NULL`, same cutover shape as
+  // migration 0049's signing_key_id.
   const [report] = await sql`
-    SELECT id FROM analytics_report_snapshots WHERE asof = ${s.date}::date ORDER BY id DESC LIMIT 1`;
+    SELECT rs.id FROM analytics_report_snapshots rs
+    JOIN analytics_output_snapshots os
+      ON os.run_id = rs.run_id
+     AND os.artifact_kind = 'regime_snapshots'
+     AND os.payload_bytes <> convert_to('[]', 'UTF8')
+    WHERE rs.asof = ${s.date}::date
+    ORDER BY rs.id DESC LIMIT 1`;
   const reportSnapshotId: string | null = report ? String(report.id) : null;
 
   // Keyed on the SESSION (migration 0028), not the day. The old

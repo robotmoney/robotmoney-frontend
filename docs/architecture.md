@@ -706,7 +706,12 @@ read/write goes through the `AnalyticsPersistence` port
 (`analytics/persistence.ts`). The independent `analytics-producer` uses the HTTP
 implementation (`analytics/api-client.ts`), submitting through authenticated typed routes
 `GET/POST /api/analytics/raw-history`, `POST /api/analytics/raw-history/seed`,
-`POST /api/analytics/regime-snapshots`, and `POST /api/analytics/research-signals`
+and — since issue #978 — `POST /api/analytics/run-packages`, the terminal run
+package that is the SOLE publisher of `regime_snapshots` and `research_signals`
+(the orchestrator no longer writes either projection mid-run, so a run that
+fails partway can never leave the current view ahead of the immutable ledger;
+`POST /api/analytics/regime-snapshots` and `POST /api/analytics/research-signals`
+remain for seeding and migration tooling)
 (`api/routes/analytics.ts`) with the analytics-provider bearer
 (`ANALYTICS_TOKEN_FILE`; wiring: `ANALYTICS_API_URL`). Only the producer and API
 verifier mount that secret; the producer has no `DATABASE_URL` or admin token.
