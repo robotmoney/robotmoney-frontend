@@ -72,3 +72,24 @@ test("ensureSmokeSubjectFixtures fills a field left empty by a prior insert, wit
   expect(row.recommendation_type).toBe("bucket_weights");
   expect(row.thesis_blurb).not.toBeNull();
 });
+
+test("ensureSmokeSubjectFixtures skips writes and returns early when source.type is framework", async () => {
+  const id = rid("subj");
+  await sql`INSERT INTO swarm_subjects (id, status, name, thesis_blurb, recommendation_type, source)
+            VALUES (${id}, 'active', 'Framework Original Name', 'Framework Original Thesis', 'bucket_weights', ${sql.json({ type: "framework" })})`;
+
+  const result = await ic.ensureSmokeSubjectFixtures(id, "Smoke Clobber Name", "2026-01-01");
+  expect(result.skipped).toBe(true);
+
+  // Assert swarm_subjects was not modified
+  const row = await subjectRow(id);
+  expect(row.name).toBe("Framework Original Name");
+  expect(row.recommendation_type).toBe("bucket_weights");
+  expect(row.thesis_blurb).toBe("Framework Original Thesis");
+
+  // Assert no snapshot was inserted for this subject
+  const [{ count }] = await sql<{ count: number }[]>`
+    SELECT count(*)::int AS count FROM swarm_subject_snapshots WHERE subject_id = ${id}`;
+  expect(count).toBe(0);
+});
+

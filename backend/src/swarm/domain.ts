@@ -1556,6 +1556,16 @@ function subjectBasket(subjectId: string): Basket {
 // smoke session opens. `date` defaults to today; the snapshot is dated on-or-before
 // the session date so the frontend snapshot picker selects it.
 export async function ensureSmokeSubjectFixtures(subjectId: string, name: string, date?: string) {
+  const existing = (await sql<{ id: string; source: any }[]>`
+    SELECT id, source FROM swarm_subjects WHERE id = ${subjectId}
+  `)[0];
+  const sourceType = typeof existing?.source === "string"
+    ? JSON.parse(existing.source)?.type
+    : existing?.source?.type;
+  if (sourceType === "framework") {
+    return { skipped: true, reason: "framework_subject", subjectId, name };
+  }
+
   const snapDate = date ?? new Date().toISOString().slice(0, 10);
   const recommendationType = "position_actions";
   const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
