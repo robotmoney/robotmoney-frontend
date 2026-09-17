@@ -17,7 +17,7 @@
 // container), not the viewport. Those differ by the page gutter, so a bubble
 // can sit fully on screen and still be sliced.
 
-const SEL = ".rm-tip";
+const SEL = ".rm-tip:not([data-concept-tip])";
 const OPEN = "data-open";
 let open = null;
 
@@ -71,6 +71,7 @@ export function placeTip(tip) {
 }
 
 export function initTooltips() {
+  initConceptTooltips();
   if (document.documentElement.dataset.rmTips === "1") return;
   document.documentElement.dataset.rmTips = "1";
 
@@ -87,6 +88,7 @@ export function initTooltips() {
   document.addEventListener("click", (e) => {
     const btn = e.target instanceof Element ? e.target.closest(".rm-tip__btn") : null;
     if (!btn) { close(); return; }
+    if (btn.closest("[data-concept-tip]")) return;
     e.stopPropagation();
     const tip = btn.closest(SEL);
     const wasOpen = bubble(tip)?.hasAttribute(OPEN);
@@ -113,4 +115,57 @@ export function initTooltips() {
   // needs nothing here; it is CSS, and scrolling takes the icon out from under
   // the pointer, which closes it.
   addEventListener("scroll", () => close(), { passive: true });
+}
+
+// Opt-in concept definitions share .rm-tip presentation, but use explicit state
+// instead of CSS hover so Escape can dismiss a still-hovered/focused trigger.
+// Delegation is unnecessary here: bind newly rendered component instances once.
+export function initConceptTooltips(scope = document) {
+  for (const tip of scope.querySelectorAll('[data-concept-tip]')) {
+    if (tip.dataset.bound) continue;
+    tip.dataset.bound = 'true';
+    const btn = trigger(tip), bub = bubble(tip);
+    let pinned = false, timer;
+    const visible = () => bub.hasAttribute(OPEN);
+    function hide() {
+      clearTimeout(timer);
+      bub.removeAttribute(OPEN);
+      pinned = false;
+    }
+    function position() {
+      const rect = btn.getBoundingClientRect(), margin = 12;
+      bub.style.width = `${Math.min(290, innerWidth-margin*2)}px`;
+      const height = bub.getBoundingClientRect().height;
+      bub.style.left = `${Math.max(margin,Math.min(rect.left,innerWidth-bub.getBoundingClientRect().width-margin))}px`;
+      const below = rect.bottom + 8;
+      bub.style.top = `${Math.max(margin,below+height <= innerHeight-margin ? below : rect.top-height-8)}px`;
+    }
+    function show() {
+      clearTimeout(timer);
+      // One definition at a time, including pinned definitions.
+      document.querySelectorAll('[data-concept-tip]').forEach(other=>{
+        if(other!==tip) other.dispatchEvent(new Event('dismiss-concept'));
+      });
+      position();
+      bub.setAttribute(OPEN,'1');
+    }
+    function leave() {
+      clearTimeout(timer);
+      timer=setTimeout(()=>{
+        if(!pinned && !tip.matches(':hover') && document.activeElement!==btn)hide();
+      },140);
+    }
+    tip.addEventListener('dismiss-concept',hide);
+    tip.addEventListener('pointerenter',event=>{if(event.pointerType!=='touch')show();});
+    tip.addEventListener('pointerleave',leave);
+    bub.addEventListener('pointerenter',()=>clearTimeout(timer));
+    bub.addEventListener('pointerleave',leave);
+    btn.addEventListener('focus',show);
+    btn.addEventListener('blur',leave);
+    btn.addEventListener('click',()=>{if(pinned)hide();else{show();pinned=true;}});
+    document.addEventListener('click',event=>{if(!tip.contains(event.target))hide();});
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&visible()){hide();event.stopPropagation();}});
+    addEventListener('resize',hide);
+    addEventListener('scroll',hide,{capture:true,passive:true});
+  }
 }

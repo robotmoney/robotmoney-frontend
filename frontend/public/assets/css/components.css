@@ -847,3 +847,18 @@
 .md-hero__lede, .cl__lede, .sk__lede {
   color: #aeb6c6 !important;
 }
+
+/* Explicitly controlled concept definitions. Legacy .rm-tip consumers keep
+   their existing behavior. Fixed positioning also escapes table scroll boxes. */
+.rm-tip[data-concept-tip] .rm-tip__bub {
+  position:fixed;left:12px;right:auto;top:0;bottom:auto;
+  width:min(290px,calc(100vw - 24px));max-width:calc(100vw - 24px);
+  max-height:calc(100vh - 24px);overflow:auto;z-index:200;
+  opacity:0;visibility:hidden;pointer-events:none;transform:none;transition:none;
+}
+.rm-tip[data-concept-tip] .rm-tip__bub[data-open="1"] {
+  opacity:1;visibility:visible;pointer-events:auto;transform:none;
+}
+.rm-tip[data-concept-tip] .rm-tip__btn:focus-visible {
+  outline:1px solid var(--color-accent);outline-offset:3px;
+}
