@@ -1,6 +1,6 @@
 // Read-only preflight for the v0.4.1 -> v0.4.2 rollout. This release carries
-// four additive migrations (0045-0048); the checks prove production is a
-// clean v0.4.1 baseline with none of them applied yet, so the candidate's
+// sixteen additive migration files (0045-0059); the checks prove production is
+// a clean v0.4.1 baseline with none of them applied yet, so the candidate's
 // migration run at boot has nothing surprising to reconcile.
 
 import { readdir } from "node:fs/promises";

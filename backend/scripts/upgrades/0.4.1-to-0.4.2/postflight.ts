@@ -1,5 +1,5 @@
 // Postflight for the v0.4.1 -> v0.4.2 rollout. All database checks are
-// SELECT-only; migration 0045-0048 already ran (at boot, via migrate.ts)
+// SELECT-only; migrations 0045-0059 already ran (at boot, via migrate.ts)
 // by the time this runs.
 
 import { dirname, join } from "node:path";
@@ -29,11 +29,11 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   record("runtime-schema", absentTables.length ? "FAIL" : "PASS", absentTables.length ? `absent: ${absentTables.join(", ")}` : "v0.4.0 runtime tables are present");
 
   const missingRelease = RELEASE_MIGRATIONS.filter((name) => !applied.has(name));
-  record("migrations", missingRelease.length ? "FAIL" : "PASS", missingRelease.length ? `missing: ${missingRelease.join(", ")}` : "all four v0.4.2 migrations recorded");
+  record("migrations", missingRelease.length ? "FAIL" : "PASS", missingRelease.length ? `missing: ${missingRelease.join(", ")}` : `all ${RELEASE_MIGRATIONS.length} v0.4.2 migrations recorded`);
 
   const absentNewTables: string[] = [];
   for (const table of NEW_RELEASE_TABLES) if (!(await tableExists(db, table))) absentNewTables.push(table);
-  record("new-tables", absentNewTables.length ? "FAIL" : "PASS", absentNewTables.length ? `absent: ${absentNewTables.join(", ")}` : "chain_address_floors, asset_prices, and asset_price_floors are present");
+  record("new-tables", absentNewTables.length ? "FAIL" : "PASS", absentNewTables.length ? `absent: ${absentNewTables.join(", ")}` : `all ${NEW_RELEASE_TABLES.length} v0.4.2 tables are present`);
 
   const [{ count: priceRows }] = (await db`SELECT count(*)::int AS count FROM asset_prices`) as unknown as { count: number }[];
   record("asset-prices-seeded", priceRows > 0 ? "PASS" : "FAIL", `${priceRows} row(s) in asset_prices`, "0046's seed should have carried forward existing live/seed price history; an empty table means the seed query matched nothing.");

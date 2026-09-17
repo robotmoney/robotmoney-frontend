@@ -9,8 +9,8 @@
 This runbook implements the foundational policy in
 [`docs/technical/release-runbooks.md`](../technical/release-runbooks.md) and
 the shared mechanics in [`rollout-procedure.md`](./rollout-procedure.md).
-v0.4.2 is **not** code-only: it carries four additive migrations
-(`0045`-`0048`) and switches production's closed-day price reads onto a new
+v0.4.2 is **not** code-only: it carries sixteen additive migration files
+(`0045`-`0059`) and switches production's closed-day price reads onto a new
 table (D41). Do not run this as a no-op cutover.
 
 ## 1. Release identity and objective
@@ -21,7 +21,8 @@ invariants:
 
 - retain all six v0.4.0 migrations, v0.4.1's code-only state, and the
   v0.4.0/v0.4.1 judge/receipt invariants;
-- apply the four additive v0.4.2 migrations and land the new tables they create;
+- apply the sixteen additive v0.4.2 migration files and land the new tables
+  they create;
 - switch closed-day allocation/performance price reads to the `asset_prices`
   join (D41 MIGRATE step) while today's live point keeps its existing fused
   read;
@@ -46,12 +47,29 @@ The release contains the following changes relative to `v0.4.1`:
 | `backend/migrations/0046_asset_prices.sql`, `backend/src/ops/asset-prices.ts`, `backend/src/chain/asset-price-floor.ts`, `backend/src/chain/wallet-*.ts` | Price/holdings read path (D41) | New `asset_prices`/`asset_price_floors` tables; migration seeds `asset_prices` from existing `live`/`seed` rows in `wallet_balance_samples`/`wallet_sleeve_samples`; reads for a **closed** day now join amount against this table instead of the old fused `price_usd` column — today's live point is unaffected | A bad seed or join produces a wrong historical valuation on `/allocation`/`/performance`; an empty seed manufactures gaps | Postflight asserts `asset_prices` is non-empty after migration; rehearsal spot-checks a known closed-day total against the pre-migration fused value before and after |
 | `backend/migrations/0047_swarm_session_subject_name_backfill.sql` | Swarm session history | One-time, idempotent `UPDATE` re-syncing `swarm_sessions.subject_name` to each subject's current `name` | None if idempotent as written; a mid-migration subject rename could theoretically race it | Postflight confirms zero sessions remain drifted from their subject's current name |
 | `backend/migrations/0048_swarm_judge_third_party_flag.sql`, `backend/src/swarm/admin.ts`, `backend/src/swarm/judge-session.ts` | Swarm judging | Adds `swarm_judge_config.third_party_enabled boolean NOT NULL DEFAULT false`; a `judgeMemberId` judgement is refused fail-closed until an admin flips it | None if left at its shipped default; flipping it live is a separate, deliberate operator action, not part of this cutover | Postflight asserts the flag is `false` on the row with `id=1`; do not enable it during this rollout |
+| `backend/migrations/0049_swarm_recommendations_signing_key.sql`, `backend/src/swarm/domain.ts` | Swarm take integrity | Adds nullable `swarm_recommendations.signing_key_id` FK to `swarm_member_keys`; an accepted take records the exact key that verified it, so reads survive key rotation. Pre-existing rows stay NULL by design — a documented cutover point, not an accidental gap | A NULL column handling defect makes reads fall back to the old "currently active key" lookup for every pre-cutover take | Postflight confirms the migration is recorded; NULL rows keep the documented fallback, never a crash |
+| `backend/migrations/0050_swarm_member_keys_append_only.sql` | Swarm key history | `swarm_member_keys` joins the append-only protected set (0032): DELETE and TRUNCATE are refused, while UPDATE stays legal — rotations keep retiring a key as `active = false` | A legitimate removal being refused would be a very narrow operational surprise, and the register-member hard-DELETE that previously destroyed key rows is removed in the same commit | Postflight confirms the migration is recorded |
+| `backend/migrations/0051_swarm_vault_recommendation_type_repair.sql` | Swarm subjects | One-time idempotent `UPDATE` restoring `recommendation_type = 'bucket_weights'` on `robotmoney-vault`/`robotmoney-allocation` after a smoke-fixture upsert clobbered it to `position_actions`; a subject legitimately running `position_actions` is left alone | None beyond the two named framework subjects; the WHERE clause targets exactly the clobbered value | Idempotent — reruns match zero rows once both subjects read `bucket_weights` |
+| `backend/migrations/0052_swarm_judgement_digest_scheme.sql`, `backend/src/swarm/judge.ts`, `backend/src/swarm/judge-replay.ts` | Swarm judging | Adds `swarm_session_judgements.digest_scheme text NOT NULL DEFAULT 'derivation-v1'`, recording which canonical form produced each stored `inputs_digest` so `swarm-judge-replay` can tell expected history from a real mismatch | Every existing row is re-stamped under the current scheme, so nothing needs a backfill | Postflight confirms the migration is recorded |
+| `backend/migrations/0053_database_role_taxonomy.sql` | Database roles | Creates `rm_owner` (NOLOGIN), `rm_app`, `rm_worker`, `rm_readonly` and re-owns every existing `public` relation/function under `rm_owner`; DDL now runs as `SET ROLE rm_owner` | The ownership sweep re-stamps every object in `public`; fully transactional and idempotent on rerun | Postflight confirms the migration is recorded; runtime roles authenticate unchanged |
+| `backend/migrations/0054_rm_worker_allowlist.sql` | Worker permissions | Replaces 0016's broad default worker grant with an explicit allow-list: `rm_worker` keeps SELECT everywhere but INSERT/UPDATE/DELETE only on the tables queue/sampler handlers actually write | A worker lane touching a table missing from the allow-list fails its writes at boot instead of silently depending on a blanket grant | Postflight confirms the migration is recorded |
+| `backend/migrations/0055_swarm_recommendations_member_received_idx.sql` | Swarm takes | Adds `swarm_recommendations (member_id, received_at DESC)` so `getMembers()`'s per-member `max(received_at)` lateral is an index-only walk instead of a scan | A redundant index if the read path never runs; otherwise negligible | Postflight confirms the migration is recorded |
+| `backend/migrations/0056_analytics_overwrite_events.sql`, `backend/src/analytics/**` | Analytics research integrity | New `analytics_overwrite_events` table and `rm_capture_analytics_overwrite()` SECURITY DEFINER function; an owner-installed trigger records immutable evidence whenever a current-view analytics table is updated or deleted | An evidence-append failure surfacing on every current-view write would trip the analytics pipeline loudly | Postflight confirms the table exists |
+| `backend/migrations/0057_source_acquisition_ledger.sql`, `backend/src/analytics/store/source-ledger-store.ts` | Analytics evidence | Five append-only tables (`source_acquisitions`, `source_acquisition_events`, `source_payloads`, `source_fetches`, `source_value_versions`) recording what a producer knew, when, and with which payload | Checksum-constrained payload rows are write-once; a broken producer that never emits events is simply dead storage | Postflight confirms the tables exist |
+| `backend/migrations/0058_analytics_run_ledger.sql`, `backend/src/analytics/run-ledger.ts`, `backend/src/analytics/store/run-ledger-store.ts` | Analytics runs | Five immutable tables (`analytics_ledger_methodology_versions`, `analytics_ledger_runs`, `analytics_ledger_run_events`, `analytics_data_vintages`, `analytics_vintage_members`) freezing per-run methodology, a write-once run header, lifecycle events, and frozen data vintages | Run headers are immutable by design; a code path trying to update a run fails loudly, never silently mutates | Postflight confirms the tables exist |
+| `backend/migrations/0059_analytics_output_and_report_snapshots.sql`, `backend/src/analytics/store/output-snapshot-store.ts`, `backend/src/swarm/domain.ts` | Analytics outputs, report snapshots, swarm briefs | `analytics_output_snapshots`/`analytics_report_snapshots` keep byte-exact, checksummed outputs and reports per run; new `swarm_brief_revisions` makes brief bodies append-only; `swarm_briefs`/`swarm_recommendations` gain nullable `report_snapshot_id` (no backfill — same documented cutover shape as 0049) | Every pre-cutover brief/take stays NULL-report, and report bytes are stored once per run (never overwritten) | Postflight confirms the tables exist |
+| `backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql` | Swarm subject history | Deletes fabricated `swarm_subject_snapshots` for framework subjects (no real book to scrape) by temporarily disabling the append-only triggers inside the migration transaction, then re-enabling them `ENABLE ALWAYS` | The delete touches only rows whose subject's `source->>'type'` is `framework`; a future framework subject would match, but the guard is fully restored before the transaction commits | Idempotent — reruns match 0 rows once cleaned |
 | `frontend/public/assets/js/app/alpine/views/allocation.js`, `frontend/public/views/allocation.html`, `frontend/public/assets/js/app/lib/allocation-subject.js` | `/allocation` frontend | `/vault` is retired and its route repointed to the rebuilt `/allocation` policy page (RM-115); the hero switches from a fan chart to a donut | A route rename that silently breaks bookmarked links or e2e coverage of the old `/vault` view | `scripts/tests/unit/e2e-route-rename-guard.test.ts` and `frontend/test/browser/allocation-view.spec.ts` are part of CI on this branch |
 
 Systems that are **not** upgraded by this release:
 
-- no existing table, column, index, trigger, or grant is altered (0045-0048
-  are additive only — new tables and one new nullable-default column);
+- every touch on an existing table is additive and idempotent: 0049/0052 add
+  nullable/defaulted columns (`swarm_recommendations.signing_key_id`,
+  `swarm_session_judgements.digest_scheme`), 0050 adds an append-only guard on
+  `swarm_member_keys`, 0053 introduces the role taxonomy, 0054 narrows the
+  worker to an explicit table allow-list, and 0055 adds one index; no existing
+  row or column is rewritten by DDL (0047/0051/0059's fixes are one-time,
+  idempotent data updates restricted to their stated scope);
 - no v0.4.0/v0.4.1 judge/receipt table, trigger, or grant changes;
 - **today's live price point is unaffected** — only closed-day reads move to
   the new join.
@@ -113,16 +131,15 @@ The preflight is blocking if any of these occur:
 
 - one of the six v0.4.0 migration filenames is absent;
 - an unexpected migration is pending — i.e. anything pending other than the
-  four v0.4.2 filenames (`0045`-`0048`);
-- one of `0045`-`0048` is already recorded (the target is not a clean
+  sixteen v0.4.2 migration files (`0045`-`0059`);
+- one of `0045`-`0059` is already recorded (the target is not a clean
   pre-migration v0.4.1 database);
-- one of `chain_address_floors`, `asset_prices`, `asset_price_floors` already
-  exists;
+- one of the tables v0.4.2 creates already exists;
 - the database contains a migration absent from the checkout;
 - a required v0.4.0 judge/receipt table is absent;
 - the target is not proven read-only.
 
-`0045`-`0048` pending is the expected, safe state to deploy from. Any other
+`0045`-`0059` pending is the expected, safe state to deploy from. Any other
 migration drift has no safe interpretation here: stop and resolve the target
 or branch mismatch instead of allowing the application boot to perform an
 unplanned schema change.
@@ -131,7 +148,7 @@ unplanned schema change.
 
 Use the same RC, forced installs, backup, and deployment environment intended
 for production. The release-specific rehearsal restores the backup into a
-local smoke-twin, boots the real stack (which applies `0045`-`0048` via
+local smoke-twin, boots the real stack (which applies `0045`-`0059` via
 `migrate.ts` on the way up), runs the frontend checks, and runs the
 0.4.2 postflight before teardown:
 
@@ -148,10 +165,14 @@ The rehearsal is a pass only when all of the following are true:
 3. Static assembly reaches prerender with a fresh contract dependency.
 4. The archive-shaped command is present and correctly named:
    `bun run smoke:archive`.
-5. All ten migration filenames (`0039`-`0048`) are recorded and the v0.4.0
+5. All twenty-two migration files are recorded — `0039`-`0048` plus
+   `0049`-`0058` plus both `0059` files — and the v0.4.0
    runtime tables remain intact after boot.
-6. `chain_address_floors`, `asset_prices`, and `asset_price_floors` exist,
-   and `asset_prices` is non-empty.
+6. `chain_address_floors`, `asset_prices`, and `asset_price_floors` exist
+   with `asset_prices` non-empty, and the analytics/source/snapshot tables
+   0056-0059 create (e.g. `analytics_overwrite_events`,
+   `source_value_versions`, `analytics_ledger_runs`,
+   `analytics_output_snapshots`, `swarm_brief_revisions`) are present.
 7. Zero `swarm_sessions` rows still show a `subject_name` that disagrees with
    their subject's current name.
 8. `swarm_judge_config.third_party_enabled` is `false`.
@@ -179,13 +200,14 @@ authority. Do not manually edit `schema_migrations` at any point.
    backup.
 2. Reconfirm the live preflight receipt is current and passed.
 3. Deploy in provider order: the v0.4.2 backend/API first (its boot applies
-   `0045`-`0048` via `migrate.ts` before it starts serving), then every worker
+   `0045`-`0059` via `migrate.ts` before it starts serving), then every worker
    lane, then static frontend last. Do not publish the new SPA before its API.
 4. Run `bun install --force` at the repository root and
    `bun install --force --cwd backend` in the deployment checkout.
 5. Start the backend and workers; wait for `/health` and the normal readiness
    gates.
-6. Confirm the migration log names `0045`-`0048` exactly once each, and that
+6. Confirm the migration log records each of the sixteen v0.4.2 migration
+   files (`0045`-`0059`; both `0059` files) exactly once, and that
    `0039`-`0044` are unchanged — per the additive-only contract.
 7. Run static assembly/prerender and publish the frontend only after the API
    is healthy.
@@ -201,11 +223,11 @@ Load and assert the writer `DATABASE_URL` as described in
 bun backend/scripts/upgrades/0.4.1-to-0.4.2/postflight.ts --emit-receipt=P8.postflight-prod
 ```
 
-The script performs SELECT-only checks: all ten migrations recorded, v0.4.0
-runtime tables intact, the three new tables present and `asset_prices`
-non-empty, zero drifted `subject_name` rows, `third_party_enabled = false`,
-and contract freshness in the deployed checkout. Also verify manually from
-the deployed origin:
+The script performs SELECT-only checks: all twenty-two migration files
+recorded (`0039`-`0059`), v0.4.0 runtime tables intact, the seventeen new
+tables present and `asset_prices` non-empty, zero drifted `subject_name`
+rows, `third_party_enabled = false`, and contract freshness in the deployed
+checkout. Also verify manually from the deployed origin:
 
 - `/health` is healthy and identifies the production environment;
 - `/allocation`, `/performance`, and representative swarm pages render;
