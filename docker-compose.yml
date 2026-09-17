@@ -435,13 +435,13 @@ services:
     # backend/src/producer/index.ts for why that is the honest signal here.
     healthcheck:
       <<: *worker-healthcheck
-      # Longer than the lanes': startProducerSchedules blocks on waitForApi for
-      # up to 120s before the liveness loop writes its first heartbeat, and on
-      # a fresh database the boot-time catch-up can run up to 14 EDGAR days
-      # sequentially (~10-15s each) before the normal liveness loop takes over.
-      # The catch-up emits a heartbeat before each day so Docker sees progress,
-      # but 300s gives a full window for the first beat to land even on a slow
-      # network day.
+      # Longer than the lanes'. On a fresh database this process does real work
+      # for many minutes before the liveness loop exists: waitForApi (up to
+      # 120s), then a boot catch-up that repairs up to 14 EDGAR days one at a
+      # time. It stays green through all of it on records written from inside
+      # that work — a `boot` record before the API wait, then one per day from
+      # each catch-up loop (src/producer/index.ts). This window only has to
+      # cover container start up to that first record.
       start_period: 300s
 
   # D21 retired the member-facing MCP server: swarm members reach the

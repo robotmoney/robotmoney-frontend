@@ -20,44 +20,56 @@ import {
   resetProducerSchedules,
   runProducerLiveness,
   startProducerSchedules,
-  withProducerBootstrapHeartbeat,
   type ProducerKind,
   type ScheduleState,
 } from "../src/producer/index.ts";
 
-test("boot-time catch-up emits progress heartbeats and always cancels its timer", async () => {
-  const beats: string[] = [];
-  let intervalCallback: (() => void) | undefined;
-  let cancelled = false;
-  const result = await withProducerBootstrapHeartbeat(async () => {
-    intervalCallback?.();
-    await Promise.resolve();
-    return "done";
-  }, {
-    beat: async (record) => { beats.push(record.detail); },
-    every: (callback) => {
-      intervalCallback = callback;
-      return 7 as unknown as ReturnType<typeof setInterval>;
+// BOOT COVER (see the boot-cover block in src/producer/index.ts)
+// Nothing wrote a heartbeat between container start and the liveness loop, so
+// a producer still legitimately working — waiting on the API, then repairing a
+// backlog of missed days — aged past its start_period and Docker called it
+// unhealthy. These two cases pin the records that close that window, and pin
+// that they are written from inside the work rather than by a detached ticker.
+test("the first record lands BEFORE the API wait, so a slow API cannot age the container out", async () => {
+  const order: string[] = [];
+  const beats: { phase: string; detail?: string; staleAfterMs: number }[] = [];
+  await startProducerSchedules({
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    beat: async (rec) => {
+      order.push(`beat:${rec.phase}`);
+      beats.push({ phase: rec.phase, detail: rec.detail, staleAfterMs: rec.staleAfterMs });
     },
-    cancel: () => { cancelled = true; },
-    tickMs: 10,
+    waitUntilReady: async () => { order.push("waitForApi"); },
+    catchUp: async () => { order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
+    scheduleKind: (kind) => { order.push(`armed:${kind}`); },
   });
-  await Promise.resolve();
-  expect(result).toBe("done");
-  expect(beats).toEqual(["boot-time catch-up in progress", "boot-time catch-up in progress"]);
-  expect(cancelled).toBe(true);
+  // The beat is first. If it came after waitForApi it would cover nothing —
+  // waitForApi is itself the 120s that was ageing the container out.
+  expect(order[0]).toBe("beat:boot");
+  expect(order.indexOf("beat:boot")).toBeLessThan(order.indexOf("waitForApi"));
+  // `boot`, never `armed`: no cron is armed yet, and a record claiming one
+  // would report a state this process has not reached.
+  expect(beats).toHaveLength(1);
+  expect(beats[0]!.phase).toBe("boot");
+  expect(beats[0]!.detail).toContain("analytics API");
+  // Must outlast waitForApi's own ceiling, or a healthy-but-slow boot goes red.
+  expect(beats[0]!.staleAfterMs).toBeGreaterThan(120_000);
 });
 
-test("boot-time catch-up cancels its progress timer when startup fails", async () => {
-  let cancelled = false;
-  await expect(withProducerBootstrapHeartbeat(async () => {
-    throw new Error("catch-up failed");
-  }, {
-    beat: async () => {},
-    every: () => 8 as unknown as ReturnType<typeof setInterval>,
-    cancel: () => { cancelled = true; },
-  })).rejects.toThrow("catch-up failed");
-  expect(cancelled).toBe(true);
+test("boot liveness is progress-driven — no detached ticker keeps it green", async () => {
+  // The rule src/ops/heartbeat.ts states and this process must not break: a
+  // record is written from inside the work, never by a timer that would go on
+  // pulsing green over a boot that had deadlocked. A red control: if someone
+  // reintroduces a setInterval pulse, this fails.
+  const src = await Bun.file(new URL("../src/producer/index.ts", import.meta.url)).text();
+  // A CALL, not a mention: the prose above and in src/ops/heartbeat.ts names
+  // `setInterval` precisely to forbid it, and matching the bare word would go
+  // green the moment someone deleted the rule it is quoting.
+  expect(src).not.toContain("setInterval(");
+  // And the catch-up loops beat per day, which is what keeps the container
+  // green across a multi-day backlog once the boot record has expired.
+  expect(src).toContain("catch-up: repairing missed research day ${day}");
 });
 
 afterEach(() => { resetProducerSchedules(); });

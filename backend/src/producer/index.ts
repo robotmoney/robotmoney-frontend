@@ -361,6 +361,8 @@ export interface ProducerServeDeps {
    *  Defaults to the real catchUpMissedIndicatorDays against the resolved API
    *  config — same shape as `catchUp` above, one per class. */
   catchUpIndicators?: (persistence: AnalyticsPersistence) => Promise<unknown>;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -368,6 +370,16 @@ export interface ProducerServeDeps {
  *  loop rather than re-reading the token file. */
 export async function startProducerSchedules(deps: ProducerServeDeps = {}): Promise<AnalyticsApiConfig> {
   const cfg = requireProducerApiConfig(deps.env);
+  // The first record this process writes, and the only one until the API
+  // answers. Its budget spans waitForApi's own 120s ceiling, so a boot blocked
+  // on an unreachable API still reports honestly: the record goes stale and the
+  // container goes red, which is the correct outcome.
+  await (deps.beat ?? writeHeartbeat)({
+    phase: "boot",
+    staleAfterMs: 180_000,
+    writer: PRODUCER_WRITER,
+    detail: "waiting for the analytics API before arming crons",
+  });
   await (deps.waitUntilReady ?? waitForApi)(cfg);
   // issue #614 AC4 ("on boot/tick"): repair any research day missed while
   // this process was down BEFORE arming today's crons — a restarted producer
@@ -414,38 +426,20 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
 
 const PRODUCER_WRITER = "analytics-producer";
 
-/** Keep the container healthy while boot-time catch-up is making observable
- * progress. The steady-state liveness loop cannot start until schedules have
- * been armed, but a rate-limited catch-up can legitimately take several
- * minutes. This heartbeat covers that bounded phase and is always cancelled
- * before the normal liveness loop takes ownership of the same file. */
-export async function withProducerBootstrapHeartbeat<T>(
-  operation: () => Promise<T>,
-  deps: {
-    beat?: typeof writeHeartbeat;
-    every?: (callback: () => void, ms: number) => ReturnType<typeof setInterval>;
-    cancel?: (timer: ReturnType<typeof setInterval>) => void;
-    tickMs?: number;
-  } = {},
-): Promise<T> {
-  const tickMs = deps.tickMs ?? 30_000;
-  const beat = deps.beat ?? writeHeartbeat;
-  const pulse = () => beat({
-    phase: "armed",
-    staleAfterMs: tickMs * 4,
-    writer: PRODUCER_WRITER,
-    detail: "boot-time catch-up in progress",
-  }).catch((err) => {
-    console.error(`[analytics-producer] bootstrap heartbeat failed: ${err instanceof Error ? err.message : err}`);
-  });
-  await pulse();
-  const timer = (deps.every ?? setInterval)(() => { void pulse(); }, tickMs);
-  try {
-    return await operation();
-  } finally {
-    (deps.cancel ?? clearInterval)(timer);
-  }
-}
+// BOOT COVER, AND WHY IT IS NOT A TICKER
+// Before this file's liveness loop exists, the process still has to reach the
+// API (up to 120s) and then repair every missed day. Nothing wrote a heartbeat
+// during that window, so the container aged past its start_period and Docker
+// called it unhealthy while it was in fact working correctly.
+//
+// The fix is one record per real step — the boot record below, then the
+// per-day record each catch-up loop writes before its own I/O. It is
+// deliberately NOT a `setInterval` pulse: this file's own rule (see the
+// heartbeat block in src/ops/heartbeat.ts) is that a record is written from
+// inside the work after a step completes, never by a detached timer that would
+// go on ticking green over a boot that had deadlocked. A ticker would also have
+// to name a phase, and every phase it could honestly claim here is false —
+// `armed` above all, since arming is precisely what has not happened yet.
 
 /** Tolerance for a cron whose fire time has just passed but whose callback has
  *  not been entered yet — timer dispatch is not instantaneous. */
@@ -572,7 +566,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command !== "serve") throw new Error(`usage: producer <serve|seed|regime|research> [YYYY-MM-DD]`);
-  const cfg = await withProducerBootstrapHeartbeat(() => startProducerSchedules());
+  const cfg = await startProducerSchedules();
   // Replaces a bare `new Promise<never>(() => {})`: the process still parks
   // here forever, but now it parks doing the liveness work above.
   await runProducerLiveness(cfg);
