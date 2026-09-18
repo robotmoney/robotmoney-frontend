@@ -15,16 +15,38 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_readonly') THEN
     CREATE ROLE rm_readonly LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
-  ALTER ROLE rm_owner NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  ALTER ROLE rm_app LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  ALTER ROLE rm_worker LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  ALTER ROLE rm_readonly LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  -- NO NOSUPERUSER/NOREPLICATION/NOBYPASSRLS HERE, deliberately.  Postgres
+  -- requires SUPERUSER to set those three attributes in ALTER ROLE even when
+  -- setting them to their negative (already-default) value, so including them
+  -- made this whole DO block fail with "permission denied to alter role" for
+  -- any non-superuser bootstrap login.  The production primary's bootstrap
+  -- login is `doadmin`, which is rolsuper=false (rolcreaterole=true), so
+  -- scripts/ops/provision-db-role-taxonomy.sh could never have completed
+  -- against it.  They are redundant regardless: CREATE ROLE above sets them
+  -- on the roles this migration creates, and a non-superuser could not grant
+  -- those attributes to begin with.  The attributes that DO need pinning here
+  -- are settable by a CREATEROLE login holding ADMIN OPTION on the target,
+  -- which doadmin holds for rm_worker and rm_readonly.
+  ALTER ROLE rm_owner NOLOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
+  ALTER ROLE rm_app LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
+  ALTER ROLE rm_worker LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
+  ALTER ROLE rm_readonly LOGIN NOINHERIT NOCREATEDB NOCREATEROLE;
 
   -- The bootstrap/migration login may assume the non-login owner.  This is
   -- intentionally the current role, never either runtime role.
   EXECUTE format('GRANT rm_owner TO %I', current_user);
 END
 $$;
+
+-- BEFORE the sweep, not after it.  ALTER TABLE ... OWNER TO rm_owner requires
+-- the NEW owner to hold CREATE on the containing schema, so `public` must
+-- already belong to rm_owner when the loop below runs.  A superuser bypasses
+-- that ACL check entirely, which is why applying this file as a container
+-- superuser (the test suite, and the smoke-twin's own boot) never surfaced it
+-- while a non-superuser bootstrap login -- the production primary's `doadmin`,
+-- rolsuper=false -- failed on the very first table with "permission denied for
+-- schema public".
+ALTER SCHEMA public OWNER TO rm_owner;
 
 -- Move every existing application relation and function out of the bootstrap
 -- role.  New objects are owned by rm_owner because migrate.ts SET LOCAL ROLEs
@@ -42,6 +64,11 @@ BEGIN
         SELECT 1 FROM pg_depend d
         WHERE d.objid = c.oid AND d.deptype IN ('a', 'i')
       ))
+      -- Objects belonging to an EXTENSION are the extension's, not ours.
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+      )
   LOOP
     EXECUTE format('ALTER %s %s OWNER TO rm_owner',
       CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
@@ -52,13 +79,22 @@ BEGIN
     SELECT p.oid::regprocedure AS object_name
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
+      -- Same exclusion as the relation loop above, and the one that actually
+      -- bites: pgcrypto installs digest()/gen_random_bytes() into public, and
+      -- re-owning an extension's function fails with "must be owner of
+      -- function digest" for a non-superuser -- and is wrong even when a
+      -- superuser is permitted to do it, since the function belongs to the
+      -- extension's lifecycle, not to rm_owner's.
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+      )
   LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO rm_owner', r.object_name);
   END LOOP;
 END
 $$;
 
-ALTER SCHEMA public OWNER TO rm_owner;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
 
