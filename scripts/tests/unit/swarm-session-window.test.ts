@@ -283,10 +283,18 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
 
 describe("red controls: the order grader must REPORT a regression", () => {
   test("it catches the close being moved back ahead of the wait", () => {
+    // Anchored on the ASSIGNMENT, not on its right-hand side. It used to match
+    // `const closedWindow = await waitUntilWindowCloses(` — and when the RHS
+    // grew a twin branch (`skipAdoptedWindow ? … : await waitUntilWindowCloses`)
+    // the regex stopped matching, the mutation stopped being applied, and this
+    // control passed while asserting NOTHING. A red control that cannot go red
+    // is worse than no control, so it is pinned below: the mutation must
+    // actually change the source.
     const broken = sessionSrc.replace(
-      /const closedWindow = await waitUntilWindowCloses\(/,
-      'await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);\n  const closedWindow = await waitUntilWindowCloses(',
+      /const closedWindow = /,
+      'await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);\n  const closedWindow = ',
     );
+    expect(broken).not.toBe(sessionSrc);
     const o = lifecycleOrder(broken);
     expect(o.close).toBeLessThan(o.windowWait);
   });

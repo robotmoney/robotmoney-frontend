@@ -35,13 +35,14 @@ import { fileURLToPath } from "node:url";
 import { runVerification, type VerifyTier } from "./lib/verify/harness.ts";
 import { swarmPipelineLeg } from "./lib/verify/legs/swarm-pipeline.ts";
 import { twinRosterLeg } from "./lib/verify/legs/twin-roster.ts";
+import { judgeReceiptLeg } from "./lib/verify/legs/judge-receipt.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Every leg, in the order a failure is most usefully read. */
 // twinRosterLeg is `full`-tier, so it runs on a twin/CI target and never
 // against production, where an absent member is honest rather than a defect.
-const LEGS = [swarmPipelineLeg, twinRosterLeg];
+const LEGS = [swarmPipelineLeg, twinRosterLeg, judgeReceiptLeg];
 
 /** Default budget. Live upstreams are eventually consistent right after a boot
  *  (smoke-live-smoke.ts's reasoning), so the legs poll rather than read once. */

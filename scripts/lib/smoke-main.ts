@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
@@ -17,6 +17,7 @@ import {
   planSubjectSchedules,
   renderCadenceLine,
   resolveSmokeCadenceForBoot,
+  stageCadenceApplies,
   type SubjectCadencePlan,
 } from "./smoke-schedule.ts";
 import {
@@ -155,7 +156,10 @@ const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 // subject); every other boot, CI included, keeps today's fast ~2-min values.
 // Every number lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that
 // the constants resolved here are the ones this invocation claims — fatal if not.
-const cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, env: process.env });
+// …EXCEPT on a twin, which is a test instrument and runs FAST however the port
+// is pinned — see stageCadenceApplies() in smoke-schedule.ts for why.
+const twinBoot = requestsTwin(process.argv);
+const cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), env: process.env });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -434,7 +438,9 @@ const smokeStackConfig: StackConfig = {
   database,
   credentials,
   environment: stackEnvironment,
-  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env) },
+  // judgeCredentialEnv LAST: the judge lane's key is not an operator knob and
+  // must not be shadowable by one (see smoke-compose-env.ts).
+  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env), ...judgeCredentialEnv(process.env) },
 };
 
 // --- TUI + logging gating -------------------------------------------------
@@ -1534,6 +1540,7 @@ async function main(): Promise<void> {
   } else if (smokeMode) {
     log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   }
+  if (twinRoster) await e2e.enableTwinJudge(resolveModelConfig(process.env).model, automationToken); // production ships the judge off; a twin must exercise it
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
@@ -1604,7 +1611,7 @@ async function main(): Promise<void> {
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
-          members: sessionMembers, cadence,
+          members: sessionMembers, cadence, twin: twinRoster,
           // The STANDING loop needs this as much as the first session does.
           // Omitting it made runSession fall back to "simulation" and write
           // smoke fixtures over archive-restored subjects — see session.ts.

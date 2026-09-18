@@ -290,6 +290,19 @@ function has(argv: readonly string[], flag: string): boolean {
  * after a gpg decrypt and a multi-minute pg_restore wastes the window the
  * rehearsal exists to protect.
  */
+/**
+ * Does this argv ask for the smoke-twin data path?
+ *
+ * Pure and argv-only, so a decision that must be made BEFORE the full parse can
+ * be — the cadence profile is resolved at the top of smoke-main.ts, long before
+ * a restore container exists. Deliberately not a second parser: it answers one
+ * boolean and leaves every other question to parseDataPath().
+ */
+export function requestsTwin(argv: readonly string[]): boolean {
+  const i = argv.indexOf(DB_FLAG);
+  return i >= 0 && argv[i + 1] === "smoke-twin";
+}
+
 export function parseDataPath(
   argv: readonly string[],
   opts: { envFilePath: string },

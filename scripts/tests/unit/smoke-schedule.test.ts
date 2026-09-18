@@ -35,6 +35,7 @@ import {
   renderCadenceLine,
   resolveSmokeCadence,
   resolveSmokeCadenceForBoot,
+  stageCadenceApplies,
   swarmStaggerMsFor,
   swarmWindowMinutes,
 } from "../../lib/smoke-schedule.ts";
@@ -543,8 +544,11 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     // The bare resolver would boot a stack whose constants nobody proved. A
     // separate assert line next to it is a line that can be deleted or omitted
     // from a new entry point; this cannot be.
-    expect(smokeMain).toContain("resolveSmokeCadenceForBoot({ stage: staticPortMode, env: process.env })");
+    expect(smokeMain).toContain("resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), env: process.env })");
     expect(smokeMain).not.toMatch(/=\s*resolveSmokeCadence\(/);
+    // The stage argument is DERIVED, not the raw flag: a twin wears the same
+    // `--static-port` pin and must still run FAST (stageCadenceApplies).
+    expect(smokeMain).toContain("const twinBoot = requestsTwin(process.argv);");
   });
 
   test("the smoke overlay still pins SWARM_SCHEDULES_ENABLED off", () => {
@@ -552,5 +556,26 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     // compose overlay every smoke/stage boot uses must keep the backend crons off.
     const overlay = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
     expect(overlay).toMatch(/SWARM_SCHEDULES_ENABLED:\s*"0"/);
+  });
+});
+
+describe("stageCadenceApplies — a twin is a test instrument, not the public smoke", () => {
+  test("the standing public smoke keeps the six-hour grid", () => {
+    expect(stageCadenceApplies(true, false)).toBe(true);
+    expect(resolveSmokeCadence({ stage: stageCadenceApplies(true, false) }).swarmIntervalMs).toBe(6 * 60 * 60 * 1000);
+  });
+
+  test("a twin runs FAST even though it wears the same --static-port pin", () => {
+    // The whole point: a six-hour window makes "did the judge run?" a six-hour
+    // question, which is how the judge went unexercised on the standing twin.
+    expect(stageCadenceApplies(true, true)).toBe(false);
+    const cadence = resolveSmokeCadence({ stage: stageCadenceApplies(true, true) });
+    expect(cadence.profile).toBe("fast");
+    expect(cadence.swarmWindowMs).toBe(120_000);
+  });
+
+  test("an unpinned boot is fast either way", () => {
+    expect(stageCadenceApplies(false, false)).toBe(false);
+    expect(stageCadenceApplies(false, true)).toBe(false);
   });
 });

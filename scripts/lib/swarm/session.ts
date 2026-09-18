@@ -1032,6 +1032,43 @@ export async function runRegimeClassify(
 // session, then restore both.
 
 /** `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce). */
+/**
+ * Turn the judge ON for a twin boot, with a model that costs real money.
+ *
+ * WHY A BOOT STEP AND NOT AN OPERATOR ACTION. A twin restores production, and
+ * production ships `swarm_judge_config.mode = 'off'` — so every twin boot came
+ * up with the judge disabled, every session published unjudged, and the judge
+ * path had no live coverage anywhere (issue #846 named exactly this). The twin
+ * is the one environment where turning it on is free of consequence: the
+ * database is a throwaway copy, and `enforce` there decides nothing real.
+ *
+ * ENFORCE, NOT SHADOW. A shadow judgement is deliberately withheld from the
+ * session, and `publishConsensusReceipt()` refuses to publish a receipt for one
+ * (`judgement_not_adopted`). Shadow would therefore exercise the judge and
+ * still prove nothing about the artifact the judge exists to produce.
+ *
+ * REFUSES A KEYLESS MODEL. The point is to prove the judge against the model
+ * production would use; a free model would make the receipt's provenance a
+ * different claim than the one under test.
+ */
+export async function enableTwinJudge(model: string, automationToken?: string): Promise<void> {
+  if (model.startsWith("free/") || model === "free") {
+    throw new Error(
+      `twin judge refuses a keyless model (${model}): a receipt authored by a free model does not evidence the paid judge. ` +
+        "Set AGENT_MODEL to a funded selector, or boot without --db smoke-twin.",
+    );
+  }
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({ mode: "enforce", model }),
+  });
+  if (!r.ok) {
+    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:enforce,model:${model}} -> ${r.status}: ${await r.text()}`);
+  }
+  console.log(`  judge: enforce, model=${model} — every session this boot is judged by a REAL model call (twin only)`);
+}
+
 export async function setJudgeMode(
   mode: "off" | "shadow" | "enforce",
   automationToken?: string,
@@ -1229,6 +1266,11 @@ export async function runSession(
     members: readonly SessionMember[];
     prevOutcome?: string;
     rail?: SessionRail;
+    /**
+     * Is this a `--db smoke-twin` boot? Only the window wait reads it — see the
+     * adopted-window branch below.
+     */
+    twin?: boolean;
     onProgress?: SessionProgress;
     regimeAsof?: string;
     // Which scenario opened this session. The session BODY is identical either
@@ -1408,9 +1450,25 @@ export async function runSession(
   // wait is on the SERVER's clock against the SERVER's stored deadline — see
   // waitUntilWindowCloses — and it throws rather than closing early if the two
   // cannot be reconciled.
-  const closedWindow = await waitUntilWindowCloses(date, subject.id, {
-    maxWaitMs: windowWaitCeilingMs(cadence),
-  });
+  //
+  // A TWIN THAT ADOPTED PRODUCTION'S EPOCH IS THE ONE EXCEPTION, and it is not
+  // an exception to the promise — it is the absence of one. The deadline on an
+  // adopted session was advertised by PRODUCTION, to production's members,
+  // and arrived here inside a restored dump; this boot promised nobody
+  // anything, and the members it seats are all in this process. Honouring it
+  // means a twin cannot answer "does the judge run?" for another six hours —
+  // and worse, planWindowWait ABORTS rather than waits when the remaining
+  // window exceeds its ceiling ("refusing to wait (it would hang)"), so the
+  // session stalls instead of completing. That is exactly how the standing
+  // twin published no judgement and no receipt for weeks.
+  //
+  // So on a twin, an ADOPTED window is closed as soon as this boot's own seats
+  // have filed. A window this boot published is still waited out in full, on
+  // both twins and everything else: that one IS a promise.
+  const skipAdoptedWindow = Boolean(opts.twin) && adopted;
+  const closedWindow = skipAdoptedWindow
+    ? { waitedMs: 0, reason: "twin adopted production's epoch — its deadline was advertised by another deployment, to members this boot does not seat" }
+    : await waitUntilWindowCloses(date, subject.id, { maxWaitMs: windowWaitCeilingMs(cadence) });
   console.log(
     `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
   );

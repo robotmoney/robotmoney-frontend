@@ -114,6 +114,10 @@ export type ConsensusReceiptRefusalReason =
   | "session_not_reaggregated"
   | "not_judged"
   | "judgement_not_adopted"
+  // The adopted judgement exists and the session took it, but no MODEL wrote
+  // it — `source='fallback'`, i.e. templateOpinion()'s prose. A receipt is a
+  // claim about authorship, so this is a refusal and not a warning.
+  | "judgement_not_authored"
   | "judgement_stale"
   | "no_takes"
   | "created_at_unparseable"
@@ -604,6 +608,26 @@ async function loadAssemblyInput(
       `session ${sessionId} has ${onFile.n} judgement(s) on file but carries no judge block on its own record, so no opinion has ever reached it. ` +
         "A judgement recorded in `shadow` is deliberately withheld from the session — that is the whole point of the mode — and the receipt carries " +
         "only an opinion the session adopted, so judge the session in `enforce` mode before publishing its receipt.",
+    );
+  }
+  // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
+  // row came from templateOpinion() — the aggregator's own sentences — and a
+  // certificate saying "the judge read the takes and concluded this" over them
+  // attests something that never happened. The refusal is separate from
+  // `judgement_not_adopted` because the fix is different: that one says judge in
+  // enforce, this one says give the judge a model it can actually reach.
+  const authored = (await sql`
+    SELECT source, fallback_reason FROM swarm_session_judgements
+    WHERE session_id = ${sessionId} AND mode = 'enforce'
+      AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
+    ORDER BY id DESC LIMIT 1`) as unknown as { source: string; fallback_reason: string | null }[];
+  if (authored[0] && authored[0].source !== "model") {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_authored",
+      `session ${sessionId}'s adopted judgement has source='${authored[0].source}'` +
+        `${authored[0].fallback_reason ? ` (${authored[0].fallback_reason})` : ""} — its opinion is TEMPLATE PROSE, not a model's. ` +
+        "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
+        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
     );
   }
   const candidates = (await sql`

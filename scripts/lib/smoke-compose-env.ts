@@ -59,6 +59,33 @@ const DEMO_COMPOSE_PASSTHROUGH = [
   "MIGRATE_DATABASE_URL",
 ] as const;
 
+/**
+ * The judge's credential, for the two services that run the judge.
+ *
+ * SEPARATE FROM THE ALLOWLIST ABOVE, because it is not an operator knob — it is
+ * the shared OpenCode Zen key, and docker-compose.yml names it on `api` and
+ * `worker-swarm` ONLY (not on the *worker-env anchor), so worker-analytics and
+ * worker-research never receive an inference credential they do not use.
+ *
+ * WHY IT HAS TO BE PASSED EXPLICITLY. It never was: `${OPENCODE_API_KEY:-}` was
+ * filled by compose's own auto-load of the checkout's `.env`. Closing that hole
+ * (composeArgs' `--env-file /dev/null`, which stopped a deployment's
+ * WORKER_DATABASE_URL reaching the worker lanes) also cut this off — and the
+ * failure is SILENT by design: an unconfigured transport is a legible state, so
+ * the judge wrote `source='fallback'`, `fallback_reason='model_unconfigured'`
+ * and carried on. docker-compose.yml:385 predicted exactly this ("the one
+ * process that actually runs the judge on a schedule falls back to template
+ * prose silently"). A boot that spends real money on member takes and then
+ * judges them with a template is the worst of both, so the key travels
+ * deliberately now rather than by accident.
+ *
+ * Absent key → absent entry, and `${VAR:-}` resolves empty exactly as before.
+ */
+export function judgeCredentialEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const key = env.OPENCODE_API_KEY?.trim();
+  return key ? { OPENCODE_API_KEY: key } : {};
+}
+
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of DEMO_COMPOSE_PASSTHROUGH) {

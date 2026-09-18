@@ -281,6 +281,51 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
 
   let outcome = await judge(input, { model: config.model, ...judgeOpts });
 
+  // NO TEMPLATE PROSE ON AN ACTIVE JUDGE. A judgement whose `opinion` came from
+  // templateOpinion() is not a judgement — it is the aggregator's own sentences
+  // wearing the judge's name, and the receipt published from it would attest an
+  // "opinion the session adopted" that no model ever authored. On a swarm that
+  // spends real money having members write real takes, grading them with a
+  // template is the worst of both, and it is INVISIBLE: the row records
+  // `source='fallback'` and a reason, the session publishes, the receipt signs
+  // clean, and nothing reads the difference.
+  //
+  // So an ACTIVE judge (`shadow`/`enforce`) throws instead of recording one.
+  // The queue is what makes that survivable: `swarm.judge` fails, retries, and
+  // an exhausted job leaves the session UNJUDGED — which publishes no receipt
+  // and is the honest outcome. `off` is untouched: it records nothing at all.
+  //
+  // This narrows the file header's "fail closed, never fail loud" on purpose.
+  // That rule was written to keep a flaky provider from blocking a live
+  // session, and it still does — nothing here blocks a session, it only refuses
+  // to WRITE a judgement the model did not author. `model_unconfigured` is the
+  // case it was hiding worst: the judge turned on with no model or no key,
+  // which is a deployment defect, silently absorbed on every session forever.
+  //
+  // NARROWED, AFTER READING WHAT THE RECORD IS FOR. Recording a refusal is not
+  // the defect — recording it AS AN OPINION is, and publishing a certificate
+  // over it is worse. The model-response refusals (a smuggled weight, prose
+  // instead of JSON, an obedient injection) are SECURITY EVIDENCE: the row is
+  // how a misbehaving model becomes visible at all, and backend/tests assert
+  // exactly that. Those still record.
+  //
+  // What throws is the case where NO model opinion was obtainable and the cause
+  // is this deployment: no transport (`model_unconfigured`) or the endpoint
+  // refusing us (`model_unavailable:*`). That is a judge that is not running,
+  // dressed as a judge that ran — the state this release spent a day finding.
+  // And no receipt is published over template prose either way; see
+  // consensus-receipt.ts's `judgement_not_authored` refusal.
+  const configFailure = outcome.source === "fallback"
+    && /^(model_unconfigured|model_unavailable)/.test(outcome.fallbackReason ?? "");
+  if (configFailure) {
+    throw new Error(
+      `judge refused to record template prose as a judgement (session ${sessionId}, mode ${config.mode}, ` +
+        `reason ${outcome.fallbackReason ?? "unknown"}, model ${outcome.model ?? "unset"}). ` +
+        `Configure swarm_judge_config.model AND give the judge lane OPENCODE_API_KEY (docker-compose.yml names it ` +
+        `on api and worker-swarm), or set mode='off' to stop judging entirely.`,
+    );
+  }
+
   let refusal: { ok: boolean; status: number; error?: string } | undefined;
   let recorded: { id: string | number; applied: boolean; skipped?: string } | undefined;
   const run = async (tx: DbHandle) => {

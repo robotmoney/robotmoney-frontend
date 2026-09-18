@@ -634,6 +634,32 @@ export function resolveJudgeTimeoutMs(env: Record<string, string | undefined> = 
  * ambient selection that rule forbids. Only the CREDENTIAL and the ENDPOINT
  * come from the environment here, and both are shared with the member agents.
  */
+/**
+ * The model id THE WIRE takes, from the id the CONFIG holds.
+ *
+ * `swarm_judge_config.model` carries D22's reviewable selector — the same
+ * provider-qualified id the member agents' OpenCode CLI takes
+ * (`opencode/deepseek-v4-flash`). The Zen REST API underneath does NOT: it
+ * takes the bare model (`deepseek-v4-flash`) and rejects the qualified form
+ * with, of all things, **HTTP 401** —
+ *
+ *   {"type":"error","error":{"type":"ModelError",
+ *    "message":"Model opencode/deepseek-v4-flash is not supported"}}
+ *
+ * — which reads as "your key is bad" and is not. That cost this release a
+ * diagnosis: the judge was recording `model_unavailable:…401` while the very
+ * same key completed a request for the bare id in the same container, on the
+ * same second. So the translation lives here, once, with the evidence.
+ *
+ * The CONFIGURED id is still what gets recorded on the judgement, so a row can
+ * be compared against `swarm_judge_config` directly; only the request body is
+ * translated.
+ */
+export function wireModelId(configured: string): string {
+  const i = configured.indexOf("/");
+  return i >= 0 ? configured.slice(i + 1) : configured;
+}
+
 export function resolveJudgeTransport(
   model: string | null,
   env: Record<string, string | undefined> = process.env,
@@ -650,12 +676,18 @@ export function resolveJudgeTransport(
         signal,
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: selected,
+          model: wireModelId(selected),
           temperature: 0,
           messages: [{ role: "user", content: prompt }],
         }),
       });
-      if (!res.ok) throw new Error(`judge model responded ${res.status}`);
+      if (!res.ok) {
+        // The BODY, not just the status: Zen answers an unsupported model with
+        // 401, so a bare status sends whoever reads this hunting a credential
+        // that was never the problem. Bounded, and the key is never in it.
+        const detail = (await res.text().catch(() => "")).slice(0, 200).replace(/\s+/g, " ");
+        throw new Error(`judge model responded ${res.status}${detail ? `: ${detail}` : ""}`);
+      }
       const body = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
       const content = body?.choices?.[0]?.message?.content;
       if (typeof content !== "string") throw new Error("judge model returned no assistant text");

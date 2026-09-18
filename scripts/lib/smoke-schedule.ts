@@ -165,6 +165,32 @@ const REALISTIC: SmokeCadence = {
  * Resolve the cadence profile for one smoke invocation. `stage` is the `--stage`
  * ARGUMENT, never an env var.
  */
+/**
+ * Does the STAGE (six-hour) cadence apply to this boot?
+ *
+ * `--static-port` means "this boot owns the tunnel port". For the standing
+ * PUBLIC smoke it also means production-like pacing, because an outside reader
+ * should see a swarm that behaves like the real one. A `--db smoke-twin` boot
+ * wears the same pin for the same tunnel and is NOT that thing: it is a test
+ * instrument against a throwaway copy of production.
+ *
+ * A six-hour submission window makes every question asked of a twin — does the
+ * judge run? does a receipt publish? — take six hours to answer, or forces an
+ * operator to hand-enqueue lifecycle jobs to find out. That is precisely how
+ * the judge sat unexercised on the standing twin: nothing was broken, the
+ * evidence was just always six hours away. So a twin runs FAST.
+ *
+ * COST, STATED PLAINLY: FAST is one session per subject every two minutes, and
+ * every session spends real inference for every seated member plus (once the
+ * judge is configured) one judge call. On a twin seating the whole restored
+ * roster that is a continuous spend, not a trickle. It is the price of a test
+ * instrument that answers in minutes; `bun run smoke:stage` is the standing
+ * public smoke and keeps the six-hour grid.
+ */
+export function stageCadenceApplies(staticPort: boolean, twin: boolean): boolean {
+  return staticPort && !twin;
+}
+
 export function resolveSmokeCadence(opts: { stage?: boolean } = {}): SmokeCadence {
   return opts.stage ? REALISTIC : FAST;
 }
