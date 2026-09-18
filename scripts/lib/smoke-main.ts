@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
@@ -160,6 +160,11 @@ const cadence = resolveSmokeCadenceForBoot({ stage: staticPortMode, env: process
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
 // rather than letting an operator believe a pin took effect.
 for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
+// Same rule for a stack-owned DATABASE URL (WORKER_DATABASE_URL) inherited from a
+// `.env` shared with the persistent deployment: dropped, and said out loud. It used
+// to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
+// does not have — see smoke-compose-env.ts.
+for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
 
 if (staticPortMode) {
   console.warn(

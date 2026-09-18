@@ -8,6 +8,7 @@
 //   - the environment handed to a compose child is BUILT, not inherited, so an
 //     ambient provider key or an operator's own admin token can never reach a
 //     container.
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -178,9 +179,49 @@ describe("buildSpawnEnv", () => {
 });
 
 describe("argv builders", () => {
+  // A boot on a host whose checkout carries a deployment `.env` put that file's
+  // WORKER_DATABASE_URL into every worker lane of a twin stack that has no
+  // `postgres` service, and the lanes died in DNS. buildSpawnEnv's allowlist
+  // could not have stopped it: compose loads the project directory's `.env`
+  // itself. Neutralising it belongs in argv, next to `-p`/`-f`.
+  test("composeArgs neutralises compose's own .env auto-load", () => {
+    for (const argv of [composeArgs("p"), composeArgs("p", ["a.yml"])]) {
+      const i = argv.indexOf("--env-file");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argv[i + 1]).toBe("/dev/null");
+      // Before the subcommand, which composeArgs is only ever a prefix of.
+      expect(i).toBeLessThan(argv.indexOf("-p"));
+    }
+  });
+
+  // The prefix must be built in ONE place, or the `--env-file` above is only as
+  // good as whoever remembered it. scripts/lib/swarm/session.ts had a
+  // hand-rolled `["docker", "compose", "-p", …]` that spawned `run --rm` — a
+  // container-creating call, interpolating the compose files, outside this
+  // module's only guarantee.
+  test("no hand-rolled compose prefix anywhere under scripts/", () => {
+    const scriptsDir = join(import.meta.dir, "..", "..");
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "tests" && entry.name !== "node_modules") walk(full);
+        } else if (entry.name.endsWith(".ts") && full !== join(scriptsDir, "stack", "config.ts")) {
+          // `"compose", "-p"` — a prefix assembled by hand rather than by composeArgs().
+          if (/"compose",\s*"-p"/.test(readFileSync(full, "utf8"))) offenders.push(full.slice(scriptsDir.length + 1));
+        }
+      }
+    };
+    walk(scriptsDir);
+    expect(offenders).toEqual([]);
+  });
+
   test("composeArgs puts the topology in argv, not the environment", () => {
-    expect(composeArgs("p", ["a.yml", "b.yml"])).toEqual(["compose", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
-    expect(composeArgs("p")).toEqual(["compose", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
+    expect(composeArgs("p", ["a.yml", "b.yml"]))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
+    expect(composeArgs("p"))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {

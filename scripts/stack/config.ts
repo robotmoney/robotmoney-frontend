@@ -285,8 +285,23 @@ export function buildSpawnEnv(cfg: StackConfig, hostEnv: Record<string, string |
 }
 
 // ── argv builders (PURE — every command shape is testable without Docker) ───
+// `--env-file /dev/null` is the third lock on the same door, and the only one
+// that closes it. buildSpawnEnv() hands the compose child an allowlisted
+// environment precisely so an ambient value cannot reach a container — but
+// compose ALSO loads `<project directory>/.env` by itself, for interpolation,
+// with no involvement from the environment we built. On a host whose checkout
+// carries a deployment `.env` that is not a theoretical leak: it put the
+// persistent stack's WORKER_DATABASE_URL (`…@postgres:5432`) into all three
+// worker lanes of a `--db smoke-twin` boot, which has no `postgres` service at
+// all, and every lane then died in DNS while the boot reported only unhealthy
+// workers. Dropping the name from the smoke's passthrough allowlist did NOT
+// fix it, because that allowlist was never the path — compose read the file.
+// Pointed at /dev/null, `${VAR:-default}` resolves from what buildComposeEnv()
+// put in the child's environment and from nothing else, which is what this
+// module has always claimed. Values we DO pass still win (an environment
+// variable outranks an env file), so nothing the stack owns changes.
 export function composeArgs(project: string, files: string[] = DEFAULT_COMPOSE_FILES): string[] {
-  return ["compose", "-p", project, ...files.flatMap((f) => ["-f", f])];
+  return ["compose", "--env-file", "/dev/null", "-p", project, ...files.flatMap((f) => ["-f", f])];
 }
 
 export function buildArgs(services: string[] = []): string[] {

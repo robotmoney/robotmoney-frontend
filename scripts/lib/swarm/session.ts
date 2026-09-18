@@ -18,6 +18,9 @@ import type { SmokeCadence } from "../smoke-schedule.ts";
 import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
+// The one builder for a compose prefix — argv topology AND the `--env-file`
+// that keeps the repo's own `.env` out of an interpolated container.
+import { composeArgs } from "../../stack/config.ts";
 
 export function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -963,8 +966,13 @@ export interface ProducerInvocationDeps {
 }
 
 async function runProducerRegimeContainer(rail: ProducerComposeRail, asof: string): Promise<void> {
+  // composeArgs(), not a hand-rolled prefix. This spawn CREATES a container, so
+  // it interpolates the compose files — and the hand-rolled version omitted the
+  // `--env-file /dev/null` that stops that interpolation reading the checkout's
+  // `.env` (see scripts/stack/config.ts). Nothing broke here only because the
+  // producer reads none of the names a deployment `.env` happens to carry.
   const producer = Bun.spawn(
-    ["docker", "compose", "-p", rail.composeProject, ...rail.composeFiles.flatMap((f) => ["-f", f]),
+    ["docker", ...composeArgs(rail.composeProject, [...rail.composeFiles]),
       "run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "regime", asof],
     { cwd: rail.repoRoot, env: rail.composeSpawnEnv, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
   );
