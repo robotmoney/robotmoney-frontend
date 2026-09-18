@@ -1312,7 +1312,20 @@ export async function judgeSessionAdmin(
       return t;
     },
   });
-  if (!result.ok) return err(result.status, result.error ?? "judge failed");
+  // PRESERVE THE FULL RESULT, not just status/error via err()'s minimal shape.
+  // `judgeUnavailableReason` (credit_exhausted / credential_rejected /
+  // model_not_supported — see JudgeUnavailableError in judge.ts) is the one
+  // field that says WHICH fail-closed class this is, and `err()` here used to
+  // drop it silently: qualifyJudgeUnavailable() (worker/handlers/swarm.ts)
+  // reads exactly this field to turn the bare `judge_unavailable` into
+  // `judge_unavailable:<reason>` before it reaches job_runs.last_error and the
+  // console — but by the time judgeSession()'s cron handler received this
+  // object, the field was already gone, so the qualifier had nothing to
+  // qualify and every occurrence logged as the bare word forever. Confirmed
+  // against a real staging failure (2026-09-18): the actual cause was
+  // unrecoverable once the session/job was gone, because nothing between the
+  // throw site and the console ever wrote it down.
+  if (!result.ok) return { ...result, ok: false as const, error: result.error ?? "judge failed" };
   await audit(actor, "session_judged", {
     sessionId, mode: result.mode, applied: result.applied === true,
     appliedSkippedReason: result.appliedSkippedReason ?? null,
