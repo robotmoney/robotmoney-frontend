@@ -211,23 +211,39 @@ export async function runJudgeAgent(rail: JudgeAgentRail, req: JudgeAgentRequest
 /**
  * The container's answer, or the RAIL failure that explains its absence.
  *
- * Order matters. "Never launched" and "timed out" are checked BEFORE the stdout
- * scan because a container that died early can still have flushed a partial
- * line, and reporting that as the model's answer is how a launcher fault would
- * come to wear a model verdict.
+ * ORDER MATTERS, AND IT IS NOT THE OBVIOUS ONE.
+ *
+ * `timedOut` is checked FIRST because a container killed at its ceiling can
+ * still have flushed a partial line, and reporting that as the model's answer is
+ * how a launcher fault would come to wear a model verdict.
+ *
+ * `containerLaunched === false` is checked LAST, AFTER the stdout scan, and that
+ * is deliberate: it is a watcher verdict, not a fact. runMemberAgent() polls
+ * `docker inspect` every 250 ms and the container carries `--rm`, so a judging
+ * that finishes faster than one poll interval — a warm image, a nearby endpoint,
+ * a fast host — is REMOVED before the watcher ever sees it and reports `false`
+ * for a container that plainly ran. Observed exactly that way in CI: two of six
+ * cases came back "never launched" in ~400 ms with a perfectly good answer on
+ * stdout, while the other four passed.
+ *
+ * A well-formed answer line IS the positive evidence, so it wins over the
+ * watcher's guess. This is the same discipline scripts/agent/classify-outcome.ts
+ * already applies to member runs — it requires an EMPTY event stream before it
+ * will call a run "never launched", precisely so one missed poll cannot
+ * manufacture a harness failure.
  */
 export function readAnswer(
   result: { stdout: string; exitCode: number | null; timedOut: boolean; containerLaunched: boolean | null },
   timeoutMs: number,
 ): JudgeRunnerLine {
-  if (result.containerLaunched === false) {
-    return { ok: false, kind: "launcher", detail: "judge container never launched" };
-  }
   if (result.timedOut) {
     return { ok: false, kind: "launcher", detail: `judge container exceeded its ${timeoutMs}ms ceiling` };
   }
   const line = parseRunnerLine(result.stdout);
   if (line) return line;
+  if (result.containerLaunched === false) {
+    return { ok: false, kind: "launcher", detail: "judge container never launched" };
+  }
   return {
     ok: false,
     kind: "launcher",

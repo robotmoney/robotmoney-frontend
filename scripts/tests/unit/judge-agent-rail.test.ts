@@ -274,6 +274,23 @@ describe("readAnswer: a dead container never wears the model's verdict", () => {
       .toMatchObject({ ok: false, kind: "launcher", detail: "judge container produced no answer line (exit 137)" });
   });
 
+  test("an ANSWER beats the launch watcher's guess — a fast container is not a missing one", () => {
+    // The watcher polls `docker inspect` every 250ms and the container carries
+    // `--rm`, so a judging that finishes inside one poll interval is removed
+    // before it is ever seen and reported as `containerLaunched: false`.
+    // Observed in CI: two of six cases came back "never launched" in ~400ms with
+    // a perfectly good answer already on stdout. A well-formed line is positive
+    // evidence and must outrank a watcher that only ever guesses.
+    const stdout = encodeRunnerLine({ ok: true, text: "answered before the first poll" });
+    expect(readAnswer({ ...base, stdout, containerLaunched: false }, 5_000))
+      .toEqual({ ok: true, text: "answered before the first poll" });
+    // ...and a vendor refusal relayed by a container the watcher missed is still
+    // a vendor refusal, not a rail fault.
+    const refusal = encodeRunnerLine({ ok: false, kind: "model_status", status: 402, body: "no credit" });
+    expect(readAnswer({ ...base, stdout: refusal, containerLaunched: false }, 5_000))
+      .toMatchObject({ ok: false, kind: "model_status", status: 402 });
+  });
+
   test("a partial line flushed by a container that then timed out is NOT the answer", () => {
     // Checked before the stdout scan on purpose: a container killed at its
     // ceiling can still have flushed a whole line, and returning that would let
