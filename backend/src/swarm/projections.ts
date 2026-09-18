@@ -142,7 +142,22 @@ export function toSessionListItem(row: Row): SwarmSessionListItem {
     swarmRecommendation: row.swarm_recommendation ?? null,
     socialDraftId: row.social_draft_id ?? null,
     generatedAt: instant(row.generated_at) ?? "",
+    // Issue #991. Distinct members who filed, and the sleeve targets the
+    // session's own brief carried (compact: id and weight only), null when the
+    // brief carried none. Never the current framework read back onto an older
+    // session.
+    takeCount: row.take_count == null ? null : Number(row.take_count),
+    referenceAllocation: toReferenceAllocation(row.reference_allocation),
   };
+}
+
+function toReferenceAllocation(raw: unknown): SwarmSessionListItem["referenceAllocation"] {
+  const a = raw as { asof?: unknown; buckets?: unknown } | null;
+  if (!a || !Array.isArray(a.buckets) || !a.buckets.length) return null;
+  const buckets = a.buckets
+    .map((b: any) => ({ id: String(b?.id ?? ""), target_weight: Number(b?.target_weight) }))
+    .filter((b) => b.id && Number.isFinite(b.target_weight));
+  return buckets.length ? { asof: a.asof == null ? null : String(a.asof), buckets } : null;
 }
 
 export function toTake(row: Row): SwarmTake {

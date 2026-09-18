@@ -438,6 +438,16 @@ export interface SwarmSessionListItem {
   swarmRecommendation: SwarmRecommendation | null;
   socialDraftId: string | null;
   generatedAt: string;
+  /** Distinct members who filed a take (issue #991). Light index rows only. */
+  takeCount?: number | null;
+  /** The sleeve targets this session's own brief carried, compact (issue
+   * #991). Null when the brief carried none; never today's framework. */
+  referenceAllocation?: SwarmReferenceAllocation | null;
+}
+
+export interface SwarmReferenceAllocation {
+  asof: string | null;
+  buckets: { id: string; target_weight: number }[];
 }
 
 export interface SwarmSessionListResponse {
@@ -497,11 +507,24 @@ export interface SwarmBriefResearchSignalRef {
   href: string;
 }
 
+// One of the subject's recent published sessions, as a brief lists it (issue
+// #965). A subject may convene more than once a day, so date and subject do
+// not name a session; the id does. `id` and `convened_at` are absent on briefs
+// published before this change.
+export interface SwarmBriefSessionRef {
+  id?: string;
+  convened_at?: string;
+  /** UTC midnight as an ISO instant, not YYYY-MM-DD. */
+  date: string;
+  subject_id: string;
+  state: string;
+}
+
 export interface SwarmBriefBody {
   allocation?: { asof: string; buckets: { id: string; target_weight: number; items?: unknown[] }[] };
   regime: unknown;
   subject: SwarmSubject | null;
-  recentSessions: unknown[];
+  recentSessions: SwarmBriefSessionRef[];
   previousSession?: { outcome: string };
   researchSignals: SwarmBriefResearchSignalRef[];
   prompt: { system: string; user: string };

@@ -150,10 +150,12 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     const full = url.searchParams.get("full") === "1";
     const limitRaw = url.searchParams.get("limit");
     const cursor = url.searchParams.get("cursor") ?? undefined;
+    const subject = url.searchParams.get("subject") || undefined;
+    const search = url.searchParams.get("search") || undefined;
     try {
       return {
         status: 200,
-        body: await ic.listSessions({ state, full, limit: limitRaw ? Number(limitRaw) : undefined, cursor }),
+        body: await ic.listSessions({ state, subject, search, full, limit: limitRaw ? Number(limitRaw) : undefined, cursor }),
       };
     } catch (e) {
       return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };

@@ -341,6 +341,8 @@ export async function getSubjectSnapshots(id: string, opts: { limit?: number; be
 // subjectSnapshotTotalValueUsd stay full-only.
 const SESSIONS_LIST_DEFAULT_LIMIT = 20;
 const SESSIONS_LIST_MAX_LIMIT = 100;
+// A search is a literal phrase, not a pattern, and a short one.
+const SESSIONS_SEARCH_MAX_LENGTH = 200;
 
 interface SessionsCursor { d: string; g: string; i: string }
 
@@ -396,6 +398,12 @@ export function parseSessionsLimit(raw?: number): number {
 
 export interface ListSessionsOptions {
   state?: string;
+  /** One subject's sessions (issue #991): a subject page pages its own
+   * history instead of filtering the whole index in the browser. */
+  subject?: string;
+  /** Case-insensitive literal match on the date, the recommendation's
+   * rationale or the synthesis. Not a pattern: `%` and `_` match themselves. */
+  search?: string;
   limit?: number;
   cursor?: string | null;
   /** Reproduce the pre-#243 unpaginated, unprojected (every field, no state
@@ -426,6 +434,11 @@ async function getNextSwarmSessionAt(): Promise<string | null> {
 
 export async function listSessions(opts: ListSessionsOptions = {}) {
   const nextSessionAt = await getNextSwarmSessionAt();
+  const search = opts.search?.trim() ?? "";
+  // The filters page; full=1 is the unpaginated escape hatch, and combining
+  // the two would quietly return an unbounded filtered list.
+  if (opts.full && (opts.subject || search)) throw new Error("subject and search page the light index; drop full=1");
+  if (search.length > SESSIONS_SEARCH_MAX_LENGTH) throw new Error(`search must be at most ${SESSIONS_SEARCH_MAX_LENGTH} characters`);
   if (opts.full) {
     const rows = await sql`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
@@ -434,6 +447,12 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   const limit = parseSessionsLimit(opts.limit);
   const conds = [];
   if (opts.state) conds.push(sql`state = ${opts.state}`);
+  if (opts.subject) conds.push(sql`subject_id = ${opts.subject}`);
+  // strpos, not LIKE: the phrase is matched literally, so a reader's `%` is a
+  // percent sign rather than a wildcard over the whole history.
+  if (search) {
+    conds.push(sql`strpos(lower(date::text || ' ' || COALESCE(swarm_recommendation->>'rationale', '') || ' ' || COALESCE(synthesis, '')), lower(${search})) > 0`);
+  }
   const cur = decodeSessionsCursor(opts.cursor);
   // Bind the timestamp as text before casting on the server.  If postgres.js
   // infers a timestamptz parameter directly it serializes the string through a
@@ -445,8 +464,14 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // COUNT query; the (date, generated_at, id) triple is both the ORDER BY and
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
+  // Two per-row facts a history row needs without fetching each session
+  // (issue #991): how many members filed (distinct members, not revisions),
+  // and the target the session's own brief carried. Bounded by LIMIT, so they
+  // run for at most one page of rows.
   const rows = await sql`
-    SELECT *, generated_at::text AS cursor_generated_at
+    SELECT *, generated_at::text AS cursor_generated_at,
+      (SELECT count(DISTINCT member_id)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id) AS take_count,
+      (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
     LIMIT ${limit + 1}`;
@@ -1750,7 +1775,13 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 5`;
+  // Each ref carries its session id (issue #965): a subject may convene more
+  // than once a day, so date and subject alone cannot reach an earlier session
+  // of that day. Ordered by convened_at, the order getSession() uses to pick a
+  // day's latest, so same-day refs come back newest first.
+  const recent = await sql`SELECT id, date, convened_at, subject_id, state FROM swarm_sessions
+                           WHERE state = 'published' AND subject_id = ${s.subject_id}
+                           ORDER BY convened_at DESC, id DESC LIMIT 5`;
 
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
