@@ -75,20 +75,34 @@ and a completed postflight. The version tag records what has been *proven in
 production*, not what is *intended for release*. Everything before that point
 is a release candidate, tagged `vA.B.C-rc.N`, `N` counting from 0.
 
+> **Revised 2026-09-11, effective from v0.5.0.** Through v0.4.0 the rc tag was
+> cut FIRST — "at the tip you intend to ship" — and stage preflight/rehearsal
+> ran against that already-tagged commit. As of v0.5.0 the order is reversed:
+> stage preflight and rehearsal run against the untagged tip, and the rc tag
+> is cut only once both pass. An rc tag therefore now means "this exact commit
+> has already cleared stage," not "this is a candidate to be tested" — see
+> the superseded-precedent note below. `backend/scripts/upgrades/0.4.0-to-0.5.0/steps.ts`'s
+> `P6.rc-tag` requiring `P4.preflight-live` and `P5.rehearsal` is the
+> mechanical form of this paragraph; `rollout-where.ts`'s `NEXT` is what
+> actually enforces it, by manifest order.
+
 The cycle, run entirely on the release's `releases-A.B.x` branch (§2):
 
-1. Cut `vA.B.C-rc.N` at the tip you intend to ship.
-2. Run preflight against that rc. **Preflight fails** → fix, cut
-   `vA.B.C-rc.(N+1)`, return to step 2.
-3. **Preflight passes** → deploy that rc to production.
-4. Run postflight. **Postflight fails** → patch, cut `vA.B.C-rc.(N+1)`, and go
-   back through preflight (step 2) before deploying again. Every patch needed
-   to reach a correct system consumes another rc number.
+1. Prepare the tip you intend to ship, on `releases-A.B.x`, untagged.
+2. Run stage preflight and stage rehearsal against that commit. **Either
+   fails** → fix, return to step 2 against the corrected commit. A stage
+   failure consumes no rc number — nothing has been tagged yet to increment.
+3. **Both pass** → cut `vA.B.C-rc.N` at that exact commit (`N` counting from
+   0), and deploy that rc to production.
+4. Run postflight. **Postflight fails** → patch, and go back through a fresh
+   stage pass (step 2) on the corrected commit before cutting
+   `vA.B.C-rc.(N+1)` and deploying again. Every patch needed to reach a
+   correct system consumes another rc number.
 5. **Postflight clean** → tag `vA.B.C` at the exact commit that is running and
    verified in production — i.e. the final rc's commit.
 
-Two consequences, stated outright because each one looks like a mistake and
-neither is:
+Three consequences, stated outright because each one looks like a mistake and
+none is:
 
 - **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
   expected and correct, not duplication to clean up. Step 5 has no other
@@ -97,22 +111,30 @@ neither is:
   verified.** A fix that lands after the last deployed rc requires a new rc
   and another pass through steps 2–4; it cannot be "rolled into the final
   tag."
+- **An rc number now only ever counts production postflight failures, never
+  stage failures.** Under the pre-v0.5.0 order a rejected stage rehearsal
+  still consumed an rc number (the tag already existed); under this order it
+  does not, because step 2 can repeat freely before anything is tagged. A
+  release that needed five stage attempts and shipped clean on its first
+  deploy is `rc.0`, not `rc.4`.
 
 rc tags obey §2's branch rule exactly as the release tag does: they are cut on
 `releases-A.B.x`, never on `main`.
 
-### Precedent — v0.2.1
+### Precedent — v0.2.1 through v0.4.0 (superseded 2026-09-11)
 
-This is a newly written-down convention, not a newly invented one. v0.2.1
-already ran it, undocumented (`git log -1 --format='%h %ci %s' <tag>`):
+This was a newly written-down convention, not a newly invented one, when v0.2.1
+first ran it (tag-then-validate), undocumented (`git log -1 --format='%h %ci %s' <tag>`):
 
 - `v0.2.1-rc.0` → `c2b9afc`, 2026-08-07
 - `v0.2.1-rc.1` → `5970f2d`, 2026-08-08
 - `v0.2.1` → `5970f2d`, 2026-08-08 — **the same commit as `rc.1`**
 
-That shared-commit final tag is the norm this section describes, not an
-anomaly in the tag history. One honest limit on the precedent: v0.2.1 predates
-the `releases-A.B.x` convention and is reachable from `main`
+That shared-commit final tag is still the norm §3 describes, unchanged by the
+2026-09-11 revision above — only the ORDER of "cut the rc" versus "run stage
+preflight/rehearsal" reversed, not the final-tag mechanics. One honest limit
+on the precedent, unaffected either way: v0.2.1 predates the `releases-A.B.x`
+convention and is reachable from `main`
 (`git merge-base --is-ancestor v0.2.1 origin/main` succeeds, as it does for
 both rc tags). It is precedent for the **rc numbering**, not for the branch
 placement rule — that rule starts with v0.2.2.

@@ -7,6 +7,12 @@
 > abandoned attempt and point at `releases-0.6.x`, so the next RC here is
 > `rc.9` unless those tags are retired first. This document is not authority
 > for a moving branch.
+>
+> **The RC tag is cut at §5.1, after stage preflight and rehearsal both
+> pass — not before them.** As of v0.5.0 the stage gates run against the
+> untagged branch tip, reversing the tag-first order every release through
+> v0.4.0 used (`release-runbooks.md` §3, revised 2026-09-11). A rejected
+> stage pass therefore consumes no rc number.
 
 This runbook implements the foundational policy in
 [`docs/technical/release-runbooks.md`](../technical/release-runbooks.md) and
@@ -115,12 +121,17 @@ CI is green, and the operator has authorized this production rollout.
 git fetch origin --tags
 git switch releases-0.5.x
 git rev-parse HEAD
-git tag --points-at HEAD -l 'v0.5.0-rc.*'
+git tag --points-at HEAD -l 'v0.5.0-rc.*'   # expected: prints nothing yet
 bun install --force
 bun install --force --cwd backend
 ```
 
-Record the printed SHA as `RC_SHA`. The tag must be on
+Record the SHA printed by `git rev-parse HEAD` as `RC_SHA` — the commit the
+stage gates validate. **Do not tag it yet.** The `git tag --points-at` line
+is a confirmation that nothing is tagged here, not a lookup: the actual
+`git tag`/`git push` happens at §5.1, once every stage acceptance criterion
+has passed. `RC_SHA` names the commit stage is currently validating, whether
+or not a tag yet points at it. When the tag is cut it must be on
 `releases-0.5.x`, never on `main`.
 
 The forced installs are a blocking prerequisite. Bun copies the local
@@ -306,14 +317,40 @@ not an optional extra; rehearse it and record the restore duration.
 Write the stage report with the backup manifest, receipts, RC SHA, boot output,
 route-check output, baseline comparison, and operator go/no-go sign-off.
 
+### 5.1 Cut the RC tag
+
+Only once every §5 criterion (1-9) has passed, the rollback rehearsal is
+recorded, and the stage report carries the operator's go sign-off. A rejected
+stage pass returns to §4/§5 on a fixed commit and consumes no rc number,
+because nothing has been tagged yet to increment:
+
+```bash
+git tag -a v0.5.0-rc.9 "$RC_SHA" -m 'v0.5.0-rc.9'
+git push origin v0.5.0-rc.9
+```
+
+`rc.9` is the next free number on this branch only because `rc.1`-`rc.8`
+are already taken by the abandoned `releases-0.6.x` attempt (see the header
+note); retire those tags first if you want a lower number. From here, `N`
+advances only on a **production postflight** failure (§7) — each new
+candidate cut only after ANOTHER full pass through §4/§5 on the patched
+commit, never by re-tagging a rejected one.
+
+Because the tag is cut here rather than at §3, `P6.rc-tag` in
+`backend/scripts/upgrades/0.4.0-to-0.5.0/steps.ts` requires
+`P4.preflight-live` and `P5.rehearsal`, and files after both in manifest
+order — so `runbook.ts`'s `NEXT` points at `P3.backup` on a fresh release,
+not at the tag step.
+
 ## 6. Production cutover
 
 **IRREVERSIBLE FORWARD MIGRATION:** `migrate.ts` has no down path. Do not
 start without a verified backup, completed rehearsal, and written rollback
 authority. Do not manually edit `schema_migrations` at any point.
 
-1. Reconfirm `RC_SHA`, the tag, production database identity, and the fresh
-   backup.
+1. Reconfirm `RC_SHA`, the §5.1 tag (it must point at `RC_SHA`, and the
+   stage gates that authorized it must have run against that same commit),
+   production database identity, and the fresh backup.
 2. Reconfirm the live preflight receipt is current and passed.
 3. Deploy in provider order: the v0.5.0 backend/API first (its boot applies
    `0045`-`0061` via `migrate.ts` before it starts serving — run it with
@@ -418,9 +455,11 @@ For judge-only degradation (an unexpectedly enabled `third_party_enabled`),
 set it back to `false` first — that is the narrow reversible mitigation; a
 full restore is for a failed release invariant.
 
-If the candidate needs a fix, cut the next `v0.5.0-rc.*`, repeat the preflight
-and rehearsal gates, and deploy only that new RC. Do not move the final tag
-onto an unverified commit.
+If the candidate needs a fix, patch it, repeat the §4 preflight and §5
+rehearsal gates against the corrected commit, and cut the next
+`v0.5.0-rc.*` at §5.1 only once they pass — in that order, per §5.1. Deploy
+only that new RC. Do not re-tag a rejected commit, and do not move the final
+tag onto an unverified one.
 
 After clean production postflight, create `v0.5.0` on the exact commit running
 in production—the final tag and the successful RC must point to the same

@@ -247,13 +247,24 @@ function evaluate(step: RolloutStep, evidence: Map<string, Evidence>, ctx: Ctx):
   const base: Omit<Evaluated, "status" | "because"> = { step, runnableHere };
 
   // Derived steps carry no receipt — git is the record.
+  //
+  // MATCHED BY SUFFIX, not the historical exact literal "P2.rc-tag" — a
+  // release's own phase number is release-specific (this module's own header
+  // says so: "the letters are names, not an order"), and 0.4.0-to-0.5.0 files
+  // its rc-tag step later in the manifest than P2, precisely because cutting
+  // the tag now comes AFTER stage preflight+rehearsal rather than before
+  // (release-runbooks.md §3, revised). An exact-string match would have
+  // silently fallen through to "no receipt" for any release that renumbers
+  // this step, which is a worse failure than a suffix that happens to be
+  // slightly less specific — no other step in any release's manifest ends in
+  // `.rc-tag` or bare `.tag` (checked across every upgrades/*/steps.ts).
   if (step.derived) {
-    if (step.id === "P2.rc-tag") {
+    if (step.id.endsWith(".rc-tag")) {
       return ctx.headTag
         ? { ...base, status: "ok", because: `${ctx.headTag} points at HEAD` }
         : { ...base, status: "missing", because: `HEAD (${ctx.sha.slice(0, 7)}) carries no ${ctx.tagGlob} tag` };
     }
-    if (step.id === "P9.tag") {
+    if (step.id.endsWith(".tag")) {
       const tag = releaseTag(ctx.tagGlob);
       const exists = ctx.tags.includes(tag);
       return exists
