@@ -2,7 +2,7 @@
 // all DTOs are compile-time types declared in the companion .d.ts files.
 export { ROUTES, path } from "./routes.js";
 export { canonicalizeClaimChallenge, canonicalizeSubmission } from "./signing.js";
-export { REGIME_RISK_OFF, REGIME_RISK_ON, classifyRegime } from "./regime.js";
+export { REGIME_RISK_OFF, REGIME_RISK_ON, REGIME_METHOD, classifyRegime } from "./regime.js";
 export {
   BPS_DENOMINATOR,
   RECEIPT_CANONICAL_BUCKET_ORDER,

@@ -73,3 +73,49 @@ export function jsonValue(value: unknown): postgresTypes.JSONValue {
 export async function closeDb(): Promise<void> {
   await sql.end({ timeout: 5 });
 }
+
+// ── "the database is not reachable" vs "the query was wrong" ────────────────
+// Issue #968. Every route handler's failure used to leave the api by the same
+// door — `500 {"error":"internal error"}` — so a Postgres outage was
+// indistinguishable from a bug in the handler, to the page (which printed the
+// serialized envelope), to an operator reading a screenshot, and to any other
+// client. These are the failures where the database is the thing that is
+// wrong; api/index.ts answers them 503 instead.
+//
+// Deliberately NARROW. A misspelled column (42703) and a missing relation
+// (42P01) are handler bugs and must keep reporting as 500s: widening this to
+// "any error thrown by a query" would relabel every real defect as an outage
+// and make the distinction worthless.
+//
+// Two families:
+//   - transport, from Node/Bun's socket layer — nothing is listening, the name
+//     does not resolve, the connection died mid-flight;
+//   - postgres.js's own lifecycle codes, plus SQLSTATE class 08 (connection
+//     exception) and 57P03 (the server is up but refusing connections, e.g.
+//     still starting or shutting down), which is what a restarting database
+//     answers with.
+const DB_UNAVAILABLE_CODES = new Set([
+  // socket / DNS
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  // postgres.js connection lifecycle
+  "CONNECTION_CLOSED",
+  "CONNECTION_DESTROYED",
+  "CONNECTION_ENDED",
+  "CONNECT_TIMEOUT",
+  // SQLSTATE 57P03 cannot_connect_now
+  "57P03",
+]);
+
+export function isDatabaseUnavailable(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code !== "string") return false;
+  // SQLSTATE class 08 — connection_exception and its refinements.
+  return DB_UNAVAILABLE_CODES.has(code) || /^08[0-9A-Z]{3}$/.test(code);
+}

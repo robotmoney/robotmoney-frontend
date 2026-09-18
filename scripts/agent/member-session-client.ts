@@ -38,7 +38,7 @@
 //
 // ENV CONTRACT (all RM_* injected explicitly by the harness at
 // `docker compose run` time — a container inherits nothing):
-//   RM_API_URL        swarm REST base (compose-internal, e.g. http://api:8787)
+//   RM_API_URL        swarm REST base (compose-internal, e.g. http://website-server:8080 — proxied to `api` by website-server/nginx.conf, issue #892)
 //   RM_MEMBER_ID      the member id this client acts as
 //   RM_MEMBER_NAME / RM_MEMBER_LENS / RM_MEMBER_BIAS   persona facts
 //   RM_SESSION_DATE / RM_SUBJECT_ID / RM_SESSION_ID    session coordinates
@@ -115,13 +115,25 @@ export async function restJson<T = any>(
   return { status: res.status, body };
 }
 
+/** The one brief shape both `resolveRequireWeights` and `reportSnapshotIdFromBrief` read from. */
+type SwarmBriefResponse = {
+  body?: { subject?: { recommendationType?: string | null } | null } | null;
+  reportSnapshotId?: unknown;
+};
+
 /**
  * Does this session ask for an allocation vector as well as prose?
  *
  * Exported so the HTTP-boundary suite can pin both witnesses without
- * running a session.
+ * running a session. `prefetchedBrief` lets a caller that already fetched the
+ * session's brief (e.g. `participate()`, which also needs its
+ * `reportSnapshotId`) reuse that ONE fetch instead of asking twice.
  */
-export async function resolveRequireWeights(sessionId: string, subjectId: string): Promise<boolean> {
+export async function resolveRequireWeights(
+  sessionId: string,
+  subjectId: string,
+  prefetchedBrief?: { status: number; body: SwarmBriefResponse | null },
+): Promise<boolean> {
   // THE BRIEF IS READ, NOT MERELY PINGED. It used to be a bare liveness check
   // with its result discarded — and that is how a `bucket_weights` session
   // could ask every analyst for an allocation and have none of them notice:
@@ -140,11 +152,11 @@ export async function resolveRequireWeights(sessionId: string, subjectId: string
   // serves `recommendationType`, is public, and exists long before any brief
   // does. The brief stays the primary source (it is the session's own ask); the
   // subject read only answers the case where the brief is not there yet.
-  const brief = await restJson<{ body?: { subject?: { recommendationType?: string | null } | null } | null }>(
-    `${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`,
-    undefined,
-    { allowStatuses: [404] },
-  );
+  const brief =
+    prefetchedBrief ??
+    (await restJson<SwarmBriefResponse>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
+      allowStatuses: [404],
+    }));
   let recommendationType = brief.body?.body?.subject?.recommendationType ?? null;
   if (recommendationType == null) {
     const subject = await restJson<{ recommendationType?: string | null } | null>(
@@ -170,6 +182,13 @@ export async function fetchSigningPayload(draft: Record<string, unknown>): Promi
   // Do not trim, normalize, parse, or locally reconstruct this value: these
   // are the exact bytes the API promises to verify.
   return body.canonical;
+}
+
+/** Read the optional immutable report binding from a public brief response. */
+export function reportSnapshotIdFromBrief(brief: { reportSnapshotId?: unknown } | null | undefined): string | undefined {
+  return typeof brief?.reportSnapshotId === "string" && brief.reportSnapshotId.length > 0
+    ? brief.reportSnapshotId
+    : undefined;
 }
 
 const b64 = (b: ArrayBuffer | Uint8Array) =>
@@ -322,7 +341,16 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  const requireWeights = await resolveRequireWeights(sessionId, subjectId);
+  // Read the brief for THIS session (not merely the newest brief that happens
+  // to share its date and subject) ONCE — it carries both which kind of
+  // recommendation this session wants (T17) and its immutable report binding,
+  // part of the schema-2 signing payload. No brief yet is a legitimate 404
+  // (issue #868), not a reason to abort the session.
+  const brief = await restJson<SwarmBriefResponse>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
+    allowStatuses: [404],
+  });
+  const requireWeights = await resolveRequireWeights(sessionId, subjectId, brief);
+  const reportSnapshotId = brief.status === 200 ? reportSnapshotIdFromBrief(brief.body) : undefined;
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,
@@ -388,6 +416,7 @@ async function participate(): Promise<void> {
     // and is reproducible by anyone holding the receipt. The client still never
     // builds canonical bytes locally — the server response is the authority.
     ...(authored.weights ? { weights: authored.weights } : {}),
+    ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);
   let signature: string;

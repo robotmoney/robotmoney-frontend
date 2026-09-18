@@ -108,13 +108,19 @@ export const ROUTES: {
   analytics: {
     readiness: string;
     rawHistory: string;
+    sourceAcquisitions: string;
     rawHistorySeed: string;
-    regimeSnapshots: string;
-    researchSignals: string;
     researchSignalDates: string;
     rawHistoryGaps: string;
     researchEligibility: string;
     telemetry: string;
+    runs: string;
+    runEvents: string;
+    vintages: string;
+    vintage: string;
+    runPackage: string;
+    reportSnapshot: string;
+    paritySweep: string;
   };
   admin: {
     auth: string;

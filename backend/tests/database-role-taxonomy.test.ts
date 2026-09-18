@@ -75,3 +75,43 @@ test("the bootstrap connection can assume the non-login owner for DDL", async ()
     await tx.unsafe("DROP TABLE rm_role_taxonomy_migration_probe");
   });
 });
+
+test("rm_app can trigger overwrite capture but cannot fabricate or mutate evidence directly", async () => {
+  const date = "2041-02-01";
+  const indicator = "ROLE_CAPTURE_PROBE";
+  await sql`
+    INSERT INTO raw_indicator_history (date, indicator, value, source)
+    VALUES (${date}, ${indicator}, 1, 'seed')`;
+
+  await app`
+    UPDATE raw_indicator_history SET value = 2, source = 'live'
+    WHERE date = ${date} AND indicator = ${indicator}`;
+
+  const rows = await sql<{
+    table_name: string;
+    operation: string;
+    natural_key: Record<string, unknown>;
+    previous_row: Record<string, unknown>;
+    replacement_row: Record<string, unknown>;
+  }[]>`
+    SELECT table_name, operation, natural_key, previous_row, replacement_row
+    FROM analytics_overwrite_events
+    WHERE table_name = 'raw_indicator_history'
+      AND natural_key = ${sql.json({ date, indicator } as never)}`;
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    table_name: "raw_indicator_history",
+    operation: "update",
+    natural_key: { date, indicator },
+    previous_row: { date, indicator, value: 1, source: "seed" },
+    replacement_row: { date, indicator, value: 2, source: "live" },
+  });
+
+  expect(await denied(app`
+    INSERT INTO analytics_overwrite_events
+      (table_name, operation, natural_key, previous_row, replacement_row)
+    VALUES ('raw_indicator_history', 'delete', '{}', '{}', NULL)`)).toBe("42501");
+  expect(await denied(app`UPDATE analytics_overwrite_events SET natural_key = natural_key`)).toBe("42501");
+  expect(await denied(app`DELETE FROM analytics_overwrite_events`)).toBe("42501");
+  expect(await denied(app`TRUNCATE analytics_overwrite_events`)).toBe("42501");
+});

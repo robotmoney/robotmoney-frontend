@@ -1,0 +1,6 @@
+container:
+  name: robotmoney/robotmoney-producer
+  build: build.sh
+  # Same reasoning as containers/api/container.yml: backend/Dockerfile's build
+  # context must be the repo root, not this container.yml's own directory.
+  content-root: .

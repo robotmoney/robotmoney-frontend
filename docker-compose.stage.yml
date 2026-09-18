@@ -16,20 +16,26 @@
 # assertStageWebPortFree) that names the holder from `docker ps` / `ss -tlnp`,
 # because compose's own bind failure alone is too opaque to act on.
 #
+# PINNED ON `website-server`, NOT `api` (issue #892): the tunnel serves public
+# HTTP traffic — HTML/static assets plus the API, the latter proxied through by
+# website-server/nginx.conf — so it is website-server's container port, not
+# api's own, that has to land on the one address cloudflared forwards to.
+#
 # WHY `!override` AND NOT A PLAIN `ports:`. Compose merges the `ports` sequence
 # by APPENDING, not replacing — verified with `docker compose config`, which
-# emits BOTH `target: 8787` (docker-assigned) and `target: 8787, published:
-# 48787` when the overlay omits the tag. That would publish the api twice: once
-# on the tunnel origin and once on a stray ephemeral port. `!override` replaces
-# the base sequence outright, so the resolved config carries exactly ONE api
-# mapping. (scripts/tests/unit/stack-ports.test.ts guards the tag; the
-# integration half in scripts/tests/integration/demo-compose-config.test.ts
-# asserts the resolved mapping count from real `docker compose config` output.)
+# emits BOTH `target: 8080` (docker-assigned) and `target: 8080, published:
+# 48787` when the overlay omits the tag. That would publish website-server
+# twice: once on the tunnel origin and once on a stray ephemeral port.
+# `!override` replaces the base sequence outright, so the resolved config
+# carries exactly ONE website-server mapping. (scripts/tests/unit/
+# stack-ports.test.ts guards the tag; the integration half in
+# scripts/tests/integration/smoke-compose-config.test.ts asserts the resolved
+# mapping count from real `docker compose config` output.)
 #
 # POSTGRES IS DELIBERATELY ABSENT. Nothing external routes to the database —
 # api and the worker lanes reach it over the compose network by service name —
 # so it stays Docker-assigned even under --stage. Publishing the stage demo's
 # database on a predictable host port is a liability, not a feature.
 services:
-  api:
-    ports: !override ["48787:8787"]
+  website-server:
+    ports: !override ["48787:8080"]

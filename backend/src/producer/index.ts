@@ -100,6 +100,8 @@ export interface ResearchCatchUpDeps {
   runner?: Runner;
   source?: AnalyticsDataSource;
   now?: () => Date;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Best-effort: a read or repair failure here must never take down the
@@ -111,6 +113,7 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
   const persistence = deps.persistence ?? analyticsApiClient();
   const now = (deps.now ?? (() => new Date()))();
   const since = new Date(now.getTime() - CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const beat = deps.beat ?? writeHeartbeat;
 
   let present: { signalKey: string; date: string }[];
   try {
@@ -123,6 +126,10 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
   const missing = computeMissingResearchDays(present, now);
   for (const day of missing) {
     console.log(`[analytics-producer] catch-up: repairing missed research day ${day}`);
+    // Write a heartbeat before each day's I/O so Docker sees liveness
+    // progress during a multi-day boot catch-up (staleAfterMs is generous
+    // enough to cover one full EDGAR day-repair round-trip).
+    await beat({ phase: "busy", staleAfterMs: 120_000, writer: "analytics-producer", detail: `catch-up: repairing missed research day ${day}` });
     try {
       await runProducerOnce("research", day, { runner: deps.runner, source: deps.source, persistence });
     } catch (err) {
@@ -158,10 +165,20 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
 // GET /api/admin/gaps for an operator to close deliberately.
 const INDICATOR_CATCHUP_WINDOW_DAYS = 14;
 
+/** Issue #979: the one data-source label this catch-up stamps on BOTH models —
+ *  source_value_versions.provenance at acquisition time and
+ *  raw_indicator_history.source at write time. It is 'seed' because the write
+ *  side is the gap-fill floor writer (store/floor-seed.ts), which tags every
+ *  row it writes 'seed'. Exported so a test can pin the two to each other
+ *  rather than restating the literal. */
+export const CATCH_UP_PROVENANCE = "seed";
+
 export interface IndicatorCatchUpDeps {
   persistence?: AnalyticsPersistence;
   source?: AnalyticsDataSource;
   now?: () => Date;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Best-effort, same contract as catchUpMissedResearchDays: never throws,
@@ -174,6 +191,7 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
   const source = deps.source ?? resolveAnalyticsSource();
   const now = (deps.now ?? (() => new Date()))();
   const since = new Date(now.getTime() - INDICATOR_CATCHUP_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const beat = deps.beat ?? writeHeartbeat;
 
   let missing: string[];
   try {
@@ -187,10 +205,24 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
   if (missing.length === 0) return [];
 
   console.log(`[analytics-producer] indicator catch-up: ${missing.length} raw_indicator_history day(s) missing since ${since}, re-fetching the registry`);
+  // Write a heartbeat before the registry fetch so Docker sees liveness
+  // progress during boot-time catch-up (the fetch is the expensive I/O here).
+  await beat({ phase: "busy", staleAfterMs: 120_000, writer: "analytics-producer", detail: `indicator catch-up: fetching registry for ${missing.length} missing day(s)` });
   const missingSet = new Set(missing);
   let fetched: Record<string, { date: string; value: number }[]>;
   try {
-    fetched = await source.fetchIndicators(INDICATORS, console);
+    const acquisitionSink = persistence.saveSourceAcquisition
+      ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
+      : undefined;
+    // Issue #979: the points this fetch returns are written back below through
+    // seedRawHistory → applyRawFloorSeed → saveRawIndicatorHistory(..., "seed"),
+    // so the ledger must record the SAME label. Without it the capture path
+    // defaults to 'live' and one gap-filled row answers 'live' in ledger mode
+    // and 'seed' in compatibility mode — the silent field change cutover is
+    // supposed to be impossible. The literal mirrors store/floor-seed.ts's tag;
+    // producer code may not import that API-owned module
+    // (tests/analytics-api-boundary.test.ts).
+    fetched = await source.fetchIndicators(INDICATORS, console, acquisitionSink, null, { provenance: CATCH_UP_PROVENANCE });
   } catch (err) {
     console.error(`[analytics-producer] indicator catch-up: registry fetch failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
     return missing;
@@ -345,6 +377,8 @@ export interface ProducerServeDeps {
    *  Defaults to the real catchUpMissedIndicatorDays against the resolved API
    *  config — same shape as `catchUp` above, one per class. */
   catchUpIndicators?: (persistence: AnalyticsPersistence) => Promise<unknown>;
+  /** Test seam: override the heartbeat writer so tests never touch /tmp. */
+  beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -352,6 +386,16 @@ export interface ProducerServeDeps {
  *  loop rather than re-reading the token file. */
 export async function startProducerSchedules(deps: ProducerServeDeps = {}): Promise<AnalyticsApiConfig> {
   const cfg = requireProducerApiConfig(deps.env);
+  // The first record this process writes, and the only one until the API
+  // answers. Its budget spans waitForApi's own 120s ceiling, so a boot blocked
+  // on an unreachable API still reports honestly: the record goes stale and the
+  // container goes red, which is the correct outcome.
+  await (deps.beat ?? writeHeartbeat)({
+    phase: "boot",
+    staleAfterMs: 180_000,
+    writer: PRODUCER_WRITER,
+    detail: "waiting for the analytics API before arming crons",
+  });
   await (deps.waitUntilReady ?? waitForApi)(cfg);
   // issue #614 AC4 ("on boot/tick"): repair any research day missed while
   // this process was down BEFORE arming today's crons — a restarted producer
@@ -397,6 +441,21 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
 // submission flows through) rather than asserting its own existence.
 
 const PRODUCER_WRITER = "analytics-producer";
+
+// BOOT COVER, AND WHY IT IS NOT A TICKER
+// Before this file's liveness loop exists, the process still has to reach the
+// API (up to 120s) and then repair every missed day. Nothing wrote a heartbeat
+// during that window, so the container aged past its start_period and Docker
+// called it unhealthy while it was in fact working correctly.
+//
+// The fix is one record per real step — the boot record below, then the
+// per-day record each catch-up loop writes before its own I/O. It is
+// deliberately NOT a `setInterval` pulse: this file's own rule (see the
+// heartbeat block in src/ops/heartbeat.ts) is that a record is written from
+// inside the work after a step completes, never by a detached timer that would
+// go on ticking green over a boot that had deadlocked. A ticker would also have
+// to name a phase, and every phase it could honestly claim here is false —
+// `armed` above all, since arming is precisely what has not happened yet.
 
 /** Tolerance for a cron whose fire time has just passed but whose callback has
  *  not been entered yet — timer dispatch is not instantaneous. */

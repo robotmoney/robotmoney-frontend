@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -394,8 +394,10 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
   expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief!.body!.windowClosesAt);
+  expect((brief?.body?.regime as any)?.method).toBe(REGIME_METHOD.id);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
+
   const submit = async (stance: string, confidence: number) => {
     const m = await activeMember();
     const sub = {
@@ -436,6 +438,8 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(typeof rs.history[0].composite).toBe("number");
   expect(rs).toHaveProperty("macro_percentile");
   expect(rs).toHaveProperty("onchain_regime");
+  expect(rs.method).toBe(REGIME_METHOD.id);
+
 
   // subject snapshot total flowed onto the session.
   expect(s.subjectSnapshotTotalValueUsd).toBeGreaterThan(0);
@@ -511,18 +515,21 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
       confidence: 0.9,
       body: "Member one supports the submitted allocation because liquidity is observable.",
       weights: canonical([2, 1, 0, 0]),
+      cites: ["signal_a"],
     },
     {
       stance: "cautious",
       confidence: 0.6,
       body: "Member two prefers a larger beta sleeve until volatility settles.",
       weights: canonical([1, 3, 1, 0]),
+      cites: ["signal_a", "signal_b"],
     },
     {
       stance: "neutral",
       confidence: 0.3,
       body: "",
       weights: canonical([0, 1, 1, 0]),
+      cites: ["signal_b", "signal_c"],
     },
   ];
   for (let index = 0; index < fixtures.length; index++) {
@@ -579,7 +586,13 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
   expect(recommendation.disagreements[0].topic).not.toMatch(/^Submitted views on/);
   expect(recommendation.disagreements[0].what_settles).not.toBe("");
   expect(recommendation.stances.neutral).toBe(1);
-  expect(detail?.takes[2].weights).toEqual(fixtures[2].weights);
+  expect(detail?.takes[2].weights).toEqual([
+    { bucket: "agent_tokens", weight: 0 },
+    { bucket: "conservative_defi_yield", weight: 0.5 },
+    { bucket: "protocol_tokens", weight: 0.5 },
+    { bucket: "real_world_assets", weight: 0 },
+  ]);
+  expect(recommendation.citedSignals).toEqual({ signal_a: 2, signal_b: 2, signal_c: 1 });
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
@@ -744,10 +757,8 @@ test("GET /api/swarm/sessions default: light-projected + cursor-paginated (no bi
 
 test("GET /api/swarm/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
-  await ensureProseSubject(subj, "Full Projection Subject");
+  await ic.ensureSmokeSubjectFixtures(subj, "Full Projection Subject", "2026-07-05");
   const session = await ic.openSession(subj);
-  // The DATABASE dates the session (migration 0022) — read it back rather
-  // than asserting a date this test chose.
   const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
   const m = await activeMember();
@@ -1398,4 +1409,62 @@ test("GET subject snapshots: omitting limit/before returns everything; both are 
   const before = await get(`${routePath(ROUTES.swarm.subjectSnapshots, { id: subj })}?before=2026-08-03`);
   const beforeBody = before?.body as { snapshots: { date: string }[] };
   expect(beforeBody.snapshots.map((s) => s.date)).toEqual(["2026-08-02", "2026-08-01"]);
+});
+
+test("normalizedTakeWeights gates malformed weights (negative weight, non-array)", () => {
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: -1 }])).toBeNull();
+  expect(ic.normalizedTakeWeights({ bucket: "b", weight: 1 })).toBeNull();
+  expect(ic.normalizedTakeWeights("not an array")).toBeNull();
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 0 }])).toBeNull(); // 0 total weight is invalid
+  expect(ic.normalizedTakeWeights([{ bucket: "b", weight: 1 }])).toEqual([{ bucket: "b", weight: 1 }]);
+});
+
+test("ordinal string formatting for percentiles in buildRationale and buildConsensus", () => {
+  const cases = [
+    { n: 1, suffix: "1st" },
+    { n: 2, suffix: "2nd" },
+    { n: 3, suffix: "3rd" },
+    { n: 11, suffix: "11th" },
+    { n: 12, suffix: "12th" },
+    { n: 13, suffix: "13th" },
+    { n: 21, suffix: "21st" },
+    { n: 22, suffix: "22nd" },
+    { n: 23, suffix: "23rd" },
+    { n: 83, suffix: "83rd" },
+  ];
+  const byStance = { neutral: 1 };
+  
+  for (const c of cases) {
+    const rs = { composite_percentile: c.n / 100, regime: "bullish" };
+    const rationale = ic.buildRationale("Subject", byStance, 1, null, rs);
+    expect(rationale).toContain(`regime composite at the ${c.suffix} percentile`);
+    
+    const consensus = ic.buildConsensus(1, 1, 1, byStance, null, rs);
+    const found = consensus.some((pt: string) => pt.includes(`Regime composite at the ${c.suffix} percentile`));
+    expect(found).toBe(true);
+  }
+});
+
+import { toTake } from "../src/swarm/projections.ts";
+
+test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
+  const row = {
+    id: "fake-id",
+    member_id: "fake-member",
+    member_handle: "fake-handle",
+    member_name: "Fake Member",
+    stance: "bullish",
+    confidence: 0.8,
+    body: "fake body",
+    memo_url: null,
+    verified: true,
+    payload: { weights: [{ bucket: "b", weight: -1 }] }, // Malformed!
+  };
+  const takeDto = toTake(row as any);
+  expect(takeDto.weights).toBeNull();
+
+  // And test valid weights just in case
+  const rowValid = { ...row, payload: { weights: [{ bucket: "b", weight: 1 }] } };
+  const takeDtoValid = toTake(rowValid as any);
+  expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
 });

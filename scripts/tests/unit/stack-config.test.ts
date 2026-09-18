@@ -57,8 +57,8 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
 }
 
 describe("stack profiles", () => {
-  test("core is exactly postgres + api — no worker lane, no member-agent", () => {
-    expect(servicesFor("core")).toEqual(["postgres", "api"]);
+  test("core is exactly postgres + api + website-server — no worker lane, no member-agent", () => {
+    expect(servicesFor("core")).toEqual(["postgres", "api", "website-server"]);
     for (const lane of WORKER_LANE_SERVICES) expect(servicesFor("core")).not.toContain(lane);
     expect(servicesFor("core")).not.toContain("member-agent");
   });
@@ -185,6 +185,12 @@ describe("argv builders", () => {
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {
     expect(upArgs(["postgres", "api"])).toEqual(["up", "-d", "postgres", "api"]);
+  });
+
+  test("upArgs can wait for a deferred service's real healthcheck", () => {
+    expect(upArgs(["analytics-producer"], { wait: true, waitTimeoutSeconds: 600 })).toEqual([
+      "up", "-d", "--wait", "--wait-timeout", "600", "analytics-producer",
+    ]);
   });
 
   test("downArgs is a plain `down` unless volumes/orphans are explicitly requested", () => {

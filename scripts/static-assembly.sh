@@ -29,6 +29,11 @@ mkdir -p "$OUT"
 find "$OUT" -mindepth 1 -delete
 cp -R frontend/public/. "$OUT"/
 
+# The web client's identity (frontend/package.json + HEAD) travels with the
+# bytes it describes: /version.json is how a deployed site says which client
+# version it is, independently of the api's own version.
+bun scripts/web-client/version.ts > "$OUT/version.json"
+
 PRERENDER_DIR="$OUT" bun scripts/prerender.ts
 
 # T26: the served SPA's own identity. `_static` is a bind mount of a build

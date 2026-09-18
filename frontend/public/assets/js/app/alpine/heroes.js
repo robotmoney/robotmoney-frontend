@@ -657,6 +657,30 @@ export function registerHeroes(Alpine) {
     },
   }));
 
+  // Tag filter for /changelog. Lives here rather than inline on the section so
+  // a no-JS HTML-to-text pass (agent fetch tools that strip tags with a regex)
+  // never sees the arrow functions: `(e) => …` contains `>`, which closes a
+  // naive `<[^>]+>` match mid-attribute and leaks the Alpine source into the
+  // extracted prose.
+  Alpine.data("changelogPage", () => ({
+    tag: null,
+    has(el) {
+      return !this.tag || el.dataset.tags.split(" ").includes(this.tag);
+    },
+    toggle(t) {
+      this.tag = this.tag === t ? null : t;
+    },
+    get shown() {
+      return [...this.$refs.log.querySelectorAll(".cl__entry")].filter((e) => this.has(e)).length;
+    },
+    get countLabel() {
+      const n = this.shown;
+      const noun = n === 1 ? " release" : " releases";
+      if (!this.tag) return n + noun;
+      return n + noun + " in " + this.tag.charAt(0).toUpperCase() + this.tag.slice(1);
+    },
+  }));
+
   Alpine.data("changelogHero", () => ({
     ...p5Lifecycle(),
     _start(container) {

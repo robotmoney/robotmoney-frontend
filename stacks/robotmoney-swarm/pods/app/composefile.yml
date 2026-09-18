@@ -1,0 +1,113 @@
+# app pod: api (JSON API + swarm REST) and website (static/SPA serving).
+#
+# Images are referenced by tag only — never `build:` here (field guide §3).
+# `stack prepare` builds each from its containers/<name>/build.sh.
+#
+# SECRET FORWARDING: name a stack.yml secret in a service's `environment:`
+# as ${STACK_SECRET_<NAME>:-} — the exact form the compose deployer exports
+# into its own process before `docker compose up` (verified empirically
+# against stack 2.0.0-47a4772: a composefile line reading bare
+# ${DATABASE_URL:-} resolves EMPTY on this target — only the
+# STACK_SECRET_-prefixed form resolves. This is undocumented upstream and
+# differs from both the scaffold-stack.md sketch and docker-compose.yml's own
+# ${VAR} convention). This choice is cosmetic, not a scoping control: `stack
+# deploy` writes its own `<NAME>: ${STACK_SECRET_<NAME>:-}` line for every
+# declared secret into every service of every generated composefile
+# regardless of what this source file says — verified by inspecting a real
+# deployment directory, where `website` (no `environment:` block below at
+# all) and every worker lane still receive all 5 secrets. See stack.yml's
+# header comment for what that means for OPENCODE_API_KEY's intended
+# worker-swarm-only scoping.
+#
+# All other (non-secret) values are forwarded as ${VAR} / ${VAR:-} — the same
+# env-var SET docker-compose.yml already forwards to `api`, but WITHOUT that
+# file's non-empty inline defaults (its RM_ENV default of "smoke", its swarm
+# cron-schedule defaults, and so on): an inline non-empty default would
+# silently beat `--config` (field guide §5), so an operator must forward the
+# value explicitly (`stack init --config VAR=value`) rather than rely on one
+# baked in here. No non-empty fallback form appears in this file outside the
+# documented OPENCODE_TIMEOUT_MS bare-null exception (which carries no
+# fallback at all — see pods/workers/composefile.yml).
+services:
+  api:
+    image: robotmoney/robotmoney-api:stack
+    command: ["bun", "run", "src/api/index.ts"]
+    environment:
+      # Required — no fallback, matching docker-compose.yml's own ${DATABASE_URL}.
+      DATABASE_URL: ${STACK_SECRET_DATABASE_URL:-}
+      RM_ENV: ${RM_ENV:-}
+      # Handle/id namespace boot guard (issue #602): escape hatch + wall-clock
+      # budget. Blank default = unset inside the container (fail-closed).
+      RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: ${RM_ALLOW_HANDLE_NAMESPACE_VIOLATION:-}
+      PG_NAMESPACE_GUARD_TIMEOUT_MS: ${PG_NAMESPACE_GUARD_TIMEOUT_MS:-}
+      # ADMIN_TOKEN / AUTOMATION_TOKEN / ANALYTICS_TOKEN generation ownership
+      # is an open decision (devops#7) — not declared as a stack secret here,
+      # forwarded the same unset-by-default way docker-compose.yml does.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      AUTOMATION_TOKEN: ${AUTOMATION_TOKEN:-}
+      # Analytics-provider bearer credential (issue #106). stack has no
+      # docker-secrets-file mechanism of its own; producer/index.ts:23 already
+      # accepts the plain-env form, which is what docker-compose.yml's field
+      # guide records as the intended shape once file secrets are dropped
+      # (stack-orchestrator.md §6) — so this is the bare var, not
+      # ANALYTICS_TOKEN_FILE.
+      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      # Passkey relying-party origin/host (issue #617).
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      # Projects data source (backend/src/projects/access/select.ts).
+      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+      # Optional capability TTLs. Blank/unset preserves backend defaults.
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
+      SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
+      SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
+      # Swarm session-lifecycle cron cadence (issue #208). docker-compose.yml
+      # inline-defaults these to the daily 06:00-08:00 UTC sequence; here they
+      # are forwarded only, per this file's no-inline-default rule above — an
+      # operator must set the cadence via --config.
+      SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-}
+      SWARM_OPEN_SESSION_CRON: ${SWARM_OPEN_SESSION_CRON:-}
+      SWARM_PUBLISH_BRIEF_CRON: ${SWARM_PUBLISH_BRIEF_CRON:-}
+      SWARM_CLOSE_WINDOW_CRON: ${SWARM_CLOSE_WINDOW_CRON:-}
+      SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-}
+      SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-}
+      SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-}
+      # Consensus judge (issue #752): shared OpenCode Zen credential, endpoint,
+      # per-call bound. On/off and model choice are `swarm_judge_config` rows,
+      # not env vars (D22 rule 1).
+      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
+      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # No STATIC_DIR / _static bind mount here: this stack's app pod carries
+      # a dedicated `website` service (website-server/Dockerfile, #892) for
+      # static/SPA serving; wiring api's own STATIC_DIR would re-add the
+      # request-time static path this stack is deliberately moving off of
+      # (backend/src/api/static.ts no longer exists as of #892), and a bind
+      # mount's relative host path does not survive being copied into a
+      # deployment directory unmodified.
+    ports:
+      # Container port only — Docker/stack picks the host port; see
+      # docker-compose.yml's header for why a fixed host port is never drawn
+      # by us. `docker compose port api 8787` / `stack manage port` reports
+      # the assignment.
+      - "8787"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "-e", "process.exit((await fetch('http://127.0.0.1:8787/health')).ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  website:
+    # Built from website-server/Dockerfile (#892) — see
+    # containers/website/build.sh. A plain static file server (no app layer),
+    # so this service's own environment: block deliberately declares no
+    # secrets or DATABASE_URL — note that stack itself still injects every
+    # stack.yml secret's STACK_SECRET_<NAME> into every container's process
+    # regardless (see stack.yml's header comment), so this omission documents
+    # intent, not an actual isolation guarantee.
+    image: robotmoney/robotmoney-website:stack
+    restart: unless-stopped

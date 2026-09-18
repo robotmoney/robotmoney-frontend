@@ -144,7 +144,19 @@ test("no disagreement is reported when the freshly repaired price matches what a
   expect(result.detail ?? "").not.toContain("disagreement");
 });
 
-test("the live sampler never writes to asset_prices — it writes a fused spot row, not a UTC daily close", async () => {
+// UPDATE (issue #927): before this issue the live sampler never touched
+// asset_prices at all — the coverage gap it closes is exactly that omission.
+// It now dual-writes on every ordinary sample, which is NOT the live/close
+// substitution D41's second trap refuses: the row it writes for TODAY's date
+// is never consumed via the read sites' join while today stays "open"
+// (`is_closed = false` — all three sites keep reading the fused sample row
+// for today regardless of what asset_prices holds, unchanged by #927). Only
+// once tomorrow arrives does today's row become a CLOSED day, and by then
+// asset_prices holds whatever spot price the LAST successful per-minute tick
+// before midnight observed — the same "last trade of the day" approximation
+// of a close the repair path's own OHLCV-derived close exists to true up
+// later if it ever disagrees (see the disagreement-check tests above).
+test("the live sampler dual-writes asset_prices under today's date (issue #927) — the row exists, but today's OWN reads never consume it via the join", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   // issue #827: read the day the sampler actually wrote off its own return
@@ -158,7 +170,18 @@ test("the live sampler never writes to asset_prices — it writes a fused spot r
   `;
   // Sanity: the sampler really did write today's fused sample rows...
   expect(balanceCount!.n).toBeGreaterThan(0);
-  // ...and none of it reached asset_prices, at any date.
-  const [priceCount] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM asset_prices`;
-  expect(priceCount!.n).toBe(0);
+  // ...and every priced symbol among them also got an asset_prices row under
+  // TODAY's date (issue #927's forward dual-write — the SP500/`config`-kind
+  // legs have no price to dual-write, so this is bounded below by balances
+  // minus those, not required to equal balanceCount exactly).
+  const [priceCount] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM asset_prices WHERE price_date = ${today}`;
+  expect(priceCount!.n).toBeGreaterThan(0);
+  const timeBases = await sql<{ time_basis: string }[]>`SELECT DISTINCT time_basis FROM asset_prices WHERE price_date = ${today}`;
+  expect(timeBases.map((r) => r.time_basis)).toEqual(["utc-daily-close"]);
+  // D41 phase 4 (issue #927): the live sampler no longer writes price_usd —
+  // asset_prices is the sole record of that price now.
+  const [priceUsdNull] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${today} AND price_usd IS NOT NULL
+  `;
+  expect(priceUsdNull!.n).toBe(0);
 });

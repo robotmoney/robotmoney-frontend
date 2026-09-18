@@ -20,6 +20,7 @@ import {
 } from "../edgar-incremental-refresh.ts";
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
+import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
 
 export type Logger = {
   log?: (m: string) => void;
@@ -74,17 +75,36 @@ export interface BacktestExtras {
   tbill3m: Point[];
 }
 
+// Issue #979: the acquisition-time data-source label the fetched values carry
+// into source_value_versions.provenance (migration 0061). It MUST be the same
+// label the caller then writes into raw_indicator_history.source for the same
+// points, or ledger mode and compatibility mode answer differently for one
+// row and cutover silently changes that field. Omitted means 'live' — the
+// default both captureSourceAcquisition() and saveRawIndicatorHistory()
+// already apply, i.e. the orchestrator's ordinary merge path
+// (analytics/index.ts). producer/index.ts's gap catch-up writes its points
+// back through the 'seed'-tagged floor writer and so passes 'seed' here.
+export interface FetchIndicatorsOptions {
+  provenance?: string;
+}
+
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
-  fetchIndicators(indicators: Indicator[], logger?: Logger): Promise<Record<string, Point[]>>;
+  fetchIndicators(
+    indicators: Indicator[],
+    logger?: Logger,
+    acquisitionSink?: AcquisitionSink,
+    requestedByRunId?: number | null,
+    opts?: FetchIndicatorsOptions,
+  ): Promise<Record<string, Point[]>>;
   // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF). `edgarCtx`
   // (issue #109) carries the persisted MNA floor + hard deadline for the
   // live source's incremental EDGAR sweep; hermetic/fixture sources never
   // need it (a fewer-parameter implementation is structurally valid TS).
-  fetchResearchInputs(asof: string, logger?: Logger, edgarCtx?: EdgarPlanContext): Promise<ResearchInputs>;
+  fetchResearchInputs(asof: string, logger?: Logger, edgarCtx?: EdgarPlanContext, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<ResearchInputs>;
   // Backtest/correlations overlays (SPX/ETH price levels + DTB3 yield). A failed
   // fetch returns [] (logged) → that leg is simply excluded downstream.
-  fetchBacktestExtras(logger?: Logger): Promise<BacktestExtras>;
+  fetchBacktestExtras(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<BacktestExtras>;
 }
 
 const CHANNEL_START = "2018-01-01";
@@ -106,18 +126,22 @@ async function safe(label: string, fn: () => Promise<Point[]>, logger: Logger): 
 }
 
 export const liveDataSource: AnalyticsDataSource = {
-  fetchIndicators(indicators, logger = console) {
-    return fetchAll({ logger, indicators });
+  fetchIndicators(indicators, logger = console, acquisitionSink, requestedByRunId, opts) {
+    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+    return fetchAll({ logger, indicators, acquisitionSink, requestedByRunId, provenance: opts?.provenance });
   },
 
-  async fetchResearchInputs(asof, logger = console, edgarCtx): Promise<ResearchInputs> {
+  async fetchResearchInputs(asof, logger = console, edgarCtx, acquisitionSink, requestedByRunId): Promise<ResearchInputs> {
+    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+    const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
+      captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
     // Channel + late-cycle share Yahoo tickers; fetch the union concurrently.
     const [btc, qqq, spy, rsp, ...top7] = await Promise.all([
-      safe("BTC-USD", () => fetchYahoo("BTC-USD", unix(CHANNEL_START)), logger),
-      safe("QQQ", () => fetchYahoo("QQQ", unix(CHANNEL_START)), logger),
-      safe("SPY", () => fetchYahoo("SPY", unix(LATECYCLE_START)), logger),
-      safe("RSP", () => fetchYahoo("RSP", unix(LATECYCLE_START)), logger),
-      ...TOP7.map((sym) => safe(sym, () => fetchYahoo(sym, unix(LATECYCLE_START)), logger)),
+      safe("BTC-USD", () => acquire("yahoo", "research:BTC-USD", `BTC-USD:${CHANNEL_START}`, () => fetchYahoo("BTC-USD", unix(CHANNEL_START))), logger),
+      safe("QQQ", () => acquire("yahoo", "research:QQQ", `QQQ:${CHANNEL_START}`, () => fetchYahoo("QQQ", unix(CHANNEL_START))), logger),
+      safe("SPY", () => acquire("yahoo", "research:SPY", `SPY:${LATECYCLE_START}`, () => fetchYahoo("SPY", unix(LATECYCLE_START))), logger),
+      safe("RSP", () => acquire("yahoo", "research:RSP", `RSP:${LATECYCLE_START}`, () => fetchYahoo("RSP", unix(LATECYCLE_START))), logger),
+      ...TOP7.map((sym) => safe(sym, () => acquire("yahoo", `research:${sym}`, `${sym}:${LATECYCLE_START}`, () => fetchYahoo(sym, unix(LATECYCLE_START))), logger)),
     ]);
 
     // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
@@ -144,26 +168,30 @@ export const liveDataSource: AnalyticsDataSource = {
     const persistedMna = edgarCtx?.persistedMna ?? [];
     const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
     const [margin, conf, mnaRefresh] = await Promise.all([
-      safe("FRED BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q"), logger),
-      safe("FRED UMCSENT", () => fetchFred("UMCSENT"), logger),
-      refreshEdgarWithTierFallback({
+      safe("FRED BOGZ1FL663067003Q", () => acquire("fred", "research:MARGIN", "BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q")), logger),
+      safe("FRED UMCSENT", () => acquire("fred", "research:CONF", "UMCSENT", () => fetchFred("UMCSENT")), logger),
+      captureSourceAcquisition({ provider: "edgar", sourceKey: "raw_indicator_history:MNA", parserVersion: "edgar:1", cacheIdentity: `${asof}:${selectEdgarRefreshTier(asof)}`, requestedByRunId, points: (result: EdgarRefreshOutcome) => result.newRows }, acquisitionSink, () =>
+        refreshEdgarWithTierFallback({
         asOf: asof,
         persistedMonths: persistedMna.map((p) => p.date.slice(0, 7)),
         persistedRows: persistedMna,
         deadlineAt,
         logger,
-      }),
+        })),
     ]);
     const mna = mnaRefresh.status === "degraded" ? persistedMna : mergeSeries(persistedMna, mnaRefresh.newRows);
 
     return { btc, qqq, spy, rsp, top7, mna, margin, conf, mnaRefresh };
   },
 
-  async fetchBacktestExtras(logger = console): Promise<BacktestExtras> {
+  async fetchBacktestExtras(logger = console, acquisitionSink, requestedByRunId): Promise<BacktestExtras> {
+    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+    const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
+      captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
     const [spx, eth, tbill3m] = await Promise.all([
-      safe("^GSPC", () => fetchYahoo("^GSPC", unix(EXTRAS_START)), logger),
-      safe("ETH-USD", () => fetchYahoo("ETH-USD", unix(EXTRAS_START)), logger),
-      safe("FRED DTB3", () => fetchFred("DTB3"), logger),
+      safe("^GSPC", () => acquire("yahoo", "backtest:^GSPC", `^GSPC:${EXTRAS_START}`, () => fetchYahoo("^GSPC", unix(EXTRAS_START))), logger),
+      safe("ETH-USD", () => acquire("yahoo", "backtest:ETH-USD", `ETH-USD:${EXTRAS_START}`, () => fetchYahoo("ETH-USD", unix(EXTRAS_START))), logger),
+      safe("FRED DTB3", () => acquire("fred", "backtest:DTB3", "DTB3", () => fetchFred("DTB3")), logger),
     ]);
     return { spx, eth, tbill3m };
   },

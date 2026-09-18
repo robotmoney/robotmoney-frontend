@@ -742,6 +742,28 @@ test("AC8b (issue #118): the request path reflects the LATEST scheduled sample p
   expect(weth.valueUsd).toBeCloseTo(15500, 6);
 });
 
+// Issue #927: sampleWalletBalances stopped writing price_usd on ordinary
+// samples, so the latest row for a symbol is now typically the post-#927
+// shape (price_usd NULL, value_usd/amount both present). This zero-RPC
+// request path (issue #118) has no live read to fall back to, so it must
+// derive priceUsd from value_usd/amount rather than reporting it null next to
+// a perfectly good value — RED CONTROL: fails against a tree that reads
+// price_usd off the row unconditionally.
+test("issue #927 regression: fetchPersistedWalletBalances derives priceUsd from value_usd/amount when the persisted row's own price_usd is NULL", async () => {
+  setBaseEnv();
+  const today = new Date().toISOString().slice(0, 10);
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${today}, 'WETH', 10, NULL, 17000, 'live', now())
+  `;
+  const r = await fetchPersistedWalletBalances();
+  const weth = r.holdings.find((h) => h.symbol === "WETH")!;
+  expect(weth.provenance).toBe("live");
+  expect(weth.amount).toBeCloseTo(10, 6);
+  expect(weth.priceUsd).toBeCloseTo(1700, 6); // derived: 17000 / 10
+  expect(weth.valueUsd).toBeCloseTo(17000, 6);
+});
+
 // issue #614 AC6: this test was previously named "...returns it as
 // CONTINUOUS..." while asserting only `date[i] >= date[i-1]` — a tautology
 // against the endpoint's own `ORDER BY sample_date ASC`, true even over a
@@ -982,6 +1004,35 @@ test("issue #294 regression: fetchWalletBalances degrade path is unchanged — a
   }
 });
 
+// Issue #927: sampleWalletBalances stopped writing price_usd on ordinary
+// samples, so the most recent persisted row for a symbol now typically has it
+// NULL. lastPersistedHolding() must still recover a usable price for the
+// #294 stale-degrade above (a live price-fetch failure with a successful
+// chain read) — it derives one from value_usd/amount rather than reporting
+// priceUsd: null next to a perfectly good valueUsd. RED CONTROL: fails
+// against a tree that reads price_usd off the row unconditionally.
+test("issue #927 regression: lastPersistedHolding() derives priceUsd from value_usd/amount when the persisted row's own price_usd is NULL", async () => {
+  setBaseEnv();
+  const fx = stubFixtures();
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.geckoOmit = [A.BNKR];
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  // A recent persisted BNKR row shaped like a post-#927 sampleWalletBalances
+  // write: price_usd NULL, value_usd/amount both present and non-zero.
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES ('2026-06-25', 'BNKR', 15000, NULL, 6, 'live', now())
+  `;
+
+  const r = await fetchWalletBalances();
+  const bnkr = r.holdings.find((h) => h.symbol === "BNKR")!;
+  expect(bnkr.provenance).toBe("stale");
+  expect(bnkr.amount).toBeCloseTo(15000, 6);
+  expect(bnkr.priceUsd).toBeCloseTo(6 / 15000, 9); // derived, not NULL
+  expect(bnkr.valueUsd).toBeCloseTo(6, 6);
+});
 
 // ── issue #642 ────────────────────────────────────────────────────────────────
 // Two defects, one root cause. The strategy vault list was reached through five

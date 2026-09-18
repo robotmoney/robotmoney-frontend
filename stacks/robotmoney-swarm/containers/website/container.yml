@@ -1,0 +1,4 @@
+container:
+  name: robotmoney/robotmoney-website
+  build: build.sh
+  content-root: .

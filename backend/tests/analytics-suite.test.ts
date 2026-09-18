@@ -20,6 +20,7 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { loadRawIndicatorHistory, loadRegimeHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import * as swarmDomain from "../src/swarm/domain.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -171,9 +172,85 @@ test(
         return { spx: [], eth: [], tbill3m: [] };
       },
     };
-    await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
+    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
     const [{ n: t10After }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'T10Y2Y'`;
     expect(t10After).toBe(t10Rows); // floor intact — nothing erased by an empty fetch
+
+    // ── (5) issue #977 AC9: every execution has a run identifier bound to
+    // exactly one frozen data vintage, and NONE of this landed persisted
+    // regime/backtest/research-signal output above was perturbed by it. ──
+    const firstLedger = (results as any).__runLedger as { runId: string; vintage: { vintageId: string } | null };
+    const secondLedger = (secondResults as any).__runLedger as { runId: string; vintage: { vintageId: string } | null };
+    expect(firstLedger.runId).toBeTruthy();
+    expect(secondLedger.runId).toBeTruthy();
+    expect(secondLedger.runId).not.toBe(firstLedger.runId); // two executions, two distinct run identifiers
+
+    for (const ledger of [firstLedger, secondLedger]) {
+      expect(ledger.vintage).not.toBeNull();
+      const [{ n: vintagesForRun }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_data_vintages WHERE run_id = ${ledger.runId}::bigint`;
+      expect(vintagesForRun).toBe(1); // exactly one frozen vintage per run
+      expect(String((ledger.vintage as { vintageId: string }).vintageId)).toBeTruthy();
+    }
+
+    // The as-of regime row this whole test already validated above is
+    // unchanged by having the run ledger wired in.
+    const [latestAfterLedger] = await sql`
+      SELECT composite, regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+    expect(Math.abs(Number(latestAfterLedger.composite) - gt.composite)).toBeLessThan(TOL);
+    expect(latestAfterLedger.regime).toBe(gt.regime);
+
+    // ── (6) issue #978 wiring: runAnalytics itself — not a test calling
+    // submitTerminalRunPackage by hand — is what freezes the terminal
+    // output/report snapshot for every real run. This is the production
+    // wiring gap the independent review found: without it,
+    // analytics_output_snapshots/analytics_report_snapshots stay empty for
+    // every real run and swarm_briefs.report_snapshot_id can never resolve
+    // to a real row. ──
+    for (const ledger of [firstLedger, secondLedger]) {
+      const [{ n: outputRows }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_output_snapshots WHERE run_id = ${ledger.runId}::bigint`;
+      expect(outputRows).toBeGreaterThan(0);
+      const kinds = (
+        await sql`SELECT artifact_kind FROM analytics_output_snapshots WHERE run_id = ${ledger.runId}::bigint ORDER BY artifact_kind`
+      ).map((r) => r.artifact_kind);
+      expect(kinds).toEqual(["regime_snapshots", "research_signals"]);
+    }
+    // Both the first (whole-suite) run and the second (regime-only re-run)
+    // ran for the SAME market date, so each froze its own independently
+    // addressable report snapshot for ASOF (issue #978: never per-date,
+    // always per-run).
+    for (const ledger of [firstLedger, secondLedger]) {
+      const [{ n: reportRowsForRun }] = await sql`
+        SELECT COUNT(*)::int AS n FROM analytics_report_snapshots WHERE run_id = ${ledger.runId}::bigint`;
+      expect(reportRowsForRun).toBe(1);
+    }
+    // publishBrief resolves to the newest report snapshot for the session's
+    // date whose run also FROZE regime rows — the run that published the
+    // regime projection the brief body reads. Both runs here are regime runs,
+    // so that is the second one. (A research-only run for the same date is
+    // deliberately NOT a candidate; see analytics-output-snapshots.test.ts.)
+    const [newestReportForAsof] = await sql`
+      SELECT rs.id::text AS id FROM analytics_report_snapshots rs
+      JOIN analytics_output_snapshots os
+        ON os.run_id = rs.run_id AND os.artifact_kind = 'regime_snapshots'
+       AND os.payload_bytes <> convert_to('[]', 'UTF8')
+      WHERE rs.asof = ${ASOF}::date ORDER BY rs.id DESC LIMIT 1`;
+
+    // publishBrief for a session dated ASOF resolves swarm_briefs.report_snapshot_id
+    // to that REAL, non-null row — not NULL, which is what the review found in
+    // production before runAnalytics called submitTerminalRunPackage at all.
+    const subjectId = `analytics-suite-wiring-${crypto.randomUUID().slice(0, 8)}`;
+    await swarmDomain.ensureSubject(subjectId, "Analytics Suite Wiring Subject");
+    const session = await swarmDomain.openSession(subjectId);
+    // `date` is a STORED generated column derived from `convened_at` (issue
+    // #150/committee_session_convened_at) — bind this session to ASOF by
+    // setting the column it is actually generated from.
+    await sql`UPDATE swarm_sessions SET convened_at = ${ASOF}::date WHERE id = ${session.id}`;
+    await swarmDomain.publishBrief(session.id, 60);
+    const [brief] = await sql`SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`;
+    expect(brief.report_snapshot_id).not.toBeNull();
+    expect(String(brief.report_snapshot_id)).toBe(newestReportForAsof!.id);
   },
   { timeout: 180_000 },
 );

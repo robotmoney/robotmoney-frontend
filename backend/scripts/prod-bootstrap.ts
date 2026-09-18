@@ -62,6 +62,7 @@ import { migrate } from "../src/db/migrate.ts";
 import { sql, closeDb } from "../src/db/client.ts";
 import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
 import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
+import { analyticsLedgerGuardRefusalLines, checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
@@ -192,6 +193,21 @@ async function runAppendOnlyGuardStep(): Promise<StepResult> {
     };
   }
   return { status: "success", summary: "append-only guard armed (delete refused on every protected table)" };
+}
+
+// Issue #979 AC6: the Phase A analytics ledger's own immutability guards
+// (source/run/output/cutover, migrations 0057-0060) — a distinct trigger
+// family from the append-only guard step above.
+async function runAnalyticsLedgerGuardStep(): Promise<StepResult> {
+  const result = await checkAnalyticsLedgerGuard(sql);
+  if (result.status === "disarmed") {
+    for (const line of analyticsLedgerGuardRefusalLines(result.problems, "[prod-bootstrap]")) console.error(line);
+    return { status: "failed", summary: `${result.problems.length} analytics ledger guard problem(s)`, failing: true };
+  }
+  if (result.status === "unavailable") {
+    return { status: "failed", summary: `database not queryable: ${result.detail}`, failing: true };
+  }
+  return { status: "success", summary: "analytics ledger guard armed (UPDATE/DELETE/TRUNCATE refused on every ledger table)" };
 }
 
 // ── Step 2: v0-seed:bootstrap ────────────────────────────────────────────────
@@ -331,9 +347,11 @@ async function runSeedProvenanceStep(): Promise<StepResult> {
 // ── Fixed step list ──────────────────────────────────────────────────────────
 
 const APPEND_ONLY_STEP: Step = { name: "append-only-guard", run: runAppendOnlyGuardStep };
+const ANALYTICS_LEDGER_GUARD_STEP: Step = { name: "analytics-ledger-guard", run: runAnalyticsLedgerGuardStep };
 
 const initializationSteps: Step[] = [
   APPEND_ONLY_STEP,
+  ANALYTICS_LEDGER_GUARD_STEP,
   { name: "v0-seed:bootstrap", run: runV0SeedStep },
   { name: "edgar-seed:bootstrap", run: runEdgarSeedStep },
   { name: "seed-provenance:verify", run: runSeedProvenanceStep },

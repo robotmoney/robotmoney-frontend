@@ -120,7 +120,8 @@ export interface SwarmTake {
   confidence: number | null;
   body: string | null;
   memoUrl?: string | null;
-  weights?: SwarmBucketWeight[];
+  weights?: SwarmBucketWeight[] | null;
+  cites?: string[];
   verified: boolean;
   /**
    * True when this take is v0 pre-launch archive content rather than a member
@@ -192,29 +193,32 @@ export interface SwarmTakeReceipt {
 // JSON shape) — the camelCase DTO seam stops at the session's top-level keys.
 export interface RegimeHistoryPoint {
   date: string;
-  composite: number;
+  composite: number | null;
+  composite_percentile: number | null;
   regime: RegimeLabel;
-  macro: number;
-  onchain: number;
-  factor: number;
+  macro_percentile: number | null;
+  onchain_percentile: number | null;
+  factor_percentile: number | null;
 }
 
 // The reference-shaped regime_summary object (backend buildRegimeSummary):
-// latest composite/percentiles/labels plus a >=8-point trailing history.
+// latest composite/percentiles/labels plus a trailing history.
 // Field names are snake_case on purpose — this object is stored and served
 // verbatim (archive fixtures and live sessions share the shape).
 export interface RegimeSummary {
   composite: number;
-  composite_percentile: number;
+  composite_percentile: number | null;
   regime: RegimeLabel;
   macro_regime: RegimeLabel;
   onchain_regime: RegimeLabel;
   factor_regime: RegimeLabel;
-  macro_percentile: number;
-  onchain_percentile: number;
-  factor_percentile: number;
+  macro_percentile: number | null;
+  onchain_percentile: number | null;
+  factor_percentile: number | null;
   history: RegimeHistoryPoint[];
+  method?: string;
 }
+
 
 // The list endpoint's slim regimeSummary (issue #357): every field the detail
 // endpoint's RegimeSummary carries EXCEPT the >=8-point trailing history
@@ -291,6 +295,7 @@ export interface SwarmRecommendation {
    */
   actions?: SwarmRecommendedAction[];
   weights?: SwarmBucketWeight[];
+  citedSignals?: Record<string, number>;
 }
 
 export interface SwarmSession {
@@ -382,6 +387,8 @@ export interface SwarmBrief {
    * pre-0028 archived rows whose session was never archived.
    */
   sessionId: string | null;
+  /** Immutable analytics report snapshot bound when this brief was published. */
+  reportSnapshotId: string | null;
   body: SwarmBriefBody | null;
   createdAt: string;
 }
@@ -398,6 +405,7 @@ export interface SwarmBriefResearchSignalRef {
 }
 
 export interface SwarmBriefBody {
+  allocation?: { asof: string; buckets: { id: string; target_weight: number; items?: unknown[] }[] };
   regime: unknown;
   subject: SwarmSubject | null;
   recentSessions: unknown[];
@@ -432,6 +440,11 @@ export interface SwarmBriefBody {
         weight: { type: "number"; minimum: 0 };
       };
     };
+    cites: {
+      type: "array";
+      optional: true;
+      items: { type: "string" };
+    };
   };
   windowClosesAt: string;
 }
@@ -461,6 +474,7 @@ export interface SwarmSubmission {
   body: string;
   memoUrl?: string;
   weights?: SwarmBucketWeight[];
+  cites?: string[];
   signature: string;
 }
 

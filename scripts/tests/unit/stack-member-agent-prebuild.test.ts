@@ -26,7 +26,7 @@ describe("shared full-stack member-agent prebuild", () => {
       const dockerPath = join(dir, "docker");
       writeFileSync(
         dockerPath,
-        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logPath}'\ncase "$*" in\n  *" port api 8787") printf '0.0.0.0:${server.port}\\n' ;;\nesac\nexit 0\n`,
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logPath}'\ncase "$*" in\n  *" port api 8787") printf '0.0.0.0:${server.port}\\n' ;;\n  *" port website-server 8080") printf '0.0.0.0:${server.port}\\n' ;;\nesac\nexit 0\n`,
         { mode: 0o755 },
       );
       chmodSync(dockerPath, 0o755);

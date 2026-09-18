@@ -10,6 +10,10 @@ export { ROUTES, path } from "./routes";
 export function canonicalizeSubmission(s: {
   memberId: string; date: string; subjectId: string; nonce: string;
   stance: string; confidence: number; body?: string; memoUrl?: string;
+  // Issue #978: naming a reportSnapshotId signs schema 2.0 (an explicit
+  // schemaVersion marker plus this field); omitting it signs schema 1.0,
+  // byte-identical to every submission signed before this field existed.
+  reportSnapshotId?: string;
   weights?: SwarmBucketWeight[];
 }): string;
 export function canonicalizeClaimChallenge(challenge: {

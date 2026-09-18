@@ -11,7 +11,8 @@
 //   * synthetic backfill is smoke-gated (refused under RM_ENV=prod) and reserved
 //     for the smoke fixture path (ensureSmokeSubjectFixtures).
 import { test, expect, afterEach } from "bun:test";
-import { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
+import { classifyRegime, REGIME_METHOD, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
+
 import { classifyRegime as classifierLabel } from "../src/analytics/analyze/regime.ts";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
@@ -42,6 +43,9 @@ async function snapshotCount(): Promise<number> {
 test("canonical thresholds are 0.33/0.67 and classifyRegime matches analyze/regime.ts's label rule", () => {
   expect(REGIME_RISK_OFF).toBe(0.33);
   expect(REGIME_RISK_ON).toBe(0.67);
+  expect(REGIME_METHOD.id).toBe("composite-v1");
+  expect(REGIME_METHOD.cuts).toEqual({ risk_off: 0.33, risk_on: 0.67 });
+
 
   // The analytics classifier re-exports the very same function — not a copy.
   expect(classifierLabel).toBe(classifyRegime);
@@ -96,7 +100,7 @@ test("buildRegimeSummary echoes a contrarian STORED label instead of re-deriving
   expect(summary.history[summary.history.length - 1].regime).toBe("risk_on");
 });
 
-test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows when regime_snapshots is sparse", async () => {
+test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows and emits no synthetic padding when regime_snapshots is sparse", async () => {
   await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-03', 0.52, 'neutral')`;
   await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-04', 0.61, 'neutral')`;
   const before = await snapshotCount();
@@ -104,15 +108,47 @@ test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows when re
 
   const summary = await buildRegimeSummary("2026-07-04");
 
-  // Sparkline minimum still honored — via IN-MEMORY padding only.
-  expect(summary.history.length).toBeGreaterThanOrEqual(8);
+  // No synthetic/padded points emitted — history.length matches real rows and can be < minPoints
+  expect(summary.history.length).toBe(2);
   expect(await snapshotCount()).toBe(before); // nothing persisted
 
-  // Every in-memory padded point is labeled by the canonical classifier.
-  const storedDates = new Set(["2026-07-03", "2026-07-04"]);
-  const padded = summary.history.filter((h) => !storedDates.has(h.date));
-  expect(padded.length).toBeGreaterThanOrEqual(6);
-  for (const p of padded) expect(p.regime).toBe(classifyRegime(p.composite));
+  // Rows carry real points only
+  expect(summary.history[0].date).toBe("2026-07-03");
+  expect(summary.history[0].composite).toBe(0.52);
+  expect(summary.history[0].regime).toBe("neutral");
+  expect(summary.history[1].date).toBe("2026-07-04");
+  expect(summary.history[1].composite).toBe(0.61);
+  expect(summary.history[1].regime).toBe("neutral");
+
+  // History rows return null for composite_percentile/macro_percentile/onchain_percentile/factor_percentile
+  // when source columns are null, never a fallback constant (e.g. 0.5, 0.6, 0.35, 0.75).
+  for (const h of summary.history) {
+    expect(h.composite_percentile).toBeNull();
+    expect(h.macro_percentile).toBeNull();
+    expect(h.onchain_percentile).toBeNull();
+    expect(h.factor_percentile).toBeNull();
+  }
+});
+
+test("buildRegimeSummary history rows emit percentiles when source columns exist", async () => {
+  await sql`
+    INSERT INTO regime_snapshots (
+      date, composite, composite_percentile, regime,
+      macro_percentile, onchain_percentile, factor_percentile
+    ) VALUES (
+      '2026-07-09', 0.65, 0.72, 'risk_on',
+      0.81, NULL, 0.55
+    )`;
+  const summary = await buildRegimeSummary("2026-07-09");
+  expect(summary.history.length).toBe(1);
+  const row = summary.history[0];
+  expect(row.date).toBe("2026-07-09");
+  expect(row.composite).toBe(0.65);
+  expect(row.composite_percentile).toBe(0.72);
+  expect(row.regime).toBe("risk_on");
+  expect(row.macro_percentile).toBe(0.81);
+  expect(row.onchain_percentile).toBeNull();
+  expect(row.factor_percentile).toBe(0.55);
 });
 
 // ── AC: synthetic backfill is smoke-gated ─────────────────────────────────────
@@ -143,3 +179,11 @@ test("backfillRegimeHistory REFUSES to write synthetic rows under RM_ENV=prod", 
   await backfillRegimeHistory("2026-07-07");
   expect(await snapshotCount()).toBe(0);
 });
+
+test("buildRegimeSummary output carries method === REGIME_METHOD.id", async () => {
+  await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-08', 0.50, 'neutral')`;
+  const summary = await buildRegimeSummary("2026-07-08", 1);
+  expect(summary.method).toBe(REGIME_METHOD.id);
+});
+
+

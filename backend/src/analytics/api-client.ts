@@ -11,7 +11,15 @@ import { ROUTES } from "@robotmoney/contract";
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
-import type { AnalyticsPersistence, FloorSeedResult } from "./persistence.ts";
+import type {
+  AnalyticsPersistence,
+  FloorSeedResult,
+  BeginRunResult,
+  FreezeVintageResult,
+  TerminalRunPackageResult,
+} from "./persistence.ts";
+import type { RunLifecycleEvent } from "./run-ledger.ts";
+import type { TerminalRunPackageInput } from "./output-snapshots.ts";
 import { envSecret } from "../lib/env-secret.ts";
 
 export interface AnalyticsApiConfig {
@@ -49,25 +57,69 @@ export function assertAnalyticsUpdaterCredentials(cfg: {
   }
 }
 
-export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): AnalyticsPersistence {
+// The one authenticated-HTTP call shape every analytics-boundary caller in
+// this codebase shares: analyticsApiClient() below (the producer/updater's
+// AnalyticsPersistence port) AND triggerParitySweep() (the worker's #979-fix
+// call to POST A.paritySweep) both go through this — one fetch/header/error
+// implementation, not two.
+async function analyticsApiCall<T>(
+  cfg: AnalyticsApiConfig,
+  method: "GET" | "POST",
+  route: string,
+  body?: unknown,
+): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
-
-  async function call<T>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${cfg.baseUrl}${route}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-      // Surface the server's error text but NEVER the credential.
-      const detail = await res.text().catch(() => "");
-      throw new Error(`analytics API ${method} ${route} failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
-    }
-    return (await res.json()) as T;
+  const res = await fetch(`${cfg.baseUrl}${route}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    // Surface the server's error text but NEVER the credential.
+    const detail = await res.text().catch(() => "");
+    throw new Error(`analytics API ${method} ${route} failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
   }
+  return (await res.json()) as T;
+}
+
+export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): AnalyticsPersistence {
+  const call = <T>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> => analyticsApiCall<T>(cfg, method, route, body);
 
   return {
+    async beginRun(input) {
+      return await call<BeginRunResult>("POST", ROUTES.analytics.runs, { run: input });
+    },
+    async appendRunEvent(runId: string, eventType: RunLifecycleEvent, detail: string | null) {
+      await call("POST", ROUTES.analytics.runEvents, { event: { runId, eventType, detail } });
+    },
+    async freezeVintage(input) {
+      return await call<FreezeVintageResult>("POST", ROUTES.analytics.vintages, { vintage: input });
+    },
+    async submitTerminalRunPackage(input: TerminalRunPackageInput) {
+      const wire =
+        input.status === "succeeded"
+          ? {
+              runId: input.runId,
+              asof: input.asof,
+              status: input.status,
+              regimeSnapshots: input.regimeSnapshots ?? [],
+              researchSignals: input.researchSignals ?? [],
+              reportBase64: Buffer.from(input.reportBytes ?? new Uint8Array()).toString("base64"),
+            }
+          : {
+              runId: input.runId,
+              asof: input.asof,
+              status: input.status,
+              warnings: input.warnings ?? [],
+              logs: input.logs ?? [],
+              exceptions: input.exceptions ?? [],
+            };
+      return await call<TerminalRunPackageResult>("POST", ROUTES.analytics.runPackage, { package: wire });
+    },
+    async saveSourceAcquisition(acquisition) {
+      return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
+    },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);
       return history;
@@ -78,12 +130,10 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async seedRawHistory(byIndicator) {
       return await call<FloorSeedResult>("POST", ROUTES.analytics.rawHistorySeed, { history: byIndicator });
     },
-    async saveRegimeSnapshots(rows: RegimeSnapshotRow[]) {
-      await call("POST", ROUTES.analytics.regimeSnapshots, { snapshots: rows });
-    },
-    async saveResearchSignal(key: string, asof: string, payload: ResearchPayload) {
-      await call("POST", ROUTES.analytics.researchSignals, { signals: [{ key, date: asof, payload }] });
-    },
+    // RETIRED (issue #978): saveRegimeSnapshots / saveResearchSignal. The
+    // routes they posted to are gone — submitTerminalRunPackage above is the
+    // only way the producer publishes either projection, and it carries the
+    // run, the immutable artifacts and the report snapshot with it.
     async loadResearchSignalDates(sinceDate: string) {
       const { dates } = await call<{ dates: { signalKey: string; date: string }[] }>(
         "GET",
@@ -99,4 +149,23 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       return dates;
     },
   };
+}
+
+export interface ParitySweepSummary {
+  domains: number;
+  matched: string[];
+  mismatched: string[];
+}
+
+// Issue #979 fix: the worker's ONLY legitimate way to run the dual-write
+// parity sweep. runParitySweep() (analytics/cutover/parity.ts) reads/writes
+// Postgres directly through db/client.ts's rm_app-credentialed pool, which
+// worker/** must never import — even transitively (that was exactly the
+// regression this fixes: worker/handlers/index.ts importing parity.ts
+// directly, which pulled db/client.ts into every worker container). This
+// goes over the SAME authenticated HTTP boundary as analyticsApiClient()
+// above, POSTing to A.paritySweep, which runs the sweep INSIDE the API
+// process instead.
+export async function triggerParitySweep(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<ParitySweepSummary> {
+  return await analyticsApiCall<ParitySweepSummary>(cfg, "POST", ROUTES.analytics.paritySweep);
 }

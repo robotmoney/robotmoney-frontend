@@ -96,6 +96,9 @@ test("cold DB: every step runs, v0-seed inserts the archive's full manifest coun
     // verifies (issue #684). Probing before would report "not applied" on every
     // cold boot and prove nothing.
     "append-only-guard",
+    // Issue #979 AC6: a distinct trigger-family guard, run right after the
+    // append-only one it sits beside.
+    "analytics-ledger-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
     // Runs LAST (issue #638/D38): an order-independent integrity sweep over
@@ -187,6 +190,9 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
     // verifies (issue #684). Probing before would report "not applied" on every
     // cold boot and prove nothing.
     "append-only-guard",
+    // Issue #979 AC6: a distinct trigger-family guard, run right after the
+    // append-only one it sits beside.
+    "analytics-ledger-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
     "seed-provenance:verify",
@@ -318,6 +324,9 @@ test("a restored namespace violation halts the run before ANY write, with both m
     // verifies (issue #684). Probing before would report "not applied" on every
     // cold boot and prove nothing.
     "append-only-guard",
+    // Issue #979 AC6: a distinct trigger-family guard, run right after the
+    // append-only one it sits beside.
+    "analytics-ledger-guard",
     "v0-seed:bootstrap",
     "edgar-seed:bootstrap",
     "seed-provenance:verify",

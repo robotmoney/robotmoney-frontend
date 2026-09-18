@@ -720,8 +720,8 @@ export const config = {
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl,
   apiPort: Number(process.env.API_PORT ?? 8787),
-  // If set, the API process also serves this static directory (the built
-  // frontend) — a single-box deployment with no reverse proxy.
+  // Read-only for AC-ID-03/T26 identity purposes only (backend/src/ops/static-identity.ts) —
+  // website-server (issue #892), not this process, serves the SPA from the same mount.
   staticDir: process.env.STATIC_DIR || null,
   // Origins allowed to call this API cross-origin (issue #871): a split-repo
   // frontend deployed as its own container is no longer same-origin, so it

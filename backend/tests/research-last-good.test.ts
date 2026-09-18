@@ -60,8 +60,8 @@ function installFetchDouble(localBaseUrl: string, edgarCountFor: (monthStart: st
     if (url.startsWith("https://efts.sec.gov/")) {
       edgarRequests.push(url);
       const count = edgarCountFor(startdtOf(url));
-      if (count == null) return { ok: false, status: 404, json: async () => ({}) } as Response;
-      return { ok: true, status: 200, json: async () => ({ hits: { total: { value: count } } }) } as Response;
+      if (count == null) return new Response(JSON.stringify({}), { status: 404 });
+      return Response.json({ hits: { total: { value: count } } });
     }
     if (url.startsWith(localBaseUrl)) return orig(input, init);
     throw new Error(`network disabled in test: ${url}`); // Yahoo/FRED — safe() degrades to []
@@ -216,7 +216,7 @@ test(
 
 // AC4's last failure-matrix case ("API rejection") + advisory: a genuine
 // mid-operation failure BETWEEN the sequential saveRawHistory and
-// saveResearchSignal submissions (not just "fail before any write").
+// terminal-run-package submissions (not just "fail before any write").
 test(
   "API rejection: a fully validated EDGAR batch that the analytics API itself rejects changes NOTHING and throws; a rejection on the LATER signal submission still leaves the just-committed floor write in place but never publishes a signal against it",
   async () => {
@@ -265,8 +265,8 @@ test(
       fetchDouble = null;
       disarm();
 
-      // NOTHING changed: the rejected submission never touched the DB, and
-      // saveResearchSignal was never reached (the throw happened first).
+      // NOTHING changed: the rejected submission never touched the DB, and the
+      // terminal run package was never reached (the throw happened first).
       const floorAfterB = await mnaRows();
       expect(floorAfterB).toEqual(floorAfterA);
       const [sigAfterB] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
@@ -274,9 +274,13 @@ test(
 
       // ── RUN C: the raw-history submission SUCCEEDS this time (a real,
       // durable write with a NEW deterministic value), but the LATER
-      // research-signals submission is what the API rejects — a genuine
-      // mid-operation failure BETWEEN the two sequential writes.
-      armFailure("POST", "/api/analytics/research-signals");
+      // terminal-run-package submission is what the API rejects — a genuine
+      // mid-operation failure BETWEEN the two sequential writes. Since issue
+      // #978 the run package IS the publisher of research_signals (the
+      // mid-run saveResearchSignal write is gone, so a failed run can never
+      // leave the current view ahead of the ledger), which makes this the
+      // endpoint that publishes the signal.
+      armFailure("POST", "/api/analytics/run-packages");
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 17);
       await expect(runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient())).rejects.toThrow();
       fetchDouble.restore();

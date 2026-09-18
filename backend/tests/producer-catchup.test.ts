@@ -9,12 +9,32 @@ import { RESEARCH_SIGNAL_TELEMETRY_KEYS } from "../src/analytics/index.ts";
 import {
   computeMissingResearchDays,
   catchUpMissedResearchDays,
+  catchUpMissedIndicatorDays,
   startProducerSchedules,
 } from "../src/producer/index.ts";
+import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-10T12:00:00Z");
 const iso = (offsetDays: number) => new Date(NOW.getTime() - offsetDays * DAY_MS).toISOString().slice(0, 10);
+
+// These fixtures test the PRODUCER's catch-up scheduling, never runAnalytics
+// itself — none of them are ever wired through the issue #977 run ledger, so
+// this stub only needs to satisfy AnalyticsPersistence's shape.
+const NOOP_RUN_LEDGER: Pick<AnalyticsPersistence, "beginRun" | "appendRunEvent" | "freezeVintage" | "submitTerminalRunPackage"> = {
+  beginRun: async () => ({ runId: "0", methodologyVersionId: "0", replayed: false }),
+  appendRunEvent: async () => {},
+  freezeVintage: async () => ({
+    vintageId: "0",
+    manifest: {
+      methodologyVersionId: "0", buildIdentity: "test", knowledgeTimeCutoff: "", marketTimeCutoff: "",
+      seriesCount: 0, memberCount: 0, seriesFingerprints: {}, manifestDigest: "",
+    },
+    memberCount: 0,
+    replayed: false,
+  }),
+  submitTerminalRunPackage: async () => ({ outputSnapshots: [], reportSnapshotId: null, replayed: false }),
+};
 
 test("computeMissingResearchDays: a fully-populated window reports nothing missing", () => {
   const present: { signalKey: string; date: string }[] = [];
@@ -61,11 +81,10 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
     { signalKey: "late-cycle-signals", date: iso(2) },
   ];
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async (since) => {
       expect(since).toBe(iso(14));
       return present;
@@ -90,11 +109,10 @@ test("catchUpMissedResearchDays: repairs exactly the missing days via the inject
 
 test("catchUpMissedResearchDays: a repair failure for one day does not stop the rest, and is reported as still missing", async () => {
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [],
     loadRawHistoryGapDates: async () => [],
   };
@@ -111,11 +129,10 @@ test("catchUpMissedResearchDays: a repair failure for one day does not stop the 
 
 test("catchUpMissedResearchDays: a read failure is swallowed — never throws, returns no missing days", async () => {
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => { throw new Error("network unreachable"); },
     loadRawHistoryGapDates: async () => [],
   };
@@ -132,11 +149,10 @@ test("catchUpMissedResearchDays: a read failure is swallowed — never throws, r
 test("catchUpMissedResearchDays: running it twice converges — the second pass repairs nothing new", async () => {
   const store = new Set<string>(); // "signalKey|date"
   const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
     loadRawHistory: async () => ({}),
     saveRawHistory: async () => {},
     seedRawHistory: async () => ({ seededPoints: 0, existingPoints: 0, indicators: 0 }),
-    saveRegimeSnapshots: async () => {},
-    saveResearchSignal: async () => {},
     loadResearchSignalDates: async () => [...store].map((s) => {
       const [signalKey, date] = s.split("|") as [string, string];
       return { signalKey, date };
@@ -163,7 +179,63 @@ test("startProducerSchedules: runs catch-up before arming the daily crons", asyn
     env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
     waitUntilReady: async () => { order.push("ready"); },
     catchUp: async () => { order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
   });
-  expect(order).toEqual(["ready", "catchup", "armed:regime", "armed:research"]);
+  expect(order).toEqual(["ready", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
+});
+
+test("missing-day indicator repair persists an acquisition independent of an analytics run", async () => {
+  const acquisitions: any[] = [];
+  let seeded: Record<string, { date: string; value: number }[]> | null = null;
+  const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
+    saveSourceAcquisition: async (e) => { acquisitions.push(e); return { acquisitionId: e.id, replayed: false }; },
+    loadRawHistory: async () => ({}), saveRawHistory: async () => {},
+    seedRawHistory: async (history) => { seeded = history; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
+    loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
+  };
+  const source: AnalyticsDataSource = {
+    async fetchIndicators(indicators, _logger, acquisitionSink, requestedByRunId) {
+      expect(requestedByRunId).toBeNull();
+      expect(acquisitionSink).toBeDefined();
+      const evidence = {
+        id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "catch-up",
+        requestedByRunId: requestedByRunId ?? null, events: [{ type: "started" as const, detail: null }, { type: "succeeded" as const, detail: null }],
+        fetches: [], values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 5, provenance: "live" }],
+      };
+      await acquisitionSink!.saveSourceAcquisition(evidence);
+      return { [indicators[0]!.id]: [{ date: iso(1), value: 5 }] };
+    },
+    async fetchResearchInputs() { throw new Error("not used"); },
+    async fetchBacktestExtras() { throw new Error("not used"); },
+  };
+  expect(await catchUpMissedIndicatorDays({ persistence, source, now: () => NOW })).toEqual([iso(1)]);
+  expect(acquisitions).toHaveLength(1);
+  expect(acquisitions[0].requestedByRunId).toBeNull();
+  expect(seeded).not.toBeNull();
+});
+
+test("missing-day repair never persists fetched values when acquisition evidence persistence fails", async () => {
+  let currentViewWrites = 0;
+  const persistence: AnalyticsPersistence = {
+    ...NOOP_RUN_LEDGER,
+    saveSourceAcquisition: async () => { throw new Error("evidence store unavailable"); },
+    loadRawHistory: async () => ({}), saveRawHistory: async () => { currentViewWrites++; },
+    seedRawHistory: async () => { currentViewWrites++; return { seededPoints: 1, existingPoints: 0, indicators: 1 }; },
+    loadResearchSignalDates: async () => [], loadRawHistoryGapDates: async () => [iso(1)],
+  };
+  const source: AnalyticsDataSource = {
+    async fetchIndicators(indicators, _logger, acquisitionSink) {
+      await acquisitionSink!.saveSourceAcquisition({
+        id: crypto.randomUUID(), provider: "fixture", parserVersion: "1", cacheIdentity: "refused", requestedByRunId: null,
+        events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }], fetches: [],
+        values: [{ sourceKey: `raw_indicator_history:${indicators[0]!.id}`, marketDate: iso(1), marketInstant: null, value: 99, provenance: "live" }],
+      });
+      return { [indicators[0]!.id]: [{ date: iso(1), value: 99 }] };
+    },
+    async fetchResearchInputs() { throw new Error("not used"); }, async fetchBacktestExtras() { throw new Error("not used"); },
+  };
+  expect(await catchUpMissedIndicatorDays({ persistence, source, now: () => NOW })).toEqual([iso(1)]);
+  expect(currentViewWrites).toBe(0);
 });

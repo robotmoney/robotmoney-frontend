@@ -18,6 +18,7 @@ import {
   parseInitializer,
   reportLines,
 } from "../scripts/db-preflight.ts";
+import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
 
 test("empty database → bootstrap, on a genuinely fresh (unmigrated) database", async () => {
   const base = new URL(config.databaseUrl);
@@ -31,11 +32,11 @@ test("empty database → bootstrap, on a genuinely fresh (unmigrated) database",
   const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
   try {
     const r = await classifyDatabase("archive", db);
-    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] });
+    expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [] });
     // Same result regardless of initializer — EMPTY bootstraps either way,
     // the adopt/refuse split only matters once tables exist.
     const r2 = await classifyDatabase("simulation", db);
-    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [] });
+    expect(r2).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [] });
     // And the invariant re-check is silent on a database whose schema does not
     // have swarm_members yet — this step runs BEFORE migrate, so "the table is
     // missing" is a migration's business, not an integrity violation.
@@ -117,6 +118,7 @@ test("a restored violation is DETECTED and the boot is refused, with both member
     census: [{ table: "swarm_members", rows: 12 }],
     handleNamespaceConflicts: conflicts,
     appendOnlyProblems: [],
+    analyticsLedgerGuardProblems: [],
   });
   const refusalAt = lines.findIndex((l) => l.includes("REFUSING the boot"));
   expect(refusalAt).toBeGreaterThanOrEqual(0);
@@ -146,7 +148,7 @@ test("parseInitializer fails closed — only an explicit archive flag can adopt"
 
 test("the three reports say what will happen, not just what was found", () => {
   const bootstrap = reportLines("db:5432/x", {
-    mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [],
+    mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [],
   }).join("\n");
   expect(bootstrap).toContain("empty");
   expect(bootstrap).toContain("migrate + seed + archive restore");
@@ -157,6 +159,7 @@ test("the three reports say what will happen, not just what was found", () => {
     census: [{ table: "raw_indicator_history", rows: 116427 }],
     handleNamespaceConflicts: [],
     appendOnlyProblems: [],
+    analyticsLedgerGuardProblems: [],
   }).join("\n");
   expect(adopt).toContain("adopting as existing production data");
   expect(adopt).toContain("idempotent and deduplicated");
@@ -172,6 +175,7 @@ test("the three reports say what will happen, not just what was found", () => {
     census: [{ table: "raw_indicator_history", rows: 116427 }],
     handleNamespaceConflicts: [],
     appendOnlyProblems: [],
+    analyticsLedgerGuardProblems: [],
   }).join("\n");
   expect(refuse).toContain("REFUSING a simulation boot");
   expect(refuse).toContain("bun run smoke:archive");
@@ -216,6 +220,61 @@ test("an ADOPTED database whose append-only guard is disarmed is refused, and th
     const report = reportLines("db:5432/x", disarmed).join("\n");
     expect(report).toContain("REFUSING the boot: the append-only guard");
     expect(report).toContain("a DELETE was ACCEPTED");
+    expect(report).toContain("Nothing has been written");
+  } finally {
+    await db.end();
+    const cleanup = postgres(base.toString(), { max: 1, onnotice: () => {} });
+    try {
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    } finally {
+      await cleanup.end();
+    }
+  }
+});
+
+test("an ADOPTED database whose analytics ledger guard (issue #979 AC6) is disarmed is refused, and the report says why", async () => {
+  // This is the THIRD real caller assertAnalyticsLedgerGuardArmed's own
+  // comment names (analytics-ledger-guard.ts): api/index.ts and
+  // scripts/prod-bootstrap.ts are the other two, and both already fail a
+  // boot whose Phase A ledger triggers (migrations 0057-0060) are missing or
+  // neutered. Without this preflight wired too, the ONE boot path that runs
+  // before either of those — a `--db external`/`--db smoke-twin` archive
+  // adopt — would migrate + seed on top of a ledger a restore already left
+  // unarmed, the same class of gap #602 was for the handle/namespace
+  // invariant.
+  //
+  // Own throwaway database, same reason as the append-only case above: the
+  // fixture disarms a real trigger function and the shared suite database
+  // must keep its guard intact for every other file.
+  const base = new URL(config.databaseUrl);
+  const dbName = `tmp_preflight_ledger_disarmed_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
+  await admin.unsafe(`CREATE DATABASE ${dbName} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
+  await admin.end();
+
+  const url = new URL(base.toString());
+  url.pathname = `/${dbName}`;
+  const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  try {
+    const armed = await classifyDatabase("archive", db);
+    expect(armed.analyticsLedgerGuardProblems).toEqual([]);
+    expect(reportLines("db:5432/x", armed).join("\n")).not.toContain("analytics ledger immutability guard");
+
+    // Neuter the cutover ledger family's trigger function — same
+    // one-statement, catalog-untouched disarm append-only-guard-check.test.ts
+    // uses for every LEDGER_FAMILIES entry. This is the family that protects
+    // analytics_parity_observations itself (issue #979 AC1/AC2).
+    const family = LEDGER_FAMILIES.find((f) => f.functionName === "rm_analytics_cutover_immutable")!;
+    await db.unsafe(
+      `CREATE OR REPLACE FUNCTION public.${family.functionName}() RETURNS trigger
+       LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN COALESCE(NEW, OLD); END IF; RETURN NULL; END $$;`,
+    );
+
+    const disarmed = await classifyDatabase("archive", db);
+    expect(disarmed.mode).toBe("adopt");
+    expect(disarmed.analyticsLedgerGuardProblems.length).toBeGreaterThan(0);
+    const report = reportLines("db:5432/x", disarmed).join("\n");
+    expect(report).toContain("REFUSING the boot: the analytics ledger immutability guard");
     expect(report).toContain("Nothing has been written");
   } finally {
     await db.end();

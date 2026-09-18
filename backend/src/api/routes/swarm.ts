@@ -301,9 +301,11 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // and never recomputes server-side (the previous shape — a trigger that ran
   // the classifier inside the API process — made the "independent producer"
   // an execution alias rather than an actor). Payload shape and validation
-  // are exactly the /api/analytics/regime-snapshots route's ({ snapshots:
-  // RegimeSnapshotRow[] }); persistence is the same idempotent upsert on
-  // (date).
+  // are exactly the ones a terminal run package's `regimeSnapshots` carries
+  // ({ snapshots: RegimeSnapshotRow[] }, one shared parseSnapshots);
+  // persistence is the same idempotent upsert on (date). This door predates
+  // issue #978's snapshot layer and still writes the current view with no run
+  // behind it, unlike POST /api/analytics/run-packages.
   if (m === "POST" && p === C.regime) {
     if (!hasAnalyticsProviderRole(req)) return { status: 403, body: { error: "analytics-provider role required" } };
     const parsed = parseSnapshots(await readJsonObject(req));

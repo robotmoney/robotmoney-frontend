@@ -76,13 +76,18 @@ REST API like every other client. Decommissioning the `mcp.` DNS record,
 firewall rule, and container is tracked as D21's follow-up implementation
 work.
 
-### 2.1 Marketing cutover host — the `api` process, serving an assembled `STATIC_DIR`
+### 2.1 Marketing cutover host — `website-server`, serving an assembled `STATIC_DIR`
 
-**`robotmoney.net` cuts over onto the `api` process** (decision
-[D29](../decisions.md#d29--the-api-process-static_dir-is-the-cutover-host-for-robotmoneynet-and-its-deploy-path-prerenders-per-route-html-issue-480)),
-which co-serves the marketing SPA from `STATIC_DIR` with no reverse proxy
-(D11/D13) — the shape the cutover origin `robotmoney.network` already runs
-behind the connector in §3.3. **Cloudflare Pages is not a production host
+**`robotmoney.net` cuts over onto `website-server`** (decision
+[D29](../decisions.md#d29--the-api-process-static_dir-is-the-cutover-host-for-robotmoneynet-and-its-deploy-path-prerenders-per-route-html-issue-480),
+amended issue #892), a plain `nginx:alpine` image
+(`website-server/Dockerfile` + `website-server/nginx.conf`) split out of the
+`api` image. It co-serves the marketing SPA from `STATIC_DIR`, proxying
+`/api/` and `/health` through to `api` so there is still no reverse proxy the
+CLIENT needs to know about (D11/D13) — the shape the cutover origin
+`robotmoney.network` already runs behind the connector in §3.3. The `api`
+process itself ships no static-serving code at all. **Cloudflare Pages is not a
+production host
 here**: §1 disables Cloudflare git integration, the §3.1 token carries no Pages
 permission, and the one Pages project (`robotmoney-preview`, D20) has automatic
 production deploys disabled with previews limited to `preview/*`. D13's DO
@@ -91,7 +96,7 @@ yet wired; it inherits everything below unchanged, because what it would upload
 is the same assembled directory.
 
 **`STATIC_DIR` is a build output, not the source tree.** `frontend/public` holds
-exactly one `index.html` — the home-page shell — so an api serving it answers
+exactly one `index.html` — the home-page shell — so serving it directly answers
 every extensionless route with the home page's `<title>`/`og:*`, and every
 shared link unfurls as the home page (unfurlers never run
 `assets/js/app/seo.js`). The deploy path therefore assembles:
@@ -107,7 +112,7 @@ same prerenderer the retired Cloudflare Pages assembly used to run over `_site`,
 so there has only ever been one metadata table. (That script,
 `scripts/cloudflare-statics.sh`, was removed in #608 — the Pages pipeline it
 served was never turned on. See architecture.md.) `docker-compose.yml` bind-mounts `./_static`
-read-only at `/srv/frontend`.
+read-only at `/srv/frontend`, now on the `website-server` service rather than `api`.
 
 **Operationally:**
 
@@ -116,14 +121,15 @@ read-only at `/srv/frontend`.
   prerendered HTML with no extra step. Assembly failure aborts the bring-up.
 - A **hand-run `docker compose -p <project> up -d` must run `bun run
   static:assemble` first.** Docker creates an *empty* directory at a bind path
-  that does not exist, and the api would then serve nothing. (`-p` is not
-  optional — see "FIRST: find the project name" in §2.1.)
+  that does not exist, and `website-server` would then serve nothing. (`-p` is
+  not optional — see "FIRST: find the project name" in §2.1.)
 - A **redeploy that changes `sitemap.xml` or `seo.js` must re-run the assembly**;
   the prerendered files are otherwise stale. The assembly empties `_static/` in
   place (never `rm -rf`), so it is safe to re-run against a live bind mount.
 - `scripts/tests/integration/prerender-static-dir.test.ts` is the CI gate: it
-  runs the real assembly, boots the real `backend/src/api/index.ts` against it,
-  and fails red if any sitemap route answers with the home-page shell's metadata.
+  runs the real assembly, builds and boots the real `website-server` image
+  against it (no Bun/Node in the serving path), and fails red if any sitemap
+  route answers with the home-page shell's metadata.
 
 **The api refuses to start against a handle/id namespace violation** (issue
 #602). `docker compose up -d` runs neither `migrate` nor

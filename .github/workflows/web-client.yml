@@ -1,0 +1,145 @@
+# The web client's OWN merge gate and CI/CD policy — separate from the api/
+# backend's (backend.yml) and from the contract's (contract.yml), matching
+# frontend/package.json's independent @robotmoney/web-client manifest and
+# version number.
+#
+# Supersedes frontend.yml (issue #275 addendum's "genuine, dedicated frontend
+# domain" workflow — same job, same taxonomy slot, same cron minute). The
+# rename tracks the client's own identity rather than the repo's directory
+# layout; the two specs frontend.yml ran (preview-smoke, api-unreachable)
+# still run here, now alongside a route sweep and the client's unit tests.
+#
+# The client is meant to ship fast and often, so ONLY four things block a
+# merge (Lucas, 2026-09-17):
+#   a) the client unit tests (bun run --cwd frontend test) fail
+#   b) the static assembly / prerender ("the html") does not build
+#   c) the preview page cannot load at all
+#   d) the Chrome console logs an error while Playwright loads it
+# (c) and (d) are both covered by frontend/test/browser/preview-routes.spec.ts
+# sweeping every sitemap route inside the FIXTURES-mode preview (goldens
+# answer /api/*, scripts/preview-server.ts — no Docker, no live backend, no
+# network beyond localhost), plus the two standalone specs frontend.yml
+# already ran.
+#
+# The preview wrapper (frontend/preview/index.html) also has a `?api=` switch
+# to point /api/* at a live prod or stage api instead of goldens — mainly a
+# developer tool (`bun run --cwd frontend check:prod` / `check:stage`), but
+# run here too, ADVISORY ONLY (`continue-on-error: true`, reported in the job
+# summary): a live host being unreachable says nothing about this PR's client
+# code, so it must never block the merge it has nothing to do with. Backend/
+# db/api changes get their own robust coverage of the client surfaces in
+# backend.yml/integration.yml/e2e.yml — this workflow is deliberately narrow.
+#
+# CI taxonomy class: feature-correctness. No Docker; the blocking steps never
+# leave localhost; the advisory steps reach the network but cannot fail the
+# job. Runs on drafts (same as unit.yml/contract.yml/repo-guards.yml) so a
+# client-only PR gets signal immediately, not at ready-for-review.
+#
+# Path-gated (issue #275 addendum pattern): a `pull_request` run whose changed
+# files don't match the filter below skips the job body — a REAL
+# dorny/paths-filter skip, not a synthetic outcome, so requiring this workflow
+# directly carries no deadlock risk. `push` to `main` is never path-filtered,
+# so a merge to main always runs this in full.
+name: web-client
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main, "releases-*", "fusion/**"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
+  # runs on `push: branches: [main]` also runs on a nightly schedule, and
+  # nothing else does. Cron minutes are staggered across the mirrors; this
+  # keeps frontend.yml's old 3:33 UTC slot, freed by that file's removal.
+  schedule:
+    - cron: "33 3 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      web-client: ${{ steps.filter.outputs.web-client }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            web-client:
+              - 'frontend/**'
+              - 'goldens/**'
+              - 'playwright.config.ts'
+
+  web-client:
+    needs: [changes]
+    # Path-gated ONLY on pull_request: a push to main always runs regardless.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web-client == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      # Playwright's CLI/transform runs on Node.js; `bunx playwright test`
+      # shells out to it. `setup-bun` does NOT provide node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install chromium
+      - name: Guard against private repo links in shipped HTML
+        run: |
+          if grep -rnq "github.com/robotmoney/robotmoney-frontend" frontend/public/views/; then
+            echo "Error: Found private repo link (github.com/robotmoney/robotmoney-frontend) in frontend/public/views/."
+            echo "Use robotmoney-core or remove the link."
+            grep -rn "github.com/robotmoney/robotmoney-frontend" frontend/public/views/
+            exit 1
+          fi
+
+      # ── (a) BLOCKING: the client's own unit tests ───────────────────────
+      - name: Web client unit tests
+        run: bun run --cwd frontend test
+
+      # ── (b) BLOCKING: the html builds ───────────────────────────────────
+      - name: Static assembly + prerender
+        run: bun run --cwd frontend assemble
+
+      # ── (c)+(d) BLOCKING: preview loads, console stays clean ────────────
+      - name: Preview checks (fixtures — goldens answer /api/*)
+        run: bun run --cwd frontend check -- --reporter=line
+
+      # ── ADVISORY: live prod/stage, never blocks this PR's merge ─────────
+      - name: Preview route sweep against production (advisory)
+        id: check_prod
+        continue-on-error: true
+        run: bun run --cwd frontend check:prod -- --reporter=line
+      - name: Report production sweep result
+        if: always()
+        run: |
+          if [ "${{ steps.check_prod.outcome }}" = "success" ]; then
+            echo "✅ Preview route sweep against **production** passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ Preview route sweep against **production** failed (advisory only — does not block merge). See the \"Preview route sweep against production (advisory)\" step above." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preview route sweep against stage (advisory)
+        id: check_stage
+        continue-on-error: true
+        run: bun run --cwd frontend check:stage -- --reporter=line
+      - name: Report stage sweep result
+        if: always()
+        run: |
+          if [ "${{ steps.check_stage.outcome }}" = "success" ]; then
+            echo "✅ Preview route sweep against **stage** passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ Preview route sweep against **stage** failed (advisory only — does not block merge). See the \"Preview route sweep against stage (advisory)\" step above." >> "$GITHUB_STEP_SUMMARY"
+          fi

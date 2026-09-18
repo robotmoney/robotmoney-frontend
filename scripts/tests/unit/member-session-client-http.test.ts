@@ -7,6 +7,7 @@ import { ROUTES } from "@robotmoney/contract";
 import {
   fetchSigningPayload,
   resolveRequireWeights,
+  reportSnapshotIdFromBrief,
   restJson,
 } from "../../agent/member-session-client.ts";
 
@@ -143,4 +144,10 @@ describe("the allocation ask is resolved from the brief, and from the subject wh
     mockFetch(async () => json(503, { error: "planted upstream failure" }));
     await expect(resolveRequireWeights("s4", "vault")).rejects.toThrow("HTTP 503");
   });
+});
+
+test("a member carries the brief's report binding into its signed draft", () => {
+  expect(reportSnapshotIdFromBrief({ reportSnapshotId: "42" })).toBe("42");
+  expect(reportSnapshotIdFromBrief({ reportSnapshotId: null })).toBeUndefined();
+  expect(reportSnapshotIdFromBrief(undefined)).toBeUndefined();
 });

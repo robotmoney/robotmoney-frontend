@@ -183,11 +183,19 @@ async function lastPersistedHolding(symbol: string): Promise<PersistedHolding | 
   `;
   const row = rows[0];
   if (!row) return null;
-  return {
-    amount: row.amount == null ? null : Number(row.amount),
-    priceUsd: row.price_usd == null ? null : Number(row.price_usd),
-    valueUsd: Number(row.value_usd),
-  };
+  const amount = row.amount == null ? null : Number(row.amount);
+  const valueUsd = Number(row.value_usd);
+  // Issue #927: the live sampler no longer writes `price_usd`, so the most
+  // recent row for a stale-degrade almost always has it NULL. `value_usd` is
+  // still written (the same `amount * price` JS double the sampler computed),
+  // so a row missing `price_usd` derives it back out rather than surfacing a
+  // null price next to a perfectly good value.
+  const priceUsd = row.price_usd != null
+    ? Number(row.price_usd)
+    : amount != null && amount !== 0
+      ? valueUsd / amount
+      : null;
+  return { amount, priceUsd, valueUsd };
 }
 
 // Value a single asset from its (pre-batched) chain amount + a per-asset price
@@ -266,21 +274,28 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
 // `asset_prices` rather than the sample row's own `value_usd`; TODAY's row is
 // the one exception and keeps its fused value (D41: "today's live point keeps
 // its fused row"). The LEFT JOIN is deliberately permissive rather than an
-// INNER JOIN or a hard read-from-asset_prices-only rewrite: issue #849's own
-// dev notes record that a CLEANLY-sampled closed day never dual-writes into
-// `asset_prices` (only a day that needed repair does), so the table is known
-// to still have gaps for ordinary, correctly-sampled history. Falling back to
-// the sample row's own `value_usd` when the join has no row for that
-// (date, symbol) is what keeps every existing response byte-identical during
-// that gap — it is not the live/close COALESCE trap markets §5.6 point 1
-// forbids, because both sides describe the SAME closed day's settled price,
-// never a live spot standing in for one. The multiplication itself happens in
-// JS, not SQL: `asset_prices.price_usd` is dual-written/seeded from the exact
-// same JS double that produced the sample row's `value_usd`
-// (ops/asset-prices.ts::writeAssetPrice, migration 0046's seed step), so
-// `Number(amount) * Number(joinedPrice)` reproduces that IEEE-754 product
-// exactly — a SQL-side `amount * price_usd` would instead run as arbitrary-
-// precision `numeric` arithmetic and could differ in its last digits.
+// INNER JOIN or a hard read-from-asset_prices-only rewrite: issue #927 shipped
+// BOTH the fix that stops the gap from widening (the live sampler now
+// dual-writes into `asset_prices` on every ordinary sample) and a scheduled
+// backfill (`ops.backfill_asset_prices`, db/seed.ts) that converges
+// `asset_prices` coverage for history that predates that change — but that
+// convergence happens over successive runs, not instantly on deploy, so a
+// closed day can still have no `asset_prices` row yet. Falling back to the
+// sample row's own `value_usd` when the join has no row for that
+// (date, symbol) is what keeps every existing response correct while that
+// convergence is in flight — it is not the live/close COALESCE trap markets
+// §5.6 point 1 forbids, because both sides describe the SAME closed day's
+// settled price, never a live spot standing in for one. The fallback is kept
+// permanently as defense-in-depth (a day whose price fetch never resolved,
+// e.g. a symbol with no liquid pool on a given day, would otherwise serve
+// nothing rather than the sample's own value).
+// The multiplication happens in JS, not SQL: `asset_prices.price_usd` is
+// dual-written/seeded from the exact same JS double that produced the sample
+// row's `value_usd` (ops/asset-prices.ts::writeAssetPrice, migration 0046's
+// seed step), so `Number(amount) * Number(joinedPrice)` reproduces that
+// IEEE-754 product exactly — a SQL-side `amount * price_usd` would instead run
+// as arbitrary-precision `numeric` arithmetic and could differ in its last
+// digits.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
   const rows = await sql<{
     sample_date: Date;
@@ -315,7 +330,11 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
       point = { date, byAsset: {}, totalUsd: 0, provenance: "stub", _seen: new Set() };
       byDate.set(date, point);
     }
-    const v = r.is_closed && r.asset_price_usd != null && r.amount != null
+    // A closed day uses the joined price once asset_prices has a row for it
+    // (issue #927 converges this over time — see the extended comment above);
+    // until then, and always for today's own row, it falls back to the fused
+    // value_usd (D41: "today's live point keeps its fused row").
+    const v = r.is_closed && r.amount != null && r.asset_price_usd != null
       ? Number(r.amount) * Number(r.asset_price_usd)
       : Number(r.value_usd);
     point.byAsset[r.symbol] = v;
@@ -429,11 +448,24 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
       // values (never fabricate a number the schedule hasn't produced).
       return { ...base, amount: null, priceUsd: null, valueUsd: null, provenance: "stale" as Provenance };
     }
+    const amount = row.amount == null ? null : Number(row.amount);
+    const valueUsd = row.value_usd == null ? null : Number(row.value_usd);
+    // Issue #927: the live sampler no longer writes price_usd, so the latest
+    // sample for a symbol typically has it NULL from the moment it is
+    // written. value_usd is still written (the same amount*price JS double
+    // the sampler computed), so a row missing price_usd derives it back out —
+    // this is the zero-RPC request path (issue #118), so there is no live
+    // read to fall back to here, only this derivation.
+    const priceUsd = row.price_usd != null
+      ? Number(row.price_usd)
+      : amount != null && valueUsd != null && amount !== 0
+        ? valueUsd / amount
+        : null;
     return {
       ...base,
-      amount: row.amount == null ? null : Number(row.amount),
-      priceUsd: row.price_usd == null ? null : Number(row.price_usd),
-      valueUsd: row.value_usd == null ? null : Number(row.value_usd),
+      amount,
+      priceUsd,
+      valueUsd,
       provenance: row.provenance as Provenance, // exactly what the schedule persisted
     };
   });

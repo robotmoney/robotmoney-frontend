@@ -82,8 +82,8 @@ const META = {
     description: "Browse press, research, token listings, and partner coverage of Robot Money, the autonomous treasury and USDC vault on Base for AI agents.",
   },
   "/changelog": {
-    title: "Changelog & Roadmap — Robot Money",
-    description: "See what Robot Money has shipped and what's next: a public build log and phased roadmap covering the USDC vault on Base, AI Swarm, and regime work.",
+    title: "Changelog — Robot Money",
+    description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the allocation and the regime classifier behind it.",
   },
   "/docs": {
     title: "Robot Money Docs — Vault, Swarm & Agent Skill",

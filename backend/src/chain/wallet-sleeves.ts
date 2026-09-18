@@ -94,10 +94,12 @@ async function computeWalletSleeves(
     // D41 phase 3 (issue #850): a CLOSED day's price is a read-time join
     // against `asset_prices`; today's own row keeps its fused price/value —
     // see the extended rationale on wallet-balances.ts::loadHistory, which
-    // this mirrors exactly (same LEFT JOIN, same COALESCE-shaped fallback for
-    // #849's known cleanly-sampled-day gap, same JS-side multiplication so a
-    // covered day reproduces the ORIGINAL value_usd bit-for-bit rather than
-    // Postgres `numeric` arithmetic's differently-rounded product).
+    // this mirrors exactly (same LEFT JOIN, same fallback for #927's
+    // in-flight coverage convergence). The multiplication happens in JS, not
+    // SQL: `asset_prices.price_usd` is dual-written/seeded from the exact
+    // same JS double that produced the sample row's `value_usd`, so the JS
+    // product reproduces it bit-for-bit rather than Postgres `numeric`
+    // arithmetic's differently-rounded product.
     const rows = await sql<
       {
         symbol: string;
@@ -155,8 +157,23 @@ async function computeWalletSleeves(
       }
 
       const amountNum = row.amount == null ? null : Number(row.amount);
+      // A closed day uses the joined price once asset_prices has a row for
+      // it (issue #927 converges this over time); until then, and always
+      // for today's own row, it falls back to the fused sample values (D41:
+      // "today's live point keeps its fused row"). Issue #927 also stopped
+      // this sampler from writing price_usd (mirroring repairResolvedDay's
+      // already-shipped #851 change — every sleeve symbol is a subset of the
+      // aggregate set since #948, so the balance leg's dual-write already
+      // covers it), so the non-join branch derives price from value_usd/amount
+      // when price_usd is NULL rather than reporting it null next to a
+      // perfectly good value.
       const useJoin = row.is_closed && row.asset_price_usd != null && amountNum != null;
-      const priceUsd = useJoin ? Number(row.asset_price_usd) : row.price_usd == null ? null : Number(row.price_usd);
+      const fallbackPriceUsd = row.price_usd != null
+        ? Number(row.price_usd)
+        : row.value_usd != null && amountNum != null && amountNum !== 0
+          ? Number(row.value_usd) / amountNum
+          : null;
+      const priceUsd = useJoin ? Number(row.asset_price_usd) : fallbackPriceUsd;
       const valueUsd = useJoin
         ? amountNum! * Number(row.asset_price_usd)
         : row.value_usd == null ? null : Number(row.value_usd);

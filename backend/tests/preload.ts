@@ -101,6 +101,13 @@ process.env.DATABASE_URL = baseUrl;
 // tests/support/clean-db.ts. Published through the environment because preload
 // and the helper are separate modules with no import edge between them.
 process.env.RM_TEST_TEMPLATE_DB = "robotmoney_tmpl";
+// The ephemeral Postgres container's own name — published the same way as
+// RM_TEST_TEMPLATE_DB above, for the one test that needs a REAL pg_dump/
+// pg_restore round-trip (tests/analytics-ledger-restore.test.ts, issue #979
+// AC8): the container's own bundled client tools are the only ones guaranteed
+// to match POSTGRES_MAJOR (the host's pg_dump may be an older major, which
+// cannot dump from a newer server at all).
+process.env.RM_TEST_PG_CONTAINER = name;
 process.env.RM_ENV = "ephemeral";
 process.env.SWARM_NOTIFICATION_EMAIL_FROM = "swarm-test@robotmoney.invalid";
 

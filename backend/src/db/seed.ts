@@ -83,6 +83,31 @@ export const SCHEDULES: SeedSchedule[] = [
   // reads BASE_RPC_SOURCE=stub, so its sweep costs no provider budget.
   // Handler: worker/handlers/repair.ts.
   { kind: "ops.repair_gaps", cron: "*/5 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Retroactive asset_prices coverage backfill (issue #927, markets §8.1). The
+  // live sampler's forward dual-write (worker/handlers/wallet.ts) only covers
+  // days sampled after that change deployed; this cron is what closes the gap
+  // for history that predates it, and for any day whose forward dual-write
+  // failed (e.g. a pool-resolution hiccup) — same "converges over successive
+  // runs, bounded per run" shape as ops.repair_gaps, not a one-shot script.
+  // Every 15 minutes: less urgent than chain-derived wallet gaps above (a
+  // day's asset_prices row does not block a read — the three join sites still
+  // fall back to the sample row's own price/value while it is missing), and
+  // the anti-join query is cheap to run against a caught-up deployment.
+  // Handler: worker/handlers/index.ts → ops/asset-prices.ts::backfillAssetPricesForCleanDays.
+  { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Issue #979 AC2: dual-write parity sweep — the ONLY production caller of
+  // recordParityObservation()/runParitySweep() (analytics/cutover/parity.ts),
+  // which is what populates analytics_parity_observations. That table is the
+  // evidence backend/scripts/analytics-ledger-cutover-gate.ts reads before
+  // ledger-mode reads can ever be armed; the CLI itself only evaluates
+  // existing observations, it never records one. Hourly (staggered to minute
+  // 20 so it never fires in the same minute as vault.sample_share_price /
+  // vault.sample_adapters above): comfortably clears the gate's default
+  // 12-observation minimum inside its default 24h window, and each tick's
+  // cost is a handful of read queries plus one small insert per domain — not
+  // proportional to how often it runs. Handler: worker/handlers/index.ts →
+  // analytics/cutover/parity.ts::runParitySweep.
+  { kind: "analytics.parity_sweep", cron: "20 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via
   // resolveSwarmSchedules(), and (unlike every other row here) their
