@@ -18,6 +18,8 @@
 // (release-runbooks.md §3, revised 2026-09-11), reversing every prior
 // release's tag-first order.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { STEPS } from "../scripts/upgrades/0.4.0-to-0.5.0/steps.ts";
 
 describe("0.4.0-to-0.5.0 rollout manifest", () => {
@@ -50,6 +52,41 @@ describe("0.4.0-to-0.5.0 rollout manifest", () => {
     const ids = STEPS.map((s) => s.id);
     expect(ids.indexOf("P4.preflight-live")).toBeLessThan(ids.indexOf("P6.rc-tag"));
     expect(ids.indexOf("P5.rehearsal")).toBeLessThan(ids.indexOf("P6.rc-tag"));
+  });
+
+  test("P8.verify-prod is the LAST cutover step and requires postflight", () => {
+    // Schema shape and product behaviour are different questions, asked in
+    // that order: postflight proves the migration landed, verify-prod proves
+    // the live product satisfies its invariants. Ordering matters because
+    // `requires` must point BACKWARDS in manifest order for
+    // propagateBlocked() to resolve in one pass.
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("P8.postflight-prod")).toBeLessThan(ids.indexOf("P8.verify-prod"));
+    const verify = STEPS.find((s) => s.id === "P8.verify-prod")!;
+    expect(verify.requires).toContain("P8.postflight-prod");
+    expect(verify.hostRole).toBe("cutover");
+    // readonly, not full: a `full` leg drives the pipeline (publishes sessions,
+    // spends inference) and would manufacture the very history the readonly
+    // legs exist to audit.
+    expect(verify.verify).toContain("--tier readonly");
+  });
+
+  test("every step's section pointer names a real section of the runbook", () => {
+    // The probe prints `section` next to NEXT, so a wrong pointer sends an
+    // operator to the wrong page. P3.backup/P3.gate-c pointed at §3
+    // ("Preconditions") when the backup and restore proof live at §4.2.
+    const runbook = readFileSync(join(import.meta.dir, "..", "..", "docs", "runbooks", "v0-5-0-rollout.md"), "utf8");
+    for (const step of STEPS) {
+      // The runbook spells sections three ways, and all three are legitimate:
+      //   `## 4. Baseline…`      chapter heading, number then a dot
+      //   `### 5.1 Cut the RC…`  sub-heading, number then a SPACE (no dot)
+      //   `**4.2 — Backup…`      bolded subsection, number then an em dash
+      // The section number itself contains dots, so escape it rather than
+      // letting `.` match any character.
+      const n = step.section.replace("§", "").replace(/\./g, "\\.");
+      const found = new RegExp(`^#{2,3} ${n}[.\\s]|^\\*\\*${n} —`, "m").test(runbook);
+      expect({ step: step.id, section: step.section, found }).toEqual({ step: step.id, section: step.section, found: true });
+    }
   });
 
   test("P8.postflight-prod requires the RC tag in addition to preflight and rehearsal", () => {

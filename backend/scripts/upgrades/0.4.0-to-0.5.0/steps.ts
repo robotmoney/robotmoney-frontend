@@ -15,19 +15,19 @@ export { TAG_GLOB };
 // P6 is positioned here in the array and not merely annotated in place of P2.
 export const STEPS: RolloutStep[] = [
   {
-    id: "P3.backup", phase: "P3 backup", section: "§3", title: "encrypted replica dump captured",
+    id: "P3.backup", phase: "P3 backup", section: "§4.2", title: "encrypted replica dump captured",
     hostRole: "stage", actor: "agent", requires: [], dependsOn: [],
     artifacts: ["rm-preupgrade-<STAMP>.dump.gpg", "rm-globals-<STAMP>.sql.gpg"], ttlHours: 48,
     verify: "bun run smoke:capture",
   },
   {
-    id: "P3.gate-c", phase: "P3 backup", section: "§3", title: "dump restores and matches the v0.4.0 schema",
+    id: "P3.gate-c", phase: "P3 backup", section: "§4.2", title: "dump restores and matches the v0.4.0 schema",
     hostRole: "stage", actor: "script", requires: ["P3.backup"],
     dependsOn: [...preflightCode(DIR), ...RESTORE_CODE, `backend/scripts/upgrades/${DIR}/restore-check.ts`], ttlHours: 48,
     verify: `bun backend/scripts/upgrades/${DIR}/restore-check.ts $RM_BACKUP_DIR --emit-receipt`,
   },
   {
-    id: "P4.preflight-live", phase: "P4 preflight", section: "§4", title: "live v0.4.0 database is safe to migrate",
+    id: "P4.preflight-live", phase: "P4 preflight", section: "§4.4", title: "live v0.4.0 database is safe to migrate",
     hostRole: "stage", actor: "script", requires: ["P3.gate-c"], dependsOn: preflightCode(DIR), ttlHours: 2,
     verify: `bun backend/scripts/upgrades/${DIR}/preflight.ts --emit-receipt`,
   },
@@ -47,5 +47,18 @@ export const STEPS: RolloutStep[] = [
     hostRole: "cutover", actor: "script", requires: ["P4.preflight-live", "P5.rehearsal", "P6.rc-tag"],
     dependsOn: postflightCode(DIR, ["scripts/lib/contract-freshness.ts", "scripts/prerender.ts", "package.json"]), ttlHours: 2,
     verify: `bun backend/scripts/upgrades/${DIR}/postflight.ts --emit-receipt=P8.postflight-prod`,
+  },
+  {
+    id: "P8.verify-prod", phase: "P8 verify", section: "§7",
+    title: "the live product satisfies its invariants",
+    hostRole: "cutover", actor: "script", requires: ["P8.postflight-prod"],
+    dependsOn: [
+      "scripts/verify-live.ts",
+      "scripts/lib/verify/**",
+      "backend/scripts/lib/checks.ts",
+      "backend/scripts/lib/rollout-receipt.ts",
+    ],
+    ttlHours: 2,
+    verify: "bun run verify:live --tier readonly --emit-receipt=P8.verify-prod",
   },
 ];

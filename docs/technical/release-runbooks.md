@@ -330,6 +330,38 @@ end to end**. No human runs commands against the production server directly;
 a human's role is authorizing the release and reading the tracking issue's
 checklists, not typing commands into a production shell.
 
+### 4.7.1. Product verification (separate from postflight, and from the deploy)
+
+**Postflight and verification answer different questions, so they are different
+steps.** Postflight asks *did the migration land* — migrations recorded, tables
+present, flags at their shipped defaults. Verification asks *is the product
+doing what it claims* — the pipeline produced decisions, and the artifacts it
+published are internally consistent.
+
+This distinction is written down because losing it has a specific failure
+shape: a release certified green on schema alone, with every product invariant
+unexamined. That is what v0.5.0's postflight was until 2026-09-18 — eight
+checks, four of which restated what the migration runner already reported.
+
+**Verification runs as a SEPARATE PROCESS against an already-live stack**, not
+inside the deploy. `bun smoke` restores, migrates, builds, boots and declares
+itself live; deciding whether the result is correct is a different job, and
+coupling the two means a standing boot or a cutover silently runs neither.
+`scripts/verify-live.ts` attaches over HTTP after liveness and reports in the
+standard check format, emitting the same receipt JSON the rollout probe reads.
+
+**Tiering is a safety rule, not a convenience.** A `readonly` leg issues GETs;
+a `full` leg drives the product — publishes sessions, spends inference, sends
+mail. Only `readonly` may run against production: a `full` leg there would
+manufacture the very history the readonly legs exist to audit. The default is
+`readonly` so the destructive direction has to be asked for explicitly.
+
+**Reading the result.** A WARN is not a pass — an invariant with nothing to
+check is unverified, not satisfied, and a release runbook must say which
+invariants a given target cannot yet exercise. And "the product is wrong"
+(exit 1) must stay distinguishable from "nothing was asserted" (exit 2);
+collapsing them lets an unreachable stack read as a product failure.
+
 ### 4.8. Rollback
 
 A postflight failure on production defaults to a full rollback by restoring

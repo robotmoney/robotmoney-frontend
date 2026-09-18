@@ -109,7 +109,7 @@ The release contains the following changes relative to `v0.4.0`:
 | `backend/migrations/0050_swarm_member_keys_append_only.sql` | Swarm key history | `swarm_member_keys` joins the append-only protected set (0032): DELETE and TRUNCATE are refused, while UPDATE stays legal — rotations keep retiring a key as `active = false` | A legitimate removal being refused would be a very narrow operational surprise, and the register-member hard-DELETE that previously destroyed key rows is removed in the same commit | Postflight confirms the migration is recorded |
 | `backend/migrations/0051_swarm_vault_recommendation_type_repair.sql` | Swarm subjects | One-time idempotent `UPDATE` restoring `recommendation_type = 'bucket_weights'` on `robotmoney-vault`/`robotmoney-allocation` after a smoke-fixture upsert clobbered it to `position_actions`; a subject legitimately running `position_actions` is left alone | None beyond the two named framework subjects; the WHERE clause targets exactly the clobbered value | Idempotent — reruns match zero rows once both subjects read `bucket_weights` |
 | `backend/migrations/0052_swarm_judgement_digest_scheme.sql`, `backend/src/swarm/judge.ts`, `backend/src/swarm/judge-replay.ts` | Swarm judging | Adds `swarm_session_judgements.digest_scheme text NOT NULL DEFAULT 'derivation-v1'`, recording which canonical form produced each stored `inputs_digest` so `swarm-judge-replay` can tell expected history from a real mismatch | Every existing row is re-stamped under the current scheme, so nothing needs a backfill | Postflight confirms the migration is recorded |
-| `backend/migrations/0053_database_role_taxonomy.sql` | Database roles | Creates `rm_owner` (NOLOGIN), `rm_app`, `rm_worker`, `rm_readonly` and re-owns every existing `public` relation/function under `rm_owner`; DDL now runs as `SET ROLE rm_owner` | The ownership sweep re-stamps every object in `public`; fully transactional and idempotent on rerun | Postflight confirms the migration is recorded. Runtime roles do **not** authenticate unchanged: this release is the cutover that points `DATABASE_URL` at `rm_app`, `WORKER_DATABASE_URL` at `rm_worker`, and the migration run at a bootstrap login holding `rm_owner` membership (§4.1; `docs/runbooks/deployment.md` §4.3/§4.3.1; `scripts/ops/provision-db-role-taxonomy.sh`). `backend/src/config.ts:710` refuses a doadmin `DATABASE_URL` at production boot, and `backend/src/db/worker-client.ts:20` hard-requires `WORKER_DATABASE_URL` in production |
+| `backend/migrations/0053_database_role_taxonomy.sql` | Database roles | Creates `rm_owner` (NOLOGIN), `rm_app` and `rm_readonly`, and re-attributes `rm_worker`, which **`0016` created** — see §4.1.1, which tables each role's true origin. Re-owns the application's `public` relations/functions under `rm_owner`, EXCLUDING objects owned by an extension (pgcrypto's `digest()` et al stay with the extension); DDL now runs as `SET ROLE rm_owner` | The ownership sweep re-stamps every APPLICATION object in `public`; fully transactional and idempotent on rerun. It must also be expressible by a NON-superuser: the primary's bootstrap login `doadmin` is `rolsuper=false`, which is what forced this migration's three corrections (§4.1.2) | Postflight confirms the migration is recorded. Runtime roles do **not** authenticate unchanged: this release is the cutover that points `DATABASE_URL` at `rm_app`, `WORKER_DATABASE_URL` at `rm_worker`, and the migration run at a bootstrap login holding `rm_owner` membership (§4.1; `docs/runbooks/deployment.md` §4.3/§4.3.1; `scripts/ops/provision-db-role-taxonomy.sh`). `backend/src/config.ts:710` refuses a doadmin `DATABASE_URL` at production boot, and `backend/src/db/worker-client.ts:20` hard-requires `WORKER_DATABASE_URL` in production |
 | `backend/migrations/0054_rm_worker_allowlist.sql` | Worker permissions | Replaces 0016's broad default worker grant with an explicit allow-list: `rm_worker` keeps SELECT everywhere but INSERT/UPDATE/DELETE only on the tables queue/sampler handlers actually write | A worker lane touching a table missing from the allow-list fails its writes at boot instead of silently depending on a blanket grant | Postflight confirms the migration is recorded |
 | `backend/migrations/0055_swarm_recommendations_member_received_idx.sql` | Swarm takes | Adds `swarm_recommendations (member_id, received_at DESC)` so `getMembers()`'s per-member `max(received_at)` lateral is an index-only walk instead of a scan | A redundant index if the read path never runs; otherwise negligible | Postflight confirms the migration is recorded |
 | `backend/migrations/0056_analytics_overwrite_events.sql`, `backend/src/analytics/**` | Analytics research integrity | New `analytics_overwrite_events` table and `rm_capture_analytics_overwrite()` SECURITY DEFINER function; an owner-installed trigger records immutable evidence whenever a current-view analytics table is updated or deleted | An evidence-append failure surfacing on every current-view write would trip the analytics pipeline loudly | Postflight confirms the table exists |
@@ -117,7 +117,7 @@ The release contains the following changes relative to `v0.4.0`:
 | `backend/migrations/0058_analytics_run_ledger.sql`, `backend/src/analytics/run-ledger.ts`, `backend/src/analytics/store/run-ledger-store.ts` | Analytics runs | Five immutable tables (`analytics_ledger_methodology_versions`, `analytics_ledger_runs`, `analytics_ledger_run_events`, `analytics_data_vintages`, `analytics_vintage_members`) freezing per-run methodology, a write-once run header, lifecycle events, and frozen data vintages | Run headers are immutable by design; a code path trying to update a run fails loudly, never silently mutates | Postflight confirms the tables exist |
 | `backend/migrations/0059_analytics_output_and_report_snapshots.sql`, `backend/src/analytics/store/output-snapshot-store.ts`, `backend/src/swarm/domain.ts` | Analytics outputs, report snapshots, swarm briefs | `analytics_output_snapshots`/`analytics_report_snapshots` keep byte-exact, checksummed outputs and reports per run; new `swarm_brief_revisions` makes brief bodies append-only; `swarm_briefs`/`swarm_recommendations` gain nullable `report_snapshot_id` (no backfill — same documented cutover shape as 0049) | Every pre-cutover brief/take stays NULL-report, and report bytes are stored once per run (never overwritten) | Postflight confirms the tables exist |
 | `backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql` | Swarm subject history | Deletes fabricated `swarm_subject_snapshots` for framework subjects (no real book to scrape) by temporarily disabling the append-only triggers inside the migration transaction, then re-enabling them `ENABLE ALWAYS` | The delete touches only rows whose subject's `source->>'type'` is `framework`; a future framework subject would match, but the guard is fully restored before the transaction commits | Idempotent — reruns match 0 rows once cleaned |
-| `backend/migrations/0060_analytics_ledger_cutover.sql`, `backend/src/analytics/cutover/*`, `backend/src/db/analytics-ledger-guard.ts`, `backend/scripts/analytics-ledger-cutover-gate.ts` | Analytics reads (issue #979/#988) | Two new tables: the single-row `analytics_read_mode` operator switch (seeded `compatibility` — the mode every consumer has always used) and the immutable `analytics_parity_observations` evidence ledger (blocked from UPDATE/DELETE/TRUNCATE, `rm_app`-only append, `rm_worker` revoked). Dual-write parity checks run automatically (§6.1); flipping the switch to `ledger` is the operator-run cutover gate CLI, refused until a matching observation window exists | Reads silently resolve from the wrong side after a bad flip | The flip is gate-refused until every domain has a fresh, unbroken, sufficiently long/large matching window; rollback is the same non-destructive single UPDATE (§6.1) |
+| `backend/migrations/0060_analytics_ledger_cutover.sql`, `backend/src/analytics/cutover/*`, `backend/src/db/analytics-ledger-guard.ts`, `backend/scripts/analytics-ledger-cutover-gate.ts` | Analytics reads (issue #979/#988) | Two new tables: the single-row `analytics_read_mode` operator switch (seeded `compatibility` — the mode every consumer has always used) and the immutable `analytics_parity_observations` evidence ledger (blocked from UPDATE/DELETE/TRUNCATE, `rm_app`-only append, `rm_worker` revoked). Dual-write parity checks run automatically (§6.1); flipping the switch to `ledger` is the operator-run cutover gate CLI, refused until a matching observation window exists | Reads silently resolve from the wrong side after a bad flip | The flip is gate-refused until every domain has a fresh, unbroken, sufficiently long/large matching window; rollback is the same non-destructive single UPDATE (§6.1). **That was unreachable for `swarm_briefs` until 2026-09-18:** the parity check compared ALL brief history against a ledger `0059` deliberately does not backfill, so that domain reported `matched=false` on every sweep and the gate could never pass on a database carrying pre-`0059` briefs — production being exactly that. Scoped to the ledger era since; if you see the gate refuse on `swarm_briefs` alone, check you are running that fix before blaming the data |
 | `backend/migrations/0061_source_value_provenance.sql`, `backend/src/analytics/source-ledger.ts` | Raw-history provenance | Adds nullable `source_value_versions.provenance` text carrying the data source label (`live`/`seed`) at acquisition time, so ledger-mode raw-series reads return the same provenance the compatibility tables do | Pre-0061 rows stay NULL by design — the append-only trigger forbids the backfill | Postflight confirms the migration is recorded; NULL is the honest "not recorded" label, never a fabrication |
 | `frontend/public/assets/js/app/alpine/views/allocation.js`, `frontend/public/views/allocation.html`, `frontend/public/assets/js/app/lib/allocation-subject.js` | `/allocation` frontend | `/vault` is retired and its route repointed to the rebuilt `/allocation` policy page (RM-115); the hero switches from a fan chart to a donut | A route rename that silently breaks bookmarked links or e2e coverage of the old `/vault` view | `scripts/tests/unit/e2e-route-rename-guard.test.ts` and `frontend/test/browser/allocation-view.spec.ts` are part of CI on this branch |
 
@@ -404,6 +404,16 @@ The rehearsal is a pass only when all of the following are true:
     check can see. The §4.3 baseline totals remain a separate operator
     cross-check against the live cutover (§7).
 
+11. Product verification passed against the migrated, booted stack. The
+    rehearsal runs `scripts/verify-live.ts --tier full` after the frontend
+    checks (`scripts/lib/smoke-twin-rehearsal.ts`), which asserts what the
+    schema checks above cannot: that the swarm pipeline produced decisions and
+    that each published allocation vector still recomputes from its own
+    published takes (D42). A WARN on `swarm:vector-recomputable` means no
+    `bucket_weights` session was available to recompute — that is NOT a pass of
+    the invariant, only an absence of evidence, and it is expected until a
+    `bucket_weights` session publishes after `0051` lands.
+
 Rehearse rollback by checking out `v0.4.0`, running both forced installs, and
 booting it against a **fresh** restored copy (the pre-migration dump, not the
 smoke-twin post-migration). This release is a real forward-only migration —
@@ -415,7 +425,7 @@ route-check output, baseline comparison, and operator go/no-go sign-off.
 
 ### 5.1 Cut the RC tag
 
-Only once every §5 criterion (1-10) has passed, the rollback rehearsal is
+Only once every §5 criterion (1-11) has passed, the rollback rehearsal is
 recorded, and the stage report carries the operator's go sign-off. A rejected
 stage pass returns to §4/§5 on a fixed commit and consumes no rc number,
 because nothing has been tagged yet to increment:
@@ -517,10 +527,43 @@ The script performs SELECT-only checks: all twenty-four migration files
 recorded (`0039`-`0061`), v0.4.0 runtime tables intact, the nineteen new
 tables present and `asset_prices` non-empty, zero drifted `subject_name`
 rows, `third_party_enabled = false`, and contract freshness in the deployed
-checkout. Also verify manually from the deployed origin:
+checkout.
 
-- `/health` is healthy and identifies the production environment;
-- `/allocation`, `/performance`, and representative swarm pages render;
+**7.1 — Product verification (a SEPARATE question, and a separate process).**
+Postflight above asks *did the migration land*. It does not ask whether the
+product is doing what it claims, and for most of this release's life nothing
+did — which is how a release could be certified on schema shape alone. Run:
+
+```bash
+bun run verify:live --tier readonly --emit-receipt=P8.verify-prod
+```
+
+It attaches to the already-live origin over HTTP and asserts the swarm
+pipeline's invariants, including the one the product rests on: that each
+published allocation vector equals the mean of its own published takes
+(D42), recomputed by an implementation that deliberately does not import
+`meanTakeWeights()`.
+
+**`--tier readonly` is not optional here.** A `full` leg DRIVES the product —
+publishes sessions, spends inference, sends mail — and against production it
+would manufacture the very history the readonly legs exist to audit. `full`
+is for a twin or CI.
+
+Read the result with two rules the schema checks never needed:
+
+- **A WARN is not a pass.** `swarm:vector-recomputable` WARNs when no
+  `bucket_weights` session was available to recompute. That is an absence of
+  evidence, not a satisfied invariant, and it is EXPECTED on production until
+  a `bucket_weights` session publishes after `0051` lands — production's
+  history predates it. Do not record the invariant as verified on a WARN.
+- **Exit 2 is not exit 1.** `1` means a check FAILED — the product is wrong,
+  and §8 applies. `2` means the verifier never reached a live stack and
+  asserted NOTHING. Both stop the rollout; only one of them is evidence about
+  the product.
+
+**7.2 — Manual confirmations.** Still by hand, because they are deployment
+hygiene rather than product invariants and no check covers them:
+
 - the closed-day allocation totals captured in the baseline still match after
   the read path switched to the `asset_prices` join;
 - static assembly completed without a contract-freshness error;
@@ -529,6 +572,9 @@ checkout. Also verify manually from the deployed origin:
   the archive boot;
 - judge mode/config (including `third_party_enabled`), schedules, migration
   records, and key row counts match baseline.
+
+(`/health` and page rendering are no longer listed: §7.1 asserts both, and a
+bullet that duplicates an executed check is a bullet that goes stale.)
 
 Any failure is a stop condition. Preserve logs, receipts, and the baseline.
 
