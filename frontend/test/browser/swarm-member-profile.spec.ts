@@ -81,16 +81,27 @@ const RENAMED_ATHENA = {
   operator: "live-operator",
 };
 
+// The declared intent is one research-record section (#intent): the lens and
+// the biases share one column, the mandate sits under its own .rr-k label in
+// the other.
+const lensOf = (page: Page) => page.locator("#intent .rr-profile__lens");
+const biasTagsOf = (page: Page) => page.locator("#intent .rr-tags");
+const mandateOf = (page: Page) =>
+  page
+    .locator("#intent .rr-split > div", { has: page.locator(".rr-k", { hasText: /^Mandate$/i }) })
+    .locator(".rr-prose");
+
 // Everything the page renders off `member`, captured from the DOM so the two
 // addresses can be compared as whole records rather than field by field.
 async function renderedProfile(page: Page) {
   return {
     name: await page.locator(".profile-name").innerText(),
     tagline: await page.locator(".profile-role").innerText(),
-    lens: await page.locator(".mp-lens").innerText(),
-    mandate: await page.locator(".mp-intent__cell", { hasText: "Mandate" }).locator(".sv__body-copy").first().innerText(),
-    biases: await page.locator(".mp-bias").allInnerTexts(),
-    facts: await page.locator(".mp-facts").innerText(),
+    lens: await lensOf(page).innerText(),
+    mandate: await mandateOf(page).innerText(),
+    biases: await biasTagsOf(page).locator("li").allInnerTexts(),
+    // The facts row: the record's figures, then who operates it and since when.
+    facts: await page.locator(".rr-meta").innerText(),
   };
 }
 
@@ -132,7 +143,7 @@ test("a renamed member's legacy-id URL and handle URL both render the LIVE recor
   await expect(page.locator(".cv--detail")).not.toContainText(manifest.name);
   await expect(page.locator(".cv--detail")).not.toContainText(manifest.tagline);
   for (const bias of manifest.biases) {
-    await expect(page.locator(".mp-biases")).not.toContainText(bias);
+    await expect(biasTagsOf(page)).not.toContainText(bias);
   }
   // The tab name is derived from the record too (route-level SEO otherwise
   // titleizes the raw URL segment). Polled: seo.js and memberProfile.init()
@@ -169,11 +180,11 @@ test("with the swarm API unreachable, all four shipped manifests still render fr
 
     await expect(page.locator(".profile-name"), `${id} name`).toHaveText(manifest.name);
     await expect(page.locator(".profile-role"), `${id} tagline`).toHaveText(manifest.tagline);
-    await expect(page.locator(".mp-lens"), `${id} lens`).toContainText(manifest.lens);
-    const biases = page.locator(".mp-bias");
+    await expect(lensOf(page), `${id} lens`).toContainText(manifest.lens);
+    const biases = biasTagsOf(page).locator("li");
     await expect(biases, `${id} biases`).toHaveCount(manifest.biases.length);
     for (const bias of manifest.biases) {
-      await expect(page.locator(".mp-biases"), `${id} biases`).toContainText(bias);
+      await expect(biasTagsOf(page), `${id} biases`).toContainText(bias);
     }
   }
 
@@ -309,13 +320,15 @@ test("an unresolvable member ref answers 404 and renders the swarm roster in pla
   await expect(page).toHaveURL(/\/swarm\/members\/not-a-real-member-anywhere$/);
   expect(memberRouteStatus).toBe(404);
 
-  // No blank/error profile: the swarm roster renders instead, reachable
-  // by each member's current handle (same link shape the /swarm directory's
-  // Members panel uses).
+  // No blank/error profile: the heading names the ref that missed, and the
+  // swarm roster renders under it, reachable by each member's current handle
+  // (same link shape the /swarm directory's Members table uses).
   await expect(page.locator(".profile-name")).toHaveCount(0);
-  await expect(page.locator(".sv__panel", { hasText: "Swarm members" })).toContainText("not-a-real-member-anywhere");
+  await expect(page.locator(".rr-head", { hasText: "Swarm members" }).locator("h1")).toContainText(
+    "not-a-real-member-anywhere",
+  );
   for (const m of ROSTER_FIXTURE) {
-    const link = page.locator(`a.sv__row-title[href="/swarm/members/${m.handle}"]`);
+    const link = page.locator(`.rr-members a.rr-lnk[href="/swarm/members/${m.handle}"]`);
     await expect(link).toHaveText(m.name);
   }
 
@@ -373,9 +386,11 @@ test("the track record states when each take was filed, and its order is a contr
   });
 
   await page.goto("/swarm/members/athena");
-  await expect(page.locator(".mp-take")).toHaveCount(4);
+  // The published record: the shared take card, under the Track record section.
+  const takes = page.locator("#record .rr-take");
+  await expect(takes).toHaveCount(4);
 
-  const stamps = () => page.locator(".mp-take .mp-take__date").allInnerTexts();
+  const stamps = () => takes.locator(".mp-take__date").allInnerTexts();
 
   // Inside a day the label is friendly; past it the MINUTE is on the row, which
   // is the whole point — the two same-day rows must not read alike.
@@ -387,22 +402,23 @@ test("the track record states when each take was filed, and its order is a contr
   // Default order is newest-filed first, and the control says so.
   await expect(page.locator(".mp-chip--sort[aria-pressed='true']")).toHaveText("Newest");
   // Uppercased by the pill's own text-transform, which is what innerText reports.
-  const stanceOrder = () => page.locator(".mp-take .sv__stance-badge").allInnerTexts();
+  const stanceOrder = () => takes.locator(".sv__stance-badge").allInnerTexts();
   expect(await stanceOrder()).toEqual(["CONSTRUCTIVE", "NEUTRAL", "CAUTIOUS", "BEARISH"]);
 
   await page.getByRole("button", { name: "Oldest", exact: true }).click();
   expect(await stanceOrder()).toEqual(["BEARISH", "CAUTIOUS", "NEUTRAL", "CONSTRUCTIVE"]);
 
-  // Confidence is the question the "Avg confidence" figure above raises.
+  // Confidence is the question the "Mean confidence" figure above raises.
   await page.getByRole("button", { name: "Confidence", exact: true }).click();
-  expect(await page.locator(".mp-take .mp-conf").allInnerTexts()).toEqual([
-    "confidence 91%", "confidence 70%", "confidence 55%", "confidence 44%",
+  const confidences = () => takes.locator(".rr-conf").allInnerTexts();
+  expect(await confidences()).toEqual([
+    "Confidence 91%", "Confidence 70%", "Confidence 55%", "Confidence 44%",
   ]);
   await expect(page.locator(".mp-chip--sort[aria-pressed='true']")).toHaveCount(1);
 
   // Filter and sort compose: narrowing to one portfolio keeps the chosen order.
   await page.getByRole("button", { name: /^Woon Treasury/ }).click();
-  expect(await page.locator(".mp-take .mp-conf").allInnerTexts()).toEqual(["confidence 91%", "confidence 70%"]);
+  expect(await confidences()).toEqual(["Confidence 91%", "Confidence 70%"]);
 
   await expectNoBrowserErrors(errors);
 });
@@ -423,7 +439,7 @@ test("the exact instant, and which session it belongs to, are one hover away", a
   });
 
   await page.goto("/swarm/members/athena");
-  const when = page.locator(".mp-when").first();
+  const when = page.locator("#record .rr-take .mp-when").first();
   const bubble = when.locator(".mp-when__tip");
 
   // Hidden at rest — and hidden by `visibility`, not by display, because it is

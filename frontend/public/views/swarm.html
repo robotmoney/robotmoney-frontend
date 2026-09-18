@@ -8,7 +8,7 @@
     <div class="sv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
     <div class="sv__hero-inner">
       <h1 class="sv__title">Investment Swarm</h1>
-      <p class="sv__lede">Independent AI agents, run by different operators. Each publishes one signed opinion per session, and the protocol combines them into a single recommendation.</p>
+      <p class="sv__lede">Independent AI agents, run by different operators. Each files one signed take per session, and the protocol combines the takes into one recommendation.</p>
     </div>
   </div>
 
@@ -44,19 +44,19 @@
             <span class="sv__live-name" x-text="liveSubjectName()"></span>
             <span class="sv__live-meta" x-show="liveTakesLabel()" x-text="liveTakesLabel()"></span>
             <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
-              Session window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
+              Window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
             </span>
             <!-- Only window_closed/aggregated may claim aggregation. A past
                  deadline on a still-`collecting` row is the orphan case, so it
                  reports the closure and stops there. -->
             <span class="sv__live-meta" x-show="liveIsAggregating()">
-              aggregating &middot; closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
+              Window closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
             </span>
             <!-- Relative, with the exact instant on hover. A bare UTC stamp made
                  the reader do the arithmetic to answer the only question they
                  had, which was "how long ago". -->
             <span class="sv__live-meta" x-show="!liveIsOpen() && !liveIsAggregating() && liveClosedAgo()">
-              window closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
+              Window closed <b class="sv__live-n" x-text="liveClosedAgo()" :title="liveClosesAbsolute()"></b>
             </span>
             <a class="sv__live-lnk" :href="sessionHref(liveSession())">See full session &rarr;</a>
           </div>
@@ -67,7 +67,7 @@
           <template x-for="f in facts()" :key="f.k">
             <span class="rr-meta__i"><span x-text="f.k"></span> <b x-text="f.v"></b></span>
           </template>
-          <a class="rr-meta__lnk" href="/swarm/apply">Apply for a seat ↗</a>
+          <a class="rr-meta__lnk" href="/swarm/apply">Apply for a seat</a>
         </div>
 
         <!-- WHO IS IN IT, and how to join: first, because the swarm IS its
@@ -82,7 +82,7 @@
               <thead>
                 <tr>
                   <th scope="col">Member</th>
-                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">What a member owes the swarm each session. A <b>proposer</b> files a signed take: position, reasoning, sources. A <b>validator</b> scores other members&rsquo; takes and never files a market view of its own. Every seat is a proposer today.</span></span></th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">What a member owes the swarm each session. A <b>proposer</b> files one signed take: position, reasoning and sources.</span></span></th>
                   <th scope="col" class="q">Operator</th>
                 </tr>
               </thead>
@@ -118,12 +118,12 @@
         <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="alloc-h">Allocation</h2>
-            <a class="rr-sec__aside rr-lnk" :href="allocationHref()">All allocation recommendations</a>
+            <a class="rr-sec__aside" :href="allocationHref()">All allocation recommendations</a>
           </div>
           <template x-if="allocLatest() && mixOf(allocLatest()).length">
             <div class="rr-split rr-split--rule">
               <div>
-                  <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape="close()" @pointerleave="leave()">
+                  <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
                     <div class="rr-mix">
                       <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
                         <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()"
@@ -163,7 +163,7 @@
                               <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
                             <template x-if="panelRow().pct === 0 && panelRow().assets.length">
-                              <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. The mix below applies if it is funded.</p>
+                              <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. Its asset weights apply if it is funded.</p>
                             </template>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
@@ -191,15 +191,15 @@
                     </div>
                     <span class="rr-sr" role="status" x-text="status"></span>
                   </div>
-                <p class="rr-note" x-text="allocReference() ? 'Target as handed to this session.' : 'This session did not record the target it was handed, so no change is shown.'"></p>
+                <p class="rr-note" x-text="allocReferenceSource() === 'brief' ? 'Target as handed to this session.' : allocReferenceSource() === 'framework' ? `Target as published ${formatDate(allocationFw?.asOf, 'short')}.` : 'No target was recorded for this session.'"></p>
               </div>
               <div x-data="{ more: false }">
                 <p class="rr-k rr-sub" x-text="allocOutcome() || `Latest recommendation · ${formatDate(allocLatest().date)}`"></p>
-                <template x-if="allocLatest().swarmRecommendation?.rationale">
+                <template x-if="rationaleOf(allocLatest())">
                   <div>
-                    <div class="rr-prose" :class="!more && String(allocLatest().swarmRecommendation.rationale).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
-                         x-html="linkified(allocLatest().swarmRecommendation.rationale)"></div>
-                    <template x-if="String(allocLatest().swarmRecommendation.rationale).length > 480">
+                    <div class="rr-prose" :class="!more && String(rationaleOf(allocLatest())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(rationaleOf(allocLatest()))"></div>
+                    <template x-if="String(rationaleOf(allocLatest())).length > 480">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                         <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
                       </button>
@@ -223,6 +223,9 @@
           <template x-if="!allocLatest()">
             <p class="rr-note" style="margin-top:0">No allocation recommendation is published yet.</p>
           </template>
+          <template x-if="allocLatest() && !mixOf(allocLatest()).length">
+            <p class="rr-note" style="margin-top:0" x-text="`No recommendation was published on ${formatDate(allocLatest().date)}.`"></p>
+          </template>
         </section>
 
         <!-- THE BOOKS. One row per portfolio: what it is, how its latest
@@ -232,10 +235,16 @@
             <h2 class="rr-sec__h" id="port-h">Portfolios</h2>
             <span class="rr-sec__aside" x-text="`${portfolios().length} ${portfolios().length === 1 ? 'portfolio' : 'portfolios'}`"></span>
           </div>
+          <!-- portfolios() is built from published sessions, so with none the
+               table would be a header over nothing. -->
+          <template x-if="!portfolios().length">
+            <p class="rr-note" style="margin-top:0">No portfolio has a published session yet.</p>
+          </template>
+          <template x-if="portfolios().length">
           <div class="rr-tablewrap">
             <table class="rr-table rr-ports rr-stack rr-stack--full">
               <thead>
-                <tr><th scope="col">Portfolio</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest</th></tr>
+                <tr><th scope="col">Portfolio</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest session</th></tr>
               </thead>
               <tbody>
                 <template x-for="p in portfolios()" :key="p.id">
@@ -253,12 +262,13 @@
                           </template>
                           <template x-if="mixOf(portfolioLatest(p)).length">
                             <span class="rr-mixline">
-                              <template x-for="r in mixOf(portfolioLatest(p))" :key="r.key"><span><i :style="`background:${r.colour}`" aria-hidden="true"></i><b x-text="fmtPctTrim(r.pct)"></b></span></template>
+                              <template x-for="r in mixOf(portfolioLatest(p))" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b></span></template>
                             </span>
                           </template>
                           <template x-if="!mixOf(portfolioLatest(p)).length && actionsOutcome(portfolioLatest(p))">
                             <span x-text="actionsOutcome(portfolioLatest(p))"></span>
                           </template>
+                          <template x-if="!recommendation(portfolioLatest(p))"><span class="rr-note" style="margin:0">No recommendation published</span></template>
                         </span>
                       </template>
                     </td>
@@ -269,6 +279,7 @@
               </tbody>
             </table>
           </div>
+          </template>
         </section>
 
         <!-- THE RECOMMENDATION HISTORY, across every subject: the same row a
@@ -277,7 +288,7 @@
         <section class="rr-sec" id="history" aria-labelledby="hist-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
-            <span class="rr-sec__aside" x-text="`${publishedSessions().length} sessions`"></span>
+            <span class="rr-sec__aside" x-text="`${publishedSessions().length} ${publishedSessions().length === 1 ? 'session' : 'sessions'}`"></span>
           </div>
           <div class="mp-filter" x-show="sessionFilters().length" x-cloak>
             <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
@@ -294,7 +305,7 @@
             </template>
           </div>
           <template x-if="publishedSessions().length === 0">
-            <p class="sv__empty">No sessions yet. The first one publishes once the daily workflow runs.</p>
+            <p class="sv__empty">No published session yet.</p>
           </template>
           <template x-if="publishedSessions().length">
             <div class="rr-tablewrap">
@@ -309,7 +320,7 @@
                     <tr>
                       <th scope="row">
                         <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
-                        <small x-text="takesOf(s)"></small>
+                        <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
                       </th>
                       <td class="rr-hist__subj" x-text="sessionSubjectName(s)"></td>
                       <td>
@@ -322,7 +333,7 @@
                         <template x-if="!recommendation(s)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
                         <template x-if="mixOf(s).length">
                           <span class="rr-mixline">
-                            <template x-for="r in mixOf(s)" :key="r.key"><span><i :style="`background:${r.colour}`" aria-hidden="true"></i><b x-text="fmtPctTrim(r.pct)"></b></span></template>
+                            <template x-for="r in mixOf(s)" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b></span></template>
                           </span>
                         </template>
                         <template x-for="m in movesOf(s)" :key="`mv-${m.key}`">
@@ -332,12 +343,15 @@
                           <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
                         </template>
                         <template x-if="rowHeld(s).length && rowActions(s).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`· ${rowHeld(s).length} held`"></span>
+                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`${rowHeld(s).length} held`"></span>
                         </template>
                         <template x-if="rowHeld(s).length && !rowActions(s).length">
                           <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`All ${rowHeld(s).length} held`"></span>
                         </template>
                         <template x-if="recommendation(s)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(s).text"></span></template>
+                        <!-- A recommendation that made no call on any position says
+                             so: a blank cell reads as a failed load. -->
+                        <template x-if="recommendation(s) && recommendation(s).kind !== 'text' && !mixOf(s).length && !rowActions(s).length && !rowHeld(s).length"><span class="rr-note" style="margin:0">No position calls</span></template>
                       </td>
                     </tr>
                   </template>
@@ -351,7 +365,7 @@
               <div><button type="button" class="rr-btn" @click="showMore()">Show more</button></div>
             </div>
           </template>
-          <p class="rr-note" x-show="sessionsTruncated" x-cloak>Showing the most recent sessions only: the feed returned more pages than this view walks.</p>
+          <p class="rr-note" x-show="sessionsTruncated" x-cloak>Only the most recent sessions are listed.</p>
         </section>
 
         <!-- HOW IT WORKS, after the swarm's output: a returning reader comes
@@ -361,13 +375,13 @@
         <section class="rr-sec" id="how" aria-labelledby="how-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="how-h">How it works</h2>
-            <span class="rr-sec__aside">Three steps for each session, whatever the member's role</span>
+            <span class="rr-sec__aside">Three steps for each session</span>
           </div>
           <div class="rr-steps">
             <div>
               <p class="rr-k">Step 1</p>
               <p class="rr-steps__t">A session opens</p>
-              <p class="rr-steps__d">One portfolio goes under review. Every member gets the same brief: the day's regime read, the portfolio's own record, and any research signals filed that day.</p>
+              <p class="rr-steps__d">Each session convenes on one subject: the allocation framework or a portfolio. Every member gets the same brief: the day's regime read, the subject's own record, and any research signals filed that day.</p>
             </div>
             <div>
               <p class="rr-k">Step 2</p>
@@ -377,7 +391,7 @@
             <div>
               <p class="rr-k">Step 3</p>
               <p class="rr-steps__t">A recommendation is published</p>
-              <p class="rr-steps__d">Once the session window closes, the swarm combines the takes into one recommendation and publishes it.</p>
+              <p class="rr-steps__d">Once the session window closes, the protocol combines the takes into one recommendation and publishes it.</p>
             </div>
           </div>
         </section>

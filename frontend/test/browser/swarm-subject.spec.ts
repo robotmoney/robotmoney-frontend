@@ -22,6 +22,12 @@ import { navigate } from "./navigation.ts";
 // (frontend/public/data/swarm/manifests/subjects/woon.json + the
 // per-date subjects/woon/*.json snapshots), which are the one dataset
 // guaranteed to carry non-empty wallets, nft_contracts, AND structural_notes.
+//
+// The page is a research record (RM-121): a facts row (.rr-meta), the latest
+// recommendation as an explorable ring (#latest), the book (#holdings) and the
+// recommendation history as a table (#history). The review band and the brief
+// the session was handed moved to the session page, one click away; the tests
+// that guarded them here follow that link.
 
 // The browser itself (not app code) logs a console error for every network
 // request that comes back non-2xx — one per failed resource load, regardless
@@ -49,11 +55,11 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors.filter((e) => !EXPECTED_NETWORK_NOISE.test(e))).toEqual([]);
 }
 
-test("public subject profile renders holdings, wallets, NFT contracts and the swarm brief from fetched (archive) data", async ({ page }) => {
+test("public subject profile renders holdings, wallets, NFT contracts and its sessions from fetched (archive) data", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   // Force every swarm API call to fail so subjectProfile.init() and its
-  // loadSnapshots()/loadSessions() side-fetches take their real archive
+  // loadSnapshots()/loadSessionIndex() side-fetches take their real archive
   // fallback branch (the same branch every pre-2026-07-01 swarm surface
   // relies on) instead of whatever the live smoke stack has or hasn't seeded
   // for this id.
@@ -69,109 +75,93 @@ test("public subject profile renders holdings, wallets, NFT contracts and the sw
   await expect(page.locator(".sv__detail-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".sv__error")).toHaveCount(0);
 
-  // Holdings table: the archived 2026-06-25 snapshot's positions (verified
+  // Positions table: the archived 2026-06-25 snapshot's positions (verified
   // directly against loadArchiveSnapshot in frontend-routes.test.ts).
-  const holdingsRows = page.locator(".sp-holdings tbody tr");
-  await expect(holdingsRows).toHaveCount(6);
-  await expect(holdingsRows.first()).toContainText("WOON");
-  await expect(page.locator(".sv__panel-label", { hasText: "Holdings" })).toBeVisible();
+  await expect(page.locator("#hold-h")).toHaveText("Holdings");
+  const positions = page.locator(".rr-positions tbody tr");
+  await expect(positions).toHaveCount(6);
+  await expect(positions.first()).toContainText("WOON");
+  await expect(page.locator(".rr-positions .rr-k")).toHaveText("Positions on Jun 25, 2026");
 
   // Concentration chart draws once there are >= 2 snapshots in the window.
-  await expect(page.locator(".sp-chart__svg svg")).toBeVisible();
+  const svg = page.locator(".rr-area__svg svg");
+  await expect(svg).toBeVisible();
   // Stacked bands, not lines: positions at equal weight drew exactly on top of
   // each other as strokes (the vault's three 33.3% holdings rendered as ONE
-  // line), and share-of-NAV is an area question.
-  await expect(page.locator(".sp-chart__svg svg polygon").first()).toBeVisible();
-  await expect(page.locator(".sp-chart__svg svg polyline")).toHaveCount(0);
+  // line), and share-of-NAV is an area question. Each band carries a crisp
+  // top edge, and that is the only line drawn: one per band, unfilled, keyed
+  // to its band, never a series of its own.
+  await expect(svg.locator("polygon").first()).toBeVisible();
+  const bandTokens = await svg.locator("polygon").evaluateAll((els) => els.map((e) => e.getAttribute("data-token")));
+  const edgeTokens = await svg.locator("polyline").evaluateAll((els) => els.map((e) => e.getAttribute("data-token")));
+  expect(bandTokens.length).toBeGreaterThan(1);
+  expect(edgeTokens).toEqual(bandTokens);
+  await expect(svg.locator('polyline:not([fill="none"])')).toHaveCount(0);
 
   // The legend is the whole point of the rebuild — the panel previously drew
   // unlabelled lines whose only key was a rule in the table further down.
-  const legend = page.locator(".sp-legend li");
+  const legend = page.locator(".rr-area__legend li");
+  await expect(legend).toHaveCount(bandTokens.length);
   await expect(legend.first()).toBeVisible();
-  await expect(page.locator(".sp-legend")).toContainText("WOON");
+  await expect(page.locator(".rr-area__legend")).toContainText("WOON");
   // Every row carries its CURRENT share, not just a name.
   await expect(legend.first()).toContainText("%");
 
   // A token's colour comes from assetDot(), so it is the same colour here, in
-  // the holdings table, and on /allocation — it used to be indexed by the
+  // the positions table, and on /allocation — it used to be indexed by the
   // position's RANK, which meant the colour said "second-biggest today" and
   // moved whenever two holdings swapped places.
-  const usdcBand = await page.locator(".sp-legend li").filter({ hasText: "USDC" })
-    .locator(".sp-legend__key").evaluate((el) => getComputedStyle(el).backgroundColor);
+  // By exact name: rmUSDC is a different token in the same book.
+  const usdcBand = await legend.filter({ has: page.locator("span", { hasText: /^USDC$/ }) })
+    .locator("i").evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(usdcBand).toBe("rgb(16, 185, 129)"); // #10b981, USDC's entry in ASSET_DOT
+  const usdcRow = await positions.filter({ has: page.locator("th span", { hasText: /^USDC$/ }) })
+    .locator("th i").evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(usdcRow).toBe(usdcBand);
 
-  // Tracked wallets: woon.json declares 3.
-  const walletsPanel = page.locator(".sv__panel", { hasText: "Tracked wallets" });
-  await expect(walletsPanel).toBeVisible();
-  await expect(walletsPanel.locator("li")).toHaveCount(3);
-  await expect(walletsPanel).toContainText("main");
-  await expect(walletsPanel).toContainText("holdings-peaq");
+  // What the book is read from, in one table. Tracked wallets: woon.json
+  // declares 3. NFT contracts: it declares 3 (RoboFarm, RecycleMachine,
+  // ClawMachine) — nft_contracts -> nftContracts is exactly the camelSubject
+  // mapping gap issue #340 covers at the unit level.
+  const sources = page.locator(".rr-sources tbody tr");
+  await expect(sources.locator("th")).toHaveText(["main", "holdings", "holdings-peaq", "RoboFarm", "RecycleMachine", "ClawMachine"]);
+  await expect(sources.locator("td:nth-child(2)")).toHaveText(["Wallet", "Wallet", "Wallet", "NFT contract", "NFT contract", "NFT contract"]);
 
-  // NFT contracts: woon.json declares 3 (RoboFarm, RecycleMachine, ClawMachine)
-  // — nft_contracts -> nftContracts is exactly the camelSubject mapping gap
-  // issue #340 covers at the unit level.
-  const nftPanel = page.locator(".sv__panel", { hasText: "NFT contracts" });
-  await expect(nftPanel).toBeVisible();
-  await expect(nftPanel.locator("li")).toHaveCount(3);
-  await expect(nftPanel).toContainText("RoboFarm");
-  await expect(nftPanel).toContainText("RecycleMachine");
-  await expect(nftPanel).toContainText("ClawMachine");
+  // Sessions: all 9 archived, published woon sessions, one history row each.
+  const rows = page.locator("#history .sv__session-card");
+  await expect(rows).toHaveCount(9);
 
-  // No "What the swarm is given" section any more. Woon is not the framework,
-  // so it has no targets card; the same latest review renders on its own, in
-  // the slot that section held, and its handover is a record of that brief.
-  await expect(page.locator(".sp-brief__sum-k")).toHaveText(["What the swarm was handed"]);
-  const review = page.locator(".sp-review .sr");
-  await expect(review).toBeVisible();
-  await expect(review.locator(".sr__k")).toHaveText(["Signal", "Reasoning"]);
-  const hand = review.locator(".sp-brief");
-  await expect(hand.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
-  await expect(hand.locator(".sp-brief__anim")).toHaveAttribute("inert", /.*/);
-  await hand.locator(".sp-brief__sum").click();
-  await expect(hand.locator('[data-part="notes"] li')).toHaveCount(4);
-  await expect(hand).toContainText("RoboFarm, RecycleMachine, ClawMachine");
-  // A research item links when the site has a page for it, and the archive's
-  // articles all do.
-  await expect(hand.locator('[data-part="research"] .hand__links a').first()).toHaveAttribute("href", /^\//);
-
-  // Sessions: all 9 archived, published woon sessions.
-  await expect(page.locator(".sv__session-card")).toHaveCount(9);
-
-  // And their takes open from the archive too. The expander's fallback is a
+  // And their takes are read from the archive too. The detail fallback is a
   // fetch against the API, which has no row for an archived session — so
-  // without the bodies carried onto the row this reported "These takes could
-  // not be loaded" over takes already in memory.
-  const first = page.locator(".sv__session-card").first();
+  // without the bodies carried onto the row this reported "could not be
+  // loaded" over takes already in memory.
+  const first = rows.first();
+  await expect(first.locator("th small")).toHaveText("3 takes");
+  await expect(page.locator("#history")).not.toContainText("could not be loaded");
 
   // The consensus is DERIVED from the takes here. The static archive stores no
-  // aggregate stances, quorum or mean confidence, so every archived card had no
+  // aggregate stances, quorum or mean confidence, so every archived row had no
   // consensus at all — over stances sitting on the takes in the same object.
-  // No stance spread bar on this page: it competed with the target ring, which
-  // IS the decision, while saying what the badge below says in a word.
-  await expect(first.locator(".sv__spread")).toHaveCount(0);
-  await expect(first.locator(".sv__session-kicker")).toHaveText("Consensus");
-  await expect(first.locator(".sv__card-verdict")).toContainText("took part");
-  await expect(first.locator(".sv__card-verdict")).toContainText("mean confidence");
-
-  const btn = first.locator(".sv__takes-btn");
-  await expect(btn).not.toBeDisabled();
-  await btn.click();
-  await expect(first.locator(".sv__take-row").first()).toBeVisible();
-  await expect(first.locator(".sv__take-line").first()).not.toHaveText("");
-  // :visible, not a count — the loading and error lines are x-show, so both
-  // are in the DOM either way. What matters is that neither is on screen.
-  await expect(first.locator(".sv__unset:visible")).toHaveCount(0);
+  await expect(first.locator(".sv__stance-badge")).toHaveText("cautious");
+  const counts = page.locator("#latest .rr-counts");
+  await expect(counts.locator(":scope > span").filter({ hasText: "cautious" }).locator("b")).toHaveText("2");
+  await expect(counts.locator(":scope > span").filter({ hasText: "constructive" }).locator("b")).toHaveText("1");
+  // An archived session knows how many filed, not how many could have.
+  await expect(counts.locator("em")).toHaveText(/^3 took part · \d+% mean confidence$/);
+  // No stance spread bar on this page: it competed with the ring, which IS the
+  // decision, while saying what the badge says in a word.
+  await expect(page.locator(".sv__spread")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
 });
 
-// The optional panels gate on .length rather than rendering an empty section.
+// The optional parts gate on .length rather than rendering an empty section.
 // This used to be asserted against robotmoney-allocation, whose archive
 // manifest is the only one carrying `wallets: []` with no `nft_contracts` key.
 // The two gates are covered separately now: the NFT one off
 // the archive, which is the fixture that has it, and the wallets one off a
 // stubbed API subject, which is the path production actually takes.
-test("public subject profile hides the NFT panel for an archived subject with none declared", async ({ page }) => {
+test("public subject profile lists no NFT contract for an archived subject with none declared", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   await page.route("**/api/swarm/**", (route) =>
@@ -179,28 +169,47 @@ test("public subject profile hides the NFT panel for an archived subject with no
   );
 
   // robotmoney-vault's manifest declares one wallet and no nft_contracts key
-  // at all, so the wallets panel below is the positive control: the NFT
-  // absence is a gate firing, not a page that never drew its panels.
+  // at all, so the wallet row below is the positive control: the NFT
+  // absence is a gate firing, not a page that never drew its sources.
   await page.goto("/swarm/subjects/robotmoney-vault");
 
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
-  await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
-  await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toBeVisible();
+  const sources = page.locator(".rr-sources tbody tr");
+  await expect(sources).toHaveCount(1);
+  await expect(sources.locator("td").first()).toHaveText("Wallet");
+  await expect(page.locator(".rr-sources")).not.toContainText("NFT contract");
+  // The note about unvalued NFT contracts goes with them.
+  await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
   await expectNoBrowserErrors(errors);
 });
 
-test("public subject profile hides the wallets panel for a subject serving an empty wallet list", async ({ page }) => {
+test("public subject profile lists no wallets for a subject serving an empty wallet list", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   await page.route("**/api/swarm/**", (route) => {
-    if (/\/api\/swarm\/subjects\/mav$/.test(new URL(route.request().url()).pathname)) {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/subjects\/mav$/.test(pathname)) {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           id: "mav", name: "Mav Treasury", thesis_blurb: "",
           wallets: [], nft_contracts: [], structural_notes: ["One note."],
+        }),
+      });
+    }
+    // A book with no wallets on it, so the Holdings section draws and the
+    // absence below is the wallets gate itself, not the section's.
+    if (/\/api\/swarm\/subjects\/mav\/snapshots$/.test(pathname)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          snapshots: [{
+            date: "2026-09-01", total_value_usd: 1000,
+            positions: [{ token: "USDC", chain: "base", value_usd: 1000 }],
+          }],
         }),
       });
     }
@@ -212,12 +221,13 @@ test("public subject profile hides the wallets panel for a subject serving an em
   await page.goto("/swarm/subjects/mav");
 
   await expect(page.locator(".sv__detail-title")).toHaveText("Mav Treasury");
-  await expect(page.locator(".sv__panel", { hasText: "Tracked wallets" })).toHaveCount(0);
-  await expect(page.locator(".sv__panel", { hasText: "NFT contracts" })).toHaveCount(0);
-  // mav gates off every panel there is, so the positive control has to sit
-  // past them: the sessions empty state proves the body rendered the whole
-  // way down, and the absences above are gates firing rather than a page
-  // that never drew.
+  // The book is drawn...
+  await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$1,000");
+  // ...with no "Read from" table: no wallet and no NFT contract to list.
+  await expect(page.locator(".rr-sources")).toHaveCount(0);
+  await expect(page.locator("#holdings")).not.toContainText("Read from");
+  // And the body rendered the whole way down: the history's empty state sits
+  // past every gated part.
   await expect(page.locator(".sv__empty")).toBeVisible();
 
   await expectNoBrowserErrors(errors);
@@ -258,20 +268,20 @@ test("a slow subject fetch does not stamp its name on the route the visitor move
 });
 
 // A subject profile lists the same sessions /swarm does, and used to read them
-// a different way: /swarm showed the stance spread, the consensus lean, the
-// quorum and what the session decided, while the profile showed a take count
-// and five lines of synthesis. Same session, two stories, depending on which
-// page you arrived from.
+// a different way: /swarm showed the consensus lean, the quorum and what the
+// session decided, while the profile showed a take count and five lines of
+// synthesis. Same session, two stories, depending on which page you arrived
+// from.
 //
 // Both surfaces now derive those from lib/session-summary.js. The data was
-// never the obstacle: loadSessions() already fetched each session's FULL
-// detail and discarded everything but `synthesis`.
+// never the obstacle: loadSessionRow() fetches each session's FULL detail, and
+// the latest recommendation and its history row are built from it.
 //
 // Stubbed rather than archive-driven on purpose: the checked-in archive
 // sessions carry a recommendation but no `stances`, `quorum` or
-// `meanConfidence`, so the archive path cannot exercise the consensus half of
-// the card at all.
-test("a subject's session card carries the consensus and the decision, as /swarm does", async ({ page }) => {
+// `meanConfidence`, so the archive path cannot exercise the aggregate half of
+// the consensus at all.
+test("a subject's latest session carries the consensus and the decision, as /swarm does", async ({ page }) => {
   const session = {
     id: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41",
     date: "2026-09-01",
@@ -311,10 +321,10 @@ test("a subject's session card carries the consensus and the decision, as /swarm
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
   await page.route("**/api/swarm/sessions", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [session], nextCursor: null }) }));
-  // Counted so the expander can be shown NOT to re-fetch what the page already
-  // holds: this same response is what built the card.
+  // Counted so the page can be shown NOT to buy the same response twice: the
+  // latest recommendation and its history row are one session, read once.
   let detailFetches = 0;
-  await page.route("**/api/swarm/sessions/2026-09-01/robotmoney-allocation", (route) => {
+  await page.route(`**/api/swarm/sessions/${session.id}`, (route) => {
     detailFetches += 1;
     return route.fulfill({
       status: 200,
@@ -334,35 +344,33 @@ test("a subject's session card carries the consensus and the decision, as /swarm
 
   await page.goto("/index.html");
   await navigate(page, "/swarm/subjects/robotmoney-allocation");
-  const card = page.locator(".sv__session-card").first();
-  await expect(card).toBeVisible();
+  const latest = page.locator("#latest");
+  await expect(latest).toBeVisible();
 
-  // The date is the identity here, not the subject's name: on this page every
-  // row would carry the same name.
-  await expect(card.locator(".sv__session-title")).toHaveText(/Sep 1, 2026/);
-  await expect(card.locator(".sv__session-title"))
-    .toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+  // The consensus, in the same parts /swarm prints: the stances counted, who
+  // took part, and how sure they were.
+  const counts = latest.locator(".rr-counts");
+  await expect(counts.locator(":scope > span").filter({ hasText: "constructive" }).locator("b")).toHaveText("4");
+  await expect(counts.locator(":scope > span").filter({ hasText: "cautious" }).locator("b")).toHaveText("1");
+  await expect(counts.locator("em")).toHaveText("5 of 7 took part · 62% mean confidence");
 
-  // The consensus, in the same three parts /swarm prints.
-  await expect(card.locator(".sv__stance-badge")).toHaveText("constructive");
-  await expect(card).toContainText("5 of 7 took part");
-  await expect(card).toContainText("62% mean confidence");
   // What it DECIDED, in the subject's own units.
-  // Drawn, not spelled: one band per sleeve, in /allocation's own colours, with
+  // Drawn, not spelled: one arc per sleeve, in /allocation's own colours, with
   // the figures beside their names. "95 / 5 / 0 / 0" made a reader map four
   // numbers back onto four names they were holding in their head.
-  const keys = card.locator(".sv__wkeys li");
+  const keys = latest.locator(".rr-legend__row");
   await expect(keys).toHaveCount(4);
   await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
   await expect(keys.nth(0)).toContainText("95%");
   await expect(keys.nth(1)).toContainText("Agent Tokens");
   await expect(keys.nth(1)).toContainText("5%");
   // A sleeve at zero keeps its row, marked as held there on purpose...
-  await expect(keys.nth(2)).toContainText("Protocol Tokens 0%");
+  await expect(keys.nth(2)).toContainText("Protocol Tokens");
+  await expect(keys.nth(2)).toContainText("0%");
   await expect(keys.nth(2)).toHaveClass(/is-zero/);
   // ...and draws no arc, so the ring never shows a sliver for nothing. Two
   // sleeves are funded here, so two arcs sit on the track.
-  const arcs = card.locator(".sv__wdonut circle[pathLength]");
+  const arcs = latest.locator(".sv__wdonut circle[pathLength]");
   await expect(arcs).toHaveCount(2);
   // An arc's length IS its percentage, because the circle carries
   // pathLength="100" — the geometry cannot drift out of step with the radius.
@@ -374,35 +382,23 @@ test("a subject's session card carries the consensus and the decision, as /swarm
   // sleeve wears on /allocation's donut and a weight change never repaints the
   // sleeves that did not move.
   await expect(arcs.first()).toHaveAttribute("stroke", "#10b981"); // CATEGORICAL[0]
-  await expect(card.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
-  // The foot /swarm carries: the takes expander and the way through to the
-  // session itself.
-  const takesBtn = card.locator(".sv__takes-btn");
-  await expect(takesBtn).toHaveText(/5 takes/);
-  await expect(takesBtn).toHaveAttribute("aria-expanded", "false");
-  await expect(card.locator(".sv__live-lnk")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+  await expect(latest.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
+  // The way through to the session itself.
+  await expect(latest.locator(".rr-cta")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+  await expect(latest.locator(".rr-cta")).toContainText("Read the Sep 1, 2026 session");
 
-  // The page already fetched this session's full detail to build the card, so
-  // opening the takes must not buy the same response twice.
-  const before = detailFetches;
-  await takesBtn.click();
-  await expect(takesBtn).toHaveAttribute("aria-expanded", "true");
-  const rows = card.locator(".sv__take-row");
-  await expect(rows).toHaveCount(5);
-  expect(detailFetches).toBe(before);
+  // The history row: the date is the identity here, not the subject's name —
+  // on this page every row would carry the same name.
+  const row = page.locator("#history .sv__session-card").first();
+  await expect(row.locator(".sv__session-title")).toHaveText(/Sep 1, 2026/);
+  await expect(row.locator(".sv__session-title")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+  await expect(row.locator("th small")).toHaveText("5 takes");
+  // The same decision, one figure per sleeve column, a held zero marked so.
+  await expect(row.locator("td.q")).toHaveText(["95%", "5%", "0%", "0%"]);
+  await expect(row.locator("td.q").nth(2)).toHaveClass(/is-zero/);
 
-  // Loudest first, and each row is a member, a stance and one line of what
-  // they actually said — not the whole memo.
-  await expect(rows.first()).toContainText("Athena");
-  await expect(rows.first().locator(".sv__stance-badge")).toHaveText("constructive");
-  await expect(rows.first()).toContainText("confidence");
-  await expect(rows.first().locator(".sv__take-line"))
-    .toHaveText("Conservative DeFi still carries the book at this size.");
-  await expect(rows.nth(1)).toContainText("Woon");
-
-  // And it closes again.
-  await takesBtn.click();
-  await expect(takesBtn).toHaveAttribute("aria-expanded", "false");
+  // One fetch built both.
+  expect(detailFetches).toBe(1);
 });
 
 // The archive fallback was keyed on the REQUEST failing. This route answers
@@ -429,17 +425,18 @@ test("a subject the API answers 200 null for still renders from the archive", as
 
 // A label with nothing under it reads as a figure that failed to load. Every
 // static-archive session row carries the recommendation but no stances, no
-// quorum and no mean confidence, and the three facts under the kicker were
-// each gated separately — so the word "Consensus" printed over empty space on
-// every archived row of every subject.
-test("a session with no consensus to report prints no Consensus kicker", async ({ page }) => {
+// quorum and no mean confidence, and the facts under the old "Consensus"
+// kicker were each gated separately — so the word printed over empty space on
+// every archived row of every subject. The consensus line under the latest
+// recommendation is gated as a whole for the same reason.
+test("a session with no consensus to report prints no consensus line", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
-  // A row the index lists but whose detail fetch fails: the card still renders
-  // from what the index carries, with no stances, no quorum, no confidence and
-  // no takes to derive any of them from. This is the case the gate is for. An
-  // ARCHIVED session is no longer one — its takes carry stances, and the card
-  // derives the consensus from them.
+  // A row whose detail resolves with the decision, and with NO takes and none
+  // of the aggregates: no stances, no quorum, no confidence and no takes to
+  // derive any of them from. This is the case the gate is for. An ARCHIVED
+  // session is no longer one — its takes carry stances, and the page derives
+  // the consensus from them.
   const row = {
     id: "8e1f0c22-4a55-4f30-b7c1-2d9e6a4b1f88",
     date: "2026-09-02",
@@ -448,16 +445,14 @@ test("a session with no consensus to report prints no Consensus kicker", async (
     swarm_recommendation: { type: "bucket_weights", weights: { conservative_defi_yield: 0.95, agent_tokens: 0.05 } },
   };
   await page.route("**/api/swarm/**", (route) => {
-    const { pathname, search } = new URL(route.request().url());
+    const { pathname } = new URL(route.request().url());
     if (pathname === "/api/swarm/sessions") {
       return route.fulfill({
         status: 200, contentType: "application/json",
         body: JSON.stringify({ sessions: [row], nextCursor: null }),
       });
     }
-    // The detail resolves — with the decision, and with NO takes and none of
-    // the aggregates. That is the shape the kicker has to survive.
-    if (pathname === "/api/swarm/sessions/2026-09-02/robotmoney-allocation") {
+    if (pathname === `/api/swarm/sessions/${row.id}`) {
       return route.fulfill({
         status: 200, contentType: "application/json",
         body: JSON.stringify({ session: row, takes: [] }),
@@ -472,21 +467,22 @@ test("a session with no consensus to report prints no Consensus kicker", async (
         }),
       });
     }
-    void search;
     return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
   });
 
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  const card = page.locator(".sv__session-card").first();
-  await expect(card).toBeVisible();
+  const latest = page.locator("#latest");
+  await expect(latest).toBeVisible();
 
-  // The row is here, and it does carry the decision...
-  await expect(card.locator(".sv__wkeys li").first()).toContainText("Conservative DeFi Yield 95%");
-  // ...but nothing to say about the consensus, so the kicker is absent rather
-  // than a label standing over empty space.
-  await expect(card.locator(".sv__session-kicker")).toHaveCount(0);
-  // And the spread bar has nothing to draw either.
-  await expect(card.locator(".sv__spread > i")).toHaveCount(0);
+  // The session is here, and it does carry the decision...
+  await expect(latest.locator(".rr-legend__row").first()).toContainText("Conservative DeFi Yield");
+  await expect(latest.locator(".rr-legend__row").first()).toContainText("95%");
+  await expect(page.locator("#history .sv__session-card").first().locator("td.q").first()).toHaveText("95%");
+  // ...but nothing to say about the consensus, so the line is absent rather
+  // than standing over empty space.
+  await expect(latest.locator(".rr-counts")).toHaveCount(0);
+  await expect(page.locator(".rr")).not.toContainText("took part");
+  await expect(page.locator(".rr")).not.toContainText("mean confidence");
 
   await expectNoBrowserErrors(errors);
 });
@@ -547,15 +543,16 @@ test("a framework subject renders no book, even when the API serves it one", asy
   await page.goto("/swarm/subjects/fw");
   await expect(page.locator(".sv__detail-title")).toHaveText("Framework Subject");
 
-  // No holdings table, no notable list, no concentration chart, and no
-  // holdings figure among the facts.
-  await expect(page.locator(".sp-holdings")).toHaveCount(0);
-  await expect(page.locator(".sv__notables")).toHaveCount(0);
-  await expect(page.locator(".sp-chart__svg svg")).toHaveCount(0);
-  await expect(page.locator(".sv__fact-row")).not.toContainText("holdings");
+  // No Holdings section: no positions table, no notable list, no
+  // concentration chart, and no holdings figure among the facts.
+  await expect(page.locator("#holdings")).toHaveCount(0);
+  await expect(page.locator(".rr-positions")).toHaveCount(0);
+  await expect(page.locator(".rr-area__notes")).toHaveCount(0);
+  await expect(page.locator(".rr-area__svg svg")).toHaveCount(0);
+  await expect(page.locator(".rr-meta")).not.toContainText(/holdings/i);
   // Two snapshots would otherwise be enough to draw the chart, so this is a
   // gate firing rather than a fixture too thin to render.
-  await expect(page.locator(".sv__fact-row")).toContainText("sessions");
+  await expect(page.locator(".rr-meta")).toContainText("Sessions");
 
   // And the request is never made: a subject with no book has none to fetch.
   expect(snapshotsRequested).toBe(false);
@@ -563,12 +560,11 @@ test("a framework subject renders no book, even when the API serves it one", asy
   await expectNoBrowserErrors(errors);
 });
 
-// The subject IS the published allocation, so its page opens with the weights
-// in force. A reader landing here was shown six sessions ABOUT the weights
-// before being shown the weights. Same .sv__alloc card /swarm carries, minus
-// the eyebrow and title that name which subject it is for — this page's own H1
-// already said that.
-test("the allocation subject opens with the weights in force, and no other subject does", async ({ page }) => {
+// The subject IS the published allocation, so its page carries the weights in
+// force, beside its latest recommendation and behind a disclosure: that
+// recommendation already compares against the target its own session was
+// handed. No other subject carries them.
+test("the allocation subject carries the weights in force, and no other subject does", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   let frameworkFetches = 0;
@@ -593,13 +589,15 @@ test("the allocation subject opens with the weights in force, and no other subje
   );
 
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  const card = page.locator(".sv__alloc");
-  await expect(card).toBeVisible();
-  await expect(card).toContainText("Unchanged since");
+  const btn = page.locator('#latest button[aria-controls="targets-in-force"]');
+  await expect(btn).toBeVisible();
+  await expect(btn).toContainText("Since Jun 2, 2026");
+  await expect(btn).toHaveAttribute("aria-expanded", "false");
+  await btn.click();
+  await expect(btn).toHaveAttribute("aria-expanded", "true");
+  const card = page.locator("#targets-in-force");
 
-  // The card's own register, not the handover's copy of the targets further
-  // down the same card.
-  const rows = card.locator(".sv__alloc-reg .sv__sleeve:not(.sv__sleeve--head)");
+  const rows = card.locator(".sv__sleeve");
   await expect(rows).toHaveCount(4);
   await expect(rows.first()).toContainText("Conservative DeFi Yield");
   await expect(rows.first()).toContainText("95%");
@@ -613,24 +611,33 @@ test("the allocation subject opens with the weights in force, and no other subje
   // /swarm points here for the history, so this points at the product page.
   await expect(card.locator('a[href="/allocation"]')).toBeVisible();
 
-  // A subject that is NOT the framework is a book the framework does not
-  // describe: it gets no card, and never asks for one.
-  frameworkFetches = 0;
+  // Another weights subject reads the framework as the target its sessions
+  // are measured against, and still carries no weights-in-force of its own:
+  // the framework does not describe it.
   await page.goto("/swarm/subjects/robotmoney-vault");
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
-  await expect(page.locator(".sv__alloc")).toHaveCount(0);
+  await expect(page.locator("#latest")).toBeVisible();
+  await expect(page.locator("#targets-in-force")).toHaveCount(0);
+
+  // A book subject is a book the framework does not describe at all: no
+  // weights in force, and it never asks for them.
+  frameworkFetches = 0;
+  await page.goto("/swarm/subjects/woon");
+  await expect(page.locator(".sv__detail-title")).toHaveText("Woon Treasury");
+  await expect(page.locator("#latest")).toBeVisible();
+  await expect(page.locator("#targets-in-force")).toHaveCount(0);
   expect(frameworkFetches).toBe(0);
 
   await expectNoBrowserErrors(errors);
 });
 
-// The card's heading has to stay true in both states. "Latest swarm
-// recommendation" is right for weights a session published and wrong for the
-// seeded row in force today — and the card's own note says, two lines below,
-// that no session has changed them. So the heading follows provenance, and it
-// follows provenance.sessionId rather than the DTO's top-level `managed`,
-// which is true today and is about the VAULT being managed.
-test("the allocation card names who set the weights, and never overclaims", async ({ page }) => {
+// The heading has to stay true in both states. "Latest swarm recommendation"
+// is right for weights a session published and wrong for the seeded row in
+// force today — and the note under the weights says that no session has
+// changed them. So the heading follows provenance, and it follows
+// provenance.sessionId rather than the DTO's top-level `managed`, which is
+// true today and is about the VAULT being managed.
+test("the weights in force name who set them, and never overclaim", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
   // Widened so the second half can add `provenance`: this is a .ts spec, so a
@@ -653,19 +660,21 @@ test("the allocation card names who set the weights, and never overclaims", asyn
   // Seeded: no provenance, so no claim of a recommendation — even though the
   // feed says managed: true.
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  await expect(page.locator(".sv__alloc-t")).toHaveText("Target weights in force");
-  await expect(page.locator(".sv__alloc")).toContainText("No session has changed these weights yet");
+  const heading = page.locator('button[aria-controls="targets-in-force"] > span');
+  await expect(heading).toHaveText("Target weights in force");
+  await expect(page.locator("#targets-in-force")).toHaveAttribute("aria-label", "Target weights in force");
+  await expect(page.locator("#targets-in-force")).toContainText("No session has changed these weights yet");
 
   // A session wrote them: now it IS the latest swarm recommendation.
   framework = { ...framework, provenance: { sessionId: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41" } };
   await page.goto("/swarm");
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  await expect(page.locator(".sv__alloc-t")).toHaveText("Latest swarm recommendation");
+  await expect(heading).toHaveText("Latest swarm recommendation");
 
   await expectNoBrowserErrors(errors);
 });
 
-// ── The latest review, inside the targets card (RM-121) ───────────────────
+// ── The latest session, and the brief it opened with (RM-121) ────────────
 // Live-shaped: the real 2026-09-10 allocation session.
 const LR_ID = "4cf025d6-8b53-4e7b-85a8-3843f2aa1609";
 const LR_ROW = {
@@ -690,7 +699,11 @@ const LR_TAKES = [
   { id: "t5", member_id: "m5", member_handle: "shodai", member_name: "ShodAI", stance: "neutral", confidence: 0.68 },
 ];
 
-test("the targets card carries the latest review under its note: signal, reasoning, what the swarm was handed", async ({ page }) => {
+// The subject page leads with its latest session's reading and vote and one
+// way into that session; the signal band and what the swarm was handed are
+// the session's own evidence, and live on its page. Followed from here, so
+// the handover this page used to carry is still checked end to end.
+test("the latest recommendation carries its session's reading and vote, and its session carries what the swarm was handed", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.route("**/api/**", (route) => {
     const u = new URL(route.request().url());
@@ -701,7 +714,7 @@ test("the targets card carries the latest review under its note: signal, reasoni
     if (u.pathname === "/api/swarm/sessions") {
       return json({ sessions: [LR_ROW, { id: "50b833d3-6e85-4b60-8d93-8a140755fe67", date: "2026-09-10", subjectId: "woon", subjectName: "Woon Treasury", state: "published" }], nextCursor: null });
     }
-    if (u.pathname === "/api/swarm/sessions/2026-09-10/robotmoney-allocation") return json({ session: LR_ROW, takes: LR_TAKES });
+    if (u.pathname === `/api/swarm/sessions/${LR_ID}`) return json({ session: LR_ROW, takes: LR_TAKES });
     if (u.pathname === "/api/swarm/brief" && u.searchParams.get("session") === LR_ID) {
       return json({
         prompt: { user: "Review the supplied swarm context for Robot Money Allocation on 2026-09-10 and return one take matching takeSchema." },
@@ -719,60 +732,54 @@ test("the targets card carries the latest review under its note: signal, reasoni
   });
   await page.goto("/swarm/subjects/robotmoney-allocation");
 
-  // Inside the targets card, directly after its note.
-  const review = page.locator(".sv__alloc .sr");
-  await expect(review).toBeVisible();
-  // After the note, in document order, inside the card.
-  const afterNote = await page.locator(".sv__alloc .sv__sleeve-note").evaluate((note) => {
-    const sr = note.closest(".sv__alloc")?.querySelector(".sr");
-    if (!sr) return false;
-    return Boolean(note.compareDocumentPosition(sr) & Node.DOCUMENT_POSITION_FOLLOWING);
-  });
-  expect(afterNote).toBe(true);
-  // The allocation link sits beside the card's title, not at its foot.
-  await expect(page.locator(".sp-alloc__head a.sv__cov-lnk")).toHaveAttribute("href", "/allocation");
-  await expect(page.locator(".sv__alloc > a.sv__cov-lnk")).toHaveCount(0);
-  // One brief section on the page: the old "What the swarm is given" is gone.
-  await expect(page.locator(".sp-brief__sum-k")).toHaveText(["What the swarm was handed"]);
-  await expect(review.locator(".sr__meta a")).toHaveAttribute("href", `/swarm/sessions/${LR_ID}`);
+  // The reading the latest session was given, in the facts row: the
+  // session's own regime summary, not the brief's copy of it.
+  const meta = page.locator(".rr-meta");
+  await expect(meta.locator(".rr-meta__i", { hasText: "Composite" }).locator("b")).toHaveText("0.598");
+  await expect(meta.locator(".rr-meta__i", { hasText: "Regime" }).locator("b")).toHaveText("risk-on");
+  await expect(meta.locator('a[href="/allocation"]')).toBeVisible();
 
-  // SIGNAL: a one-word state, then dots on one percentile axis.
-  await expect(review.locator(".sr__k")).toHaveText(["Signal", "Reasoning"]);
-  const signal = review.locator(".sr__col").first();
-  await expect(signal.locator(".sr__state")).toContainText("risk-on");
-  await expect(signal.locator(".sr__state")).toContainText("83rd percentile");
+  // The vote: each stance counted, bearish to bullish, then who took part.
+  const latest = page.locator("#latest");
+  await expect(latest.locator(".rr-sec__aside")).toHaveText("Sep 10, 2026");
+  const counts = latest.locator(".rr-counts");
+  await expect(counts.locator(":scope > span > span")).toHaveText(["neutral", "constructive", "bullish"]);
+  await expect(counts.locator(":scope > span > b")).toHaveText(["1", "3", "1"]);
+  await expect(counts.locator("em")).toHaveText("5 of 7 took part · 64% mean confidence");
+
+  // One way into the session, by its id.
+  const cta = latest.locator(".rr-cta");
+  await expect(cta).toHaveAttribute("href", `/swarm/sessions/${LR_ID}`);
+  await cta.click();
+  await expect(page).toHaveURL(new RegExp(`/swarm/sessions/${LR_ID}$`));
+
+  // SIGNAL, on the session page: dots on one percentile axis.
+  const signal = page.locator(".rr-context");
   await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
   await expect(signal.locator(".sig__v")).toHaveText(["83rd", "90th", "56th", "68th"]);
   await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
   // On the published method factor is context, not an input, and is drawn so.
   await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(signal.locator(".sr__foot")).toContainText("Factor is context");
+  await expect(signal.locator(".rr-note")).toContainText("Factor is context");
   // This reading carries no cuts, and none are hard-coded in their place.
   await expect(signal.locator(".sig__zone")).toHaveCount(0);
 
-  // REASONING: each member in their stance's column.
-  const reasoning = review.locator(".sr__col").nth(1);
-  await expect(reasoning.locator(".sr__state")).toContainText("constructive");
-  await expect(reasoning.locator(".sr__state")).toContainText("3 of 5");
-  await expect(reasoning.locator(".vote__col.is-lead .vote__m")).toHaveCount(3);
-  await expect(reasoning.locator(".vote__m", { hasText: "Noop Analyst" })).toHaveAttribute("href", "/swarm/members/noop-analyst");
-  await expect(reasoning.locator(".sr__foot")).toContainText("5 of 7 took part");
-
   // WHAT THE SWARM WAS HANDED: closed, then a record of that brief's parts.
-  const hand = review.locator(".sp-brief");
-  await expect(hand.locator(".sp-brief__sum")).toHaveAttribute("aria-expanded", "false");
-  await hand.locator(".sp-brief__sum").click();
+  const handBtn = page.locator('button[aria-controls="session-handover"]');
+  await expect(handBtn).toHaveAttribute("aria-expanded", "false");
+  await handBtn.click();
+  const hand = page.locator("#session-handover");
   const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
   expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
   // The regime in the session page's own chips: every reading wears its dot,
   // the composite (a number) does not.
   const regime = hand.locator('[data-part="regime"] .sv__fact');
-  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "onchain"]);
+  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "on-chain"]);
   await expect(regime.locator("b")).toHaveText(["0.604", "risk-on", "risk-on", "neutral"]);
   await expect(regime.first().locator(".sv__fact-dot")).toHaveCount(0);
   await expect(regime.locator(".sv__fact-dot")).toHaveCount(3);
   // A recent session links to its session, by the dated address.
-  const recent = hand.locator('[data-part="recent"] a.hand__pill');
+  const recent = hand.locator('[data-part="recent"] a.rr-lnk');
   await expect(recent).toHaveText(["Sep 10 · Woon Treasury"]);
   await expect(recent).toHaveAttribute("href", "/swarm/2026-09-10/woon");
   // Each signal links to its reader page, under that page's own name, in a
@@ -794,26 +801,38 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   }));
   await page.goto("/swarm/subjects/robotmoney-allocation");
 
-  // The 2026-06-24 archive session: its composite averaged macro, on-chain AND
-  // factor, so saying "factor is context" here would be wrong.
-  const signal = page.locator(".sv__alloc .sr .sr__col").first();
-  await expect(signal.locator(".sr__k")).toHaveText("Signal");
+  // The hue the first sleeve wears in the weights in force on this page.
+  const cardHue = await page.locator("#targets-in-force .sv__bucket-dot").first().getAttribute("style");
+  expect(cardHue).toMatch(/background:/);
+
+  // The latest archived session is 2026-06-24.
+  const cta = page.locator("#latest .rr-cta");
+  await expect(cta).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");
+  await cta.click();
+  await expect(page).toHaveURL(/\/swarm\/2026-06-24\/robotmoney-allocation$/);
+
+  // Its composite averaged macro, on-chain AND factor, so saying "factor is
+  // context" here would be wrong.
+  const signal = page.locator(".rr-context");
+  await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
-  await expect(signal.locator(".sr__foot")).not.toContainText("Factor is context");
+  await expect(signal.locator(".rr-note")).not.toContainText("Factor is context");
 
   // That brief carried the targets in force when it opened: drawn as the
-  // card's register, each sleeve in the hue it wears in the card above.
-  const hand = page.locator(".sv__alloc .sr .sp-brief");
-  await hand.locator(".sp-brief__sum").click();
+  // subject page's register, each sleeve in the hue it wears there.
+  await page.locator('button[aria-controls="session-handover"]').click();
+  const hand = page.locator("#session-handover");
   const bars = hand.locator('[data-part="targets"] .sv__sleeve');
   await expect(bars.locator(".sv__sleeve-n")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
   await expect(bars.locator(".sv__sleeve-v")).toHaveText(["95%", "5%", "0%", "0%"]);
   await expect(bars.first().locator(".sv__sleeve-track i")).toHaveAttribute("style", /width:\s*95%/);
-  const cardHue = await page.locator(".sp-alloc__body .sv__bucket-dot").first().getAttribute("style");
   await expect(bars.first().locator(".sv__bucket-dot")).toHaveAttribute("style", cardHue || "missing");
   // The archive's refs carry no subject; they are this subject's own sessions.
-  await expect(hand.locator('[data-part="recent"] a.hand__pill')).toHaveText(["Jun 21", "Jun 17", "Jun 13"]);
-  await expect(hand.locator('[data-part="recent"] a.hand__pill').first()).toHaveAttribute("href", "/swarm/2026-06-21/robotmoney-allocation");
+  await expect(hand.locator('[data-part="recent"] a.rr-lnk')).toHaveText(["Jun 21", "Jun 17", "Jun 13"]);
+  await expect(hand.locator('[data-part="recent"] a.rr-lnk').first()).toHaveAttribute("href", "/swarm/2026-06-21/robotmoney-allocation");
+  // A research item links when the site has a page for it, and the archive's
+  // articles all do.
+  await expect(hand.locator('[data-part="research"] .hand__links a').first()).toHaveAttribute("href", /^\//);
 
   await expectNoBrowserErrors(errors);
 });
@@ -829,7 +848,7 @@ test("a research signal with no page on the site is not linked", async ({ page }
       return json({ id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" }, wallets: [], structural_notes: [] });
     }
     if (u.pathname === "/api/swarm/sessions") return json({ sessions: [LR_ROW], nextCursor: null });
-    if (u.pathname === "/api/swarm/sessions/2026-09-10/robotmoney-allocation") return json({ session: LR_ROW, takes: LR_TAKES });
+    if (u.pathname === `/api/swarm/sessions/${LR_ID}`) return json({ session: LR_ROW, takes: LR_TAKES });
     if (u.pathname === "/api/swarm/brief") {
       return json({ researchSignals: [{ signalKey: "channel-divergence" }, { signalKey: "made-up-signal" }] });
     }
@@ -837,8 +856,11 @@ test("a research signal with no page on the site is not linked", async ({ page }
     return json({}, 503);
   });
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  const hand = page.locator(".sr .sp-brief");
-  await hand.locator(".sp-brief__sum").click();
+  // Through the latest recommendation to the session the brief belongs to.
+  await page.locator("#latest .rr-cta").click();
+  await expect(page).toHaveURL(new RegExp(`/swarm/sessions/${LR_ID}$`));
+  await page.locator('button[aria-controls="session-handover"]').click();
+  const hand = page.locator("#session-handover");
   await expect(hand.locator('[data-part="research"] .hand__links a')).toHaveText(["Channel Divergence"]);
   await expect(hand.locator('[data-part="research"] .hand__links li > span')).toHaveText(["Made up signal"]);
   await expectNoBrowserErrors(errors);

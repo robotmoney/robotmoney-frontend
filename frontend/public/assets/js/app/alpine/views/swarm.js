@@ -24,7 +24,7 @@ import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
-  referenceWeights, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
+  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
 import * as weightChange from "../../lib/weight-change.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
@@ -80,7 +80,7 @@ const SESSIONS_SHOWN_STEP = 20;
 // vault address, and a paragraph of flywheel; this page has a chart and a
 // link for those. Nothing else here depends on the map.
 const ROW_BLURBS = {
-  "Robot Money Vault": "Depositor capital in the ERC-4626 vault on Base. One implementation of the allocation above.",
+  "Robot Money Vault": "Depositor capital in the ERC-4626 vault on Base. One implementation of the Robot Money Allocation.",
   "RM Protocol Labs Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "RM Protocol Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "Robot Money protocol wallets": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
@@ -144,8 +144,10 @@ export function registerSwarmView(Alpine) {
         // the page could paint.
         await Promise.all([this.loadLiveTakes(), this.loadAllocation()]);
         this.loading = false;
-      } catch (e) {
-        this.error = e.message;
+      } catch (_) {
+        // Our sentence, not the exception's: a raw "Failed to fetch" is
+        // machine noise to a reader.
+        this.error = "The swarm could not be loaded.";
         this.loading = false;
       }
     },
@@ -196,7 +198,10 @@ export function registerSwarmView(Alpine) {
           };
         } catch (_) { return null; }
       }));
-      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      // Two subjects can convene on one date; the later one leads, as each row
+      // prints its time.
+      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
+        || String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
     },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
@@ -257,7 +262,7 @@ export function registerSwarmView(Alpine) {
         { k: "Subjects", v: String(this.sessionFilters().length) },
         { k: "Sessions", v: String(published.length) },
       ];
-      if (latest) rows.push({ k: "Latest review", v: this.formatDate(latest) });
+      if (latest) rows.push({ k: "Latest session", v: this.formatDate(latest) });
       if (this.nextSessionAt) rows.push({ k: "Next session", v: absoluteUtc(this.nextSessionAt) });
       return rows;
     },
@@ -266,9 +271,19 @@ export function registerSwarmView(Alpine) {
       const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
       return this.publishedSessions().filter((s) => s.subjectId === id)[0] || null;
     },
+    // The target the latest allocation session is measured against: the one
+    // its brief handed over, else the published target when it was already in
+    // force that day, as the session page reads it.
     allocReference() {
       const s = this.allocLatest();
-      return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null);
+      return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null)
+        || targetsInForce(this.allocationFw, s?.date);
+    },
+    // Which of those it is, for the note under the ring.
+    allocReferenceSource() {
+      const s = this.allocLatest();
+      if (referenceWeights(this.allocBrief) || s?.referenceAllocation) return "brief";
+      return targetsInForce(this.allocationFw, s?.date) ? "framework" : null;
     },
     // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
     // subject and session pages.
@@ -312,9 +327,10 @@ export function registerSwarmView(Alpine) {
     // A weights recommendation as its four figures, in the published order.
     mixOf(s) { return this.sessionWeights(s) || []; },
     // A weights row's moves against the target ITS OWN session was handed
-    // (the list carries it once #991 lands). None without that target.
+    // (the list carries it once #991 lands), else the published target when it
+    // was already in force that day. None without either.
     movesOf(s) {
-      const ref = s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null;
+      const ref = (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null) || targetsInForce(this.allocationFw, s?.date);
       if (!ref) return [];
       return this.mixOf(s)
         .map((r) => ({ key: r.key, label: r.label, d: weightChange.weightDelta(r.pct, ref[r.key] ?? null) }))
@@ -421,7 +437,7 @@ export function registerSwarmView(Alpine) {
       const n = this.liveTakes;
       const seats = this.members.length;
       if (n == null || !seats) return "";
-      return `${n}/${seats} takes in.`;
+      return `${n} of ${seats} takes filed`;
     },
     liveSubjectName() {
       const s = this.liveSession();
@@ -521,7 +537,7 @@ export function registerSwarmView(Alpine) {
       if (!n) return "";
       const chains = this.chainsOf(p.wallets);
       const noun = n === 1 ? "wallet" : "wallets";
-      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
+      return chains.length ? `${n} ${noun} on ${chains.map((c) => this.chainLabel(c)).join(", ")}` : `${n} ${noun}`;
     },
     blurbOf(p) { return rowBlurb(p); },
     // Counted rather than written. Stage 5 of this redesign turns three
@@ -531,7 +547,7 @@ export function registerSwarmView(Alpine) {
       const n = this.portfolios().length;
       const word = ["No", "One", "Two", "Three", "Four", "Five"][n] ?? String(n);
       const noun = n === 1 ? "portfolio" : "portfolios";
-      return `${word} ${noun}. One is reviewed per session, and each review ends in a verdict or a recommendation.`;
+      return `${word} ${noun}. Each session convenes on one, and a published session ends in a recommendation.`;
     },
     portfolios() {
       const map = new Map();

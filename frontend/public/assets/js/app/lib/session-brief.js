@@ -139,7 +139,7 @@ export function sessionBrief() {
       const r = b.regime;
       if (r && (r.regime || r.composite != null)) {
         // session.html's chips, word for word: composite is a number and has
-        // no dot; regime, macro and onchain are readings and each wears its own.
+        // no dot; regime, macro and on-chain are readings and each wears its own.
         const comp = Number(r.composite);
         const macro = r.macro_regime || r.macroRegime;
         const onchain = r.onchain_regime || r.onchainRegime;
@@ -148,7 +148,7 @@ export function sessionBrief() {
           r.composite != null && Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
           r.regime ? reading("regime", r.regime) : null,
           macro ? reading("macro", macro) : null,
-          onchain ? reading("onchain", onchain) : null,
+          onchain ? reading("on-chain", onchain) : null,
         ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
         parts.push({ key: "regime", label: "Market regime", facts });
       }

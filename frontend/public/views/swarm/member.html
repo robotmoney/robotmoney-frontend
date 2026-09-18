@@ -12,7 +12,7 @@
       <div class="sv__skel-h"></div>
       <div class="sv__skel-card"></div><div class="sv__skel-card"></div><div class="sv__skel-card"></div>
     </div>
-    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+    <div class="rr-head" x-show="error" x-cloak><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/swarm">Swarm</a></p></div>
 
     <template x-if="!loading && member">
       <div>
@@ -29,16 +29,19 @@
           <div>
             <p class="sv__eyebrow sv__eyebrow--quiet">Swarm member</p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
-            <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
+            <p class="sv__lede sv__lede--compact profile-role" x-show="memberTagline(member)" x-text="memberTagline(member)"></p>
           </div>
         </header>
 
         <!-- The record in figures, then who runs it and since when. Each figure
              explains itself on demand. -->
         <div class="rr-meta">
-          <span class="rr-meta__i">Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every portfolio.</span></span> <b x-text="recordStats().takes"></b></span>
-          <span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key. Takes filed before signing existed are not counted.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span>
-          <span class="rr-meta__i">Avg confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues, not how often it is right. Outcomes are not scored yet.</span></span> <b x-text="recordStats().conviction"></b></span>
+          <span class="rr-meta__i">Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About takes filed">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every subject.</span></span> <b x-text="recordStats().takes"></b></span>
+          <!-- A record of archived takes only has nothing to verify: "0 / 0"
+               reads as a failing score, so it states the archived count. -->
+          <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key. Takes filed before signing existed are not counted.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
+          <template x-if="!recordStats().verifiable && recordStats().archival"><span class="rr-meta__i">Archived<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About archived takes">i</button><span class="rm-tip__bub" role="tooltip">Filed before members signed their takes. Unsigned, which is not a failed signature check.</span></span> <b x-text="recordStats().archival"></b></span></template>
+          <span class="rr-meta__i">Mean confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About mean confidence">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues, not how often it is right.</span></span> <b x-text="recordStats().conviction"></b></span>
           <template x-if="member.operator">
             <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
           </template>
@@ -63,28 +66,29 @@
               <ul class="rr-tags">
                 <template x-for="b in memberBiases(member)" :key="b"><li x-text="b"></li></template>
               </ul>
+              <template x-if="!memberBiases(member).length"><p class="rr-prose">Not stated</p></template>
             </div>
             <div>
               <p class="rr-k rr-sub">Mandate</p>
-              <p class="rr-prose" x-text="member.mandate || fallbackMandate(member)"></p>
+              <p class="rr-prose" x-text="member.mandate || 'Not stated'"></p>
             </div>
           </div>
         </section>
 
-        <!-- Filed, and sealed until the session publishes: shown on their own
-             so a just-submitted take never reads as "nothing yet". -->
+        <!-- Filed, not yet published: shown on their own so a just-submitted
+             take never reads as "nothing yet". -->
         <template x-if="inProgressTakes().length">
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="latest-h" x-text="inProgressTakes().length > 1 ? 'Latest takes' : 'Latest take'"></h2>
-              <span class="rr-sec__aside">Sealed until the session publishes</span>
+              <span class="rr-sec__aside">Not yet published</span>
             </div>
             <div class="rr-takes">
               <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}-${row.take.id}`">
                 <article class="rr-take" x-data="takeCard()">
                   <div class="rr-take__top">
                     <div class="rr-take__what">
-                      <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+                      <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="subjectNameOf(row.session)"></a>
                       <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
                     <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
                     </div>
@@ -114,17 +118,17 @@
                   <div class="rr-take__main" :class="weightRows(row.take).length ? 'has-aside' : ''">
                     <div>
                       <div class="rr-take__text" x-ref="text">
-                        <template x-if="!open && call(row.take.body, row.session.subjectName)">
+                        <template x-if="!open && call(row.take.body, subjectNameOf(row.session))">
                           <div>
-                            <p class="rr-k rr-take__call" x-text="call(row.take.body, row.session.subjectName).label"></p>
-                            <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, row.session.subjectName).text)"></div>
+                            <p class="rr-k rr-take__call" x-text="call(row.take.body, subjectNameOf(row.session)).label"></p>
+                            <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
                           </div>
                         </template>
-                        <template x-if="open || !call(row.take.body, row.session.subjectName)">
+                        <template x-if="open || !call(row.take.body, subjectNameOf(row.session))">
                           <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
                         </template>
                       </div>
-                      <template x-if="call(row.take.body, row.session.subjectName) || long(row.take.body)">
+                      <template x-if="call(row.take.body, subjectNameOf(row.session)) || long(row.take.body)">
                         <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
                           <span x-text="open ? 'Show less' : 'Read full take'"></span>
                         </button>
@@ -132,8 +136,8 @@
                     </div>
                     <template x-if="weightRows(row.take).length">
                       <aside class="rr-take__aside">
-                        <p class="rr-k">Proposed weights</p>
-                        <ul class="rr-legend" style="margin-top:0.5rem">
+                        <p class="rr-k rr-sub">Proposed weights</p>
+                        <ul class="rr-legend">
                           <template x-for="w in weightRows(row.take)" :key="w.key">
                             <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
                           </template>
@@ -141,9 +145,6 @@
                       </aside>
                     </template>
                   </div>
-                  <p class="rr-note" x-text="row.phase === 'live'
-                    ? 'Filed and signature-checked. The window is still collecting; it joins the record below when the session publishes.'
-                    : 'The window has closed; this take joins the record once the session is aggregated.'"></p>
                 </article>
               </template>
             </div>
@@ -161,7 +162,7 @@
           <div class="mp-controls" x-show="recentTakes().length > 1" x-cloak>
             <div class="mp-filter" x-show="subjects().length > 1">
               <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
-                      @click="subject = null" :aria-pressed="subject === null">
+                      @click="subject = null; shown = 20" :aria-pressed="subject === null">
                 All <span class="mp-chip__n" x-text="recentTakes().length"></span>
               </button>
               <template x-for="s in subjects()" :key="s.id">
@@ -184,31 +185,30 @@
               </template>
             </div>
           </div>
-          <!-- A brand-new member lands here from onboarding: say what fills it. -->
+          <!-- A brand-new member lands here from onboarding: name the gap and
+               stop. Where takes land and how they verify is layout and backend. -->
           <template x-if="recentTakes().length === 0 && inProgressTakes().length === 0">
             <div class="rr-empty mp-empty">
               <p class="rr-k">Awaiting first take</p>
-              <p class="rr-prose">Nothing published yet. Every take this member submits lands here, signed on its own machine and verified again when you read it.</p>
+              <p class="rr-prose">Nothing published yet.</p>
               <a class="rr-lnk" href="/swarm">See the swarm</a>
             </div>
           </template>
           <template x-if="recentTakes().length === 0 && inProgressTakes().length > 0">
-            <p class="rr-note sv__empty" x-text="inProgressTakes().length > 1
-              ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
-              : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
+            <p class="rr-note sv__empty">No published takes yet.</p>
           </template>
           <template x-if="subject && visibleTakes().length === 0">
-            <p class="rr-note sv__empty">No published takes for this portfolio yet.</p>
+            <p class="rr-note sv__empty">No published takes for this subject yet.</p>
           </template>
           <div class="rr-takes">
             <!-- Keyed on the session AND the take: an archived take has no id of
                  its own, so camelTake falls back to the member id, which every
                  row on this page shares. -->
-          <template x-for="row in visibleTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}-${row.take.id}`">
+          <template x-for="row in visibleTakes().slice(0, shown)" :key="`${row.session.date}-${row.session.subjectId}-${row.take.id}`">
             <article class="rr-take" x-data="takeCard()">
               <div class="rr-take__top">
                 <div class="rr-take__what">
-                  <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+                  <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="subjectNameOf(row.session)"></a>
                   <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
                 </div>
                 <div class="rr-take__stance">
@@ -237,17 +237,17 @@
               <div class="rr-take__main" :class="weightRows(row.take).length ? 'has-aside' : ''">
                 <div>
                   <div class="rr-take__text" x-ref="text">
-                    <template x-if="!open && call(row.take.body, row.session.subjectName)">
+                    <template x-if="!open && call(row.take.body, subjectNameOf(row.session))">
                       <div>
-                        <p class="rr-k rr-take__call" x-text="call(row.take.body, row.session.subjectName).label"></p>
-                        <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, row.session.subjectName).text)"></div>
+                        <p class="rr-k rr-take__call" x-text="call(row.take.body, subjectNameOf(row.session)).label"></p>
+                        <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
                       </div>
                     </template>
-                    <template x-if="open || !call(row.take.body, row.session.subjectName)">
+                    <template x-if="open || !call(row.take.body, subjectNameOf(row.session))">
                       <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
                     </template>
                   </div>
-                  <template x-if="call(row.take.body, row.session.subjectName) || long(row.take.body)">
+                  <template x-if="call(row.take.body, subjectNameOf(row.session)) || long(row.take.body)">
                     <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
                       <span x-text="open ? 'Show less' : 'Read full take'"></span>
                     </button>
@@ -255,8 +255,8 @@
                 </div>
                 <template x-if="weightRows(row.take).length">
                   <aside class="rr-take__aside">
-                    <p class="rr-k">Proposed weights</p>
-                    <ul class="rr-legend" style="margin-top:0.5rem">
+                    <p class="rr-k rr-sub">Proposed weights</p>
+                    <ul class="rr-legend">
                       <template x-for="w in weightRows(row.take)" :key="w.key">
                         <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
                       </template>
@@ -267,6 +267,14 @@
             </article>
           </template>
           </div>
+          <!-- The aside counts every published take, so the list reaches them
+               all: the same pager /swarm's history uses. -->
+          <template x-if="visibleTakes().length > shown">
+            <div class="rr-pager">
+              <span x-text="`${shown} of ${visibleTakes().length} shown`"></span>
+              <div><button type="button" class="rr-btn" @click="shown += 20">Show more</button></div>
+            </div>
+          </template>
         </section>
       </div>
     </template>
@@ -282,9 +290,9 @@
         </nav>
         <header class="rr-head">
           <p class="sv__eyebrow sv__eyebrow--quiet">Swarm members</p>
-          <h1 class="sv__detail-title">No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;</h1>
-          <p class="sv__lede sv__lede--compact">Every current member is listed below.</p>
+          <h1 class="sv__detail-title" style="overflow-wrap:anywhere">No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;</h1>
         </header>
+        <p class="rr-k rr-sub">Current members</p>
         <div class="rr-tablewrap">
           <table class="rr-table rr-table--compact rr-members">
             <thead><tr><th scope="col">Member</th><th scope="col" class="q">Lens</th></tr></thead>
@@ -297,11 +305,11 @@
                          x-html="memberMark(m.keyFingerprint || m.id, m.name, 32, m.avatar?.path, m.handle)"></a>
                       <span>
                         <a class="rr-lnk" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
-                        <small x-text="memberTagline(m)"></small>
+                        <small x-show="memberTagline(m)" x-text="memberTagline(m)"></small>
                       </span>
                     </span>
                   </th>
-                  <td class="q" x-text="m.lens || 'swarm member'"></td>
+                  <td class="q" x-text="m.lens || '—'"></td>
                 </tr>
               </template>
             </tbody>
@@ -342,6 +350,9 @@
        read as the static verified mark. */
     .mp-pulse { width: .4rem; height: .4rem; background: var(--color-green);
                 flex: 0 0 auto; animation: mp-beat 2.4s ease-in-out infinite; }
+    /* .rr-meta__i i (the regime marker's round 7px dot) outranks .mp-pulse, so
+       restate the square at the same specificity plus one. */
+    .rr-meta__i .mp-pulse { width: .4rem; height: .4rem; border-radius: 0; }
     @keyframes mp-beat { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
     @media (prefers-reduced-motion: reduce) { .mp-pulse { animation: none; } }
   </style>

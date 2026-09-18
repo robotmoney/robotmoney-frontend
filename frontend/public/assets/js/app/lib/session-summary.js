@@ -46,6 +46,11 @@ const BUCKET_LABELS = {
   real_world_assets: "Real World Assets",
 };
 
+// A chain id as its proper name. The id stays the key everywhere else (the
+// explorer link reads it raw); "peaq" is lowercase by its own spelling.
+/** @type {Record<string, string>} */
+const CHAIN_LABELS = { base: "Base", peaq: "peaq", ethereum: "Ethereum" };
+
 /** @param {unknown} v */
 const normKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -358,6 +363,17 @@ export const sessionSummary = {
     if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
     return (Array.isArray(rec.actions) ? rec.actions : []).filter((/** @type {any} */ a) => a && a.action);
   },
+  // The glyph-first chip label, here so an action list outside the explorer
+  // reads its verb the way the history and the ring do.
+  actionLabel,
+  // The recommendation's own prose, or "" when a rollup's template wrote it:
+  // a live aggregate carries quorum/stances and its rationale restates the tally.
+  /** @param {any} s */
+  rationaleOf(s) {
+    const rec = s?.swarmRecommendation;
+    if (!rec || rec.quorum || rec.stances) return "";
+    return rec.rationale || "";
+  },
   // The positions it moves, holds left out: the held count says the rest.
   /** @param {any} s */
   rowActions(s) {
@@ -376,7 +392,13 @@ export const sessionSummary = {
     const acts = this.authoredActionsOf(s);
     if (!acts.length) return "";
     const moved = acts.filter((/** @type {any} */ a) => String(a.action).toLowerCase() !== "hold").length;
-    return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
+    // Counted in actions, which can be fewer than the positions the ring and
+    // holdings list, so no "N of M": the history row's "· 3 held" form, and
+    // never "0 held".
+    const held = acts.length - moved;
+    return moved
+      ? `${moved} ${moved === 1 ? "position changes" : "positions change"}${held ? `, ${held} held` : ""}`
+      : `${acts.length} ${acts.length === 1 ? "position" : "positions"} held`;
   },
   // One dot and count per stance that has any, bearish to bullish: the tally
   // both text columns (subject and session) print under the rationale.
@@ -400,6 +422,18 @@ export const sessionSummary = {
     /** @type {Record<string, unknown>} */
     const c = this.stanceCounts(s) || {};
     return `${Number(c[l.stance]) || 0} of ${this.voteTotal(s)}`;
+  },
+  // An unknown chain prints as its id rather than a guessed capitalisation.
+  /** @param {unknown} c */
+  chainLabel(c) { return CHAIN_LABELS[String(c || "").toLowerCase()] || c; },
+  // The publish time, when the record has one: a subject can convene twice in
+  // a day, and the date alone prints both rows identically. Archive rows carry
+  // a bare date, so they print nothing here.
+  /** @param {any} row */
+  rowTime(row) {
+    const at = row?.publishedAt || row?.generatedAt;
+    if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
+    return `${new Date(at).toISOString().slice(11, 16)} UTC`;
   },
 };
 

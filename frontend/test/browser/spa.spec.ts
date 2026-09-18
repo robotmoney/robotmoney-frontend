@@ -118,6 +118,8 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await navigate(page, "/performance");
   await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
+  // A member's page is a research record now (RM-121); its h1 still carries
+  // .profile-name and the tagline under it .profile-role.
   await page.goto("/swarm/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
   await expect(page.locator(".profile-role")).not.toHaveText("");
@@ -125,22 +127,29 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   const woonDate = await resolveSeededSessionDate(page, "woon");
   await page.goto(`/swarm/${woonDate}/woon`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
-  await expect(page.locator(".session-submissions tbody tr")).toHaveCount(3);
+  // The per-member submissions table became the vote chart (RM-121): one dot
+  // per member who took part, keyed on the member like the table rows were
+  // (issue #573), so a revision never adds a second dot for the same member.
+  const takesSection = page.locator("#takes");
+  await expect(takesSection.locator(".rr-vote__dot")).toHaveCount(3);
+  await expect(takesSection.locator(".rr-meta__i", { hasText: "Took part" })).toHaveText(/^\s*Took part\s+3\s*$/);
 
-  // Live loadApi -> camelTake -> sv__take render path (issue #75): a live/current
-  // Woon session served from the Postgres swarm API (not the pre-2026-07-01
-  // static archive) renders one member-opinion card per participating member.
-  // runSession drives athena/boreas/cygnus, so exactly three cards render. Each
-  // card carries the member name, a non-empty role/lens, and a stance-confidence
-  // badge — guards a silent regression in the member-opinion render surface.
-  const takeCards = page.locator(".sv__take");
+  // Live loadApi -> camelTake -> take-card render path (issue #75): a
+  // live/current Woon session served from the Postgres swarm API (not the
+  // pre-2026-07-01 static archive) renders one member-opinion card per
+  // participating member. runSession drives athena/boreas/cygnus, so exactly
+  // three cards render. Each card carries the member name, a non-empty
+  // role/lens, a stance badge, its confidence and the signature seal: guards a
+  // silent regression in the member-opinion render surface.
+  const takeCards = takesSection.locator(".rr-take");
   await expect(takeCards).toHaveCount(3);
   const firstCard = takeCards.first();
   await expect(firstCard.locator(".sv__member-link")).not.toHaveText("");
   await expect(firstCard.locator(".sv__take-lens")).not.toHaveText("");
-  // Stance and confidence apart, as /swarm's take rows set them.
+  // Stance and confidence apart, as every take card sets them.
   await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/^\s*[a-z]+\s*$/);
-  await expect(firstCard.locator(".mp-conf")).toHaveText(/confidence \d+%/);
+  await expect(firstCard.locator(".rr-conf")).toHaveText(/^\s*Confidence \d+%\s*$/);
+  await expect(firstCard.locator(".sv__vfy[data-verified-badge]")).toHaveCount(1);
 
   await expectNoBrowserErrors(errors);
 });

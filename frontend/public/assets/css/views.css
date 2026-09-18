@@ -277,7 +277,7 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .mp-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1rem; }
 .mp-chip { display: inline-flex; align-items: center; gap: 0.42rem; min-height: 34px;
   padding: 0.3rem 0.62rem; background: transparent; color: var(--color-text-muted);
-  border: 1px solid var(--color-border); border-radius: var(--radius);
+  border: 1px solid var(--color-border); border-radius: 0;
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; cursor: pointer;
   transition: color .16s ease, border-color .16s ease, background .16s ease; }
 /* The hover lift is a border, not type, so it steps along the border tokens:
@@ -1141,10 +1141,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
   .hand dt { padding-top: 0; }
 }
 .hand__pill-wrap { display: contents; }
-.hand__pill--link { color: var(--color-text); text-decoration: none; }
-.hand__pill--link::after { content: " \2192"; color: var(--color-text-muted); }
-.hand__pill--link:hover { border-color: var(--color-text-muted); }
-.hand__pill--link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+/* A recent session is an inline link, not a box: at the pills' 0.35rem gap
+   the underlines run together into one. */
+.hand__pills a.rr-lnk { margin-right: 0.65rem; }
 /* The holdings table, on the subject page and the session page. The series
    key matches the chart's band for the same token: a filled square, not a
    rule, because the figure is a stack of areas and the key has to look like
@@ -1576,16 +1575,30 @@ table.alp__tbl--led th:first-child { width: 40%; }
    of boxed cards. Taken from the #990 prototype's information
    architecture and rebuilt on house tokens. One type scale and one spacing
    scale for every rule below:
-     type    0.625 (eyebrow) · 0.75 (note) · 0.875 (body) · 1.3125 (h3) · 1.6875rem (h2)
-     space   0.5 · 0.75 · 1 · 1.5 · 2.25rem
+     type    0.625 (label) · 0.75 (note, table) · 0.875 (body) · 0.9375 (prose) · 1 (name) · 1.3125 (h3) · 1.5 / 1.6875 (figure, h2) · 2.25rem (stat)
+     space   0.25 · 0.5 · 0.75 · 1 · 1.5 · 2.25rem
    Section headings carry no numbers (David, 2026-09-18): a "01 / 02" index
    in front of an h2 reads as generated filler, and the headings name their
    sections on their own. */
 .rr a:not(.btn-primary) { color: inherit; text-decoration: none; }
-.rr-lnk, .rr-prose a, .rr-dl a, .rr-meta__lnk {
-  border-bottom: 1px solid var(--color-border-light); transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
-.rr-lnk:hover, .rr-prose a:hover, .rr-dl a:hover, .rr-meta__lnk:hover,
-.rr-lnk:focus-visible, .rr-prose a:focus-visible, .rr-dl a:focus-visible, .rr-meta__lnk:focus-visible {
+/* Two link treatments and no third. Inline: accent text over the accent
+   line (ink in a table, where a column of accent would shout). Nav: mono,
+   uppercase, text-soft over the accent line. Every selector is at least
+   (0,2,1), so it matches the reset above and, written after it, wins. */
+.rr .rr-prose a, .rr .rr-dl a, .rr a.rr-lnk {
+  color: var(--color-accent); border-bottom: 1px solid var(--color-accent-line);
+  transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr .rr-table a.rr-lnk { color: var(--color-text); border-bottom-color: var(--color-border-light); }
+.rr .rr-crumbs, .rr .rr-recnav, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-soft); }
+.rr .rr-crumbs a, .rr .rr-recnav a, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
+  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
+  transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr .rr-prose a:hover, .rr .rr-dl a:hover, .rr a.rr-lnk:hover, .rr .rr-table a.rr-lnk:hover,
+.rr .rr-prose a:focus-visible, .rr .rr-dl a:focus-visible, .rr a.rr-lnk:focus-visible, .rr .rr-table a.rr-lnk:focus-visible {
+  border-bottom-color: var(--color-accent); }
+.rr .rr-crumbs a:hover, .rr .rr-recnav a:hover, .rr a.rr-meta__lnk:hover, .rr a.rr-sec__aside:hover,
+.rr .rr-crumbs a:focus-visible, .rr .rr-recnav a:focus-visible, .rr a.rr-meta__lnk:focus-visible, .rr a.rr-sec__aside:focus-visible {
   color: var(--color-text); border-bottom-color: var(--color-accent); }
 .rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-k { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.5; text-transform: uppercase;
@@ -1593,8 +1606,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-note { margin: 0.75rem 0 0; font-size: 0.75rem; line-height: 1.65; color: var(--color-text-muted); }
 .rr-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.rr-crumbs { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0 0 2.25rem; font-size: 0.75rem; color: var(--color-text-muted); }
-.rr-crumbs a:hover, .rr-crumbs a:focus-visible { color: var(--color-text); }
+.rr-crumbs { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0 0 2.25rem; }
 .rr-crumbs [aria-current] { color: var(--color-text-soft); }
 
 .rr-head { padding-bottom: 1.5rem; }
@@ -1605,12 +1617,17 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-links { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0 0; font-size: 0.75rem; color: var(--color-text-soft); }
 
 /* Facts as label and figure on one hairline row, not as bordered chips. */
-.rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.75rem; padding: 0.875rem 0;
+.rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; padding: 0.75rem 0;
   border-block: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-meta__i { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
 .rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.rr-meta__lnk { margin-left: auto; color: var(--color-text-soft); }
+.rr-meta__lnk { position: relative; margin-left: auto; }
+/* A 13px (i) and a 21px link are too small to hit on a phone, and the tip is
+   the only way to learn what a figure means: each gets an invisible tap area. */
+.rr-meta__lnk::before { content: ""; position: absolute; inset: -0.5rem -0.25rem; }
+.rr .rm-tip__btn { position: relative; }
+.rr .rm-tip__btn::before { content: ""; position: absolute; inset: -0.75rem; }
 
 
 .rr-sec { padding: 2.25rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
@@ -1625,7 +1642,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-sub { margin: 0 0 1rem; }
 
 /* Two columns that stack under 860px. --rule draws the seam between them. */
-.rr-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2.25rem 2.75rem; }
+.rr-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2.25rem; }
 .rr-split--rule > :last-child { border-left: 1px solid var(--color-border); padding-left: 2.25rem; }
 @media (max-width: 860px) {
   .rr-split { grid-template-columns: minmax(0, 1fr); }
@@ -1644,7 +1661,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
    content on a 0fr/1fr grid row, per the motion rule. */
 .rr-disc { border-top: 1px solid var(--color-border); }
 .rr-disc + .rr-disc { border-top: 0; }
-.rr-disc__btn { width: 100%; display: flex; align-items: center; gap: 1rem; padding: 0.875rem 0; background: none; border: 0;
+.rr-disc__btn { width: 100%; display: flex; align-items: center; gap: 1rem; padding: 1rem 0; background: none; border: 0;
   border-bottom: 1px solid var(--color-border); color: var(--color-text); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer; }
 .rr-disc__btn small { font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-disc__btn::after { content: "+"; margin-left: auto; font-family: var(--font-mono); color: var(--color-text-soft);
@@ -1655,12 +1672,22 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-disc.is-open > .rr-disc__anim { grid-template-rows: 1fr; }
 .rr-disc__clip { overflow: hidden; min-height: 0; }
 .rr-disc__body { padding: 1rem 0 1.5rem; }
-.rr-more { display: inline-flex; align-items: baseline; gap: 0.75rem; margin: 0.75rem 0 0; padding: 0; background: none; border: 0;
-  border-bottom: 1px solid var(--color-border-light); color: var(--color-text); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+.rr-more { position: relative; display: inline-flex; align-items: baseline; gap: 0.75rem; margin: 0.75rem 0 0; padding: 0; background: none; border: 0;
+  border-bottom: 1px solid var(--color-border-light); color: var(--color-text); font: inherit; font-size: 0.875rem; cursor: pointer; }
+/* A 23px line of text, repeated down a member's page: an invisible tap area
+   around it, as .rr-meta__lnk has. */
+.rr-more::before { content: ""; position: absolute; inset: -0.625rem -0.5rem; }
 .rr-more small { font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-more:hover { border-bottom-color: var(--color-accent); }
 @media (prefers-reduced-motion: reduce) {
   .rr-disc__anim, .rr-disc__btn::after { transition: none; }
+}
+/* On a phone a long label and its count would squeeze into two ragged
+   columns: the count drops below only when it does not fit, and the plus
+   stays centred on the right either way. */
+@media (max-width: 640px) {
+  .rr-disc:not(.rr-q) > .rr-disc__btn { position: relative; flex-wrap: wrap; column-gap: 1rem; row-gap: 0.25rem; padding-right: 1.5rem; }
+  .rr-disc:not(.rr-q) > .rr-disc__btn::after { position: absolute; right: 0; top: 50%; translate: 0 -50%; margin: 0; }
 }
 
 /* The mix: a ring and its legend. The ring is the shared weightDonutSvg. */
@@ -1676,21 +1703,21 @@ table.alp__tbl--led th:first-child { width: 40%; }
 }
 .rr-legend { list-style: none; margin: 0; padding: 0; }
 .rr-legend li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: baseline; column-gap: 0.75rem;
-  padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem; }
+  padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
 .rr-legend li > i { width: 0.5rem; height: 0.5rem; align-self: center; }
 .rr-legend li > b { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
 .rr-legend li.is-zero { color: var(--color-text-muted); }
-.rr-legend li > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-legend li > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-legend .alp__mv { justify-content: flex-start; }
 
 /* The one prominent control on a subject page: the way into the latest session. */
-.rr-cta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 0.875rem 1.125rem;
-  border: 1px solid var(--color-border-light); font-size: 0.8125rem; color: var(--color-text); transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
+.rr-cta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border-light); font-size: 0.875rem; color: var(--color-text); transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
 .rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text-muted); }
 
 /* Stance tallies, one dot and count per stance that has any. */
-.rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.6875rem; }
-.rr-counts > span { display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; }
+.rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.75rem; }
+.rr-counts > span { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .rr-counts > span i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .rr-counts > span b { font-weight: 500; color: var(--color-text); }
 .rr-counts > em { font-style: normal; color: var(--color-text-muted); }
@@ -1705,13 +1732,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
 
 /* A disagreement: a question row that opens onto each member's view. */
 .rr-q .rr-disc__btn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; padding: 1rem 0; }
-.rr-q .rr-disc__btn b { display: block; margin-top: 0.25rem; font-weight: 500; font-size: 0.9375rem; }
+.rr-q .rr-disc__btn b { display: block; font-weight: 500; font-size: 0.875rem; }
 .rr-q .rr-disc__btn::after { margin-left: 0; }
 .rr-views { display: grid; gap: 0; }
 .rr-view { display: grid; grid-template-columns: 10rem 11rem minmax(0, 1fr); gap: 0.5rem 1.5rem; padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border); font-size: 0.8125rem; line-height: 1.6; }
+  border-bottom: 1px solid var(--color-border); font-size: 0.875rem; line-height: 1.6; }
 .rr-view > p { margin: 0; color: var(--color-text-soft); }
-.rr-settles { margin: 1rem 0 0; font-size: 0.8125rem; color: var(--color-text-soft); }
+.rr-settles { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-soft); }
 @media (max-width: 720px) { .rr-view { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
 
 /* A take: hairline-separated, body clamped, proposed weights aside. */
@@ -1721,8 +1748,8 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-take__who { display: flex; align-items: center; gap: 0.75rem; }
 .rr-take__who .sv__avatar { width: 2.25rem; height: 2.25rem; flex: none; }
 .rr-take__name { font-size: 1rem; font-weight: 500; color: var(--color-text); }
-.rr-take .rr-take__lens { margin-top: 0.125rem; font-family: var(--font-sans); font-size: 0.75rem; text-transform: none; letter-spacing: 0; color: var(--color-text-muted); }
-.rr-take__stance { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-take .rr-take__lens { margin-top: 0.25rem; font-family: var(--font-sans); font-size: 0.75rem; text-transform: none; letter-spacing: 0; color: var(--color-text-muted); }
+.rr-take__stance { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-take__stance b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); }
 .rr-take__main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem 2.25rem; }
 .rr-take__main.has-aside { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
@@ -1740,50 +1767,64 @@ a.sv__vfy { text-decoration: none; }
 .rr-take a:focus-visible, .rr-take button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-take__name:hover, .rr-take__name:focus-visible { color: var(--color-text); text-decoration: underline;
   text-decoration-color: var(--color-accent); text-decoration-thickness: 1px; text-underline-offset: 4px; }
-.rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.875rem; min-width: 0; }
+.rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; min-width: 0; }
 .rr-take__call { margin: 0 0 0.5rem; }
 .rr-take__text > div > .sv__take-body, .rr-take__text > .sv__take-body { margin-top: 0; }
 /* Confidence is its own figure beside the stance chip, never inside it. */
-.rr-conf { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
+.rr-conf { font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
 .rr-conf b { font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
 /* The signature seal, in flow and always worded: the one claim a take card
    exists to make. Its tooltip is .sv__vfy-tip's. */
-.rr-vfy { font-size: 0.6875rem; }
+.rr-vfy { font-size: 0.625rem; }
 .rr-vfy .sv__vfy-mark { width: 11px; height: 11px; }
-.rr-vfy .sv__vfy-label { font-size: inherit; letter-spacing: 0.04em; }
+.rr-vfy .sv__vfy-label { font-size: inherit; letter-spacing: 0.04em; text-transform: capitalize; }
 .rr-take .sv__take-body { font-size: 0.9375rem; max-width: none; }
 .rr-take .sv__take-body > :first-child { margin-top: 0; }
-.rr-take .sv__take-body ul { margin: 0 0 0.75rem; padding-left: 1.125rem; }
-.rr-take .sv__take-body li + li { margin-top: 0.375rem; }
+.rr-take .sv__take-body ul { margin: 0 0 0.75rem; padding-left: 1rem; }
+.rr-take .sv__take-body li + li { margin-top: 0.5rem; }
 
 /* Evidence as label/value rows. */
 .rr-dl { margin: 0; }
-.rr-dl > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem; }
+.rr-dl > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
 .rr-dl dt { color: var(--color-text-muted); }
 .rr-dl dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
+/* What the swarm was handed sits under that list: the same sans labels, and
+   its regime facts as label and figure in a row rather than bordered chips
+   (the markup keeps .sv__fact, which the specs read). */
+.rr .hand { padding: 0; }
+.rr .hand dt { font-family: var(--font-sans); font-size: 0.875rem; letter-spacing: 0; text-transform: none; padding-top: 0; color: var(--color-text-muted); }
+.rr .hand .sv__fact-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; }
+.rr .hand .sv__fact { border: 0; border-radius: 0; padding: 0; gap: 0.5rem; }
+.rr .hand .sv__fact b { font-family: var(--font-mono); letter-spacing: 0; }
 
-.rr-recnav { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; padding: 1.5rem 0; border-top: 1px solid var(--color-border); font-size: 0.8125rem; color: var(--color-text-soft); }
+.rr-recnav { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; padding: 1.5rem 0; border-top: 1px solid var(--color-border); }
 .rr-recnav > :last-child { justify-self: end; }
-.rr-recnav a:hover, .rr-recnav a:focus-visible { color: var(--color-text); }
+/* On a phone the three cells are too narrow for a date: the two dates share
+   the top line and the subject link drops below, so no date breaks. */
+@media (max-width: 640px) {
+  .rr-recnav { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 0.75rem; }
+  .rr-recnav > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .rr-recnav a { white-space: nowrap; }
+}
 
 /* The history table. */
 .rr-tablewrap { width: 100%; overflow-x: auto; }
 .rr-table { width: 100%; min-width: 44rem; border-collapse: collapse; text-align: left; }
-.rr-table th, .rr-table td { padding: 0.875rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
+.rr-table th, .rr-table td { padding: 0.75rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
 .rr-table thead th { background: var(--color-surface); font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; color: var(--color-text-muted); vertical-align: bottom; }
-.rr-table thead th small { display: block; margin-top: 0.25rem; font-size: 0.5625rem; }
-.rr-table thead th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.4rem; }
-.rr-table tbody th { font-weight: 500; font-size: 0.8125rem; }
-.rr-table tbody th small { display: block; margin-top: 0.25rem; font-size: 0.6875rem; font-weight: 400; color: var(--color-text-muted); }
+.rr-table thead th small { display: block; margin-top: 0.25rem; font-size: 0.625rem; }
+.rr-table thead th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
+.rr-table tbody th { font-weight: 500; font-size: 0.875rem; }
+.rr-table tbody th small { display: block; margin-top: 0.25rem; font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); }
 .rr-table td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text-soft); }
 .rr-table .q { text-align: right; }
 .rr-table td.is-zero { color: var(--color-text-muted); }
 .rr-table .rr-out > div > span { display: block; white-space: nowrap; }
 .rr-table .rr-out > div > span + span { margin-top: 0.25rem; }
 .rr-table tbody tr:hover { background: var(--color-surface); }
-.rr-pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-pager div { display: flex; gap: 0.5rem; }
-.rr-btn { min-height: 2.25rem; padding: 0.5rem 0.875rem; border: 1px solid var(--color-border-light); background: transparent; color: var(--color-text);
+.rr-btn { min-height: 2.25rem; padding: 0.5rem 1rem; border: 1px solid var(--color-border-light); background: transparent; color: var(--color-text);
   font: inherit; font-size: 0.75rem; cursor: pointer; transition: border-color 100ms var(--ease-out-expo); }
 .rr-btn:hover:not(:disabled) { border-color: var(--color-text-muted); }
 .rr-btn:disabled { opacity: 0.4; cursor: default; }
@@ -1795,11 +1836,11 @@ a.sv__vfy { text-decoration: none; }
 .rr-ring figcaption span { max-width: 7.5rem; }
 .rr-legend__row { width: 100%; display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto auto; align-items: baseline; column-gap: 0.75rem;
   padding: 0.75rem 0.5rem; background: transparent; border: 1px solid transparent; border-bottom-color: var(--color-border);
-  color: var(--color-text); font: inherit; font-size: 0.8125rem; text-align: left; cursor: pointer;
+  color: var(--color-text); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer;
   transition: background 160ms var(--ease-out-expo), border-color 160ms var(--ease-out-expo), opacity 160ms var(--ease-out-expo); }
 .rr-legend__row > i { width: 0.5rem; height: 0.5rem; align-self: center; }
 .rr-legend__row > b { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
-.rr-legend__row > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-legend__row > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-legend__row .alp__mv { justify-content: flex-start; }
 .rr-legend__row.is-zero { color: var(--color-text-muted); }
 .rr-legend__row.is-muted { opacity: 0.55; }
@@ -1814,10 +1855,10 @@ a.sv__vfy { text-decoration: none; }
   opacity: 0; transition: opacity 160ms var(--ease-out-expo); }
 .rr-x__drawer.is-open .rr-x__panel { opacity: 1; }
 .rr-x__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
-.rr-x__head p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; font-size: 0.8125rem; }
+.rr-x__head p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; font-size: 0.875rem; }
 .rr-x__head p i { width: 0.5rem; height: 0.5rem; align-self: center; }
 .rr-x__head p b { font-weight: 500; }
-.rr-x__head p span { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-x__head p span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 /* A session's action on a position. Direction by glyph first, colour second,
    the delta convention: adding reads green, trimming reads warn, a rotation
    and a hold stay neutral. Fixed width so the figures align down the legend. */
@@ -1827,11 +1868,11 @@ a.sv__vfy { text-decoration: none; }
 .rr-act[class*="is-add"], .rr-act[class*="is-buy"], .rr-act[class*="is-increase"], .rr-act[class*="is-accumulate"] { color: var(--color-green); }
 .rr-act[class*="is-trim"], .rr-act[class*="is-reduce"], .rr-act[class*="is-sell"], .rr-act[class*="is-exit"], .rr-act[class*="is-cut"] { color: var(--color-warn); }
 .rr-x__why { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 1rem; margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
-.rr-x__why .rr-act { min-width: 0; text-align: left; padding-top: 0.2rem; }
+.rr-x__why .rr-act { min-width: 0; text-align: left; padding-top: 0.25rem; }
 .rr-x__close { padding: 0.25rem 0; background: none; border: 0; color: var(--color-text-muted); font: inherit; font-size: 0.75rem; cursor: pointer; }
 .rr-x__close:hover { color: var(--color-text); }
 .rr-x__assets { min-width: 0; }
-.rr-x__assets th, .rr-x__assets td { padding: 0.5625rem 0.375rem; font-size: 0.6875rem; }
+.rr-x__assets th, .rr-x__assets td { padding: 0.5625rem 0.5rem; font-size: 0.75rem; }
 .rr-x__assets tbody th { font-weight: 400; font-size: 0.75rem; }
 .rr-x__assets tbody th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
 @media (prefers-reduced-motion: reduce) {
@@ -1869,17 +1910,19 @@ a.sv__vfy { text-decoration: none; }
 .rr-area__tip { position: absolute; top: 0.75rem; min-width: 11rem; padding: 0.625rem 0.75rem; transform: translateX(0.75rem);
   background: var(--color-surface); border: 1px solid var(--color-border-light); pointer-events: none; z-index: 2; }
 .rr-area__tip.is-left { transform: translateX(calc(-100% - 0.75rem)); }
-.rr-area__tip-h { display: flex; justify-content: space-between; gap: 1rem; margin: 0 0 0.5rem; font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-area__tip-h { display: flex; justify-content: space-between; gap: 1rem; margin: 0 0 0.5rem; font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-area__tip-h b { font-weight: 500; color: var(--color-text); }
 .rr-area__tip-h span { font-family: var(--font-mono); }
 .rr-area__tip ul { list-style: none; margin: 0; padding: 0; }
 .rr-area__tip li { display: grid; grid-template-columns: 0.4375rem minmax(0, 1fr) auto; align-items: center; column-gap: 0.5rem;
-  padding: 0.1875rem 0; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-soft); transition: opacity 160ms var(--ease-out-expo); }
+  padding: 0.25rem 0; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-soft); transition: opacity 160ms var(--ease-out-expo); }
 .rr-area__tip li i, .rr-area__legend li i { width: 0.4375rem; height: 0.4375rem; }
 .rr-area__tip li b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .rr-area__tip li.is-muted, .rr-area__legend li.is-muted { opacity: 0.4; }
+/* Indented by the y-axis gutter (a track width, not a step on the spacing
+   scale), so the legend starts under the plot. */
 .rr-area__legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1rem 0 0 2.75rem; padding: 0; list-style: none; }
-.rr-area__legend li { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.6875rem;
+.rr-area__legend li { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem;
   color: var(--color-text-soft); cursor: default; transition: opacity 160ms var(--ease-out-expo); }
 .rr-area__legend li b { font-weight: 400; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 .rr-area__notes { margin-top: 2.25rem; }
@@ -1901,9 +1944,8 @@ a.sv__vfy { text-decoration: none; }
 
 /* The vote: stance across, confidence up, on the holdings chart's frame. */
 .rr-vote { margin: 0 0 1.5rem; }
-.rr-vote__sum { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.75rem; margin-bottom: 1.25rem;
+.rr-vote__sum { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; margin-bottom: 1rem;
   font-size: 0.75rem; color: var(--color-text-muted); }
-.rr-vote__sum .rr-lnk { color: var(--color-text-soft); }
 .rr-vote__share { font-family: var(--font-mono); font-style: normal; color: var(--color-text-soft); }
 .rr-vote__frame { grid-template-rows: 11rem 2rem; }
 .rr-vote__ytitle { margin: 0 0 0.75rem; }
@@ -1912,8 +1954,9 @@ a.sv__vfy { text-decoration: none; }
 .rr-vote__col { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--color-border); }
 .rr-vote__mean { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed rgba(237, 239, 241, 0.3); pointer-events: none; }
 .rr-vote__mean span { position: absolute; right: 0; bottom: 0.25rem; font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
-.rr-vote__dot { position: absolute; display: inline-flex; align-items: center; gap: 0.4rem; transform: translate(-0.3125rem, -50%);
-  font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text); white-space: nowrap; z-index: 1;
+.rr-vote__dot { position: absolute; display: inline-flex; align-items: center; gap: 0.5rem; transform: translate(-0.3125rem, -50%);
+  font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; z-index: 1;
+  background: var(--color-void); /* a name on the mean line is not struck through by it */
   transition: opacity 160ms var(--ease-out-expo); }
 .rr-vote__dot i { width: 0.625rem; height: 0.625rem; border-radius: 50%; background: var(--c); flex: none;
   box-shadow: 0 0 0 3px var(--color-void); transition: transform 160ms var(--ease-out-expo); }
@@ -1922,7 +1965,7 @@ a.sv__vfy { text-decoration: none; }
 .rr-vote__dot:hover i, .rr-vote__dot:focus-visible i { transform: scale(1.3); }
 .rr-vote__dot:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-vote__dot.is-dim { opacity: 0.35; }
-.rr-vote__x span { display: inline-flex; align-items: center; gap: 0.375rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.rr-vote__x span { display: inline-flex; align-items: center; gap: 0.5rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .rr-vote__x span::before { display: none; }
 .rr-vote__x span i { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--c); }
 .rr-vote__x span em { font-style: normal; }
@@ -1950,8 +1993,8 @@ a.sv__vfy { text-decoration: none; }
 .rr-table--compact th, .rr-table--compact td { padding: 0.5rem 0.625rem; }
 .rr-table--compact thead th { padding-top: 0.625rem; padding-bottom: 0.625rem; }
 .rr-sources tbody th { font-weight: 400; font-size: 0.75rem; }
-.rr-sources td a, .rr-sources td span { font-size: 0.6875rem; }
-.rr-stat__v { margin: 0.375rem 0 0; font-family: var(--font-mono); font-weight: 400; font-size: 2.25rem; line-height: 1.1;
+.rr-sources td a, .rr-sources td span { font-size: 0.75rem; }
+.rr-stat__v { margin: 0; font-family: var(--font-mono); font-weight: 400; font-size: 2.25rem; line-height: 1.1;
   color: var(--color-text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .rr-stat__sub { margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--color-text-muted); }
 
@@ -1975,32 +2018,35 @@ a.sv__vfy { text-decoration: none; }
 /* A portfolio's recommendation history: the moves as the same action chips
    the ring's legend wears, then how many positions it held. */
 .rr-rowacts { font-family: var(--font-mono); white-space: normal; }
-.rr-rowacts > span { display: inline-flex; align-items: baseline; gap: 0.375rem; margin: 0.125rem 1.25rem 0.125rem 0; }
+.rr-rowacts > span { display: inline-flex; align-items: baseline; gap: 0.5rem; margin: 0.25rem 1rem 0.25rem 0; }
 .rr-rowacts .rr-act { min-width: 0; text-align: left; }
+/* The same chip in an action list, where the dd's own column sets the width. */
+.sr__act dd .rr-act { min-width: 0; text-align: left; }
 .rr-rowtext { font-family: var(--font-sans); color: var(--color-text-soft); }
 .rr-held { color: var(--color-text-muted); cursor: default; }
 
 /* /swarm in the research record's grammar (RM-121). */
 /* A weights recommendation as its four figures, each beside its sleeve's hue. */
-.rr-mixline { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.875rem; font-family: var(--font-mono); }
-.rr-mixline > span { display: inline-flex; align-items: center; gap: 0.375rem; }
+.rr-mixline { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; font-family: var(--font-mono); }
+.rr-mixline > span { display: inline-flex; align-items: center; gap: 0.5rem; }
 .rr-mixline i { width: 0.4375rem; height: 0.4375rem; flex: none; }
 .rr-mixline b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
 /* Portfolios: identity, then the latest review, then cadence. */
 .rr-ports { min-width: 44rem; }
 .rr-ports tbody th { width: 42%; vertical-align: top; }
-.rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-ports__blurb { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.5rem;
   font-family: var(--font-sans); font-weight: 400; font-size: 0.75rem; line-height: 1.55; color: var(--color-text-muted); }
 .rr-ports__rec, .rr-ports td { vertical-align: top; }
-.rr-ports__line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.875rem; font-family: var(--font-sans); color: var(--color-text); }
+.rr-ports__line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; font-family: var(--font-sans); color: var(--color-text); }
 .rr-hist { min-width: 46rem; }
-.rr-hist__subj { font-family: var(--font-sans); color: var(--color-text); white-space: nowrap; }
-.rr-hist .rr-rowacts > span { margin-right: 1rem; }
+/* (0,2,1), to beat .rr-table td's mono: a subject name reads sans here as it
+   does in Portfolios. */
+.rr-table td.rr-hist__subj { font-family: var(--font-sans); color: var(--color-text); white-space: nowrap; }
 /* Members: the mark, the name and lens. */
 .rr-members__who { display: inline-flex; align-items: center; gap: 0.75rem; }
 .rr-members__who .sv__mmark { flex: none; line-height: 0; }
-.rr-members__who small { display: block; margin-top: 0.125rem; font-family: var(--font-sans); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-members__who small { display: block; margin-top: 0.25rem; font-family: var(--font-sans); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-members td { font-family: var(--font-mono); color: var(--color-text-soft); }
 .rr-apply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem 2.25rem;
   margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border); }
@@ -2009,14 +2055,14 @@ a.sv__vfy { text-decoration: none; }
 .rr-apply__seats { color: var(--color-text-muted); }
 /* How it works: three steps, divided by hairlines, not boxed. */
 .rr-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
-.rr-steps > div { padding: 1.25rem 1.5rem 0 0; }
+.rr-steps > div { padding: 1rem 1.5rem 0 0; }
 .rr-steps > div + div { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
-.rr-steps__t { margin: 0.5rem 0 0.5rem; font-size: 0.9375rem; font-weight: 500; color: var(--color-text); }
-.rr-steps__d { margin: 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-soft); }
+.rr-steps__t { margin: 0.5rem 0 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
+.rr-steps__d { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 .rr-steps__d b { font-weight: 500; color: var(--color-text); }
 @media (max-width: 760px) {
   .rr-steps { grid-template-columns: minmax(0, 1fr); }
-  .rr-steps > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border); margin-top: 1.25rem; }
+  .rr-steps > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border); margin-top: 1rem; }
 }
 
 /* A table that stacks on a phone instead of scrolling sideways: the first
@@ -2027,25 +2073,25 @@ a.sv__vfy { text-decoration: none; }
   .rr-table.rr-stack { min-width: 0 !important; }
   .rr-stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .rr-stack tbody tr { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline;
-    gap: 0.375rem 0.875rem; padding: 0.875rem 0; border-bottom: 1px solid var(--color-border); }
+    gap: 0.5rem 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
   .rr-stack tbody th, .rr-stack tbody td { display: block; padding: 0; border: 0; text-align: left; }
   .rr-stack tbody td:nth-of-type(n+2) { grid-column: 1 / -1; }
   .rr-stack--full tbody tr > * { grid-column: 1 / -1; }
-  .rr-stack--full tbody td.q { display: block; }
+  .rr-stack--full tbody td.q { display: block; text-align: left; }
   .rr-ports tbody th { width: auto; }
   /* A bare count reads as noise without its column head; the date stays. */
   .rr-ports tbody td:nth-of-type(2) { display: none; }
 }
 
 /* A member's page: the mark beside the name, the declared lens and biases. */
-.rr-profile { display: flex; align-items: flex-start; gap: 1.25rem; }
+.rr-profile { display: flex; align-items: flex-start; gap: 1rem; }
 .rr-profile__mark { flex: none; width: 4.5rem; height: 4.5rem; }
-.rr-profile__lens { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.3125rem;
-  text-transform: uppercase; color: var(--color-text); }
-.rr-tags { display: flex; flex-wrap: wrap; gap: 0.375rem; margin: 0; padding: 0; list-style: none; }
+/* The lens is a value under its label, not a sub-heading: body text. */
+.rr-profile__lens { margin: 0; font-size: 1rem; font-weight: 500; color: var(--color-text); }
+.rr-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
 .rr-tags li { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light); font-family: var(--font-mono);
-  font-size: 0.6875rem; letter-spacing: 0.04em; color: var(--color-text-soft); }
-.rr-empty { padding: 1.25rem 0; }
+  font-size: 0.625rem; letter-spacing: 0.04em; color: var(--color-text-soft); }
+.rr-empty { padding: 1rem 0; }
 .rr-empty .rr-prose { margin: 0.5rem 0 0.75rem; font-size: 0.875rem; }
 @media (max-width: 560px) {
   .rr-profile { flex-direction: column; gap: 0.75rem; }

@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 
 // The badge (frontend/public/views/swarm/{session,member,take}.html) is a
 // drawn mark, a one-word label, and an explanatory line shown on hover/focus.
+// On the session and member views it sits in the shared take card (.rr-take)
+// as the signature seal, and the seal is itself the link to the take's
+// rendered receipt: it replaced the separate "Verification receipt" link, so
+// the permalink assertions below target the seal's href.
 //
 // Its text is therefore NOT a safe discriminator, and the original hazard this
 // file guards against got worse rather than better: the old pair was
@@ -63,17 +67,18 @@ test("public swarm take shows an exact verified badge on the session view, membe
 
   // 2. Public member view: the same take's badge and permalink must also render
   // the exact positive state (issue #207 Behaviour: "On the public session AND
-  // member views each take shows a verified badge").
+  // member views each take shows a verified badge"). The permalink is the seal.
   await page.goto(`/swarm/members/${encodeURIComponent(take.memberId)}`);
-  const memberBadge = page.locator(`[data-verified-badge][data-take-id="${take.id}"]`);
+  const memberBadge = page.locator(`.rr-take [data-verified-badge][data-take-id="${take.id}"]`);
   await expectPositiveBadge(memberBadge);
-  const memberPermalink = page.locator(`[data-take-permalink][href="/swarm/takes/${take.id}"]`);
-  await expect(memberPermalink).toBeVisible();
+  await expect(memberBadge).toBeVisible();
+  await expect(memberBadge).toHaveAttribute("href", `/swarm/takes/${take.id}`);
 
-  // 3. Per-take permalink: a real rendered page (not raw JSON), exact positive
-  // badge text, no negative class.
+  // 3. Per-take permalink: following the seal from the session view lands on a
+  // real rendered page (not raw JSON), exact positive badge text, no negative
+  // class.
   await page.goto(`/swarm/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`);
-  const permalink = page.locator(`[data-take-permalink][href="/swarm/takes/${take.id}"]`);
+  const permalink = page.locator(`.rr-take a[data-verified-badge][data-take-id="${take.id}"][href="/swarm/takes/${take.id}"]`);
   await expect(permalink).toBeVisible();
   await permalink.click();
   await expect(page).toHaveURL(new RegExp(`/swarm/takes/${take.id}$`));

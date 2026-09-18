@@ -468,6 +468,27 @@ export const helpers = {
     const n = Number(value);
     return Number.isFinite(n) ? n.toFixed(digits) : "—";
   },
+  // Shared by the subject and session pages, which print the same positions
+  // table. A token amount at the precision it deserves: billions and millions
+  // compact, thousands grouped without decimals, units to two places, dust
+  // to four significant digits.
+  fmtAmount(v) {
+    const n = Number(v);
+    if (v == null || !Number.isFinite(n)) return "—";
+    const a = Math.abs(n);
+    if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+    if (a >= 1e3) return Math.round(n).toLocaleString("en-US");
+    if (a >= 1) return n.toFixed(2);
+    return a === 0 ? "0" : n.toPrecision(4);
+  },
+  // A unit price: cents above a dollar, four significant digits below it.
+  fmtPrice(v) {
+    const n = Number(v);
+    if (v == null || !Number.isFinite(n) || n <= 0) return "—";
+    if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$${Number(n.toPrecision(4)).toString()}`;
+  },
   clampPct(value) {
     const n = Number(value);
     return Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
@@ -502,16 +523,10 @@ export const helpers = {
       : { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
     try { return date.toLocaleDateString("en-US", opts); } catch (_) { return value; }
   },
-  memberTagline(member) {
-    return member?.tagline || member?.mandate || `${member?.name || "This member"} reads the session through a ${member?.lens || "swarm"} lens.`;
-  },
-  memberBiases(member) {
-    if (Array.isArray(member?.biases) && member.biases.length) return member.biases.filter(Boolean);
-    return member?.lens ? [member.lens] : ["independent review", "signed recommendations"];
-  },
-  fallbackMandate(member) {
-    return `Evaluate each subject through the ${member?.lens || "swarm"} lens and submit a signed stance with confidence and rationale.`;
-  },
+  // Only what the member declared. A newly approved member has no tagline,
+  // biases or mandate yet, and the page says so rather than writing them one.
+  memberTagline(member) { return member?.tagline || member?.mandate || ""; },
+  memberBiases(member) { return Array.isArray(member?.biases) ? member.biases.filter(Boolean) : []; },
   takeHref,
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -534,10 +549,10 @@ export const helpers = {
   verifyLabel(ok, archival) { return this.verifyState(ok, archival); },
   verifyTip(ok, archival) {
     if (archival) {
-      return "Archived from the pre-launch record. Published by v0 before member key registration existed, so it was never member-signed — this is not a failed signature check.";
+      return "Archived from the pre-launch record, filed before members signed their takes. It was never member-signed, so this is not a failed signature check.";
     }
     return ok
-      ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key every time this take is served — not just when it was filed."
+      ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key each time this take is shown, not only when it was filed."
       : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
   },
   // Inner glyph of the badge: a check for verified, a cross for a failed
@@ -1160,10 +1175,12 @@ export function registerStaticViews(Alpine) {
         // figures depend on having a real one.
         this.brief = await this.loadBrief(id).catch(() => null);
         // A FRAMEWORK subject IS the published allocation, so its own page
-        // opens with the weights in force. Any other subject is a book that
-        // the framework does not describe, and asking for it there would put
-        // the vault's targets on a page about somebody else's treasury.
-        if (this.isFramework()) await this.loadAllocationFw();
+        // opens with the weights in force (hasTargetsCard stays gated on
+        // isFramework). Any weights subject also reads it, as the target a
+        // session was measured against when its brief handed none over. A
+        // book subject never asks: the framework does not describe it, and
+        // asking would put the vault's targets on somebody else's treasury.
+        if (this.isWeightsSubject()) await this.loadAllocationFw();
         // The newest session's own regime read first, and the brief's copy of
         // it as the fallback: an archive-only subject reaches the brief but not
         // always the session detail, and they carry the same reading under two
@@ -1172,8 +1189,10 @@ export function registerStaticViews(Alpine) {
           date: this.sessions[0]?.date || this.brief?.date || "",
           v0: this.readingIsV0(this.latest()),
         });
-      } catch (e) {
-        this.error = e.message || "Subject not found";
+      } catch (_) {
+        // Never e.message: it is whatever the fetch threw. A subject in hand
+        // means a side-fetch failed, not that the subject is missing.
+        this.error = this.subject ? "This subject could not be loaded." : "Subject not found.";
       } finally {
         this.loading = false;
       }
@@ -1325,7 +1344,9 @@ export function registerStaticViews(Alpine) {
             });
           } catch (_) { /* fall through */ }
         }
-        return { ...s, synthesis: "", swarmRecommendation: null, takes: 0, takeRows: [], reference: null };
+        // Marked failed, with no take count: a row that did not load is not a
+        // session that collected nothing and published nothing.
+        return { ...s, failed: true, synthesis: "", swarmRecommendation: null, takes: null, takeRows: [], reference: null };
       }
     },
     historyPageCount() { return Math.max(1, Math.ceil(this.sessionIndex.length / this.historySize)); },
@@ -1338,7 +1359,7 @@ export function registerStaticViews(Alpine) {
         this.historyPage = page;
         document.getElementById("history")?.scrollIntoView({ block: "start" });
       } catch (_) {
-        this.historyError = "This page of history could not be loaded. The previous page is still shown.";
+        this.historyError = "These sessions could not be loaded.";
       } finally {
         this.historyBusy = false;
       }
@@ -1366,15 +1387,18 @@ export function registerStaticViews(Alpine) {
         return hit ? hit.pct : null;
       });
     },
-    // The moves a row recommends against the reference ITS OWN brief carried.
-    // No reference, no moves: today's framework is never read back onto an
-    // older session.
+    // The target a row is measured against: the one its brief handed over, else
+    // the published target when it was already in force that day.
+    rowReference(row) { return row?.reference || targetsInForce(this.allocationFw, row?.date); },
+    // The moves a row recommends against rowReference(). No reference, no
+    // moves: a target published after the session is never read back onto it.
     rowMoves(row) {
-      if (!row?.reference) return null;
+      const ref = this.rowReference(row);
+      if (!ref) return null;
       const w = this.rowWeights(row);
       if (w.every((v) => v == null)) return null;
       return BUCKET_ORDER.map((key, i) => {
-        const was = row.reference[key];
+        const was = ref[key];
         const d = weightChange.weightDelta(w[i], was == null ? null : was);
         return { key, label: bucketLabel(key), was, d };
       }).filter((m) => m.d != null && m.d !== 0);
@@ -1384,19 +1408,22 @@ export function registerStaticViews(Alpine) {
     rowOutcome(row) {
       const rec = row?.swarmRecommendation;
       if (rec?.type !== "bucket_weights") return this.actionsOutcome(row);
-      if (!this.rowWeights(row).some((v) => v != null)) return "Recommendation unavailable";
+      // No weights, no outcome: the history cell and the latest block each
+      // say "no recommendation" in their own words, so this adds nothing.
+      if (!this.rowWeights(row).some((v) => v != null)) return "";
       const moves = this.rowMoves(row);
-      if (moves == null) return "Reference unavailable";
+      if (moves == null) return "No target recorded";
       return moves.length ? `${moves.length} ${moves.length === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
     },
     // The latest review's legend: each sleeve, its recommended weight, and its
-    // move against the reference that session was handed.
+    // move against the target that session is measured against (rowReference).
     latestLegend() {
       const row = this.latest();
       const w = this.rowWeights(row);
+      const ref = this.rowReference(row);
       return this.sleeveColumns().map((c, i) => {
-        const was = row?.reference ? row.reference[c.key] : null;
-        return { ...c, pct: w[i], was: was == null ? null : was, d: row?.reference ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
+        const was = ref ? ref[c.key] : null;
+        return { ...c, pct: w[i], was: was == null ? null : was, d: ref ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
       }).filter((r) => r.pct != null);
     },
     // The explorer for the latest review: the recommended mix on a weights
@@ -1431,11 +1458,19 @@ export function registerStaticViews(Alpine) {
       if (!Number.isFinite(n)) return "—";
       return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
     },
-    bookColour(token) {
-      const book = this.latestBook();
-      const tokens = [...(book?.positions || []).map((p) => p.token), ...this.latestActions().map((a) => a.token)];
-      return resolveTokenColors([...new Set(tokens.filter(Boolean))])[token] || assetDot(token);
+    // One palette per book: the ring, the positions table and its share bars,
+    // and the chart's bands. A named position keeps one hue on all of them;
+    // only what both the chart and the ring fold into "other" is grey. The ring
+    // is read from latestBook() directly: explorerRows() calls bookColour(),
+    // so reading it here would recurse.
+    bookPalette() {
+      const ring = (this.latestBook()?.positions || [])
+        .map((p) => ({ token: String(p.token || p.symbol || ""), value: Number(p.value_usd ?? p.valueUsd) || 0 }))
+        .filter((p) => p.token).sort((a, b) => b.value - a.value).slice(0, 7).map((p) => p.token);
+      const tokens = [...this.chartTokens(), ...ring, ...this.latestActions().map((a) => a.token)];
+      return resolveTokenColors([...new Set(tokens.filter(Boolean))], [OTHER_COLOR]);
     },
+    bookColour(token) { return this.bookPalette()[token] || assetDot(token); },
     explorerRows() {
       if (this.hasBook()) return bookExplorerRows(this.latestBook(), this.latestActions(), (t) => this.bookColour(t), (v) => this.fmtUsd(v));
       const row = this.latest();
@@ -1445,8 +1480,8 @@ export function registerStaticViews(Alpine) {
       return legend.map((r) => ({
         ...r,
         meta: `${this.fmtPctTrim(r.pct)} of allocation`, action: "", rationale: "",
-        d: row?.reference ? r.d : null,
-        was: row?.reference ? r.was : null,
+        d: this.rowReference(row) ? r.d : null,
+        was: this.rowReference(row) ? r.was : null,
         basis: "target",
         assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
       }));
@@ -1456,11 +1491,6 @@ export function registerStaticViews(Alpine) {
     changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
-    rowTime(row) {
-      const at = row?.publishedAt || row?.generatedAt;
-      if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
-      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
-    },
     wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
     isLong(text, chars) { return String(text || "").length > chars; },
     sessionsJsonHref() { return ROUTES.swarm.sessions; },
@@ -1513,9 +1543,8 @@ export function registerStaticViews(Alpine) {
     // share its figure, so WOON can be sand here and cyan elsewhere. That is the
     // right trade: an unmapped symbol has no identity to protect, and within one
     // figure being TELLABLE APART beats being globally stable.
-    chartColors() {
-      return resolveTokenColors(this.chartTokens(), [OTHER_COLOR]);
-    },
+    // Chart tokens lead bookPalette()'s list, so the bands still claim first.
+    chartColors() { return this.bookPalette(); },
     // The snapshots inside the chart window, oldest first.
     //
     // Calendar days, not readings. This was `slice(-windowDays)`, which cut the
@@ -1597,6 +1626,9 @@ export function registerStaticViews(Alpine) {
       if (!series.length) return [];
       return series.map((b) => ({
         token: b.token,
+        // The residual band's key is lowercase; printed as-is it reads as one
+        // more token among the symbols. Keys and focus stay on `token`.
+        label: b.token === OTHER_TOKEN ? "Other" : b.token,
         color: b.color,
         pct: this.fmtPct1(b.shares[b.shares.length - 1] || 0),
       })); // largest first: the legend runs left to right under the chart
@@ -1701,7 +1733,7 @@ export function registerStaticViews(Alpine) {
         total: Number.isFinite(total) && total > 0 ? this.fmtUsd(total) : "",
         // Positions the book did not hold on that date are left out.
         items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
-          .map((b) => ({ token: b.token, color: b.color, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
+          .map((b) => ({ token: b.token, label: b.token === OTHER_TOKEN ? "Other" : b.token, color: b.color, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
       };
     },
     // The crosshair snaps to the nearest reading under the pointer.
@@ -1757,15 +1789,9 @@ export function registerStaticViews(Alpine) {
         address: n.address || "",
       }));
     },
-    // A position as the chart draws it: its own band when it earns one, else
-    // the residual "other" band it is folded into, in that band's grey. The
-    // table row and the chart then name the same thing in the same colour.
-    positionBand(token) {
-      return this.chartTokens().includes(token) ? token : OTHER_TOKEN;
-    },
-    positionColor(token) {
-      return this.positionBand(token) === OTHER_TOKEN ? OTHER_COLOR : this.seriesColor(token);
-    },
+    // A table row names a token, so it takes that token's hue: the one the
+    // ring and the chart give it. Only a position neither figure names is grey.
+    positionColor(token) { return this.bookPalette()[token] || OTHER_COLOR; },
     // Everything the book is read from, in one list: the tracked wallets, then
     // the NFT contracts the operator declared (which are not valued).
     bookSources() {
@@ -1773,26 +1799,6 @@ export function registerStaticViews(Alpine) {
         ...this.trackedWallets().map((w) => ({ name: w.label || "wallet", kind: "Wallet", chain: w.chain, address: w.address })),
         ...this.nftContracts().map((n) => ({ name: n.name, kind: "NFT contract", chain: n.chain, address: n.address })),
       ];
-    },
-    // A token amount at the precision it deserves: billions and millions
-    // compact, thousands grouped without decimals, units to two places, dust
-    // to four significant digits.
-    fmtAmount(v) {
-      const n = Number(v);
-      if (v == null || !Number.isFinite(n)) return "—";
-      const a = Math.abs(n);
-      if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-      if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-      if (a >= 1e3) return Math.round(n).toLocaleString("en-US");
-      if (a >= 1) return n.toFixed(2);
-      return a === 0 ? "0" : n.toPrecision(4);
-    },
-    // A unit price: cents above a dollar, four significant digits below it.
-    fmtPrice(v) {
-      const n = Number(v);
-      if (v == null || !Number.isFinite(n) || n <= 0) return "—";
-      if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      return `$${Number(n.toPrecision(4)).toString()}`;
     },
     // The chains the book is read on, in the order its wallets list them.
     walletChains() {
@@ -1827,6 +1833,7 @@ export function registerStaticViews(Alpine) {
     sort: "newest",  // see sortedBy(): newest | oldest | confidence
     now: Date.now(), // stamped once — a track record does not need a ticker
     openTakes: {},   // take id → expanded
+    shown: 20,       // rows listed; "Show more" adds 20, a new sort or filter resets it
     // #687: the ref that failed to resolve, and the full roster to land on
     // instead of a blank profile. Kept distinct from `error` — this is not a
     // failure, it is the deliberate not-found render, and the two states show
@@ -1834,6 +1841,10 @@ export function registerStaticViews(Alpine) {
     notFound: false,
     attemptedRef: null,
     members: [],
+    // subject id → the subject record's name. A take row carries the name its
+    // session was filed under, which can lag a rename; /swarm and the subject
+    // page print the record's name, so this page does too.
+    subjectNames: {},
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       // The route this init is answering. Everything below runs after an await,
@@ -1875,6 +1886,9 @@ export function registerStaticViews(Alpine) {
         if (!this.member) {
           this.notFound = true;
           this.attemptedRef = memberId;
+          // The route-level title titleizes the missed ref, which names a
+          // member who does not exist ("Nobody Here").
+          if (location.pathname === routeAtEntry) document.title = "Member not found: Robot Money Investment Swarm";
           const res = await api.get(ROUTES.swarm.members).catch(() => null);
           // The shipped archive's members stand in when the API is not there,
           // so the roster still lists who the swarm is.
@@ -1906,8 +1920,13 @@ export function registerStaticViews(Alpine) {
           }
         }
         this.rows = await this.loadRows(memberId);
-      } catch (e) {
-        this.error = e.message || "Member not found";
+        try {
+          const ids = [...new Set(this.rows.map((r) => r.session.subjectId).filter(Boolean))];
+          const subs = await Promise.all(ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject).catch(() => null)) || loadArchiveSubject(id).catch(() => null)));
+          this.subjectNames = Object.fromEntries(ids.map((id, i) => [id, subs[i]?.name]).filter(([, n]) => n));
+        } catch (_) { /* the stored names stand */ }
+      } catch (_) {
+        this.error = "This member's record could not be loaded.";
       } finally {
         this.loading = false;
       }
@@ -2041,10 +2060,11 @@ export function registerStaticViews(Alpine) {
       for (const r of this.recentTakes()) {
         const cur = by.get(r.session.subjectId);
         if (cur) cur.count += 1;
-        else by.set(r.session.subjectId, { id: r.session.subjectId, name: r.session.subjectName || r.session.subjectId, count: 1 });
+        else by.set(r.session.subjectId, { id: r.session.subjectId, name: this.subjectNameOf(r.session), count: 1 });
       }
       return [...by.values()].sort((a, b) => b.count - a.count);
     },
+    subjectNameOf(s) { return this.subjectNames[s?.subjectId] || s?.subjectName || s?.subjectId || ""; },
     // ── When ─────────────────────────────────────────────────────────────────
     // TWO CLOCKS reach this page and they are not the same fact: the session's
     // date (when the room convened, and what every /swarm URL is keyed on) and
@@ -2089,7 +2109,7 @@ export function registerStaticViews(Alpine) {
     // "what did this member open with"; confidence answers "what has it argued
     // hardest", which is the question the Avg confidence figure above raises
     // and could not previously be followed up on.
-    setSort(key) { this.sort = key; },
+    setSort(key) { this.sort = key; this.shown = 20; },
     sortedBy(rows) {
       const at = (r) => Date.parse(String(this.filedAt(r) || "")) || 0;
       const copy = [...rows];
@@ -2107,7 +2127,7 @@ export function registerStaticViews(Alpine) {
       const rows = this.recentTakes();
       return this.sortedBy(this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows);
     },
-    filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; },
+    filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; this.shown = 20; },
 
     // ── Take body collapse ───────────────────────────────────────────────────
     // Bodies run to several hundred words across three sections. Collapsed by
@@ -2150,14 +2170,19 @@ export function registerStaticViews(Alpine) {
     // The sessions either side of this one on the same subject, for the
     // record's own prev/next. Filled after render, like the receipt.
     neighbours: { older: null, newer: null },
+    // A 404, as opposed to a load that failed: retrying cannot find a session
+    // that does not exist, so the page offers no retry for it.
+    notFound: false,
     // A failed load offers a retry instead of a dead end.
     retry() {
       this.error = null;
+      this.notFound = false;
       this.loading = true;
       this.session = null;
       this.init();
     },
     async init() {
+      const routeAtEntry = location.pathname;
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
       //                                 reach an earlier session of a day on which
@@ -2177,8 +2202,10 @@ export function registerStaticViews(Alpine) {
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
           this.loadEvidence();
+          this.syncTitle(routeAtEntry);
         } catch (e) {
-          this.error = /** @type {any} */ (e)?.status === 404 ? "Session not found" : "This session could not be loaded. Try again.";
+          this.notFound = /** @type {any} */ (e)?.status === 404;
+          this.error = this.notFound ? "Session not found." : "This session could not be loaded.";
         } finally {
           this.loading = false;
         }
@@ -2186,7 +2213,8 @@ export function registerStaticViews(Alpine) {
       }
       const match = location.pathname.match(/^\/swarm\/(\d{4}-\d{2}-\d{2})\/([^/]+)/);
       if (!match) {
-        this.error = "Session not found";
+        this.notFound = true;
+        this.error = "Session not found.";
         this.loading = false;
         return;
       }
@@ -2202,6 +2230,7 @@ export function registerStaticViews(Alpine) {
         // backend, not a competing source of truth for old dates.
         await this.loadApi(date, subject);
         this.loadEvidence();
+        this.syncTitle(routeAtEntry);
       } catch (primary) {
         try {
           // Fall back to the static archive. It only carries dates through
@@ -2210,8 +2239,12 @@ export function registerStaticViews(Alpine) {
           if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
           this.loadEvidence();
+          this.syncTitle(routeAtEntry);
         } catch (_) {
-          this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
+          // Not found when the API said so, or when the date is one the archive
+          // covers and it has no such session; any other failure can be retried.
+          this.notFound = /** @type {any} */ (primary)?.status === 404 || archivePreferred(date);
+          this.error = this.notFound ? "Session not found." : "This session could not be loaded.";
         }
       } finally {
         this.loading = false;
@@ -2314,6 +2347,20 @@ export function registerStaticViews(Alpine) {
       const id = this.session?.subjectId || this.subject?.id;
       return id ? `/swarm/subjects/${encodeURIComponent(id)}` : "/swarm";
     },
+    // The subject record's name, as /swarm and the subject page print it. The
+    // session stores the name it was filed under, which can lag a rename, so
+    // it is only the fallback when the subject record did not load.
+    subjectTitle() { return this.subject?.name || this.session?.subjectName || this.session?.subjectId || ""; },
+    // Route-level SEO titleizes the URL's slug ("Robotmoney Allocation"). Name
+    // the tab after the subject and the session's date once both are known,
+    // unless the visitor has already moved on: the loads are not cancelled
+    // when the router tears this view down.
+    /** @param {string} routeAtEntry */
+    syncTitle(routeAtEntry) {
+      const name = this.subjectTitle();
+      if (!name || !this.session?.date || location.pathname !== routeAtEntry) return;
+      document.title = `${name}, ${this.formatDate(this.session.date, "short")}: Robot Money Investment Swarm`;
+    },
     // The session in the shape the shared review band reads (lib/
     // session-summary.js): the record, with its takes on it as `takeRows`.
     reviewRow() {
@@ -2384,10 +2431,10 @@ export function registerStaticViews(Alpine) {
     // (domain.ts buildRationale), every one of which the review band draws. v0
     // sessions carry a rationale somebody wrote, and that one is the reason
     // behind the weights.
+    // The rule itself is sessionSummary.rationaleOf(), so the subject page and
+    // /swarm apply the same one.
     recommendationRationale() {
-      const rec = this.session?.swarmRecommendation;
-      if (!rec || this.isRollupRecommendation()) return "";
-      return rec.rationale || "";
+      return this.rationaleOf(this.session);
     },
     // The recommendation's `actions`, as the payload carries them. Rollups
     // aggregated between 2026-08-06 and 2026-09-04 carry the same two
@@ -2419,6 +2466,13 @@ export function registerStaticViews(Alpine) {
     tokenColor(token) {
       const tokens = [...this.positionRows().slice(0, 8).map((p) => p.token), ...this.authoredActions().map((a) => a.token)];
       return resolveTokenColors([...new Set(tokens)])[token] || assetDot(token);
+    },
+    // The holdings table lists every position, and the palette keys eight.
+    // A position past those, and not named by an action, goes grey instead of
+    // hashing onto a hue a keyed row already wears.
+    holdingColor(token) {
+      const keyed = this.positionRows().slice(0, 8).some((p) => p.token === token) || this.authoredActions().some((a) => a.token === token);
+      return keyed ? this.tokenColor(token) : OTHER_COLOR;
     },
     // The snapshot's notable lines, minus the ones that are the subject's own
     // operator notes, which the handover already prints under that name.
@@ -2702,7 +2756,7 @@ export function registerStaticViews(Alpine) {
         } else if (this.allocationAsOf()) {
           const when = this.formatDate(this.allocationAsOf(), "short");
           parts.push(this.targetPostdatesSession()
-            ? `Target as published ${when}, after this session, so it is shown for reference only.`
+            ? `Target as published ${when}, after this session, so the session was not measured against it.`
             : `Target as published ${when}.`);
         }
       }
@@ -2792,6 +2846,14 @@ export function registerStaticViews(Alpine) {
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
+    // Record generated, dated like every other date on the page. Guarded:
+    // toISOString() throws on an unparseable stamp, so that one prints as is.
+    generatedLabel() {
+      const at = this.session?.generatedAt || this.session?.generated_at;
+      const t = Date.parse(at);
+      if (!Number.isFinite(t)) return at || "";
+      return `${this.formatDate(at, "short")} · ${new Date(t).toISOString().slice(11, 16)} UTC`;
+    },
     sessionJsonHref() {
       const s = this.session;
       if (this.source === "api" && s?.id) return path(ROUTES.swarm.sessionById, { id: s.id });
@@ -2825,11 +2887,13 @@ export function registerStaticViews(Alpine) {
       const acts = this.authoredActions();
       if (!acts.length) return "";
       const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
-      return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
-    },
-    outcomeColumnsLabel() {
-      const cols = [this.hasTargetColumn() && "target", this.hasActualColumn() && "actual", "recommended", "change"].filter(Boolean);
-      return cols.join(", ");
+      // Counted in actions, which can be fewer than the positions the ring and
+      // holdings list, so no "N of M": the history row's "· 3 held" form, and
+      // never "0 held".
+      const held = acts.length - moved;
+      return moved
+        ? `${moved} ${moved === 1 ? "position changes" : "positions change"}${held ? `, ${held} held` : ""}`
+        : `${acts.length} ${acts.length === 1 ? "position" : "positions"} held`;
     },
     isLong(text, chars) { return String(text || "").length > chars; },
     wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
@@ -2902,7 +2966,7 @@ export function registerStaticViews(Alpine) {
     consensusText() {
       const row = this.reviewRow();
       const lean = this.lean(row);
-      if (!lean) return "—";
+      if (!lean) return "No consensus recorded";
       if (!lean.stance) return "Split, no stance has a majority";
       const word = lean.stance.charAt(0).toUpperCase() + lean.stance.slice(1);
       return `${word}, ${this.leadShare(row)} members`;
@@ -2922,8 +2986,8 @@ export function registerStaticViews(Alpine) {
     signatureDetail() {
       const t = this.takes || [];
       if (!t.length) return "No member filed a take for this session.";
-      if (t.every((x) => x.archival)) return "These takes predate member key registration. They were never signed, which is different from a failed signature check.";
-      return "Each take shows its own signature state. A verified take was signed by the member's registered key. A recommendation records research; it does not show that capital moved.";
+      if (t.every((x) => x.archival)) return "These takes are from the pre-launch record, filed before members signed their takes. They were never member-signed, which is not a failed signature check.";
+      return "A verified take was signed with the member's registered key. A recommendation records research; it does not show that capital moved.";
     },
     targetPolicyLabel() {
       const src = this.targetSource();
@@ -2933,8 +2997,8 @@ export function registerStaticViews(Alpine) {
       }
       if (src === "framework" && this.allocationAsOf()) {
         return this.targetPostdatesSession()
-          ? `Not recorded for this session. Current policy dated ${this.formatDate(this.allocationAsOf(), "short")}`
-          : `Published policy dated ${this.formatDate(this.allocationAsOf(), "short")}`;
+          ? `Not recorded for this session. Current target published ${this.formatDate(this.allocationAsOf(), "short")}`
+          : `Published ${this.formatDate(this.allocationAsOf(), "short")}`;
       }
       return "Not recorded for this session";
     },
@@ -2991,7 +3055,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
     const pct = (p.value / total) * 100;
     return {
       key: p.token, label: p.token, hue: colourOf(p.token), pct,
-      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(p.value)}${p.chain ? ` · ${p.chain}` : ""}`,
+      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(p.value)}${p.chain ? ` · ${sessionSummary.chainLabel(p.chain)}` : ""}`,
       action: act ? String(act.action).toLowerCase() : "", rationale: act?.rationale || "",
       d: null, was: null, basis: "", assets: [],
     };
@@ -3041,6 +3105,18 @@ export function referenceWeights(brief) {
     if (Number.isFinite(w) && i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = w * 100;
   }
   return Object.keys(out).length ? out : null;
+}
+
+// The published targets in force on `date`, as { bucket key: percent }, or
+// null. The framework keeps one current row and no history, so a row dated
+// after the session is never read back onto it (the session page's
+// targetPostdatesSession rule).
+/** @param {any} fw @param {string} date */
+export function targetsInForce(fw, date) {
+  const asOf = fw?.asOf ? String(fw.asOf).slice(0, 10) : "";
+  if (!asOf || !date || String(date) < asOf) return null;
+  const rows = (fw.strategy || []).filter((r) => r?.targetPct != null && Number.isFinite(Number(r.targetPct)));
+  return referenceWeights({ allocation: { buckets: rows.map((r) => ({ name: r.label, target_weight: Number(r.targetPct) / 100 })) } });
 }
 
 // A subject's published sessions, newest first, as { id, date, subjectId }.

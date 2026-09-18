@@ -107,7 +107,16 @@ export function sleeveExplorer() {
       this.pinned = null;
       this.hovered = null;
       this.status = "Breakdown closed";
-      /** @type {any} */ (this).$root?.querySelector(`[data-sleeve-btn="${CSS.escape(String(key))}"]`)?.focus();
+      // Focus goes back to the sleeve's row only when it was inside the
+      // explorer (Close, or Escape from the panel): a hover preview dismissed
+      // with Escape leaves focus where the reader had it. Focusing the row
+      // fires its preview synchronously, which would reopen the panel Close
+      // just shut, so that preview is dropped.
+      const root = /** @type {any} */ (this).$root;
+      if (root && root.contains(document.activeElement)) {
+        root.querySelector(`[data-sleeve-btn="${CSS.escape(String(key))}"]`)?.focus();
+        this.hovered = null;
+      }
     },
     actionLabel,
     // The arcs are drawn with x-html and cannot carry Alpine bindings, so the
