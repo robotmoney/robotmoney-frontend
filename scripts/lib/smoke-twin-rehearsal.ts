@@ -311,6 +311,51 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     const backendUrl = `http://127.0.0.1:${ready.webPort}`;
     log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=http://127.0.0.1:${ready.apiPort} (/health OK) web=${backendUrl}`);
 
+    // WORKER LANES MUST BE HEALTHY, not merely running.
+    //
+    // /health above is the API's alone, and the frontend checks below assert
+    // static CONTENT — neither can see a wedged worker lane, so a rehearsal
+    // could report a clean release while swarm/analytics/research were failing
+    // every cycle. That is not hypothetical: the gap was found by booting a
+    // standing twin and looking at the lanes by hand, which is exactly the
+    // inspection a green rehearsal is supposed to make unnecessary.
+    //
+    // The lanes' own healthcheck is the right signal precisely because it is
+    // not "the process exists": each writes a heartbeat from INSIDE its work
+    // loop with its own staleness budget (backend/src/ops/healthcheck.ts), so
+    // an idle lane stays green and a deadlocked one goes red.
+    const laneDeadline = Date.now() + 180_000;
+    let lanes = "";
+    for (;;) {
+      const ps = Bun.spawnSync(["docker", "ps", "--filter", `label=com.docker.compose.project=${ready.project}`, "--format", "{{.Names}}\t{{.Status}}"]);
+      lanes = new TextDecoder().decode(ps.stdout).trim();
+      // `docker compose run` children (analytics-producer-run-*, the per-member
+      // member-agent containers) carry the same project label but are one-shot
+      // and come and go mid-rehearsal; gating on them would stall on a
+      // container that is *supposed* to exit.
+      const rows = lanes.split("\n").filter(Boolean).filter((r) => !/-run-[0-9a-f]{6,}/.test(r));
+      // Only containers that DECLARE a healthcheck report one; the rest are
+      // judged by still being up, which is all docker can tell us about them.
+      const unhealthy = rows.filter((r) => /unhealthy/i.test(r));
+      const starting = rows.filter((r) => /health: starting/i.test(r));
+      if (rows.length && unhealthy.length === 0 && starting.length === 0) {
+        log(`all ${rows.length} container(s) healthy:\n${lanes.split("\n").map((l) => `  ${l}`).join("\n")}`);
+        break;
+      }
+      if (Date.now() > laneDeadline) {
+        err("container health did not settle within 180s — a lane is unhealthy or never left 'starting':");
+        for (const r of [...unhealthy, ...starting]) err(`  ${r}`);
+        for (const r of unhealthy) {
+          const name = r.split("\t")[0]!;
+          const insp = Bun.spawnSync(["docker", "inspect", "--format", "{{range .State.Health.Log}}{{.Output}}{{end}}", name]);
+          const why = new TextDecoder().decode(insp.stdout).trim().split("\n").slice(-3).join(" | ");
+          if (why) err(`  ${name}: ${why}`);
+        }
+        return 1;
+      }
+      await Bun.sleep(5000);
+    }
+
     log("running scripts/smoke-frontend-check.ts against the booted stack (same checks CI runs)");
     const checkCode = await spawn(["bun", "scripts/smoke-frontend-check.ts"], {
       env: { ...process.env, BACKEND_URL: backendUrl },
