@@ -1943,8 +1943,6 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-positions .rr-table { min-width: 36rem; }
 .rr-positions tbody th { font-family: var(--font-mono); font-weight: 400; font-size: 0.75rem; }
 .rr-positions tbody th i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.625rem; }
-.rr-positions tbody tr { transition: opacity 160ms var(--ease-out-expo); }
-.rr-positions tbody tr.is-muted { opacity: 0.4; }
 .rr-share { display: inline-grid; grid-template-columns: 5rem auto; align-items: center; gap: 0.75rem; }
 .rr-share i { display: block; height: 0.25rem; justify-self: end; opacity: 0.7; }
 @media (max-width: 560px) {
@@ -1955,12 +1953,11 @@ table.alp__tbl--led th:first-child { width: 40%; }
   .rr-share { grid-template-columns: auto; }
   .rr-share i { display: none; }
 }
-@media (prefers-reduced-motion: reduce) { .rr-positions tbody tr { transition: none; } }
 
-/* A portfolio's recommendation history: the outcome as a line, the moves as
-   the same action chips the ring's legend wears. */
-.rr-outcome { font-family: var(--font-sans); white-space: nowrap; color: var(--color-text); }
+/* A portfolio's recommendation history: the moves as the same action chips
+   the ring's legend wears, then how many positions it held. */
 .rr-rowacts { font-family: var(--font-mono); white-space: normal; }
 .rr-rowacts > span { display: inline-flex; align-items: baseline; gap: 0.375rem; margin: 0.125rem 1.25rem 0.125rem 0; }
 .rr-rowacts .rr-act { min-width: 0; text-align: left; }
 .rr-rowtext { font-family: var(--font-sans); color: var(--color-text-soft); }
+.rr-held { color: var(--color-text-muted); cursor: default; }

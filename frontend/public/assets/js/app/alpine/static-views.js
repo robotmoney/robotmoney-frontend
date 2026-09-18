@@ -1381,6 +1381,14 @@ export function registerStaticViews(Alpine) {
         .filter((a) => a && a.action && String(a.action).toLowerCase() !== "hold")
         .map((a) => ({ token: a.token, action: String(a.action).toLowerCase(), label: actionLabel(a.action) }));
     },
+    // The positions a portfolio recommendation held, by token.
+    rowHeld(row) {
+      const rec = row?.swarmRecommendation;
+      if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
+      return (Array.isArray(rec.actions) ? rec.actions : [])
+        .filter((a) => a && a.action && String(a.action).toLowerCase() === "hold")
+        .map((a) => a.token);
+    },
     rowOutcome(row) {
       const rec = row?.swarmRecommendation;
       if (rec?.type !== "bucket_weights") {

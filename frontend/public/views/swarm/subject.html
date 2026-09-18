@@ -279,8 +279,7 @@
                  every position's share on that date; a legend entry puts its
                  band in focus. -->
             <!-- What the book holds today, exactly: every position, largest
-                 first, in the colour its band takes in the chart below. A row
-                 puts its band in focus there. -->
+                 first, in the colour its band takes in the chart below. -->
             <template x-if="positionRows().length">
               <div class="rr-tablewrap rr-positions">
                 <table class="rr-table rr-table--compact">
@@ -290,8 +289,7 @@
                   </thead>
                   <tbody>
                     <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
-                      <tr :class="chartFocus && chartFocus !== positionBand(p.token) ? 'is-muted' : ''"
-                          @pointerenter="chartFocus = positionBand(p.token)" @pointerleave="chartFocus = null">
+                      <tr>
                         <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
                         <td x-text="p.chain"></td>
                         <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
@@ -417,9 +415,9 @@
 
           <template x-if="sessionIndex.length && !isWeightsSubject()">
             <div class="rr-tablewrap">
-              <table class="rr-table" style="min-width:44rem">
+              <table class="rr-table" style="min-width:36rem">
                 <thead>
-                  <tr><th scope="col">Session</th><th scope="col">Consensus</th><th scope="col">Outcome</th><th scope="col">Actions</th></tr>
+                  <tr><th scope="col">Session</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
                 </thead>
                 <tbody>
                   <template x-for="row in sessions" :key="row.id">
@@ -434,17 +432,21 @@
                         </template>
                         <template x-if="!lean(row)"><span>—</span></template>
                       </td>
-                      <td class="rr-outcome">
-                        <template x-if="!recommendation(row)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
-                        <template x-if="recommendation(row) && rowOutcome(row)"><span x-text="rowOutcome(row)"></span></template>
-                        <template x-if="recommendation(row) && !rowOutcome(row)"><span>—</span></template>
-                      </td>
+                      <!-- What moved, then how many positions it held: the moves are
+                           what a reader scans a history for. -->
                       <td class="rr-rowacts">
+                        <template x-if="!recommendation(row)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
                         <template x-for="a in rowActions(row)" :key="`${a.token}-${a.action}`">
                           <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
                         </template>
+                        <template x-if="rowHeld(row).length && rowActions(row).length">
+                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`· ${rowHeld(row).length} held`"></span>
+                        </template>
+                        <template x-if="rowHeld(row).length && !rowActions(row).length">
+                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`All ${rowHeld(row).length} held`"></span>
+                        </template>
                         <template x-if="recommendation(row)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(row).text"></span></template>
-                        <template x-if="recommendation(row) && !rowActions(row).length && recommendation(row).kind !== 'text'"><span class="rr-note" style="margin:0">Holds every position</span></template>
+                        <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span>—</span></template>
                       </td>
                     </tr>
                   </template>
