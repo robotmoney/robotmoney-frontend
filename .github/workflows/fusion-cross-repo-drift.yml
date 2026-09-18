@@ -32,7 +32,7 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*"]
+    branches: [main, "releases-*", "fusion/**"]
     tags: ["v*"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and

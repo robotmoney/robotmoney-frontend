@@ -144,7 +144,7 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main, "releases-*"]
+    branches: [main, "releases-*", "fusion/**"]
     paths-ignore: ['**.md', '**.txt']
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
