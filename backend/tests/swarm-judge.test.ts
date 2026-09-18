@@ -1572,6 +1572,34 @@ test("the model is selected by the config row, and a missing credential fails cl
   expect(transport?.model).toBe("vendor/m");
 });
 
+// REGRESSION: judgeSessionAdmin() used to rebuild its failure return via
+// `err(result.status, result.error)`, a two-field object, which silently
+// dropped `judgeUnavailableReason` — the ONE field that says WHICH fail-closed
+// class this is (credit_exhausted / credential_rejected / model_not_supported
+// / credential_unconfigured / ...). Every caller downstream of the admin
+// layer — the worker-swarm cron path's qualifyJudgeUnavailable(), job_runs's
+// last_error, and the console — had nothing left to qualify, so a real staging
+// failure (2026-09-18) logged the bare word "judge_unavailable" with the
+// actual cause unrecoverable once the session/job was gone. The test above
+// pins this at judge-session.ts's own layer; this one pins it one layer up, at
+// the boundary every real caller actually goes through.
+test("judgeSessionAdmin() preserves judgeUnavailableReason on a fail-closed refusal", async () => {
+  const { session } = await aggregatedSession("judge-admin-reason-passthrough");
+  await setJudgeConfig({ mode: "shadow", model: "vendor/some-judge" });
+
+  const savedKey = process.env.OPENCODE_API_KEY;
+  delete process.env.OPENCODE_API_KEY;
+  try {
+    const result = await admin.judgeSessionAdmin(session.id, undefined) as any;
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(503);
+    expect(result.error).toBe("judge_unavailable");
+    expect(result.judgeUnavailableReason).toBe("credential_unconfigured");
+  } finally {
+    if (savedKey !== undefined) process.env.OPENCODE_API_KEY = savedKey;
+  }
+});
+
 // ISSUE #969, PROBED AGAINST THE LIVE VENDOR 2026-09-13. `swarm_judge_config.model`
 // is posted VERBATIM as the OpenAI-compatible `model` field, which is NOT the
 // `provider/model` selector resolveAgentModel() yields for the opencode CLI:
