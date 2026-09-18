@@ -364,7 +364,10 @@ describe("member-agent container primitive", () => {
   test("FUNDED: the argv is byte-for-byte what the eval spawns, with exactly one -e credential", () => {
     expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED })).toEqual([
       "docker",
-      "compose", "-p", "rm_smoke_stack_abc",
+      // `--env-file /dev/null` rides along because this argv is built by
+      // composeArgs(): a container-creating call must not interpolate from the
+      // checkout's own `.env` (scripts/stack/config.ts).
+      "compose", "--env-file", "/dev/null", "-p", "rm_smoke_stack_abc",
       "-f", "docker-compose.yml",
       "-f", "docker-compose.smoke.yml",
       "run",

@@ -140,7 +140,11 @@ function renderComposeConfig(
 ): string {
   const r = Bun.spawnSync(
     [
-      "docker", "compose",
+      // Same `--env-file /dev/null` the stack's own composeArgs() passes, so this
+      // dump is the config a boot actually gets — not one coloured by whatever
+      // `.env` the checkout this suite runs in happens to carry (a staging
+      // checkout carries the deployment's).
+      "docker", "compose", "--env-file", "/dev/null",
       ...profiles.flatMap((profile) => ["--profile", profile]),
       ...composeFiles.flatMap((file) => ["-f", file]),
       "config", "--format", "json",
