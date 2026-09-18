@@ -223,9 +223,11 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.",
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
     backs: ["/swarm"],
     params: [
+      { name: "subject", in: "query", description: "One subject's sessions, filtered before the page is cut. Cannot be combined with full=1.", example: "robotmoney-allocation" },
+      { name: "search", in: "query", description: "Case-insensitive literal phrase matched against the date, the recommendation's rationale and the synthesis; at most 200 characters. Cannot be combined with full=1." },
       { name: "state", in: "query", description: "Filter by lifecycle state, for example published.", example: "published" },
       { name: "limit", in: "query", description: "Page size.", example: "20" },
       { name: "cursor", in: "query", description: "Opaque cursor from the previous response's nextCursor." },
