@@ -258,12 +258,14 @@ bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --
 
 `smoke:capture` writes into `$RM_BACKUP_DIR` (the same variable restore-check
 and the rehearsal read). Gate C restores the dump into a container-superuser
-database and grades the schema; it cannot grade roles or credentials — the
+database and grades the schema; it does not grade roles or credentials — the
 smoke-twin carries only `rm_readonly`/`rm_worker` out of the globals dump
-(`scripts/lib/restore-container.ts`'s `RESTORE_ROLES`), and the twin would
-migrate as superuser regardless. Role/credential readiness is gated by the
-`role-readiness` preflight record against the **live** target (§4.4), never
-by the twin.
+(`scripts/lib/restore-container.ts`'s `RESTORE_ROLES`). **Deployed**
+credential readiness is gated by the `role-readiness` preflight record
+against the **live** target (§4.4), never by the twin. The §5 rehearsal does
+now exercise the migration under a non-superuser bootstrap login (see §5) —
+that covers the migration SQL's privilege requirements, not which URLs the
+cutover host has installed.
 
 **4.3 — Baseline.** Before deployment, record a read-only baseline beside the dump. At minimum,
 capture the full `schema_migrations` set, counts for `swarm_sessions`,
@@ -335,7 +337,7 @@ for production. The release-specific rehearsal restores the backup into a
 local smoke-twin, boots the real stack (which applies whatever the restored
 dump leaves pending — `0049`-`0061`, since the dump carries `0045`-`0048`
 — via `migrate.ts` on the way up), runs the frontend checks, and runs the
-0.5.0 postflight — and the §5 criterion 9 allocation comparison — before
+0.5.0 postflight — and the §5 criterion 10 allocation comparison — before
 teardown:
 
 ```bash
@@ -344,14 +346,27 @@ bun install --force --cwd backend
 bun backend/scripts/upgrades/0.4.0-to-0.5.0/stage-rehearsal.ts "$RM_BACKUP_DIR" --emit-receipt
 ```
 
-The smoke-twin is a container-superuser database (`rollout-procedure.md`
-G7/T1): its restore carries only `rm_readonly` and `rm_worker` out of the
-globals dump, and its boot applies the migrations with privileges no
-production runtime role has. The rehearsal therefore validates the migration
-SQL and the application's behavior — **not** the role/credential cutover.
-Role and credential readiness is gated by the `role-readiness` preflight
-record against the **live** target (§4.4); a green rehearsal is never
-evidence for it.
+The smoke-twin restores into a container-superuser database
+(`rollout-procedure.md` G7/T1), carrying only `rm_readonly` and `rm_worker`
+out of the globals dump. **Its migration run, however, is no longer a
+superuser's.** The rehearsal sets `RM_TWIN_PRODUCTION_PRIVILEGES=1`, which
+reshapes the restored twin so a non-superuser bootstrap login — the
+attributes of the production primary's `doadmin`: `rolsuper=false` with
+CREATEROLE/CREATEDB/BYPASSRLS/REPLICATION — owns `public` and everything in
+it, then points `MIGRATE_DATABASE_URL` at that login
+(`shapeTwinToProductionPrivileges()` in `scripts/lib/restore-container.ts`).
+
+This was added because the previous arrangement could not see an ownership or
+grant defect at all: `0053` reached this runbook with three, each of which
+failed immediately under a real bootstrap login and passed silently under a
+superuser. So a green rehearsal **is** now evidence that the migrations apply
+under production's privilege model.
+
+It remains **not** evidence for the credential cutover itself — that the
+cutover host's `DATABASE_URL` names `rm_app`, that `WORKER_DATABASE_URL`
+names `rm_worker`, that a real bootstrap login holds `rm_owner`. Those are
+deployed-environment facts no twin can observe; they are gated by the
+`role-readiness` preflight record against the **live** target (§4.4).
 
 The rehearsal is a pass only when all of the following are true:
 
@@ -372,16 +387,22 @@ The rehearsal is a pass only when all of the following are true:
 7. Zero `swarm_sessions` rows still show a `subject_name` that disagrees with
    their subject's current name.
 8. `swarm_judge_config.third_party_enabled` is `false`.
-9. The closed-day allocation total computed from the rehearsed stack's new
-   `asset_prices` join matches, within rounding, the same day computed from
-   the pre-migration fused read. `stage-rehearsal.ts` now computes BOTH
-   sides inside the migrated twin (0046 leaves the fused `price_usd` /
-   `value_usd` columns in place) for the most recent closed day
-   `asset_prices` covers, allowing one cent per symbol, and fails the
-   rehearsal on any divergence — this is the one check that catches a bad
-   `asset_prices` seed or a broken join, which no structural FAIL/PASS
-   check can see. The §4.3 baseline totals remain a separate operator
-   cross-check against the live cutover (§7).
+9. The boot's migration run authenticated as the non-superuser bootstrap
+   login, not as the twin's superuser. The boot log names it
+   (`twin reshaped to production privileges: rm_twin_bootstrap (NOT
+   superuser) owns N public table(s)`); its absence means the rehearsal fell
+   back to a superuser migration and criterion 10 below is the only thing
+   that still distinguishes this run from the old, privilege-blind one.
+10. The closed-day allocation total computed from the rehearsed stack's new
+    `asset_prices` join matches, within rounding, the same day computed from
+    the pre-migration fused read. `stage-rehearsal.ts` now computes BOTH
+    sides inside the migrated twin (0046 leaves the fused `price_usd` /
+    `value_usd` columns in place) for the most recent closed day
+    `asset_prices` covers, allowing one cent per symbol, and fails the
+    rehearsal on any divergence — this is the one check that catches a bad
+    `asset_prices` seed or a broken join, which no structural FAIL/PASS
+    check can see. The §4.3 baseline totals remain a separate operator
+    cross-check against the live cutover (§7).
 
 Rehearse rollback by checking out `v0.4.0`, running both forced installs, and
 booting it against a **fresh** restored copy (the pre-migration dump, not the
@@ -394,7 +415,7 @@ route-check output, baseline comparison, and operator go/no-go sign-off.
 
 ### 5.1 Cut the RC tag
 
-Only once every §5 criterion (1-9) has passed, the rollback rehearsal is
+Only once every §5 criterion (1-10) has passed, the rollback rehearsal is
 recorded, and the stage report carries the operator's go sign-off. A rejected
 stage pass returns to §4/§5 on a fixed commit and consumes no rc number,
 because nothing has been tagged yet to increment:

@@ -229,7 +229,18 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     const { CI: _ci, ...envWithoutCi } = process.env as Record<string, string | undefined>;
     bootProc = Bun.spawn(args, {
       cwd: repoRoot,
-      env: { ...envWithoutCi, SMOKE_PROJECT: project, OPENCODE_API_KEY: zen.key },
+      env: {
+        ...envWithoutCi,
+        SMOKE_PROJECT: project,
+        OPENCODE_API_KEY: zen.key,
+        // A REHEARSAL migrates the way a cutover does: as a non-superuser
+        // bootstrap login, not as the twin container's superuser. Without this
+        // the boot bypasses every ACL check a production migration faces, and
+        // the rehearsal cannot see an ownership or grant defect — which is how
+        // 0053 reached a production runbook with three of them. See
+        // shapeTwinToProductionPrivileges() in restore-container.ts.
+        RM_TWIN_PRODUCTION_PRIVILEGES: "1",
+      },
       stdout: "inherit",
       stderr: "inherit",
       stdin: "ignore",

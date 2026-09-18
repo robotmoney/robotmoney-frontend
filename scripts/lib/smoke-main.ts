@@ -5,6 +5,8 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
@@ -276,6 +278,9 @@ const DB_USER = database.user;
 const DB_PASSWORD = database.password;
 const DB_NAME = database.name;
 const databaseUrl = internalDatabaseUrl(database);
+
+// Sets MIGRATE_DATABASE_URL for a rehearsal boot only; see restore-container.ts.
+if (dataPath.kind === "smoke-twin") twinMigrationCredential(dataPath.url, (m) => console.log(`[smoke] ${m}`));
 // Base compose files (what smoke:down/smoke:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
@@ -379,48 +384,6 @@ delete process.env.ANALYTICS_TOKEN;
 // Data-path resolution (issue #147: DEMO_HERMETIC and the stubbed/offline path
 // were removed entirely — every boot, local or CI, is production parity: live
 // Base mainnet RPC + live analytics + floor seed).
-// Compose interpolation values the DEMO honours from the operator's own
-// environment, passed to the shared stack explicitly via `extraComposeEnv`.
-//
-// Why an allowlist and not `...process.env`: scripts/stack deliberately does not
-// inherit the ambient environment (§11.3 E1 — that is what keeps a provider key
-// out of a container). But the DEMO is an operator tool, and these knobs are
-// documented and load-bearing for it: exporting SWARM_WINDOW_MINUTES=5 or a
-// custom BASE_RPC_URL before `bun run smoke` works today, and silently ignoring
-// it after the bring-up moved onto the shared module would be a behaviour
-// regression that is miserable to debug. Every name here is interpolated by
-// docker-compose.yml / docker-compose.smoke.yml and each already carries a
-// `:-default` there, so an unset value behaves exactly as before. Values
-// buildComposeEnv() owns (ports, credentials, DATABASE_URL, POSTGRES_*,
-// DEMO_PROJECT) are deliberately NOT listed: the stack config is their single
-// source and an exported value must never shadow it.
-const DEMO_COMPOSE_PASSTHROUGH = [
-  "BASE_RPC_URL",
-  "SWARM_AGGREGATE_CRON",
-  "SWARM_CLOSE_WINDOW_CRON",
-  "SWARM_NOTIFICATION_EMAIL_FROM",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
-  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL",
-  "SWARM_OPEN_SESSION_CRON",
-  "SWARM_PUBLISH_BRIEF_CRON",
-  "SWARM_PUBLISH_CRON",
-  "SWARM_SCHEDULES_ENABLED",
-  "SWARM_WINDOW_MINUTES",
-  "FETCH_CACHE_DIR",
-  "FLOOR_SEED_PATH",
-  "PROJECTS_SOURCE",
-  "RM_ENV",
-  "WORKER_DATABASE_URL",
-] as const;
-
-function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of DEMO_COMPOSE_PASSTHROUGH) {
-    const v = env[k];
-    if (v !== undefined && v !== "") out[k] = v;
-  }
-  return out;
-}
 
 // Env shared by every `docker compose` call — pins the project, selects the
 // smoke override, resolves the data path, and sets credentials. NO host ports:
