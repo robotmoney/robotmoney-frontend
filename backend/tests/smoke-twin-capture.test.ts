@@ -6,7 +6,7 @@
 //   - writing a copy of production plus its passphrase into the git checkout;
 //   - dumping from the PRIMARY instead of the read-only replica;
 //   - starting a long dump with a client too old to finish it.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { assertOutsideRepo, clientVersionComplaint, majorOf, parseArgs } from "../scripts/smoke-twin-capture.ts";
 
 describe("parseArgs", () => {
@@ -33,6 +33,39 @@ describe("parseArgs", () => {
 
   test("an unknown flag is rejected", () => {
     expect(parseArgs(["--dump-everything"])).toEqual({ error: 'unknown flag "--dump-everything".' });
+  });
+
+  describe("RM_BACKUP_DIR — the runbook exports it and restore-check reads it, so capture must too", () => {
+    const PREV = process.env.RM_BACKUP_DIR;
+    const PREV_HOME = process.env.HOME;
+
+    afterEach(() => {
+      if (PREV === undefined) delete process.env.RM_BACKUP_DIR;
+      else process.env.RM_BACKUP_DIR = PREV;
+      if (PREV_HOME === undefined) delete process.env.HOME;
+      else process.env.HOME = PREV_HOME;
+    });
+
+    test("RM_BACKUP_DIR becomes the default output dir when --out is absent", () => {
+      process.env.RM_BACKUP_DIR = "/srv/rm-backup-v042";
+      const a = parseArgs([]);
+      if ("error" in a) throw new Error(a.error);
+      expect(a.out).toBe("/srv/rm-backup-v042");
+    });
+
+    test("--out still wins over an exported RM_BACKUP_DIR", () => {
+      process.env.RM_BACKUP_DIR = "/srv/rm-backup-v042";
+      const a = parseArgs(["--out", "/srv/explicit"]);
+      if ("error" in a) throw new Error(a.error);
+      expect(a.out).toBe("/srv/explicit");
+    });
+
+    test("an empty RM_BACKUP_DIR falls back to the home default", () => {
+      process.env.RM_BACKUP_DIR = "   ";
+      const a = parseArgs([]);
+      if ("error" in a) throw new Error(a.error);
+      expect(a.out).toMatch(/rm-backup-v022$/);
+    });
   });
 });
 
