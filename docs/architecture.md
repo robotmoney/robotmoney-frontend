@@ -1509,7 +1509,16 @@ CREDENTIAL rather than the model is the problem: an unfunded workspace, i.e. a
 wrong key, i.e. a `401`/`403` that does not complain about the model
 (`credential_rejected`), and an id this endpoint does not serve, e.g. the
 `opencode/`-prefixed selector Zen answers with `401 ModelError`
-(`model_not_supported`), and a model id THIS ENVIRONMENT MAY NOT USE
+(`model_not_supported`), **the RAIL that carries the call rather than the model
+or the key** (`launcher_unavailable`, issue #1012) — the `agent-launcher`
+service was unreachable, answered non-2xx or unreadably, or reported that the
+judge container never launched, hung past its ceiling, or exited without one
+well-formed answer line; it is its own reason because its operator fix is
+neither "re-issue the key" nor "wait for the vendor" but "look at the one
+service in the stack that holds the Docker socket", and folding it into the
+deterministic-fallback path would make a stack whose launcher is down publish
+template prose on a signed receipt for every session — and a model id THIS
+ENVIRONMENT MAY NOT USE
 (`model_disallowed`) — the free family anywhere, or anything but the pinned
 acceptance model on an acceptance path (AC-MODEL-01,
 `backend/src/swarm/judge-model-policy.ts`). That last one is asserted at the

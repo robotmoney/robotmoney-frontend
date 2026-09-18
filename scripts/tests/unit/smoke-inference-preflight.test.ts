@@ -100,13 +100,33 @@ describe("the standing stack refuses to boot rather than produce nothing", () =>
   });
 });
 
-describe("a NON-standing boot is left exactly as it was", () => {
-  test("no credential is resolved, no env is touched, and AGENT_MODEL=free still runs", () => {
+describe("a NON-standing boot keeps its escape hatches, and delivers a key it was given", () => {
+  test("no credential is RESOLVED, no env is touched, and AGENT_MODEL=free still runs", () => {
     const env: Record<string, string | undefined> = { AGENT_MODEL: "free", CI: "1" };
     const composeEnv = preflightInference({ standingStack: false, repoRoot: root, env, log: () => {} });
     expect(composeEnv).toEqual({});
     expect(env[ZEN_KEY_ENV]).toBeUndefined();
-    // The local `bun run smoke` keeps every escape hatch D22-as-amended left open.
+    // The local `bun run smoke` keeps every escape hatch D22-as-amended left open:
+    // nothing is read from `.env`/`.env.readonly` for a boot that is not staging.
+  });
+
+  test("a key ALREADY in the process environment is forwarded to the containers (#1012)", () => {
+    // The defect this closes: CI sets OPENCODE_API_KEY as a job environment
+    // variable, DOCKER_CLIENT_ENV_ALLOWLIST drops it on the way to the
+    // containers, and every judged session recorded
+    // `judge_unavailable:credential_unconfigured` on a credential that WAS
+    // supplied — with the e2e gate red on it. `extraComposeEnv` is the one
+    // channel buildComposeEnv() emits, so the FRAGMENT is what has to carry it.
+    const env: Record<string, string | undefined> = { CI: "1", [ZEN_KEY_ENV]: "sk-from-the-job-env" };
+    const composeEnv = preflightInference({ standingStack: false, repoRoot: root, env, log: () => {} });
+    expect(composeEnv).toEqual({ [ZEN_KEY_ENV]: "sk-from-the-job-env" });
+  });
+
+  test("a blank or whitespace key is NOT forwarded — an empty value is not a credential", () => {
+    for (const blank of ["", "   "]) {
+      const env: Record<string, string | undefined> = { CI: "1", [ZEN_KEY_ENV]: blank };
+      expect(preflightInference({ standingStack: false, repoRoot: root, env, log: () => {} })).toEqual({});
+    }
   });
 });
 

@@ -41,7 +41,17 @@ export type StackProfile = "core" | "full";
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
 export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
-export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
+// The one service that holds the Docker socket (issue #1012). It belongs to
+// `full` and NOT to `core` for the same reason the worker lanes do: `core` is
+// postgres + api + the static origin, which never judges a session and so never
+// needs a container started on its behalf. A `full` stack DOES judge, and a
+// judge with no launcher fails closed with `launcher_unavailable` on every
+// session — so leaving it out of this list would make the stack's own judging
+// permanently broken rather than merely unconfigured.
+export const LAUNCHER_SERVICES = ["agent-launcher"] as const;
+export const FULL_SERVICES = [
+  ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
+] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),

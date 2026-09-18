@@ -31,6 +31,7 @@ import {
   migrateArgs,
   MEMBER_AGENT_SERVICE,
   pgReadyArgs,
+  LAUNCHER_SERVICES,
   servicesFor,
   upArgs,
   WORKER_LANE_SERVICES,
@@ -57,15 +58,24 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
 }
 
 describe("stack profiles", () => {
-  test("core is exactly postgres + api + website-server — no worker lane, no member-agent", () => {
+  test("core is exactly postgres + api + website-server — no worker lane, no member-agent, no launcher", () => {
     expect(servicesFor("core")).toEqual(["postgres", "api", "website-server"]);
     for (const lane of WORKER_LANE_SERVICES) expect(servicesFor("core")).not.toContain(lane);
     expect(servicesFor("core")).not.toContain("member-agent");
+    // Issue #1012: `core` never judges, so it never needs the one service that
+    // holds the Docker socket. Letting the socket into the cheapest profile
+    // would put it on every bring-up that only wanted an api.
+    for (const svc of LAUNCHER_SERVICES) expect(servicesFor("core")).not.toContain(svc);
   });
 
-  test("full is core plus worker lanes and the independent producer, in order", () => {
-    expect(servicesFor("full")).toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES]);
+  test("full is core plus worker lanes, the independent producer and the agent launcher, in order", () => {
+    expect(servicesFor("full")).toEqual([
+      ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
+    ]);
     expect(servicesFor("full")).not.toContain("member-agent");
+    // A `full` stack judges, and every judging starts a container through this
+    // service — so it must be RUNNING, not merely built (issue #1012).
+    expect(servicesFor("full")).toContain("agent-launcher");
   });
 
   test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {
