@@ -98,13 +98,19 @@ export const CI_IDENTITY_VARS = [
 //   eval           — the local real-inference onboarding eval (onboarding-eval-local.ts)
 //   eval-swarm — the local real-inference swarm-authoring eval (swarm-eval-local.ts)
 //   infra          — the inference-off rails check (onboarding-eval-infra.test.ts)
+//   judge-launch   — the judge container rail check (issue #1012,
+//                    judge-container-launch.test.ts). Its OWN role, not `infra`:
+//                    both files are Docker-backed checks that run as Bun test
+//                    files in the same job, and sharing a project name would let
+//                    one's stack.down() tear down the other's containers mid-run
+//                    — the same collision `eval-swarm` exists to avoid.
 //   pgtest         — the backend suite's ephemeral postgres (backend/tests/preload.ts)
 //   smoke-twin           — a STANDALONE restored production copy (restore-check.ts).
 //                    A smoke-twin booted as part of a smoke (`--db smoke-twin`) carries that
 //                    smoke's project instead, so smoke:down / smoke:clean scope to
 //                    it like any other container the boot created; this role is
 //                    only for a smoke-twin that belongs to no stack.
-export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest" | "smoke-twin";
+export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "judge-launch" | "pgtest" | "smoke-twin";
 
 export interface StackEnvironment {
   /** Which kind of environment started this stack. */

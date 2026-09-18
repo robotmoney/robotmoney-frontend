@@ -23,7 +23,11 @@
 //      model. And the three refusals where the call WAS made but the account or
 //      the id, not the model, is what failed — an unfunded workspace
 //      (`credit_exhausted`), a rejected key (`credential_rejected`), and an id
-//      this endpoint does not serve (`model_not_supported`). See
+//      this endpoint does not serve (`model_not_supported`). And the one that is
+//      neither the model nor the credential but the RAIL that carries the call —
+//      the agent-launcher service could not be reached, refused the request, or
+//      could not get a judge container to produce a well-formed answer
+//      (`launcher_unavailable`, issue #1012). See
 //      judgeTransportGap(): a 402 answered with template prose is an exhausted
 //      account manufacturing a signed receipt that looks exactly like a
 //      legitimate AC-FE-05 outage fallback, which is the one conflation the QA
@@ -846,6 +850,15 @@ function readCompletion(value: string | JudgeCompletion): { text: string; usage:
 }
 
 export const DEFAULT_JUDGE_BASE_URL = "https://opencode.ai/zen/v1";
+// Re-exported, not redefined (issue #1012), for the same reason
+// DEFAULT_JUDGE_TIMEOUT_MS is: the launcher SERVICE and the compose-topology
+// test are the contract's two other readers and neither may import this
+// module's database wiring. Every caller of this file keeps the same import.
+import {
+  DEFAULT_JUDGE_LAUNCHER_URL, JUDGE_LAUNCH_PATH, type JudgeLaunchAnswer,
+} from "./judge-launcher.ts";
+export { DEFAULT_JUDGE_LAUNCHER_URL, JUDGE_LAUNCH_PATH, type JudgeLaunchAnswer };
+export { JUDGE_LAUNCHER_HEALTH_PATH, JUDGE_LAUNCHER_PORT } from "./judge-launcher.ts";
 // Re-exported, not redefined: the constant lives in the leaf judge-budget.ts so
 // the smoke driver can derive its judge ceiling from it without importing this
 // module's database wiring. Every caller of this file keeps the same import.
@@ -897,6 +910,36 @@ export class JudgeTransportError extends Error {
   }
 }
 
+/**
+ * THE RAIL FAILED, NOT THE MODEL AND NOT THE CREDENTIAL (issue #1012).
+ *
+ * Since the judge stopped calling Zen in-process and started asking the
+ * `agent-launcher` service to run one short-lived judge container per call
+ * (the SAME rail a member agent rides — scripts/agent/judge-agent.ts on top of
+ * runMemberAgent()), a third thing can fail that neither of the two existing
+ * classes describes: the launcher itself. It was unreachable, it answered
+ * non-2xx, it answered with a body this cannot read, or it reported that the
+ * container never launched / hung / exited without one well-formed line.
+ *
+ * It is its OWN reason rather than either neighbour because the operator fix is
+ * different from both: `credential_rejected` says re-issue the key,
+ * `model_unavailable:` says wait for the vendor, and `launcher_unavailable`
+ * says look at the one service in the stack that holds the Docker socket.
+ * Folding it into `model_unavailable:` (the deterministic-fallback path) would
+ * be worse still: a stack whose launcher is down would publish template prose
+ * on a signed receipt for every session, which is exactly the D-A7 forgery this
+ * file exists to make impossible.
+ */
+export class JudgeLauncherError extends Error {
+  readonly detail: string;
+  constructor(detail: string) {
+    const bounded = boundedReason(detail);
+    super(`judge launcher failed${bounded ? `: ${bounded}` : ""}`);
+    this.name = "JudgeLauncherError";
+    this.detail = bounded;
+  }
+}
+
 /** Credit/quota wording, from any status. An exhausted workspace, not an outage. */
 const CREDIT_BODY = /insufficient|credit|balance|quota|billing|payment_required|payment required/i;
 /** "this endpoint does not serve that model id" — the `opencode/` prefix case. */
@@ -919,6 +962,12 @@ const UNSUPPORTED_MODEL_BODY = /not supported|modelerror|unknown model|model_not
  *   `credential_rejected`  — 401/403 with no model complaint in the body. A
  *                            revoked, wrong or truncated key. An operator fix,
  *                            not a retryable blip.
+ *   `launcher_unavailable` — the agent-launcher rail (issue #1012), not the
+ *                            model and not the key. Checked FIRST, and never
+ *                            re-derived from a status, because a launcher
+ *                            failure carries no model verdict at all: reading
+ *                            one out of it would report a vendor or an account
+ *                            problem the vendor was never asked about.
  *   `model_not_supported`  — a body that names the model rather than the
  *                            credential. Zen answers `opencode/deepseek-v4-flash`
  *                            (the prefixed selector) with 401 + `ModelError`,
@@ -933,7 +982,8 @@ const UNSUPPORTED_MODEL_BODY = /not supported|modelerror|unknown model|model_not
  */
 export function judgeTransportGap(
   err: unknown,
-): "credit_exhausted" | "credential_rejected" | "model_not_supported" | null {
+): "credit_exhausted" | "credential_rejected" | "model_not_supported" | "launcher_unavailable" | null {
+  if (err instanceof JudgeLauncherError) return "launcher_unavailable";
   if (!(err instanceof JudgeTransportError)) return null;
   const body = err.bodyLabel;
   if (err.status === 402 || CREDIT_BODY.test(body)) return "credit_exhausted";
@@ -976,39 +1026,71 @@ export function resolveJudgeTransport(
     }
   }
   if (!apiKey || !selected) return null;
-  const baseUrl = (env.SWARM_JUDGE_BASE_URL ?? "").trim() || DEFAULT_JUDGE_BASE_URL;
+  const launcherUrl = ((env.SWARM_AGENT_LAUNCHER_URL ?? "").trim() || DEFAULT_JUDGE_LAUNCHER_URL).replace(/\/+$/, "");
   return {
     model: selected,
     async complete(prompt: string, signal: AbortSignal): Promise<JudgeCompletion> {
-      const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: selected,
-          temperature: 0,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) {
-        // The BODY is what separates "no credit" from "bad key" from "that id
-        // is not served here" — three operator fixes the status alone cannot
-        // tell apart. Read defensively: a body that cannot be read is simply
-        // absent, and the status still classifies.
-        let bodyLabel = "";
-        try {
-          bodyLabel = (await res.text()).slice(0, 400);
-        } catch {
-          bodyLabel = "";
-        }
-        throw new JudgeTransportError(res.status, bodyLabel);
+      // The container's own ceiling. judge()'s AbortSignal is the backstop, not
+      // the mechanism: the launcher bounds the container BELOW this so a hung
+      // container comes back as `launcher_unavailable` rather than racing the
+      // host's abort into `model_timeout`. A malformed SWARM_JUDGE_TIMEOUT_MS
+      // never reaches here (judge() fails closed on it first), so the catch is
+      // a belt, not a policy.
+      let timeoutMs: number;
+      try {
+        timeoutMs = resolveJudgeTimeoutMs(env);
+      } catch {
+        timeoutMs = resolveJudgeTimeoutMs({});
       }
-      const body = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
-      const content = body?.choices?.[0]?.message?.content;
-      if (typeof content !== "string") throw new Error("judge model returned no assistant text");
-      // R19: the spend travels WITH the text, so the judgement row can record
-      // what this opinion cost without a second call to anyone.
-      return { text: content, usage: parseJudgeUsage(body) };
+      let res: Response;
+      try {
+        res = await fetch(`${launcherUrl}${JUDGE_LAUNCH_PATH}`, {
+          method: "POST",
+          signal,
+          headers: { "content-type": "application/json" },
+          // THE CREDENTIAL IS NOT IN THIS BODY. The launcher holds its own copy
+          // of OPENCODE_API_KEY and injects it into the container it starts, the
+          // same single explicit `-e` a member agent gets. A judge key crossing
+          // this hop per request would put it in an internal request log.
+          body: JSON.stringify({ model: selected, prompt, timeoutMs }),
+        });
+      } catch (err) {
+        // An abort is the CALLER's timeout, not a launcher fault — judge()
+        // reads `signal.aborted` and records `model_timeout`. Rethrow it
+        // untouched so that classification still works.
+        if (signal.aborted) throw err;
+        throw new JudgeLauncherError(`launcher unreachable: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.text()).slice(0, 400); } catch { detail = ""; }
+        throw new JudgeLauncherError(`launcher responded ${res.status}${detail ? `: ${detail}` : ""}`);
+      }
+      let answer: JudgeLaunchAnswer;
+      try {
+        answer = (await res.json()) as JudgeLaunchAnswer;
+      } catch {
+        throw new JudgeLauncherError("launcher answer was not JSON");
+      }
+      if (answer?.ok === true) {
+        if (typeof answer.text !== "string") throw new JudgeLauncherError("launcher answer carried no text");
+        // R19: the spend travels WITH the text. The container hands the
+        // provider's own usage object back UNPARSED — parseJudgeUsage() stays
+        // here, host-side, so the one reader of a provider's cost report is
+        // still the one file that documents how it reads it.
+        return { text: answer.text, usage: parseJudgeUsage(answer.providerUsage) };
+      }
+      if (answer?.kind === "model_status") {
+        // The MODEL refused, and the container faithfully relayed the status and
+        // the bounded body. This is the SAME typed error the in-process fetch
+        // used to throw, so judgeTransportGap()'s credit / credential /
+        // unsupported-id taxonomy is unchanged by the move into a container.
+        const status = Number(answer.status);
+        throw new JudgeTransportError(Number.isFinite(status) ? status : 0, String(answer.body ?? ""));
+      }
+      throw new JudgeLauncherError(
+        typeof answer?.detail === "string" && answer.detail ? answer.detail : "launcher answer had no recognised shape",
+      );
     },
   };
 }
