@@ -203,6 +203,11 @@ export function camelTake(raw) {
     // archive is v0 content by definition.
     archival: raw.archival === true,
     receivedAt: raw.receivedAt || raw.received_at || raw.generated_at || raw.generatedAt,
+    // The member's proposed sleeve weights (#963): the public take DTO serves
+    // them normalized, as [{ bucket, weight }]. Null on a take that proposed
+    // none and on the shipped archive, whose takes predate the field; the
+    // take card's "Proposed weights" panel renders only when they are here.
+    weights: Array.isArray(raw.weights) ? raw.weights : null,
   };
 }
 

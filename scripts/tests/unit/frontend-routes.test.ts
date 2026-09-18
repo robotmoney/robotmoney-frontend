@@ -531,6 +531,16 @@ describe("frontend route resolution", () => {
     expect(takeHref(withRealId)).toBe("/swarm/takes/take-9f2c1e0a");
   });
 
+  // #963: the public take DTO serves each take's proposed weights. camelTake
+  // dropped every field it did not name, so the session page's "Proposed
+  // weights" panel never rendered against the live API.
+  test("camelTake keeps a take's proposed weights, and reads none as null", () => {
+    const weights = [{ bucket: "conservative_defi_yield", weight: 0.93 }, { bucket: "agent_tokens", weight: 0.07 }];
+    expect(camelTake({ id: "t1", member_id: "athena", stance: "cautious", confidence: 0.7, weights }).weights).toEqual(weights);
+    expect(camelTake({ id: "t2", member_id: "athena", stance: "cautious", confidence: 0.7, weights: null }).weights).toBeNull();
+    expect(camelTake({ member_id: "athena", stance: "cautious", confidence: 0.7 }).weights).toBeNull();
+  });
+
   // The member profile page (/swarm/members/:id) builds its rows from two
   // sources — the member-takes endpoint (loadRows) and, on failure, a scan of
   // the sessions index (scanSessions) which also serves the archive. Both
