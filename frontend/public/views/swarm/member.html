@@ -33,9 +33,12 @@
           </div>
         </header>
 
-        <!-- The record in figures, then who runs it and since when. Each figure
-             explains itself on demand. -->
+        <!-- Whether it holds a seat now and since when, then the record in
+             figures, then who runs it. Each figure explains itself on demand. -->
         <div class="rr-meta">
+          <template x-if="member.status === 'active'">
+            <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
+          </template>
           <span class="rr-meta__i">Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About takes filed">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every subject.</span></span> <b x-text="recordStats().takes"></b></span>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
@@ -45,9 +48,6 @@
           <template x-if="member.operator">
             <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
           </template>
-          <template x-if="member.status === 'active'">
-            <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
-          </template>
         </div>
 
         <!-- Declared intent, between what is happening now and the evidence,
@@ -55,7 +55,6 @@
         <section class="rr-sec" id="intent" aria-labelledby="intent-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="intent-h">What it looks for</h2>
-            <span class="rr-sec__aside">Declared when the seat was taken</span>
           </div>
           <div class="rr-split rr-split--rule">
             <div>

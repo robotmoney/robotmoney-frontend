@@ -1809,6 +1809,11 @@ a.sv__vfy { text-decoration: none; }
 
 /* The history table. */
 .rr-tablewrap { width: 100%; overflow-x: auto; }
+/* A table with an (i) tip in its header must not scroll on desktop: the bubble
+   is absolutely positioned there, so a scroll container slices it to a sliver
+   (the Role tip on /swarm). Under 700px the bubble is position: fixed and a
+   scroll container no longer clips it, as on the regime dashboard's panels. */
+@media (min-width: 700px) { .rr-tablewrap--tips { overflow: visible; } }
 .rr-table { width: 100%; min-width: 44rem; border-collapse: collapse; text-align: left; }
 .rr-table th, .rr-table td { padding: 0.75rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
 .rr-table thead th { background: var(--color-surface); font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; color: var(--color-text-muted); vertical-align: bottom; }
@@ -2031,7 +2036,8 @@ a.sv__vfy { text-decoration: none; }
 .rr-mixline > span { display: inline-flex; align-items: center; gap: 0.5rem; }
 .rr-mixline i { width: 0.4375rem; height: 0.4375rem; flex: none; }
 .rr-mixline b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
-/* Portfolios: identity, then the latest review, then cadence. */
+/* Portfolios: identity, the latest consensus and recommendation in their own
+   columns (as both history tables set them), then cadence. */
 .rr-ports { min-width: 44rem; }
 .rr-ports tbody th { width: 42%; vertical-align: top; }
 .rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
@@ -2080,7 +2086,7 @@ a.sv__vfy { text-decoration: none; }
   .rr-stack--full tbody td.q { display: block; text-align: left; }
   .rr-ports tbody th { width: auto; }
   /* A bare count reads as noise without its column head; the date stays. */
-  .rr-ports tbody td:nth-of-type(2) { display: none; }
+  .rr-ports tbody td.rr-ports__n { display: none; }
 }
 
 /* A member's page: the mark beside the name, the declared lens and biases. */

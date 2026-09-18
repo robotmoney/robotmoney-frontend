@@ -77,7 +77,7 @@
             <h2 class="rr-sec__h" id="mem-h">Members</h2>
             <span class="rr-sec__aside" x-text="seatsLabel()"></span>
           </div>
-          <div class="rr-tablewrap">
+          <div class="rr-tablewrap rr-tablewrap--tips">
             <table class="rr-table rr-table--compact rr-members">
               <thead>
                 <tr>
@@ -244,7 +244,7 @@
           <div class="rr-tablewrap">
             <table class="rr-table rr-ports rr-stack rr-stack--full">
               <thead>
-                <tr><th scope="col">Portfolio</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest session</th></tr>
+                <tr><th scope="col">Portfolio</th><th scope="col">Consensus</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest session</th></tr>
               </thead>
               <tbody>
                 <template x-for="p in portfolios()" :key="p.id">
@@ -254,12 +254,15 @@
                       <small x-text="[p.operator, p.isFramework ? 'target recipe, no wallets' : walletsLine(p)].filter(Boolean).join(' · ')"></small>
                       <template x-if="blurbOf(p)"><span class="rr-ports__blurb" x-text="blurbOf(p)"></span></template>
                     </th>
+                    <td>
+                      <template x-if="lean(portfolioLatest(p))">
+                        <span class="sv__stance-badge" :style="leanBadgeStyle(portfolioLatest(p))"><i x-show="leanStance(portfolioLatest(p))" :style="leanDotStyle(portfolioLatest(p))"></i><span x-text="leanLabel(portfolioLatest(p))"></span></span>
+                      </template>
+                      <template x-if="!lean(portfolioLatest(p))"><span>—</span></template>
+                    </td>
                     <td class="rr-ports__rec">
                       <template x-if="portfolioLatest(p)">
                         <span class="rr-ports__line">
-                          <template x-if="lean(portfolioLatest(p))">
-                            <span class="sv__stance-badge" :style="leanBadgeStyle(portfolioLatest(p))"><i x-show="leanStance(portfolioLatest(p))" :style="leanDotStyle(portfolioLatest(p))"></i><span x-text="leanLabel(portfolioLatest(p))"></span></span>
-                          </template>
                           <template x-if="mixOf(portfolioLatest(p)).length">
                             <span class="rr-mixline">
                               <template x-for="r in mixOf(portfolioLatest(p))" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b></span></template>
@@ -272,7 +275,7 @@
                         </span>
                       </template>
                     </td>
-                    <td class="q" x-text="p.count"></td>
+                    <td class="q rr-ports__n" x-text="p.count"></td>
                     <td class="q"><template x-if="portfolioLatest(p)"><a class="rr-lnk" :href="sessionHref(portfolioLatest(p))" x-text="formatDate(p.latest)"></a></template></td>
                   </tr>
                 </template>
