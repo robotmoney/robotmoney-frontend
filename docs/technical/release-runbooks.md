@@ -212,6 +212,33 @@ The smoke-twin must use the same release candidate that is planned for productio
 Any failure, warning, or unexpected state change discovered on the smoke-twin is a
 blocking issue.
 
+**The rehearsal must migrate under production's privilege model, not as the
+container's superuser** (added 2026-09-18, after this went wrong). A smoke-twin
+restores with `pg_restore --no-owner --no-privileges` and its container
+superuser holds *more* Postgres privilege than the production primary's
+bootstrap login does — `doadmin` is `rolsuper=false`. A superuser bypasses the
+ACL checks a real cutover faces, so a rehearsal run that way cannot see an
+ownership or grant defect **at all**: it grades the migration's logic while
+silently excusing its permissions.
+
+This is not hypothetical. `0053_database_role_taxonomy.sql` reached a
+production runbook carrying three separate defects — an `ALTER ROLE` clause
+that requires superuser even to set a default, an ownership sweep ordered
+before the schema transfer it depends on, and a sweep that tried to re-own an
+extension's functions. Every one was green in CI and green on the twin, and
+every one failed immediately under a real bootstrap login. The live preflight
+could not have caught them either: it audits role *state* read-only and never
+executes migration SQL.
+
+So a release that touches roles, ownership, or grants must rehearse with
+`RM_TWIN_PRODUCTION_PRIVILEGES=1`, which reshapes the restored twin so a
+non-superuser bootstrap login owns `public` and points `MIGRATE_DATABASE_URL`
+at it. State the general rule plainly, because it outlives this mechanism: **a
+gate that runs with more privilege than production proves less than it appears
+to.** When a check cannot be run at production's privilege level, say so in the
+release runbook rather than letting a green result imply coverage it does not
+have.
+
 The smoke-twin is a named data path, not an assembly:
 
 ```bash

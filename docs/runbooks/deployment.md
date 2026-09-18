@@ -514,6 +514,28 @@ the short-lived migration credential, verify the role probes, then install only
 the `rm_app` and `rm_worker` URLs on the host. Keep the bootstrap credential in
 the DO dashboard or an operator vault.
 
+Three mechanics that are not obvious from the script, and that an operator hits
+in order:
+
+- **The bootstrap login is whichever login runs the script — that is not a
+  free choice made later.** `0053` ends with `GRANT rm_owner TO current_user`,
+  so the login that applies it is the one that ends up holding `rm_owner`
+  membership. `MIGRATE_DATABASE_URL` must name *that same* login afterwards;
+  point it at a different one and `0054`+ fail with permission denied on
+  `SET LOCAL ROLE rm_owner`. On the managed primary this is `doadmin`.
+- **`doadmin` is not a superuser** (`rolsuper=false`, with CREATEROLE,
+  CREATEDB, BYPASSRLS and REPLICATION). Any DDL in a taxonomy migration has to
+  be expressible within that — notably, `ALTER ROLE` cannot set `NOSUPERUSER`,
+  `NOREPLICATION`, or `NOBYPASSRLS` even to their already-default values, and
+  `ALTER ... OWNER TO` requires the *new* owner to already hold CREATE on the
+  schema.
+- **`0053` is applied twice, by design.** The script runs its SQL through
+  `psql`, which does not write `schema_migrations` — `migrate.ts` owns that
+  ledger. So the migration is still *pending* afterwards, and the next boot
+  re-applies (idempotently) and records it. Seeing `0053` in the deploy's
+  migration log is expected; its absence would be the anomaly. Do not
+  hand-edit `schema_migrations` to "fix" it.
+
 ### 4.4 Droplet access — pick a deploy mechanism
 
 - **SSH deploy (simplest).** Generate an SSH keypair; put the public key in the
