@@ -1,6 +1,7 @@
 import * as ic from "../../swarm/domain.ts";
 import * as admin from "../../swarm/admin.ts";
 import { deliverSwarmNotification } from "../../swarm/notifications.ts";
+import { judgeLaneFailureFor } from "../../swarm/receipt-gap.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
   // `payload.date` is deliberately IGNORED (and no longer defaulted from this
@@ -73,7 +74,30 @@ export async function judgeSession(payload: Record<string, unknown>): Promise<un
   // judgeSession(), so this cron path and the HTTP admin route share the one
   // resolution — nothing to add on this side.
   const result = await admin.judgeSessionAdmin(sessionId, undefined, "worker", { force });
-  return translateBenignSkip(result, judgeSkipReason, sessionId);
+  return translateBenignSkip(qualifyJudgeUnavailable(result), judgeSkipReason, sessionId);
+}
+
+/**
+ * CARRY THE REASON INTO `jobs.last_error`.
+ *
+ * `judgeSessionAdmin` reports a fail-closed judging as
+ * `{ error: "judge_unavailable", judgeUnavailableReason: "credit_exhausted" }`
+ * — two fields — but `worker/loop.ts` persists only `error`. So every
+ * fail-closed class in the D-A7 ruling landed in the durable record as the
+ * single word `judge_unavailable`, and the one column an operator (and the
+ * stage rehearsal's fail-fast poll) can read afterwards could not tell an
+ * exhausted account from an unparseable answer. The reason is already computed;
+ * this only stops it being dropped at the seam.
+ *
+ * The `judge_unavailable:` prefix is preserved so nothing that matches on the
+ * old word breaks, and `judgeSkipReason` is unaffected — it tests
+ * `judge_disabled` by equality and `terminal_state:` by prefix, neither of
+ * which this touches.
+ */
+export function qualifyJudgeUnavailable<T extends { ok?: unknown; error?: unknown; judgeUnavailableReason?: unknown }>(result: T): T {
+  if (result.ok !== false || result.error !== "judge_unavailable") return result;
+  const reason = typeof result.judgeUnavailableReason === "string" ? result.judgeUnavailableReason.trim() : "";
+  return reason === "" ? result : { ...result, error: `judge_unavailable:${reason}` };
 }
 
 // ── Benign terminals on the cadence (issues #767, #806) ─────────────────────
@@ -159,9 +183,140 @@ function translateBenignSkip(
   return reason == null ? result : { skipped: reason, sessionId };
 }
 
+// The consensus receipt used to need its own admin call after publish
+// (issue #754's original design: "the judge is off by default, so wiring
+// assembly into the publish path would make every ordinary publish an
+// assembly that refuses" — admin.ts's publishConsensusReceiptAdmin). That
+// reasoning is why this is safe to fold in unconditionally rather than a bug
+// to work around: `publishConsensusReceiptAdmin` already treats every refusal
+// (`not_judged`, `judgement_not_adopted`, ...) as a normal, auditable outcome
+// rather than throwing, so an `off`- or `shadow`-mode session's publish still
+// completes cleanly here, exactly as it did before — it just also records
+// why no receipt exists yet, instead of requiring an operator to ask.
+//
+// STILL REFUSED FOR `shadow`, ON PURPOSE, not something this patch changes: a
+// shadow judgement is deliberately withheld from the session
+// (consensus-receipt.ts's `judgement_not_adopted`), so there is no adopted
+// opinion for a receipt to attest to until the session is judged in
+// `enforce`. This only removes the ADMIN CALL for the case that was always
+// going to succeed — an already-`enforce`-judged, now-published session.
+//
+// NOT folded into `ic.publishSession` itself (domain.ts) for the same reason
+// the admin surface keeps them separate: a receipt is not a state transition,
+// and the HTTP publish route (`publishSessionAdmin`) still returns without
+// one — only this cadence path auto-attempts it, so a caller publishing
+// through the API is unaffected and still gets an explicit `ok`/`error` shape
+// from its own request rather than one folded into someone else's.
+/**
+ * Refusals that mean "this session legitimately has no receipt yet" — a mode
+ * the operator chose, or ordinary product behaviour with a named remedy — and
+ * so must leave the publish job SUCCESSFUL:
+ *
+ * - `not_judged`           the judge is off, which is the production default
+ * - `judgement_not_adopted` a shadow judgement is withheld from the session by
+ *                           design (consensus-receipt.ts says so explicitly)
+ * - `session_not_reaggregated` a member filed a FIRST take after aggregation —
+ *                           consensus-receipt.ts calls this "ordinary product
+ *                           behaviour rather than corruption"
+ * - `judgement_stale`      an amendment landed between judging and publishing
+ *
+ * EVERY OTHER reason is an assembly failure — `no_takes`, `schema_invalid`,
+ * `semantics_invalid`, `canonicalization_failed`, the `weights_*` family
+ * (including `weights_absent_for_bucket_weights_subject`, the refusal that
+ * makes an allocation session publishing no allocation a LOUD failure rather
+ * than a clean, silent, verifiable nothing, and
+ * `weights_not_authored_by_every_take`, which does the same for a receipt that
+ * would claim more analyst support for its allocation than it has),
+ * `signing_key_unresolved`, `nonce_replayed` — and must degrade the run. An
+ * ALLOWLIST rather than a failure list on purpose: a reason added later
+ * degrades loudly instead of being silently absorbed into a successful publish.
+ */
+const EXPECTED_RECEIPT_REFUSALS = new Set([
+  "not_judged", "judgement_not_adopted", "session_not_reaggregated", "judgement_stale",
+]);
+
+/**
+ * LOUD, AND ONCE (T21). Two of the `weights_*` refusals are facts about a take
+ * set that is already FROZEN by assembly time, so no backoff can change the
+ * answer:
+ *
+ * - `weights_absent_for_bucket_weights_subject` — no contributing take carried
+ *   a weight vector, so the rollup has none;
+ * - `weights_not_authored_by_every_take` — the allocation was written by fewer
+ *   analysts than the receipt attests to.
+ *
+ * Both are repaired by RE-RUNNING THE SESSION against analysts that author a
+ * WEIGHTS line, which is an operator action on new takes, never a retry of this
+ * job. Left as ordinary degrades they produced five identical red rows and
+ * ~30 s of pointless backoff for one permanent condition — precisely the
+ * "queue of red for a control working as designed" this file's benign-skip seam
+ * exists to prevent, and the same test it applies: CAN A RETRY CHANGE THE
+ * ANSWER. These stay `{ok:false}` — they are loud failures, not skips — and add
+ * `terminal:true`, which `worker/loop.ts` settles as FAILED on the first
+ * attempt.
+ *
+ * Every OTHER assembly refusal keeps its retries: `signing_key_unresolved` and
+ * `nonce_replayed` are about the environment, not the takes, and a retry really
+ * can change those answers.
+ */
+const TERMINAL_RECEIPT_REFUSALS = new Set([
+  "weights_absent_for_bucket_weights_subject",
+  "weights_not_authored_by_every_take",
+]);
+
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
-  return await ic.publishSession(sessionId);
+  const published = await ic.publishSession(sessionId);
+  const receipt = await admin.publishConsensusReceiptAdmin(sessionId, "worker");
+  if (receipt.ok) return { ...published, consensusReceipt: { published: true } };
+  // admin.publishConsensusReceiptAdmin puts the refusal's REASON CODE in `error`.
+  const consensusReceipt = { published: false, reason: receipt.error };
+  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) {
+    // `not_judged` IS TWO CONDITIONS WEARING ONE REASON CODE, and the allowlist
+    // above can only be right about one of them (AC-FE-10, 1.13 N5).
+    //
+    //   * "the judge is off, which is the production default" — benign, the
+    //     reason this entry exists, and it must leave the run successful.
+    //   * "the judge was ON, was asked, exhausted its retries on THIS session,
+    //     and never answered" — an eligible session losing its receipt, which
+    //     is precisely what the criterion forbids passing in silence.
+    //
+    // The second one is already recorded, in this session's own `swarm.judge`
+    // job: `worker/loop.ts` settles an exhausted degrade `succeeded`, so the
+    // status says nothing, but `last_error` survives. No new state is needed to
+    // tell them apart — only the question.
+    const judgeFailure = receipt.error === "not_judged" ? await judgeLaneFailureFor(sessionId) : null;
+    if (!judgeFailure) return { ...published, consensusReceipt };
+    return {
+      ...published,
+      consensusReceipt: { ...consensusReceipt, judgeLastError: judgeFailure },
+      ok: false,
+      error: `consensus receipt refused: not_judged, and this session's own swarm.judge job recorded ${JSON.stringify(judgeFailure)} — ` +
+        "the judge was asked and never answered, so this is an eligible session losing its receipt, not the shipped `off` default",
+    };
+  }
+  // The `{ok:false}` shape loop.ts's isDegradedResult() looks for. Without it a
+  // broken receipt path reported a SUCCEEDED run carrying a quiet `published:
+  // false`, so the release's headline feature could stop producing receipts in
+  // production with no degraded run and nothing to alert on.
+  //
+  // RETRYING IS SAFE, AND FOR TWO REFUSALS IT IS ALSO POINTLESS.
+  // `ic.publishSession` is state-guarded and stamps `published_at` once (T21),
+  // so a redelivery of this job neither re-publishes nor moves the recorded
+  // publication instant. What a retry cannot do is change a refusal that is a
+  // fact about a frozen take set — see TERMINAL_RECEIPT_REFUSALS, which settles
+  // those on the first attempt instead of five times.
+  const terminal = TERMINAL_RECEIPT_REFUSALS.has(receipt.error);
+  return {
+    ...published,
+    consensusReceipt,
+    ok: false,
+    ...(terminal ? { terminal: true } : {}),
+    error: `consensus receipt refused: ${receipt.error}` +
+      (terminal
+        ? " — the session's takes are frozen, so no retry can change this; re-run the session against analysts that author a WEIGHTS control line"
+        : ""),
+  };
 }
 
 export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {

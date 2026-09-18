@@ -12,7 +12,7 @@
 import { test, expect } from "bun:test";
 import { sql, jsonValue } from "../../src/db/client.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
-import { MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS } from "../../src/admin/overview.ts";
+import { JUDGE_KIND, MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS } from "../../src/admin/overview.ts";
 import { withFrozenClock } from "../support/fixed-clock.ts";
 
 const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
@@ -124,6 +124,40 @@ test("overview: the AC1 sampler kinds are monitored", async () => {
   const body = res?.body as { production: Array<{ kind: string }> };
   const monitoredKinds = body.production.map((p) => p.kind);
   for (const kind of SAMPLER_KINDS) expect(monitoredKinds).toContain(kind);
+});
+
+// D-A7's ALERT clause, and AC-FE-10's "Scheduler/worker tests ... exercise
+// alerting". A judge that cannot be ASKED now fails closed: no judgement row, no
+// consensus receipt, a 503, and a `degraded` job_run for kind `swarm.judge`. That
+// last step is only an ALERT if the kind is monitored — and `swarm.judge` was
+// absent from MONITORED_KINDS entirely, so every fail-closed judging landed in a
+// feed nobody watches. Adding it back is one line, which is exactly why it needs
+// a test: deleting that line again must go red here.
+test("overview: swarm.judge is monitored, and a degraded judging raises an alert", async () => {
+  expect(MONITORED_KINDS).toContain(JUDGE_KIND);
+
+  const res0 = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  const body0 = res0?.body as { production: Array<{ kind: string }> };
+  expect(body0.production.map((p) => p.kind)).toContain(JUDGE_KIND);
+
+  // The shape worker/loop.ts writes when judgeSessionAdmin answers
+  // `{ ok:false, error:"judge_unavailable" }` — i.e. a judge with no model, no
+  // credential, an unfunded credential or a rejected one.
+  const judgeJobId = await insertJob({ kind: JUDGE_KIND, status: "succeeded" });
+  await insertRun(judgeJobId, { kind: JUDGE_KIND, status: "degraded", error: "judge_unavailable" });
+
+  const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  const body = res?.body as {
+    production: Array<{ kind: string; alert: string; lastRunStatus: string }>;
+    alerts: Array<{ level: string; source: string; message: string }>;
+  };
+  const judge = body.production.find((p) => p.kind === JUDGE_KIND)!;
+  expect(judge.lastRunStatus).toBe("degraded");
+  expect(judge.alert).toBe("degraded");
+  // …and it reaches the ALERT list, not merely the per-kind table.
+  const alert = body.alerts.find((a) => a.source === JUDGE_KIND);
+  expect(alert, "a degraded swarm.judge run must surface as an alert").toBeTruthy();
+  expect(alert!.level).toBe("degraded");
 });
 
 // issue #614 AC3: "latest-point age alone is not sufficient" — a sampler kind

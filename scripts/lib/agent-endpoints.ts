@@ -85,6 +85,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getVersion",
+    method: "GET",
+    path: ROUTES.version,
+    summary: "Which source commit and tag the running process was built from",
+    description:
+      "Returns the full git commit SHA and the exact tag baked into this deployment's image at build time. Use it to check that a host is running the release it is supposed to: compare `commit` against the tag's commit, not against a checkout on the host, which moves independently of the image. Either field is null with a named reason when the image was built without its identity, and a commit ending in `+dirty` was built from a modified tree and is not the tagged artifact. The same object is also on /health as `build`.",
+    backs: [],
+    contractType: "{ commit, tag, commit_unavailable?, tag_unavailable? }",
+    sizeHint: "under 200 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
@@ -289,12 +300,24 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     id: "getConsensusReceipt",
     method: "GET",
     path: ROUTES.swarm.sessionConsensusReceipt,
-    summary: "The signed consensus receipt for a session",
+    summary: "The anchored consensus receipt bytes for a session",
     description:
-      "The aggregate receipt for one session: the signed consensus over the member takes, verified at read time. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one.",
+      "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "ConsensusReceipt",
+    sizeHint: "a few KB",
+  },
+  {
+    id: "getConsensusReceiptVerified",
+    method: "GET",
+    path: ROUTES.swarm.sessionConsensusReceiptVerified,
+    summary: "The consensus receipt with a read-time verification verdict",
+    description:
+      "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "SwarmConsensusReceiptResponse",
     sizeHint: "a few KB",
   },
   {
@@ -573,7 +596,7 @@ export function assertCatalogCoversRoutes(): string[] {
   const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
 
   const missing = flattenRoutes(ROUTES)
-    .filter((p) => p.startsWith("/api/") || p === ROUTES.health)
+    .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)
     .filter((p) => !credentialed(p))
     .filter((p) => !catalogued.has(p) && !excluded.has(p));
 

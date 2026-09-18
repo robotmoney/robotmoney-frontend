@@ -5,8 +5,11 @@
 # issue #892 — website-server/nginx.conf proxies /api/ and /health through to
 # `api` so this stack still presents as one origin, matching frontend/public/
 # config.js's same-origin default and this repo's own local dev/smoke/e2e
-# harness, which loads pages from `backendUrl`). `api` no longer serves any
-# static content or STATIC_DIR; see website-server/Dockerfile.
+# harness, which loads pages from `backendUrl`). `api` no longer SERVES any
+# static content — see website-server/Dockerfile — but still reads the same
+# `_static` mount read-only, for AC-ID-03/T26 identity purposes only (see the
+# STATIC_DIR comment on the api service; tracked for removal once the static
+# bundle is baked into website-server's own image instead of assembled here).
 #
 # HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
 # use the container-port-only short form (`- "8787"`), which makes the Docker
@@ -103,6 +106,8 @@ x-worker-base: &worker-base
     dockerfile: backend/Dockerfile
     args:
       AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+      RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+      RM_BUILD_TAG: ${RM_BUILD_TAG:-}
   command: ["bun", "run", "src/worker/index.ts"]
   depends_on:
     postgres:
@@ -121,7 +126,15 @@ x-worker-env: &worker-env
   # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  RM_ENV: ${RM_ENV:-smoke}
+  # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+  # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+  # service, so the value is a property of the stack config rather than of
+  # whatever the operator's shell last exported. It used to default to `smoke`,
+  # which meant a bare `docker compose up` — or any bring-up path that forgot to
+  # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+  # `prod` is the strict/acceptance path: if the default IS ever reached, the
+  # stack refuses a keyless or unpinned model instead of accepting one.
+  RM_ENV: ${RM_ENV:-prod}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
@@ -215,10 +228,20 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-smoke}
+      # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+      # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+      # service, so the value is a property of the stack config rather than of
+      # whatever the operator's shell last exported. It used to default to `smoke`,
+      # which meant a bare `docker compose up` — or any bring-up path that forgot to
+      # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+      # `prod` is the strict/acceptance path: if the default IS ever reached, the
+      # stack refuses a keyless or unpinned model instead of accepting one.
+      RM_ENV: ${RM_ENV:-prod}
       # website-server (nginx) now sits in front of `api` for EVERY request in
       # every composition this file resolves (issue #892) — website-server/
       # nginx.conf forwards X-Real-IP/X-Forwarded-For/X-Forwarded-Proto to
@@ -235,9 +258,15 @@ services:
       TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
-      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
-      # and backend/Dockerfile sets no ENV, so a variable that is not named here
-      # NEVER reaches the container. Without these two lines the runbook's
+      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here,
+      # so a variable that is not named here NEVER reaches the container at RUN
+      # time. The one exception is deliberate and is the opposite of a leak:
+      # backend/Dockerfile bakes AUM_PRODUCER_REVISION and RM_BUILD_COMMIT /
+      # RM_BUILD_TAG as ENV from its build args, because those are properties of
+      # the IMAGE rather than of a deployment. They must NOT be repeated in this
+      # block — an `environment:` entry with a blank default would override the
+      # baked value with the empty string and erase the identity /version
+      # reports. Without the two lines below the runbook's
       # emergency override (§2.1) is a silent no-op: the operator sets it in the
       # droplet env, redeploys, and the api's refusal log still tells them to set
       # the variable they just set. Blank default = unset inside the container,
@@ -297,12 +326,31 @@ services:
       # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
       # keeps model selection to one reviewable signal. What is left here is the
       # shared OpenCode Zen credential (the member agents' existing key, not a
-      # second one), the endpoint, and the per-call bound. All blank by default:
-      # an unconfigured model means template prose and a recorded reason, never
-      # a failed session.
+      # second one), the endpoint, and the per-call bound. All blank by default.
+      # An unconfigured model no longer means template prose and a recorded
+      # reason (issue #969): `shadow`/`enforce` REQUIRE a model, and a judge
+      # that cannot be reached stops the judging rather than authoring prose
+      # under its own name and letting it reach a signed receipt.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts). This service arms/disarms the row over
+      # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
+      # `assertFaultInjectionAllowed()` runs on THIS process's env before that
+      # write — a row armed without the flag present here is refused at arm
+      # time, not merely inert. Blank by default so no deployment honours a
+      # fault-injected judge unless an operator explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
+      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY (issue #892 follow-up tracked
+      # separately: this mount should not exist by the time that work lands —
+      # the static bundle should be baked into website-server's own image, and
+      # deploy-time should only write/check a small identity JSON, never build
+      # anything). website-server, not this process, SERVES the SPA from the
+      # same underlying `_static` directory; api reads the manifest here purely
+      # to compare its own build identity against what was assembled.
+      STATIC_DIR: /srv/frontend
     ports:
       # HOST side: ABSENT on purpose — the short form publishes the container
       # port on a host port the Docker daemon picks and binds atomically (see
@@ -326,6 +374,10 @@ services:
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
+    volumes:
+      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY — api does not serve from
+      # this mount (website-server does). See the STATIC_DIR comment above.
+      - ./_static:/srv/frontend:ro
     secrets:
       - analytics_token
     depends_on:
@@ -384,13 +436,25 @@ services:
       # credential, the endpoint and the per-call bound are declared on this
       # service rather than in the *worker-env anchor above: worker-analytics
       # and worker-research would otherwise receive a live inference credential
-      # they never use. Without them HERE the one process that actually runs
-      # the judge on a schedule falls back to template prose silently.
+      # they never use. Without them HERE the one process that actually runs the
+      # judge on a schedule cannot reach a model at all — which since issue #969
+      # STOPS the judging loudly (503 judge_unavailable, session left unjudged)
+      # instead of falling back to template prose silently, which is what this
+      # comment used to warn about and what production actually did.
       # On/off AND which model are database rows, not env vars; see the api
       # block above.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts) — THIS LANE ONLY, same reasoning as the three
+      # knobs above: `selectFaultInjection()` runs inside `swarm.judge`, which
+      # only this worker lane executes. Without the flag present here the
+      # lever stays inert even once armed through the api. Blank by default so
+      # no deployment honours a fault-injected judge unless an operator
+      # explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
 
   worker-analytics:
     <<: *worker-base
@@ -424,6 +488,8 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       ANALYTICS_API_URL: http://api:8787

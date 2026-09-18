@@ -125,6 +125,44 @@ test("non-analytics sampler tables stay writable to the worker role (legacy hand
   await worker`DELETE FROM vault_share_price_history WHERE vault_address = '0xroletest'`;
 });
 
+// The wallet-backfill repair driver (issue #709/#760) runs entirely under
+// worker/handlers/repair.ts, which imports `sql` from db/worker-client.ts —
+// the WORKER_DATABASE_URL / rm_worker connection — never db/client.ts. So its
+// caches (chain_day_blocks, chain_address_floors) and its per-day checkpoint
+// ledger (wallet_backfill_state) must be writable under the restricted role,
+// exactly like the legacy samplers above. Migration 0054 replaced 0016's
+// broad/default worker grant with an explicit current-table allow-list and
+// did not name these three, leaving them unreachable to the role that is the
+// only thing that ever writes them (staging 2026-09-15: "permission denied
+// for table wallet_backfill_state" / "...chain_day_blocks").
+test("wallet-backfill driver tables (chain_day_blocks/chain_address_floors/wallet_backfill_state) stay writable to the worker role", async () => {
+  await worker`
+    INSERT INTO chain_day_blocks (sample_date, block_number, block_timestamp)
+    VALUES ('1997-01-01', 1, '1997-01-01T00:00:00Z')
+    ON CONFLICT (sample_date) DO UPDATE SET block_number = EXCLUDED.block_number`;
+  const [block] = await worker`SELECT block_number FROM chain_day_blocks WHERE sample_date = '1997-01-01'`;
+  expect(Number(block.block_number)).toBe(1);
+
+  await worker`
+    INSERT INTO chain_address_floors (address, floor_block)
+    VALUES ('0xroletest', 1)
+    ON CONFLICT (address) DO UPDATE SET floor_block = EXCLUDED.floor_block`;
+  const [floor] = await worker`SELECT floor_block FROM chain_address_floors WHERE address = '0xroletest'`;
+  expect(Number(floor.floor_block)).toBe(1);
+
+  await worker`
+    INSERT INTO wallet_backfill_state (sample_date, status, block_number)
+    VALUES ('1997-01-01', 'filled', 1)
+    ON CONFLICT (sample_date) DO UPDATE SET status = EXCLUDED.status`;
+  const [state] = await worker`SELECT status FROM wallet_backfill_state WHERE sample_date = '1997-01-01'`;
+  expect(state.status).toBe("filled");
+
+  // Cleanup with the owner connection.
+  await sql`DELETE FROM chain_day_blocks WHERE sample_date = '1997-01-01'`;
+  await sql`DELETE FROM chain_address_floors WHERE address = '0xroletest'`;
+  await sql`DELETE FROM wallet_backfill_state WHERE sample_date = '1997-01-01'`;
+});
+
 // Admin surface telemetry tables (migration 0017, issue #150): the worker
 // must be able to READ them (swarm/admin projections) but never mutate
 // them — writes go only through the authenticated analytics-provider

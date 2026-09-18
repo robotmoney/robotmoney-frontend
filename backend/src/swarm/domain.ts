@@ -4,6 +4,7 @@
 import {
   canonicalizeApplication,
   classifyRegime,
+  RECEIPT_CANONICAL_BUCKET_ORDER,
   REGIME_METHOD,
   type RegimeLabel,
   type RegimeSummary,
@@ -935,6 +936,56 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
   }
 
+  // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
+  //
+  // A `bucket_weights` subject convenes the swarm to produce a NUMBER. Until
+  // this gate existed the only refusal of a take that cannot support one was at
+  // RECEIPT ASSEMBLY (consensus-receipt.ts gates 5 and 5b), and that refusal is
+  // TERMINAL: `swarm_recommendations` is append-only, amendments are gated on
+  // `window_closes_at > now()`, and neither `reopenSessionAdmin` nor
+  // `publishConsensusReceiptAdmin` can reach a published session. So ONE keyed
+  // member — or any rmpc/MCP/API client, which is never asked for a vector —
+  // destroyed the receipt of every `bucket_weights` session it touched, by
+  // behaving normally. Here the same fact is a 400 with the window still open,
+  // which the member answers by amending its take.
+  //
+  // BREAKING, AND DELIBERATELY SO (D4): a member client that does not carry the
+  // four-bucket vector for these sessions now fails loudly at submission
+  // instead of silently stranding the session. The assembly gates STAY as
+  // defence in depth — they are the only guard over takes already on file.
+  //
+  // ORDERED BELOW THE CHEAP REFUSALS AND ABOVE THE VERIFY: it is one indexed
+  // lookup, so a looping agent is still refused without paying for an Ed25519
+  // verification, and a take that is a replay or over the amendment cap is
+  // answered by the more specific refusal above.
+  //
+  // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
+  // does not exist yet while takes are being collected, and the subject is what
+  // the brief was built from (`publishBrief`, takeSchema.weights.optional).
+  const subjectRow = (await sql<{ recommendation_type: string | null }[]>`
+    SELECT recommendation_type FROM swarm_subjects WHERE id = ${sub.subjectId}`)[0];
+  if (subjectRow?.recommendation_type === "bucket_weights") {
+    const vector = sub.weights;
+    if (vector == null || vector.length === 0) {
+      return {
+        ok: false,
+        status: 400,
+        error: `weights_required_for_bucket_weights_subject: ${sub.subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
+          "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
+      };
+    }
+    const named = new Set(vector.map((w) => w.bucket));
+    if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
+        !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
+      return {
+        ok: false,
+        status: 400,
+        error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
+          "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
+      };
+    }
+  }
+
   const key = await activeKeyFor(memberId);
   if (!key) return { ok: false, status: 403, error: "no registered key for member" };
   const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
@@ -1784,6 +1835,10 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  // The ONE read of the subject's recommendation type on this path — the same
+  // value `aggregateSession()` normalizes, so the ask published to the swarm and
+  // the derivation applied to its answers come from one column.
+  const recommendationType = subject?.recommendationType === "bucket_weights" ? "bucket_weights" : "position_actions";
   const framework =
     (subject?.source as { type?: string } | null)?.type === "framework"
       ? (await sql<{ asof: Date | string; buckets: unknown[] }[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
@@ -1811,11 +1866,21 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
       stance: { type: "string", enum: [...STANCES] },
       confidence: { type: "number", minimum: 0, maximum: 1 },
       body: { type: "string" },
+      // WHAT THIS SESSION ACTUALLY ASKS FOR. `optional` used to be an
+      // unconditional `true`, which said — truthfully, and uselessly — that the
+      // API accepts a take with no vector. It never said that a
+      // `bucket_weights` subject NEEDS one, so the brief an analyst reasons
+      // from could not distinguish "an allocation is wanted" from "prose is
+      // wanted", and v0.5.0-rc.1 published `bucket_weights` receipts carrying
+      // no allocation at all. `buckets` is the canonical four, from the
+      // contract, so the brief and the receipt schema can never disagree about
+      // which vaults exist.
       weights: {
         type: "array",
-        optional: true,
+        optional: recommendationType !== "bucket_weights",
+        buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER],
         items: {
-          bucket: { type: "string" },
+          bucket: { type: "string", enum: [...RECEIPT_CANONICAL_BUCKET_ORDER] },
           weight: { type: "number", minimum: 0 },
         },
       },
@@ -2454,9 +2519,50 @@ export async function aggregateSession(sessionId: string) {
   };
 }
 
+/**
+ * Publish a session — GUARDED (T21), like the admin path it sits beside.
+ *
+ * WHAT IT WAS. A bare `UPDATE … SET state='published', published_at=now()
+ * WHERE id=$1`, with no state guard and no `published_at IS NULL` guard, while
+ * `publishSessionAdmin` has both plus a `guardedTransition` that refuses
+ * terminal states and writes session-event and audit rows. Two consequences,
+ * both reachable from the `swarm.publish` job's ordinary retries:
+ *
+ *   * every retry RE-STAMPED `published_at`, so the recorded publication
+ *     instant drifted and `swarm/receipt-gap.ts`'s alert named a time the
+ *     session did not publish at;
+ *   * an operator who CANCELLED a session inside the retry window had it
+ *     silently flipped back to `published` — no transition, no event row, no
+ *     audit row, from a state the lifecycle calls terminal.
+ *
+ * WHAT IT IS NOW. The same single statement, with the admin path's two guards:
+ * it fires only from a publishable state and stamps `published_at` once. It
+ * stays a single statement rather than becoming `guardedTransition` because the
+ * cadence deliberately keeps the two surfaces separate (see
+ * `worker/handlers/swarm.ts`), and it reports whether it actually transitioned
+ * so a caller can tell an effective publish from a no-op instead of reading
+ * "published" either way.
+ */
+const PUBLISHABLE_STATES = ["aggregated", "judged"] as const;
+
 export async function publishSession(sessionId: string) {
-  await sql`UPDATE swarm_sessions SET state = 'published', published_at = now() WHERE id = ${sessionId}`;
-  return { sessionId, state: "published" };
+  const rows = await sql`
+    UPDATE swarm_sessions
+       SET state = 'published',
+           published_at = COALESCE(published_at, now()),
+           version = version + 1
+     WHERE id = ${sessionId}
+       AND state = ANY(${[...PUBLISHABLE_STATES]})
+    RETURNING id, state`;
+  if (rows.length > 0) return { sessionId, state: "published", transitioned: true };
+  // Nothing transitioned: either the session is ALREADY published (an ordinary
+  // job redelivery — idempotent success, and `published_at` is untouched) or it
+  // is somewhere this call may not publish from, which is reported as the
+  // state it is actually in rather than as a publication that did not happen.
+  const current = (await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { state: string }
+    | undefined;
+  return { sessionId, state: current?.state ?? "unknown", transitioned: false };
 }
 
 // ── Memos ───────────────────────────────────────────────────────────────────

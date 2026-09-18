@@ -439,11 +439,27 @@ export interface SwarmBriefBody {
     stance: { type: "string"; enum: Stance[] };
     confidence: { type: "number"; minimum: 0; maximum: 1 };
     body: { type: "string" };
+    /**
+     * The session's ALLOCATION ask.
+     *
+     * `optional` is FALSE exactly when the subject's `recommendationType` is
+     * `bucket_weights` — the brief is where an analyst learns that this session
+     * wants a number and not only prose. It used to be an unconditional `true`,
+     * which was true of the API (a weightless take is a valid take) and useless
+     * to a reader: v0.5.0-rc.1's analysts could not tell an allocation session
+     * from a narrative one, so every `bucket_weights` receipt it published was
+     * silent about the allocation.
+     *
+     * `buckets` is the receipt's canonical bucket order
+     * (`RECEIPT_CANONICAL_BUCKET_ORDER`), carried on the brief so the ask and
+     * the receipt schema cannot name different vaults.
+     */
     weights: {
       type: "array";
-      optional: true;
+      optional: boolean;
+      buckets: string[];
       items: {
-        bucket: { type: "string" };
+        bucket: { type: "string"; enum: string[] };
         weight: { type: "number"; minimum: 0 };
       };
     };

@@ -37,6 +37,7 @@ import {
   canonicalizeApplication,
   canonicalizeClaimChallenge,
   path as routePath,
+  RECEIPT_CANONICAL_BUCKET_ORDER,
   ROUTES,
 } from "@robotmoney/contract";
 import { fetchRmpc } from "../../lib/rmpc-fetch.ts";
@@ -73,6 +74,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
+
+// The allocation the fixture model "authors". DERIVED from the contract's
+// canonical order, never re-declared, so this fixture and the receipt schema
+// cannot drift into disagreeing about which four vaults exist.
+const CANONICAL_BUCKETS = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+const AUTHORED_WEIGHTS = [0.15, 0.7, 0.1, 0.05].map((weight, i) => ({ bucket: CANONICAL_BUCKETS[i]!, weight }));
 
 // EVERY pure assertion this file used to carry alongside its Docker-backed
 // half now lives in its cost-class sibling, scripts/tests/unit/onboarding-eval-helpers.test.ts
@@ -544,6 +551,16 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
             "- The principal risk is accidental identity rotation between duties.",
             "- Accept the take only under the originally admitted public key.",
             "",
+            // THE ALLOCATION VECTOR, because this subject is a `bucket_weights`
+            // one. `admin("subject")` -> `ensureSubject()` INSERTs
+            // recommendation_type = 'bucket_weights' (domain.ts), so the brief
+            // this member reads declares `takeSchema.weights.optional = false`,
+            // `participate()` sets `requireWeights`, and `authorTake()` re-samples
+            // and then throws on a take with no WEIGHTS line — which would exit
+            // the client 1 and fail the `exitCode` assertion below. The line sits
+            // immediately above STANCE because the parsers read the last line
+            // first: `parseStanceFromBody` strips STANCE and uncovers this one.
+            `WEIGHTS: ${AUTHORED_WEIGHTS.map((w) => `${w.bucket}=${w.weight}`).join(" | ")}`,
             "STANCE: neutral | CONFIDENCE: 0.61",
           ].join("\n");
           const opencodeShim = join(workDir, "opencode-prose-fixture");
@@ -598,6 +615,22 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           const take = session.takes.find((candidate: { memberId?: string }) => candidate.memberId === memberId);
           expect(take).toMatchObject({ memberId, verified: true, stance: "neutral", confidence: 0.61 });
           expect(take.id).toMatch(/^[0-9a-f-]{36}$/i);
+          // D1'S CLIENT HALF, EXECUTED — the two lines that decide whether an
+          // analyst is ASKED for a vector (`requireWeights` off the brief) and
+          // whether the authored vector reaches the SIGNED draft
+          // (`...(authored.weights ? { weights } : {})`). This is the only test
+          // in the repository that runs the production member client end to
+          // end, so without this assertion the exact rc.1 regression — a draft
+          // with no `weights` key — reappears with a green suite. The vector is
+          // read back off the STORED take, not off the client's stdout.
+          expect(take.weights, "the member client put the vector in the signed draft").toBeDefined();
+          expect(take.weights.map((w: { bucket: string }) => w.bucket)).toEqual(CANONICAL_BUCKETS);
+          expect(take.weights.map((w: { weight: number }) => w.weight))
+            .toEqual(AUTHORED_WEIGHTS.map((w) => w.weight));
+          // And the body it stored does NOT restate the allocation: the control
+          // line is stripped, so the numbers exist exactly once in what is
+          // signed — in the field a receipt verifier can recompute.
+          expect(take.body).not.toContain("WEIGHTS:");
 
           const receiptRes = await fetch(
             `${stack!.backendUrl}${routePath(ROUTES.swarm.take, { id: take.id })}`,

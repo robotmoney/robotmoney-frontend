@@ -59,7 +59,7 @@
 // LOUD-FAILURE CONTRACT: any failure exits non-zero with the reason on
 // stderr; the harness renders that member ABSENT (#122 semantics) and the
 // session proceeds without it. There is no fallback of any kind in here.
-import { classifyRegime, ROUTES } from "@robotmoney/contract";
+import { classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -113,6 +113,60 @@ export async function restJson<T = any>(
     throw new Error(`${route} failed with HTTP ${res.status}${error ? `: ${error}` : ""}`);
   }
   return { status: res.status, body };
+}
+
+/** The one brief shape both `resolveRequireWeights` and `reportSnapshotIdFromBrief` read from. */
+type SwarmBriefResponse = {
+  body?: { subject?: { recommendationType?: string | null } | null } | null;
+  reportSnapshotId?: unknown;
+};
+
+/**
+ * Does this session ask for an allocation vector as well as prose?
+ *
+ * Exported so the HTTP-boundary suite can pin both witnesses without
+ * running a session. `prefetchedBrief` lets a caller that already fetched the
+ * session's brief (e.g. `participate()`, which also needs its
+ * `reportSnapshotId`) reuse that ONE fetch instead of asking twice.
+ */
+export async function resolveRequireWeights(
+  sessionId: string,
+  subjectId: string,
+  prefetchedBrief?: { status: number; body: SwarmBriefResponse | null },
+): Promise<boolean> {
+  // THE BRIEF IS READ, NOT MERELY PINGED. It used to be a bare liveness check
+  // with its result discarded — and that is how a `bucket_weights` session
+  // could ask every analyst for an allocation and have none of them notice:
+  // WHICH KIND of recommendation this session wants is stated on the brief
+  // (`body.subject.recommendationType`, and `body.takeSchema.weights`), and
+  // nothing in this client ever looked.
+  //
+  // BY SESSION, not by date+subject. `?session=` is the unambiguous handle
+  // (migration 0028: a brief is keyed on its session), so a subject that
+  // convened twice today cannot hand this member the other session's ask.
+  // No brief yet is still a legitimate 404 (issue #868) and not a reason to
+  // abort — but it is no longer a reason to author prose only either. T17 made
+  // a weightless take a 400 for a `bucket_weights` subject, so a member that
+  // guessed "no brief, therefore no allocation asked for" would simply be
+  // refused. THE SUBJECT IS THE FALLBACK AUTHORITY: `GET /api/swarm/subjects/:id`
+  // serves `recommendationType`, is public, and exists long before any brief
+  // does. The brief stays the primary source (it is the session's own ask); the
+  // subject read only answers the case where the brief is not there yet.
+  const brief =
+    prefetchedBrief ??
+    (await restJson<SwarmBriefResponse>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
+      allowStatuses: [404],
+    }));
+  let recommendationType = brief.body?.body?.subject?.recommendationType ?? null;
+  if (recommendationType == null) {
+    const subject = await restJson<{ recommendationType?: string | null } | null>(
+      routePath(ROUTES.swarm.subject, { id: subjectId }),
+      undefined,
+      { allowStatuses: [404] },
+    );
+    recommendationType = subject.body?.recommendationType ?? null;
+  }
+  return recommendationType === "bucket_weights";
 }
 
 /** Fetch the exact canonical byte string RM validated for this draft. */
@@ -288,12 +342,14 @@ async function participate(): Promise<void> {
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
   // Read the brief for THIS session (not merely the newest brief that happens
-  // to share its date and subject). Its immutable report binding is part of
-  // the schema-2 signing payload. No brief yet is a legitimate 404 (issue
-  // #868), not a reason to abort the session.
-  const brief = await restJson<{ reportSnapshotId?: unknown }>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
+  // to share its date and subject) ONCE — it carries both which kind of
+  // recommendation this session wants (T17) and its immutable report binding,
+  // part of the schema-2 signing payload. No brief yet is a legitimate 404
+  // (issue #868), not a reason to abort the session.
+  const brief = await restJson<SwarmBriefResponse>(`${ROUTES.swarm.brief}?session=${encodeURIComponent(sessionId)}`, undefined, {
     allowStatuses: [404],
   });
+  const requireWeights = await resolveRequireWeights(sessionId, subjectId, brief);
   const reportSnapshotId = brief.status === 200 ? reportSnapshotIdFromBrief(brief.body) : undefined;
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
@@ -328,6 +384,7 @@ async function participate(): Promise<void> {
     {
       telemetry: (event) => out("RM_TELEMETRY", event),
       diagnosticArtifactPath: process.env.RM_DIAGNOSTIC_ARTIFACT,
+      requireWeights,
     },
   );
   const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
@@ -352,6 +409,13 @@ async function participate(): Promise<void> {
     confidence: authored.confidence,
     body,
     memoUrl,
+    // INSIDE THE SIGNED BYTES, and only when the session asked. The draft goes
+    // to POST /api/swarm/signing-payload, whose canonicalizer
+    // (`canonicalizeSubmission`) already places `weights` after `memoUrl`, so
+    // the vector this member states is covered by this member's own signature
+    // and is reproducible by anyone holding the receipt. The client still never
+    // builds canonical bytes locally — the server response is the authority.
+    ...(authored.weights ? { weights: authored.weights } : {}),
     ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);

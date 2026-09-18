@@ -28,6 +28,7 @@ import { getJudgeConfig, judgeSession, latestJudgement, setJudgeConfig } from ".
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -43,7 +44,7 @@ async function member(prefix: string) {
 
 async function session(prefix: string) {
   const subjectId = rid(prefix);
-  await swarm.ensureSubject(subjectId, subjectId);
+  await ensureProseSubject(subjectId, subjectId);
   const opened = await swarm.openSession(subjectId);
   await swarm.publishBrief(opened.id, 60);
   return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };
@@ -80,7 +81,7 @@ async function judgeRole(prefix: string) {
 test("shipped default is off, and off refuses a third-party judgement before any row lands", async () => {
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
 
-  await setJudgeConfig({ mode: "shadow" }); // thirdPartyEnabled left at its default: false
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" }); // thirdPartyEnabled left at its default: false
   const judge = await judgeRole("candidate");
   const s = await aggregated("flag_off");
 
@@ -104,7 +105,7 @@ test("shipped default is off, and off refuses a third-party judgement before any
 // entirely, not merely that one caller of it is blocked.
 test("a self-declared operator='robotmoney' does not exempt a non-roster judge from the third-party gate", async () => {
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
-  await setJudgeConfig({ mode: "shadow" }); // thirdPartyEnabled left at its default: false
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" }); // thirdPartyEnabled left at its default: false
 
   const judge = await judgeRole("forger");
   const patched = await swarm.updateMemberProfile(judge.token, judge.id, { operator: "robotmoney" });
@@ -122,7 +123,7 @@ test("a self-declared operator='robotmoney' does not exempt a non-roster judge f
 });
 
 test("the in-house worker succeeds with the flag off — third parties are never a prerequisite for the in-house stage", async () => {
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: "test/judge-model" });
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
 
   const s = await aggregated("in_house_unaffected");
@@ -134,7 +135,7 @@ test("the in-house worker succeeds with the flag off — third parties are never
 });
 
 test("turning the flag on permits a graduated judge, and every row still names its judging party", async () => {
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: "test/judge-model" });
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(true);
 
   const judge = await judgeRole("permitted");
@@ -151,7 +152,7 @@ test("the flag is read fresh inside the write transaction — turning it off aft
   // Same shape as #812's role-revocation race: the model call happens outside
   // the transaction and can take up to 60s, so an admin flipping the switch
   // mid-flight must be observed before any judgement row can land.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: "test/judge-model" });
   const judge = await judgeRole("raced");
   const s = await aggregated("raced_off");
 
@@ -170,7 +171,7 @@ test("the flag is read fresh inside the write transaction — turning it off aft
 });
 
 test("turning the flag on and off is a database row, audited like mode already is, and needs no redeploy", async () => {
-  const on = await admin.setJudgeConfigAdmin({ mode: "shadow", thirdPartyEnabled: true });
+  const on = await admin.setJudgeConfigAdmin({ mode: "shadow", thirdPartyEnabled: true, model: "test/judge-model" });
   expect(on).toMatchObject({ ok: true, status: 200, judge: { thirdPartyEnabled: true } });
 
   const off = await admin.setJudgeConfigAdmin({ thirdPartyEnabled: false });

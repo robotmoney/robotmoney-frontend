@@ -26,12 +26,14 @@
 // unit tests in scripts/tests/unit/smoke-env.test.ts) and MUST stay side-effect free.
 //
 // It is ALSO where the smoke's cadence profile reaches the analytics-producer:
-// a `--stage` boot injects the realistic profile's PRODUCER_REGIME_CRON /
+// ONLY a RESOLVED realistic cadence (`--stage`, or an explicit `--cadence
+// realistic` override) injects the realistic profile's PRODUCER_REGIME_CRON /
 // PRODUCER_RESEARCH_CRON (scripts/lib/smoke-schedule.ts) so research cadence and
-// swarm cadence are stated in ONE file. A non-stage boot injects neither, so
-// compose resolves the COMMITTED production defaults untouched and the CI smoke
-// path is byte-for-byte unaffected.
-import { resolveSmokeCadence } from "./smoke-schedule.ts";
+// swarm cadence are stated in ONE file. A fast-cadence boot — CI, plain
+// `bun run smoke`, and the smoke-twin's deliberate `--static-port --cadence fast`
+// — injects neither, so compose resolves the COMMITTED production defaults
+// untouched and the CI smoke path is byte-for-byte unaffected.
+import { resolveSmokeCadence, type SmokeCadenceProfile } from "./smoke-schedule.ts";
 
 export const NORMAL_DEMO_CACHE_TTL_MS = 3_600_000;
 
@@ -58,7 +60,7 @@ export interface SmokeEnvResolution {
 
 export function resolveSmokeEnv(
   env: Record<string, string | undefined> = process.env,
-  opts: { stage?: boolean } = {},
+  opts: { stage?: boolean; cadence?: SmokeCadenceProfile } = {},
 ): SmokeEnvResolution {
   const baseRpcUrl = env.BASE_RPC_URL || undefined;
   const baseRpcSource: "live" = "live";
@@ -67,11 +69,13 @@ export function resolveSmokeEnv(
   // years of history (idempotent; no-op once warm).
   const analyticsFloorSeed = env.ANALYTICS_FLOOR_SEED || "1";
 
-  // Cadence → analytics-producer. ONLY the realistic (`--stage`) profile
-  // injects timers; the fast profile deliberately emits nothing so compose's
-  // committed `${PRODUCER_*_CRON:-…}` defaults resolve exactly as they do today.
-  const cadence = resolveSmokeCadence({ stage: opts.stage === true });
-  const producerCronEnv: Record<string, string> = opts.stage === true
+  // Cadence → analytics-producer. ONLY a resolved REALISTIC cadence injects
+  // timers; the fast profile deliberately emits nothing so compose's committed
+  // `${PRODUCER_*_CRON:-…}` defaults resolve exactly as they do today. The
+  // `cadence` override is how the fast-cadence smoke-twin lands here even
+  // though it pins the port.
+  const cadence = resolveSmokeCadence({ stage: opts.stage === true, cadence: opts.cadence });
+  const producerCronEnv: Record<string, string> = cadence.profile === "realistic"
     ? { PRODUCER_REGIME_CRON: cadence.regimeCron, PRODUCER_RESEARCH_CRON: cadence.researchCron }
     : {};
   const cacheEnv: Record<string, string> = {

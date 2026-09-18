@@ -37,7 +37,11 @@ const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 /** Records every effect runJudgeStep reaches for, in the order it reaches. */
 function harness(
   mode: string | null,
-  opts: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null } = {},
+  opts: {
+    waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null;
+    /** Who authored the in-force judgement (issue #969). Defaults to a real model. */
+    source?: string | null;
+  } = {},
 ) {
   const calls: string[] = [];
   const enqueued: { action: string; payload: Record<string, unknown> }[] = [];
@@ -59,12 +63,23 @@ function harness(
     },
     // Read ONLY on the expiry path, to say which failure this was.
     countJudgements: async () => { calls.push("countJudgements"); return "recorded" in opts ? opts.recorded! : 0; },
+    // WHO AUTHORED IT (issue #969). `judged (enforce)` was the strongest thing
+    // this step could report, and it was equally true of a session whose
+    // opinion came from a template because the judge had no model at all.
+    readProvenance: async () => {
+      calls.push("readProvenance");
+      const source = "source" in opts ? opts.source! : "model";
+      return { source, fallbackReason: source === "fallback" ? "model_unconfigured" : null, model: "judge-model" };
+    },
     log: (line: string) => { logs.push(line); },
   };
   return { calls, enqueued, logs, deps };
 }
 
-const run = (mode: string | null, opts?: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null }) => {
+const run = (
+  mode: string | null,
+  opts?: { waitFails?: boolean; enqueueFails?: boolean; recorded?: number | null; source?: string | null },
+) => {
   const h = harness(mode, opts);
   return { h, result: runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps) };
 };
@@ -108,14 +123,27 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // later. Enqueue both back to back and the publish wins, the transition is
     // refused, the whole judging transaction rolls back, and the soak records
     // nothing.
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null });
+    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, source: "model" });
   });
 
   test("`enforce` waits on the same terms", async () => {
     const { h, result } = run("enforce");
-    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null });
-    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
+    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null, source: "model" });
+    expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged", "readProvenance"]);
+  });
+
+  // ISSUE #969. Before this, `judged (enforce)` was the whole report, and it was
+  // true of a session whose opinion came from a template because the judge had
+  // no model. The step now carries WHO AUTHORED IT, and the log says so.
+  test("a judging no model authored is reported as such, not as a healthy `judged`", async () => {
+    const { h, result } = run("enforce", { source: "fallback" });
+    const out = await result;
+    expect(out.source).toBe("fallback");
+    expect(h.logs.join("\n")).toContain("source=fallback");
+    expect(h.logs.join("\n")).toContain("model_unconfigured");
+    // And the progress stream carries it to the TUI rather than stopping at the mode.
+    expect(judgedProgress(out)).toEqual({ judgeMode: "enforce", judgeSource: "fallback" });
   });
 
   test("an unreadable switch still queues the judging, and does not wait for a state it cannot predict", async () => {
@@ -131,7 +159,7 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const out = await result;
     // `recorded` is carried out of the expiry path because it, not the wait's
     // opinion, is what the progress stream keys the `judged` event on (#817).
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, source: null });
     // Loud, not silent: the operator reading the driver's log learns the
     // session published without its judging, and why.
     expect(h.logs.join("\n")).toContain("publishing anyway");
@@ -155,7 +183,10 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     await result;
     const log = h.logs.join("\n");
     expect(h.calls, "the record is read only on the expiry path").toEqual(
-      ["readMode", "enqueue:judge", "waitForJudged", "countJudgements"],
+      // …and when it says rows DO exist, their provenance is read too: a
+      // judging that landed late is still a judging somebody has to have
+      // authored (issue #969).
+      ["readMode", "enqueue:judge", "waitForJudged", "countJudgements", "readProvenance"],
     );
     expect(log).toContain("judge job #77 was queued");
     expect(log).toContain("2 judgement row(s) ARE recorded");
@@ -435,6 +466,9 @@ describe("the progress stream reports the judging (#817)", () => {
       subject: "woon",
       date: "2026-08-31",
       judgeMode: "shadow",
+      // Issue #969: the stream carries WHO AUTHORED the opinion, not only the
+      // mode it was recorded under.
+      judgeSource: "model",
     });
   });
 

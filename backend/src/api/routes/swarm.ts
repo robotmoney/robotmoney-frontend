@@ -488,9 +488,25 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         const dedupeKey = sessionId && !force && queueAction === "judge"
           ? `swarm:${sessionId}:judge`
           : null;
+        // SCOPE THE ROW TO ITS SESSION AT THE WRITER (T04, AC-FE-10).
+        //
+        // `createSessionAdmin` has always set `scope_type`/`scope_id`; this
+        // endpoint — the DRIVER'S path, and the one production actually uses —
+        // INSERTed `(kind, payload, dedupe_key)` and nothing else. So every
+        // consumer that asked "which job belongs to this session?" by the scope
+        // columns matched zero rows on the shape production writes, and a
+        // session that lost its consensus receipt to a judge outage was
+        // recorded as a clean success. `swarm/receipt-gap.ts` matches both
+        // shapes for the rows already on file; this stops new ones being
+        // written half-identified.
+        //
+        // Only for the SESSION kinds, which are every kind in `actionMap`: the
+        // scope is read off `payload.sessionId`, so a row without one carries
+        // no scope rather than a fabricated one.
+        const scopeType = sessionId ? "swarm_session" : null;
         const rows = await sql`
-          INSERT INTO jobs (kind, payload, dedupe_key)
-          VALUES (${kind}, ${sql.json(jsonValue(jobPayload))}, ${dedupeKey})
+          INSERT INTO jobs (kind, payload, dedupe_key, scope_type, scope_id)
+          VALUES (${kind}, ${sql.json(jsonValue(jobPayload))}, ${dedupeKey}, ${scopeType}, ${sessionId || null})
           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
           RETURNING id, kind`;
         if (rows[0]) return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind, deduped: false } };

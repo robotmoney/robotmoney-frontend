@@ -5,6 +5,17 @@
 // never by an env var — the same hard rule `--pg-data` and `--stage`'s port pin
 // already follow (docs/architecture.md §0). Cadence is a property of one
 // deliberate invocation, not of a shell that happens to have something exported.
+// An EXPLICIT `--cadence fast|realistic` argument overrides the profile the
+// invocation shape would otherwise imply. The smoke-twin is why that override
+// exists: `--static-port --cadence fast` boots production-shaped DATA on the
+// pinned tunnel port while running the fast TEST cadence — never the 6 h
+// production one the port pin alone would select.
+//
+// The BOOT resolver treats "production" as exactly "realistic cadence on the
+// pinned port" (see resolveSmokeCadenceForBoot), so the fast-cadence twin sits
+// in the non-production branch and must resolve fast — asserting probes both
+// directions, so a pinned-port boot CANNOT silently run the fast cadence and a
+// fast-cadence boot CANNOT silently inherit the 6 h one.
 //
 //   fast (default)      — `bun run smoke` and CI. Today's values, unchanged: a
 //                         swarm session per subject every ~2 min, subjects
@@ -163,9 +174,14 @@ const REALISTIC: SmokeCadence = {
 
 /**
  * Resolve the cadence profile for one smoke invocation. `stage` is the `--stage`
- * ARGUMENT, never an env var.
+ * ARGUMENT, never an env var. An explicit `cadence` override wins when present —
+ * that is the argument the fast smoke-twin passes (see the module header).
  */
-export function resolveSmokeCadence(opts: { stage?: boolean } = {}): SmokeCadence {
+export function resolveSmokeCadence(
+  opts: { stage?: boolean; cadence?: SmokeCadenceProfile } = {},
+): SmokeCadence {
+  if (opts.cadence === "fast") return FAST;
+  if (opts.cadence === "realistic") return REALISTIC;
   return opts.stage ? REALISTIC : FAST;
 }
 
@@ -365,10 +381,18 @@ export function assertProductionConstants(
  * or scheduler ownership is not what the invocation claims.
  */
 export function resolveSmokeCadenceForBoot(
-  opts: { stage: boolean; env: Record<string, string | undefined> },
+  opts: { stage: boolean; cadence?: SmokeCadenceProfile; env: Record<string, string | undefined> },
 ): SmokeCadence {
-  const cadence = resolveSmokeCadence({ stage: opts.stage });
-  assertProductionConstants(cadence, opts.env, { production: opts.stage });
+  const cadence = resolveSmokeCadence({ stage: opts.stage, cadence: opts.cadence });
+  // "Production" means exactly "realistic cadence on the pinned port". An
+  // explicit `--cadence fast` on the pinned port — the smoke-twin — is a TEST
+  // boot: production-shaped DATA on the tunnel origin, run at the fast cadence,
+  // so it takes the NON-production branch, which demands fast (as resolved here,
+  // by construction). The opposite slip is equally fatal: a non-pinned boot
+  // cannot claim the realistic profile either.
+  assertProductionConstants(cadence, opts.env, {
+    production: opts.stage && cadence.profile === "realistic",
+  });
   return cadence;
 }
 

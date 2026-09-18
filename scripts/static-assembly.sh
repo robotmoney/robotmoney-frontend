@@ -36,6 +36,16 @@ bun scripts/web-client/version.ts > "$OUT/version.json"
 
 PRERENDER_DIR="$OUT" bun scripts/prerender.ts
 
+# T26: the served SPA's own identity. `_static` is a bind mount of a build
+# output produced OUTSIDE the image, so nothing else in the system can say which
+# commit the bytes a visitor receives came from — the api reports this manifest
+# beside its own baked commit/tag at /version and /health, and a redeploy that
+# skipped this script is then visible instead of silently serving last release's
+# HTML from a correctly-identified container. LAST, so it describes the finished
+# directory; RM_BUILD_* are inherited from the caller (scripts/stack/stack.ts
+# resolves them once and uses the same values for `docker compose build`).
+bun scripts/static-manifest.ts "$OUT"
+
 # Post-deploy verification (issue #548): check live parity
 if [ "${VERIFY_LIVE_ASSEMBLY:-}" = "true" ]; then
   echo "Verifying live SKILL.md against assembled copy..."

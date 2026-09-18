@@ -114,12 +114,16 @@ for (const id of sessionIds) {
     judgeWroteNothing: replay.judgeWroteNothing,
     rationaleDisagrees: replay.rationale.disagrees,
     tiedStances: replay.rationale.tiedStances,
-    source: replay.outcome.source,
-    fallbackReason: replay.outcome.fallbackReason ?? null,
-    thinlySupported: replay.outcome.opinion.release_safety.thinly_supported,
-    release: replay.outcome.opinion.release_safety.release,
-    promptHash: replay.outcome.promptHash,
-    inputsDigest: replay.outcome.inputsDigest,
+    // NULL when the replay's own judge call refused (issue #969) — the normal
+    // state for an auditor pointed at production without a judge model of its
+    // own. Reported as a refusal rather than silently rendered as an opinion.
+    source: replay.outcome?.source ?? null,
+    judgeRefusal: replay.judgeRefusal,
+    thinlySupported: replay.outcome?.opinion.release_safety.thinly_supported ?? null,
+    release: replay.outcome?.opinion.release_safety.release ?? null,
+    // Input-derived, so they survive a refusal — see JudgeReplayResult.
+    promptHash: replay.promptHash,
+    inputsDigest: replay.inputsDigest,
     digestVerdict: replay.digestVerdict,
     digestReproducible: replay.digestReproducible,
     digestScheme: replay.digestScheme,
@@ -145,10 +149,10 @@ for (const id of sessionIds) {
         replay.sessionId,
         `state=${replay.state}`,
         `takes=${replay.takeCount}`,
-        `judge=${replay.outcome.source}${replay.outcome.fallbackReason ? `(${replay.outcome.fallbackReason})` : ""}`,
-        `release=${replay.outcome.opinion.release_safety.release}`,
+        `judge=${replay.outcome?.source ?? `refused(${replay.judgeRefusal ?? "unknown"})`}`,
+        `release=${replay.outcome?.opinion.release_safety.release ?? "n/a"}`,
         digestBadge,
-        replay.outcome.opinion.release_safety.thinly_supported ? "THIN" : "",
+        replay.outcome?.opinion.release_safety.thinly_supported ? "THIN" : "",
         replay.judgeWroteNothing ? "" : "JUDGE-WROTE-THE-VECTOR",
       ].join("  ").trimEnd(),
     );

@@ -59,7 +59,7 @@ function baseEnv(): Record<string, string> {
       // the set and the unset resolution, so neither may be inherited.
       "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
       // Build identity is asserted set and unset below; never inherit it.
-      "AUM_PRODUCER_REVISION",
+      "AUM_PRODUCER_REVISION", "RM_BUILD_COMMIT", "RM_BUILD_TAG",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -185,6 +185,9 @@ const PREWARM: readonly RenderArgs[] = [
   ...ALL_COMPOSITIONS.flatMap((files): RenderArgs[] => [
     // "AUM producer revision reaches every backend image build", explicit.
     { knobs: { AUM_PRODUCER_REVISION: "git-fixture-abc123" }, files },
+    // The AC-ID-03 build-identity cases, explicit. (Their unset baseline is the
+    // `{}` render below, shared with every other unset case.)
+    { knobs: { RM_BUILD_COMMIT: "abc123def456", RM_BUILD_TAG: "v0.5.0-rc.2" }, files },
     // The unset baseline: the revision cases, the healthcheck sweep, and the
     // boot-guard "even when UNSET" cases all read it.
     { knobs: {}, files },
@@ -315,6 +318,56 @@ describe("AUM producer revision reaches every backend image build", () => {
     expect(dockerfile).toMatch(/^ARG AUM_PRODUCER_REVISION$/m);
     expect(dockerfile).toMatch(/^ENV AUM_PRODUCER_REVISION=\$AUM_PRODUCER_REVISION$/m);
     expect(dockerfile).not.toMatch(/AUM_PRODUCER_REVISION=.*(?:unknown|package|date|timestamp)/i);
+  });
+
+  // AC-ID-03. The image's OWN identity travels the same way and under the same
+  // rule: an explicit build arg, baked as ENV, with no substitute when it is
+  // absent. `/version` reports whatever this carries, so a fallback here would
+  // become a confident wrong answer to "is staging running the pinned RC".
+  for (const [label, files] of COMPOSITIONS) {
+    test(`${label} passes the resolved build commit and tag to every backend Docker build`, () => {
+      const cfg = composeConfig({ RM_BUILD_COMMIT: "abc123def456", RM_BUILD_TAG: "v0.5.0-rc.2" }, files);
+      for (const service of BACKEND_IMAGE_BUILDS) {
+        expect(`${service}:${cfg.services[service]?.build?.args?.RM_BUILD_COMMIT ?? "missing"}`)
+          .toBe(`${service}:abc123def456`);
+        expect(`${service}:${cfg.services[service]?.build?.args?.RM_BUILD_TAG ?? "missing"}`)
+          .toBe(`${service}:v0.5.0-rc.2`);
+      }
+    });
+
+    test(`${label} leaves the build identity blank when it is unset, never substituted`, () => {
+      const cfg = composeConfig({}, files);
+      for (const service of BACKEND_IMAGE_BUILDS) {
+        expect(`${service}:${cfg.services[service]?.build?.args?.RM_BUILD_COMMIT ?? ""}`).toBe(`${service}:`);
+        expect(`${service}:${cfg.services[service]?.build?.args?.RM_BUILD_TAG ?? ""}`).toBe(`${service}:`);
+      }
+    });
+
+    test(`${label} never re-declares the baked identity as a runtime environment entry`, () => {
+      // An `environment:` entry with a blank default would override the ENV the
+      // Dockerfile baked and erase the identity — the one way this wiring can
+      // fail silently rather than loudly.
+      const cfg = composeConfig({}, files);
+      for (const service of BACKEND_IMAGE_BUILDS) {
+        const env = (cfg.services[service]?.environment ?? {}) as Record<string, unknown>;
+        expect(`${service}:${Object.keys(env).filter((k) => k.startsWith("RM_BUILD_")).join(",")}`).toBe(`${service}:`);
+      }
+    });
+  }
+
+  test("the Dockerfile bakes the build identity with no fallback", async () => {
+    const dockerfile = await Bun.file(join(repoRoot, "backend/Dockerfile")).text();
+    for (const name of ["RM_BUILD_COMMIT", "RM_BUILD_TAG"]) {
+      expect(dockerfile).toMatch(new RegExp(`^ARG ${name}$`, "m"));
+      expect(dockerfile).toMatch(new RegExp(`^ENV ${name}=\\$${name}$`, "m"));
+      expect(dockerfile).not.toMatch(new RegExp(`${name}=.*(?:unknown|package|date|timestamp)`, "i"));
+    }
+    // Nothing in the image may ask git at runtime — the container has no
+    // repository, and on a staging host the nearest one is the unpinned
+    // checkout AC-ID-03 exists to catch. Comments may DISCUSS git; no
+    // instruction may invoke it.
+    const instructions = dockerfile.split("\n").filter((l) => l.trim() !== "" && !l.trimStart().startsWith("#"));
+    expect(instructions.filter((l) => /\bgit\b/.test(l))).toEqual([]);
   });
 });
 
@@ -530,7 +583,12 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     expect(smokeMain).toContain('"--already-migrated"');
     expect(smokeMain).toContain('"src/producer/index.ts", "seed"');
     expect(smokeMain).not.toContain("v0-seed-bootstrap");
-    expect(smokeMain).toContain("{ stage: staticPortMode }");
+    // `staticPortMode` still reaches the resolvers as the `stage` fact — but it
+    // no longer travels alone: PR be6ac57c added `cadence` alongside it, so the
+    // exact-literal `{ stage: staticPortMode }` this pinned stopped existing and
+    // this assertion went red on the branch tip. Pin the PROPERTY, which is what
+    // it was ever about, rather than the punctuation around it.
+    expect(smokeMain).toMatch(/\bstage:\s*staticPortMode\b/);
     const stackSrc = await Bun.file(join(repoRoot, "scripts/stack/stack.ts")).text();
     expect(stackSrc).toContain("migrateScriptArgs");
     const stackConfigSrc = await Bun.file(join(repoRoot, "scripts/stack/config.ts")).text();

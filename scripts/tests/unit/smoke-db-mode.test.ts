@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   bannerFor,
+  cadenceOverride,
   DB_FLAG,
   keptDataDescription,
   DB_MODES,
@@ -143,6 +144,26 @@ describe("validateArgv — unknown flags are errors, not silence", () => {
 
   test("a clean invocation passes", () => {
     expect(validateArgv(argv("--smoke", DB_FLAG, "smoke-twin", "--no-tui"))).toEqual([]);
+  });
+
+  test("--cadence is a known arity-1 flag (the fast smoke-twin's override)", () => {
+    expect(validateArgv(argv("--cadence", "fast"))).toEqual([]);
+    expect(validateArgv(argv("--cadence=realistic"))).toEqual([]);
+    expect(validateArgv(argv("--cadence")).join(" ")).toMatch(/requires a value/);
+  });
+
+  test("cadenceOverride reads the value and THROWS on anything but fast|realistic", () => {
+    expect(cadenceOverride(argv("--cadence", "fast"))).toBe("fast");
+    expect(cadenceOverride(argv("--cadence=realistic"))).toBe("realistic");
+    expect(cadenceOverride(argv("--smoke"))).toBeUndefined();
+    expect(() => cadenceOverride(argv("--cadence", "overnight"))).toThrow(/--cadence accepts "fast" or "realistic"/);
+  });
+
+  test("parseDataPath surfaces the cadence override, and a bad value fails at parse time", () => {
+    expect(parse(argv("--cadence", "fast")).cadence).toBe("fast");
+    expect(parse(argv("--cadence=realistic")).cadence).toBe("realistic");
+    expect(parse(argv("--smoke")).cadence).toBeUndefined();
+    expect(() => parse(argv("--cadence", "overnight"))).toThrow(/--cadence accepts "fast" or "realistic"/);
   });
 
   test("an arity-1 flag's value is consumed, not read as a positional", () => {
