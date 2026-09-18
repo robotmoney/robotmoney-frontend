@@ -365,6 +365,18 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       return 1;
     }
 
+    // PRODUCT invariants, same driver CI and the cutover run. The frontend
+    // checks above assert CONTENT; this asserts that the swarm pipeline
+    // produced decisions and that each published allocation vector still
+    // recomputes from its own published takes (D42). tier=full: a twin may be
+    // driven.
+    log("verifying product invariants against the migrated stack (verify-live)");
+    const verifyCode = await spawn(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", "full"]);
+    if (verifyCode !== 0) {
+      err("product verification failed against the migrated, booted stack");
+      return 1;
+    }
+
     if (opts.onReady) {
       // The smoke-twin's URL is recovered from the container, not from
       // smoke-state.json, which redacts it — see smokeTwinUrlFromContainer().

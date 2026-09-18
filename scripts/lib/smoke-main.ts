@@ -1250,6 +1250,14 @@ async function main(): Promise<void> {
     await run(["bun", "run", "scripts/smoke-live-smoke.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
 
+    // PRODUCT invariants, via the same driver a cutover runs (scripts/verify-live.ts).
+    // Called here so CI and production assert the same things from one
+    // implementation, instead of CI having legs the release's postflight does
+    // not. tier=full because this is a twin: it may drive the pipeline.
+    console.log("[smoke] verifying product invariants (verify-live)…");
+    await run(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", "full"], repoRoot,
+      { ...process.env } as Record<string, string>, "live product verification");
+
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
     // EXACT boot instead of standing up a parallel stack. Only runs when
     // RMPC_RELEASE_E2E=1 — unset (and therefore a no-op) in e2e.yml, so this
