@@ -212,6 +212,17 @@ The smoke-twin must use the same release candidate that is planned for productio
 Any failure, warning, or unexpected state change discovered on the smoke-twin is a
 blocking issue.
 
+**The rehearsal must seat the whole restored roster** (added 2026-09-18, after
+this went wrong too). A twin boot adopts every ACTIVE member the dump restored;
+members with no committed signing key sign with a per-boot key the harness
+registers against their restored id, and the boot names those seats. Rehearsing
+a subset is not a smaller rehearsal, it is a misleading one — the stage twin ran
+3-of-7 sessions unnoticed, because a missing member and a silent member render
+identically. Enforced at boot (`unseatedActiveCharacters()`) and over HTTP by
+`verify-live --tier full` (`twin-roster:every-active-member-seated`); see
+`docs/runbooks/rollout-procedure.md` §6 and architecture.md's `--db` section for
+why it is sound on a twin and permitted nowhere else.
+
 **The rehearsal must migrate under production's privilege model, not as the
 container's superuser** (added 2026-09-18, after this went wrong). A smoke-twin
 restores with `pg_restore --no-owner --no-privileges` and its container

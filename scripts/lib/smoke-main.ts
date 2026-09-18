@@ -37,6 +37,7 @@ import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./smoke-
 import {
   SMOKE_MEMBERS,
   adoptRestoredRoster,
+  simulatedSigners,
   judgeCoverageCandidate,
   withMemberAbsent,
   bootstrapStepNames,
@@ -1525,15 +1526,26 @@ async function main(): Promise<void> {
   //
   // Both scenarios reconnect database identities through one helper. It returns
   // a fresh array so a previous run can never contaminate this run's seats.
-  if (smokeMode) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+  // A TWIN rehearses the whole swarm; a smoke boot against a database that
+  // outlives it does not (adoptionFilter in smoke-mode.ts says why).
+  const twinRoster = dataPath.kind === "smoke-twin";
+  if (twinRoster) {
+    log("twin: seating EVERY active member of the restored roster — a member with no committed key signs with a per-boot SIMULATED key");
+  } else if (smokeMode) {
+    log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
+  }
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
     log("roster unreadable at boot — continuing with this run's simulation members");
   } else {
     const before = sessionMembers.length;
-    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers);
+    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers, { twin: twinRoster });
     if (sessionMembers.length > before) log(`swarm now ${sessionMembers.length} seats (${sessionMembers.length - before} restored identities reconnected)`);
+    // Named every boot. These takes carry a real member's name over a signature
+    // this stack minted, so the cheapest place to state that is where it happens.
+    const simulated = simulatedSigners(sessionMembers);
+    if (simulated.length) log(`${simulated.length} seat(s) sign with a SIMULATED per-boot key: ${simulated.join(", ")}`);
   }
 
   // Populate the per-subject panes and seed their countdowns.

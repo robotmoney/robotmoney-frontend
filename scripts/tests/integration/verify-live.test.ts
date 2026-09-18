@@ -66,14 +66,24 @@ afterAll(() => {
   for (const s of servers) s.stop();
 });
 
-/** A stub serving exactly the three routes the leg reads. */
-function serve(sessions: StubSession[], opts: { healthy?: boolean } = {}): string {
+/** Roster rows for the `full`-tier twin-roster leg. Ids match the take fixtures
+ *  above, because that leg keys a seat on handle-or-id exactly as adoption does. */
+type StubMember = { id: string; handle?: string; name: string; status: string };
+const MEMBER = (id: string, status = "active"): StubMember => ({ id, handle: id, name: id, status });
+
+/** A stub serving exactly the routes the legs read. */
+function serve(sessions: StubSession[], opts: { healthy?: boolean; members?: StubMember[] } = {}): string {
   const server = Bun.serve({
     port: 0,
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
         return opts.healthy === false ? new Response("no", { status: 503 }) : new Response("ok");
+      }
+      if (url.pathname === "/api/swarm/members") {
+        // Default: exactly the members the take fixtures speak for, so the
+        // readonly-tier cases stay unaffected by the full-tier leg's existence.
+        return Response.json({ members: opts.members ?? TAKES.map((t) => MEMBER(t.memberId)) });
       }
       if (url.pathname === "/api/swarm/sessions") {
         // The light index row: everything except `takes`, matching issue #243.
@@ -206,5 +216,63 @@ describe("verify-live — position_actions history does not fake a pass", () => 
     expect(code).toBe(0);
     expect(out).toContain("NOT A PASS");
     expect(out).toMatch(/0 of them bucket_weights/);
+  }, 60_000);
+});
+
+// ── INVARIANT #3: a twin seats the WHOLE restored roster ────────────────────
+// `full` tier only. Against production the same assertion would be wrong — an
+// absent member there is an owner's agent being down, which the swarm tolerates
+// by design — so these cases also pin that the leg stays OFF by default.
+describe("verify-live — twin-roster (full tier only)", () => {
+  const SEVEN = [
+    ...TAKES.map((t) => MEMBER(t.memberId)),
+    ...["dualmint", "maximus", "shodai", "woon", "athena"].map((h) => MEMBER(h)),
+  ];
+
+  test("a twin whose session seats every active member exits 0", async () => {
+    const { code, out } = await runDriver(serve(HEALTHY()), ["--tier", "full"]);
+    expect(code).toBe(0);
+    expect(out).toContain("twin-roster:every-active-member-seated");
+    expect(out).toMatch(/live take from all 2 active member\(s\)/);
+  }, 60_000);
+
+  test("THE 3-OF-7 SHORTFALL fails and names who never sat", async () => {
+    // The exact stage defect: a roster of seven, a session carrying takes from
+    // two. Before this leg existed the run was green, because no other check
+    // compares the roster against the take set.
+    const { code, out } = await runDriver(serve(HEALTHY(), { members: SEVEN }), ["--tier", "full"]);
+    expect(code).toBe(1);
+    expect(out).toContain("twin-roster:every-active-member-seated");
+    for (const missing of ["dualmint", "maximus", "shodai", "woon", "athena"]) {
+      expect(out).toContain(missing);
+    }
+  }, 60_000);
+
+  test("the same shortfall is NOT a failure at the default tier — it is SKIPPED, and said so", async () => {
+    // Production runs this driver readonly. If the leg ever leaked into that
+    // tier it would redden every cutover for a member whose agent is offline —
+    // an honest state the swarm tolerates. It must not run, and per the
+    // harness's "recorded, never silent" rule it must say that it did not,
+    // so a readonly report cannot be mistaken for a full one.
+    const { code, out } = await runDriver(serve(HEALTHY(), { members: SEVEN }));
+    expect(code).toBe(0);
+    expect(out).toContain("twin-roster:skipped");
+    expect(out).toMatch(/not run at tier=readonly/);
+    expect(out).not.toContain("twin-roster:every-active-member-seated");
+  }, 60_000);
+
+  test("an ARCHIVAL-only session does not count as seating", async () => {
+    // Restored history carries takes from everyone and proves nothing about
+    // who THIS boot seated — the leg must keep looking, then fail.
+    const archival = HEALTHY().map((s) => ({ ...s, takes: s.takes.map((t) => ({ ...t, archival: true })) }));
+    const { code, out } = await runDriver(serve(archival), ["--tier", "full"]);
+    expect(code).toBe(1);
+    expect(out).toMatch(/no session with a live \(non-archival\) take/);
+  }, 60_000);
+
+  test("an empty roster fails rather than passing vacuously", async () => {
+    const { code, out } = await runDriver(serve(HEALTHY(), { members: [] }), ["--tier", "full"]);
+    expect(code).toBe(1);
+    expect(out).toContain("twin-roster:active-members");
   }, 60_000);
 });

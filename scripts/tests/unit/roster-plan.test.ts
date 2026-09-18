@@ -25,7 +25,7 @@ import {
 } from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/smoke-newcomers.ts";
 import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
-import { SMOKE_MEMBERS, adoptionFilter } from "../../lib/smoke-mode.ts";
+import { SMOKE_MEMBERS, adoptionFilter, simulatedSigners, unseatedActiveCharacters } from "../../lib/smoke-mode.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
   id: over.id ?? `id-${over.name.toLowerCase()}`,
@@ -305,5 +305,87 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // Every seated persona signs with a key that ALREADY existed — never one
     // invented for it here.
     for (const m of plan.adopt) expect(personaIdentity(m.name)).toBeDefined();
+  });
+});
+
+// ── A TWIN seats the WHOLE restored roster ──────────────────────────────────
+// The stage twin ran sessions with three seats while its restored roster showed
+// seven active members: the four real ones (DualMint, Maximus, ShodAI, Woon)
+// were filtered out for having no committed key, and the page gave no hint that
+// anyone was missing. A twin database is a throwaway copy restored per boot, so
+// neither reason for that filter applies to it — see adoptionFilter's comment.
+describe("planAdoptions on a twin (the whole restored roster)", () => {
+  const twinFilter = adoptionFilter(true, true);
+  // The live stage roster, as the restored production dump actually holds it.
+  const RESTORED = [
+    row({ name: "Athena", id: "athena" }),
+    row({ name: "Robot Money", id: "robotmoney" }),
+    row({ name: "Noop analyst", id: "woon-archive" }),
+    row({ name: "DualMint", id: "dualmint" }),
+    row({ name: "Maximus", id: "maximus" }),
+    row({ name: "ShodAI", id: "shodai" }),
+    row({ name: "Woon", id: "woon" }),
+  ];
+
+  test("every active member is seated, committed key or not", () => {
+    const plan = planAdoptions(RESTORED, new Set(), twinFilter);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(
+      ["athena", "dualmint", "maximus", "robotmoney", "shodai", "woon", "woon-archive"],
+    );
+  });
+
+  test("the smoke allowlist is what it replaces — same roster, three seats", () => {
+    const plan = planAdoptions(RESTORED, new Set(), adoptionFilter(true));
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon-archive"]);
+  });
+
+  test("still ACTIVE only, still one seat per character", () => {
+    const plan = planAdoptions(
+      [
+        ...RESTORED,
+        row({ name: "Applicant", id: "applied-1", status: "applied" }),
+        row({ name: "Retired", id: "gone-1", status: "deactivated" }),
+        row({ name: "DualMint", id: "dualmint-dup" }),
+      ],
+      new Set(),
+      twinFilter,
+    );
+    expect(plan.adopt.some((m) => m.id === "applied-1")).toBe(false);
+    expect(plan.adopt.some((m) => m.id === "gone-1")).toBe(false);
+    expect(plan.adopt.filter((m) => m.name === "DualMint")).toHaveLength(1);
+    expect(plan.duplicates.map((m) => m.id)).toEqual(["dualmint-dup"]);
+  });
+
+  test("simulatedSigners names exactly those signing with a minted key", () => {
+    // Athena / Robot Money / Noop analyst own committed identities; the four
+    // real members do not, so their takes carry OUR signature and the boot says so.
+    expect(simulatedSigners(RESTORED).sort()).toEqual(["DualMint", "Maximus", "ShodAI", "Woon"]);
+    expect(simulatedSigners([{ name: "Athena" }])).toEqual([]);
+  });
+});
+
+describe("unseatedActiveCharacters (the twin's coverage invariant)", () => {
+  const roster = [
+    row({ name: "Athena" }),
+    row({ name: "DualMint" }),
+    row({ name: "Retired", status: "deactivated" }),
+  ];
+
+  test("empty when every active character is seated", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }, { name: "DualMint" }])).toEqual([]);
+  });
+
+  test("names whoever was left out — the failure that is otherwise silent", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }])).toEqual(["DualMint"]);
+  });
+
+  test("an inactive row is not owed a seat, and a name is reported once", () => {
+    expect(unseatedActiveCharacters([...roster, row({ name: "DualMint", id: "dup" })], [])).toEqual(
+      ["Athena", "DualMint"],
+    );
+  });
+
+  test("matching is case- and whitespace-insensitive, as planAdoptions is", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: " athena " }, { name: "DUALMINT" }])).toEqual([]);
   });
 });

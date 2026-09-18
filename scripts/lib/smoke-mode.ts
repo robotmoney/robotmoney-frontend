@@ -172,11 +172,70 @@ export const SMOKE_MEMBER_NAMES: ReadonlySet<string> = Object.freeze(
  * committed key; minting one for a member the fixture does not know is exactly
  * the duplicate-making behaviour issue #537 keeps out.
  */
-export function adoptionFilter(smoke: boolean): (name: string) => boolean {
+export function adoptionFilter(smoke: boolean, twin = false): (name: string) => boolean {
+  // A TWIN seats the WHOLE restored roster, fixture or not.
+  //
+  // Both rules above exist to protect a PERSISTENT database: a member whose key
+  // the smoke invented would be a real member re-keyed by us, and a per-boot
+  // container key cannot sign again after a restart. A `--db smoke-twin` boot has
+  // neither hazard. Its database is a throwaway copy of production, restored
+  // fresh for this boot and thrown away with it (docs/runbooks/v0-5-0-rollout.md
+  // §5), so nothing we re-key here outlives the boot and nothing we write can
+  // reach the real member. What the old rules bought there was a session with 3
+  // seats on a roster of 7 — the twin silently exercising less than half the
+  // swarm it exists to rehearse.
+  //
+  // So: under `twin`, every ACTIVE restored member is adoptable. The three with
+  // committed keys still sign as themselves; everyone else signs with a key
+  // their container generates for this boot alone, which the harness registers
+  // through the same privileged shortcut adoption already uses. That is a
+  // SIMULATED member — real name, real lens, real history, a signature that is
+  // ours and not theirs — and `simulatedSigners()` below is what makes the boot
+  // say so out loud rather than leaving it to be inferred from a roster count.
+  if (twin) return () => true;
   return (name: string) => {
     if (smoke && !SMOKE_MEMBER_NAMES.has(name.trim().toLowerCase())) return false;
     return Boolean(personaIdentity(name));
   };
+}
+
+/**
+ * Of the members about to be seated, which will sign with a key this boot
+ * invented rather than with their own committed identity.
+ *
+ * Pure, and deliberately name-based: it answers the question the session page
+ * cannot ("is this take really theirs?"), so the boot can print it.
+ */
+export function simulatedSigners(members: readonly { name: string }[]): string[] {
+  return members.filter((m) => !personaIdentity(m.name)).map((m) => m.name);
+}
+
+/**
+ * Active characters on `roster` that nobody is seating — the twin's invariant,
+ * as a value rather than as an inline check.
+ *
+ * A twin exists to rehearse the swarm it restored, so a seat count below the
+ * roster count is a defect, and a SILENT one: a session that runs with three of
+ * seven members is indistinguishable, on the page, from a session where four
+ * members had nothing to say. That is exactly how a 3-of-7 twin ran unnoticed.
+ *
+ * Distinct by NAME, matching planAdoptions: several active rows for one
+ * character are the duplicate-admission residue, and seating that character
+ * once covers all of them.
+ */
+export function unseatedActiveCharacters(
+  roster: readonly { name: string; status: string }[],
+  seated: readonly { name: string }[],
+): string[] {
+  const covered = new Set(seated.map((m) => m.name.trim().toLowerCase()));
+  const missing = new Map<string, string>();
+  for (const m of roster) {
+    if (m.status !== "active") continue;
+    const key = m.name.trim().toLowerCase();
+    if (covered.has(key) || missing.has(key)) continue;
+    missing.set(key, m.name);
+  }
+  return [...missing.values()];
 }
 
 /** Return a fresh roster for this run; never mutate module-global members. */
@@ -184,11 +243,13 @@ export function adoptRestoredRoster(
   plan: ScenarioPlan,
   roster: readonly RosterMember[],
   seated: readonly ScenarioMember[] = plan.members,
+  opts: { twin?: boolean } = {},
 ): ScenarioMember[] {
+  const twin = Boolean(opts.twin);
   const result = planAdoptions(
     [...roster],
     new Set(seated.map((m) => m.memberId)),
-    adoptionFilter(plan.kind === "smoke"),
+    adoptionFilter(plan.kind === "smoke", twin),
   );
   const adopted = result.adopt.map((m) => ({
     memberId: m.id,
@@ -197,7 +258,12 @@ export function adoptRestoredRoster(
     bias: 0,
     present: true,
   }));
-  if (plan.kind === "smoke") {
+  if (twin) {
+    const missing = unseatedActiveCharacters(roster, [...seated, ...adopted]);
+    if (missing.length) {
+      throw new Error(`twin boot left ${missing.length} active roster character(s) unseated: ${missing.join(", ")}`);
+    }
+  } else if (plan.kind === "smoke") {
     // Compared by HANDLE (issue #685). The adopted rows carry whatever id this
     // deployment generated, so an id comparison could only ever be satisfied by
     // a seed that hardcoded slug ids — the thing this issue removes. The handle

@@ -414,6 +414,26 @@ The rehearsal is a pass only when all of the following are true:
     the invariant, only an absence of evidence, and it is expected until a
     `bucket_weights` session publishes after `0051` lands.
 
+12. **The rehearsed session seated the WHOLE restored roster.** A twin boot
+    adopts every ACTIVE member the dump restored — not only the three personas
+    holding a committed key (`scripts/lib/swarm/fixtures/persona-keys.json`).
+    Members without one sign with a key their container generates for that boot
+    and the harness registers against the restored member id; the boot names
+    them (`N seat(s) sign with a SIMULATED per-boot key: …`). This is safe
+    ONLY on a twin, and the code restricts it to one: the database is a
+    throwaway copy restored per boot, so a re-keyed member never outlives the
+    run and never touches the real member (`adoptionFilter`'s `twin` branch,
+    `scripts/lib/smoke-mode.ts`).
+
+    Two things enforce it rather than leaving it to a reader: the boot itself
+    throws if any active character is left unseated
+    (`unseatedActiveCharacters()`), and `verify-live --tier full` records
+    `twin-roster:every-active-member-seated` against the live stack. Read the
+    boot's `swarm now N seats` line against the roster count — a twin that
+    rehearses 3 of 7 members looks EXACTLY like a session where four members
+    had nothing to say, which is how it went unnoticed on stage until
+    2026-09-18.
+
 Rehearse rollback by checking out `v0.4.0`, running both forced installs, and
 booting it against a **fresh** restored copy (the pre-migration dump, not the
 smoke-twin post-migration). This release is a real forward-only migration —
@@ -425,7 +445,7 @@ route-check output, baseline comparison, and operator go/no-go sign-off.
 
 ### 5.1 Cut the RC tag
 
-Only once every §5 criterion (1-11) has passed, the rollback rehearsal is
+Only once every §5 criterion (1-12) has passed, the rollback rehearsal is
 recorded, and the stage report carries the operator's go sign-off. A rejected
 stage pass returns to §4/§5 on a fixed commit and consumes no rc number,
 because nothing has been tagged yet to increment:

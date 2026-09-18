@@ -788,6 +788,26 @@ What it does:
    `smoke-down` keeps by contract but which, for a rehearsal, is pure litter
    holding production-derived data.
 
+> **Who sits in the rehearsed sessions — everyone the dump restored.** A
+> `--db smoke-twin` boot seats every ACTIVE member of the restored roster, not
+> only the three personas whose signing keys are committed to the repo. A member
+> without a committed key signs with a keypair its container generates for that
+> boot, registered against the restored member id; the boot names those seats
+> (`N seat(s) sign with a SIMULATED per-boot key: …`), because such a take
+> carries a real member's name over a signature this stack minted.
+>
+> That is sound on a twin and nowhere else, which is why the code allows it
+> nowhere else (`adoptionFilter`'s `twin` branch): a twin database is a
+> throwaway copy restored per boot, so a re-keyed member never outlives the run
+> and the real member is never touched. Rehearsing a subset was the alternative,
+> and it is worse than it sounds — the standing stage twin rehearsed 3 of 7
+> members until 2026-09-18, and nothing showed it, because a session missing
+> four members renders exactly like a session where four members had nothing to
+> say. The boot now throws if any active character is left unseated, and
+> `verify-live --tier full` asserts the same thing over HTTP
+> (`twin-roster:every-active-member-seated`). Check the boot's `swarm now N
+> seats` line against the roster count.
+
 > **The isolated `git worktree` is gone, and so is the throwaway `.env`.**
 > Earlier revisions of this step checked out a detached worktree, symlinked
 > `node_modules` into it and wrote it a private `.env`, for exactly one reason:

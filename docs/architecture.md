@@ -3122,6 +3122,30 @@ The smoke-twin's tooling is version-agnostic and lives outside any release direc
 unattended with the frontend checks, and `bun run smoke:smoke-twin` is the standing variant on the
 pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
 
+**Who sits in a twin's sessions — the whole restored roster.** A `--db smoke-twin`
+boot seats EVERY active member the dump restored, not only the personas whose signing keys
+are committed in `scripts/lib/swarm/fixtures/persona-keys.json`. A member without a committed
+key signs with a keypair its own container generates for that boot, which the harness registers
+against the restored member id through the same privileged shortcut adoption already uses — so
+its takes carry a real member's name over a signature this stack minted. The boot says so, by
+name (`N seat(s) sign with a SIMULATED per-boot key: …`).
+
+This is deliberately twin-ONLY (`adoptionFilter`'s `twin` branch in
+`scripts/lib/smoke-mode.ts`). The two rules it relaxes exist to protect a database that
+OUTLIVES the boot: inventing a key for somebody's real member re-keys that member, and a
+per-boot container key cannot sign again after a restart. A twin has neither property — it is
+a throwaway copy restored fresh per boot and discarded with it — so neither rule buys anything
+there, while the cost was concrete: the standing stage twin rehearsed 3 of 7 members, and a
+session missing four members is indistinguishable, on the page, from a session where four
+members had nothing to say. Two things now enforce attendance rather than describing it:
+`unseatedActiveCharacters()` throws at boot if any active character is left unseated, and
+`verify-live --tier full` records `twin-roster:every-active-member-seated` against the live
+stack. The leg is `full`-tier because the same assertion would be WRONG against production,
+where an absent member is an honest state the swarm is built to tolerate. One consequence is
+visible at cutover: the harness records a leg it did not run rather than hiding it, so a
+readonly run now reports `twin-roster:skipped` as a WARN. That is scope, not a defect — it
+says this invariant was not verified against this target, which is exactly true.
+
 A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
 drives the same shared driver and adds the half that *is* version-specific: it passes an
 `onReady` hook, so that release's postflight runs against the migrated smoke-twin between the
