@@ -62,25 +62,44 @@ export const REQUIRED_TABLES = [
   "swarm_consensus_receipts",
 ] as const;
 
-/** Tables the v0.5.0 migrations create; must be absent before migrating, present after. */
-export const NEW_RELEASE_TABLES = [
-  "chain_address_floors",
-  "asset_prices",
-  "asset_price_floors",
-  "analytics_overwrite_events",
-  "source_acquisitions",
-  "source_acquisition_events",
-  "source_payloads",
-  "source_fetches",
-  "source_value_versions",
-  "analytics_ledger_methodology_versions",
-  "analytics_ledger_runs",
-  "analytics_ledger_run_events",
-  "analytics_data_vintages",
-  "analytics_vintage_members",
-  "analytics_output_snapshots",
-  "analytics_report_snapshots",
-  "swarm_brief_revisions",
-  "analytics_read_mode",
-  "analytics_parity_observations",
-] as const;
+/**
+ * Which migration creates each table v0.5.0 adds.
+ *
+ * Attributed per-migration rather than kept as one flat list because the
+ * "must be absent before migrating" rule is only true of a table whose
+ * migration is still PENDING. Production applied 0045-0048 on 2026-09-08
+ * outside this rollout (see the runbook's §0 note), so chain_address_floors,
+ * asset_prices and asset_price_floors legitimately exist there already —
+ * a flat list cannot tell that apart from a wrong target, and graded it as
+ * drift. Derived from the CREATE TABLE statements in backend/migrations/,
+ * not from the runbook's prose table.
+ */
+export const NEW_RELEASE_TABLES_BY_MIGRATION: Readonly<Record<string, readonly string[]>> = {
+  "0045_chain_address_floors.sql": ["chain_address_floors"],
+  "0046_asset_prices.sql": ["asset_prices", "asset_price_floors"],
+  "0056_analytics_overwrite_events.sql": ["analytics_overwrite_events"],
+  "0057_source_acquisition_ledger.sql": [
+    "source_acquisitions",
+    "source_acquisition_events",
+    "source_payloads",
+    "source_fetches",
+    "source_value_versions",
+  ],
+  "0058_analytics_run_ledger.sql": [
+    "analytics_ledger_methodology_versions",
+    "analytics_ledger_runs",
+    "analytics_ledger_run_events",
+    "analytics_data_vintages",
+    "analytics_vintage_members",
+  ],
+  "0059_analytics_output_and_report_snapshots.sql": [
+    "analytics_output_snapshots",
+    "analytics_report_snapshots",
+    "swarm_brief_revisions",
+  ],
+  "0060_analytics_ledger_cutover.sql": ["analytics_read_mode", "analytics_parity_observations"],
+};
+
+/** Every table the v0.5.0 migrations create. Postflight asserts all of these
+ *  are present after the release; preflight checks only the pending subset. */
+export const NEW_RELEASE_TABLES: readonly string[] = Object.values(NEW_RELEASE_TABLES_BY_MIGRATION).flat();

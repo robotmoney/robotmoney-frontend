@@ -21,7 +21,7 @@ import { tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
 import { runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
-import { NEW_RELEASE_TABLES, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS, TAG_GLOB } from "./release.ts";
+import { NEW_RELEASE_TABLES_BY_MIGRATION, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS, TAG_GLOB } from "./release.ts";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(dir, "..", "..", "..", "..");
@@ -228,6 +228,7 @@ export async function runChecks(
   const expectedPending = new Set<string>(RELEASE_MIGRATIONS);
   const pending = onDisk.filter((name) => !applied.has(name));
   const unexpectedPending = pending.filter((name) => !expectedPending.has(name));
+  const releasePending = RELEASE_MIGRATIONS.filter((name) => !applied.has(name));
   const orphans = rows.map((row) => row.name).filter((name) => !onDisk.includes(name));
   record(
     "no-schema-delta",
@@ -237,7 +238,11 @@ export async function runChecks(
           ...(unexpectedPending.length ? [`unexpected pending migration(s): ${unexpectedPending.join(", ")}`] : []),
           ...(orphans.length ? [`recorded but absent from checkout: ${orphans.join(", ")}`] : []),
         ]
-      : `database migration ledger matches the candidate checkout aside from the ${RELEASE_MIGRATIONS.length} v0.5.0 migration(s) not yet applied`,
+      // COUNT THE PENDING ONES, not RELEASE_MIGRATIONS.length: with 0045-0048
+      // already applied on production this said "18 not yet applied" in the
+      // same run that clean-target reported 4 already applied — two records
+      // in one verdict describing the same ledger differently.
+      : `database migration ledger matches the candidate checkout aside from the ${releasePending.length} v0.5.0 migration(s) not yet applied`,
     "Stop and resolve schema/code drift before migrating.",
   );
 
@@ -252,20 +257,66 @@ export async function runChecks(
     "Do not treat this as a clean v0.4.0 production baseline.",
   );
 
-  const alreadyApplied = RELEASE_MIGRATIONS.filter((name) => applied.has(name));
+  // A PREFIX of the release set being applied is a RESUME, not drift.
+  //
+  // This check used to fail on any recorded v0.5.0 migration, on the premise
+  // that production sat at a clean 0044. It does not: 0045-0048 were applied
+  // 2026-09-08T14:43:24Z, in one boot, by an ordinary deploy that carried
+  // them — verified against the replica's schema_migrations.applied_at. The
+  // guard's real job is catching a WRONG TARGET (a 0.6.x database, a stale
+  // replica), and a gap-free prefix cannot be one: migrate.ts applies pending
+  // migrations in order, so any target it has touched shows a prefix. A GAP
+  // (0045 and 0049 recorded, 0046 not) is something migrate.ts cannot
+  // produce, so that still fails — as does anything applied out of order.
+  const appliedIdx = RELEASE_MIGRATIONS.map((name, i) => (applied.has(name) ? i : -1)).filter((i) => i >= 0);
+  const prefixLen = appliedIdx.length;
+  const isPrefix = appliedIdx.every((idx, i) => idx === i);
   record(
     "clean-target",
-    alreadyApplied.length ? "FAIL" : "PASS",
-    alreadyApplied.length ? `v0.5.0 migration(s) already applied: ${alreadyApplied.join(", ")}` : "no v0.5.0 migration recorded yet",
-    "The target is not a clean pre-migration v0.4.0 database.",
+    isPrefix ? "PASS" : "FAIL",
+    !prefixLen
+      ? "no v0.5.0 migration recorded yet"
+      : isPrefix
+        ? [
+            `RESUMING: ${prefixLen} of ${RELEASE_MIGRATIONS.length} v0.5.0 migration(s) already applied, as a gap-free prefix`,
+            `already applied: ${RELEASE_MIGRATIONS.slice(0, prefixLen).join(", ")}`,
+            `still pending: ${releasePending.join(", ")}`,
+          ]
+        : [
+            `v0.5.0 migrations are applied OUT OF ORDER — migrate.ts cannot produce this, so the target is wrong or was hand-edited`,
+            `applied: ${RELEASE_MIGRATIONS.filter((n) => applied.has(n)).join(", ")}`,
+            `pending: ${releasePending.join(", ")}`,
+          ],
+    "The recorded v0.5.0 migrations are not a gap-free prefix — identify the target before migrating, and do not hand-edit schema_migrations.",
   );
 
-  const existingNewTables: string[] = [];
-  for (const table of NEW_RELEASE_TABLES) if (await tableExists(db, table)) existingNewTables.push(table);
+  // Absence is only required of a table whose migration is still PENDING.
+  // 0045/0046 are applied on production, so chain_address_floors,
+  // asset_prices and asset_price_floors SHOULD exist — grading them as
+  // "already exist" was the flat list failing to distinguish a landed
+  // migration from a wrong target. The applied side is checked in the
+  // opposite direction: its tables missing IS drift.
+  const shouldBeAbsent: string[] = [];
+  const shouldBePresent: string[] = [];
+  for (const [migration, tables] of Object.entries(NEW_RELEASE_TABLES_BY_MIGRATION)) {
+    (applied.has(migration) ? shouldBePresent : shouldBeAbsent).push(...tables);
+  }
+  const unexpectedlyPresent: string[] = [];
+  for (const table of shouldBeAbsent) if (await tableExists(db, table)) unexpectedlyPresent.push(table);
+  const unexpectedlyAbsent: string[] = [];
+  for (const table of shouldBePresent) if (!(await tableExists(db, table))) unexpectedlyAbsent.push(table);
   record(
     "clean-target-tables",
-    existingNewTables.length ? "FAIL" : "PASS",
-    existingNewTables.length ? `already exist: ${existingNewTables.join(", ")}` : "v0.5.0's new tables are absent before migration",
+    unexpectedlyPresent.length || unexpectedlyAbsent.length ? "FAIL" : "PASS",
+    unexpectedlyPresent.length || unexpectedlyAbsent.length
+      ? [
+          ...(unexpectedlyPresent.length ? [`a pending migration's table(s) already exist: ${unexpectedlyPresent.join(", ")}`] : []),
+          ...(unexpectedlyAbsent.length ? [`an APPLIED migration's table(s) are missing: ${unexpectedlyAbsent.join(", ")}`] : []),
+        ]
+      : shouldBePresent.length
+        ? `${shouldBeAbsent.length} pending-migration table(s) absent; ${shouldBePresent.length} already-applied table(s) present`
+        : "v0.5.0's new tables are absent before migration",
+    "Resolve the table/migration mismatch before migrating — the target's schema does not match its own migration ledger.",
   );
 }
 

@@ -19,26 +19,51 @@ This runbook implements the foundational policy in
 the shared mechanics in [`rollout-procedure.md`](./rollout-procedure.md).
 v0.5.0 is **not** code-only: it carries eighteen additive migration files
 (`0045`-`0061`) and switches production's closed-day price reads onto a new
-table (D41). Do not run this as a no-op cutover.
+table (D41). Four of the eighteen (`0045`-`0048`) already reached production
+outside this rollout, so the cutover applies the remaining fourteen — see the
+RESOLVED note below. Do not run this as a no-op cutover.
 
 **Provenance.** This procedure is the v0.4.2 runbook, carried over whole. The
 0.4 patch track (v0.4.1, v0.4.2) was abandoned without either release ever
 reaching production, so its gate work is inherited here rather than rewritten,
 and v0.4.0 is the baseline v0.5.0 upgrades from.
 
-**Open question the operator must settle before §4.4 can pass.** This runbook
-assumes production sits at migration `0044`, so that `0045`-`0061` are all
-pending. An earlier v0.5.0 attempt on `releases-0.6.x`
-(`backend/scripts/upgrades/0.4.0-to-0.5.0/release.ts` on that branch) records
-production as being at migration `0048` as of 2026-09-11, verified by a fresh
-replica capture. Both cannot be true. The §4.4 preflight is written to FAIL
-loudly rather than proceed if any of `0045`-`0061` is already recorded, so a
-wrong assumption here stops the rollout instead of corrupting it — but resolve
-it against the live replica first and correct `RELEASE_MIGRATIONS` if the
-capture is right. Note also that `releases-0.6.x` carries entirely different
-migration files at numbers `0056`-`0061` (judge policy/fault-injection work)
-than this branch does (analytics ledger work); the two lines collide on those
-numbers and cannot both be deployed to the same database.
+**RESOLVED 2026-09-18 — production is at `0048`, and this is a RESUME.** The
+open question this runbook used to carry (is production at `0044` or `0048`?)
+was settled against the live read-only replica. It is at `0048`. The ledger:
+
+| Migrations | `applied_at` | What applied them |
+| --- | --- | --- |
+| `0039`-`0044` | 2026-09-04T21:37:30Z | the v0.4.0 release |
+| `0045`-`0048` | 2026-09-08T14:43:24Z | **an ordinary deploy, not a rollout** |
+
+`0045`-`0048` landed in a single boot, 231ms apart, four days after v0.4.0.
+The recorded filenames match this branch's own `0045`-`0048` exactly, so they
+are this migration line and not `releases-0.6.x`'s colliding set. At that
+moment `main` already carried `0049`/`0050`, so the deployed build predated
+them — a build cut from the ~4h window on 2026-09-07 between `0048` landing
+(17:52Z) and `0049` landing (22:36Z).
+
+**The consequence is structural, and it outlives this release.** Migrations
+reach production when a build carrying them boots, whatever branch that build
+came from — `migrate.ts` runs at boot and applies whatever is pending. So the
+premise that a release rollout is what moves production's schema is false;
+this runbook gates a migration set that partly arrives on its own. Fourteen
+migrations (`0049`-`0061`) are still pending and this rollout applies those.
+Treat the same drift as possible again before each cutover: §4.4's preflight
+is what re-establishes the real starting point, and it now reports a
+resumable prefix rather than refusing outright.
+
+**Still true and still blocking:** the role taxonomy has never been
+provisioned — `rm_owner` and `rm_app` do not exist in `pg_roles` at all, and
+`rm_worker` holds none of `0054`'s grants. `0053`/`0054` never reached
+production because no deployed build has carried them. §4.1 is therefore a
+real, unstarted operator action, not a formality.
+
+Note also that `releases-0.6.x` carries entirely different migration files at
+numbers `0056`-`0061` (judge policy/fault-injection work) than this branch
+does (analytics ledger work); the two lines collide on those numbers and
+cannot both be deployed to the same database.
 
 ## 1. Release identity and objective
 
@@ -47,8 +72,9 @@ fixes while preserving the v0.4.0 application, schema, and judge/receipt
 invariants:
 
 - retain all six v0.4.0 migrations and the v0.4.0 judge/receipt invariants;
-- apply the eighteen additive v0.5.0 migration files and land the new tables
-  they create;
+- apply the fourteen still-pending v0.5.0 migration files (`0049`-`0061`, of
+  the eighteen the release carries) and land the new tables they create,
+  leaving `0045`-`0048`'s existing records and tables untouched;
 - switch closed-day allocation/performance price reads to the `asset_prices`
   join (D41 MIGRATE step) while today's live point keeps its existing fused
   read;
@@ -154,29 +180,71 @@ This release is the first one that cannot boot on the old credentials:
   **membership** can execute — the runtime `rm_app` role empirically cannot
   (permission denied).
 
-The taxonomy cutover is human-run by design
-(`docs/runbooks/deployment.md` §4.3/§4.3.1): it writes to the **primary**, so
-it is an operator action, never an agent's. Provision the four roles and
-their passwords against the primary with the password-free bootstrap URL
-(`rm_owner` is NOLOGIN and gets none; the script prompts for the other
-three):
+**4.1.1 — The four roles, and where each comes from.** They do not all have
+the same origin, which is why "provision the four roles" alone is not an
+instruction anyone can follow:
+
+| Role | Login? | Created by | Used as | Production state (verified 2026-09-18) |
+| --- | --- | --- | --- | --- |
+| `rm_owner` | **NOLOGIN** | `0053` | owns every `public` object; DDL runs as it via `SET LOCAL ROLE` | **ABSENT** |
+| `rm_app` | LOGIN | `0053` | `DATABASE_URL` — the API runtime | **ABSENT** |
+| `rm_worker` | LOGIN | **`0016`, not `0053`** — `0053` only re-attributes it, `0054` narrows its grants | `WORKER_DATABASE_URL` — worker lanes | present, **without any of `0054`'s grants** |
+| `rm_readonly` | LOGIN | `0053` if absent | `.env.readonly` — preflight's own login | present (this runbook's preflight already authenticates as it) |
+
+`rm_owner` never authenticates and therefore never gets a password. The
+script prompts for the other three.
+
+**4.1.2 — What actually initializes them.** `scripts/ops/provision-db-role-taxonomy.sh`
+is the whole mechanism, and it does exactly two things: it runs
+`backend/migrations/0053_database_role_taxonomy.sql` through `psql` as the
+bootstrap login, then prompts `\password` for `rm_app`, `rm_worker`, and
+`rm_readonly` in turn. It never accepts, prints, writes, or logs a password —
+`psql` prompts on the terminal — so the URL you hand it must be
+**password-free** or it refuses:
 
 ```bash
 scripts/ops/provision-db-role-taxonomy.sh 'postgres://<bootstrap-login>@<primary-host>:25060/defaultdb?sslmode=require'
 ```
 
-Then, on the cutover host:
+**The bootstrap login is whichever admin login you run that command as** —
+on the managed primary that is `doadmin`. It needs to be able to `CREATE
+ROLE`. This matters beyond the one command: `0053` ends with
+`GRANT rm_owner TO current_user` (`0053_database_role_taxonomy.sql:25`), so
+the login that runs the script is, by that act, the one that ends up holding
+`rm_owner` membership — and is therefore the login `MIGRATE_DATABASE_URL`
+must name at §6. Run the script as one login and set `MIGRATE_DATABASE_URL`
+to another and `0054` fails with permission denied.
+
+**4.1.3 — `0053` is applied twice, and that is correct.** The script applies
+`0053`'s SQL through `psql`, which does **not** write `schema_migrations` —
+`migrate.ts` owns that ledger. So after the script runs, `0053` is still
+*pending*, and the §6 boot re-applies and then records it. That is safe by
+construction: every `CREATE ROLE` in the file is guarded by
+`IF NOT EXISTS (SELECT FROM pg_roles ...)`, and the ownership sweep is
+re-runnable and transactional. **Expect `0053` in the §6 migration log even
+though you already ran it here** — its absence would be the anomaly, not its
+presence. Do not "fix" this by hand-editing `schema_migrations` (§6).
+
+**4.1.4 — Install the credentials.** Then, on the cutover host:
 
 - `DATABASE_URL` → the **`rm_app`** login (deployment.md §4.3);
 - `WORKER_DATABASE_URL` → the **`rm_worker`** login (deployment.md §4.3);
-- the migration run gets **`MIGRATE_DATABASE_URL`** → a bootstrap login that
-  is a **member of `rm_owner`** (`backend/src/db/migrate.ts:34` reads it for
-  the migration run; `0053` grants `rm_owner` to the role that applies it).
-  Set it for the migration command only — never on the long-lived processes.
+- the migration run gets **`MIGRATE_DATABASE_URL`** → the §4.1.2 bootstrap
+  login that now holds `rm_owner` membership (`backend/src/db/migrate.ts:34`
+  reads it for the migration run). Set it for the migration command only —
+  never on the long-lived processes.
+
+The taxonomy cutover is human-run by design
+(`docs/runbooks/deployment.md` §4.3/§4.3.1): it writes to the **primary**, so
+it is an operator action, never an agent's, and it cannot be run from the
+stage host, which holds no writer credential.
 
 Run this pre-step **before** `smoke:capture` in §4.2: the globals dump then
 carries the taxonomy, and the `role-readiness` preflight record (§4.4)
-against the live target can pass.
+against the live target can pass. Re-run §4.4's preflight afterwards — it is
+the check that confirms §4.1 actually landed, and as of 2026-09-18 it FAILs
+with `role(s) absent from pg_roles: rm_owner, rm_app`, meaning none of this
+section has been done yet.
 
 **4.2 — Backup, restore proof, and baseline.** Export a unique backup
 directory and follow `rollout-procedure.md` for the replica identity
@@ -228,8 +296,14 @@ The preflight is blocking if any of these occur:
 - one of the six v0.4.0 migration filenames is absent;
 - an unexpected migration is pending — i.e. anything pending other than the
   eighteen v0.5.0 migration files (`0045`-`0061`);
-- one of `0045`-`0061` is already recorded (the target is not a clean
-  pre-migration v0.4.0 database);
+- the recorded `0045`-`0061` migrations are **not a gap-free prefix** of the
+  release set, or are recorded out of order — `migrate.ts` applies pending
+  migrations in order, so it cannot produce a gap; one means a wrong target
+  or a hand-edited `schema_migrations`. A gap-free prefix (production's
+  `0045`-`0048`) is a resume and passes, naming what is already applied and
+  what is still pending;
+- a table belonging to a **pending** migration already exists, or a table
+  belonging to an **already-applied** one is missing;
 - one of the tables v0.5.0 creates already exists;
 - the database contains a migration absent from the checkout;
 - a required v0.4.0 judge/receipt table is absent;
@@ -258,8 +332,9 @@ unplanned schema change.
 
 Use the same RC, forced installs, backup, and deployment environment intended
 for production. The release-specific rehearsal restores the backup into a
-local smoke-twin, boots the real stack (which applies `0045`-`0061` via
-`migrate.ts` on the way up), runs the frontend checks, and runs the
+local smoke-twin, boots the real stack (which applies whatever the restored
+dump leaves pending — `0049`-`0061`, since the dump carries `0045`-`0048`
+— via `migrate.ts` on the way up), runs the frontend checks, and runs the
 0.5.0 postflight — and the §5 criterion 9 allocation comparison — before
 teardown:
 
@@ -362,9 +437,12 @@ authority. Do not manually edit `schema_migrations` at any point.
    `bun install --force --cwd backend` in the deployment checkout.
 5. Start the backend and workers; wait for `/health` and the normal readiness
    gates.
-6. Confirm the migration log records each of the eighteen v0.5.0 migration
-   files (`0045`-`0061`; both `0059` files) exactly once, and that
-   `0039`-`0044` are unchanged — per the additive-only contract.
+6. Confirm the migration log records the **fourteen pending** v0.5.0
+   migration files (`0049`-`0061`; both `0059` files) exactly once, that
+   `0045`-`0048` remain recorded at their 2026-09-08 `applied_at` and are
+   NOT re-applied, and that `0039`-`0044` are unchanged — per the
+   additive-only contract. All twenty-four (`0039`-`0061`) must be recorded
+   when the boot completes.
 7. Run static assembly/prerender and publish the frontend only after the API
    is healthy.
 8. Do **not** flip `swarm_judge_config.third_party_enabled` during cutover;
