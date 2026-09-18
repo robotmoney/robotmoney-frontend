@@ -9,7 +9,9 @@
 // portfolio subject, whose sessions set no target sizes). A nested Alpine
 // component; the page around it supplies, under the same names everywhere:
 //   explorerSvg()     the ring, drawn once
-//   explorerCenter()  { value, label } the ring's centre shows at rest
+//   explorerCenter()  { value, label } the ring's centre shows at rest; an
+//                     empty value shows the label alone, and both empty
+//                     leave the centre blank until a row is in focus
 //   explorerRows()    [{ key, label, hue, pct, meta, d, was, basis, action,
 //                     rationale, assets: [{ key, label, colour, ofSleeve,
 //                     ofAllocation }] }] in the order the legend lists them

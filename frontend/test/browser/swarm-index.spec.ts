@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 // /swarm, as a research record (RM-121): a row of facts, the Members register,
-// the flagship Allocation, the Portfolios table, the Recommendation history
+// the flagship Latest allocation, the Portfolios table, the Recommendation history
 // across every subject, and How it works. Each test seeds a deterministic
 // members and sessions response (mocked, since the live smoke stack's roster
 // and sessions are not a stable thing to assert text against) and checks the
@@ -398,7 +398,10 @@ test("allocation sessions are listed, and the chips keep them off the vault", as
 
   await page.goto("/swarm");
 
-  await expect(page.locator("#history .rr-sec__aside")).toHaveText("2 sessions");
+  // The total is stated once, in the row of facts and on the All chip; the
+  // section head does not repeat it.
+  await expect(page.locator("#history .rr-sec__aside")).toHaveCount(0);
+  await expect(page.locator(".rr-meta__i", { hasText: /^Sessions/ }).locator("b")).toHaveText("2");
   await expect(page.locator(".rr-hist .rr-hist__subj")).toHaveText([
     "Robot Money Allocation",
     "Robot Money Vault",
@@ -407,6 +410,7 @@ test("allocation sessions are listed, and the chips keep them off the vault", as
   const chips = page.locator(".mp-filter .mp-chip");
   await expect(chips).toHaveCount(3);
   await expect(chips.nth(0)).toContainText("All");
+  await expect(chips.nth(0).locator(".mp-chip__n")).toHaveText("2");
   await expect(chips.nth(1)).toContainText("Robot Money Allocation");
   await expect(chips.nth(2)).toContainText("Robot Money Vault");
 
@@ -414,13 +418,19 @@ test("allocation sessions are listed, and the chips keep them off the vault", as
   // inflate the vault's session count.
   const ports = page.locator(".rr-ports tbody tr");
   await expect(ports).toHaveCount(1);
-  await expect(page.locator("#portfolios .rr-sec__aside")).toHaveText("1 portfolio");
+  // The rows are the count: no aside restates it.
+  await expect(page.locator("#portfolios .rr-sec__aside")).toHaveCount(0);
   await expect(ports.locator("th a")).toHaveText("Robot Money Vault");
-  await expect(ports.locator("td.q").first()).toHaveText("1");
+  // The vault's session count is its history chip's, which the table no
+  // longer repeats in a column.
+  await expect(chips.nth(2).locator(".mp-chip__n")).toHaveText("1");
 
   await chips.nth(1).click();
   await expect(page.locator(".rr-hist tbody tr")).toHaveCount(1);
   await expect(page.locator(".rr-hist .rr-hist__subj")).toHaveText("Robot Money Allocation");
+  // Filtered, the pressed chip names the subject; the column would repeat it on every row.
+  await expect(chips.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".rr-hist .rr-hist__subj")).toBeHidden();
 });
 
 
@@ -459,7 +469,37 @@ test("a tooltip anchored in a nowrap header still wraps its text", async ({ page
   expect(box.whiteSpace, "the bubble must not inherit the header's nowrap").toBe("normal");
   expect(box.overflowing, "the bubble's text must fit its own width").toBe(false);
   // A sentence this long cannot honestly be one or two lines at this measure.
-  // (109 characters since the bubble dropped the validator role nobody holds.)
-  expect(box.chars).toBeGreaterThan(100);
+  // (79 characters since the bubble dropped the validator role nobody holds
+  // and the sentence describing the column.)
+  expect(box.chars).toBeGreaterThan(70);
   expect(box.lines).toBeGreaterThan(2);
+});
+
+// Read from the shipped archive (32 sessions, the 2026-06-24 allocation
+// session the latest): each fact once, where it is most useful. The legend's
+// rows carry the allocation's moves, so no headline counts them and a sleeve
+// that did not move prints its weight alone; the history's one count is how
+// far into the list the reader is, which the rows cannot say.
+test("the latest allocation and the history state each fact once", async ({ page }) => {
+  await page.route("**/api/**", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+
+  await page.goto("/swarm");
+
+  const alloc = page.locator("#allocation");
+  const row = (name: string) => alloc.locator(".rr-legend__row").filter({ hasText: name });
+  await expect(row("Agent Tokens")).toContainText("vs target 5%");
+  await expect(row("Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
+  await expect(row("Real World Assets").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(row("Conservative DeFi Yield").locator("b")).toHaveText("95%");
+  await expect(row("Conservative DeFi Yield")).not.toContainText("vs target");
+  await expect(alloc.locator("p.rr-k.rr-sub")).toHaveCount(0);
+  await expect(alloc).not.toContainText(/sleeves? moves?/i);
+
+  const history = page.locator("#history");
+  await expect(history.locator(".rr-hist tbody tr")).toHaveCount(20);
+  await expect(history.locator(".rr-pager > span")).toHaveText("20 of 32");
+  await history.getByRole("button", { name: "Show more" }).click();
+  await expect(history.locator(".rr-hist tbody tr")).toHaveCount(32);
+  await expect(history.locator(".rr-pager")).toHaveCount(0);
 });

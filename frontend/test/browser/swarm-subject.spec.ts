@@ -104,8 +104,10 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   await expect(legend).toHaveCount(bandTokens.length);
   await expect(legend.first()).toBeVisible();
   await expect(page.locator(".rr-area__legend")).toContainText("WOON");
-  // Every row carries its CURRENT share, not just a name.
-  await expect(legend.first()).toContainText("%");
+  // A key, not a second copy of today's shares: those are the positions
+  // table's Share column, one block up.
+  await expect(legend.first()).not.toContainText("%");
+  await expect(positions.first().locator("td").last()).toContainText("55.8%");
 
   // A token's colour comes from assetDot(), so it is the same colour here, in
   // the positions table, and on /allocation — it used to be indexed by the
@@ -126,6 +128,9 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   const sources = page.locator(".rr-sources tbody tr");
   await expect(sources.locator("th")).toHaveText(["main", "holdings", "holdings-peaq", "RoboFarm", "RecycleMachine", "ClawMachine"]);
   await expect(sources.locator("td:nth-child(2)")).toHaveText(["Wallet", "Wallet", "Wallet", "NFT contract", "NFT contract", "NFT contract"]);
+  // They are not in the total, and the line under it says so. The count is
+  // the three rows above, and the date is the positions table's label.
+  await expect(page.locator("#holdings .rr-stat__sub")).toHaveText("Base, peaq · NFT contracts not valued");
 
   // Sessions: all 9 archived, published woon sessions, one history row each.
   const rows = page.locator("#history .sv__session-card");
@@ -136,7 +141,9 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   // without the bodies carried onto the row this reported "could not be
   // loaded" over takes already in memory.
   const first = rows.first();
-  await expect(first.locator("th small")).toHaveText("3 takes");
+  // With its time, read off the archived session file as /swarm reads it: the
+  // index entry alone carries no time, and the row printed "3 takes" bare.
+  await expect(first.locator("th small")).toHaveText("23:58 UTC · 3 takes");
   await expect(page.locator("#history")).not.toContainText("could not be loaded");
 
   // The consensus is DERIVED from the takes here. The static archive stores no
@@ -146,8 +153,9 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   const counts = page.locator("#latest .rr-counts");
   await expect(counts.locator(":scope > span").filter({ hasText: "cautious" }).locator("b")).toHaveText("2");
   await expect(counts.locator(":scope > span").filter({ hasText: "constructive" }).locator("b")).toHaveText("1");
-  // An archived session knows how many filed, not how many could have.
-  await expect(counts.locator("em")).toHaveText(/^3 took part · \d+% mean confidence$/);
+  // An archived session knows how many filed, not how many could have, and
+  // the tally already counts who filed: no bare "3 took part" beside it.
+  await expect(counts.locator("em")).toHaveText(/^\d+% mean confidence$/);
   // No stance spread bar on this page: it competed with the ring, which IS the
   // decision, while saying what the badge says in a word.
   await expect(page.locator(".sv__spread")).toHaveCount(0);
@@ -178,7 +186,7 @@ test("public subject profile lists no NFT contract for an archived subject with 
   await expect(sources).toHaveCount(1);
   await expect(sources.locator("td").first()).toHaveText("Wallet");
   await expect(page.locator(".rr-sources")).not.toContainText("NFT contract");
-  // The note about unvalued NFT contracts goes with them.
+  // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
   await expectNoBrowserErrors(errors);
@@ -229,6 +237,11 @@ test("public subject profile lists no wallets for a subject serving an empty wal
   // And the body rendered the whole way down: the history's empty state sits
   // past every gated part.
   await expect(page.locator(".sv__empty")).toBeVisible();
+  // Said once, where the history would be: no "Sessions 0" among the facts,
+  // and with no other fact to state, no facts row at all.
+  await expect(page.locator(".sv__empty")).toHaveText("No published session yet.");
+  await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Sessions" })).toHaveCount(0);
+  await expect(page.locator(".rr-meta")).toBeHidden();
 
   await expectNoBrowserErrors(errors);
 });
@@ -551,8 +564,11 @@ test("a framework subject renders no book, even when the API serves it one", asy
   await expect(page.locator(".rr-area__svg svg")).toHaveCount(0);
   await expect(page.locator(".rr-meta")).not.toContainText(/holdings/i);
   // Two snapshots would otherwise be enough to draw the chart, so this is a
-  // gate firing rather than a fixture too thin to render.
-  await expect(page.locator(".rr-meta")).toContainText("Sessions");
+  // gate firing rather than a fixture too thin to render. The facts row is
+  // drawn: this subject has no session, so its one item is the link to the
+  // allocation it is.
+  await expect(page.locator(".rr-meta")).toContainText("Asset allocation");
+  await expect(page.locator(".sv__empty")).toBeVisible();
 
   // And the request is never made: a subject with no book has none to fetch.
   expect(snapshotsRequested).toBe(false);
@@ -606,10 +622,11 @@ test("the allocation subject carries the weights in force, and no other subject 
   // target renders an em dash and no track, and the two must not look alike.
   await expect(rows.nth(2)).toContainText("0%");
   await expect(rows.nth(2).locator(".sv__sleeve-track")).toHaveCount(1);
-  await expect(card).toContainText("targets, not gaps");
+  await expect(card).not.toContainText("not gaps");
 
-  // /swarm points here for the history, so this points at the product page.
-  await expect(card.locator('a[href="/allocation"]')).toBeVisible();
+  // The way to the product page is the facts row's, once: not again in here.
+  await expect(card.locator('a[href="/allocation"]')).toHaveCount(0);
+  await expect(page.locator('.rr-meta a[href="/allocation"]')).toBeVisible();
 
   // Another weights subject reads the framework as the target its sessions
   // are measured against, and still carries no weights-in-force of its own:
@@ -633,8 +650,7 @@ test("the allocation subject carries the weights in force, and no other subject 
 
 // The heading has to stay true in both states. "Latest swarm recommendation"
 // is right for weights a session published and wrong for the seeded row in
-// force today — and the note under the weights says that no session has
-// changed them. So the heading follows provenance, and it follows
+// force today. So the heading follows provenance, and it follows
 // provenance.sessionId rather than the DTO's top-level `managed`, which is
 // true today and is about the VAULT being managed.
 test("the weights in force name who set them, and never overclaim", async ({ page }) => {
@@ -663,7 +679,7 @@ test("the weights in force name who set them, and never overclaim", async ({ pag
   const heading = page.locator('button[aria-controls="targets-in-force"] > span');
   await expect(heading).toHaveText("Target weights in force");
   await expect(page.locator("#targets-in-force")).toHaveAttribute("aria-label", "Target weights in force");
-  await expect(page.locator("#targets-in-force")).toContainText("No session has changed these weights yet");
+  await expect(page.locator("#targets-in-force")).not.toContainText("No session has changed");
 
   // A session wrote them: now it IS the latest swarm recommendation.
   framework = { ...framework, provenance: { sessionId: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41" } };
@@ -741,7 +757,9 @@ test("the latest recommendation carries its session's reading and vote, and its 
 
   // The vote: each stance counted, bearish to bullish, then who took part.
   const latest = page.locator("#latest");
-  await expect(latest.locator(".rr-sec__aside")).toHaveText("Sep 10, 2026");
+  // The date in the way into the session: no aside over the section repeats it.
+  await expect(latest.locator(".rr-sec__aside")).toHaveCount(0);
+  await expect(latest.locator(".rr-cta")).toContainText("Read the Sep 10, 2026 session");
   const counts = latest.locator(".rr-counts");
   await expect(counts.locator(":scope > span > span")).toHaveText(["neutral", "constructive", "bullish"]);
   await expect(counts.locator(":scope > span > b")).toHaveText(["1", "3", "1"]);
@@ -760,7 +778,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
   await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
   // On the published method factor is context, not an input, and is drawn so.
   await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).toContainText("Factor is context");
+  await expect(signal.locator(".rr-note")).toContainText("factor not in composite");
   // This reading carries no cuts, and none are hard-coded in their place.
   await expect(signal.locator(".sig__zone")).toHaveCount(0);
 
@@ -816,7 +834,7 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   const signal = page.locator(".rr-context");
   await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Factor"]);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).not.toContainText("Factor is context");
+  await expect(signal.locator(".rr-note")).not.toContainText("factor not in composite");
 
   // That brief carried the targets in force when it opened: drawn as the
   // subject page's register, each sleeve in the hue it wears there.
@@ -863,5 +881,316 @@ test("a research signal with no page on the site is not linked", async ({ page }
   const hand = page.locator("#session-handover");
   await expect(hand.locator('[data-part="research"] .hand__links a')).toHaveText(["Channel Divergence"]);
   await expect(hand.locator('[data-part="research"] .hand__links li > span')).toHaveText(["Made up signal"]);
+  await expectNoBrowserErrors(errors);
+});
+
+// A subject that holds a book measures its latest recommendation as its
+// session page does: against where the book sat when the session read it
+// (bookSleeveShares, one helper both pages call). The vault's latest block
+// read "Target weights retained" while its session page read "2 sleeves move
+// from the book". Both now state the two moves on their legend rows, and
+// neither counts them again in a headline. The history table keeps each row on
+// its session target, as its column header says, and the allocation subject
+// has no book to read.
+test("a subject with a book reads its latest recommendation against the book, as its session page does", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.route("**/api/**", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+  // The legend rows that state a move, as a reader sees them.
+  const moves = (scope: string) => page.locator(`${scope} .rr-legend__row`)
+    .filter({ has: page.locator(".alp__mv.up, .alp__mv.down") })
+    .evaluateAll((rows) => rows.map((r) => (r as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+
+  // The archived 2026-06-22 session: 95/5/0/0 recommended, the book entirely
+  // in Conservative DeFi Yield (Aave, Compound, Morpho).
+  await page.goto("/swarm/2026-06-22/robotmoney-vault");
+  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Conservative DeFi Yield" })).toContainText("vs book 100%");
+  await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveCount(0);
+  const onSession = await moves("#recommendation");
+  expect(onSession).toHaveLength(2);
+
+  await page.goto("/swarm/subjects/robotmoney-vault");
+  const latest = page.locator("#latest");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Conservative DeFi Yield" })).toContainText("vs book 100%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" })).toContainText("vs book 0%");
+  expect(await moves("#latest")).toEqual(onSession);
+  await expect(latest).not.toContainText("vs target");
+  await expect(latest).not.toContainText("Target weights retained");
+  // The history row for the same session still measures it against the
+  // target it was handed: 95/5/0/0 against 95/5/0/0.
+  const row = page.locator("#history .sv__session-card").first();
+  await expect(row.locator(".sv__session-title")).toHaveText(/Jun 22, 2026/);
+  await expect(row.locator("td.rr-out")).toHaveText("Target weights retained");
+
+  // Where the recommendation holds the book, both pages say so in the same
+  // words, and the history row still reads the move from the target.
+  await page.route("**/data/swarm/sessions/2026-06-22-robotmoney-vault.json", async (route) => {
+    const res = await route.fetch();
+    const raw = await res.json();
+    raw.committee_recommendation.weights = { conservative_defi_yield: 1, agent_tokens: 0, protocol_tokens: 0, real_world_assets: 0 };
+    return route.fulfill({ response: res, json: raw });
+  });
+  await page.goto("/swarm/2026-06-22/robotmoney-vault");
+  await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
+  await page.goto("/swarm/subjects/robotmoney-vault");
+  await expect(latest.locator("p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
+  await expect(row.locator("td.rr-out")).toContainText("Conservative DeFi Yield");
+  await expect(row.locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+
+  // The allocation subject holds nothing: its latest recommendation reads
+  // against its target.
+  await page.goto("/swarm/subjects/robotmoney-allocation");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" })).toContainText("vs target 5%");
+  await expect(latest).not.toContainText("vs book");
+
+  await expectNoBrowserErrors(errors);
+});
+
+// ── The history pages on the server (#1007) ────────────────────────────────
+// GET /api/swarm/sessions filters by subject and search before it cuts the
+// keyset page, and each light row carries takeCount and the target its own
+// brief carried (referenceAllocation). The subject page pages its history
+// from there instead of reading the whole index and fetching a brief per row.
+const SP_SUBJECT = "robotmoney-allocation";
+const spId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const spDate = (n: number) => new Date(Date.UTC(2026, 8, 18) - n * 86_400_000).toISOString().slice(0, 10);
+const spRef = (conservative: number, agent: number) => ({
+  asof: "2026-09-01",
+  buckets: [
+    { id: "conservative_defi_yield", target_weight: conservative },
+    { id: "agent_tokens", target_weight: agent },
+    { id: "protocol_tokens", target_weight: 0 },
+    { id: "real_world_assets", target_weight: 0 },
+  ],
+});
+// Thirty published sessions on the subject, newest first. Each recommends
+// 90/10 against a target that is NOT the framework's (85/15 on the first
+// page, 80/20 after it), so a move can only have come from the row itself.
+// Every fifth rationale mentions liquidity, for the search.
+const SP_ROWS = Array.from({ length: 30 }, (_, i) => ({
+  id: spId(i), date: spDate(i), subjectId: SP_SUBJECT, subjectName: "Robot Money Allocation", state: "published",
+  windowClosesAt: `${spDate(i)}T14:00:00.000Z`, publishedAt: `${spDate(i)}T14:05:00.000Z`, generatedAt: `${spDate(i)}T13:00:00.000Z`,
+  regimeSummary: null, socialDraftId: null,
+  synthesis: `Session ${i + 1} on the allocation.`,
+  swarmRecommendation: {
+    type: "bucket_weights",
+    weights: { conservative_defi_yield: 0.9, agent_tokens: 0.1, protocol_tokens: 0, real_world_assets: 0 },
+    rationale: i % 5 === 0 ? "Liquidity is thinning, so the agent sleeve grows slowly." : "The defensive core holds.",
+  },
+  takeCount: 3 + (i % 4),
+  referenceAllocation: i < 12 ? spRef(0.85, 0.15) : spRef(0.8, 0.2),
+}));
+// Another subject's sessions, which a server that honours `subject` never returns.
+const SP_OTHER = [0, 1, 2].map((i) => ({
+  ...SP_ROWS[i], id: `11111111-0000-4000-8000-${String(i).padStart(12, "0")}`, subjectId: "woon", subjectName: "Woon Treasury",
+}));
+
+test("the history pages and searches on the server, with no brief fetched per row", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const listed: URLSearchParams[] = [];
+  const details: string[] = [];
+  const briefs: string[] = [];
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === `/api/swarm/subjects/${SP_SUBJECT}`) {
+      return json({ id: SP_SUBJECT, name: "Robot Money Allocation", source: { type: "framework" }, wallets: [], structural_notes: [] });
+    }
+    // A server as #1007 built it: subject and search applied, then the page.
+    if (u.pathname === "/api/swarm/sessions") {
+      listed.push(u.searchParams);
+      const subject = u.searchParams.get("subject");
+      const search = (u.searchParams.get("search") || "").toLowerCase();
+      const limit = Number(u.searchParams.get("limit") || 20);
+      const start = Number(u.searchParams.get("cursor") || 0);
+      const rows = [...SP_ROWS, ...SP_OTHER]
+        .filter((r) => !subject || r.subjectId === subject)
+        .filter((r) => !search || `${r.date} ${r.swarmRecommendation.rationale} ${r.synthesis}`.toLowerCase().includes(search));
+      const next = start + limit < rows.length ? String(start + limit) : null;
+      return json({ sessions: rows.slice(start, start + limit), nextCursor: next, nextSessionAt: null });
+    }
+    const byId = u.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)$/);
+    if (byId) {
+      details.push(byId[1]);
+      const row = SP_ROWS.find((r) => r.id === byId[1]);
+      return row ? json({ session: row, takes: [] }) : json({ error: "not found" }, 404);
+    }
+    if (u.pathname === "/api/swarm/brief") {
+      briefs.push(u.searchParams.get("session") || u.search);
+      return json({ error: "not found" }, 404);
+    }
+    return json({}, 503);
+  });
+  await page.goto(`/swarm/subjects/${SP_SUBJECT}`);
+
+  const history = page.locator("#history");
+  const rows = history.locator(".sv__session-card");
+  const pager = history.locator(".rr-pager");
+  await expect(rows).toHaveCount(12);
+  // The take count and the moves, each off its own row: 90/10 against the
+  // 85/15 that session's brief carried.
+  const first = rows.first();
+  await expect(first.locator(".sv__session-title")).toHaveText("Sep 18, 2026");
+  await expect(first.locator(".sv__session-title")).toHaveAttribute("href", `/swarm/sessions/${spId(0)}`);
+  await expect(first.locator("th small")).toHaveText("14:05 UTC · 3 takes");
+  await expect(first.locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+  await expect(rows.nth(1).locator("th small")).toHaveText("14:05 UTC · 4 takes");
+  // Where the server stops is not known yet, so no total is printed.
+  await expect(pager.locator('[role="status"]')).toHaveText("1–12");
+  await expect(page.locator(".rr-meta__i", { hasText: "Sessions" })).toHaveCount(0);
+  await expect(page.locator("#history-q")).toBeVisible();
+  expect(listed[0].get("subject")).toBe(SP_SUBJECT);
+  expect(listed[0].get("state")).toBe("published");
+  expect(listed[0].get("limit")).toBe("12");
+  expect(listed[0].get("cursor")).toBeNull();
+
+  // Older reads the next page at the cursor the last one returned.
+  await pager.getByRole("button", { name: "Older" }).click();
+  await expect(pager.locator('[role="status"]')).toHaveText("13–24");
+  await expect(first.locator(".sv__session-title")).toHaveText("Sep 6, 2026");
+  await expect(first.locator("td.rr-out .alp__mv")).toHaveText(["▲+10.00%", "▼−10.00%"]);
+  expect(listed.at(-1)?.get("cursor")).toBe("12");
+  // The last page ends the history, and now the count is known.
+  await pager.getByRole("button", { name: "Older" }).click();
+  await expect(pager.locator('[role="status"]')).toHaveText("25–30 of 30");
+  await expect(rows).toHaveCount(6);
+  await expect(pager.getByRole("button", { name: "Older" })).toBeDisabled();
+  await expect(page.locator(".rr-meta__i", { hasText: "Sessions" }).locator("b")).toHaveText("30");
+  await pager.getByRole("button", { name: "Newer" }).click();
+  await expect(pager.locator('[role="status"]')).toHaveText("13–24 of 30");
+  expect(listed.at(-1)?.get("cursor")).toBe("12");
+
+  // Search narrows on the server, from the first page.
+  await page.locator("#history-q").fill("liquidity");
+  await expect(rows).toHaveCount(6);
+  await expect(first.locator(".sv__session-title")).toHaveText("Sep 18, 2026");
+  await expect(rows.nth(1).locator(".sv__session-title")).toHaveText("Sep 13, 2026");
+  await expect(pager).toHaveCount(0);
+  expect(listed.at(-1)?.get("search")).toBe("liquidity");
+  expect(listed.at(-1)?.get("subject")).toBe(SP_SUBJECT);
+  expect(listed.at(-1)?.get("cursor")).toBeNull();
+  // Nothing found is said in a fragment, where the rows were.
+  await page.locator("#history-q").fill("no such phrase");
+  await expect(history.locator(".sv__empty")).toHaveText("No sessions match");
+  await expect(rows).toHaveCount(0);
+  // An empty box puts the unfiltered first page back.
+  await page.locator("#history-q").fill("");
+  await expect(rows).toHaveCount(12);
+  await expect(pager.locator('[role="status"]')).toHaveText("1–12 of 30");
+  await expect(history.locator(".sv__empty")).toHaveCount(0);
+
+  // Every request asked for this subject's published sessions only, and no
+  // row was fetched to be drawn: the latest session is read in full once, for
+  // its own block, and its brief once, for the page. No other brief at all.
+  expect(listed.every((q) => q.get("subject") === SP_SUBJECT && q.get("state") === "published")).toBe(true);
+  expect(details).toEqual([spId(0)]);
+  expect(briefs.filter((b) => b !== spId(0))).toEqual([]);
+  expect(briefs.length).toBeLessThanOrEqual(1);
+  await expect(page.locator("#history")).not.toContainText("Woon");
+
+  await expectNoBrowserErrors(errors);
+});
+
+// A backend that predates #1007 ignores `subject` and `search` and answers
+// with every subject's sessions, and no takeCount. The page must not take
+// that for this subject's history: it reads the history the way it did
+// before, filtering the index here and fetching each row, with no search box.
+test("a backend that ignores the subject filter leaves the history on the browser-side index", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const legacy = (r: (typeof SP_ROWS)[number]) => {
+    const { takeCount: _t, referenceAllocation: _r, ...rest } = r;
+    return rest;
+  };
+  const mixed = [SP_ROWS[0], SP_OTHER[0], SP_ROWS[1], SP_OTHER[1], SP_ROWS[2]].map(legacy);
+  const listed: URLSearchParams[] = [];
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === `/api/swarm/subjects/${SP_SUBJECT}`) {
+      return json({ id: SP_SUBJECT, name: "Robot Money Allocation", source: { type: "framework" }, wallets: [], structural_notes: [] });
+    }
+    if (u.pathname === "/api/swarm/sessions") {
+      listed.push(u.searchParams);
+      return json({ sessions: mixed, nextCursor: null, nextSessionAt: null });
+    }
+    const byId = u.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)$/);
+    if (byId) {
+      const row = mixed.find((r) => r.id === byId[1]);
+      const takes = [
+        { id: "t1", member_id: "m1", member_name: "Athena", stance: "constructive", confidence: 0.6 },
+        { id: "t2", member_id: "m2", member_name: "Woon", stance: "neutral", confidence: 0.7 },
+      ];
+      return row ? json({ session: row, takes }) : json({ error: "not found" }, 404);
+    }
+    // The fallback learns each row's target from its brief, as it always has.
+    if (u.pathname === "/api/swarm/brief") return json({ allocation: spRef(0.85, 0.15) });
+    return json({}, 503);
+  });
+  await page.goto(`/swarm/subjects/${SP_SUBJECT}`);
+
+  const rows = page.locator("#history .sv__session-card");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.locator(".sv__session-title")).toHaveText(["Sep 18, 2026", "Sep 17, 2026", "Sep 16, 2026"]);
+  await expect(rows.first().locator("th small")).toContainText("2 takes");
+  await expect(rows.first().locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+  await expect(page.locator("#history")).not.toContainText("Woon");
+  // The index is whole here, so its count is known; there is no search to offer.
+  await expect(page.locator(".rr-meta__i", { hasText: "Sessions" }).locator("b")).toHaveText("3");
+  await expect(page.locator("#history-q")).toHaveCount(0);
+  await expect(page.locator("#history .rr-pager")).toHaveCount(0);
+  // It asked for this subject's page first, then read the whole index.
+  expect(listed[0].get("subject")).toBe(SP_SUBJECT);
+  expect(listed.some((q) => !q.has("subject"))).toBe(true);
+
+  await expectNoBrowserErrors(errors);
+});
+
+// A portfolio session published before the stance tally was aggregated onto
+// its record has its consensus only on its takes. Those rows, and only those,
+// are read in full on the server path, so the Consensus column says what the
+// browser-side path said for them.
+test("on the server path, only a portfolio row with no stance tally is read in full", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const actions = { type: "position_actions", actions: [{ token: "WOON", action: "hold" }] };
+  const woon = [
+    { stances: { constructive: 3, cautious: 1 }, quorum: { active: 7, submitted: 4 } },
+    null,
+    { stances: { neutral: 2 }, quorum: { active: 7, submitted: 2 } },
+  ].map((agg, i) => ({
+    ...SP_ROWS[i], id: spId(100 + i), subjectId: "woon", subjectName: "Woon Treasury",
+    swarmRecommendation: { ...actions, ...(agg || {}) }, takeCount: 2, referenceAllocation: null,
+  }));
+  const details: string[] = [];
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === "/api/swarm/subjects/woon") {
+      return json({ id: "woon", name: "Woon Treasury", source: { type: "portfolio" }, wallets: [], structural_notes: [] });
+    }
+    if (u.pathname === "/api/swarm/sessions") {
+      return json({ sessions: u.searchParams.get("subject") === "woon" ? woon : [], nextCursor: null, nextSessionAt: null });
+    }
+    const byId = u.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)$/);
+    if (byId) {
+      details.push(byId[1]);
+      const row = woon.find((r) => r.id === byId[1]);
+      const takes = [
+        { id: "t1", member_id: "m1", member_name: "Athena", stance: "bearish", confidence: 0.6 },
+        { id: "t2", member_id: "m2", member_name: "Woon", stance: "bearish", confidence: 0.7 },
+      ];
+      return row ? json({ session: row, takes }) : json({ error: "not found" }, 404);
+    }
+    return json({}, 503);
+  });
+  await page.goto("/swarm/subjects/woon");
+
+  const rows = page.locator("#history .sv__session-card");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.locator(".sv__stance-badge")).toHaveText(["constructive", "bearish", "neutral"]);
+  // The latest, for its block, and the row with no tally. Not the third.
+  expect(details.sort()).toEqual([spId(100), spId(101)]);
+  await expect(page.locator(".rr-meta__i", { hasText: "Sessions" }).locator("b")).toHaveText("3");
+
   await expectNoBrowserErrors(errors);
 });

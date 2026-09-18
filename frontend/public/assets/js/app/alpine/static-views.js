@@ -15,7 +15,7 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, BUCKET_ORDER } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
@@ -549,11 +549,11 @@ export const helpers = {
   verifyLabel(ok, archival) { return this.verifyState(ok, archival); },
   verifyTip(ok, archival) {
     if (archival) {
-      return "Archived from the pre-launch record, filed before members signed their takes. It was never member-signed, so this is not a failed signature check.";
+      return "Archived from the pre-launch record, filed before members signed their takes.";
     }
     return ok
-      ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key each time this take is shown, not only when it was filed."
-      : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
+      ? "Signed on the member's own machine with a key only they hold, and the signature checks out against their public key."
+      : "This take's signature did not check out against the member's public key.";
   },
   // Inner glyph of the badge: a check for verified, a cross for a failed
   // check, a horizontal bar for archived — a state that is neither a pass nor
@@ -1103,6 +1103,9 @@ export function registerStaticViews(Alpine) {
     // recent-session refs can name their subjects.
     subjectNames: {},
     snapshot: null,
+    // The published framework manifest, for its per-bucket token lists; only
+    // a weights subject with a book asks for it. See latestBookWeights().
+    allocationFramework: null,
     // Every published session on this subject, newest first, as index rows.
     sessionIndex: [],
     // The detailed rows: the current history page. sessions[0] on page 1 is
@@ -1112,6 +1115,28 @@ export function registerStaticViews(Alpine) {
     historyBusy: false,
     historyError: "",
     historySize: 12,
+    // How the history pages. "index": the whole list is read and filtered
+    // here, which is all a backend before #1007 and the static archive allow.
+    // "server": the API pages this subject's sessions and searches them.
+    // Settled once, by loadHistory().
+    historyMode: "index",
+    historySubject: "",
+    // Server mode. The cursor each page read so far opened at (the first
+    // opens at none), the cursor past the page on screen, and how many
+    // sessions the query holds: known once a page reaches the end, never
+    // estimated. sessionTotal is the same count with no search applied.
+    historyCursors: /** @type {(string | null)[]} */ ([null]),
+    historyNext: /** @type {string | null} */ (null),
+    historyTotal: /** @type {number | null} */ (null),
+    sessionTotal: /** @type {number | null} */ (null),
+    // The search the rows on screen answer, the one last asked for, and a
+    // counter that lets only the newest request land.
+    historyQuery: "",
+    historyAsked: "",
+    historySeq: 0,
+    // The unfiltered first page, kept so clearing a search restores it
+    // without asking again.
+    historyFirst: /** @type {{ rows: any[], next: string | null } | null} */ (null),
     // The book chart's hover: the reading under the crosshair, and the band a
     // legend entry has put in focus.
     chartAt: null,
@@ -1167,8 +1192,7 @@ export function registerStaticViews(Alpine) {
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
-        this.sessionIndex = await this.loadSessionIndex(id);
-        this.sessions = await this.loadSessionPage(0);
+        await this.loadHistory(id);
         this.latestRow = this.sessions[0] || null;
         // The brief the last session opened with. Guarded like the rest: the
         // page describes the handover with or without it, and only the
@@ -1181,6 +1205,11 @@ export function registerStaticViews(Alpine) {
         // book subject never asks: the framework does not describe it, and
         // asking would put the vault's targets on somebody else's treasury.
         if (this.isWeightsSubject()) await this.loadAllocationFw();
+        // A weights subject that holds a book also reads the framework's
+        // token lists, which sum that book into sleeves: its latest
+        // recommendation is measured against the book, as its session page
+        // measures it (latestBookWeights).
+        if (this.isWeightsSubject() && this.snapshots.length) this.allocationFramework = await loadAllocationFramework();
         // The newest session's own regime read first, and the brief's copy of
         // it as the fallback: an archive-only subject reaches the brief but not
         // always the session detail, and they carry the same reading under two
@@ -1255,9 +1284,143 @@ export function registerStaticViews(Alpine) {
       const l = this.latest();
       return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
     },
+    // The history's first page. The API pages one subject's published
+    // sessions itself (#1007), each row carrying its take count and the target
+    // its brief handed over, so no row is fetched to be drawn. A backend that
+    // predates it ignores `subject` and answers with every subject's rows, so
+    // the answer is trusted only when servesSubjectHistory() says so; anything
+    // else reads the history as before, the static archive included.
+    async loadHistory(id) {
+      const first = await this.requestHistory(id, null, "").catch(() => null);
+      if (!first || !servesSubjectHistory(first.rows, id)) {
+        this.sessionIndex = await this.loadSessionIndex(id);
+        this.sessions = await this.loadSessionPage(0);
+        return;
+      }
+      this.historyMode = "server";
+      this.historySubject = id;
+      await this.showHistory(0, null, first, "", this.historySeq);
+      this.historyFirst = { rows: this.sessions, next: this.historyNext };
+    },
+    /** @param {string} id @param {string | null} cursor @param {string} search */
+    async requestHistory(id, cursor, search) {
+      /** @type {Record<string, string>} */
+      const query = { subject: id, state: "published", limit: String(this.historySize) };
+      if (cursor) query.cursor = cursor;
+      if (search) query.search = search;
+      const res = await api.get(ROUTES.swarm.sessions, query);
+      return {
+        rows: Array.isArray(res?.sessions) ? res.sessions : [],
+        next: typeof res?.nextCursor === "string" && res.nextCursor ? res.nextCursor : null,
+      };
+    },
+    // One server page on screen, unless a newer request has been made since
+    // (`seq`). The count is recorded when the query runs out on this page.
+    async showHistory(page, cursor, res, search, seq) {
+      const rows = await this.historyRows(res.rows, page === 0 && !search);
+      if (seq !== this.historySeq) return false;
+      if (search !== this.historyQuery) this.historyTotal = null;
+      if (!res.next) this.historyTotal = page * this.historySize + rows.length;
+      if (!search && this.historyTotal != null) this.sessionTotal = this.historyTotal;
+      this.sessions = rows;
+      this.historyPage = page;
+      this.historyCursors = [...this.historyCursors.slice(0, page), cursor];
+      this.historyNext = res.next;
+      this.historyQuery = search;
+      return true;
+    },
+    // Server rows as history rows. The row carries everything the table
+    // draws but the takes, which only two readers need: the latest block (the
+    // full synthesis, and a tally counted from the takes) and the consensus
+    // of a portfolio session whose record predates the stance tally. Those
+    // rows are read in full; no other row is fetched.
+    async historyRows(raw, withLatest) {
+      const rows = raw.filter((s) => (s?.subjectId ?? s?.subject_id) === this.historySubject).map(historyRowOf);
+      const weights = this.isFramework() || rows.some((r) => r.swarmRecommendation?.type === "bucket_weights");
+      return Promise.all(rows.map((r, i) => {
+        if (this.latestRow && r.id === this.latestRow.id) return this.latestRow;
+        const full = (withLatest && i === 0) || (!weights && Number(r.takes) > 0 && !this.lean(r));
+        return full ? this.withDetail(r) : r;
+      }));
+    },
+    // The session's own record over its index row, with its takes. The index
+    // row stands when the detail does not load.
+    async withDetail(r) {
+      try {
+        const detail = await api.get(path(ROUTES.swarm.sessionById, { id: r.id }));
+        const full = camelSession(detail.session || detail);
+        return {
+          ...r,
+          synthesis: full?.synthesis || r.synthesis,
+          swarmRecommendation: full?.swarmRecommendation || r.swarmRecommendation,
+          regimeSummary: full?.regimeSummary || r.regimeSummary,
+          takeRows: (detail.takes || []).map(camelTake),
+        };
+      } catch (_) {
+        return r;
+      }
+    },
+    // The search box (server mode only): a literal phrase the API matches
+    // against each session's date, rationale and synthesis before it pages.
+    // An empty box puts the unfiltered first page back.
+    async searchHistory(raw) {
+      const q = String(raw || "").trim().slice(0, HISTORY_SEARCH_MAX);
+      if (this.historyMode !== "server" || q === this.historyAsked) return;
+      this.historyAsked = q;
+      const seq = ++this.historySeq;
+      this.historyError = "";
+      if (!q && this.historyFirst) {
+        this.sessions = this.historyFirst.rows;
+        this.historyNext = this.historyFirst.next;
+        this.historyCursors = [null];
+        this.historyPage = 0;
+        this.historyQuery = "";
+        this.historyTotal = this.sessionTotal;
+        this.historyBusy = false;
+        return;
+      }
+      this.historyBusy = true;
+      try {
+        await this.showHistory(0, null, await this.requestHistory(this.historySubject, null, q), q, seq);
+      } catch (_) {
+        if (seq === this.historySeq) {
+          this.historyError = "These sessions could not be loaded.";
+          this.historyAsked = this.historyQuery;
+        }
+      } finally {
+        if (seq === this.historySeq) this.historyBusy = false;
+      }
+    },
+    // Newer and Older in server mode: a page already read reopens at its
+    // cursor, the next one at the cursor past the page on screen.
+    async goServerHistory(page) {
+      const cursor = page === this.historyPage + 1 ? this.historyNext : this.historyCursors[page];
+      if (this.historyBusy || page < 0 || page === this.historyPage || cursor === undefined) return;
+      if (page > this.historyPage && !cursor) return;
+      const seq = ++this.historySeq;
+      this.historyBusy = true;
+      this.historyError = "";
+      try {
+        const res = await this.requestHistory(this.historySubject, cursor, this.historyQuery);
+        if (await this.showHistory(page, cursor, res, this.historyQuery, seq)) {
+          document.getElementById("history")?.scrollIntoView({ block: "start" });
+        }
+      } catch (_) {
+        if (seq === this.historySeq) this.historyError = "These sessions could not be loaded.";
+      } finally {
+        if (seq === this.historySeq) this.historyBusy = false;
+      }
+    },
+    // How many sessions the subject has published, when the page knows: the
+    // whole index in index mode, and in server mode once the unfiltered
+    // history has been read to its end. Null otherwise, never a guess.
+    sessionCount() { return this.historyMode === "server" ? this.sessionTotal : this.sessionIndex.length; },
+    hasPages() { return this.historyMode === "server" ? this.historyPage > 0 || !!this.historyNext : this.historyPageCount() > 1; },
+    hasOlder() { return this.historyMode === "server" ? !!this.historyNext : this.historyPage < this.historyPageCount() - 1; },
     // Every published session on the subject, newest first, as index rows.
-    // The public list has no subject filter yet (#991), so the whole index is
-    // read and filtered here, with the static archive behind it.
+    // The fallback when the API does not page by subject (a backend before
+    // #1007): the whole index is read and filtered here, with the static
+    // archive behind it.
     async loadSessionIndex(id) {
       const pick = (list) => list
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
@@ -1339,6 +1502,9 @@ export function registerStaticViews(Alpine) {
               synthesis: archive.session?.synthesis || "",
               swarmRecommendation: archive.session?.swarmRecommendation || null,
               regimeSummary: archive.session?.regimeSummary || null,
+              // The index entry has no time; the session file does. Without it
+              // the row printed "3 takes" where /swarm prints "23:58 UTC · 3 takes".
+              generatedAt: s.generatedAt ?? archive.session?.generatedAt ?? null,
               takes: (archive.takes || []).length,
               takeRows: archive.takes || [],
             });
@@ -1351,6 +1517,7 @@ export function registerStaticViews(Alpine) {
     },
     historyPageCount() { return Math.max(1, Math.ceil(this.sessionIndex.length / this.historySize)); },
     async goHistory(page) {
+      if (this.historyMode === "server") return this.goServerHistory(page);
       if (this.historyBusy || page < 0 || page >= this.historyPageCount()) return;
       this.historyBusy = true;
       this.historyError = "";
@@ -1365,6 +1532,11 @@ export function registerStaticViews(Alpine) {
       }
     },
     historyRange() {
+      if (this.historyMode === "server") {
+        const first = this.historyPage * this.historySize + 1;
+        const last = first + this.sessions.length - 1;
+        return this.historyTotal == null ? `${first}–${last}` : `${first}–${last} of ${this.historyTotal}`;
+      }
       const from = this.historyPage * this.historySize + 1;
       const to = Math.min(this.sessionIndex.length, from + this.historySize - 1);
       return `${from}–${to} of ${this.sessionIndex.length}`;
@@ -1392,8 +1564,9 @@ export function registerStaticViews(Alpine) {
     rowReference(row) { return row?.reference || targetsInForce(this.allocationFw, row?.date); },
     // The moves a row recommends against rowReference(). No reference, no
     // moves: a target published after the session is never read back onto it.
-    rowMoves(row) {
-      const ref = this.rowReference(row);
+    // The history table measures every row this way, the latest included.
+    rowMoves(row) { return this.movesAgainst(row, this.rowReference(row)); },
+    movesAgainst(row, ref) {
       if (!ref) return null;
       const w = this.rowWeights(row);
       if (w.every((v) => v == null)) return null;
@@ -1405,22 +1578,42 @@ export function registerStaticViews(Alpine) {
     },
     // The positions a portfolio recommendation moves, holds left out: the
     // outcome line already counts them.
-    rowOutcome(row) {
+    rowOutcome(row) { return this.outcomeAgainst(row, this.rowMoves(row), "target"); },
+    outcomeAgainst(row, moves, basis) {
       const rec = row?.swarmRecommendation;
       if (rec?.type !== "bucket_weights") return this.actionsOutcome(row);
       // No weights, no outcome: the history cell and the latest block each
       // say "no recommendation" in their own words, so this adds nothing.
       if (!this.rowWeights(row).some((v) => v != null)) return "";
-      const moves = this.rowMoves(row);
       if (moves == null) return "No target recorded";
-      return moves.length ? `${moves.length} ${moves.length === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
+      return weightsOutcomeLine(moves.length, basis);
     },
+    // The latest recommendation is measured as its session page measures it
+    // (gapBasis there): against the book when the session read one, on or
+    // before its date, and the framework's token lists can sum it into
+    // sleeves; against its target otherwise. bookSleeveShares() is the one
+    // reading of the book both pages call. Percent by sleeve, or null.
+    latestBookWeights() {
+      const row = this.latest();
+      if (!row || this.isFramework()) return null;
+      /** @type {Record<string, number>} */
+      const out = {};
+      for (const [id, share] of bookSleeveShares(this.allocationFramework, this.latestBook(), row.date)) {
+        const i = bucketRank(id);
+        if (i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = share * 100;
+      }
+      return Object.keys(out).length ? out : null;
+    },
+    latestBasis() { return this.latestBookWeights() ? "book" : "target"; },
+    latestReference() { return this.latestBookWeights() || this.rowReference(this.latest()); },
+    latestMoves() { return this.movesAgainst(this.latest(), this.latestReference()); },
+    latestOutcome() { return this.outcomeAgainst(this.latest(), this.latestMoves(), this.latestBasis()); },
     // The latest review's legend: each sleeve, its recommended weight, and its
-    // move against the target that session is measured against (rowReference).
+    // move against what that session is measured against (latestReference).
     latestLegend() {
       const row = this.latest();
       const w = this.rowWeights(row);
-      const ref = this.rowReference(row);
+      const ref = this.latestReference();
       return this.sleeveColumns().map((c, i) => {
         const was = ref ? ref[c.key] : null;
         return { ...c, pct: w[i], was: was == null ? null : was, d: ref ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
@@ -1448,10 +1641,17 @@ export function registerStaticViews(Alpine) {
     explorerLabel() {
       return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
+    // The centre speaks for the row in focus. At rest a recommended mix reads
+    // "Recommended", as it does on the session page and /swarm, so one ring
+    // means one thing on every page. The book the latest session read is the
+    // Holdings figure while it is still the newest snapshot; once newer
+    // snapshots land, this is the only place the page gives the total of the
+    // book the recommendation acted on.
     explorerCenter() {
-      return this.hasBook()
-        ? { value: this.fmtUsdShort(this.latestBook()?.totalValueUsd), label: "Holdings" }
-        : { value: "100%", label: "Recommended" };
+      if (!this.hasBook()) return { value: "", label: "Recommended" };
+      const book = this.latestBook();
+      const newest = String(book?.date || "").slice(0, 10) === String(this.snapshot?.date || "").slice(0, 10);
+      return book && !newest ? { value: this.fmtUsdShort(book.totalValueUsd), label: "Holdings" } : { value: "", label: "" };
     },
     fmtUsdShort(v) {
       const n = Number(v);
@@ -1479,10 +1679,8 @@ export function registerStaticViews(Alpine) {
       const within = new Map(withinBucketsFor(row?.swarmRecommendation, this.brief, null, sleeveWeight).map((w) => [normKeyOf(w.bucket), w]));
       return legend.map((r) => ({
         ...r,
-        meta: `${this.fmtPctTrim(r.pct)} of allocation`, action: "", rationale: "",
-        d: this.rowReference(row) ? r.d : null,
-        was: this.rowReference(row) ? r.was : null,
-        basis: "target",
+        meta: "", action: "", rationale: "",
+        basis: this.latestBasis(),
         assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
       }));
     },
@@ -1491,7 +1689,6 @@ export function registerStaticViews(Alpine) {
     changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
-    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
     isLong(text, chars) { return String(text || "").length > chars; },
     sessionsJsonHref() { return ROUTES.swarm.sessions; },
     // What KIND of subject this is, from the record rather than from the slug.
@@ -1501,14 +1698,6 @@ export function registerStaticViews(Alpine) {
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectKind() { return this.subjectKindOf(this.subject); },
     operatorLabel() { return this.operatorOf(this.subject); },
-    // Newest first, so the head's chip names the most recent review. The
-    // prose line this replaced named the OLDEST ("since August 2026"), which
-    // is the less useful of the two: a reader wants to know how current the
-    // page is, not when it started.
-    lastReviewedLabel() {
-      const s = this.sessionIndex[0];
-      return s?.date ? this.formatDate(s.date, "short") : "";
-    },
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
       return (this.snapshot?.positions || [])
@@ -1618,9 +1807,11 @@ export function registerStaticViews(Alpine) {
       }
       return bands;
     },
-    // The legend: swatch, token, and its share on the most recent reading. The
-    // panel previously shipped no legend at all, so six unlabelled lines could
-    // only be decoded against a 14px rule in the table further down the page.
+    // The legend: swatch and token. The latest reading's share of each is the
+    // positions table's Share column above, and every reading's is in the
+    // crosshair tip. The panel previously shipped no legend at all, so six
+    // unlabelled lines could only be decoded against a 14px rule in the table
+    // further down the page.
     concentrationLegend() {
       const series = this.concentrationSeries();
       if (!series.length) return [];
@@ -1630,16 +1821,15 @@ export function registerStaticViews(Alpine) {
         // more token among the symbols. Keys and focus stay on `token`.
         label: b.token === OTHER_TOKEN ? "Other" : b.token,
         color: b.color,
-        pct: this.fmtPct1(b.shares[b.shares.length - 1] || 0),
       })); // largest first: the legend runs left to right under the chart
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
-    // them days would misdescribe the x-axis.
+    // them days would misdescribe the x-axis. The span is the axis's own first
+    // and last ticks.
     chartSpan() {
       const w = this.windowed();
-      if (w.length < 2) return "";
-      return `${this.formatDate(w[0].date, "short")} – ${this.formatDate(w[w.length - 1].date, "short")} · ${w.length} readings`;
+      return w.length < 2 ? "" : `${w.length} readings`;
     },
     // ── the book over time (RM-121) ─────────────────────────────────────────
     // Share-of-NAV over time, one stacked BAND per position. A holdings table is
@@ -1705,17 +1895,20 @@ export function registerStaticViews(Alpine) {
       const named = m.series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
       return `Share of the book by position, stacked to 100%, ${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
     },
-    // A tick under every reading; the first and last carry their year, and the
-    // ones between drop out on a narrow screen.
+    // A tick under every reading, month and day; the ones between the ends drop
+    // out on a narrow screen. The last reading's year is the positions label's
+    // above the chart, so the first tick carries its own year only when it
+    // differs (windowed() can fall back to two readings a year or more apart).
     chartXTicks() {
       const m = this.chartModel();
       if (!m) return [];
       const last = m.rows.length - 1;
       const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
+      const lastYear = String(m.rows[last]?.date || "").slice(0, 4);
       return m.rows.map((r, i) => ({
         key: `${r.date}-${i}`,
         left: m.xs[i] / 10,
-        label: md(r.date),
+        label: i === 0 && String(r.date || "").slice(0, 4) !== lastYear ? this.formatDate(r.date, "short") : md(r.date),
         i,
         cls: i === 0 ? "is-first" : i === last ? "is-last" : "is-mid",
       }));
@@ -1803,6 +1996,18 @@ export function registerStaticViews(Alpine) {
     // The chains the book is read on, in the order its wallets list them.
     walletChains() {
       return [...new Set(this.trackedWallets().map((w) => w.chain).filter(Boolean))];
+    },
+    // What the total spans and leaves out that the page does not already say:
+    // the chains (both tables drop their Chain column on a phone) and the NFT
+    // contracts it does not value. The date is the positions table's label and
+    // the count is its rows, so the date stays only when there is no table.
+    bookStatSub() {
+      const nft = this.nftContracts().length;
+      return [
+        this.positionRows().length ? "" : this.formatDate(this.snapshot?.date, "short"),
+        this.walletChains().map((c) => this.chainLabel(c)).join(", "),
+        nft ? `${nft === 1 ? "NFT contract" : "NFT contracts"} not valued` : "",
+      ].filter(Boolean).join(" · ");
     },
     // An address on a chain whose explorer is known. Base only for now; other
     // chains print the address without a link rather than guess a URL.
@@ -2460,6 +2665,12 @@ export function registerStaticViews(Alpine) {
         .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
         .sort((a, b) => b.share - a.share);
     },
+    // The book's date, only when it is not the session's own: pickSnapshotFor
+    // falls back to an earlier snapshot, or the latest when none precedes it.
+    bookDate() {
+      const d = String(this.snapshot?.date || "").slice(0, 10);
+      return d && d !== String(this.session?.date || "").slice(0, 10) ? this.formatDate(d, "short") : "";
+    },
     // Keyed the way the subject page keys the same book: named tokens keep the
     // colour they own and the rest take a free one, resolved over the rows
     // this table draws, so no two rows share a key.
@@ -2600,19 +2811,12 @@ export function registerStaticViews(Alpine) {
     // only when the snapshot and the framework are BOTH present, and a bucket
     // whose tokens are simply absent from the book reads 0%, which is true,
     // rather than "—", which would claim we do not know.
+    //
+    // bookSleeveShares() is the one implementation: the subject page's latest
+    // recommendation reads the book through it too, so the two pages cannot
+    // measure the same session against different things.
     bucketActuals() {
-      const out = new Map();
-      const buckets = this.allocationFramework?.buckets || [];
-      const positions = this.snapshot?.positions || [];
-      const total = Number(this.snapshot?.totalValueUsd ?? this.snapshot?.total_value_usd ?? 0);
-      if (!buckets.length || !positions.length || !(total > 0)) return out;
-      for (const b of buckets) {
-        const held = positions
-          .filter((p) => b.tokens.includes(String(p.token || "").toUpperCase()))
-          .reduce((sum, p) => sum + Number(p.value_usd || 0), 0);
-        out.set(b.id, held / total);
-      }
-      return out;
+      return bookSleeveShares(this.allocationFramework, this.snapshot, this.session?.date);
     },
     // The date the published framework's targets are stated as of.
     // /api/dashboards/allocation serves the SINGLE CURRENT row of
@@ -2635,6 +2839,14 @@ export function registerStaticViews(Alpine) {
       const date = this.session?.date;
       return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
     },
+    // Whether the legend and the headline can state a move: there is a basis,
+    // and it is not a target that postdates the session. A move from the book
+    // never reads the target, so the target's date cannot withhold it; the
+    // subject page's latest recommendation follows the same rule.
+    gapIsFair() {
+      const basis = this.gapBasis();
+      return basis === "actual" || (basis === "target" && !this.targetPostdatesSession());
+    },
     // Inside each sleeve, as /allocation's sleeve cards draw it: each sleeve
     // under its published name and hue with its recommended weight, and its
     // items in POLICY order, each in the colour its position gives it there
@@ -2655,10 +2867,14 @@ export function registerStaticViews(Alpine) {
     explorerLabel() {
       return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
+    // At rest a recommended mix's centre names the ring and nothing more: the
+    // mix is the whole allocation by definition, so "100%" said nothing, and
+    // it was wrong where the weights do not sum to 100 (ringSvg leaves that
+    // ring open on purpose).
     explorerCenter() {
       return this.hasBook()
         ? { value: this.fmtUsdShort(this.snapshot?.totalValueUsd), label: "Holdings" }
-        : { value: "100%", label: "Recommended" };
+        : { value: "", label: "Recommended" };
     },
     fmtUsdShort(v) {
       const n = Number(v);
@@ -2668,14 +2884,14 @@ export function registerStaticViews(Alpine) {
     explorerRows() {
       if (this.hasBook()) return bookExplorerRows(this.snapshot, this.authoredActions(), (t) => this.tokenColor(t), (v) => this.fmtUsd(v));
       const within = new Map(this.withinBucketWeights().map((w) => [normKeyOf(w.bucket), w]));
-      const fair = !!this.gapBasis() && !this.targetPostdatesSession();
+      const fair = this.gapIsFair();
       const basis = this.gapBasis() === "actual" ? "book" : "target";
       return this.bucketRows().map((b, i) => {
         const key = BUCKET_ORDER[bucketRank(b.id || b.name)] || String(b.id || b.name || i);
         const pct = b.recommended == null ? null : b.recommended * 100;
         const was = this.gapBasis() === "actual" ? b.actual : b.target;
         return {
-          key, label: b.name, hue: b.hue, pct, meta: `${this.fmtPctTrim(pct)} of allocation`, action: "", rationale: "",
+          key, label: b.name, hue: b.hue, pct, meta: "", action: "", rationale: "",
           d: fair ? b.gap : null, was: fair && was != null ? was * 100 : null, basis,
           assets: explorerAssets(within.get(normKeyOf(b.id || b.name)) || within.get(normKeyOf(b.name)), pct),
         };
@@ -2709,6 +2925,12 @@ export function registerStaticViews(Alpine) {
     },
     hasTargetColumn() { return this.bucketWeights().some((b) => b.target != null); },
     hasActualColumn() { return this.bucketWeights().some((b) => b.actual != null); },
+    // The full comparison, only when it holds a figure the legend does not:
+    // the target beside the book, or a target the legend withholds because it
+    // postdates the session.
+    hasLedger() {
+      return !!this.gapBasis() && ((this.hasTargetColumn() && this.hasActualColumn()) || this.targetPostdatesSession());
+    },
     // The number of figure columns in the outcome register, for its grid.
     outcomeColumns() {
       return 1 + (this.hasTargetColumn() ? 1 : 0) + (this.hasActualColumn() ? 1 : 0) + (this.gapBasis() ? 1 : 0);
@@ -2728,7 +2950,7 @@ export function registerStaticViews(Alpine) {
     outcomeState() {
       if (this.isBucketWeights()) {
         const basis = this.gapBasis();
-        if (!basis || this.targetPostdatesSession()) return null;
+        if (!this.gapIsFair()) return null;
         const rows = this.bucketRows().filter((b) => b.gap != null);
         if (!rows.length) return null;
         const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
@@ -2743,24 +2965,6 @@ export function registerStaticViews(Alpine) {
       return moved
         ? { label: "Change", detail: `${moved} of the ${acts.length} positions it reviewed` }
         : { label: "No change", detail: `holds all ${acts.length} positions it reviewed` };
-    },
-    // Which target, and whose book, the figures are measured against.
-    outcomeCaption() {
-      const basis = this.gapBasis();
-      if (!basis) return "";
-      const parts = [];
-      if (basis === "actual" && this.snapshot?.date) parts.push(`Change is measured against the book on ${this.formatDate(this.snapshot.date, "short")}.`);
-      if (this.hasTargetColumn()) {
-        if (this.targetSource() === "brief") {
-          parts.push("Target as handed to this session.");
-        } else if (this.allocationAsOf()) {
-          const when = this.formatDate(this.allocationAsOf(), "short");
-          parts.push(this.targetPostdatesSession()
-            ? `Target as published ${when}, after this session, so the session was not measured against it.`
-            : `Target as published ${when}.`);
-        }
-      }
-      return parts.join(" ");
     },
     // Anything byte-identical to a take already on this page is an echo, and
     // dropped. Shape-agnostic: a real synthesis stops matching any body and
@@ -2846,13 +3050,16 @@ export function registerStaticViews(Alpine) {
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
-    // Record generated, dated like every other date on the page. Guarded:
+    // Record generated, as a time when it is the session's own day (the header
+    // prints that date), dated only when generated on another. Guarded:
     // toISOString() throws on an unparseable stamp, so that one prints as is.
     generatedLabel() {
       const at = this.session?.generatedAt || this.session?.generated_at;
       const t = Date.parse(at);
       if (!Number.isFinite(t)) return at || "";
-      return `${this.formatDate(at, "short")} · ${new Date(t).toISOString().slice(11, 16)} UTC`;
+      const iso = new Date(t).toISOString();
+      const time = `${iso.slice(11, 16)} UTC`;
+      return iso.slice(0, 10) === String(this.session?.date || "").slice(0, 10) ? time : `${this.formatDate(at, "short")} · ${time}`;
     },
     sessionJsonHref() {
       const s = this.session;
@@ -2870,33 +3077,20 @@ export function registerStaticViews(Alpine) {
     hasRecommendationSection() {
       return this.hasOutcome() || !!this.recommendationRationale();
     },
-    // The decision in one line, measured against what the session was given.
-    // Nothing when there is no fair comparison: the legend still shows the mix.
+    // The decision in one line, only where the legend cannot say it: that no
+    // sleeve moved from what the session was measured against. A count of
+    // moves is the legend's rows that carry one, and every action is labelled
+    // on its own row, as on the subject page. Nothing when there is no fair
+    // comparison: the legend still shows the mix.
     outcomeHeadline() {
-      if (this.isBucketWeights()) {
-        if (!this.gapBasis() || this.targetPostdatesSession()) return "";
-        const rows = this.bucketRows().filter((b) => b.gap != null);
-        if (!rows.length) return "";
-        const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
-        // The subject page's wording (rowOutcome), so the same session reads
-        // the same on both pages.
-        const what = this.gapBasis() === "actual" ? "the book" : "target";
-        if (!moved) return this.gapBasis() === "actual" ? "Holds the book as it stands" : "Target weights retained";
-        return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${what}`;
-      }
-      const acts = this.authoredActions();
-      if (!acts.length) return "";
-      const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
-      // Counted in actions, which can be fewer than the positions the ring and
-      // holdings list, so no "N of M": the history row's "· 3 held" form, and
-      // never "0 held".
-      const held = acts.length - moved;
-      return moved
-        ? `${moved} ${moved === 1 ? "position changes" : "positions change"}${held ? `, ${held} held` : ""}`
-        : `${acts.length} ${acts.length === 1 ? "position" : "positions"} held`;
+      if (!this.isBucketWeights() || !this.gapIsFair()) return "";
+      const rows = this.bucketRows().filter((b) => b.gap != null);
+      if (!rows.length || rows.some((b) => this.changeClass(b.gap) !== "flat")) return "";
+      // The subject page's wording (weightsOutcomeLine), so the same
+      // session reads the same on both pages.
+      return weightsOutcomeLine(0, this.gapBasis() === "actual" ? "book" : "target");
     },
     isLong(text, chars) { return String(text || "").length > chars; },
-    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
     // ── the vote, as a chart ────────────────────────────────────────────────
     // Each member at their stance (a fifth of the width each, bearish to
     // bullish) and their confidence. Members sharing a stance spread apart
@@ -2971,23 +3165,21 @@ export function registerStaticViews(Alpine) {
       const word = lean.stance.charAt(0).toUpperCase() + lean.stance.slice(1);
       return `${word}, ${this.leadShare(row)} members`;
     },
+    // The plot's accessible name carries the mean: its dashed rule is
+    // decoration inside role=img, and the caption no longer repeats it.
     voteLabel() {
       const dots = this.voteDots();
+      const mean = this.voteMean();
       return `How members voted, by stance and confidence. ${this.consensusText()}. `
-        + dots.map((d) => `${d.name} ${d.stance} at ${d.y}%`).join(", ") + ".";
+        + dots.map((d) => `${d.name} ${d.stance} at ${d.y}%`).join(", ") + "."
+        + (mean === null ? "" : ` Mean confidence ${mean}%.`);
     },
     signatureHeadline() {
       const t = this.takes || [];
-      if (!t.length) return "No takes filed";
+      if (!t.length) return "";
       if (t.every((x) => x.archival)) return "Archived, unsigned research";
       const ok = t.filter((x) => x.verified).length;
       return ok === t.length ? "Every take is signed and verified" : `${ok} of ${t.length} takes verified`;
-    },
-    signatureDetail() {
-      const t = this.takes || [];
-      if (!t.length) return "No member filed a take for this session.";
-      if (t.every((x) => x.archival)) return "These takes are from the pre-launch record, filed before members signed their takes. They were never member-signed, which is not a failed signature check.";
-      return "A verified take was signed with the member's registered key. A recommendation records research; it does not show that capital moved.";
     },
     targetPolicyLabel() {
       const src = this.targetSource();
@@ -2996,11 +3188,10 @@ export function registerStaticViews(Alpine) {
         return asof ? `Handed to this session, dated ${this.formatDate(asof, "short")}` : "Handed to this session";
       }
       if (src === "framework" && this.allocationAsOf()) {
-        return this.targetPostdatesSession()
-          ? `Not recorded for this session. Current target published ${this.formatDate(this.allocationAsOf(), "short")}`
-          : `Published ${this.formatDate(this.allocationAsOf(), "short")}`;
+        const when = this.formatDate(this.allocationAsOf(), "short");
+        return this.targetPostdatesSession() ? `Published ${when}, after this session` : `Published ${when}`;
       }
-      return "Not recorded for this session";
+      return "Not recorded";
     },
   }));
 }
@@ -3055,7 +3246,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
     const pct = (p.value / total) * 100;
     return {
       key: p.token, label: p.token, hue: colourOf(p.token), pct,
-      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(p.value)}${p.chain ? ` · ${sessionSummary.chainLabel(p.chain)}` : ""}`,
+      meta: `${usd(p.value)}${p.chain ? ` · ${sessionSummary.chainLabel(p.chain)}` : ""}`,
       action: act ? String(act.action).toLowerCase() : "", rationale: act?.rationale || "",
       d: null, was: null, basis: "", assets: [],
     };
@@ -3065,7 +3256,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
   if (restValue > 0) {
     const pct = (restValue / total) * 100;
     rows.push({ key: OTHER_TOKEN, label: `Other (${rest.length})`, hue: OTHER_COLOR, pct,
-      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(restValue)}`, action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
+      meta: usd(restValue), action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
   }
   const held = new Set(positions.map((p) => p.token.toLowerCase()));
   for (const a of actions || []) {
@@ -3117,6 +3308,42 @@ export function targetsInForce(fw, date) {
   if (!asOf || !date || String(date) < asOf) return null;
   const rows = (fw.strategy || []).filter((r) => r?.targetPct != null && Number.isFinite(Number(r.targetPct)));
   return referenceWeights({ allocation: { buckets: rows.map((r) => ({ name: r.label, target_weight: Number(r.targetPct) / 100 })) } });
+}
+
+// The API's own limit on a history search (#1007): a literal phrase, short.
+const HISTORY_SEARCH_MAX = 200;
+
+// Whether a session list answered a `subject=` request as #1007 does: every
+// row that subject's, and each carrying its take count. A backend before it
+// ignores the parameter and returns every subject's rows, with no takeCount.
+// An empty answer proves nothing either way, so it is not trusted.
+/** @param {any[]} rows @param {string} subjectId */
+export function servesSubjectHistory(rows, subjectId) {
+  return Array.isArray(rows) && rows.length > 0
+    && rows.every((s) => Number.isFinite(s?.takeCount) && (s.subjectId ?? s.subject_id) === subjectId);
+}
+
+// A light index row (#1007) as a subject history row: the fields
+// loadSessionRow() builds from a session and its brief, read off the row. The
+// take count is the members who filed; the reference is the target that
+// session's own brief carried, or null.
+/** @param {any} s */
+function historyRowOf(s) {
+  const full = camelSession(s);
+  return {
+    id: full?.id,
+    date: full?.date,
+    subjectId: full?.subjectId,
+    subjectName: full?.subjectName,
+    generatedAt: full?.generatedAt ?? null,
+    publishedAt: s?.publishedAt ?? s?.published_at ?? null,
+    synthesis: full?.synthesis || "",
+    swarmRecommendation: full?.swarmRecommendation || null,
+    regimeSummary: full?.regimeSummary || null,
+    takes: Number.isFinite(s?.takeCount) ? s.takeCount : null,
+    takeRows: [],
+    reference: referenceWeights({ allocation: s?.referenceAllocation }),
+  };
 }
 
 // A subject's published sessions, newest first, as { id, date, subjectId }.

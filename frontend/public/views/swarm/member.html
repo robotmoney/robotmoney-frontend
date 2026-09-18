@@ -27,24 +27,23 @@
           <div class="sv__avatar sv__avatar--mark rr-profile__mark"
                x-html="memberMark(member.keyFingerprint || member.id, member.name, 72, member.avatar?.path, member.handle)"></div>
           <div>
-            <p class="sv__eyebrow sv__eyebrow--quiet">Swarm member</p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
             <p class="sv__lede sv__lede--compact profile-role" x-show="memberTagline(member)" x-text="memberTagline(member)"></p>
           </div>
         </header>
 
         <!-- Whether it holds a seat now and since when, then the record in
-             figures, then who runs it. Each figure explains itself on demand. -->
-        <div class="rr-meta">
+             figures, then who runs it. -->
+        <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes">
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
-          <span class="rr-meta__i">Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About takes filed">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every subject.</span></span> <b x-text="recordStats().takes"></b></span>
+          <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="recordStats().takes"></b></span></template>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
-          <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key. Takes filed before signing existed are not counted.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
-          <template x-if="!recordStats().verifiable && recordStats().archival"><span class="rr-meta__i">Archived<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About archived takes">i</button><span class="rm-tip__bub" role="tooltip">Filed before members signed their takes. Unsigned, which is not a failed signature check.</span></span> <b x-text="recordStats().archival"></b></span></template>
-          <span class="rr-meta__i">Mean confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About mean confidence">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues, not how often it is right.</span></span> <b x-text="recordStats().conviction"></b></span>
+          <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
+          <template x-if="recordStats().archival"><span class="rr-meta__i">Archived<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About archived takes">i</button><span class="rm-tip__bub" role="tooltip">Filed before members signed their takes.</span></span> <b x-text="recordStats().archival"></b></span></template>
+          <template x-if="recordStats().takes"><span class="rr-meta__i">Mean confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About mean confidence">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues.</span></span> <b x-text="recordStats().conviction"></b></span></template>
           <template x-if="member.operator">
             <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
           </template>
@@ -60,7 +59,6 @@
             <div>
               <p class="rr-k rr-sub">Lens</p>
               <p class="rr-profile__lens" x-text="member.lens || 'Not stated'"></p>
-              <p class="rr-note">The angle it reads every brief from. One per seat.</p>
               <p class="rr-k rr-sub" style="margin-top:1.5rem">Biases</p>
               <ul class="rr-tags">
                 <template x-for="b in memberBiases(member)" :key="b"><li x-text="b"></li></template>
@@ -80,7 +78,6 @@
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="latest-h" x-text="inProgressTakes().length > 1 ? 'Latest takes' : 'Latest take'"></h2>
-              <span class="rr-sec__aside">Not yet published</span>
             </div>
             <div class="rr-takes">
               <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}-${row.take.id}`">
@@ -118,10 +115,7 @@
                     <div>
                       <div class="rr-take__text" x-ref="text">
                         <template x-if="!open && call(row.take.body, subjectNameOf(row.session))">
-                          <div>
-                            <p class="rr-k rr-take__call" x-text="call(row.take.body, subjectNameOf(row.session)).label"></p>
-                            <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
-                          </div>
+                          <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
                         </template>
                         <template x-if="open || !call(row.take.body, subjectNameOf(row.session))">
                           <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
@@ -153,7 +147,7 @@
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
-            <span class="rr-sec__aside" x-text="`${recentTakes().length} published ${recentTakes().length === 1 ? 'take' : 'takes'} · times UTC`"></span>
+            <span class="rr-sec__aside" x-show="recentTakes().length">Times UTC</span>
           </div>
           <!-- Filter narrows WHAT is listed, sort decides in what order: two
                questions, two groups on one line. mp-chip--sort carries no
@@ -166,8 +160,7 @@
               </button>
               <template x-for="s in subjects()" :key="s.id">
                 <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
-                        @click="filterBy(s.id)" :aria-pressed="subject === s.id"
-                        :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+                        @click="filterBy(s.id)" :aria-pressed="subject === s.id">
                   <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
                   <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
                 </button>
@@ -176,11 +169,11 @@
             <div class="mp-sort" role="group" aria-label="Sort the record">
               <span class="mp-sort__label" aria-hidden="true">Sort</span>
               <template x-for="o in [
-                { k: 'newest', t: 'Newest', h: 'When it was filed, newest first' },
-                { k: 'oldest', t: 'Oldest', h: 'When it was filed, oldest first' },
-                { k: 'confidence', t: 'Confidence', h: 'Boldest calls first' }]" :key="o.k">
+                { k: 'newest', t: 'Newest' },
+                { k: 'oldest', t: 'Oldest' },
+                { k: 'confidence', t: 'Confidence' }]" :key="o.k">
                 <button type="button" class="mp-chip mp-chip--sort" :class="{ 'is-on': sort === o.k }"
-                        @click="setSort(o.k)" :aria-pressed="sort === o.k" :title="o.h" x-text="o.t"></button>
+                        @click="setSort(o.k)" :aria-pressed="sort === o.k" x-text="o.t"></button>
               </template>
             </div>
           </div>
@@ -189,7 +182,6 @@
           <template x-if="recentTakes().length === 0 && inProgressTakes().length === 0">
             <div class="rr-empty mp-empty">
               <p class="rr-k">Awaiting first take</p>
-              <p class="rr-prose">Nothing published yet.</p>
               <a class="rr-lnk" href="/swarm">See the swarm</a>
             </div>
           </template>
@@ -237,10 +229,7 @@
                 <div>
                   <div class="rr-take__text" x-ref="text">
                     <template x-if="!open && call(row.take.body, subjectNameOf(row.session))">
-                      <div>
-                        <p class="rr-k rr-take__call" x-text="call(row.take.body, subjectNameOf(row.session)).label"></p>
-                        <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
-                      </div>
+                      <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, subjectNameOf(row.session)).text)"></div>
                     </template>
                     <template x-if="open || !call(row.take.body, subjectNameOf(row.session))">
                       <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
@@ -266,11 +255,11 @@
             </article>
           </template>
           </div>
-          <!-- The aside counts every published take, so the list reaches them
-               all: the same pager /swarm's history uses. -->
+          <!-- Twenty at a time, the same pager /swarm's history uses, with
+               the one count the list cannot give: how far into it the reader is. -->
           <template x-if="visibleTakes().length > shown">
             <div class="rr-pager">
-              <span x-text="`${shown} of ${visibleTakes().length} shown`"></span>
+              <span x-text="`${shown} of ${visibleTakes().length}`"></span>
               <div><button type="button" class="rr-btn" @click="shown += 20">Show more</button></div>
             </div>
           </template>
@@ -288,7 +277,6 @@
           <span aria-current="page">Members</span>
         </nav>
         <header class="rr-head">
-          <p class="sv__eyebrow sv__eyebrow--quiet">Swarm members</p>
           <h1 class="sv__detail-title" style="overflow-wrap:anywhere">No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;</h1>
         </header>
         <p class="rr-k rr-sub">Current members</p>

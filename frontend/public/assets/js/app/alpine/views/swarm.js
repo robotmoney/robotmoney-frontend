@@ -80,7 +80,7 @@ const SESSIONS_SHOWN_STEP = 20;
 // vault address, and a paragraph of flywheel; this page has a chart and a
 // link for those. Nothing else here depends on the map.
 const ROW_BLURBS = {
-  "Robot Money Vault": "Depositor capital in the ERC-4626 vault on Base. One implementation of the Robot Money Allocation.",
+  "Robot Money Vault": "Depositor capital in the ERC-4626 vault. One implementation of the Robot Money Allocation.",
   "RM Protocol Labs Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "RM Protocol Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "Robot Money protocol wallets": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
@@ -279,18 +279,14 @@ export function registerSwarmView(Alpine) {
       return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null)
         || targetsInForce(this.allocationFw, s?.date);
     },
-    // Which of those it is, for the note under the ring.
-    allocReferenceSource() {
-      const s = this.allocLatest();
-      if (referenceWeights(this.allocBrief) || s?.referenceAllocation) return "brief";
-      return targetsInForce(this.allocationFw, s?.date) ? "framework" : null;
-    },
     // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
     // subject and session pages.
     hasBook() { return false; },
     explorerSource() { return this.allocLatest(); },
     explorerSvg() { return this.weightDonutSvg(this.allocLatest()); },
-    explorerCenter() { return { value: "100%", label: "Recommended" }; },
+    // At rest the centre names the ring and nothing more: a recommended mix
+    // is the whole allocation by definition, so "100%" says nothing.
+    explorerCenter() { return { value: "", label: "Recommended" }; },
     explorerLabel() {
       return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
@@ -304,16 +300,17 @@ export function registerSwarmView(Alpine) {
         const was = ref ? (ref[r.key] ?? null) : null;
         return {
           key: r.key, label: r.label, hue: r.colour, pct: r.pct,
-          meta: `${this.fmtPctTrim(r.pct)} of allocation`, action: "", rationale: "",
+          meta: "", action: "", rationale: "",
           d: ref ? weightChange.weightDelta(r.pct, was) : null, was, basis: "target",
           assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
         };
       });
     },
+    // Only what the legend cannot show, as on the subject and session pages:
+    // that no sleeve moved. A count of moves is the legend's rows that carry one.
     allocOutcome() {
       if (!this.allocReference()) return "";
-      const moved = this.explorerRows().filter((r) => r.d != null && r.d !== 0).length;
-      return moved ? `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
+      return this.explorerRows().some((r) => r.d != null && r.d !== 0) ? "" : "Target weights retained";
     },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
     changeGlyph(d) { return weightChange.changeGlyph(d); },
@@ -642,13 +639,12 @@ export function registerSwarmView(Alpine) {
 
     // ── members ──────────────────────────────────────────────────────────
     memberRole() { return DEFAULT_ROLE; },
-    seatsLabel() {
-      if (this.rosterCap == null) return `${this.members.length} seats`;
-      return `${this.members.length} of ${this.rosterCap} seats taken`;
-    },
+    // The seats beside the Apply button: how many are open, of how many. The
+    // members holding the rest are the facts row's count.
     openSeatsLabel() {
       if (this.seatsAvailable == null) return "";
       if (this.seatsAvailable <= 0) return "No seats open right now";
+      if (this.rosterCap != null) return `${this.seatsAvailable} of ${this.rosterCap} seats open`;
       return this.seatsAvailable === 1 ? "One seat open" : `${this.seatsAvailable} seats open`;
     },
     // House or external, from the operator. A member with none set gets

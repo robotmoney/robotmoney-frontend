@@ -47,15 +47,12 @@
           </template>
         </header>
 
-        <div class="rr-meta">
-          <span class="rr-meta__i">Sessions <b x-text="sessionIndex.length"></b></span>
-          <template x-if="lastReviewedLabel()"><span class="rr-meta__i">Latest session <b x-text="lastReviewedLabel()"></b></span></template>
-          <!-- x-if on `snapshot` alone: a framework subject is never given one
-               (see subjectProfile.init), so "holdings" cannot reach a subject
-               that has no book. -->
-          <template x-if="snapshot">
-            <span class="rr-meta__i">Holdings <b x-text="fmtUsd(snapshot?.totalValueUsd)"></b></span>
-          </template>
+        <!-- The facts only this row states. The latest session's date is the
+             way into it, below; the book's total is the Holdings figure; and
+             with no session the history says so where the list would be. The
+             row itself goes when none of its items would draw. -->
+        <div class="rr-meta" x-show="sessionCount() || (backdrop && backdrop.composite !== null) || backdrop?.regime || isFramework()">
+          <template x-if="sessionCount()"><span class="rr-meta__i">Sessions <b x-text="sessionCount()"></b></span></template>
           <template x-if="backdrop && backdrop.composite !== null">
             <span class="rr-meta__i">Composite <b x-text="fmtNum(backdrop?.composite, 3)"></b></span>
           </template>
@@ -77,7 +74,6 @@
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="latest-h" x-text="recommendation(latest()) ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
-              <time class="rr-sec__aside" :datetime="latest().date" x-text="formatDate(latest().date, 'short')"></time>
             </div>
             <div class="rr-split rr-split--rule">
               <div>
@@ -90,7 +86,7 @@
                                 x-html="explorerSvg()"
                                 x-effect="active(); $nextTick(() => syncArcs($el))"></span>
                           <figcaption>
-                            <b x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                            <b x-show="activeRow() || explorerCenter().value" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
                             <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                           </figcaption>
                         </figure>
@@ -104,7 +100,7 @@
                               <span x-text="r.label"></span>
                               <b x-text="fmtPctTrim(r.pct)"></b>
                               <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
-                              <template x-if="r.was != null">
+                              <template x-if="r.was != null && r.d">
                                 <small>
                                   <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
                                   <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
@@ -122,9 +118,6 @@
                                 <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
                                 <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                               </div>
-                              <template x-if="panelRow().pct === 0 && panelRow().assets.length">
-                                <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. Its asset weights apply if it is funded.</p>
-                              </template>
                               <template x-if="panelRow().assets.length">
                                 <table class="rr-table rr-x__assets">
                                   <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
@@ -140,10 +133,10 @@
                                 </table>
                               </template>
                               <template x-if="panelRow().action">
-                                <p class="rr-x__why"><em class="rr-act" :class="`is-${panelRow().action}`" x-text="actionLabel(panelRow().action)"></em><span x-text="panelRow().rationale"></span></p>
+                                <p class="rr-x__why"><span x-text="panelRow().rationale"></span></p>
                               </template>
                               <template x-if="!panelRow().assets.length && !panelRow().action">
-                                <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action on this position this session.' : 'No asset-level weights were published for this sleeve.'"></p>
+                                <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action' : 'No asset weights published'"></p>
                               </template>
                             </div>
                           </template>
@@ -151,9 +144,9 @@
                       </div>
                       <span class="rr-sr" role="status" x-text="status"></span>
                     </div>
-                    <p class="rr-note" x-text="hasBook()
-                      ? `Holdings on ${formatDate(latestBook()?.date, 'short')}, with the action this session set on each position.`
-                      : latest().reference ? 'Target as handed to this session.' : rowReference(latest()) ? `Target as published ${formatDate(allocationFw?.asOf, 'short')}.` : 'No target was recorded for this session.'"></p>
+                    <template x-if="hasBook() && String(latestBook()?.date || '').slice(0, 10) !== String(latest().date || '').slice(0, 10)">
+                      <p class="rr-note" x-text="`Holdings on ${formatDate(latestBook()?.date, 'short')}`"></p>
+                    </template>
                   </div>
                 </template>
                 <!-- Member-authored actions only: a rollup's two hardcoded rows
@@ -169,10 +162,10 @@
                   </dl>
                 </template>
                 <template x-if="recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length">
-                  <p class="rr-note" style="margin-top:0">No position calls were published for this session.</p>
+                  <p class="rr-note" style="margin-top:0">No position calls</p>
                 </template>
                 <template x-if="!recommendation(latest())">
-                  <p class="rr-note" style="margin-top:0">No recommendation was published for this session.</p>
+                  <p class="rr-note" style="margin-top:0">No recommendation published</p>
                 </template>
 
                 <!-- The weights in force, on the page about them. Behind a
@@ -198,8 +191,6 @@
                             </div>
                           </template>
                         </div>
-                        <p class="rr-note" x-show="allocationNote()" x-text="allocationNote()"></p>
-                        <p class="rr-note"><a class="rr-lnk" href="/allocation">Asset allocation</a></p>
                       </div></div>
                     </div>
                   </div>
@@ -207,8 +198,11 @@
               </div>
 
               <div x-data="{ more: false }">
-                <template x-if="rowOutcome(latest())">
-                  <p class="rr-k rr-sub" x-text="rowOutcome(latest())"></p>
+                <!-- Only what the legend cannot show: that no sleeve moved, or
+                     that there was no target to move from. A count of moves
+                     or actions is the legend's rows. -->
+                <template x-if="recommendation(latest())?.kind === 'weights' && !(latestMoves() || []).length && latestOutcome()">
+                  <p class="rr-k rr-sub" x-text="latestOutcome()"></p>
                 </template>
                 <template x-if="rationaleOf(latest()) || latest().synthesis">
                   <div>
@@ -216,7 +210,7 @@
                          x-html="linkified(rationaleOf(latest()) || latest().synthesis)"></div>
                     <template x-if="isLong(rationaleOf(latest()) || latest().synthesis, 480)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
-                        <span x-text="more ? 'Show less' : (rationaleOf(latest()) ? 'Read full rationale' : 'Read full synthesis')"></span><small x-text="`${wordCount(rationaleOf(latest()) || latest().synthesis)} words`"></small>
+                        <span x-text="more ? 'Show less' : (rationaleOf(latest()) ? 'Read full rationale' : 'Read full synthesis')"></span>
                       </button>
                     </template>
                   </div>
@@ -226,7 +220,7 @@
                     <template x-for="x in stanceTally(latest())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[quorumText(latest()), meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[latest().swarmRecommendation?.quorum ? quorumText(latest()) : '', meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(latest())">
@@ -252,9 +246,8 @@
             <div class="rr-split rr-bookhead">
               <template x-if="snapshot">
                 <div class="rr-stat">
-                  <p class="rr-k rr-sub">Total holdings</p>
                   <p class="rr-stat__v" x-text="fmtUsd(snapshot?.totalValueUsd)"></p>
-                  <p class="rr-stat__sub" x-text="[formatDate(snapshot?.date, 'short'), `${(snapshot?.positions || []).length} positions`, walletChains().map((c) => chainLabel(c)).join(', ')].filter(Boolean).join(' · ')"></p>
+                  <template x-if="bookStatSub()"><p class="rr-stat__sub" x-text="bookStatSub()"></p></template>
                 </div>
               </template>
               <template x-if="bookSources().length">
@@ -280,9 +273,6 @@
                       </tbody>
                     </table>
                   </div>
-                  <template x-if="nftContracts().length">
-                    <p class="rr-note">NFT contracts are declared by the operator and not included in the total.</p>
-                  </template>
                 </div>
               </template>
             </div>
@@ -293,8 +283,9 @@
                  band in focus. -->
             <!-- What the book holds today, exactly: every position, largest
                  first, in the colour its band takes in the chart below. It
-                 opens with a label like every other Holdings sub-part, which
-                 is why .rr-positions wraps the scroller rather than being it. -->
+                 opens with a label like the Read from table beside the figure,
+                 which is why .rr-positions wraps the scroller rather than
+                 being it. -->
             <template x-if="positionRows().length">
               <div class="rr-positions">
                 <p class="rr-k rr-sub" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}`"></p>
@@ -352,7 +343,7 @@
                 <ul class="rr-area__legend">
                   <template x-for="l in concentrationLegend()" :key="l.token">
                     <li :class="chartFocus && chartFocus !== l.token ? 'is-muted' : ''" @pointerenter="chartFocus = l.token" @pointerleave="chartFocus = null">
-                      <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.label"></span><b x-text="l.pct"></b>
+                      <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.label"></span>
                     </li>
                   </template>
                 </ul>
@@ -379,17 +370,29 @@
         <section class="rr-sec sp-sessions" id="history" aria-labelledby="hist-h" :aria-busy="historyBusy ? 'true' : 'false'">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
-            <span class="rr-sec__aside sv__session-count" x-text="`${sessionIndex.length} ${sessionIndex.length === 1 ? 'session' : 'sessions'}`"></span>
+            <!-- Only where the API searches this subject's sessions before
+                 it pages them (#1007). The browser-side index and the archive
+                 have no search to offer, so they show no box. -->
+            <template x-if="historyMode === 'server'">
+              <div class="rr-search" role="search">
+                <label class="rm-visually-hidden" for="history-q">Search the recommendation history</label>
+                <input class="rr-search__in" id="history-q" type="search" maxlength="200" placeholder="Date or reasoning"
+                       autocomplete="off" spellcheck="false"
+                       @input.debounce.250ms="searchHistory($event.target.value)" @search="searchHistory($event.target.value)">
+              </div>
+            </template>
           </div>
 
-          <template x-if="!sessionIndex.length">
+          <template x-if="!sessions.length && !historyQuery">
             <p class="sv__empty">No published session yet.</p>
           </template>
+          <template x-if="!sessions.length && historyQuery">
+            <p class="sv__empty">No sessions match</p>
+          </template>
 
-          <template x-if="sessionIndex.length && isWeightsSubject()">
+          <template x-if="sessions.length && isWeightsSubject()">
             <div class="rr-tablewrap">
               <table class="rr-table sp-weights" :style="`--sleeves:${sleeveColumns().length}`">
-                <caption class="rr-sr">Recommended sleeve weights by session, percent of the allocation, with each session's moves against the target it was handed.</caption>
                 <thead>
                   <tr>
                     <th scope="col">Session</th>
@@ -428,7 +431,7 @@
             </div>
           </template>
 
-          <template x-if="sessionIndex.length && !isWeightsSubject()">
+          <template x-if="sessions.length && !isWeightsSubject()">
             <div class="rr-tablewrap">
               <table class="rr-table rr-stack" style="min-width:36rem">
                 <thead>
@@ -472,17 +475,14 @@
           </template>
 
           <template x-if="historyError"><p class="rr-note" role="alert" x-text="historyError"></p></template>
-          <template x-if="historyPageCount() > 1">
+          <template x-if="hasPages()">
             <nav class="rr-pager" aria-label="History pages">
               <span role="status" x-text="historyBusy ? 'Loading…' : historyRange()"></span>
               <div>
                 <button type="button" class="rr-btn" :disabled="historyBusy || historyPage === 0" @click="goHistory(historyPage - 1)">Newer</button>
-                <button type="button" class="rr-btn" :disabled="historyBusy || historyPage >= historyPageCount() - 1" @click="goHistory(historyPage + 1)">Older</button>
+                <button type="button" class="rr-btn" :disabled="historyBusy || !hasOlder()" @click="goHistory(historyPage + 1)">Older</button>
               </div>
             </nav>
-          </template>
-          <template x-if="isWeightsSubject() && sessionIndex.length">
-            <p class="rr-note">These are recommendations, not a record of executed holdings.</p>
           </template>
         </section>
       </div>

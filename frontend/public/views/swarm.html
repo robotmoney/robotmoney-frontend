@@ -67,7 +67,6 @@
           <template x-for="f in facts()" :key="f.k">
             <span class="rr-meta__i"><span x-text="f.k"></span> <b x-text="f.v"></b></span>
           </template>
-          <a class="rr-meta__lnk" href="/swarm/apply">Apply for a seat</a>
         </div>
 
         <!-- WHO IS IN IT, and how to join: first, because the swarm IS its
@@ -75,14 +74,13 @@
         <section class="rr-sec" id="members" aria-labelledby="mem-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="mem-h">Members</h2>
-            <span class="rr-sec__aside" x-text="seatsLabel()"></span>
           </div>
           <div class="rr-tablewrap rr-tablewrap--tips">
             <table class="rr-table rr-table--compact rr-members">
               <thead>
                 <tr>
                   <th scope="col">Member</th>
-                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">What a member owes the swarm each session. A <b>proposer</b> files one signed take: position, reasoning and sources.</span></span></th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">A <b>proposer</b> files one signed take each session: position, reasoning and sources.</span></span></th>
                   <th scope="col" class="q">Operator</th>
                 </tr>
               </thead>
@@ -117,7 +115,7 @@
              that session's brief carried, never today's. -->
         <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
           <div class="rr-sec__head">
-            <h2 class="rr-sec__h" id="alloc-h">Allocation</h2>
+            <h2 class="rr-sec__h" id="alloc-h">Latest allocation</h2>
             <a class="rr-sec__aside" :href="allocationHref()">All allocation recommendations</a>
           </div>
           <template x-if="allocLatest() && mixOf(allocLatest()).length">
@@ -130,7 +128,7 @@
                               x-html="explorerSvg()"
                               x-effect="active(); $nextTick(() => syncArcs($el))"></span>
                         <figcaption>
-                          <b x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                          <b x-show="activeRow() || explorerCenter().value" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
                           <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                         </figcaption>
                       </figure>
@@ -144,7 +142,7 @@
                             <span x-text="r.label"></span>
                             <b x-text="fmtPctTrim(r.pct)"></b>
                             <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
-                            <template x-if="r.was != null">
+                            <template x-if="r.was != null && r.d">
                               <small>
                                 <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
                                 <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
@@ -162,9 +160,6 @@
                               <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
                               <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
-                            <template x-if="panelRow().pct === 0 && panelRow().assets.length">
-                              <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. Its asset weights apply if it is funded.</p>
-                            </template>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
                                 <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
@@ -180,10 +175,10 @@
                               </table>
                             </template>
                             <template x-if="panelRow().action">
-                              <p class="rr-x__why"><em class="rr-act" :class="`is-${panelRow().action}`" x-text="actionLabel(panelRow().action)"></em><span x-text="panelRow().rationale"></span></p>
+                              <p class="rr-x__why"><span x-text="panelRow().rationale"></span></p>
                             </template>
                             <template x-if="!panelRow().assets.length && !panelRow().action">
-                              <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action on this position this session.' : 'No asset-level weights were published for this sleeve.'"></p>
+                              <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action' : 'No asset weights published'"></p>
                             </template>
                           </div>
                         </template>
@@ -191,10 +186,12 @@
                     </div>
                     <span class="rr-sr" role="status" x-text="status"></span>
                   </div>
-                <p class="rr-note" x-text="allocReferenceSource() === 'brief' ? 'Target as handed to this session.' : allocReferenceSource() === 'framework' ? `Target as published ${formatDate(allocationFw?.asOf, 'short')}.` : 'No target was recorded for this session.'"></p>
+                <template x-if="!allocReference()"><p class="rr-note">No target recorded</p></template>
               </div>
               <div x-data="{ more: false }">
-                <p class="rr-k rr-sub" x-text="allocOutcome() || `Latest recommendation · ${formatDate(allocLatest().date)}`"></p>
+                <template x-if="allocOutcome()">
+                  <p class="rr-k rr-sub" x-text="allocOutcome()"></p>
+                </template>
                 <template x-if="rationaleOf(allocLatest())">
                   <div>
                     <div class="rr-prose" :class="!more && String(rationaleOf(allocLatest())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
@@ -211,7 +208,7 @@
                     <template x-for="x in stanceTally(allocLatest())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[quorumText(allocLatest()), meanConfidenceText(allocLatest())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[turnoutText(allocLatest()), meanConfidenceText(allocLatest())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(allocLatest())">
@@ -221,30 +218,25 @@
             </div>
           </template>
           <template x-if="!allocLatest()">
-            <p class="rr-note" style="margin-top:0">No allocation recommendation is published yet.</p>
+            <p class="rr-note" style="margin-top:0">No recommendation published</p>
           </template>
           <template x-if="allocLatest() && !mixOf(allocLatest()).length">
-            <p class="rr-note" style="margin-top:0" x-text="`No recommendation was published on ${formatDate(allocLatest().date)}.`"></p>
+            <p class="rr-note" style="margin-top:0" x-text="`No recommendation published · ${formatDate(allocLatest().date)}`"></p>
           </template>
         </section>
 
-        <!-- THE BOOKS. One row per portfolio: what it is, how its latest
-             review came out, how often it is reviewed. -->
-        <section class="rr-sec" id="portfolios" aria-labelledby="port-h">
+        <!-- THE BOOKS. One row per portfolio: what it is and how its latest
+             review came out. Built from published sessions, so it is empty only
+             when nothing is published, which the facts row and the history
+             already say: absent then, rather than a heading over nothing. -->
+        <template x-if="portfolios().length"><section class="rr-sec" id="portfolios" aria-labelledby="port-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="port-h">Portfolios</h2>
-            <span class="rr-sec__aside" x-text="`${portfolios().length} ${portfolios().length === 1 ? 'portfolio' : 'portfolios'}`"></span>
           </div>
-          <!-- portfolios() is built from published sessions, so with none the
-               table would be a header over nothing. -->
-          <template x-if="!portfolios().length">
-            <p class="rr-note" style="margin-top:0">No portfolio has a published session yet.</p>
-          </template>
-          <template x-if="portfolios().length">
           <div class="rr-tablewrap">
             <table class="rr-table rr-ports rr-stack rr-stack--full">
               <thead>
-                <tr><th scope="col">Portfolio</th><th scope="col">Consensus</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest session</th></tr>
+                <tr><th scope="col">Portfolio</th><th scope="col">Consensus</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Latest session</th></tr>
               </thead>
               <tbody>
                 <template x-for="p in portfolios()" :key="p.id">
@@ -275,23 +267,24 @@
                         </span>
                       </template>
                     </td>
-                    <td class="q rr-ports__n" x-text="p.count"></td>
                     <td class="q"><template x-if="portfolioLatest(p)"><a class="rr-lnk" :href="sessionHref(portfolioLatest(p))" x-text="formatDate(p.latest)"></a></template></td>
                   </tr>
                 </template>
               </tbody>
             </table>
           </div>
-          </template>
-        </section>
+        </section></template>
 
         <!-- THE RECOMMENDATION HISTORY, across every subject: the same row a
-             subject page lists, with the subject named. A session that produced
-             nothing says so. The session page is one click away. -->
+             subject page lists, with the subject named. The Subject column
+             drops while a chip filters to one subject: the pressed chip names
+             it. A session that produced nothing says so. The session page is
+             one click away. The total is the facts row's and the All chip's;
+             the head counts only when the list stops short of everything. -->
         <section class="rr-sec" id="history" aria-labelledby="hist-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
-            <span class="rr-sec__aside" x-text="`${publishedSessions().length} ${publishedSessions().length === 1 ? 'session' : 'sessions'}`"></span>
+            <template x-if="sessionsTruncated"><span class="rr-sec__aside" x-text="`Latest ${publishedSessions().length} sessions`"></span></template>
           </div>
           <div class="mp-filter" x-show="sessionFilters().length" x-cloak>
             <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
@@ -300,8 +293,7 @@
             </button>
             <template x-for="f in sessionFilters()" :key="f.id">
               <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === f.id }"
-                      @click="filterBy(f.id)" :aria-pressed="subjectFilter === f.id"
-                      :title="subjectFilter === f.id ? `Clear the ${f.name} filter` : `Show only ${f.name}`">
+                      @click="filterBy(f.id)" :aria-pressed="subjectFilter === f.id">
                 <span x-text="f.name"></span> <span class="mp-chip__n" x-text="f.count"></span>
                 <span class="mp-chip__x" x-show="subjectFilter === f.id" aria-hidden="true">×</span>
               </button>
@@ -314,7 +306,7 @@
             <div class="rr-tablewrap">
               <table class="rr-table rr-hist rr-stack">
                 <thead>
-                  <tr><th scope="col">Session</th><th scope="col">Subject</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
+                  <tr><th scope="col">Session</th><th scope="col" x-show="!subjectFilter">Subject</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
                 </thead>
                 <tbody>
                   <!-- Keyed on the session id: a subject may convene more than
@@ -325,7 +317,7 @@
                         <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
                         <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
                       </th>
-                      <td class="rr-hist__subj" x-text="sessionSubjectName(s)"></td>
+                      <td class="rr-hist__subj" x-show="!subjectFilter" x-text="sessionSubjectName(s)"></td>
                       <td>
                         <template x-if="lean(s)">
                           <span class="sv__stance-badge" :style="leanBadgeStyle(s)"><i x-show="leanStance(s)" :style="leanDotStyle(s)"></i><span x-text="leanLabel(s)"></span></span>
@@ -362,13 +354,14 @@
               </table>
             </div>
           </template>
+          <!-- The one count the list cannot give: how far into it the reader
+               is, as the subject page's pager states it. -->
           <template x-if="hasMore()">
             <div class="rr-pager">
-              <span x-text="`${visibleSessions().length} of ${matchingCount()} shown`"></span>
+              <span x-text="`${visibleSessions().length} of ${matchingCount()}`"></span>
               <div><button type="button" class="rr-btn" @click="showMore()">Show more</button></div>
             </div>
           </template>
-          <p class="rr-note" x-show="sessionsTruncated" x-cloak>Only the most recent sessions are listed.</p>
         </section>
 
         <!-- HOW IT WORKS, after the swarm's output: a returning reader comes
@@ -378,7 +371,6 @@
         <section class="rr-sec" id="how" aria-labelledby="how-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="how-h">How it works</h2>
-            <span class="rr-sec__aside">Three steps for each session</span>
           </div>
           <div class="rr-steps">
             <div>
@@ -389,12 +381,12 @@
             <div>
               <p class="rr-k">Step 2</p>
               <p class="rr-steps__t">Members submit takes</p>
-              <p class="rr-steps__d">Every member files one <b>signed take</b> before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
+              <p class="rr-steps__d">Takes are due by the deadline, and <b>members can't see other takes until the window closes</b>.</p>
             </div>
             <div>
               <p class="rr-k">Step 3</p>
               <p class="rr-steps__t">A recommendation is published</p>
-              <p class="rr-steps__d">Once the session window closes, the protocol combines the takes into one recommendation and publishes it.</p>
+              <p class="rr-steps__d">With the consensus stance, every signed take and the brief the session opened with.</p>
             </div>
           </div>
         </section>

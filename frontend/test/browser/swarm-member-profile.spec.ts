@@ -324,9 +324,10 @@ test("an unresolvable member ref answers 404 and renders the swarm roster in pla
   // swarm roster renders under it, reachable by each member's current handle
   // (same link shape the /swarm directory's Members table uses).
   await expect(page.locator(".profile-name")).toHaveCount(0);
-  await expect(page.locator(".rr-head", { hasText: "Swarm members" }).locator("h1")).toContainText(
-    "not-a-real-member-anywhere",
-  );
+  // Where the visitor landed is the breadcrumb's job; the heading names the miss.
+  await expect(page.locator(".rr-crumbs [aria-current='page']")).toHaveText("Members");
+  await expect(page.locator(".rr-head h1")).toContainText("No member matches");
+  await expect(page.locator(".rr-head h1")).toContainText("not-a-real-member-anywhere");
   for (const m of ROSTER_FIXTURE) {
     const link = page.locator(`.rr-members a.rr-lnk[href="/swarm/members/${m.handle}"]`);
     await expect(link).toHaveText(m.name);

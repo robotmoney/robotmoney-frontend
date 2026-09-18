@@ -58,8 +58,7 @@ export function allocationFramework() {
     // /allocation's state chip uses. NOT the DTO's top-level `managed`, which
     // is true today and is about the VAULT being managed, not about who wrote
     // the targets. Reading that field would have the card claim a swarm
-    // recommendation directly above its own note saying no session has made
-    // one.
+    // recommendation for the seeded row.
     allocationIsFromSession() {
       return !!this.allocationFw?.provenance?.sessionId;
     },
@@ -78,24 +77,6 @@ export function allocationFramework() {
       // not to this module.
       const fmt = /** @type {any} */ (this).formatDate;
       return d ? fmt.call(this, d) : "";
-    },
-    // The note carries what the register cannot, and nothing it cannot back.
-    //
-    // "No session has changed these weights yet" is read from the code rather
-    // than from the feed: `allocation_framework` has exactly one writer, the
-    // seed, and this row has not moved since it was written. When a real
-    // writer lands, this sentence is the whole of the change.
-    allocationNote() {
-      if (!this.allocationFw) return "The published target could not be read.";
-      const zeros = this.allocationTargets().filter((t) => t.pct === 0).length;
-      const head = "No session has changed these weights yet.";
-      if (!zeros) return head;
-      // Counted, not written into the string. The framework is 95/5/0/0 today,
-      // and a hardcoded "two" becomes false the first time a weight is edited.
-      const word = ["", "one", "two", "three", "four"][zeros] || String(zeros);
-      return zeros === 1
-        ? `${head} The ${word} sleeve at zero is a target, not a gap.`
-        : `${head} The ${word} sleeves at zero are targets, not gaps.`;
     },
   };
 }

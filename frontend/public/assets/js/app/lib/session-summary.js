@@ -100,6 +100,53 @@ export function bucketLabel(idOrName) {
   return String(idOrName || "").replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Where a book sat, per sleeve, when a session read it: each framework
+// bucket's share of the snapshot's value, summed from the positions whose
+// token the framework assigns to that bucket. Keyed by the framework's bucket
+// id; a bucket none of whose tokens the book holds reads 0, which is true.
+//
+// The ONE reading of "the book" a weights recommendation is measured against.
+// The session page and the subject page's latest recommendation both call it,
+// so the same session cannot read "moves from the book" on one page and
+// "target weights retained" on the other.
+//
+// Empty, meaning no book to measure against, unless the framework's token
+// lists and a valued snapshot are both in hand and the snapshot was read on
+// or before `date`: a book read after the session is not what it acted on.
+/**
+ * @param {{ buckets?: Array<{ id: string, tokens: string[] }> } | null | undefined} framework
+ * @param {{ date?: unknown, totalValueUsd?: unknown, total_value_usd?: unknown, positions?: any[] } | null | undefined} snapshot
+ * @param {unknown} [date]
+ * @returns {Map<string, number>}
+ */
+export function bookSleeveShares(framework, snapshot, date) {
+  /** @type {Map<string, number>} */
+  const out = new Map();
+  const buckets = framework?.buckets || [];
+  const positions = snapshot?.positions || [];
+  const total = Number(snapshot?.totalValueUsd ?? snapshot?.total_value_usd ?? 0);
+  if (!buckets.length || !positions.length || !(total > 0)) return out;
+  const readOn = String(snapshot?.date || "").slice(0, 10);
+  if (date && readOn && readOn > String(date).slice(0, 10)) return out;
+  for (const b of buckets) {
+    const tokens = b.tokens || [];
+    const held = positions
+      .filter((p) => tokens.includes(String(p?.token || "").toUpperCase()))
+      .reduce((sum, p) => sum + (Number(p?.value_usd ?? p?.valueUsd) || 0), 0);
+    out.set(b.id, held / total);
+  }
+  return out;
+}
+
+// A weights recommendation's outcome in one line, against the book or the
+// target: the session page's headline and the subject page's latest
+// recommendation and history rows all word it here.
+/** @param {number} moved @param {"book" | "target"} basis */
+export function weightsOutcomeLine(moved, basis) {
+  if (!moved) return basis === "book" ? "Holds the book as it stands" : "Target weights retained";
+  return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${basis === "book" ? "the book" : "target"}`;
+}
+
 export const sessionSummary = {
   // The stance tally. The live pipeline aggregates it onto the record; the
   // static archive never did, and its sessions carry the stances only on the
@@ -183,6 +230,18 @@ export const sessionSummary = {
     if (q) return `${q.submitted} of ${q.active} took part`;
     const n = takeRowsOf(s).length;
     return n ? `${n} took part` : "";
+  },
+  // Turnout beside the stance tally, only where the tally cannot say it: a
+  // seat that sat the session out ("4 of 5"), or a take the tally does not
+  // count (no stance, or one off the five-stance axis). "3 took part" beside a
+  // 1/1/1 tally is the tally's own sum.
+  /** @param {any} s */
+  turnoutText(s) {
+    const q = s?.swarmRecommendation?.quorum;
+    if (q && Number(q.submitted) < Number(q.active)) return this.quorumText(s);
+    const tallied = this.stanceTally(s).reduce((/** @type {number} */ a, /** @type {{ n: number }} */ x) => a + x.n, 0);
+    const filed = q ? Number(q.submitted) : takeRowsOf(s).length;
+    return Number.isFinite(filed) && filed > 0 && filed !== tallied ? this.quorumText(s) : "";
   },
   // How many takes this session collected. The quorum is the authority when
   // the record has one; a row that carries its own count comes next (the
@@ -401,7 +460,8 @@ export const sessionSummary = {
       : `${acts.length} ${acts.length === 1 ? "position" : "positions"} held`;
   },
   // One dot and count per stance that has any, bearish to bullish: the tally
-  // both text columns (subject and session) print under the rationale.
+  // the subject page and /swarm print under the latest rationale. The session
+  // page draws it as its vote chart instead.
   /** @param {any} s */
   stanceTally(s) {
     /** @type {Record<string, unknown>} */

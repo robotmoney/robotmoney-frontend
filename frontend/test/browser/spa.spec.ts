@@ -132,7 +132,8 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   // (issue #573), so a revision never adds a second dot for the same member.
   const takesSection = page.locator("#takes");
   await expect(takesSection.locator(".rr-vote__dot")).toHaveCount(3);
-  await expect(takesSection.locator(".rr-meta__i", { hasText: "Took part" })).toHaveText(/^\s*Took part\s+3\s*$/);
+  // The turnout is the facts row's take count, stated once.
+  await expect(page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Takes/ })).toHaveText(/^\s*Takes\s+3\s*$/);
 
   // Live loadApi -> camelTake -> take-card render path (issue #75): a
   // live/current Woon session served from the Postgres swarm API (not the

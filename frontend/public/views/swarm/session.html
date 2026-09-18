@@ -56,14 +56,13 @@
               <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
             </span>
           </template>
-          <a class="rr-meta__lnk" :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON ↗</a>
         </div>
 
         <!-- THE RECOMMENDATION. The mix on the left, the decision and its
              reason on the right: the same arrangement as the subject page's
              latest recommendation, so the explorer sits in one place on both.
-             The legend carries each sleeve's move, so the full ledger waits
-             behind a disclosure. -->
+             The legend carries each sleeve's move against one basis; the full
+             ledger opens only when it holds a figure the legend does not. -->
         <template x-if="hasRecommendationSection()">
           <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
@@ -77,7 +76,7 @@
                               x-html="explorerSvg()"
                               x-effect="active(); $nextTick(() => syncArcs($el))"></span>
                         <figcaption>
-                          <b x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                          <b x-show="activeRow() || explorerCenter().value" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
                           <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                         </figcaption>
                       </figure>
@@ -91,7 +90,7 @@
                             <span x-text="r.label"></span>
                             <b x-text="fmtPctTrim(r.pct)"></b>
                             <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
-                            <template x-if="r.was != null">
+                            <template x-if="r.was != null && r.d">
                               <small>
                                 <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
                                 <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
@@ -109,9 +108,6 @@
                               <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
                               <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
-                            <template x-if="panelRow().pct === 0 && panelRow().assets.length">
-                              <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. Its asset weights apply if it is funded.</p>
-                            </template>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
                                 <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
@@ -127,10 +123,10 @@
                               </table>
                             </template>
                             <template x-if="panelRow().action">
-                              <p class="rr-x__why"><em class="rr-act" :class="`is-${panelRow().action}`" x-text="actionLabel(panelRow().action)"></em><span x-text="panelRow().rationale"></span></p>
+                              <p class="rr-x__why"><span x-text="panelRow().rationale"></span></p>
                             </template>
                             <template x-if="!panelRow().assets.length && !panelRow().action">
-                              <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action on this position this session.' : 'No asset-level weights were published for this sleeve.'"></p>
+                              <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action' : 'No asset weights published'"></p>
                             </template>
                           </div>
                         </template>
@@ -138,11 +134,8 @@
                     </div>
                     <span class="rr-sr" role="status" x-text="status"></span>
                   </div>
-                  <template x-if="outcomeCaption()">
-                    <p class="rr-note" data-target-asof x-text="outcomeCaption()"></p>
-                  </template>
-                  <template x-if="hasBook()">
-                    <p class="rr-note" x-text="`Holdings on ${formatDate(snapshot?.date, 'short')}, with the action this session set on each position.`"></p>
+                  <template x-if="hasBook() && bookDate()">
+                    <p class="rr-note" x-text="`Holdings on ${bookDate()}`"></p>
                   </template>
                   <template x-if="hasBook() && notableItems().length">
                     <div class="rr-disc" style="margin-top:1.5rem" x-data="{ open: false }" :class="open ? 'is-open' : ''">
@@ -156,8 +149,8 @@
                       </div>
                     </div>
                   </template>
-                  <div style="margin-top:1.5rem">
-                    <template x-if="gapBasis()">
+                  <template x-if="hasLedger()">
+                    <div style="margin-top:1.5rem">
                       <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
                         <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="rec-ledger" @click="open = !open">
                           Full comparison
@@ -194,15 +187,15 @@
                           </div></div>
                         </div>
                       </div>
-                    </template>
-                  </div>
+                    </div>
+                  </template>
                 </div>
               </template>
 
-              <!-- The same text column as the subject page's latest
-                   recommendation: the outcome as a label, the rationale, the
-                   stance tally. Only the way into the session is left out,
-                   because this is the session. -->
+              <!-- The subject page's latest-recommendation column: the outcome
+                   as a label only where the legend cannot show it (no sleeve
+                   moved), then the rationale. The tally and turnout are the
+                   vote chart's, below. -->
               <div x-data="{ more: false }">
                 <template x-if="outcomeHeadline()">
                   <p class="rr-k rr-sub" x-text="outcomeHeadline()"></p>
@@ -213,18 +206,10 @@
                          x-html="linkified(recommendationRationale())"></div>
                     <template x-if="isLong(recommendationRationale(), 480)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
-                        <span x-text="more ? 'Show less' : 'Read full rationale'"></span><small x-text="`${wordCount(recommendationRationale())} words`"></small>
+                        <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
                       </button>
                     </template>
                   </div>
-                </template>
-                <template x-if="stanceTally(reviewRow()).length">
-                  <p class="rr-counts">
-                    <template x-for="x in stanceTally(reviewRow())" :key="x.stance">
-                      <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
-                    </template>
-                    <em x-text="[quorumText(reviewRow()), meanConfidenceText(reviewRow())].filter(Boolean).join(' · ')"></em>
-                  </p>
                 </template>
                 <template x-if="authoredActions().length && !hasBook()">
                   <dl class="sr__acts">
@@ -240,13 +225,13 @@
             </div>
           </section>
         </template>
-        <!-- The same section when there is nothing to draw in it, so the page
-             says what every history row linking here says. Gated on the
-             phase: a session still collecting has not published nothing. -->
-        <template x-if="!hasRecommendationSection()">
+        <!-- The same section when a published session drew nothing in it, so
+             the page says what every history row linking here says. Before
+             publication the phase beside the date says it. -->
+        <template x-if="!hasRecommendationSection() && phaseOf(session)?.key === 'published'">
           <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
-            <p class="rr-note" style="margin-top:0" x-text="phaseOf(session)?.label !== 'published' ? 'Not published yet.' : session.swarmRecommendation ? 'No position calls were published for this session.' : 'No recommendation was published for this session.'"></p>
+            <p class="rr-note" style="margin-top:0" x-text="session.swarmRecommendation ? 'No position calls published' : 'No recommendation published'"></p>
           </section>
         </template>
 
@@ -256,13 +241,13 @@
           <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
-              <span class="rr-sec__aside" x-text="`${fmtUsd(snapshot?.totalValueUsd)} · ${formatDate(snapshot?.date, 'short')}`"></span>
+              <span class="rr-sec__aside" x-text="[fmtUsd(snapshot?.totalValueUsd), bookDate()].filter(Boolean).join(' · ')"></span>
             </div>
             <!-- The subject page's positions table, every position, largest
                  first: the same book reads the same on both pages. -->
             <div class="rr-tablewrap rr-positions">
               <table class="rr-table rr-table--compact">
-                <caption class="rr-sr" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}, largest first`"></caption>
+                <caption class="rr-sr" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}`"></caption>
                 <thead>
                   <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
                 </thead>
@@ -305,13 +290,13 @@
                          x-html="linkified(session.synthesis)"></div>
                     <template x-if="isLong(session.synthesis, 700)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
-                        <span x-text="more ? 'Show less' : 'Read full synthesis'"></span><small x-text="`${wordCount(session.synthesis)} words`"></small>
+                        <span x-text="more ? 'Show less' : 'Read full synthesis'"></span>
                       </button>
                     </template>
                   </div>
                 </template>
                 <template x-if="!showSynthesis() && !consensusItems().length && !disagreements().length">
-                  <p class="rr-note" style="margin-top:0">No written synthesis for this session.</p>
+                  <p class="rr-note" style="margin-top:0">No written synthesis</p>
                 </template>
               </div>
               <template x-if="signalRows().length">
@@ -321,7 +306,6 @@
                   <div class="rr-context">
                     <div class="rr-context__head">
                       <p class="rr-k">Market context</p>
-                      <span class="rr-k" x-text="formatDate(session.date, 'short')"></span>
                     </div>
                     <div class="sig" role="img"
                          :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
@@ -347,7 +331,7 @@
                         </div>
                       </template>
                     </div>
-                    <p class="rr-note">Percentile of its own three-year history.<template x-if="!backdropV0"><span> Factor is context, not part of the composite.</span></template></p>
+                    <p class="rr-note">Three-year percentile<template x-if="!backdropV0"><span> · factor not in composite</span></template></p>
                   </div>
                 </div>
               </template>
@@ -375,7 +359,7 @@
                 <template x-if="disagreements().length">
                   <div class="rr-disc rr-disc--lead" x-data="{ open: false }" :class="open ? 'is-open' : ''">
                     <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="views-differ" @click="open = !open">
-                      Where views differ <small x-text="`${disagreements().length} ${disagreements().length === 1 ? 'disagreement' : 'disagreements'}`"></small>
+                      Where views differ
                     </button>
                     <div class="rr-disc__anim" id="views-differ" role="region" aria-label="Where views differ" :inert="!open">
                       <div class="rr-disc__clip"><div class="rr-disc__body">
@@ -391,12 +375,7 @@
                                   <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
                                     <div class="rr-view">
                                       <a class="rr-lnk" style="justify-self:start" :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
-                                      <span>
-                                        <template x-if="takeOf(p.member_id)">
-                                          <span class="ss-stance"><i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`" aria-hidden="true"></i><span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span></span>
-                                        </template>
-                                        <template x-if="!takeOf(p.member_id)"><span class="rr-note" style="margin:0">No take</span></template>
-                                      </span>
+                                      <template x-if="!takeOf(p.member_id)"><span class="rr-note" style="margin:0">No take</span></template>
                                       <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
                                       <template x-if="isEcho(p.view) && takeOf(p.member_id)">
                                         <p><a class="rr-lnk" :href="`#${takeAnchor(takeOf(p.member_id))}`">Read their take →</a></p>
@@ -425,7 +404,6 @@
           <section class="rr-sec sv__takes-section" id="takes" aria-labelledby="takes-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="takes-h">Member takes</h2>
-              <span class="rr-sec__aside" x-text="`${takes.length} ${takes.length === 1 ? 'take' : 'takes'}`"></span>
             </div>
             <!-- The vote, as a chart: each member placed by the stance they
                  took (across) and how sure they were (up), the mean confidence
@@ -437,16 +415,12 @@
                   <!-- The consensus as the same chip a take's stance wears; a
                        tie reads "split" in the neutral chip. -->
                   <span class="rr-meta__i">Consensus
-                    <span class="sv__stance-badge" :style="leanBadgeStyle(reviewRow())" :title="consensusText()">
+                    <span class="sv__stance-badge" :style="leanBadgeStyle(reviewRow())" :title="leanStance(reviewRow()) ? null : consensusText()">
                       <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
                       <span x-text="leanLabel(reviewRow())"></span>
                     </span>
                     <template x-if="leadShare(reviewRow())"><em class="rr-vote__share" x-text="leadShare(reviewRow())"></em></template>
                   </span>
-                  <span class="rr-meta__i">Took part <b x-text="voteDots().length"></b></span>
-                  <template x-if="voteMean() !== null">
-                    <span class="rr-meta__i">Mean confidence <b x-text="`${voteMean()}%`"></b></span>
-                  </template>
                   <template x-if="absentNames().length">
                     <span class="rr-meta__i">Absent
                       <template x-for="id in (session.swarmRecommendation?.absent || [])" :key="id">
@@ -525,17 +499,17 @@
                   <div class="rr-take__main" :class="weightRows(t).length ? 'has-aside' : ''">
                     <div>
                       <div class="rr-take__text" x-ref="text">
-                        <template x-if="!open && call(t.body, subjectTitle())">
+                        <template x-if="!open && call(t.body)">
                           <div>
-                            <p class="rr-k rr-take__call" x-text="call(t.body, subjectTitle()).label"></p>
-                            <div class="sv__take-body rr-prose" x-html="linkified(call(t.body, subjectTitle()).text)"></div>
+                            <p class="rr-k rr-take__call" x-text="call(t.body).label"></p>
+                            <div class="sv__take-body rr-prose" x-html="linkified(call(t.body).text)"></div>
                           </div>
                         </template>
-                        <template x-if="open || !call(t.body, subjectTitle())">
+                        <template x-if="open || !call(t.body)">
                           <div class="sv__take-body rr-prose" :class="!open && long(t.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(t.body || '')"></div>
                         </template>
                       </div>
-                      <template x-if="call(t.body, subjectTitle()) || long(t.body)">
+                      <template x-if="call(t.body) || long(t.body)">
                         <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
                           <span x-text="open ? 'Show less' : 'Read full take'"></span>
                         </button>
@@ -563,10 +537,7 @@
         <section class="rr-sec" id="evidence" aria-labelledby="ev-h">
           <div class="rr-sec__head"><h2 class="rr-sec__h" id="ev-h">Evidence &amp; provenance</h2></div>
           <div class="rr-split">
-            <div>
-              <p class="rr-k rr-sub" x-text="signatureHeadline()"></p>
-              <p class="rr-prose" x-text="signatureDetail()"></p>
-            </div>
+            <template x-if="takes.length"><div><p class="rr-k rr-sub" x-text="signatureHeadline()"></p></div></template>
             <dl class="rr-dl">
               <template x-if="source === 'api'">
                 <div><dt>Consensus receipt</dt><dd>
@@ -576,7 +547,7 @@
                   </template>
                 </dd></div>
               </template>
-              <template x-if="session.generatedAt || session.generated_at">
+              <template x-if="(session.generatedAt || session.generated_at) && generatedLabel() !== sessionTime()">
                 <div><dt>Record generated</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
               </template>
               <!-- Weights sessions only: a portfolio's targets are in its brief,
@@ -592,7 +563,7 @@
           <template x-if="handoverParts().length">
             <div class="rr-disc" style="margin-top:2.25rem" x-data="{ open: false }" :class="open ? 'is-open' : ''">
               <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="session-handover" @click="open = !open">
-                What the swarm was handed <small>The brief this session opened with</small>
+                What the swarm was handed
               </button>
               <div class="rr-disc__anim" id="session-handover" role="region" aria-label="What the swarm was handed" :inert="!open">
                 <div class="rr-disc__clip"><div class="rr-disc__body">
@@ -677,8 +648,6 @@
   <style>
     /* Page-local: the handful of pieces only this page has. The record's
        components are shared in views.css (.rr-*). */
-    .ss-stance { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.75rem; }
-    .ss-stance i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
     .sr__foot .sv__take-absent-who { font-size: inherit; font-weight: 400; color: var(--color-text-soft);
       text-decoration: underline; text-decoration-color: var(--color-border-light); text-underline-offset: 3px; }
     .sr__foot .sv__take-absent-who + .sv__take-absent-who::before { content: ","; display: inline-block;

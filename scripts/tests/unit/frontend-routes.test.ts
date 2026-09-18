@@ -646,8 +646,8 @@ describe("frontend route resolution", () => {
 
     expect(helpers.verifyLabel(archival.verified, archival.archival)).toBe("archived");
     const tip = helpers.verifyTip(archival.verified, archival.archival);
-    expect(tip).toContain("never member-signed");
-    expect(tip).toContain("not a failed signature check");
+    expect(tip).toContain("filed before members signed");
+    expect(tip).toContain("pre-launch record");
     // The exact copy that must not reach these rows.
     expect(tip).not.toContain("did not check out");
     expect(tip).not.toContain("unattributed");

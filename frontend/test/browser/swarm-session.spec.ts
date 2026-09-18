@@ -235,18 +235,26 @@ async function mockSessionApi(
 }
 
 // The record's first section is the recommendation: the mix as a ring whose
-// legend carries each sleeve's move, the decision in one line beside it, and
-// the full comparison (the target, the book where it is known, the
-// recommendation and the move) behind a disclosure. A move is written the way
+// legend carries each sleeve's move, the decision in one line beside it, and,
+// when it holds a figure the legend does not (the target beside the book, or a
+// target that postdates the session), the full comparison behind a
+// disclosure. A move is written the way
 // /allocation writes one (lib/weight-change.js): ▲ +2.00% / ▼ −2.00%, "—" when
 // flat.
 const outcome = (page: Page) => page.locator("#recommendation");
-// The decision in one line. Absent when there is no fair basis to state it on.
+// The decision in one line, only where the legend cannot state it: that no
+// sleeve moved. Absent when there is no fair basis to state it on, and when
+// the legend's rows already carry the moves.
 const headline = (page: Page) => outcome(page).locator("p.rr-k.rr-sub");
 const legendRow = (page: Page, name: string) => outcome(page).locator(".rr-legend__row").filter({ hasText: name });
+// The legend rows that state a move, as a reader counts them.
+const movedRows = (page: Page) => outcome(page).locator(".rr-legend__row").filter({ has: page.locator(".alp__mv.up, .alp__mv.down") });
 const register = (page: Page) => outcome(page).locator(".sr__ledger table");
 const registerHead = (page: Page) => register(page).locator("thead");
 const registerRow = (page: Page, name: string) => register(page).locator("tbody tr").filter({ hasText: name });
+// Which target the figures are measured against, and when it was published:
+// the Evidence row, now that no caption under the ring restates it.
+const targetRow = (page: Page) => page.locator("#evidence .rr-dl > div").filter({ has: page.locator("dt", { hasText: "Target" }) }).locator("dd");
 
 // The full comparison is closed until asked for, as a reader finds it.
 async function openRegister(page: Page): Promise<void> {
@@ -279,27 +287,23 @@ test("bucket_weights session draws the target from the allocation framework and 
   await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs target 95%");
   await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+2.00%");
 
-  // Values carry their unit, and the columns are headed with what they are.
-  await openRegister(page);
-  await expect(register(page)).toContainText("95%");
-  await expect(register(page)).toContainText("97%");
-  await expect(register(page)).toContainText("5%");
-  await expect(register(page)).toContainText("3%");
-  await expect(registerHead(page)).toContainText(/target/i, { useInnerText: true });
-  await expect(registerHead(page)).toContainText(/recommended/i, { useInnerText: true });
-  await expect(registerHead(page)).toContainText(/change/i, { useInnerText: true });
+  // One basis: the legend is the whole comparison.
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
+  await expect(legendRow(page, "Directional Crypto")).toContainText("3%");
+  await expect(legendRow(page, "Directional Crypto")).toContainText("vs target 5%");
   // The framework's own spelling wins over humanize("conservative_defi_yield"),
   // which cannot recover DeFi's inner capital.
-  await expect(register(page)).toContainText("Conservative DeFi Yield");
-  await expect(register(page)).not.toContainText("Conservative Defi Yield");
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+2.00%");
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bup\b/);
+  await expect(outcome(page).locator(".rr-legend")).toContainText("Conservative DeFi Yield");
+  await expect(outcome(page).locator(".rr-legend")).not.toContainText("Conservative Defi Yield");
+  await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bup\b/);
 
-  // The finding a reader is here for, in one line beside the mix.
-  await expect(headline(page)).toHaveText("2 sleeves move from target");
+  // The finding is the legend's two moved rows; no line beside the mix
+  // counts them again.
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(headline(page)).toHaveCount(0);
 });
 
-test("bucket_weights session that matches its target says so, and every move reads as none", async ({ page }) => {
+test("bucket_weights session that matches its target says so once, and no sleeve restates it", async ({ page }) => {
   await mockSessionApi(page, {
     session: bucketSession("2026-06-05", {
       conservative_defi_yield: 0.95,
@@ -313,18 +317,15 @@ test("bucket_weights session that matches its target says so, and every move rea
   await page.goto("/swarm/2026-06-05/robotmoney-allocation");
 
   await expect(page.locator(".sv__error")).toBeHidden();
-  // Same target, same recommendation: the decision must say so, otherwise it
-  // says nothing when it does report a change.
+  // Same target, same recommendation: the one thing the legend cannot show
+  // is that nothing moved, so the headline says it.
   await expect(headline(page)).toHaveText("Target weights retained");
-  // …and every move agrees with it: a zero move reads "—", as on /allocation,
-  // in the legend and in the full comparison alike.
-  await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("—");
-  await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bflat\b/);
-  await openRegister(page);
-  await expect(register(page)).toContainText("95%");
-  await expect(registerHead(page)).toContainText(/target/i, { useInnerText: true });
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("—");
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveClass(/\bflat\b/);
+  // …and the legend agrees without restating it: a sleeve that did not move
+  // prints its weight alone, not "— vs target 95%" beside "95%".
+  await expect(legendRow(page, "Conservative DeFi Yield").locator("b")).toHaveText("95%");
+  await expect(outcome(page).locator(".rr-legend .alp__mv")).toHaveCount(0);
+  await expect(outcome(page).locator(".rr-legend")).not.toContainText("vs target");
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
 });
 
 // "Actual" is the only figure on this panel that is DERIVED rather than
@@ -363,10 +364,13 @@ test("bucket_weights session derives Actual from the snapshot and measures the g
 
   await expect(page.locator(".sv__error")).toBeHidden();
   // Basis flips to actual the moment we know it: recommended-minus-actual is
-  // the MOVE being asked for, which is the question a reader has.
-  await expect(headline(page)).toHaveText("2 sleeves move from the book");
+  // the MOVE being asked for, which is the question a reader has. The legend
+  // states both moves against the book; no headline counts them again.
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(headline(page)).toHaveCount(0);
   await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs book 100%");
-  await expect(outcome(page).locator("[data-target-asof]")).toContainText("Change is measured against the book on");
+  // The book is the session's own day's, so the aside states its total alone.
+  await expect(page.locator("#holdings .rr-sec__aside")).toHaveText("$150");
   await openRegister(page);
   await expect(registerHead(page)).toContainText(/actual/i, { useInnerText: true });
   const conservative = registerRow(page, "Conservative DeFi Yield");
@@ -382,6 +386,81 @@ test("bucket_weights session derives Actual from the snapshot and measures the g
   // The book is on the page too, in the subject page's positions table.
   await expect(page.locator("#holdings .rr-sec__h")).toHaveText("Holdings");
   await expect(page.locator("#holdings .rr-positions tbody tr")).toHaveCount(3);
+});
+
+// A book from another day is the one case the date says something the header
+// does not: pickSnapshotFor falls back to the latest snapshot before the session.
+test("a book read on an earlier day than its session is dated in the Holdings aside", async ({ page }) => {
+  await mockSessionApi(page, {
+    session: bucketSession("2026-08-03", {
+      conservative_defi_yield: 0.97,
+      agent_tokens: 0.03,
+      protocol_tokens: 0,
+      real_world_assets: 0,
+    }, "robotmoney-vault", "Robot Money Vault"),
+    allocation: ALLOCATION,
+    snapshots: [{
+      date: "2026-08-02",
+      total_value_usd: 150,
+      positions: [
+        { token: "AAVE", chain: "base", value_usd: 50 },
+        { token: "COMPOUND", chain: "base", value_usd: 50 },
+        { token: "MORPHO", chain: "base", value_usd: 50 },
+      ],
+    }],
+  });
+
+  await page.goto("/swarm/2026-08-03/robotmoney-vault");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(page.locator("#holdings .rr-sec__aside")).toHaveText("$150 · Aug 2, 2026");
+});
+
+// The book is what the session acted on, so only a book read on or before its
+// date is measured against, and a move from the book never reads the target:
+// a published target that postdates the session withholds a move from target,
+// not one from the book. The subject page's latest recommendation reads the
+// book through the same helper (bookSleeveShares).
+test("a move from the book is measured on a book read by the session's date, whatever the target's date", async ({ page }) => {
+  const book = (date: string) => ({
+    date,
+    total_value_usd: 150,
+    positions: [
+      { token: "AAVE", chain: "base", value_usd: 50 },
+      { token: "COMPOUND", chain: "base", value_usd: 50 },
+      { token: "MORPHO", chain: "base", value_usd: 50 },
+    ],
+  });
+  const weights = { conservative_defi_yield: 0.97, agent_tokens: 0.03, protocol_tokens: 0, real_world_assets: 0 };
+
+  // 2026-05-30 predates ALLOCATION.asOf (2026-06-02): no move from target,
+  // but the book it read that day still gives one.
+  await mockSessionApi(page, {
+    session: bucketSession("2026-05-30", weights, "robotmoney-vault", "Robot Money Vault"),
+    allocation: ALLOCATION,
+    snapshots: [book("2026-05-30")],
+  });
+  await page.goto("/swarm/2026-05-30/robotmoney-vault");
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(headline(page)).toHaveCount(0);
+  await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs book 100%");
+  await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▼−3.00%");
+
+  // The only book is read two days after the session: it is not what the
+  // session acted on, so the move reads from the target instead.
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await mockSessionApi(page, {
+    session: bucketSession("2026-08-03", weights, "robotmoney-vault", "Robot Money Vault"),
+    allocation: ALLOCATION,
+    snapshots: [book("2026-08-05")],
+  });
+  await page.goto("/swarm/2026-08-03/robotmoney-vault");
+  await expect(page.locator(".sv__error")).toBeHidden();
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(headline(page)).toHaveCount(0);
+  await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs target 95%");
+  await expect(outcome(page)).not.toContainText("vs book");
 });
 
 // The allocation subject IS the framework: it holds nothing. The release smoke
@@ -405,14 +484,14 @@ test("a framework session renders no book, even when the API serves one, and mea
   await page.goto("/swarm/2026-08-03/robotmoney-allocation");
 
   await expect(page.locator(".sv__error")).toBeHidden();
-  await openRegister(page);
-  await expect(register(page)).toBeVisible();
+  await expect(legendRow(page, "Agent Tokens")).toContainText("vs target 5%");
   await expect(page.locator("#holdings")).toHaveCount(0);
   await expect(page.locator(".rr-positions")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("$42,688");
-  await expect(registerHead(page)).not.toContainText(/actual/i, { useInnerText: true });
-  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
-  await expect(legendRow(page, "Agent Tokens")).toContainText("vs target 5%");
+  await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
+  // A leaked book would add an Actual column beside the target and open the
+  // full comparison; with the target alone there is none.
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
   await expect(outcome(page)).not.toContainText("vs book");
 });
 
@@ -444,10 +523,9 @@ test("a live bucket_weights session published as an array reads the same as the 
   // Auto-waiting: the rows land after init resolves.
   await expect(outcome(page).locator(".rr-legend__row > span")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
   await expect(legendRow(page, "Agent Tokens").locator("b")).toHaveText("7%");
-  await openRegister(page);
-  await expect(register(page).locator("tbody tr td:first-child")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
-  await expect(registerRow(page, "Agent Tokens")).toContainText("7%");
-  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(legendRow(page, "Agent Tokens")).toContainText("vs target 5%");
+  await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
   // The ring the session cards draw, from the same weights.
   await expect(outcome(page).locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Agent Tokens 7%/);
 });
@@ -474,8 +552,11 @@ test("bucket_weights session degrades to Recommended-only when the framework is 
   // Recommended alone: the ring names its whole as the recommendation and the
   // legend compares it with nothing, which is the whole claim of this test.
   await expect(outcome(page).locator(".rr-ring figcaption")).toContainText("Recommended");
+  // A mix is the whole allocation by definition: the centre names the ring
+  // and prints no "100%".
+  await expect(outcome(page).locator(".rr-ring figcaption")).not.toContainText("100%");
   await expect(outcome(page).locator(".rr-legend")).not.toContainText(/target|book|actual/i, { useInnerText: true });
-  await expect(outcome(page).locator("[data-target-asof]")).toHaveCount(0);
+  await expect(targetRow(page)).toHaveText("Not recorded");
   // With no basis to measure against, there is no move to state and no
   // comparison to open, rather than a row of em-dashes under a verdict.
   await expect(headline(page)).toHaveCount(0);
@@ -528,12 +609,12 @@ test("an archival take is labelled archived and never described as a failed sign
   // aria-label carries the full sentence, so this is the text a screen-reader
   // user is actually given — not a hover-only tooltip.
   const label = await badge.getAttribute("aria-label");
-  expect(label).toContain("never member-signed");
-  expect(label).toContain("not a failed signature check");
+  expect(label).toContain("filed before members signed");
+  expect(label).toContain("pre-launch record");
   expect(label).not.toContain("did not check out");
   expect(label).not.toContain("unattributed");
   // The visible tooltip says the same thing as the aria-label.
-  await expect(page.locator(".sv__vfy-tip").first()).toContainText("never member-signed");
+  await expect(page.locator(".sv__vfy-tip").first()).toContainText("filed before members signed");
   // And it is not styled as a failure.
   await expect(badge).toHaveClass(/sv__vfy--arch/);
   await expect(badge).not.toHaveClass(/sv__vfy--bad/);
@@ -552,7 +633,7 @@ test("a live submission whose signature failed still gets the failed-check wordi
   await expect(badge).toHaveAttribute("data-verified-state", "unverified");
   const label = await badge.getAttribute("aria-label");
   expect(label).toContain("did not check out");
-  expect(label).toContain("unattributed");
+  expect(label).not.toContain("unattributed");
   await expect(badge).toHaveClass(/sv__vfy--bad/);
   await expect(badge).not.toHaveClass(/sv__vfy--arch/);
 });
@@ -562,7 +643,7 @@ test("a live submission whose signature failed still gets the failed-check wordi
 // historical session against it measures the swarm against a target that did
 // not exist yet, and lets an edit today silently rewrite yesterday's verdict.
 // The target still draws in the full comparison — it is informative — but
-// the decision is withheld and the caption names the target's own asOf.
+// the decision is withheld and the Evidence row dates the target after the session.
 test("a session that predates the published framework draws the target for reference and withholds the verdict", async ({ page }) => {
   // 2026-05-25 is the archive's first session; ALLOCATION.asOf is 2026-06-02.
   await mockSessionApi(page, {
@@ -584,11 +665,10 @@ test("a session that predates the published framework draws the target for refer
   await expect(legendRow(page, "Conservative DeFi Yield").locator("b")).toHaveText("97%");
   await expect(outcome(page).locator(".rr-legend .alp__mv")).toHaveCount(0);
   await expect(outcome(page).locator(".rr-legend")).not.toContainText("vs target");
-  await expect(page.locator("[data-target-asof]")).toContainText(/target as published/i, { useInnerText: true });
-  await expect(page.locator("[data-target-asof]")).toContainText(/after this session, so the session was not measured against it/i, { useInnerText: true });
+  await expect(targetRow(page)).toHaveText("Published Jun 2, 2026, after this session");
 });
 
-test("a session dated after the published framework states the change, captioned with the target's date", async ({ page }) => {
+test("a session dated after the published framework states the change, with the target's date in the Evidence row", async ({ page }) => {
   await mockSessionApi(page, {
     session: bucketSession("2026-08-03", { conservative_defi_yield: 0.97, directional_crypto: 0.03 }),
     allocation: ALLOCATION,
@@ -596,9 +676,11 @@ test("a session dated after the published framework states the change, captioned
 
   await page.goto("/swarm/2026-08-03/robotmoney-allocation");
 
-  await expect(headline(page)).toHaveText("2 sleeves move from target");
-  await expect(page.locator("[data-target-asof]")).toContainText(/target as published/i, { useInnerText: true });
-  await expect(page.locator("[data-target-asof]")).not.toContainText(/not measured against it/i, { useInnerText: true });
+  // The change is the legend's: both sleeves carry their move from target.
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs target 95%");
+  await expect(headline(page)).toHaveCount(0);
+  await expect(targetRow(page)).toHaveText("Published Jun 2, 2026");
 });
 
 test("a date the static archive DOES cover is read from the API, not from the checked-in archive", async ({ page }) => {
@@ -835,7 +917,7 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(context.locator(".sig__row.is-lead .sig__v")).toHaveText("83rd");
   // Live method: factor is context, drawn apart.
   await expect(context.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(context.locator(".rr-note")).toContainText("Factor is context, not part of the composite.");
+  await expect(context.locator(".rr-note")).toContainText("factor not in composite");
 
   // The vote: constructive leads, three of the five who took part.
   const vote = page.locator("#takes .rr-vote");
@@ -843,8 +925,11 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(tally.locator(".sv__stance-badge")).toHaveText("constructive");
   await expect(tally.locator(".rr-vote__share")).toHaveText("3 of 5");
   await expect(vote.locator('.rr-vote__dot[aria-label*=", constructive,"]')).toHaveCount(3);
-  await expect(tally.locator(".rr-meta__i").filter({ hasText: "Took part" }).locator("b")).toHaveText("5");
-  await expect(tally.locator(".rr-meta__i").filter({ hasText: "Mean confidence" }).locator("b")).toHaveText("64%");
+  // Turnout and the mean are stated once each: the takes in the facts row, the mean on the chart's rule.
+  await expect(page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Takes/ }).locator("b")).toHaveText("5");
+  await expect(vote.locator(".rr-vote__mean span")).toHaveText("Mean 64%");
+  await expect(vote.locator(".rr-vote__plot")).toHaveAttribute("aria-label", /Mean confidence 64%\./);
+  await expect(tally).not.toContainText(/Took part|Mean confidence/);
   // Who could have voted and did not, by name.
   const absent = tally.locator(".rr-meta__i").filter({ hasText: "Absent" }).locator("a.rr-lnk");
   await expect(absent).toHaveText(["Maximus", "DualMint"]);
@@ -854,11 +939,11 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   // nothing, and the hardcoded USDC/rmUSDC pair is not the swarm's.
   await expect(outcome(page).locator(".rr-x")).toHaveCount(0);
   await expect(outcome(page).locator(".sr__act, .rr-act")).toHaveCount(0);
-  await expect(outcome(page).locator(".rr-note")).toHaveText("No position calls were published for this session.");
+  await expect(outcome(page).locator(".rr-note")).toHaveText("No position calls published");
   await expect(page.locator("body")).not.toContainText("hardcoded");
   // No discussion: every line of it restates a figure the record draws.
   await expect(page.locator(".rr-sec__h")).toHaveText(["The recommendation", "Reasoning & disagreement", "Member takes", "Evidence & provenance"]);
-  await expect(page.locator("#reasoning")).toContainText("No written synthesis for this session.");
+  await expect(page.locator("#reasoning")).toContainText("No written synthesis");
   await expect(page.locator("body")).not.toContainText("Stance split");
   await expect(page.locator("#members-agree")).toHaveCount(0);
   await expect(page.locator("#views-differ")).toHaveCount(0);
@@ -896,18 +981,22 @@ test("an archived allocation session measures its outcome against the targets it
   await expect(context.locator(".sig")).toBeVisible();
 
   const out = outcome(page);
-  await expect(headline(page)).toHaveText("2 sleeves move from target");
+  // The two moves are the legend's rows (asserted below); no headline
+  // counts them again.
+  await expect(movedRows(page)).toHaveCount(2);
+  await expect(headline(page)).toHaveCount(0);
+  // The stance tally and turnout are the vote chart's, not a second line
+  // under the rationale.
+  await expect(out.locator(".rr-counts")).toHaveCount(0);
+  await expect(page.locator("#takes .rr-vote__dot")).toHaveCount(3);
   await expect(out.locator(".sv__wdonut-host")).toHaveAttribute("aria-label",
     "Conservative DeFi Yield 95%, Agent Tokens 3%, Real World Assets 2%");
   await expect(legendRow(page, "Agent Tokens")).toContainText("vs target 5%");
   await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
-  await openRegister(page);
-  await expect(registerRow(page, "Agent Tokens")).toContainText("5%");
-  await expect(registerRow(page, "Agent Tokens")).toContainText("3%");
-  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
-  await expect(registerRow(page, "Real World Assets").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(legendRow(page, "Real World Assets").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(out.getByRole("button", { name: "Full comparison" })).toHaveCount(0);
   // The target is the one in the session's own brief, so it cannot postdate it.
-  await expect(out.locator("[data-target-asof]")).toHaveText("Target as handed to this session.");
+  await expect(targetRow(page)).toHaveText("Handed to this session, dated Jun 2, 2026");
   await expect(out.locator(".rr-prose")).toContainText("Composite 0.541");
 
   // Inside each sleeve, as /allocation's sleeve cards: published names, the
@@ -921,7 +1010,10 @@ test("an archived allocation session measures its outcome against the targets it
   const panel = out.locator(".rr-x__panel");
   await expect(panel).toHaveAttribute("id", "sleeve-conservative_defi_yield");
   await expect(panel.locator(".rr-x__head b")).toHaveText("Conservative DeFi Yield");
-  await expect(panel.locator(".rr-x__head")).toContainText("95% of allocation");
+  // The pinned sleeve's weight is the ring's and its legend row's; the panel names the sleeve alone.
+  await expect(out.locator(".rr-ring figcaption b")).toHaveText("95%");
+  await expect(defiBtn.locator("b")).toHaveText("95%");
+  await expect(panel.locator(".rr-x__head")).not.toContainText("%");
   const assets = panel.locator(".rr-x__assets tbody tr");
   await expect(assets.locator("th span")).toHaveText(["Aave", "Morpho", "Compound", "Sky"]);
   await expect(assets.filter({ hasText: "Morpho" }).locator("td").first()).toHaveText("35%");
@@ -931,7 +1023,11 @@ test("an archived allocation session measures its outcome against the targets it
   await expect(page.locator(".rr-sec__h")).toHaveText(["The recommendation", "Reasoning & disagreement", "Member takes", "Evidence & provenance"]);
   await expect(page.locator("#members-agree li")).toHaveCount(4);
   await expect(page.locator("#views-differ .rr-q")).toHaveCount(3);
-  await expect(page.locator("#views-differ .rr-view").filter({ hasText: "Cut to 2%" }).locator(".ss-stance")).toContainText("cautious · 68%");
+  // A view carries no stance chip: the member's stance and confidence are their take card's.
+  await expect(page.locator("#views-differ .rr-view").filter({ hasText: "Cut to 2%" }).locator(".ss-stance")).toHaveCount(0);
+  await expect(page.locator("#views-differ .rr-view").filter({ hasText: "Cut to 2%" }).locator(".rr-note")).toHaveCount(0);
+  await expect(page.locator("#take-athena .sv__stance-badge")).toHaveText("cautious");
+  await expect(page.locator("#take-athena .rr-conf")).toHaveText("Confidence 68%");
   await expect(page.locator(".rr-take")).toHaveCount(3);
 });
 
@@ -956,11 +1052,13 @@ test("a session page opens on its date and phase, then leads with the recommenda
   expect(order).toEqual(["recommendation", "reasoning", "takes", "evidence"]);
 
   // The actions Woon's members wrote, on the book they were written against
-  // (the book holds six positions; the session set an action on five).
-  await expect(headline(page)).toHaveText("2 positions change, 3 held");
+  // (the book holds six positions; the session set an action on five). Each
+  // row carries its own, so no headline counts "2 change, 3 held" again.
+  await expect(headline(page)).toHaveCount(0);
   const rows = outcome(page).locator(".rr-legend__row");
   await expect(rows).toHaveCount(6);
   await expect(rows.locator(".rr-act:not(.is-none)")).toHaveCount(5);
+  await expect(rows.locator(".rr-act.is-hold")).toHaveCount(3);
   await expect(rows.first().locator(":scope > span")).toHaveText("WOON");
   await expect(rows.first().locator(".rr-act")).toHaveText("hold");
 
@@ -981,6 +1079,9 @@ test("a session page opens on its date and phase, then leads with the recommenda
   const first = page.locator(".rr-take").first();
   await expect(first.locator(".sv__stance-badge")).toHaveText("cautious");
   await expect(first.locator(".rr-conf")).toHaveText("Confidence 72%");
+
+  // The record's generation time, without the date the header already gives.
+  await expect(page.locator("#evidence .rr-dl > div").filter({ hasText: "Record generated" }).locator("dd")).toHaveText("23:58 UTC");
 });
 
 // The targets the session's OWN brief handed it are what its outcome is
@@ -1008,11 +1109,10 @@ test("the targets the session's own brief handed it win over today's framework",
   await page.goto("/swarm/2026-08-03/robotmoney-allocation");
 
   await expect(legendRow(page, "Conservative DeFi Yield")).toContainText("vs target 90%");
-  await openRegister(page);
-  await expect(registerRow(page, "Conservative DeFi Yield")).toContainText("90%");
-  await expect(registerRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+5.00%");
-  await expect(registerRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−5.00%");
-  await expect(outcome(page).locator("[data-target-asof]")).toHaveText("Target as handed to this session.");
+  await expect(legendRow(page, "Conservative DeFi Yield").locator(".alp__mv")).toHaveText("▲+5.00%");
+  await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("▼−5.00%");
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
+  await expect(targetRow(page)).toHaveText("Handed to this session");
 });
 
 // v0 sessions imported into the database run past the static archive's last
@@ -1038,8 +1138,8 @@ test("a v0 session imported past the archive date draws factor as the input it w
   const signal = page.locator("#reasoning .rr-context");
   await expect(signal.locator(".sig__row")).toHaveCount(4);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).toHaveText("Percentile of its own three-year history.");
-  await expect(signal.locator(".rr-note")).not.toContainText("Factor is context");
+  await expect(signal.locator(".rr-note")).toHaveText("Three-year percentile");
+  await expect(signal.locator(".rr-note")).not.toContainText("factor not in composite");
 });
 
 // A sleeve published with no weight has none: it is not a move to zero.
@@ -1054,11 +1154,10 @@ test("a sleeve published with no weight is not drawn as a move to zero", async (
 
   await page.goto("/swarm/2026-08-03/robotmoney-allocation");
 
-  // The legend prints no weight for it, and no move.
+  // The legend prints no weight for it, and no move: neither a drop to zero
+  // nor a "—" mark restating the dash its weight already reads.
   await expect(legendRow(page, "Agent Tokens").locator("b")).toHaveText("—");
-  await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveText("—");
-  await openRegister(page);
-  const agent = registerRow(page, "Agent Tokens");
-  await expect(agent.locator("td").nth(2)).toHaveText("—");
-  await expect(agent.locator(".alp__mv")).toHaveText("—");
+  await expect(legendRow(page, "Agent Tokens").locator(".alp__mv")).toHaveCount(0);
+  await expect(legendRow(page, "Agent Tokens")).not.toContainText("−5.00%");
+  await expect(outcome(page).getByRole("button", { name: "Full comparison" })).toHaveCount(0);
 });
