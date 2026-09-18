@@ -702,6 +702,11 @@ function writeStateFile(): void {
     // `docker compose port` for the LIVE values and treats these as history:
     // a state file left by a previous boot really can disagree with the daemon.
     apiPort,
+    // Issue #892: the static/SPA origin is website-server, NOT api. Recorded so
+    // a consumer that must fetch a PAGE (the stage rehearsal's frontend checks)
+    // resolves against the right port instead of the api's, which serves the
+    // SPA shell for /views/* and makes every content assertion miss.
+    webPort,
     pgPort,
     // Was the api port PINNED by `--stage` (i.e. did this boot apply
     // docker-compose.stage.yml)? Recorded so smoke:down / smoke:status

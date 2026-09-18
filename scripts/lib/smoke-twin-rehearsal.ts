@@ -70,6 +70,13 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 interface SmokeState {
   project: string;
   apiPort: number;
+  /**
+   * website-server's host port — the static/SPA origin since issue #892, and
+   * the one a page fetch must use. The api port answers /views/* with the SPA
+   * shell, so checking content against it misses every assertion while looking
+   * like a content regression.
+   */
+  webPort?: number;
   /** Written only by a `--db smoke-twin` boot — see smoke-main.ts's writeStateFile(). */
   smokeTwinContainer?: string;
 }
@@ -293,8 +300,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       return 1;
     }
 
-    const backendUrl = `http://127.0.0.1:${ready.apiPort}`;
-    log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=${backendUrl} (/health OK)`);
+    // /health is the api's; the frontend checks fetch PAGES, which only
+    // website-server serves (issue #892). Deliberately no fallback to apiPort:
+    // that is exactly the misconfiguration this fixes, and it fails as a wall
+    // of "MISSING" content assertions that reads like a broken frontend.
+    if (!ready.webPort) {
+      err("smoke-state.json has no webPort — this boot predates issue #892's website-server split, or writeStateFile() stopped recording it");
+      return 1;
+    }
+    const backendUrl = `http://127.0.0.1:${ready.webPort}`;
+    log(`ready after ${Math.round((Date.now() - startedAt) / 1000)}s: project=${ready.project} api=http://127.0.0.1:${ready.apiPort} (/health OK) web=${backendUrl}`);
 
     log("running scripts/smoke-frontend-check.ts against the booted stack (same checks CI runs)");
     const checkCode = await spawn(["bun", "scripts/smoke-frontend-check.ts"], {
