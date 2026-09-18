@@ -17,7 +17,8 @@ export function allocationFramework() {
     allocationFw: null,
 
     async loadAllocationFw() {
-      this.allocationFw = await api.get(ROUTES.dashboards.allocation).catch(() => null);
+      this.allocationFw = await api.get(ROUTES.dashboards.allocation).catch(() => null)
+        || await archivedFramework();
       return this.allocationFw;
     },
 
@@ -98,3 +99,22 @@ export function allocationFramework() {
     },
   };
 }
+
+// The published targets from the shipped manifest, in the dashboard's shape,
+// for a checkout with no API. No provenance: the manifest does not say which
+// session set them, so the card reads "Target weights in force".
+async function archivedFramework() {
+  try {
+    const res = await fetch("/data/swarm/manifests/allocation.json");
+    if (!res.ok) return null;
+    const raw = await res.json();
+    const strategy = (raw.buckets || []).map((/** @type {any} */ b) => ({
+      label: b.name || b.id || "",
+      targetPct: Number.isFinite(Number(b.target_weight)) ? Number(b.target_weight) * 100 : null,
+    }));
+    return strategy.length ? { asOf: raw.asof || raw.asOf || null, strategy, provenance: null } : null;
+  } catch (_) {
+    return null;
+  }
+}
+

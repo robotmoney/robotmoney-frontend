@@ -42,7 +42,7 @@ const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
-const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
+export const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });

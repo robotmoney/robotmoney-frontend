@@ -23,7 +23,7 @@ import { sessionTakes } from "../../lib/session-takes.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
-import { helpers } from "../static-views.js";
+import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS } from "../static-views.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
 // signature seal's wording and mark, the receipt link, and the take body's
@@ -119,9 +119,12 @@ export function registerSwarmView(Alpine) {
     async load() {
       this.liveTimer = setInterval(() => { this.now = Date.now(); }, LIVE_TICK_MS);
       try {
+        // The shipped archive stands in when the API is not there (a
+        // backendless checkout), the same fallback every other swarm page
+        // takes, so the directory still reads.
         const [memberData, sessionData] = await Promise.all([
-          api.get(ROUTES.swarm.members),
-          this.loadAllSessions(),
+          api.get(ROUTES.swarm.members).catch(() => this.archiveMembers()),
+          this.loadAllSessions().catch(() => this.archiveSessions()),
         ]);
         this.members = memberData.members || [];
         this.rosterCap = memberData.rosterCap ?? null;
@@ -163,10 +166,42 @@ export function registerSwarmView(Alpine) {
       this.sessionsTruncated = true;
       return rows;
     },
+    // ── the shipped archive, when there is no API ─────────────────────────
+    async archiveMembers() {
+      const members = await Promise.all(KNOWN_ARCHIVE_MEMBERS.map((id) => loadArchiveMember(id).catch(() => null)));
+      return { members: members.filter(Boolean), rosterCap: null, seatsAvailable: null };
+    },
+    // Every archived session, published, newest first, each carrying its takes
+    // as `takeRows` so a card's takes open without asking an API that is not
+    // there. The composite `${date}-${subjectId}` id is what sessionHref()
+    // turns back into the dated address.
+    async archiveSessions() {
+      const index = await fetch("/data/swarm/sessions/index.json").then((r) => (r.ok ? r.json() : { sessions: [] }));
+      const rows = await Promise.all((index.sessions || []).map(async (e) => {
+        const subjectId = e.subjectId ?? e.subject_id;
+        try {
+          const d = await loadArchiveSession(e.date, subjectId);
+          return {
+            ...d.session,
+            id: `${e.date}-${subjectId}`,
+            date: e.date,
+            subjectId,
+            subjectName: d.session?.subjectName || e.subjectName || e.subject_name || subjectId,
+            state: "published",
+            takes: (d.takes || []).length,
+            takeRows: d.takes || [],
+          };
+        } catch (_) { return null; }
+      }));
+      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
+      // The API answers null for a subject it does not hold, so the archive
+      // manifest is asked on a miss as well as on a failure.
       const rows = await Promise.all(
-        ids.map((id) => api.get(path(ROUTES.swarm.subject, { id })).catch(() => null)),
+        ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).catch(() => null))
+          || loadArchiveSubject(id).catch(() => null)),
       );
       const cache = {};
       ids.forEach((id, i) => { if (rows[i]) cache[id] = rows[i]; });
