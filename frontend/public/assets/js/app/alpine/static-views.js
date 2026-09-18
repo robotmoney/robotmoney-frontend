@@ -21,6 +21,7 @@ import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer, actionLabel } from "../lib/sleeve-explorer.js";
+import { takeCard } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -610,6 +611,7 @@ export function registerStaticViews(Alpine) {
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
   Alpine.data("sleeveExplorer", sleeveExplorer);
+  Alpine.data("takeCard", takeCard);
 
   Alpine.data("swarmTakeReceipt", () => ({
     ...helpers,
@@ -1959,7 +1961,17 @@ export function registerStaticViews(Alpine) {
     // window can sit deep in a date-ordered list, so a naive slice would drop it
     // and the page would read "no sessions yet" right after a verified submit.
     async scanSessions() {
-      const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+      // The shipped archive stands in for the index when the API is not there
+      // (a backendless checkout), the same fallback the session and subject
+      // pages take, so a member's archived record still reads.
+      let all;
+      try {
+        all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+      } catch (_) {
+        all = ((await fetchJson("/data/swarm/sessions/index.json")).sessions || [])
+          .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name ?? s.subject_id, state: "published" }))
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      }
       const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judged"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
@@ -2916,49 +2928,6 @@ export function registerStaticViews(Alpine) {
       const dots = this.voteDots();
       return `How members voted, by stance and confidence. ${this.consensusText()}. `
         + dots.map((d) => `${d.name} ${d.stance} at ${d.y}%`).join(", ") + ".";
-    },
-    // A structured take's CALL: the section about the subject under review.
-    // v0 takes open with REGIME (the market notes every member repeats), then
-    // ALLOCATION (the framework), then SUBJECT or YOUR PORTFOLIO (the book in
-    // front of them). A framework session's call is its allocation; a
-    // portfolio session's is its section on the portfolio. Null when the take
-    // has no such structure, and the card falls back to the opening of the
-    // body.
-    takeCall(t) {
-      const body = String(t?.body || "");
-      const re = /^\*\*([A-Z][A-Z \-\/&+]+)\*\*\s*$/gm;
-      const heads = [...body.matchAll(re)];
-      if (heads.length < 2) return null;
-      const sections = heads.map((m, i) => ({
-        head: m[1].trim(),
-        text: body.slice(m.index + m[0].length, i + 1 < heads.length ? heads[i + 1].index : body.length).trim(),
-      })).filter((x) => x.text);
-      const want = this.isFramework() ? ["ALLOCATION"] : ["SUBJECT", "YOUR PORTFOLIO", "ALLOCATION"];
-      // A heading may join two parts ("REGIME + ALLOCATION"); it matches
-      // either.
-      const parts = (h) => h.split(/\s*\+\s*/);
-      for (const w of want) {
-        const hit = sections.find((x) => parts(x.head).includes(w));
-        if (hit) {
-          const label = w === "ALLOCATION" ? "Allocation" : `On ${this.session?.subjectName || "this portfolio"}`;
-          // The first three points of it. A line clamp would drop the list
-          // markers; "Read full take" opens the rest.
-          const lines = hit.text.split("\n").filter((l) => l.trim());
-          return { label, text: lines.slice(0, 3).join("\n") };
-        }
-      }
-      return null;
-    },
-    // A member's proposed sleeve weights, when the take carries them (#963).
-    takeWeightRows(t) {
-      const entries = weightEntries(t?.weights || t?.payload?.weights);
-      if (entries.length < 2) return [];
-      const nums = entries.map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v) && v >= 0);
-      const total = nums.reduce((a, [, v]) => a + v, 0);
-      if (!total) return [];
-      return nums
-        .map(([k, v]) => ({ key: k, label: bucketLabel(k), pct: (v / total) * 100, colour: bucketHue(k), rank: bucketRank(k) }))
-        .sort((a, b) => a.rank - b.rank);
     },
     signatureHeadline() {
       const t = this.takes || [];

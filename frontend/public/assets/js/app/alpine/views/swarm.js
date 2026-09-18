@@ -23,6 +23,22 @@ import { sessionTakes } from "../../lib/session-takes.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
+import { helpers } from "../static-views.js";
+
+// What the shared take card (lib/take-card.js) reads off its host: the
+// signature seal's wording and mark, the receipt link, and the take body's
+// markdown. Taken from static-views' helpers rather than copied, so the seal
+// says the same thing on /swarm as on a session and a member's page.
+const takeCardHost = {
+  verifyState: helpers.verifyState,
+  verifyLabel: helpers.verifyLabel,
+  verifyTip: helpers.verifyTip,
+  verifyPath: helpers.verifyPath,
+  takeHref: helpers.takeHref,
+  escapeHtml: helpers.escapeHtml,
+  inlineMarks: helpers.inlineMarks,
+  linkified: helpers.linkified,
+};
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -76,6 +92,7 @@ export function registerSwarmView(Alpine) {
   Alpine.data("swarmView", () => ({
     ...sessionSummary,
     ...sessionTakes(),
+    ...takeCardHost,
     ...allocationFramework(),
     loading: true,
     error: null,

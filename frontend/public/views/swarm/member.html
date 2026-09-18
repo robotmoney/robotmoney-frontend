@@ -76,25 +76,26 @@
                 <p class="sv__sec-sub">Filed, and sealed until the session publishes. It joins the record below then.</p>
               </div>
             </div>
-            <div class="sv__session-list sv__session-list--compact">
+            <div class="rr-takes">
               <!-- Keyed on the TAKE id: (date, subjectId) collides now that a
                    subject can convene more than once a day, and Alpine renders
                    nothing at all for a duplicate key. -->
-              <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
-                <article class="mp-take">
-                  <div class="mp-take__top">
-                    <div class="mp-take__head">
+              <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}-${row.take.id}`">
+                <article class="rr-take" x-data="takeCard()">
+                  <div class="rr-take__top">
+                    <div class="rr-take__what">
+                      <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
                       <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
-                                            <a class="mp-take__subject" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
-                      <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
+                    <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
                     </div>
-                    <div class="mp-take__meta">
+                    <div class="rr-take__stance">
                       <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
-                        <i :style="`background:${stanceColor(row.take.stance)}`"></i>
-                        <span x-text="row.take.stance"></span>
+                        <i :style="`background:${stanceColor(row.take.stance)}`"></i><span x-text="row.take.stance"></span>
                       </span>
-                      <span class="mp-conf">confidence <b x-text="fmtPct(row.take.confidence)"></b></span>
-                      <span class="sv__vfy mp-vfy" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
+                      <template x-if="Number.isFinite(Number(row.take.confidence))">
+                        <span class="rr-conf">Confidence <b x-text="fmtPct(row.take.confidence)"></b></span>
+                      </template>
+                      <a class="sv__vfy rr-vfy" :href="takeHref(row.take) || undefined" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
                             data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified, row.take.archival)"
                             tabindex="0" :aria-label="`${verifyLabel(row.take.verified, row.take.archival)}. ${verifyTip(row.take.verified, row.take.archival)}`">
                         <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -103,21 +104,46 @@
                         </svg>
                         <span class="sv__vfy-label" x-text="verifyLabel(row.take.verified, row.take.archival)"></span>
                         <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified, row.take.archival)"></span>
-                      </span>
+                      </a>
                     </div>
                   </div>
-                  <div class="mp-body" :class="{ 'mp-body--open': isOpen(row.take.id) || !expandable(row.take.body) }">
-                    <div class="sv__take-body mp-body__inner" x-html="linkified(row.take.body || '')"></div>
+                  <!-- Closed, a structured take leads with the member's CALL, the section
+                       about the subject under review, not the regime notes every take opens
+                       with. Open, the whole take in its own order. The card grows and shrinks
+                       by height (lib/take-card.js). -->
+                  <div class="rr-take__main" :class="weightRows(row.take).length ? 'has-aside' : ''">
+                    <div>
+                      <div class="rr-take__text" x-ref="text">
+                        <template x-if="!open && call(row.take.body, row.session.subjectName)">
+                          <div>
+                            <p class="rr-k rr-take__call" x-text="call(row.take.body, row.session.subjectName).label"></p>
+                            <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, row.session.subjectName).text)"></div>
+                          </div>
+                        </template>
+                        <template x-if="open || !call(row.take.body, row.session.subjectName)">
+                          <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
+                        </template>
+                      </div>
+                      <template x-if="call(row.take.body, row.session.subjectName) || long(row.take.body)">
+                        <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
+                          <span x-text="open ? 'Show less' : 'Read full take'"></span>
+                        </button>
+                      </template>
+                    </div>
+                    <template x-if="weightRows(row.take).length">
+                      <aside class="rr-take__aside">
+                        <p class="rr-k">Proposed weights</p>
+                        <ul class="rr-legend" style="margin-top:0.5rem">
+                          <template x-for="w in weightRows(row.take)" :key="w.key">
+                            <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
+                          </template>
+                        </ul>
+                      </aside>
+                    </template>
                   </div>
-                  <div class="mp-take__foot">
-                    <button type="button" class="mp-more" x-show="expandable(row.take.body)"
-                            @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
-                            x-text="isOpen(row.take.id) ? 'Collapse ▴' : 'Read the full take ▾'"></button>
-                    <a class="sv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
-                  </div>
-                  <p class="mp-note" x-text="row.phase === 'live'
-                    ? 'Take is in and signature-verified. The window is still collecting; it joins the track record below when the session publishes.'
-                    : 'The window has closed; this take publishes to the track record once the session is aggregated.'"></p>
+                  <p class="rr-note" x-text="row.phase === 'live'
+                    ? 'Filed and signature-checked. The window is still collecting; it joins the record below when the session publishes.'
+                    : 'The window has closed; this take joins the record once the session is aggregated.'"></p>
                 </article>
               </template>
             </div>
@@ -215,22 +241,25 @@
         <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
           No published takes for this portfolio yet.
         </p>
-        <div class="sv__session-list">
-          <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
-          <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
-            <article class="mp-take">
-              <div class="mp-take__top">
-                <div class="mp-take__head">
-                  <a class="mp-take__subject" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+        <div class="rr-takes">
+          <!-- Keyed on the session AND the take: an archived take has no id of its
+               own, so camelTake falls back to the member id, which every row on
+               this page shares, and Alpine renders nothing for duplicate keys. -->
+          <template x-for="row in visibleTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}-${row.take.id}`">
+            <article class="rr-take" x-data="takeCard()">
+              <div class="rr-take__top">
+                <div class="rr-take__what">
+                  <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
                   <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
                 </div>
-                <div class="mp-take__meta">
+                <div class="rr-take__stance">
                   <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
-                    <i :style="`background:${stanceColor(row.take.stance)}`"></i>
-                    <span x-text="row.take.stance"></span>
+                    <i :style="`background:${stanceColor(row.take.stance)}`"></i><span x-text="row.take.stance"></span>
                   </span>
-                  <span class="mp-conf">confidence <b x-text="fmtPct(row.take.confidence)"></b></span>
-                  <span class="sv__vfy mp-vfy" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
+                  <template x-if="Number.isFinite(Number(row.take.confidence))">
+                    <span class="rr-conf">Confidence <b x-text="fmtPct(row.take.confidence)"></b></span>
+                  </template>
+                  <a class="sv__vfy rr-vfy" :href="takeHref(row.take) || undefined" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
                         data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified, row.take.archival)"
                         tabindex="0" :aria-label="`${verifyLabel(row.take.verified, row.take.archival)}. ${verifyTip(row.take.verified, row.take.archival)}`">
                     <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -239,17 +268,42 @@
                     </svg>
                     <span class="sv__vfy-label" x-text="verifyLabel(row.take.verified, row.take.archival)"></span>
                     <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified, row.take.archival)"></span>
-                  </span>
+                  </a>
                 </div>
               </div>
-              <div class="mp-body" :class="{ 'mp-body--open': isOpen(row.take.id) || !expandable(row.take.body) }">
-                <div class="sv__take-body mp-body__inner" x-html="linkified(row.take.body || row.session.synthesis || '')"></div>
-              </div>
-              <div class="mp-take__foot">
-                <button type="button" class="mp-more" x-show="expandable(row.take.body)"
-                        @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
-                        x-text="isOpen(row.take.id) ? 'Collapse ▴' : 'Read the full take ▾'"></button>
-                <a class="sv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+              <!-- Closed, a structured take leads with the member's CALL, the section
+                   about the subject under review, not the regime notes every take opens
+                   with. Open, the whole take in its own order. The card grows and shrinks
+                   by height (lib/take-card.js). -->
+              <div class="rr-take__main" :class="weightRows(row.take).length ? 'has-aside' : ''">
+                <div>
+                  <div class="rr-take__text" x-ref="text">
+                    <template x-if="!open && call(row.take.body, row.session.subjectName)">
+                      <div>
+                        <p class="rr-k rr-take__call" x-text="call(row.take.body, row.session.subjectName).label"></p>
+                        <div class="sv__take-body rr-prose" x-html="linkified(call(row.take.body, row.session.subjectName).text)"></div>
+                      </div>
+                    </template>
+                    <template x-if="open || !call(row.take.body, row.session.subjectName)">
+                      <div class="sv__take-body rr-prose" :class="!open && long(row.take.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(row.take.body || '')"></div>
+                    </template>
+                  </div>
+                  <template x-if="call(row.take.body, row.session.subjectName) || long(row.take.body)">
+                    <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
+                      <span x-text="open ? 'Show less' : 'Read full take'"></span>
+                    </button>
+                  </template>
+                </div>
+                <template x-if="weightRows(row.take).length">
+                  <aside class="rr-take__aside">
+                    <p class="rr-k">Proposed weights</p>
+                    <ul class="rr-legend" style="margin-top:0.5rem">
+                      <template x-for="w in weightRows(row.take)" :key="w.key">
+                        <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
+                      </template>
+                    </ul>
+                  </aside>
+                </template>
               </div>
             </article>
           </template>
@@ -364,82 +418,11 @@
     .mp-empty__link { display: inline-block; margin-top: 0.8rem; font-family: var(--font-mono);
                       font-size: 0.72rem; letter-spacing: 0.08em; }
 
-    /* ── The take card ──────────────────────────────────────────────────────
-       NOT .sv__session-card. A session card on /swarm is about a SESSION: it
-       carries a participation bar, a verdict and a recommendation for a whole
-       room, and its title is display caps because a session IS its subject.
-       This card is one member's own argument, and it was borrowing all of
-       that — display-caps title, the corner-pinned seal, the gutters those
-       two need — to say four things it could say in one line. Same primitive
-       (bordered plane, 1.25rem of padding), its own row.
-       Spacing is /swarm's session feed, exactly: 1.25rem of padding, a 16px
-       rhythm between the blocks inside, 12px between cards. It was stacked at
-       1px on a 12px internal rhythm, which made the one list on the site with
-       the most reading in it the tightest thing on the site. */
-    .mp-take { position: relative; border: 1px solid var(--color-border);
-               background: var(--color-surface); padding: 1.25rem; }
-    /* Facts left, judgement right. The meta group is right-aligned IN FLOW,
-       which is what lets the verification mark form a column down the right
-       edge without being positioned into the corner — the reason the pin
-       existed, met without the gutters the pin then had to reserve. */
-    .mp-take__top { display: flex; align-items: baseline; justify-content: space-between;
-                    gap: 0.6rem 1.4rem; flex-wrap: wrap; }
-    .mp-take__head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; min-width: 0; }
-    .mp-take__meta { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-                     font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.04em;
-                     color: var(--color-text-muted); }
+    /* The take card is the shared .rr-take (views.css, lib/take-card.js):
+       the same card a session page lists, headed by what the take was about
+       rather than who filed it. Only the filed-at date is page-local. */
     .mp-take__date { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em;
                      font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
-    /* Sentence case at body weight, not display caps: the loud thing on this
-       row should be the stance, and on a member's own page the portfolio is
-       context rather than headline. Link treatment is the site's — no rule at
-       rest, the accent arrives underneath on hover. */
-    .mp-take__subject { color: var(--color-text); font-weight: 500; font-size: 0.95rem;
-                        text-decoration: none; }
-    .mp-take__subject:hover, .mp-take__subject:focus-visible {
-      text-decoration: underline; text-decoration-color: var(--color-accent);
-      text-decoration-thickness: 1px; text-underline-offset: 4px; }
-    /* Confidence is its OWN figure. It rode inside the stance pill as
-       "constructive · 72%", which put a number inside a coloured badge and
-       made one mark answer two questions — and the pill is the stance ramp,
-       the one place hue carries meaning. A figure is mono and uncoloured. */
-    .mp-conf b { color: var(--color-text-soft); font-weight: 500; font-variant-numeric: tabular-nums; }
-    /* The seal, in flow and always worded. Pinned and glyph-only it was the
-       same size on a card twice as wide, and "verified" — the single claim
-       this whole page exists to make — was readable only on hover. */
-    .mp-vfy { font-size: inherit; letter-spacing: inherit; }
-    .mp-vfy .sv__vfy-mark { width: 11px; height: 11px; }
-    .mp-vfy .sv__vfy-label { font-size: inherit; letter-spacing: inherit; }
-
-    /* Collapsed by default: enough to judge the take, not enough to drown the
-       list. Clipped hard rather than faded — flat planes, no gradient. */
-    .mp-body { overflow: hidden; max-height: 6.4rem;
-               transition: max-height .42s cubic-bezier(.22, .61, .36, 1); }
-    .mp-body--open { max-height: 120rem; }
-    .mp-take__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 1rem; }
-    /* Reads as a link, so it is styled as one — the same underline the rest of
-       the site uses. It was the last cyan word on this page. */
-    .mp-more { background: transparent; border: 0; padding: 0; min-height: 34px; cursor: pointer;
-               font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em;
-               text-transform: uppercase; color: var(--color-text-muted);
-               text-decoration: underline; text-decoration-color: var(--color-border-light);
-               text-decoration-thickness: 1px; text-underline-offset: 4px; }
-    .mp-more:hover { color: var(--color-text); text-decoration-color: var(--color-accent); }
-    .mp-more:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
-
-    /* Take bodies render from the shared .sv__take-body rules (views.css); the
-       list view only tightens them, since 20 cards need denser copy than a
-       single permalink does. The ch cap is the measure — the card is 1080px
-       wide now, and a container is not a line length. */
-    .mp-body .sv__take-body { margin: 1rem 0 0; font-size: 0.875rem; line-height: 1.7;
-                              color: var(--color-text-soft); max-width: 82ch; }
-    .mp-body .sv__take-h { margin: 0.85rem 0 0.35rem; }
-    .mp-body p { margin: 0 0 0.6rem; }
-    .mp-body ul { margin: 0.2rem 0 0.6rem; padding-left: 1.05rem; }
-
-    @media (prefers-reduced-motion: reduce) {
-      .mp-body { transition: none; }
-    }
 
     /* In-progress take block: a top seam marks "current" (no left/right accent
        rail), a pulsing point signals the window is still open, a mono pill

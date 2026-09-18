@@ -1582,12 +1582,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
    in front of an h2 reads as generated filler, and the headings name their
    sections on their own. */
 .rr a { color: inherit; text-decoration: none; }
-.rr-lnk, .rr-prose a, .rr-dl a, .rr-take__foot a, .rr-meta__lnk {
-  border-bottom: 1px solid var(--color-border-light); transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
-.rr-lnk:hover, .rr-prose a:hover, .rr-dl a:hover, .rr-take__foot a:hover, .rr-meta__lnk:hover,
-.rr-lnk:focus-visible, .rr-prose a:focus-visible, .rr-dl a:focus-visible, .rr-take__foot a:focus-visible, .rr-meta__lnk:focus-visible {
-  color: var(--color-text); border-bottom-color: var(--color-accent); }
-.rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.rr-lnk, .rr-prose a, .rr-dl a, .rr-lnk:hover, .rr-prose a:hover, .rr-dl a:hover, .rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-k { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.5; text-transform: uppercase;
   letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rr-note { margin: 0.75rem 0 0; font-size: 0.75rem; line-height: 1.65; color: var(--color-text-muted); }
@@ -1731,8 +1726,26 @@ table.alp__tbl--led th:first-child { width: 40%; }
   .rr-take__main.has-aside { grid-template-columns: minmax(0, 1fr); }
   .rr-take__aside { border-left: 0; padding-left: 0; }
 }
-.rr-take__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; margin-top: 1rem; font-size: 0.6875rem; color: var(--color-text-muted); }
-.rr-take__foot > :first-child { margin-right: auto; }
+/* The card carries its own link treatment, so it reads the same inside a
+   research record (.rr) and on a member's page, which is not one yet. */
+.rr-take a:not(.sv__vfy) { color: inherit; text-decoration: none; }
+/* The seal links to the take's verification receipt; it keeps its own colour
+   (warn when a signature failed, muted when archived). */
+a.sv__vfy { text-decoration: none; }
+.rr-take a:focus-visible, .rr-take button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.rr-take__name:hover, .rr-take__name:focus-visible { color: var(--color-text); text-decoration: underline;
+  text-decoration-color: var(--color-accent); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.875rem; min-width: 0; }
+.rr-take__call { margin: 0 0 0.5rem; }
+.rr-take__text > div > .sv__take-body, .rr-take__text > .sv__take-body { margin-top: 0; }
+/* Confidence is its own figure beside the stance chip, never inside it. */
+.rr-conf { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
+.rr-conf b { font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
+/* The signature seal, in flow and always worded: the one claim a take card
+   exists to make. Its tooltip is .sv__vfy-tip's. */
+.rr-vfy { font-size: 0.6875rem; }
+.rr-vfy .sv__vfy-mark { width: 11px; height: 11px; }
+.rr-vfy .sv__vfy-label { font-size: inherit; letter-spacing: 0.04em; }
 .rr-take .sv__take-body { font-size: 0.9375rem; max-width: none; }
 .rr-take .sv__take-body > :first-child { margin-top: 0; }
 .rr-take .sv__take-body ul { margin: 0 0 0.75rem; padding-left: 1.125rem; }
