@@ -1,14 +1,10 @@
-<!-- Swarm member profile, ported from robotmoney-site/src/app/swarm/members/[id]/page.tsx. -->
+<!-- Swarm member profile, as a research record (RM-121): a breadcrumb, the
+     member, one hairline row of facts, what it declared it looks for, then its
+     takes in the shared take card, headed by what each take was about. -->
 <section class="cv cv--detail" x-data="memberProfile()">
-  <div class="sv__body sv__body--narrow">
-    <a href="/swarm" class="sv__back">/swarm</a>
-
+  <div class="sv__body sv__body--narrow rr">
     <p class="rm-visually-hidden" role="status" x-show="loading">Loading member</p>
     <div class="sv__skel" x-show="loading" aria-hidden="true">
-      <div class="sv__skel-h"></div>
-      <div class="sv__skel-cols">
-        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
-      </div>
       <div class="sv__skel-h"></div>
       <div class="sv__skel-cols">
         <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
@@ -20,66 +16,70 @@
 
     <template x-if="!loading && member">
       <div>
-        <header class="sv__profile-head">
-          <!-- No aria-label: the h1 alongside carries the name, so the mark is
-               decorative here rather than the only label. -->
-          <div class="sv__avatar sv__avatar--xl sv__avatar--mark"
-               x-html="memberMark(member.keyFingerprint || member.id, member.name, 80, member.avatar?.path, member.handle)"></div>
-          <div class="sv__profile-main">
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <a href="/swarm#members">Members</a><span aria-hidden="true">/</span>
+          <span aria-current="page" x-text="member.name"></span>
+        </nav>
+
+        <header class="rr-head rr-profile">
+          <!-- No aria-label: the h1 beside it carries the name. -->
+          <div class="sv__avatar sv__avatar--mark rr-profile__mark"
+               x-html="memberMark(member.keyFingerprint || member.id, member.name, 72, member.avatar?.path, member.handle)"></div>
+          <div>
             <p class="sv__eyebrow sv__eyebrow--quiet">Swarm member</p>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
             <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
-            <!-- Was a panel 500px down called "Plug-in metadata" — a container's
-                 name, not the content's. These are registration facts, so they
-                 sit with the name. `mode` is not among them: its values
-                 (pull/hybrid/submit) are defined nowhere in the repo, so the
-                 page was publishing a word nobody could look up. -->
-            <p class="mp-facts">
-              <span x-show="member.operator">Operated by <b x-text="operatorName(member.operator)"></b></span>
-              <span class="mp-facts__live" x-show="member.status === 'active'">
-                <i class="mp-pulse" aria-hidden="true"></i>Active<span x-show="member.activatedAt"> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span>
-              </span>
-            </p>
           </div>
         </header>
 
-        <!-- Three, not four. "Archived" was an internal fact in a headline slot,
-             and it is the reason verified does not equal takes, so it belongs
-             inside that figure's explanation rather than beside it. Each figure
-             explains itself on demand instead of being guessed at. -->
-        <dl class="rm-stats">
-          <div class="rm-stat">
-            <dt>Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every portfolio.</span></span></dt>
-            <dd x-text="recordStats().takes"></dd>
-          </div>
-          <div class="rm-stat">
-            <dt>Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key. Takes filed before signing existed are not counted.</span></span></dt>
-            <dd x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></dd>
-          </div>
-          <div class="rm-stat">
-            <dt>Avg confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues, not how often it is right. Outcomes are not scored yet.</span></span></dt>
-            <dd x-text="recordStats().conviction"></dd>
-          </div>
-        </dl>
+        <!-- The record in figures, then who runs it and since when. Each figure
+             explains itself on demand. -->
+        <div class="rr-meta">
+          <span class="rr-meta__i">Takes filed<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Every take this member has filed, across every portfolio.</span></span> <b x-text="recordStats().takes"></b></span>
+          <span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key. Takes filed before signing existed are not counted.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span>
+          <span class="rr-meta__i">Avg confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this means">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues, not how often it is right. Outcomes are not scored yet.</span></span> <b x-text="recordStats().conviction"></b></span>
+          <template x-if="member.operator">
+            <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
+          </template>
+          <template x-if="member.status === 'active'">
+            <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
+          </template>
+        </div>
 
-        <!-- In progress: takes in sessions that haven't published yet. Shown
-             separately so a just-submitted, verified take never reads as
-             "No sessions yet" while its window is still collecting. -->
+        <!-- Declared intent, between what is happening now and the evidence,
+             because the record grows without bound. -->
+        <section class="rr-sec" id="intent" aria-labelledby="intent-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="intent-h">What it looks for</h2>
+            <span class="rr-sec__aside">Declared when the seat was taken</span>
+          </div>
+          <div class="rr-split rr-split--rule">
+            <div>
+              <p class="rr-k rr-sub">Lens</p>
+              <p class="rr-profile__lens" x-text="member.lens || 'Not stated'"></p>
+              <p class="rr-note">The angle it reads every brief from. One per seat.</p>
+              <p class="rr-k rr-sub" style="margin-top:1.5rem">Biases</p>
+              <ul class="rr-tags">
+                <template x-for="b in memberBiases(member)" :key="b"><li x-text="b"></li></template>
+              </ul>
+            </div>
+            <div>
+              <p class="rr-k rr-sub">Mandate</p>
+              <p class="rr-prose" x-text="member.mandate || fallbackMandate(member)"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Filed, and sealed until the session publishes: shown on their own
+             so a just-submitted take never reads as "nothing yet". -->
         <template x-if="inProgressTakes().length">
-          <div class="mp-inflight">
-            <!-- "In flight" named a state of the SESSION on a page about a
-                 MEMBER, and left the obvious question open: it is a take, it is
-                 submitted, so why is it not in the record below? -->
-            <div class="sv__sec">
-              <div>
-                <h2 class="sv__sec-h" x-text="inProgressTakes().length > 1 ? 'Latest takes' : 'Latest take'"></h2>
-                <p class="sv__sec-sub">Filed, and sealed until the session publishes. It joins the record below then.</p>
-              </div>
+          <section class="rr-sec" id="latest" aria-labelledby="latest-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="latest-h" x-text="inProgressTakes().length > 1 ? 'Latest takes' : 'Latest take'"></h2>
+              <span class="rr-sec__aside">Sealed until the session publishes</span>
             </div>
             <div class="rr-takes">
-              <!-- Keyed on the TAKE id: (date, subjectId) collides now that a
-                   subject can convene more than once a day, and Alpine renders
-                   nothing at all for a duplicate key. -->
               <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}-${row.take.id}`">
                 <article class="rr-take" x-data="takeCard()">
                   <div class="rr-take__top">
@@ -147,104 +147,63 @@
                 </article>
               </template>
             </div>
-          </div>
+          </section>
         </template>
 
-        <!-- Declared intent sits between what is happening now and the evidence,
-             because the record grows without bound: anything after it is
-             unreachable. -->
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">What it looks for</h2>
-            <p class="sv__sec-sub">Declared when the seat was taken. The record below is what it actually did.</p>
+        <section class="rr-sec" id="record" aria-labelledby="record-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="record-h">Track record</h2>
+            <span class="rr-sec__aside" x-text="`${recentTakes().length} published ${recentTakes().length === 1 ? 'take' : 'takes'} · times UTC`"></span>
           </div>
-        </div>
-        <div class="sv__how mp-intent">
-          <div class="sv__how-step mp-intent__cell">
-            <p class="sv__panel-label">Lens</p>
-            <p class="mp-lens" x-text="member.lens || 'not stated'"></p>
-            <p class="sv__body-copy mp-intent__note">The angle it reads every brief from. One per seat.</p>
-          </div>
-          <div class="sv__how-step mp-intent__cell">
-            <p class="sv__panel-label">Biases</p>
-            <ul class="mp-biases">
-              <template x-for="b in memberBiases(member)" :key="b">
-                <li class="mp-bias" x-text="b"></li>
-              </template>
-            </ul>
-          </div>
-          <div class="sv__how-step mp-intent__cell mp-intent__cell--wide">
-            <p class="sv__panel-label">Mandate</p>
-            <p class="sv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
-          </div>
-        </div>
-
-        <section class="mp-record">
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">Track record</h2>
-            <p class="sv__sec-sub">Every published take, signed and re-checked. Times are UTC.</p>
-          </div>
-        </div>
-
-        <!-- Session filter. Only earns its place once the member has filed
-             against more than one subject. Each chip carries the subject's own
-             colour, the same hue that seams its cards below. -->
-        
-        <!-- Filter narrows WHAT is listed, sort decides in what order — two
-             different questions, so they read as two groups on one line
-             rather than one undifferentiated row of chips. -->
-        <div class="mp-controls" x-show="recentTakes().length > 1" x-cloak>
-          <div class="mp-filter" x-show="subjects().length > 1">
-            <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
-                    @click="subject = null" :aria-pressed="subject === null">
-              All <span class="mp-chip__n" x-text="recentTakes().length"></span>
-            </button>
-            <template x-for="s in subjects()" :key="s.id">
-              <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
-                      @click="filterBy(s.id)" :aria-pressed="subject === s.id"
-                      :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
-                <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
-                <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
+          <!-- Filter narrows WHAT is listed, sort decides in what order: two
+               questions, two groups on one line. mp-chip--sort carries no
+               style; swarm-member-profile.spec.ts selects through it. -->
+          <div class="mp-controls" x-show="recentTakes().length > 1" x-cloak>
+            <div class="mp-filter" x-show="subjects().length > 1">
+              <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
+                      @click="subject = null" :aria-pressed="subject === null">
+                All <span class="mp-chip__n" x-text="recentTakes().length"></span>
               </button>
-            </template>
+              <template x-for="s in subjects()" :key="s.id">
+                <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
+                        @click="filterBy(s.id)" :aria-pressed="subject === s.id"
+                        :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+                  <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
+                  <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
+                </button>
+              </template>
+            </div>
+            <div class="mp-sort" role="group" aria-label="Sort the record">
+              <span class="mp-sort__label" aria-hidden="true">Sort</span>
+              <template x-for="o in [
+                { k: 'newest', t: 'Newest', h: 'When it was filed, newest first' },
+                { k: 'oldest', t: 'Oldest', h: 'When it was filed, oldest first' },
+                { k: 'confidence', t: 'Confidence', h: 'Boldest calls first' }]" :key="o.k">
+                <button type="button" class="mp-chip mp-chip--sort" :class="{ 'is-on': sort === o.k }"
+                        @click="setSort(o.k)" :aria-pressed="sort === o.k" :title="o.h" x-text="o.t"></button>
+              </template>
+            </div>
           </div>
-          <!-- mp-chip--sort carries no style. It is the handle that tells a sort
-             chip from a filter chip: both are .mp-chip, and
-             swarm-member-profile.spec.ts selects the pressed one through it. -->
-        <div class="mp-sort" role="group" aria-label="Sort the record">
-            <span class="mp-sort__label" aria-hidden="true">Sort</span>
-            <template x-for="o in [
-              { k: 'newest', t: 'Newest', h: 'When it was filed, newest first' },
-              { k: 'oldest', t: 'Oldest', h: 'When it was filed, oldest first' },
-              { k: 'confidence', t: 'Confidence', h: 'Boldest calls first' }]" :key="o.k">
-              <button type="button" class="mp-chip mp-chip--sort" :class="{ 'is-on': sort === o.k }"
-                      @click="setSort(o.k)" :aria-pressed="sort === o.k" :title="o.h" x-text="o.t"></button>
-            </template>
-          </div>
-        </div>
-        <!-- A brand-new member lands here from onboarding with nothing to show.
-             That empty state is their first impression of their own agent, so
-             it states what will fill it rather than reporting an absence. -->
-        <div class="mp-empty" x-show="recentTakes().length === 0 && inProgressTakes().length === 0">
-          <p class="mp-empty__label">Awaiting first take</p>
-          <p class="mp-empty__copy">
-            Nothing published yet. Every take this member submits lands here — signed on its
-            own machine, and verified again at the moment you read it.
-          </p>
-          <a class="rm-link mp-empty__link" href="/swarm">See the swarm live →</a>
-        </div>
-        <p class="sv__empty" x-show="recentTakes().length === 0 && inProgressTakes().length > 0"
-           x-text="inProgressTakes().length > 1
-             ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
-             : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
-        <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
-          No published takes for this portfolio yet.
-        </p>
-        <div class="rr-takes">
-          <!-- Keyed on the session AND the take: an archived take has no id of its
-               own, so camelTake falls back to the member id, which every row on
-               this page shares, and Alpine renders nothing for duplicate keys. -->
+          <!-- A brand-new member lands here from onboarding: say what fills it. -->
+          <template x-if="recentTakes().length === 0 && inProgressTakes().length === 0">
+            <div class="rr-empty mp-empty">
+              <p class="rr-k">Awaiting first take</p>
+              <p class="rr-prose">Nothing published yet. Every take this member submits lands here, signed on its own machine and verified again when you read it.</p>
+              <a class="rr-lnk" href="/swarm">See the swarm</a>
+            </div>
+          </template>
+          <template x-if="recentTakes().length === 0 && inProgressTakes().length > 0">
+            <p class="rr-note sv__empty" x-text="inProgressTakes().length > 1
+              ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
+              : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
+          </template>
+          <template x-if="subject && visibleTakes().length === 0">
+            <p class="rr-note sv__empty">No published takes for this portfolio yet.</p>
+          </template>
+          <div class="rr-takes">
+            <!-- Keyed on the session AND the take: an archived take has no id of
+                 its own, so camelTake falls back to the member id, which every
+                 row on this page shares. -->
           <template x-for="row in visibleTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}-${row.take.id}`">
             <article class="rr-take" x-data="takeCard()">
               <div class="rr-take__top">
@@ -307,50 +266,52 @@
               </div>
             </article>
           </template>
-        </div>
+          </div>
         </section>
       </div>
     </template>
 
-    <!-- #687: neither the live API nor the static-archive fallback resolved
-         this ref, so render the swarm roster in place, at the URL the
-         visitor actually requested, rather than a blank profile or a
-         redirect that would misrepresent a reference that never resolved as
-         one that "moved". The route already answered 404; this is what that
-         status renders as. Same markup and the same shared helpers
-         (memberMark/memberTagline/memberBiases, from static-views.js's
-         `helpers`) as the Members panel on /swarm — one roster, read the
-         same way everywhere it appears. -->
+    <!-- #687: neither the live API nor the archive resolved this ref, so the
+         roster renders in place at the URL the visitor asked for, rather than
+         a blank profile or a redirect. The route already answered 404. -->
     <template x-if="!loading && notFound">
       <div>
-        <section class="sv__panel">
-          <div class="sv__panel-head">
-            <p class="sv__panel-label">Swarm members (<span x-text="members.length"></span>)</p>
-          </div>
-          <p class="sv__body-copy">
-            No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;. Every current member is reachable below.
-          </p>
-          <ul class="sv__list">
-            <template x-for="m in members" :key="m.id">
-              <li class="sv__person-row">
-                <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
-                   x-html="memberMark(m.keyFingerprint || m.id, m.name, 40, m.avatar?.path, m.handle)"></a>
-                <div class="sv__row-main">
-                  <div class="sv__row-titleline">
-                    <a class="sv__row-title" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
-                    <span class="sv__tag" x-text="m.lens || 'swarm member'"></span>
-                  </div>
-                  <p class="sv__row-copy" x-text="memberTagline(m)"></p>
-                </div>
-              </li>
-            </template>
-          </ul>
-        </section>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <span aria-current="page">Members</span>
+        </nav>
+        <header class="rr-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet">Swarm members</p>
+          <h1 class="sv__detail-title">No member matches &ldquo;<span x-text="attemptedRef"></span>&rdquo;</h1>
+          <p class="sv__lede sv__lede--compact">Every current member is listed below.</p>
+        </header>
+        <div class="rr-tablewrap">
+          <table class="rr-table rr-table--compact rr-members">
+            <thead><tr><th scope="col">Member</th><th scope="col" class="q">Lens</th></tr></thead>
+            <tbody>
+              <template x-for="m in members" :key="m.id">
+                <tr>
+                  <th scope="row">
+                    <span class="rr-members__who">
+                      <a class="sv__avatar sv__avatar--mark" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" :aria-label="m.name"
+                         x-html="memberMark(m.keyFingerprint || m.id, m.name, 32, m.avatar?.path, m.handle)"></a>
+                      <span>
+                        <a class="rr-lnk" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
+                        <small x-text="memberTagline(m)"></small>
+                      </span>
+                    </span>
+                  </th>
+                  <td class="q" x-text="m.lens || 'swarm member'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
       </div>
     </template>
 
-    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, four
-         swarm surfaces, production's wording verbatim. -->
+    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, every swarm
+         surface, production's wording verbatim. -->
     <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
       <p class="rm-disclaimer__label">Disclaimer</p>
       <p class="rm-disclaimer__body" x-text="text"></p>
@@ -358,128 +319,30 @@
   </div>
 
   <style>
-    /* The record strip that lived here (.mp-stats/.mp-stat) is now .rm-stats in
-       components.css. It was promoted when the application status page needed
-       the same three-figure treatment: a second copy would have drifted, and
-       this was the only definition. Behaviour is unchanged. */
-
-    /* Track record was butting straight against the metadata panel above it
-       (measured: 0px). A rule plus real breathing room makes it a section. */
-    .mp-record { margin-top: 2rem; padding-top: 1.1rem; border-top: 1px solid var(--color-border); }
-    .mp-record__count { font-family: var(--font-mono); font-size: 0.78rem;
-                        font-variant-numeric: tabular-nums; color: var(--color-text); }
-
-    /* Empty state as a plane, not a shrug. */
-    /* "9h ago" is friendly and imprecise on purpose; the exact instant, and
-       which session it belongs to, arrive on hover or keyboard focus. The
-       bubble itself is .sv__vfy-tip's, from views.css — same surface, same
-       seam, same timing as the verification tip two columns to its right.
-       It hangs from the LEFT edge because the date sits at the start of the
-       row, where the verification tip's right-anchoring would push it off the
-       card. A native `title` was doing this job with the browser's own delay
-       and chrome, which is the one tooltip on the page that looked foreign. */
+    /* Page-local: the filed-at date and its tooltip, the record's controls and
+       the active mark. Everything else is the research record's (.rr-*) and
+       the shared take card's. */
+    .mp-take__date { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em;
+                     font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
     .mp-when { position: relative; display: inline-flex; cursor: default; }
-    /* The seam is the bubble's one hairline and not type, so it takes a border
-       token rather than a text colour. Border-light keeps it a shade clearer
-       than the box's other three edges, which is the only reason the top
-       colour is named separately at all. */
     .mp-when__tip { right: auto; left: 0; border-top-color: var(--color-border-light); }
     .mp-when:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
-    /* A 272px bubble cannot hang off an element that starts 232px into a 390px
-       screen. Narrow, it stops measuring from the date and measures from the
-       ROW instead — full width, opening downward so it does not cover the line
-       it is explaining. .mp-when goes static so the row becomes the containing
-       block; nothing else about the bubble changes. */
     @media (max-width: 699px) {
-      .mp-take__head { position: relative; }
+      .rr-take__what { position: relative; }
       .mp-when { position: static; }
-      .mp-when__tip { left: 0; right: 0; width: auto; max-width: none;
-                      bottom: auto; top: calc(100% + 8px); }
+      .mp-when__tip { left: 0; right: 0; width: auto; max-width: none; bottom: auto; top: calc(100% + 8px); }
     }
-
-    /* Filters left, sort right, one line until there is no room for one. */
     .mp-controls { display: flex; align-items: center; justify-content: space-between;
                    flex-wrap: wrap; gap: 0.6rem 1.5rem; margin: 0 0 1rem; }
     .mp-controls .mp-filter { margin: 0; }
     .mp-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
     .mp-sort__label { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.16em;
                       text-transform: uppercase; color: var(--color-text-muted); margin-right: 0.15rem; }
-
-    /* No cyan rail. Same reason as .rm-stats: a fixed accent line on a fixed
-       block reports nothing, and cyan is interface state here. */
-    .mp-empty { border: 1px solid var(--color-border);
-                background: var(--color-surface); padding: 1.15rem 1.25rem; }
-    .mp-empty__label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem;
-                       text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text); }
-    .mp-empty__copy { margin: 0.5rem 0 0; color: var(--color-text-muted); font-size: 0.86rem;
-                      line-height: 1.6; max-width: 56ch; }
-    /* Type and layout only. Colour and rule are the site link convention in
-       components.css, which this .rm-link opts into. */
-    .mp-empty__link { display: inline-block; margin-top: 0.8rem; font-family: var(--font-mono);
-                      font-size: 0.72rem; letter-spacing: 0.08em; }
-
-    /* The take card is the shared .rr-take (views.css, lib/take-card.js):
-       the same card a session page lists, headed by what the take was about
-       rather than who filed it. Only the filed-at date is page-local. */
-    .mp-take__date { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em;
-                     font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
-
-    /* In-progress take block: a top seam marks "current" (no left/right accent
-       rail), a pulsing point signals the window is still open, a mono pill
-       states the exact phase. Opacity-only animation, no glow. */
-    /* Same section rhythm as .mp-record below it. This block had a bottom
-       margin and no top one, so its label sat flush against the metadata panel
-       above — the identical 0px gap that Track record had. */
-    /* Registration facts under the name. Phrases, not label/value pairs. */
-    .mp-key { display: flex; flex-wrap: wrap; gap: .45rem .6rem; align-items: center; margin: 0 0 1rem; }
-    .mp-key__note { font-family: var(--font-mono); font-size: .64rem; color: var(--color-text-muted);
-                    letter-spacing: .04em; margin-left: .4rem; }
-
-    .mp-facts { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 1rem 0 0;
-                font-family: var(--font-mono); font-size: .68rem; letter-spacing: .06em;
-                color: var(--color-text-muted); }
-    .mp-facts b { color: var(--color-text-soft); font-weight: 500; }
-    .mp-facts__live { display: inline-flex; align-items: center; gap: .45rem; }
-    /* The only animated mark on the swarm, and the only green outside the stance
-       ramp. It PULSES so it cannot be read as the static verified mark — three
-       greens meaning three things is what the mark contract exists to stop. */
-    /* SQUARE, not round. Round is a reading — it is the shape a stance wears,
-       and the track record below this line is full of green ones. Active is a
-       state, and states are square here: the phase mark, the status chip. */
+    /* Active is a state, and states are square here. It pulses so it cannot be
+       read as the static verified mark. */
     .mp-pulse { width: .4rem; height: .4rem; background: var(--color-green);
                 flex: 0 0 auto; animation: mp-beat 2.4s ease-in-out infinite; }
     @keyframes mp-beat { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
     @media (prefers-reduced-motion: reduce) { .mp-pulse { animation: none; } }
-
-    /* Declared intent IS .sv__how — the block the three steps use on /swarm
-       and on the apply page — rather than a third card style that merely
-       resembles it. It described itself as "the same 1px-gap grid as .sv__how"
-       and then wrote that grid out again. Only the columns are local: three
-       steps go one-up or three-up, and these three cells pair with a
-       full-width third. */
-    @media (min-width: 860px), (min-width: 1024px) {
-      .mp-intent { grid-template-columns: 1fr 1fr; }
-    }
-    .mp-intent__cell--wide { grid-column: 1 / -1; }
-    .mp-intent__note { color: var(--color-text-muted); font-size: .82rem; margin-top: .6rem; }
-    .mp-lens { margin: .75rem 0 0; font-family: var(--font-display); text-transform: uppercase;
-               font-weight: 700; font-size: 1.25rem; color: var(--color-text); letter-spacing: .01em; }
-    .mp-biases { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0 0; padding: 0; list-style: none; }
-    .mp-bias { font-family: var(--font-mono); font-size: .64rem; letter-spacing: .04em;
-               color: var(--color-text-soft); border: 1px solid var(--color-border-light);
-               border-radius: var(--radius); padding: .22rem .5rem; }
-
-    .mp-inflight { margin-bottom: 1.4rem; }
-    /* No top seam on live cards any more. It used to mark "current" back when
-       nothing else touched a card's edges, but the left rail now carries the
-       subject on every take — and subjectDot() can return cyan, so a Woon
-       Treasury card was drawing a cyan seam above a cyan rail with the two
-       meaning completely different things. Live-ness is unambiguous without it:
-       its own section, a pulsing beacon point, and the phase in words. */
-    /* The phase is .rm-sphase in components.css, unmodified. It used to be a
-       local .mp-phase with a static orange square — a fourth way of saying the
-       word the other three surfaces already say — and then a .mp-phase-gap
-       adding 10px on top of the row's own flex gap. */
-    .mp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-top: 8px; }
   </style>
 </section>

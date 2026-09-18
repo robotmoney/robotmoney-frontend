@@ -20,7 +20,7 @@ import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
-import { sleeveExplorer, actionLabel } from "../lib/sleeve-explorer.js";
+import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
@@ -1381,29 +1381,9 @@ export function registerStaticViews(Alpine) {
     },
     // The positions a portfolio recommendation moves, holds left out: the
     // outcome line already counts them.
-    rowActions(row) {
-      const rec = row?.swarmRecommendation;
-      if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
-      return (Array.isArray(rec.actions) ? rec.actions : [])
-        .filter((a) => a && a.action && String(a.action).toLowerCase() !== "hold")
-        .map((a) => ({ token: a.token, action: String(a.action).toLowerCase(), label: actionLabel(a.action) }));
-    },
-    // The positions a portfolio recommendation held, by token.
-    rowHeld(row) {
-      const rec = row?.swarmRecommendation;
-      if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
-      return (Array.isArray(rec.actions) ? rec.actions : [])
-        .filter((a) => a && a.action && String(a.action).toLowerCase() === "hold")
-        .map((a) => a.token);
-    },
     rowOutcome(row) {
       const rec = row?.swarmRecommendation;
-      if (rec?.type !== "bucket_weights") {
-        const acts = (Array.isArray(rec?.actions) ? rec.actions : []).filter((a) => a && a.action);
-        if (!acts.length || rec.quorum || rec.stances) return "";
-        const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
-        return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
-      }
+      if (rec?.type !== "bucket_weights") return this.actionsOutcome(row);
       if (!this.rowWeights(row).some((v) => v != null)) return "Recommendation unavailable";
       const moves = this.rowMoves(row);
       if (moves == null) return "Reference unavailable";
@@ -1896,7 +1876,10 @@ export function registerStaticViews(Alpine) {
           this.notFound = true;
           this.attemptedRef = memberId;
           const res = await api.get(ROUTES.swarm.members).catch(() => null);
-          this.members = res?.members || [];
+          // The shipped archive's members stand in when the API is not there,
+          // so the roster still lists who the swarm is.
+          this.members = res?.members
+            || (await Promise.all(KNOWN_ARCHIVE_MEMBERS.map((id) => loadArchiveMember(id).catch(() => null)))).filter(Boolean);
           return;
         }
         // Both corrections below name this page after the record rather than
@@ -2959,14 +2942,14 @@ export function registerStaticViews(Alpine) {
 }
 
 /** @param {unknown} v */
-const normKeyOf = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+export const normKeyOf = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // Inside each sleeve: each sleeve under its published name and hue, and its
 // items in POLICY order, each in the colour its position gives it there (so
 // Morpho is one colour on every page), named as the brief or the published
 // framework names it rather than by the payload's slug.
 /** @param {any} rec @param {any} brief @param {any} framework @param {Map<string, number|null>} sleeveWeight */
-function withinBucketsFor(rec, brief, framework, sleeveWeight) {
+export function withinBucketsFor(rec, brief, framework, sleeveWeight) {
   const body = brief?.body || brief;
   const policyOf = (/** @type {string} */ bucket) => {
     const n = normKeyOf(bucket);
@@ -3033,7 +3016,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
 // A sleeve's assets as the explorer lists them: share of the sleeve, and share
 // of the whole allocation that implies.
 /** @param {any} sleeve @param {number | null} pct */
-function explorerAssets(sleeve, pct) {
+export function explorerAssets(sleeve, pct) {
   return (sleeve?.items || []).map((/** @type {any} */ it) => ({
     key: it.name,
     label: it.label || it.name,
@@ -3046,7 +3029,7 @@ function explorerAssets(sleeve, pct) {
 // The sleeve weights a brief handed its session, as { bucket key: percent }.
 // Null when the brief carried none: the live brief does not yet (#961).
 /** @param {any} brief */
-function referenceWeights(brief) {
+export function referenceWeights(brief) {
   const body = brief?.body || brief;
   const buckets = body?.allocation?.buckets;
   if (!Array.isArray(buckets) || !buckets.length) return null;

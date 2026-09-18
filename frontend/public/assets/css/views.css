@@ -1581,8 +1581,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
    Section headings carry no numbers (David, 2026-09-18): a "01 / 02" index
    in front of an h2 reads as generated filler, and the headings name their
    sections on their own. */
-.rr a { color: inherit; text-decoration: none; }
-.rr-lnk, .rr-prose a, .rr-dl a, .rr-lnk:hover, .rr-prose a:hover, .rr-dl a:hover, .rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.rr a:not(.btn-primary) { color: inherit; text-decoration: none; }
+.rr-lnk, .rr-prose a, .rr-dl a, .rr-meta__lnk {
+  border-bottom: 1px solid var(--color-border-light); transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr-lnk:hover, .rr-prose a:hover, .rr-dl a:hover, .rr-meta__lnk:hover,
+.rr-lnk:focus-visible, .rr-prose a:focus-visible, .rr-dl a:focus-visible, .rr-meta__lnk:focus-visible {
+  color: var(--color-text); border-bottom-color: var(--color-accent); }
+.rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-k { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.5; text-transform: uppercase;
   letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rr-note { margin: 0.75rem 0 0; font-size: 0.75rem; line-height: 1.65; color: var(--color-text-muted); }
@@ -1974,3 +1979,75 @@ a.sv__vfy { text-decoration: none; }
 .rr-rowacts .rr-act { min-width: 0; text-align: left; }
 .rr-rowtext { font-family: var(--font-sans); color: var(--color-text-soft); }
 .rr-held { color: var(--color-text-muted); cursor: default; }
+
+/* /swarm in the research record's grammar (RM-121). */
+/* A weights recommendation as its four figures, each beside its sleeve's hue. */
+.rr-mixline { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.875rem; font-family: var(--font-mono); }
+.rr-mixline > span { display: inline-flex; align-items: center; gap: 0.375rem; }
+.rr-mixline i { width: 0.4375rem; height: 0.4375rem; flex: none; }
+.rr-mixline b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
+/* Portfolios: identity, then the latest review, then cadence. */
+.rr-ports { min-width: 44rem; }
+.rr-ports tbody th { width: 42%; vertical-align: top; }
+.rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-ports__blurb { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.5rem;
+  font-family: var(--font-sans); font-weight: 400; font-size: 0.75rem; line-height: 1.55; color: var(--color-text-muted); }
+.rr-ports__rec, .rr-ports td { vertical-align: top; }
+.rr-ports__line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.875rem; font-family: var(--font-sans); color: var(--color-text); }
+.rr-hist { min-width: 46rem; }
+.rr-hist__subj { font-family: var(--font-sans); color: var(--color-text); white-space: nowrap; }
+.rr-hist .rr-rowacts > span { margin-right: 1rem; }
+/* Members: the mark, the name and lens. */
+.rr-members__who { display: inline-flex; align-items: center; gap: 0.75rem; }
+.rr-members__who .sv__mmark { flex: none; line-height: 0; }
+.rr-members__who small { display: block; margin-top: 0.125rem; font-family: var(--font-sans); font-size: 0.6875rem; color: var(--color-text-muted); }
+.rr-members td { font-family: var(--font-mono); color: var(--color-text-soft); }
+.rr-apply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem 2.25rem;
+  margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border); }
+.rr-apply p { margin: 0; max-width: 46rem; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+.rr-apply b { color: var(--color-text); font-weight: 500; }
+.rr-apply__seats { color: var(--color-text-muted); }
+/* How it works: three steps, divided by hairlines, not boxed. */
+.rr-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
+.rr-steps > div { padding: 1.25rem 1.5rem 0 0; }
+.rr-steps > div + div { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
+.rr-steps__t { margin: 0.5rem 0 0.5rem; font-size: 0.9375rem; font-weight: 500; color: var(--color-text); }
+.rr-steps__d { margin: 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-soft); }
+.rr-steps__d b { font-weight: 500; color: var(--color-text); }
+@media (max-width: 760px) {
+  .rr-steps { grid-template-columns: minmax(0, 1fr); }
+  .rr-steps > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border); margin-top: 1.25rem; }
+}
+
+/* A table that stacks on a phone instead of scrolling sideways: the first
+   cells share a line (a date and its subject), the rest run full width under
+   them. --full stacks every cell. Weights tables keep their columns: four
+   figures side by side are the point. */
+@media (max-width: 640px) {
+  .rr-table.rr-stack { min-width: 0 !important; }
+  .rr-stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rr-stack tbody tr { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline;
+    gap: 0.375rem 0.875rem; padding: 0.875rem 0; border-bottom: 1px solid var(--color-border); }
+  .rr-stack tbody th, .rr-stack tbody td { display: block; padding: 0; border: 0; text-align: left; }
+  .rr-stack tbody td:nth-of-type(n+2) { grid-column: 1 / -1; }
+  .rr-stack--full tbody tr > * { grid-column: 1 / -1; }
+  .rr-stack--full tbody td.q { display: block; }
+  .rr-ports tbody th { width: auto; }
+  /* A bare count reads as noise without its column head; the date stays. */
+  .rr-ports tbody td:nth-of-type(2) { display: none; }
+}
+
+/* A member's page: the mark beside the name, the declared lens and biases. */
+.rr-profile { display: flex; align-items: flex-start; gap: 1.25rem; }
+.rr-profile__mark { flex: none; width: 4.5rem; height: 4.5rem; }
+.rr-profile__lens { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.3125rem;
+  text-transform: uppercase; color: var(--color-text); }
+.rr-tags { display: flex; flex-wrap: wrap; gap: 0.375rem; margin: 0; padding: 0; list-style: none; }
+.rr-tags li { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light); font-family: var(--font-mono);
+  font-size: 0.6875rem; letter-spacing: 0.04em; color: var(--color-text-soft); }
+.rr-empty { padding: 1.25rem 0; }
+.rr-empty .rr-prose { margin: 0.5rem 0 0.75rem; font-size: 0.875rem; }
+@media (max-width: 560px) {
+  .rr-profile { flex-direction: column; gap: 0.75rem; }
+  .rr-profile__mark { width: 3.5rem; height: 3.5rem; }
+}

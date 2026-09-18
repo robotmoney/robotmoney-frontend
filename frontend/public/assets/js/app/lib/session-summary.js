@@ -20,6 +20,7 @@
 // evidence, not a side effect of this one.
 import { stanceColor, stanceStyle } from "./stance.js";
 import { CATEGORICAL } from "./chart-theme.js";
+import { actionLabel } from "./sleeve-explorer.js";
 
 // Fixed reading direction, so a spread bar means the same thing on every
 // surface. A stance this build does not know keeps its count and sorts last
@@ -346,6 +347,36 @@ export const sessionSummary = {
     /** @type {Record<string, unknown>} */
     const c = this.stanceCounts(s) || {};
     return VOTE_AXIS.flatMap((stance) => Array.from({ length: Number(c[stance]) || 0 }, (_, i) => ({ key: `${stance}-${i}`, stance })));
+  },
+  // ── a portfolio recommendation, as a history row reads it ─────────────
+  // The authored actions only: rollups aggregated 2026-08-06 to 09-04 carry
+  // two hardcoded actions derived from no member input (quorum/stances mark
+  // them), and they say nothing about the book.
+  /** @param {any} s */
+  authoredActionsOf(s) {
+    const rec = s?.swarmRecommendation;
+    if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
+    return (Array.isArray(rec.actions) ? rec.actions : []).filter((/** @type {any} */ a) => a && a.action);
+  },
+  // The positions it moves, holds left out: the held count says the rest.
+  /** @param {any} s */
+  rowActions(s) {
+    return this.authoredActionsOf(s)
+      .filter((/** @type {any} */ a) => String(a.action).toLowerCase() !== "hold")
+      .map((/** @type {any} */ a) => ({ token: a.token, action: String(a.action).toLowerCase(), label: actionLabel(a.action) }));
+  },
+  /** @param {any} s */
+  rowHeld(s) {
+    return this.authoredActionsOf(s)
+      .filter((/** @type {any} */ a) => String(a.action).toLowerCase() === "hold")
+      .map((/** @type {any} */ a) => a.token);
+  },
+  /** @param {any} s */
+  actionsOutcome(s) {
+    const acts = this.authoredActionsOf(s);
+    if (!acts.length) return "";
+    const moved = acts.filter((/** @type {any} */ a) => String(a.action).toLowerCase() !== "hold").length;
+    return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
   },
   // One dot and count per stance that has any, bearish to bullish: the tally
   // both text columns (subject and session) print under the rationale.

@@ -23,7 +23,9 @@ import { sessionTakes } from "../../lib/session-takes.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
-import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS } from "../static-views.js";
+import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
+  referenceWeights, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
+import * as weightChange from "../../lib/weight-change.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
 // signature seal's wording and mark, the receipt link, and the take body's
@@ -158,6 +160,7 @@ export function registerSwarmView(Alpine) {
         if (cursor) query.cursor = cursor;
         const res = await api.get(ROUTES.swarm.sessions, query);
         rows.push(...(res.sessions || []));
+        if (res.nextSessionAt !== undefined) this.nextSessionAt = res.nextSessionAt;
         cursor = res.nextCursor || null;
         if (!cursor) return rows;
       }
@@ -226,6 +229,100 @@ export function registerSwarmView(Alpine) {
     // the policy is the conflation this section now exists to undo.
     async loadAllocation() {
       await this.loadAllocationFw();
+      // The brief the latest allocation session opened with: the only honest
+      // source of the target its recommendation is measured against, and of
+      // the asset names inside each sleeve.
+      const s = this.allocLatest();
+      if (s) this.allocBrief = await this.briefFor(s);
+    },
+    async briefFor(s) {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) {
+        const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
+        if (b && !b.error) return b;
+      }
+      return fetch(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    },
+
+    // ── the research record's pieces (RM-121) ────────────────────────────
+    // /swarm reads like the subject and session pages: a row of facts, the
+    // flagship allocation's latest recommendation as the explorable ring, the
+    // portfolios and the recommendation history as tables.
+    nextSessionAt: null,
+    allocBrief: null,
+    facts() {
+      const published = this.publishedSessions();
+      const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
+      const rows = [
+        { k: "Members", v: String(this.members.length) },
+        { k: "Subjects", v: String(this.sessionFilters().length) },
+        { k: "Sessions", v: String(published.length) },
+      ];
+      if (latest) rows.push({ k: "Latest review", v: this.formatDate(latest) });
+      if (this.nextSessionAt) rows.push({ k: "Next session", v: absoluteUtc(this.nextSessionAt) });
+      return rows;
+    },
+    // The newest published session on the allocation subject.
+    allocLatest() {
+      const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
+      return this.publishedSessions().filter((s) => s.subjectId === id)[0] || null;
+    },
+    allocReference() {
+      const s = this.allocLatest();
+      return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null);
+    },
+    // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
+    // subject and session pages.
+    hasBook() { return false; },
+    explorerSource() { return this.allocLatest(); },
+    explorerSvg() { return this.weightDonutSvg(this.allocLatest()); },
+    explorerCenter() { return { value: "100%", label: "Recommended" }; },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    explorerRows() {
+      const s = this.allocLatest();
+      const rows = this.sessionWeights(s) || [];
+      const ref = this.allocReference();
+      const sleeveWeight = new Map(rows.map((r) => [normKeyOf(r.key), r.pct / 100]));
+      const within = new Map(withinBucketsFor(s?.swarmRecommendation, this.allocBrief, null, sleeveWeight).map((w) => [normKeyOf(w.bucket), w]));
+      return rows.map((r) => {
+        const was = ref ? (ref[r.key] ?? null) : null;
+        return {
+          key: r.key, label: r.label, hue: r.colour, pct: r.pct,
+          meta: `${this.fmtPctTrim(r.pct)} of allocation`, action: "", rationale: "",
+          d: ref ? weightChange.weightDelta(r.pct, was) : null, was, basis: "target",
+          assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
+        };
+      });
+    },
+    allocOutcome() {
+      if (!this.allocReference()) return "";
+      const moved = this.explorerRows().filter((r) => r.d != null && r.d !== 0).length;
+      return moved ? `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
+    },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeGlyph(d) { return weightChange.changeGlyph(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    // A portfolio's newest published session, its own and not a folded one.
+    portfolioLatest(p) {
+      return this.publishedSessions().find((s) => s.subjectId === p.id)
+        || this.publishedSessions().find((s) => this.parentFor(s.subjectId) === p.id) || null;
+    },
+    // A weights recommendation as its four figures, in the published order.
+    mixOf(s) { return this.sessionWeights(s) || []; },
+    // A weights row's moves against the target ITS OWN session was handed
+    // (the list carries it once #991 lands). None without that target.
+    movesOf(s) {
+      const ref = s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null;
+      if (!ref) return [];
+      return this.mixOf(s)
+        .map((r) => ({ key: r.key, label: r.label, d: weightChange.weightDelta(r.pct, ref[r.key] ?? null) }))
+        .filter((m) => m.d != null && m.d !== 0);
+    },
+    takesOf(s) {
+      const n = this.takesCount(s);
+      return n ? `${n} ${n === 1 ? "take" : "takes"}` : "";
     },
 
     // ── the published allocation ─────────────────────────────────────────

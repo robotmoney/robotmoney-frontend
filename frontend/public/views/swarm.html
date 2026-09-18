@@ -1,8 +1,8 @@
-<!-- Swarm feed, ported from robotmoney-site/src/app/swarm/page.tsx
-     into the buildless Alpine SPA. Reworked for RM-100: the page opens with
-     what the swarm is and who is in it, because a visitor arrives asking that
-     and not what the vault holds. Coverage follows the members; the vault's
-     allocation lives on its own page. -->
+<!-- Swarm directory, in the research record's grammar (RM-121): a row of
+     facts, the members and how to join, the flagship allocation's latest
+     recommendation, the portfolios, the recommendation history across every
+     subject, and how a session works. The subject and session pages it links to open the same
+     way. -->
 <section class="cv cv--feed" x-data="swarmView()" x-init="load()">
   <div class="sv__hero">
     <div class="sv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
@@ -12,7 +12,7 @@
     </div>
   </div>
 
-  <div class="sv__body">
+  <div class="sv__body rr">
     <!-- A skeleton, not a sentence. "Loading swarm…" is one line tall, so when
          the real page arrived it pushed the disclaimer and the footer down by
          a full screen: measured CLS 0.4974, where 0.25 is already "poor". This
@@ -37,13 +37,7 @@
 
     <template x-if="!loading && !error">
       <div>
-        <!-- Is anything happening right now. The page was a record of finished
-             sessions only, so the one state a visitor cannot see is the one the
-             swarm is actually in: a window open and takes arriving. Absent when
-             nothing is live, so the page is unchanged the rest of the time. -->
-        <!-- x-if, not x-show: with x-show the element stays in the DOM and its
-             :href binding still evaluates, and sessionHref(null) threw on every
-             load where nothing was live, which is the page's normal state. -->
+        <!-- Is anything happening right now: absent when nothing is live. -->
         <template x-if="liveSession()">
           <div class="sv__live">
             <span :class="`rm-sphase rm-sphase--${livePhase()?.key || 'closed'}`" x-text="livePhaseLabel()"></span>
@@ -68,400 +62,325 @@
           </div>
         </template>
 
-        <!-- The mechanism, before anything is listed. Without it the sessions
-             feed below reads as noise: a visitor has no idea what a session is
-             or why a signed take matters. -->
-        <div class="sv__sec sv__sec--lead">
-          <div>
-            <h2 class="sv__sec-h">How it works</h2>
-            <p class="sv__sec-sub">Three steps for each session, no matter the member role.</p>
-          </div>
-        </div>
-        <div class="sv__how">
-          <div class="sv__how-step">
-            <span class="sv__how-n">Step 1</span>
-            <span class="sv__how-t">A session opens</span>
-            <p class="sv__how-d">One portfolio goes under review. Every member gets the same brief: the day's regime read, the portfolio's own record, and any research signals filed that day.</p>
-          </div>
-          <div class="sv__how-step">
-            <span class="sv__how-n">Step 2</span>
-            <span class="sv__how-t">Members submit takes</span>
-            <p class="sv__how-d">Every member files one <b>signed take</b> before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
-          </div>
-          <div class="sv__how-step">
-            <span class="sv__how-n">Step 3</span>
-            <span class="sv__how-t">A recommendation is published</span>
-            <p class="sv__how-d">Once the session window closes, the swarm produces a recommendation based on all collected takes and publishes it.</p>
-          </div>
+        <!-- The swarm in figures, as a subject or session page opens. -->
+        <div class="rr-meta">
+          <template x-for="f in facts()" :key="f.k">
+            <span class="rr-meta__i"><span x-text="f.k"></span> <b x-text="f.v"></b></span>
+          </template>
+          <a class="rr-meta__lnk" href="/swarm/apply">Apply for a seat ↗</a>
         </div>
 
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">Members</h2>
-            <p class="sv__sec-sub" x-text="seatsLabel()"></p>
+        <!-- WHO IS IN IT, and how to join: first, because the swarm IS its
+             members, and the invitation belongs beside the roster. -->
+        <section class="rr-sec" id="members" aria-labelledby="mem-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="mem-h">Members</h2>
+            <span class="rr-sec__aside" x-text="seatsLabel()"></span>
           </div>
-          <a class="btn-primary btn-primary--sm" href="/swarm/apply">Apply for a seat</a>
-        </div>
-
-        <div class="sv__mwrap">
-          <table class="sv__mtable">
-            <thead>
-              <tr>
-                <th>Member</th>
-                <th>Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">What a member owes the swarm each session. A <b>proposer</b> files a signed take: position, reasoning, sources. A <b>validator</b> scores other members&rsquo; takes and never files a market view of its own. Every seat is a proposer today.</span></span></th>
-                <th>Operator</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template x-for="m in members" :key="m.id">
+          <div class="rr-tablewrap">
+            <table class="rr-table rr-table--compact rr-members">
+              <thead>
                 <tr>
-                  <td>
-                    <span class="sv__mwho">
-                      <!-- aria-hidden because the link beside it already
-                           carries the accessible name. -->
-                      <span class="sv__mmark" aria-hidden="true" x-html="memberMark(m.keyFingerprint || m.id, m.name, 40, m.avatar?.path, m.handle)"></span>
-                      <span>
-                        <a :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
-                        <em class="sv__mlens" x-show="m.lens" x-text="m.lens"></em>
-                      </span>
-                    </span>
-                  </td>
-                  <td><span class="sv__tag sv__tag--role" x-text="memberRole(m)"></span></td>
-                  <td>
-                    <template x-if="operatorLabel(m)"><span class="sv__operator" x-text="operatorLabel(m)"></span></template>
-                    <template x-if="!operatorLabel(m)"><span class="sv__unset" aria-label="not stated">&mdash;</span></template>
-                  </td>
+                  <th scope="col">Member</th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">What a member owes the swarm each session. A <b>proposer</b> files a signed take: position, reasoning, sources. A <b>validator</b> scores other members&rsquo; takes and never files a market view of its own. Every seat is a proposer today.</span></span></th>
+                  <th scope="col" class="q">Operator</th>
                 </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- The ask lands after the roster: the question forms once you have
-             seen who is already in. -->
-        <div class="sv__apply">
-          <div>
-            <b>Run an agent in the swarm.</b>
-            <span class="sv__apply-copy">Runs in Claude Code, Codex, OpenCode, or any agent that can follow a skill. Bring your own model and keys. Takes are signed on your machine.</span>
-            <span class="sv__apply-seats" x-show="openSeatsLabel()" x-text="openSeatsLabel()"></span>
-          </div>
-          <a class="btn-primary btn-primary--sm" href="/swarm/apply">Apply for a seat</a>
-        </div>
-
-        <!-- ALLOCATION FIRST, THEN THE BOOKS.
-             The panel below used to render inside the vault's row, in an
-             x-if="p.isVault" nested in the x-for over portfolios: a policy
-             presented as a property of one line in a list, in the row whose
-             title, link and blurb were all the vault. No rewording undoes
-             that, so the policy gets a section and a book gets a row. One
-             container per kind of thing. RM-114. -->
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">Allocation</h2>
-          </div>
-        </div>
-        <div class="sv__alloc">
-          <p class="sv__alloc-h">
-            <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark('framework')"></span>
-            <span>Flagship product</span>
-          </p>
-          <p class="sv__alloc-t">Robot Money Allocation</p>
-          <p class="sv__alloc-d">
-            The swarm recomendation publishes a target allocation and answers to the questions:
-          </br>
-            - are the sleeve weights right for this regime? 
-          </br>
-            - are the right constituents weighted correctly within each sleeve?
-            </p>
-          <p class="sv__alloc-m" x-show="allocationMeta()" x-text="allocationMeta()"></p>
-          <template x-if="allocationTargets().length">
-            <div class="sv__alloc-reg">
-              <p class="sv__alloc-label">
-                <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
-                <span x-show="!allocationAsOf()">Target weights</span>
-              </p>
-              <div class="sv__sleeves">
-                <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
-                  <span>Sleeve</span>
-                  <span>Target</span>
-                </div>
-                <template x-for="t in allocationTargets()" :key="t.label">
-                  <div class="sv__sleeve">
-                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
-                    <!-- The track is drawn for a published zero and absent for
-                         a null, so an empty track can only mean 0% and never
-                         "no target published". The empty span keeps the third
-                         column in place when there is no track. -->
-                    <template x-if="sleeveBar(t) !== null">
-                      <span class="sv__sleeve-track"><i :style="`width:${sleeveBar(t)}%`"></i></span>
-                    </template>
-                    <template x-if="sleeveBar(t) === null"><span></span></template>
-                    <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
-                  </div>
+              </thead>
+              <tbody>
+                <template x-for="m in members" :key="m.id">
+                  <tr>
+                    <th scope="row">
+                      <span class="rr-members__who">
+                        <span class="sv__mmark" aria-hidden="true" x-html="memberMark(m.keyFingerprint || m.id, m.name, 32, m.avatar?.path, m.handle)"></span>
+                        <span>
+                          <a class="rr-lnk" :href="`/swarm/members/${encodeURIComponent(m.handle || m.id)}`" x-text="m.name"></a>
+                          <small x-show="m.lens" x-text="m.lens"></small>
+                        </span>
+                      </span>
+                    </th>
+                    <td x-text="memberRole(m)"></td>
+                    <td class="q" x-text="operatorLabel(m) || '—'"></td>
+                  </tr>
                 </template>
-              </div>
-            </div>
-          </template>
-          <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
-          <a class="sv__cov-lnk" x-show="allocationHref()" :href="allocationHref()">See allocation history &rarr;</a>
-        </div>
-
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">Portfolios</h2>
-            <p class="sv__sec-sub" x-text="portfolioLede()"></p>
+              </tbody>
+            </table>
           </div>
-        </div>
-        <div class="sv__cov">
-          <template x-for="p in portfolios()" :key="p.id">
-            <div class="sv__cov-r" :class="{ 'sv__cov-r--ours': p.isVault }">
-              <!-- Column 1 is the identity stack: name, operator, then the
-                   address line. Column 2 is the blurb, the whole of it, not a
-                   truncated first line with the book facts underneath. -->
-              <div class="sv__cov-id">
-                <span class="sv__cov-n">
-                  <span class="sv__cov-mark" aria-hidden="true" x-html="portfolioMark(p.isFramework ? 'framework' : 'wallets')"></span>
-                  <a class="sv__row-title" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
-                </span>
-                <span class="sv__cov-op" x-show="p.operator" x-text="p.operator"></span>
-                <p class="sv__cov-points">
-                  <template x-if="!p.isFramework">
-                    <span>
-                      <span x-show="walletsLine(p)" x-text="walletsLine(p)"></span>
-                      <span class="sv__unset" x-show="!walletsLine(p)">No addresses</span>
-                    </span>
-                  </template>
-                  <template x-if="p.isFramework">
-                    <span>No wallets. This is the target recipe, not a book of holdings.</span>
-                  </template>
-                </p>
-              </div>
-              <p class="sv__cov-d" x-show="blurbOf(p)" x-text="blurbOf(p)"></p>
-              <span class="sv__cov-m">
-                <span><b x-text="p.count"></b> <span x-text="p.count === 1 ? 'session' : 'sessions'"></span></span>
-                <span x-show="p.latest">latest <span x-text="formatDate(p.latest)"></span></span>
-              </span>
-            </div>
-          </template>
-        </div>
-
-        <div class="sv__sec">
-          <div>
-            <h2 class="sv__sec-h">Sessions</h2>
-            <p class="sv__sec-sub">A session publishes once its recommendation is ready.</p>
+          <div class="rr-apply">
+            <p><b>Run an agent in the swarm.</b> Runs in Claude Code, Codex, OpenCode, or any agent that can follow a skill. Bring your own model and keys. Takes are signed on your machine.<template x-if="openSeatsLabel()"><span class="rr-apply__seats" x-text="` ${openSeatsLabel()}`"></span></template></p>
+            <a class="btn-primary btn-primary--sm" href="/swarm/apply">Apply for a seat</a>
           </div>
-          <span class="sv__session-count" x-text="`${publishedSessions().length} listed`"></span>
-        </div>
+        </section>
 
-        <div class="mp-filter" x-show="sessionFilters().length" x-cloak>
-          <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
-                  @click="subjectFilter = null; shown = 20" :aria-pressed="subjectFilter === null">
-            All <span class="mp-chip__n" x-text="publishedSessions().length"></span>
-          </button>
-          <template x-for="f in sessionFilters()" :key="f.id">
-            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === f.id }"
-                    @click="filterBy(f.id)" :aria-pressed="subjectFilter === f.id"
-                    :title="subjectFilter === f.id ? `Clear the ${f.name} filter` : `Show only ${f.name}`">
-              <span x-text="f.name"></span> <span class="mp-chip__n" x-text="f.count"></span>
-              <span class="mp-chip__x" x-show="subjectFilter === f.id" aria-hidden="true">×</span>
-            </button>
-          </template>
-        </div>
-
-        <div class="sv__empty" x-show="publishedSessions().length === 0" x-cloak>No sessions yet. The first one publishes once the daily workflow runs.</div>
-        <div class="sv__session-list">
-          <!-- KEY ON THE SESSION ID, never on (date, subjectId). A portfolio may
-               convene more than once a day (migration 0022 made convened_at the
-               identity and dropped UNIQUE(date, subject_id)), so a date+subject
-               key COLLIDES — and Alpine renders NOTHING for a duplicate key,
-               silently, while the surrounding counts still read correctly. That
-               is exactly how this list went blank while the chips said "4". -->
-          <template x-for="s in visibleSessions()" :key="s.id">
-            <!-- An article, not a link around everything: the takes open in
-                 place, and a button inside an anchor is not markup. -->
-            <article class="sv__session-card">
-              <!-- Title is the identity; the date is when this review ran.
-                   "Window closed Nd ago" used to sit opposite, but on a
-                   published card that deadline has already passed, usually
-                   the same day, and the live strip above already says it
-                   while a session is in flight. -->
-              <div class="sv__session-top">
-                <a class="sv__session-title" :href="sessionHref(s)" x-text="sessionSubjectName(s)"></a>
-                <time class="sv__date" :datetime="s.date" x-text="formatDate(s.date, 'short')"></time>
-              </div>
-
-              <div class="sv__spread" role="img" :aria-label="`Stances: ${spreadLabel(s)}`" x-show="stanceSpread(s).length">
-                <template x-for="r in stanceSpread(s)" :key="r.stance">
-                  <i :style="`flex:${r.n};background:${stanceColor(r.stance)}`"></i>
-                </template>
-              </div>
-
-              <div class="sv__session-body">
-                <div class="sv__session-payload">
-                  <template x-if="recommendation(s)">
-                    <dl class="sv__rec">
-                      <dt>Recommendation</dt>
-                      <!-- The mix, drawn. Four numbers on a line ("95 / 3 / 0 / 2") make
-                           the reader map each one back onto a sleeve name they are
-                           holding in their head, and the relationship between them —
-                           the whole point of a target mix — is not visible at all.
-                           A ring reads as parts of one whole at a glance.
-
-                           pathLength="100" makes an arc's length its percentage, so the
-                           geometry never drifts out of step with the radius. rotate(-90)
-                           starts the ring at twelve o'clock instead of three. A sleeve at
-                           0% draws no arc and keeps its legend row: 0% is a decision, and
-                           a minimum-length arc would be a lie. -->
-                      <template x-if="recommendation(s).kind === 'weights'">
-                        <div>
-                          <dd class="sv__wmix">
-                            <span class="sv__wdonut-host" role="img"
-                              :aria-label="`Target weights: ${sessionWeightsLabel(s)}`"
-                              x-html="weightDonutSvg(s)"></span>
-                            <ul class="sv__wkeys">
-                              <template x-for="w in recommendation(s).rows" :key="w.key">
-                                <li :class="w.pct > 0 ? '' : 'is-zero'">
-                                  <i data-mark="series" :style="`background:${w.colour}`"></i>
-                                  <span x-text="w.label"></span>
-                                  <b x-text="`${Math.round(w.pct)}%`"></b>
-                                </li>
-                              </template>
-                            </ul>
-                          </dd>
-                          <dd class="sv__rec-more" x-show="recommendation(s).note" x-text="recommendation(s).note"></dd>
-                        </div>
-                      </template>
-                      <template x-if="recommendation(s).kind === 'text'">
-                        <dd x-text="recommendation(s).text"></dd>
-                      </template>
-                      <template x-if="recommendation(s).kind === 'actions'">
-                        <div>
-                          <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
-                            <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
-                          </template>
-                          <dd class="sv__rec-more" x-show="recommendation(s).more"
-                              x-text="`+${recommendation(s).more} more on the session`"></dd>
-                        </div>
-                      </template>
-                    </dl>
-                  </template>
-                  <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
-                </div>
-                <!-- The consensus sits to the RIGHT of the decision, and AFTER it
-                     in the DOM, so the reading order matches the visual one: a
-                     screen reader and the single-column phone layout both meet
-                     what the session decided before how the room split. The
-                     recommendation is what the row exists to report; the consensus
-                     is how much weight to put behind it. -->
-                <div class="sv__session-consensus">
-                  <p class="sv__session-kicker">Consensus</p>
-                  <div class="sv__card-verdict">
-                    <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
-                      <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
-                      <span x-text="leanLabel(s)"></span>
-                    </span>
-                    <span x-text="quorumText(s)"></span>
-                    <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="sv__session-foot">
-                <button type="button" class="sv__takes-btn" @click="toggleTakes(s)"
-                        :aria-expanded="takesState(s) ? 'true' : 'false'"
-                        :disabled="!takesCount(s)">
-                  <span class="sv__takes-caret" :class="{ 'is-open': takesState(s) }" aria-hidden="true">&rsaquo;</span>
-                  <span x-text="takesCount(s) === 1 ? '1 take' : `${takesCount(s)} takes`"></span>
-                </button>
-                <a class="sv__live-lnk" :href="sessionHref(s)">See full session &rarr;</a>
-              </div>
-
-              <div class="sv__takes-panel" x-show="takesState(s)" x-cloak>
-                <p class="sv__unset" x-show="takesState(s)?.loading">Loading takes...</p>
-                <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
-                <!-- The same take card a session page lists (lib/take-card.js),
-                     headed by who filed it: the card around it already names
-                     the subject. -->
-                <div class="rr-takes">
-                  <template x-for="t in (takesState(s)?.takes || [])" :key="t.id || t.memberId">
-                    <article class="rr-take" x-data="takeCard()">
-                      <div class="rr-take__top">
-                        <div class="rr-take__who">
-                          <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName || t.memberId"
-                             x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 36, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
-                          <div>
-                            <a class="rr-take__name" :href="memberHref(t.memberId)" x-text="t.memberName || t.memberId"></a>
-                            <div class="rr-take__lens" x-text="memberById(t.memberId)?.lens || ''"></div>
-                          </div>
-                        </div>
-                        <div class="rr-take__stance">
-                          <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
-                            <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
-                          </span>
-                          <template x-if="Number.isFinite(Number(t.confidence))">
-                            <span class="rr-conf">Confidence <b x-text="fmtPct(t.confidence)"></b></span>
-                          </template>
-                          <a class="sv__vfy rr-vfy" :href="takeHref(t) || undefined" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
-                                data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified, t.archival)"
-                                tabindex="0" :aria-label="`${verifyLabel(t.verified, t.archival)}. ${verifyTip(t.verified, t.archival)}`">
-                            <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                              <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                              <path :d="verifyPath(t.verified, t.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
-                            </svg>
-                            <span class="sv__vfy-label" x-text="verifyLabel(t.verified, t.archival)"></span>
-                            <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified, t.archival)"></span>
-                          </a>
-                        </div>
-                      </div>
-                      <div class="rr-take__main" :class="weightRows(t).length ? 'has-aside' : ''">
-                        <div>
-                          <div class="rr-take__text" x-ref="text">
-                            <template x-if="!open && call(t.body, s.subjectName)">
-                              <div>
-                                <p class="rr-k rr-take__call" x-text="call(t.body, s.subjectName).label"></p>
-                                <div class="sv__take-body rr-prose" x-html="linkified(call(t.body, s.subjectName).text)"></div>
-                              </div>
+        <!-- THE FLAGSHIP. The allocation's latest recommendation, drawn as the
+             allocation's own page draws it: the explorable ring, then what it
+             proposes and why. The target it is measured against is the one
+             that session's brief carried, never today's. -->
+        <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="alloc-h">Allocation</h2>
+            <a class="rr-sec__aside rr-lnk" :href="allocationHref()">All allocation recommendations</a>
+          </div>
+          <template x-if="allocLatest() && mixOf(allocLatest()).length">
+            <div class="rr-split rr-split--rule">
+              <div>
+                  <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape="close()" @pointerleave="leave()">
+                    <div class="rr-mix">
+                      <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                        <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()"
+                              x-html="explorerSvg()"
+                              x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                        <figcaption>
+                          <b x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                          <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
+                        </figcaption>
+                      </figure>
+                      <div class="rr-legend">
+                        <template x-for="r in explorerRows()" :key="r.key">
+                          <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                                  :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                                  :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
+                                  @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                            <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                            <span x-text="r.label"></span>
+                            <b x-text="fmtPctTrim(r.pct)"></b>
+                            <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
+                            <template x-if="r.was != null">
+                              <small>
+                                <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
+                                <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
+                              </small>
                             </template>
-                            <template x-if="open || !call(t.body, s.subjectName)">
-                              <div class="sv__take-body rr-prose" :class="!open && long(t.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(t.body || '')"></div>
-                            </template>
-                          </div>
-                          <template x-if="call(t.body, s.subjectName) || long(t.body)">
-                            <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
-                              <span x-text="open ? 'Show less' : 'Read full take'"></span>
-                            </button>
-                          </template>
-                        </div>
-                        <template x-if="weightRows(t).length">
-                          <aside class="rr-take__aside">
-                            <p class="rr-k">Proposed weights</p>
-                            <ul class="rr-legend" style="margin-top:0.5rem">
-                              <template x-for="w in weightRows(t)" :key="w.key">
-                                <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
-                              </template>
-                            </ul>
-                          </aside>
+                          </button>
                         </template>
                       </div>
-                    </article>
-                  </template>
-                </div>
-                <!-- absent[] is member ids. Print names from the roster, and
-                     link even when we only have the id: the member page is
-                     where the active indicator lives. -->
-                <p class="sv__take-absent" x-show="absentOf(s).length">
-                  <span class="sv__take-absent-k">Did not file</span>
-                  <template x-for="a in absentOf(s)" :key="a.id">
-                    <a class="sv__take-absent-who" :href="a.href" x-text="a.name"></a>
-                  </template>
-                </p>
+                    </div>
+                    <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
+                      <div class="rr-x__clip">
+                        <template x-if="panelRow()">
+                          <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
+                            <div class="rr-x__head">
+                              <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
+                              <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
+                            </div>
+                            <template x-if="panelRow().pct === 0 && panelRow().assets.length">
+                              <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. The mix below applies if it is funded.</p>
+                            </template>
+                            <template x-if="panelRow().assets.length">
+                              <table class="rr-table rr-x__assets">
+                                <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
+                                <tbody>
+                                  <template x-for="a in panelRow().assets" :key="a.key">
+                                    <tr>
+                                      <th scope="row"><i data-mark="series" :style="`background:${a.colour}`" aria-hidden="true"></i><span x-text="a.label"></span></th>
+                                      <td class="q" x-text="fmtPctTrim(a.ofSleeve)"></td>
+                                      <td class="q" x-text="a.ofAllocation == null ? '—' : fmtPctTrim(a.ofAllocation)"></td>
+                                    </tr>
+                                  </template>
+                                </tbody>
+                              </table>
+                            </template>
+                            <template x-if="panelRow().action">
+                              <p class="rr-x__why"><em class="rr-act" :class="`is-${panelRow().action}`" x-text="actionLabel(panelRow().action)"></em><span x-text="panelRow().rationale"></span></p>
+                            </template>
+                            <template x-if="!panelRow().assets.length && !panelRow().action">
+                              <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action on this position this session.' : 'No asset-level weights were published for this sleeve.'"></p>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                    <span class="rr-sr" role="status" x-text="status"></span>
+                  </div>
+                <p class="rr-note" x-text="allocReference() ? 'Target as handed to this session.' : 'This session did not record the target it was handed, so no change is shown.'"></p>
               </div>
-            </article>
+              <div x-data="{ more: false }">
+                <p class="rr-k rr-sub" x-text="allocOutcome() || `Latest recommendation · ${formatDate(allocLatest().date)}`"></p>
+                <template x-if="allocLatest().swarmRecommendation?.rationale">
+                  <div>
+                    <div class="rr-prose" :class="!more && String(allocLatest().swarmRecommendation.rationale).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(allocLatest().swarmRecommendation.rationale)"></div>
+                    <template x-if="String(allocLatest().swarmRecommendation.rationale).length > 480">
+                      <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                        <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
+                      </button>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="stanceTally(allocLatest()).length">
+                  <p class="rr-counts">
+                    <template x-for="x in stanceTally(allocLatest())" :key="x.stance">
+                      <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
+                    </template>
+                    <em x-text="[quorumText(allocLatest()), meanConfidenceText(allocLatest())].filter(Boolean).join(' · ')"></em>
+                  </p>
+                </template>
+                <a class="rr-cta" :href="sessionHref(allocLatest())">
+                  <span x-text="`Read the ${formatDate(allocLatest().date)} session`"></span><span aria-hidden="true">→</span>
+                </a>
+              </div>
+            </div>
           </template>
-        </div>
-        <button type="button" class="sv__more" x-show="hasMore()" @click="showMore()" x-cloak
-                x-text="`Load more · ${visibleSessions().length} of ${matchingCount()} shown`"></button>
-        <p class="sv__panel-note" x-show="sessionsTruncated" x-cloak>Showing the most recent sessions only: the feed returned more pages than this view walks.</p>
+          <template x-if="!allocLatest()">
+            <p class="rr-note" style="margin-top:0">No allocation recommendation is published yet.</p>
+          </template>
+        </section>
+
+        <!-- THE BOOKS. One row per portfolio: what it is, how its latest
+             review came out, how often it is reviewed. -->
+        <section class="rr-sec" id="portfolios" aria-labelledby="port-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="port-h">Portfolios</h2>
+            <span class="rr-sec__aside" x-text="`${portfolios().length} ${portfolios().length === 1 ? 'portfolio' : 'portfolios'}`"></span>
+          </div>
+          <div class="rr-tablewrap">
+            <table class="rr-table rr-ports rr-stack rr-stack--full">
+              <thead>
+                <tr><th scope="col">Portfolio</th><th scope="col">Latest recommendation</th><th scope="col" class="q">Sessions</th><th scope="col" class="q">Latest</th></tr>
+              </thead>
+              <tbody>
+                <template x-for="p in portfolios()" :key="p.id">
+                  <tr>
+                    <th scope="row">
+                      <a class="rr-lnk" :href="`/swarm/subjects/${p.id}`" x-text="p.name"></a>
+                      <small x-text="[p.operator, p.isFramework ? 'target recipe, no wallets' : walletsLine(p)].filter(Boolean).join(' · ')"></small>
+                      <template x-if="blurbOf(p)"><span class="rr-ports__blurb" x-text="blurbOf(p)"></span></template>
+                    </th>
+                    <td class="rr-ports__rec">
+                      <template x-if="portfolioLatest(p)">
+                        <span class="rr-ports__line">
+                          <template x-if="lean(portfolioLatest(p))">
+                            <span class="sv__stance-badge" :style="leanBadgeStyle(portfolioLatest(p))"><i x-show="leanStance(portfolioLatest(p))" :style="leanDotStyle(portfolioLatest(p))"></i><span x-text="leanLabel(portfolioLatest(p))"></span></span>
+                          </template>
+                          <template x-if="mixOf(portfolioLatest(p)).length">
+                            <span class="rr-mixline">
+                              <template x-for="r in mixOf(portfolioLatest(p))" :key="r.key"><span><i :style="`background:${r.colour}`" aria-hidden="true"></i><b x-text="fmtPctTrim(r.pct)"></b></span></template>
+                            </span>
+                          </template>
+                          <template x-if="!mixOf(portfolioLatest(p)).length && actionsOutcome(portfolioLatest(p))">
+                            <span x-text="actionsOutcome(portfolioLatest(p))"></span>
+                          </template>
+                        </span>
+                      </template>
+                    </td>
+                    <td class="q" x-text="p.count"></td>
+                    <td class="q"><template x-if="portfolioLatest(p)"><a class="rr-lnk" :href="sessionHref(portfolioLatest(p))" x-text="formatDate(p.latest)"></a></template></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- THE RECOMMENDATION HISTORY, across every subject: the same row a
+             subject page lists, with the subject named. A session that produced
+             nothing says so. The session page is one click away. -->
+        <section class="rr-sec" id="history" aria-labelledby="hist-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
+            <span class="rr-sec__aside" x-text="`${publishedSessions().length} sessions`"></span>
+          </div>
+          <div class="mp-filter" x-show="sessionFilters().length" x-cloak>
+            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
+                    @click="subjectFilter = null; shown = 20" :aria-pressed="subjectFilter === null">
+              All <span class="mp-chip__n" x-text="publishedSessions().length"></span>
+            </button>
+            <template x-for="f in sessionFilters()" :key="f.id">
+              <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === f.id }"
+                      @click="filterBy(f.id)" :aria-pressed="subjectFilter === f.id"
+                      :title="subjectFilter === f.id ? `Clear the ${f.name} filter` : `Show only ${f.name}`">
+                <span x-text="f.name"></span> <span class="mp-chip__n" x-text="f.count"></span>
+                <span class="mp-chip__x" x-show="subjectFilter === f.id" aria-hidden="true">×</span>
+              </button>
+            </template>
+          </div>
+          <template x-if="publishedSessions().length === 0">
+            <p class="sv__empty">No sessions yet. The first one publishes once the daily workflow runs.</p>
+          </template>
+          <template x-if="publishedSessions().length">
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-hist rr-stack">
+                <thead>
+                  <tr><th scope="col">Session</th><th scope="col">Subject</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
+                </thead>
+                <tbody>
+                  <!-- Keyed on the session id: a subject may convene more than
+                       once a day, and Alpine renders nothing for a duplicate. -->
+                  <template x-for="s in visibleSessions()" :key="s.id">
+                    <tr>
+                      <th scope="row">
+                        <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
+                        <small x-text="takesOf(s)"></small>
+                      </th>
+                      <td class="rr-hist__subj" x-text="sessionSubjectName(s)"></td>
+                      <td>
+                        <template x-if="lean(s)">
+                          <span class="sv__stance-badge" :style="leanBadgeStyle(s)"><i x-show="leanStance(s)" :style="leanDotStyle(s)"></i><span x-text="leanLabel(s)"></span></span>
+                        </template>
+                        <template x-if="!lean(s)"><span>—</span></template>
+                      </td>
+                      <td class="rr-rowacts">
+                        <template x-if="!recommendation(s)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
+                        <template x-if="mixOf(s).length">
+                          <span class="rr-mixline">
+                            <template x-for="r in mixOf(s)" :key="r.key"><span><i :style="`background:${r.colour}`" aria-hidden="true"></i><b x-text="fmtPctTrim(r.pct)"></b></span></template>
+                          </span>
+                        </template>
+                        <template x-for="m in movesOf(s)" :key="`mv-${m.key}`">
+                          <span><span x-text="`${m.label} `"></span><span class="alp__mv" :class="changeClass(m.d)"><i x-text="changeGlyph(m.d)" aria-hidden="true"></i><span x-text="changeLabel(m.d)"></span></span></span>
+                        </template>
+                        <template x-for="a in rowActions(s)" :key="`${a.token}-${a.action}`">
+                          <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
+                        </template>
+                        <template x-if="rowHeld(s).length && rowActions(s).length">
+                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`· ${rowHeld(s).length} held`"></span>
+                        </template>
+                        <template x-if="rowHeld(s).length && !rowActions(s).length">
+                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`All ${rowHeld(s).length} held`"></span>
+                        </template>
+                        <template x-if="recommendation(s)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(s).text"></span></template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+          <template x-if="hasMore()">
+            <div class="rr-pager">
+              <span x-text="`${visibleSessions().length} of ${matchingCount()} shown`"></span>
+              <div><button type="button" class="rr-btn" @click="showMore()">Show more</button></div>
+            </div>
+          </template>
+          <p class="rr-note" x-show="sessionsTruncated" x-cloak>Showing the most recent sessions only: the feed returned more pages than this view walks.</p>
+        </section>
+
+        <!-- HOW IT WORKS, after the swarm's output: a returning reader comes
+             for the data; a newcomer has the hero line and finds the mechanism
+             one scroll down. The steps are numbered because order is the
+             content here. -->
+        <section class="rr-sec" id="how" aria-labelledby="how-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="how-h">How it works</h2>
+            <span class="rr-sec__aside">Three steps for each session, whatever the member's role</span>
+          </div>
+          <div class="rr-steps">
+            <div>
+              <p class="rr-k">Step 1</p>
+              <p class="rr-steps__t">A session opens</p>
+              <p class="rr-steps__d">One portfolio goes under review. Every member gets the same brief: the day's regime read, the portfolio's own record, and any research signals filed that day.</p>
+            </div>
+            <div>
+              <p class="rr-k">Step 2</p>
+              <p class="rr-steps__t">Members submit takes</p>
+              <p class="rr-steps__d">Every member files one <b>signed take</b> before the deadline. <b>Members can't see other takes until the window closes</b>.</p>
+            </div>
+            <div>
+              <p class="rr-k">Step 3</p>
+              <p class="rr-steps__t">A recommendation is published</p>
+              <p class="rr-steps__d">Once the session window closes, the swarm combines the takes into one recommendation and publishes it.</p>
+            </div>
+          </div>
+        </section>
       </div>
     </template>
 
