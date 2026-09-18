@@ -33,7 +33,7 @@ const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 // The bucket order the allocation framework publishes in. Weights are printed
 // in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
 // four sleeves every time.
-const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
+export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
 // Named, not humanised from the key: "real world assets" is the transform a
 // slug gives you and "Real World Assets" is what the framework publishes.
@@ -237,8 +237,14 @@ export const sessionSummary = {
   // an absence, and a minimum-length one would be a lie.
   /** @param {any} s */
   weightArcs(s) {
-    const rows = this.sessionWeights(s);
-    if (!rows) return [];
+    return this.ringArcs(this.sessionWeights(s) || []);
+  },
+  // The arcs for any set of parts, each { key, label, pct, colour }, pct out
+  // of 100. The recommended mix and a book's holdings draw through this one
+  // geometry, so the two rings cannot drift apart.
+  /** @param {any[]} rows */
+  ringArcs(rows) {
+    if (!rows || !rows.length) return [];
     const drawn = rows.filter((r) => Number(r.pct) > 0);
     // Surface between neighbouring arcs, in the same 100-unit space. Taken out
     // of the LARGEST arc only, so the ring still closes and every small sleeve
@@ -268,8 +274,14 @@ export const sessionSummary = {
   // numbers are computed above and the colours are CATEGORICAL constants. The
   // readable label is an aria-label on the host element, where it is escaped.
   /** @param {any} s */
-  weightDonutSvg(s) {
-    const arcs = this.weightArcs(s);
+  // `active` is a sleeve key the reader is exploring: the other arcs recede,
+  // so the one in focus reads against the whole without being redrawn.
+  weightDonutSvg(s, active = null) {
+    return this.ringSvg(this.sessionWeights(s) || [], active);
+  },
+  /** @param {any[]} rows @param {string | null} [active] */
+  ringSvg(rows, active = null) {
+    const arcs = this.ringArcs(rows);
     if (!arcs.length) return "";
     const ring = (/** @type {string} */ stroke, /** @type {string} */ extra) =>
       `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${stroke}" stroke-width="4"${extra}></circle>`;
@@ -278,7 +290,8 @@ export const sessionSummary = {
     // unclosed ring instead of being rescaled to look complete.
     const track = ring("var(--color-border)", "");
     const segs = arcs.map((a) =>
-      ring(a.colour, ` pathLength="100" stroke-dasharray="${a.dash}" stroke-dashoffset="${a.offset}" data-mark="series"`),
+      ring(a.colour, ` pathLength="100" stroke-dasharray="${a.dash}" stroke-dashoffset="${a.offset}" data-mark="series" data-sleeve="${String(a.key).replace(/[&"<>]/g, "")}"`
+        + (active && active !== a.key ? ` class="is-muted"` : "")),
     ).join("");
     return `<svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false">`
       + `<g transform="rotate(-90 21 21)">${track}${segs}</g></svg>`;
@@ -333,6 +346,14 @@ export const sessionSummary = {
     /** @type {Record<string, unknown>} */
     const c = this.stanceCounts(s) || {};
     return VOTE_AXIS.flatMap((stance) => Array.from({ length: Number(c[stance]) || 0 }, (_, i) => ({ key: `${stance}-${i}`, stance })));
+  },
+  // One dot and count per stance that has any, bearish to bullish: the tally
+  // both text columns (subject and session) print under the rationale.
+  /** @param {any} s */
+  stanceTally(s) {
+    /** @type {Record<string, unknown>} */
+    const c = this.stanceCounts(s) || {};
+    return VOTE_AXIS.map((stance) => ({ stance, n: Number(c[stance]) || 0 })).filter((x) => x.n > 0);
   },
   /** @param {any} s */
   voteTotal(s) {

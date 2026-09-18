@@ -1,606 +1,475 @@
-<!-- Public swarm subject profile. The reader-facing counterpart to the
-     admin subject page (#159), and the surface production robotmoney.network has
-     published per subject all along: what portfolio is under review, what it
-     holds today, which wallets are tracked, and every session about it.
-     Conventions are member.html's — same sv__ shell, same portfolio block as
-     session.html so a holdings read looks identical wherever it appears. -->
+<!-- Public swarm subject page, as a research record (RM-121). It opens the way
+     a session opens (breadcrumb, head, one hairline row of facts), then:
+     the latest recommendation and why, the book when the subject has one, and
+     the recommendation history, one row per session. A session and the subject
+     it reviews read as one document.
+     Sections render only when the subject carries what they draw. -->
 <section class="cv cv--detail" x-data="subjectProfile()">
-  <div class="sv__body sv__body--narrow">
-    <a href="/swarm" class="sv__back">/swarm</a>
-
+  <div class="sv__body sv__body--narrow rr">
     <p class="sv__loading" x-show="loading">Loading subject…</p>
-    <!-- x-if, not x-show: x-show only toggles CSS display and leaves the node
-         in the DOM, so a page that loaded cleanly would still have a
-         `.sv__error` element for any test/reader to find. x-if removes it
-         entirely when there is no error. -->
+    <!-- x-if, not x-show: a hidden error node is still an error node for a
+         reader's find-in-page and for a test's locator. -->
     <template x-if="error"><p class="sv__error" x-text="error"></p></template>
 
     <template x-if="!loading && subject">
       <div>
-        <!-- .sv__detail-head, and the same four elements in the same order as
-             session.html: eyebrow, title, the subject's own blurb, a row of
-             facts. A session and the subject it reviews are two views of one
-             thing, and they open identically now.
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <span aria-current="page" x-text="subject.name"></span>
+        </nav>
 
-             No identity mark. It was a 5rem square of the subject's initials
-             standing in for an avatar that does not exist: it carried no
-             information, and it indented the headline and its copy away from
-             the left edge every other block on this page sits on. -->
-        <header class="sv__detail-head">
-          <!-- The operator is named only when it is not this house. See
-               operatorOf(): "· operator robotmoney" under a headline reading
-               ROBOT MONEY ALLOCATION said nothing twice, while peaq running
-               Woon Treasury is the fact the slot exists for. x-if, not x-show,
-               so the suppressed case leaves no node behind. -->
+        <header class="rr-head">
+          <!-- The operator is named only when it is not this house: peaq
+               running Woon Treasury is the fact the slot exists for. -->
           <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="subjectKind()">portfolio</span><template x-if="operatorLabel()"><span> · operator <span x-text="operatorLabel()"></span></span></template></p>
           <h1 class="sv__detail-title" x-text="subject.name"></h1>
-          <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
-          <p class="sp-links" x-show="subject.homepage || subject.xHandle">
-            <a x-show="subject.homepage" :href="subject.homepage" rel="noopener noreferrer" target="_blank"
-               x-text="hostOf(subject.homepage) + ' ↗'"></a>
-            <a x-show="subject.xHandle" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`"
-               rel="noopener noreferrer" target="_blank" x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
-          </p>
-          <!-- The same chips a session carries, with the facts a subject has.
-               This was a prose sentence spelling the same two numbers out
-               ("It holds $42,688 today and the swarm has reviewed it 6 times
-               since August 2026"), which read as narration and, on a framework
-               subject, asserted a book that does not exist. -->
-          <div class="sv__fact-row">
-            <span class="sv__fact"><em>sessions</em><b x-text="sessions.length"></b></span>
-            <!-- x-if, not x-show: a hidden chip still carries its label and
-                 an em-dash value into the page's text, so "holdings —" was
-                 reachable on a subject that has no book. The holdings gate is
-                 `snapshot` alone: a framework subject is never given one (see
-                 subjectProfile.init), so there is one place to reason about
-                 whether this figure exists. -->
-            <template x-if="lastReviewedLabel()">
-              <span class="sv__fact"><em>last reviewed</em><b x-text="lastReviewedLabel()"></b></span>
-            </template>
-            <template x-if="snapshot">
-              <span class="sv__fact"><em>holdings</em><b x-text="fmtUsd(snapshot?.totalValueUsd)"></b></span>
-            </template>
-            <!-- The regime the last session was given, in the same two chips
-                 session.html carries. Macro and on-chain stay off: they are the
-                 panels behind the composite, and the backdrop below shows all
-                 three against their own history, where the comparison is the
-                 point. Sits beside "last reviewed", and the backdrop carries
-                 the date on its face, so neither chip claims to be today. -->
-            <template x-if="backdrop && backdrop.composite !== null">
-              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(backdrop?.composite, 3)"></b></span>
-            </template>
-            <template x-if="backdrop?.regime">
-              <span class="sv__fact">
-                <em>regime</em>
-                <i class="sv__fact-dot" :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
-                <b x-text="regimeLabel(backdrop?.regime)"></b>
-              </span>
-            </template>
-          </div>
+          <template x-if="subject.thesisBlurb"><p class="sv__lede sv__lede--compact" x-text="subject.thesisBlurb"></p></template>
+          <template x-if="subject.homepage || subject.xHandle">
+            <p class="rr-links sp-links">
+              <template x-if="subject.homepage">
+                <a class="rr-lnk" :href="subject.homepage" rel="noopener noreferrer" target="_blank" x-text="hostOf(subject.homepage) + ' ↗'"></a>
+              </template>
+              <template x-if="subject.xHandle">
+                <a class="rr-lnk" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`" rel="noopener noreferrer" target="_blank"
+                   x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
+              </template>
+            </p>
+          </template>
         </header>
 
-        <!-- Concentration over time. A holdings table is a single day; the
-             question a reader actually has is whether the book is getting more
-             concentrated or less, which only a series answers. One stacked band
-             per position, oldest to newest, summing to 100% of NAV. Each band's
-             colour is assetDot()'s, so it is the same colour this token takes on
-             /allocation and in the holdings table below — see concentrationArea()
-             for why bands rather than lines. -->
-        <!-- x-if, not x-show: x-show leaves the section in the DOM at
-     display:none, so a subject with no book still has a holdings
-     table for a reader's find-in-page, a screen reader's tree and a
-     test's locator to reach. -->
-        <template x-if="concentrationArea()">
-          <section class="sv__panel sp-chart">
-            <div class="sv__panel-head">
-              <p class="sv__panel-label">Concentration · top positions as % of NAV</p>
-              <span class="sv__tag" x-text="spanLabel()"></span>
+        <div class="rr-meta">
+          <template x-if="lastReviewedLabel()">
+            <span class="rr-meta__i">Latest review <b x-text="lastReviewedLabel()"></b></span>
+          </template>
+          <span class="rr-meta__i">Sessions <b x-text="sessionIndex.length"></b></span>
+          <!-- x-if on `snapshot` alone: a framework subject is never given one
+               (see subjectProfile.init), so "holdings" cannot reach a subject
+               that has no book. -->
+          <template x-if="snapshot">
+            <span class="rr-meta__i">Holdings <b x-text="fmtUsd(snapshot?.totalValueUsd)"></b></span>
+          </template>
+          <template x-if="backdrop && backdrop.composite !== null">
+            <span class="rr-meta__i">Composite <b x-text="fmtNum(backdrop?.composite, 3)"></b></span>
+          </template>
+          <template x-if="backdrop?.regime">
+            <span class="rr-meta__i">Regime
+              <i :style="`background:${regimeColor(backdrop?.regime)}`" aria-hidden="true"></i>
+              <b x-text="regimeLabel(backdrop?.regime)"></b>
+            </span>
+          </template>
+          <template x-if="isFramework()">
+            <a class="rr-meta__lnk" href="/allocation">Allocation &amp; vaults ↗</a>
+          </template>
+        </div>
+
+        <!-- THE LATEST RECOMMENDATION. The mix (or the actions) on the
+             left; what it proposes and why on the right, and the one prominent
+             way into the session. -->
+        <template x-if="latest()">
+          <section class="rr-sec" id="latest" aria-labelledby="latest-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="latest-h">Latest recommendation</h2>
+              <time class="rr-sec__aside" :datetime="latest().date" x-text="formatDate(latest().date, 'short')"></time>
             </div>
-            <!-- Legend beside the figure, not inside it: it is real text (so it
-                 selects, wraps, and scales with the reader's font size) and it
-                 carries each band's CURRENT share, which is the number a reader
-                 wants first and the old panel made them hunt for in the table. -->
-            <div class="sp-chart__body">
-              <div class="sp-chart__svg" x-html="concentrationArea()"></div>
-              <ul class="sp-legend">
-                <template x-for="l in concentrationLegend()" :key="l.token">
-                  <li>
-                    <i class="sp-legend__key" :style="`--k:${l.color}`" aria-hidden="true"></i>
-                    <span class="sp-legend__token" x-text="l.token"></span>
-                    <span class="sp-legend__pct" x-text="l.pct"></span>
-                  </li>
+            <div class="rr-split rr-split--rule">
+              <div>
+                <template x-if="hasExplorer()">
+                  <div>
+                    <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape="close()" @pointerleave="leave()">
+                      <div class="rr-mix">
+                        <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                          <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()"
+                                x-html="explorerSvg()"
+                                x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                          <figcaption>
+                            <b x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                            <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
+                          </figcaption>
+                        </figure>
+                        <div class="rr-legend">
+                          <template x-for="r in explorerRows()" :key="r.key">
+                            <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                                    :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                                    :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
+                                    @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                              <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                              <span x-text="r.label"></span>
+                              <b x-text="fmtPctTrim(r.pct)"></b>
+                              <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
+                              <template x-if="r.was != null">
+                                <small>
+                                  <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
+                                  <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
+                                </small>
+                              </template>
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+                      <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
+                        <div class="rr-x__clip">
+                          <template x-if="panelRow()">
+                            <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
+                              <div class="rr-x__head">
+                                <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
+                                <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
+                              </div>
+                              <template x-if="panelRow().pct === 0 && panelRow().assets.length">
+                                <p class="rr-note" style="margin:0 0 0.75rem">Nothing is allocated to this sleeve. The mix below applies if it is funded.</p>
+                              </template>
+                              <template x-if="panelRow().assets.length">
+                                <table class="rr-table rr-x__assets">
+                                  <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
+                                  <tbody>
+                                    <template x-for="a in panelRow().assets" :key="a.key">
+                                      <tr>
+                                        <th scope="row"><i data-mark="series" :style="`background:${a.colour}`" aria-hidden="true"></i><span x-text="a.label"></span></th>
+                                        <td class="q" x-text="fmtPctTrim(a.ofSleeve)"></td>
+                                        <td class="q" x-text="a.ofAllocation == null ? '—' : fmtPctTrim(a.ofAllocation)"></td>
+                                      </tr>
+                                    </template>
+                                  </tbody>
+                                </table>
+                              </template>
+                              <template x-if="panelRow().action">
+                                <p class="rr-x__why"><em class="rr-act" :class="`is-${panelRow().action}`" x-text="actionLabel(panelRow().action)"></em><span x-text="panelRow().rationale"></span></p>
+                              </template>
+                              <template x-if="!panelRow().assets.length && !panelRow().action">
+                                <p class="rr-note" style="margin:0" x-text="hasBook() ? 'No action on this position this session.' : 'No asset-level weights were published for this sleeve.'"></p>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                      <span class="rr-sr" role="status" x-text="status"></span>
+                    </div>
+                    <p class="rr-note" x-text="hasBook()
+                      ? `Holdings on ${formatDate(latestBook()?.date, 'short')}, with the action this session set on each position.`
+                      : latest().reference ? 'Target as handed to this session.' : 'This session did not record the target it was handed, so no change is shown.'"></p>
+                  </div>
                 </template>
-              </ul>
+                <template x-if="recommendation(latest())?.kind === 'actions' && !hasBook()">
+                  <dl class="sr__acts">
+                    <template x-for="a in (latest().swarmRecommendation?.actions || []).filter((x) => x && x.action)" :key="`${a.token}-${a.action}`">
+                      <div class="sr__act">
+                        <dt x-text="a.token"></dt>
+                        <dd><b x-text="a.action"></b><span x-text="a.rationale || ''"></span></dd>
+                      </div>
+                    </template>
+                  </dl>
+                </template>
+                <template x-if="!recommendation(latest())">
+                  <p class="rr-note" style="margin-top:0">No recommendation was published for this session.</p>
+                </template>
+
+                <!-- The weights in force, on the page about them. Behind a
+                     disclosure: the latest review already compares against the
+                     target its own session was handed. -->
+                <template x-if="hasTargetsCard()">
+                  <div class="rr-disc" style="margin-top:1.5rem" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                    <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="targets-in-force" @click="open = !open">
+                      <span x-text="allocationTitle()">Target weights in force</span>
+                      <small x-show="allocationAsOf()" x-text="`Since ${allocationAsOf()}`"></small>
+                    </button>
+                    <div class="rr-disc__anim" id="targets-in-force" role="region" :aria-label="allocationTitle()" :inert="!open">
+                      <div class="rr-disc__clip"><div class="rr-disc__body">
+                        <div class="sv__sleeves sp-alloc__body" style="max-width:none">
+                          <template x-for="t in allocationTargets()" :key="t.label">
+                            <div class="sv__sleeve">
+                              <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                              <template x-if="sleeveBar(t) !== null">
+                                <span class="sv__sleeve-track"><i :style="`width:${sleeveBar(t)}%`"></i></span>
+                              </template>
+                              <template x-if="sleeveBar(t) === null"><span></span></template>
+                              <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
+                            </div>
+                          </template>
+                        </div>
+                        <p class="rr-note" x-show="allocationNote()" x-text="allocationNote()"></p>
+                        <p class="rr-note"><a class="rr-lnk" href="/allocation">See the allocation page</a></p>
+                      </div></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div x-data="{ more: false }">
+                <template x-if="rowOutcome(latest())">
+                  <p class="rr-k rr-sub" x-text="rowOutcome(latest())"></p>
+                </template>
+                <template x-if="latest().swarmRecommendation?.rationale || latest().synthesis">
+                  <div>
+                    <div class="rr-prose" :class="!more && isLong(latest().swarmRecommendation?.rationale || latest().synthesis, 480) ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(latest().swarmRecommendation?.rationale || latest().synthesis)"></div>
+                    <template x-if="isLong(latest().swarmRecommendation?.rationale || latest().synthesis, 480)">
+                      <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                        <span x-text="more ? 'Show less' : 'Read full rationale'"></span><small x-text="`${wordCount(latest().swarmRecommendation?.rationale || latest().synthesis)} words`"></small>
+                      </button>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="stanceTally(latest()).length">
+                  <p class="rr-counts">
+                    <template x-for="x in stanceTally(latest())" :key="x.stance">
+                      <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
+                    </template>
+                    <em x-text="[quorumText(latest()), meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
+                  </p>
+                </template>
+                <a class="rr-cta" :href="sessionHref(latest())">
+                  <span x-text="`Read the ${formatDate(latest().date, 'short')} session`"></span><span aria-hidden="true">→</span>
+                </a>
+              </div>
             </div>
           </section>
         </template>
 
-        <!-- Same markup as session.html's portfolio read, deliberately: the two
-             surfaces show the same kind of thing and must not teach two
-             different readings of it. -->
-        <!-- x-if, not x-show: x-show leaves the section in the DOM at
-     display:none, so a subject with no book still has a holdings
-     table for a reader's find-in-page, a screen reader's tree and a
-     test's locator to reach. -->
-        <template x-if="snapshot">
-          <section class="sv__portfolio">
-            <div class="sv__panel-head">
-              <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
-              <span class="sv__tag" x-text="snapshot?.date"></span>
+        <!-- THE BOOK, when the subject has one: its value and the wallets it is
+             read from, then its concentration over time and what is notable
+             in it. Today's positions are the latest recommendation's ring. -->
+        <template x-if="snapshot || chartModel() || trackedWallets().length || nftContracts().length">
+          <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
             </div>
-            <div class="sp-holdings">
-              <div class="sv__table-wrap">
-                <table class="sv__data-table">
-                  <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
+
+            <!-- The book's value beside exactly what it is read from: every
+                 tracked wallet and declared contract in one table, so a reader
+                 knows what "the book" is before reading about it. -->
+            <div class="rr-split rr-bookhead">
+              <template x-if="snapshot">
+                <div class="rr-stat">
+                  <p class="rr-k">Total holdings</p>
+                  <p class="rr-stat__v" x-text="fmtUsd(snapshot?.totalValueUsd)"></p>
+                  <p class="rr-stat__sub" x-text="[formatDate(snapshot?.date, 'short'), `${(snapshot?.positions || []).length} positions`, walletChains().join(', ')].filter(Boolean).join(' · ')"></p>
+                </div>
+              </template>
+              <template x-if="bookSources().length">
+                <div>
+                  <p class="rr-k" style="margin-bottom:0.5rem">Read from</p>
+                  <div class="rr-tablewrap">
+                    <table class="rr-table rr-table--compact rr-sources">
+                      <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Chain</th><th scope="col" class="q">Address</th></tr></thead>
+                      <tbody>
+                        <template x-for="w in bookSources()" :key="`${w.kind}-${w.chain}-${w.address || w.name}`">
+                          <tr>
+                            <th scope="row" x-text="w.name"></th>
+                            <td x-text="w.kind"></td>
+                            <td x-text="w.chain"></td>
+                            <td class="q">
+                              <template x-if="explorerHref(w.chain, w.address)">
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" :title="w.address" x-text="`${truncAddress(w.address)} ↗`"></a>
+                              </template>
+                              <template x-if="!explorerHref(w.chain, w.address)"><span :title="w.address" x-text="truncAddress(w.address) || '—'"></span></template>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <template x-if="nftContracts().length">
+                    <p class="rr-note">NFT contracts are declared by the operator and not included in the total.</p>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <!-- The book over time, full width: share of the book by position,
+                 stacked to 100%. The crosshair snaps to a reading and lists
+                 every position's share on that date; a legend entry puts its
+                 band in focus. -->
+            <!-- What the book holds today, exactly: every position, largest
+                 first, in the colour its band takes in the chart below. A row
+                 puts its band in focus there. -->
+            <template x-if="positionRows().length">
+              <div class="rr-tablewrap rr-positions">
+                <table class="rr-table rr-table--compact">
+                  <caption class="rr-sr" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}, largest first`"></caption>
+                  <thead>
+                    <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                  </thead>
                   <tbody>
-                    <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
-                      <tr>
-                        <td><i class="sp-key" :style="`--k:${seriesColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
+                    <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
+                      <tr :class="chartFocus && chartFocus !== positionBand(p.token) ? 'is-muted' : ''"
+                          @pointerenter="chartFocus = positionBand(p.token)" @pointerleave="chartFocus = null">
+                        <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
                         <td x-text="p.chain"></td>
-                        <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
-                        <td class="sv__num" x-text="fmtPct1(p.share)"></td>
+                        <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
+                        <td class="q" x-text="fmtPrice(p.price_usd)"></td>
+                        <td class="q" x-text="fmtUsd(p.value_usd)"></td>
+                        <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
                       </tr>
                     </template>
                   </tbody>
                 </table>
               </div>
-            </div>
-            <div class="sv__notables" x-show="(snapshot?.notable || []).length">
-              <p class="sv__panel-label">Notable</p>
-              <ul>
-                <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
-              </ul>
-            </div>
+            </template>
+
+            <template x-if="chartModel()">
+              <figure class="rr-area" style="margin-top:2.25rem">
+                <figcaption class="rr-area__head">
+                  <p class="rr-k">Share of the book by position</p>
+                  <span class="rr-k" x-text="chartSpan()"></span>
+                </figcaption>
+                <div class="rr-area__frame">
+                  <div class="rr-area__y" aria-hidden="true">
+                    <template x-for="t in [100, 75, 50, 25, 0]" :key="t"><span :style="`top:${100 - t}%`" x-text="`${t}%`"></span></template>
+                  </div>
+                  <div class="rr-area__plot" tabindex="0" role="img" :aria-label="chartLabel()"
+                       @pointermove="chartMove($event)" @pointerdown="chartMove($event)" @pointerleave="chartAt = null" @keydown="chartKey($event)" @blur="chartAt = null">
+                    <div class="rr-area__svg" x-html="chartSvg()" x-effect="chartFocus; $nextTick(() => syncBands($el))"></div>
+                    <template x-if="chartPoint(chartAt)">
+                      <div class="rr-area__cross" :style="`left:${chartPoint(chartAt).left}%`"></div>
+                    </template>
+                    <template x-if="chartPoint(chartAt)">
+                      <div class="rr-area__tip" :class="chartPoint(chartAt).left > 62 ? 'is-left' : ''" :style="`left:${chartPoint(chartAt).left}%`">
+                        <p class="rr-area__tip-h"><b x-text="chartPoint(chartAt).date"></b><span x-text="chartPoint(chartAt).total"></span></p>
+                        <ul>
+                          <template x-for="it in chartPoint(chartAt).items" :key="it.token">
+                            <li :class="chartFocus && chartFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.color}`"></i><span x-text="it.token"></span><b x-text="it.pct"></b></li>
+                          </template>
+                        </ul>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="rr-area__x" aria-hidden="true">
+                    <template x-for="t in chartXTicks()" :key="t.key"><span :class="[t.cls, t.i === chartAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                  </div>
+                </div>
+                <ul class="rr-area__legend">
+                  <template x-for="l in concentrationLegend()" :key="l.token">
+                    <li :class="chartFocus && chartFocus !== l.token ? 'is-muted' : ''" @pointerenter="chartFocus = l.token" @pointerleave="chartFocus = null">
+                      <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.token"></span><b x-text="l.pct"></b>
+                    </li>
+                  </template>
+                </ul>
+              </figure>
+            </template>
+
+            <template x-if="(snapshot?.notable || []).length">
+              <div class="rr-block rr-area__notes">
+                <p class="rr-k">Notable</p>
+                <ul class="rr-list" style="margin-top:0.75rem">
+                  <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
+                </ul>
+              </div>
+            </template>
           </section>
         </template>
 
-        <!-- x-if wraps every optional panel below, not x-show: x-show only
-             sets display:none and leaves the section in the DOM, so a
-             subject with no wallets/NFT contracts would still render a
-             `.sv__panel` element matching that heading text — present, just
-             invisible. x-if removes the section entirely when the gated
-             list is empty, matching "hidden" to what a reader (and a test)
-             can actually find on the page. -->
-        <!-- Gated on having a panel to hold. The grid carries a 2rem bottom
-             margin, so on a subject with neither wallets nor NFT contracts it
-             was an empty container reserving space above whatever came next —
-             the same x-show trap as the panels inside it, one level up. -->
-        <template x-if="trackedWallets().length || nftContracts().length">
-        <div class="sv__rail-grid sv__rail-grid--compact">
-          <template x-if="trackedWallets().length">
-            <section class="sv__panel">
-              <p class="sv__panel-label">Tracked wallets (<span x-text="trackedWallets().length"></span>)</p>
-              <ul class="sv__bullet-list sp-wallets">
-                <template x-for="w in trackedWallets()" :key="`${w.chain}-${w.address}`">
-                  <li>
-                    <span class="sp-wallet__label" x-text="w.label || 'wallet'"></span>
-                    <span class="sv__tag" x-text="w.chain"></span>
-                    <code x-text="truncAddress(w.address)"></code>
-                  </li>
-                </template>
-              </ul>
-            </section>
+        <!-- THE RECOMMENDATION HISTORY. One row per published session, newest
+             first, paged: a session is the process, the recommendation is what
+             it produced, and a session that produced none says so. A weights
+             subject shows each mix and its moves against the target THAT
+             session was handed; a portfolio shows how the room leaned, the
+             outcome, and the positions it moved. -->
+        <section class="rr-sec sp-sessions" id="history" aria-labelledby="hist-h" :aria-busy="historyBusy ? 'true' : 'false'">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
+            <span class="rr-sec__aside sv__session-count" x-text="`${sessionIndex.length} ${sessionIndex.length === 1 ? 'session' : 'sessions'}`"></span>
+          </div>
+
+          <template x-if="!sessionIndex.length">
+            <p class="sv__empty">No published session yet.</p>
           </template>
-          <template x-if="nftContracts().length">
-            <section class="sv__panel">
-              <p class="sv__panel-label">NFT contracts</p>
-              <p class="sv__body-copy sp-note">Declared by the operator, not valued in v1.</p>
-              <ul class="sv__bullet-list">
-                <template x-for="n in nftContracts()" :key="`${n.chain}-${n.name}`">
-                  <li><span x-text="n.name"></span> <span class="sv__tag" x-text="n.chain"></span></li>
-                </template>
-              </ul>
-            </section>
-          </template>
-        </div>
-        </template>
 
-        <!-- The operator's brief TO THE SWARM: how to review this subject,
-             what not to default to, which sibling subject owns the holdings
-             question. It ships to the agents in every session brief. It used
-             to sit open, in a panel headed "Structural notes", where it read
-             as the page annotating itself in front of the reader. Collapsed,
-             and labelled with what it is for.
-
-             Mirrors /allocation's .alp__hold idiom (a button carrying
-             aria-expanded, an inert region, and a 0fr/1fr grid row) rather
-             than <details>, whose content renders at full size the first time
-             and so has no previous height to transition from. Page-local here
-             as it is there; one shared component is worth extracting when a
-             third page wants it.
-
-             x-if on .length: camelSubject defaults the field to [], which is
-             truthy, so a plain gate would put an empty disclosure on every
-             subject that declares none. -->
-        <!-- The weights in force, first, on the page about them. /swarm
-             carries this card because the allocation is the flagship product;
-             here it is the subject itself, and a reader was being shown six
-             sessions ABOUT the weights before being shown the weights.
-
-             Same .sv__alloc markup and CSS as /swarm, minus its header: the
-             eyebrow and title there name which subject the card is for, and
-             this page's own H1 already said it. The link goes the other way
-             too — /swarm points here for the history, so here points at the
-             product page. -->
-        <!-- One host for two subjects' needs. On the framework it is the
-             targets card, and the latest review sits inside it under the note.
-             On any other subject there is no targets card, so the same review
-             renders on its own, in the slot "What the swarm is given" used to
-             hold on every subject page. One copy of the review markup either
-             way. -->
-        <template x-if="hasTargetsCard() || hasLatestReview()">
-          <div :class="hasTargetsCard() ? 'sv__alloc sp-alloc' : 'sp-review'">
-            <template x-if="hasTargetsCard()">
-            <div class="sp-alloc__body">
-            <!-- The heading follows the PROVENANCE, because both wordings are
-                 wrong in the other state: these weights are the seeded row
-                 today, and the note at the foot of this very card says no
-                 session has changed them. See allocationTitle(). -->
-            <!-- The link sits beside what it points at, the way the latest
-                 review puts "Open the session" beside its own title. At the
-                 foot of the card it read as an afterthought to the review. -->
-            <div class="sp-alloc__head">
-              <p class="sv__alloc-t" x-text="allocationTitle()">Target weights in force</p>
-              <a class="sv__cov-lnk" href="/allocation">See the allocation page &rarr;</a>
-            </div>
-            <div class="sv__alloc-reg">
-              <p class="sv__alloc-label">
-                <span x-show="allocationAsOf()">Unchanged since <span x-text="allocationAsOf()"></span></span>
-                <span x-show="!allocationAsOf()">Target weights</span>
-              </p>
-              <div class="sv__sleeves">
-                <div class="sv__sleeve sv__sleeve--head" aria-hidden="true">
-                  <span>Sleeve</span>
-                  <span>Target</span>
-                </div>
-                <template x-for="t in allocationTargets()" :key="t.label">
-                  <div class="sv__sleeve">
-                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
-                    <!-- The track is drawn for a published zero and absent for
-                         a null, so an empty track can only mean 0% and never
-                         "no target published". The empty span keeps the third
-                         column in place when there is no track. -->
-                    <template x-if="sleeveBar(t) !== null">
-                      <span class="sv__sleeve-track"><i :style="`width:${sleeveBar(t)}%`"></i></span>
+          <template x-if="sessionIndex.length && isWeightsSubject()">
+            <div class="rr-tablewrap">
+              <table class="rr-table">
+                <caption class="rr-sr">Recommended sleeve weights by session, percent of the allocation, with each session's moves against the target it was handed.</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Session</th>
+                    <template x-for="c in sleeveColumns()" :key="c.key">
+                      <th scope="col" class="q"><i data-mark="series" :style="`background:${c.hue}`" aria-hidden="true"></i><span x-text="c.label"></span></th>
                     </template>
-                    <template x-if="sleeveBar(t) === null"><span></span></template>
-                    <span class="sv__sleeve-v" x-text="t.pct === null ? '—' : `${t.pct}%`"></span>
-                  </div>
-                </template>
+                    <th scope="col">vs session target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in sessions" :key="row.id">
+                    <tr class="sv__session-card">
+                      <th scope="row">
+                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(row.date, 'short')"></a>
+                        <small x-text="[rowTime(row), `${row.takes || 0} ${row.takes === 1 ? 'take' : 'takes'}`].filter(Boolean).join(' · ')"></small>
+                      </th>
+                      <template x-for="(v, i) in rowWeights(row)" :key="i">
+                        <td class="q" :class="v === 0 ? 'is-zero' : ''" x-text="v == null ? '—' : pctLabel(v)"></td>
+                      </template>
+                      <td class="rr-out">
+                        <template x-if="rowMoves(row) && rowMoves(row).length">
+                          <div>
+                            <template x-for="m in rowMoves(row)" :key="m.key">
+                              <span><span x-text="`${m.label} `"></span><span class="alp__mv" :class="changeClass(m.d)"><i x-text="changeGlyph(m.d)" aria-hidden="true"></i><span x-text="changeLabel(m.d)"></span></span></span>
+                            </template>
+                          </div>
+                        </template>
+                        <template x-if="!(rowMoves(row) && rowMoves(row).length)">
+                          <span class="rr-note" style="margin:0" x-text="rowOutcome(row)"></span>
+                        </template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="sessionIndex.length && !isWeightsSubject()">
+            <div class="rr-tablewrap">
+              <table class="rr-table" style="min-width:44rem">
+                <thead>
+                  <tr><th scope="col">Session</th><th scope="col">Consensus</th><th scope="col">Outcome</th><th scope="col">Actions</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in sessions" :key="row.id">
+                    <tr class="sv__session-card">
+                      <th scope="row">
+                        <a class="rr-lnk sv__session-title" :href="sessionHref(row)" x-text="formatDate(row.date, 'short')"></a>
+                        <small x-text="[rowTime(row), `${row.takes || 0} ${row.takes === 1 ? 'take' : 'takes'}`].filter(Boolean).join(' · ')"></small>
+                      </th>
+                      <td>
+                        <template x-if="lean(row)">
+                          <span class="sv__stance-badge" :style="leanBadgeStyle(row)"><i x-show="leanStance(row)" :style="leanDotStyle(row)"></i><span x-text="leanLabel(row)"></span></span>
+                        </template>
+                        <template x-if="!lean(row)"><span>—</span></template>
+                      </td>
+                      <td class="rr-outcome">
+                        <template x-if="!recommendation(row)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
+                        <template x-if="recommendation(row) && rowOutcome(row)"><span x-text="rowOutcome(row)"></span></template>
+                        <template x-if="recommendation(row) && !rowOutcome(row)"><span>—</span></template>
+                      </td>
+                      <td class="rr-rowacts">
+                        <template x-for="a in rowActions(row)" :key="`${a.token}-${a.action}`">
+                          <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
+                        </template>
+                        <template x-if="recommendation(row)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(row).text"></span></template>
+                        <template x-if="recommendation(row) && !rowActions(row).length && recommendation(row).kind !== 'text'"><span class="rr-note" style="margin:0">Holds every position</span></template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="historyError"><p class="rr-note" role="alert" x-text="historyError"></p></template>
+          <template x-if="historyPageCount() > 1">
+            <nav class="rr-pager" aria-label="History pages">
+              <span role="status" x-text="historyBusy ? 'Loading…' : historyRange()"></span>
+              <div>
+                <button type="button" class="rr-btn" :disabled="historyBusy || historyPage === 0" @click="goHistory(historyPage - 1)">Newer</button>
+                <button type="button" class="rr-btn" :disabled="historyBusy || historyPage >= historyPageCount() - 1" @click="goHistory(historyPage + 1)">Older</button>
               </div>
-            </div>
-            <p class="sv__sleeve-note" x-show="allocationNote()" x-text="allocationNote()"></p>
-            </div>
-            </template>
-            <!-- THE LATEST REVIEW (RM-121): what the market said (signal) and
-                 how the swarm voted (reasoning), then what it was handed. Each
-                 column opens on a one-word state, then the one chart that fits
-                 its data. Only what the data supports renders. -->
-            <template x-if="hasLatestReview()">
-              <section class="sr" aria-labelledby="sr-title">
-                <div class="sr__head">
-                  <h2 class="sr__title" id="sr-title">Latest review</h2>
-                  <p class="sr__meta">
-                    <span x-text="formatDate(latest().date, 'short')"></span>
-                    <a :href="sessionHref(latest())">Open the session &rarr;</a>
-                  </p>
-                </div>
-                <div class="sr__cols">
-                  <template x-if="signalRows().length">
-                    <div class="sr__col">
-                      <p class="sr__k">Signal</p>
-                      <p class="sr__state">
-                        <i :style="`background:${regimeColor(backdrop.regime)}`" aria-hidden="true"></i>
-                        <b x-text="regimeLabel(backdrop.regime)"></b>
-                        <span x-show="backdrop.compositePercentile !== null" x-text="`${ordinal(backdrop.compositePercentile)} percentile`"></span>
-                      </p>
-                      <div class="sig" role="img"
-                           :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
-                        <div class="sig__scale" aria-hidden="true">
-                          <span></span>
-                          <span class="sig__ticks">
-                            <template x-for="z in signalZones()" :key="z.key">
-                              <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
-                            </template>
-                            <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
-                          </span>
-                          <span></span>
-                        </div>
-                        <template x-for="r in signalRows()" :key="r.key">
-                          <div class="sig__row" :class="`is-${r.kind}`">
-                            <span class="sig__l" x-text="r.label"></span>
-                            <span class="sig__track">
-                              <b class="sig__mid"></b>
-                              <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
-                              <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
-                            </span>
-                            <span class="sig__v" x-text="ordinal(r.pct)"></span>
-                          </div>
-                        </template>
-                      </div>
-                      <p class="sr__foot">Percentile of its own three-year history.<template x-if="!backdropV0"><span> Factor is context, not part of the composite.</span></template></p>
-                    </div>
-                  </template>
-                  <template x-if="voteTotal(latest())">
-                    <div class="sr__col">
-                      <p class="sr__k">Reasoning</p>
-                      <p class="sr__state">
-                        <i x-show="leanStance(latest())" :style="leanDotStyle(latest())" aria-hidden="true"></i>
-                        <b x-text="leanLabel(latest())"></b>
-                        <span x-text="leadShare(latest())"></span>
-                      </p>
-                      <template x-if="hasVoteMembers(latest())">
-                        <div class="vote" role="img" :aria-label="`How members voted: ${spreadLabel(latest())}.`">
-                          <template x-for="c in voteColumns(latest())" :key="c.stance">
-                            <div class="vote__col" :class="{ 'is-lead': c.stance === leanStance(latest()) }">
-                              <div class="vote__stack">
-                                <template x-for="m in c.members" :key="m.key">
-                                  <a class="vote__m" :href="m.href || undefined">
-                                    <i :style="`background:${stanceColor(c.stance)}`" aria-hidden="true"></i><span x-text="m.name"></span>
-                                  </a>
-                                </template>
-                              </div>
-                              <span class="vote__axis" x-text="c.stance"></span>
-                            </div>
-                          </template>
-                        </div>
-                      </template>
-                      <template x-if="!hasVoteMembers(latest())">
-                        <p class="vote__sq" :aria-label="`How members voted: ${spreadLabel(latest())}.`">
-                          <template x-for="q in voteSquares(latest())" :key="q.key"><i :style="`background:${stanceColor(q.stance)}`"></i></template>
-                        </p>
-                      </template>
-                      <p class="sr__foot">
-                        <span x-text="quorumText(latest())"></span><span x-show="meanConfidenceText(latest())" x-text="` · ${meanConfidenceText(latest())}`"></span>
-                      </p>
-                    </div>
-                  </template>
-                </div>
-                <!-- What the swarm was handed: a record of that session's
-                     brief, one row per part it actually contains. -->
-                <template x-if="handoverParts().length">
-                  <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                    <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
-                            aria-controls="subject-handover" @click="open = !open">
-                      <span class="sp-brief__sum-k">What the swarm was handed</span>
-                      <span class="sp-brief__sum-m"><i aria-hidden="true">⌄</i></span>
-                    </button>
-                    <div class="sp-brief__anim" id="subject-handover" role="region"
-                         aria-label="What the swarm was handed" :inert="!open">
-                      <div class="sp-brief__clip">
-                        <dl class="hand">
-                          <template x-for="part in handoverParts()" :key="part.key">
-                            <div class="hand__row" :data-part="part.key">
-                              <dt x-text="part.label"></dt>
-                              <dd>
-                                <template x-if="part.quote"><q x-text="part.quote"></q></template>
-                                <!-- The header's own chips, so a regime reads
-                                     the same at the top of the page and here. -->
-                                <template x-if="part.facts">
-                                  <div class="sv__fact-row">
-                                    <template x-for="f in part.facts" :key="f.key">
-                                      <span class="sv__fact">
-                                        <em x-text="f.k"></em>
-                                        <template x-if="f.dot"><i class="sv__fact-dot" :style="`background:${f.dot}`" aria-hidden="true"></i></template>
-                                        <b x-text="f.v"></b>
-                                      </span>
-                                    </template>
-                                  </div>
-                                </template>
-                                <!-- The targets card's register, smaller. -->
-                                <template x-if="part.bars">
-                                  <div class="sv__sleeves">
-                                    <template x-for="t in part.bars" :key="t.key">
-                                      <div class="sv__sleeve">
-                                        <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
-                                        <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, t.pct))}%`"></i></span>
-                                        <span class="sv__sleeve-v" x-text="`${t.pct}%`"></span>
-                                      </div>
-                                    </template>
-                                  </div>
-                                </template>
-                                <template x-if="part.links">
-                                  <ul class="hand__links">
-                                    <template x-for="l in part.links" :key="l.key">
-                                      <li>
-                                        <template x-if="l.href"><a class="rm-link" :href="l.href" x-text="l.text"></a></template>
-                                        <template x-if="!l.href"><span x-text="l.text"></span></template>
-                                      </li>
-                                    </template>
-                                  </ul>
-                                </template>
-                                <template x-if="part.pills">
-                                  <span class="hand__pills">
-                                    <template x-for="p in part.pills" :key="p.key">
-                                      <span class="hand__pill-wrap">
-                                        <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
-                                        <template x-if="!p.href"><span class="hand__pill" x-text="p.text"></span></template>
-                                      </span>
-                                    </template>
-                                  </span>
-                                </template>
-                                <template x-if="part.list">
-                                  <ul><template x-for="n in part.list" :key="n.key"><li x-text="n.text"></li></template></ul>
-                                </template>
-                              </dd>
-                            </div>
-                          </template>
-                        </dl>
-                      </div>
-                    </div>
-                  </div>
-                </template>
-              </section>
-            </template>
-          </div>
-        </template>
-
-        <!-- /swarm's Sessions section, on a page that already knows the
-             subject. Same section head, same card, same foot, same takes
-             panel, same CSS (all of it in views.css, none of it page-local),
-             so a session a reader opens here is the object they opened there.
-             Two differences, both because this list is one subject deep: the
-             card title is the DATE rather than the subject name, which would
-             be the same string on every row, and there are no subject filter
-             chips to filter by. -->
-        <section class="sp-sessions">
-          <div class="sv__sec">
-            <div>
-              <h2 class="sv__sec-h">Sessions</h2>
-              <p class="sv__sec-sub">Every session the swarm has held on this subject.</p>
-            </div>
-            <span class="sv__session-count" x-text="`${sessions.length} listed`"></span>
-          </div>
-
-          <p class="sv__empty" x-show="!sessions.length" x-cloak>
-            No published session yet. Every session the swarm holds on this subject lands here.
-          </p>
-
-          <div class="sv__session-list">
-            <!-- Keyed on the SESSION id: a subject may convene more than once
-                 a day, so (date, subjectId) is no longer unique, and Alpine
-                 renders NOTHING for a duplicate key. -->
-            <template x-for="s in sessions" :key="s.id">
-              <article class="sv__session-card">
-                <div class="sv__session-top">
-                  <!-- /swarm puts the date opposite the title because its
-                       title is the subject's name. Here the title IS the date,
-                       and the take count now sits on the expander in the foot,
-                       so nothing goes opposite. -->
-                  <a class="sv__session-title" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
-                </div>
-
-                <!-- No stance spread bar. /swarm keeps one because its list
-                     interleaves every subject and the bar is how a reader
-                     scans a column of unlike rows. Here the row IS the
-                     decision, and a second full-width proportion bar directly
-                     above the target ring read as the card's headline while
-                     saying something the Consensus badge below already says in
-                     a word. The tally still feeds that badge, the quorum and
-                     the mean confidence. -->
-
-                <div class="sv__session-body">
-                  <div class="sv__session-payload">
-                    <template x-if="recommendation(s)">
-                      <dl class="sv__rec">
-                        <dt>Recommendation</dt>
-                        <!-- The mix, drawn. Four numbers on a line ("95 / 3 / 0 / 2") make
-                             the reader map each one back onto a sleeve name they are
-                             holding in their head, and the relationship between them —
-                             the whole point of a target mix — is not visible at all.
-                             A ring reads as parts of one whole at a glance.
-
-                             pathLength="100" makes an arc's length its percentage, so the
-                             geometry never drifts out of step with the radius. rotate(-90)
-                             starts the ring at twelve o'clock instead of three. A sleeve at
-                             0% draws no arc and keeps its legend row: 0% is a decision, and
-                             a minimum-length arc would be a lie. -->
-                        <template x-if="recommendation(s).kind === 'weights'">
-                          <div>
-                            <dd class="sv__wmix">
-                              <span class="sv__wdonut-host" role="img"
-                                :aria-label="`Target weights: ${sessionWeightsLabel(s)}`"
-                                x-html="weightDonutSvg(s)"></span>
-                              <ul class="sv__wkeys">
-                                <template x-for="w in recommendation(s).rows" :key="w.key">
-                                  <li :class="w.pct > 0 ? '' : 'is-zero'">
-                                    <i data-mark="series" :style="`background:${w.colour}`"></i>
-                                    <span x-text="w.label"></span>
-                                    <b x-text="`${Math.round(w.pct)}%`"></b>
-                                  </li>
-                                </template>
-                              </ul>
-                            </dd>
-                            <dd class="sv__rec-more" x-show="recommendation(s).note" x-text="recommendation(s).note"></dd>
-                          </div>
-                        </template>
-                        <template x-if="recommendation(s).kind === 'text'">
-                          <dd x-text="recommendation(s).text"></dd>
-                        </template>
-                        <template x-if="recommendation(s).kind === 'actions'">
-                          <div>
-                            <template x-for="a in recommendation(s).actions" :key="a.token + a.action">
-                              <dd><b x-text="`${a.action} ${a.token}`"></b><span x-show="a.rationale" x-text="` · ${a.rationale}`"></span></dd>
-                            </template>
-                            <dd class="sv__rec-more" x-show="recommendation(s).more"
-                                x-text="`+${recommendation(s).more} more on the session`"></dd>
-                          </div>
-                        </template>
-                      </dl>
-                    </template>
-                    <p class="sv__rec-empty" x-show="!recommendation(s)">No recommendation was published for this session.</p>
-                    </div>
-
-                  <!-- The consensus sits to the RIGHT of the decision, and AFTER
-                       it in the DOM, so the reading order matches the visual one:
-                       a screen reader and the single-column phone layout both meet
-                       what the session decided before how the room split. The
-                       recommendation is what the row exists to report; the
-                       consensus is how much weight to put behind it.
-
-                       The kicker is gated on there being a consensus to put under
-                       it, not just on each fact separately: an archive row carries
-                       the recommendation but no stances, quorum or confidence, and
-                       printed "Consensus" over nothing. -->
-                  <template x-if="hasConsensus(s)">
-                    <div class="sv__session-consensus">
-                      <p class="sv__session-kicker">Consensus</p>
-                      <div class="sv__card-verdict">
-                        <span class="sv__stance-badge" x-show="lean(s)" :style="leanBadgeStyle(s)">
-                          <i x-show="leanStance(s)" :style="leanDotStyle(s)"></i>
-                          <span x-text="leanLabel(s)"></span>
-                        </span>
-                        <span x-text="quorumText(s)"></span>
-                        <span x-show="meanConfidenceText(s)" x-text="meanConfidenceText(s)"></span>
-                      </div>
-                    </div>
-                  </template>
-                </div>
-
-                <div class="sv__session-foot">
-                  <button type="button" class="sv__takes-btn" @click="toggleTakes(s)"
-                          :aria-expanded="takesState(s) ? 'true' : 'false'"
-                          :disabled="!takesCount(s)">
-                    <span class="sv__takes-caret" :class="{ 'is-open': takesState(s) }" aria-hidden="true">&rsaquo;</span>
-                    <span x-text="takesCount(s) === 1 ? '1 take' : `${takesCount(s)} takes`"></span>
-                  </button>
-                  <a class="sv__live-lnk" :href="sessionHref(s)">See full session &rarr;</a>
-                </div>
-
-                <div class="sv__takes-panel" x-show="takesState(s)" x-cloak>
-                  <p class="sv__unset" x-show="takesState(s)?.loading">Loading takes...</p>
-                  <p class="sv__unset" x-show="takesState(s)?.error" x-text="takesState(s)?.error"></p>
-                  <template x-for="t in (takesState(s)?.takes || [])" :key="t.id">
-                    <div class="sv__take-row">
-                      <div class="sv__take-row-head">
-                        <a class="sv__take-who sv__take-name" :href="`/swarm/members/${encodeURIComponent(t.memberId)}`" x-text="t.memberName || t.memberId"></a>
-                        <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
-                          <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
-                        </span>
-                        <span class="mp-conf" x-show="Number.isFinite(Number(t.confidence))">
-                          confidence <b x-text="fmtPct(t.confidence)"></b>
-                        </span>
-                      </div>
-                      <p class="sv__take-line" x-text="takeLine(t)"></p>
-                    </div>
-                  </template>
-                  <p class="sv__take-absent" x-show="absentOf(s).length">
-                    <span class="sv__take-absent-k">Did not file</span>
-                    <template x-for="a in absentOf(s)" :key="a.id">
-                      <a class="sv__take-absent-who" :href="a.href" x-text="a.name"></a>
-                    </template>
-                  </p>
-                </div>
-              </article>
-            </template>
-          </div>
+            </nav>
+          </template>
+          <template x-if="isWeightsSubject() && sessionIndex.length">
+            <p class="rr-note">These are recommendations, not a record of executed holdings. A session without a recorded target shows no moves.</p>
+          </template>
         </section>
       </div>
     </template>
 
-    <!-- The fifth surface. The shared string has landed, so this page carries
-         the same disclaimer, from the same source, as every other swarm
-         surface rather than being the one that quietly omits it. -->
     <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
       <p class="rm-disclaimer__label">Disclaimer</p>
       <p class="rm-disclaimer__body" x-text="text"></p>
@@ -608,67 +477,12 @@
   </div>
 
   <style>
-    /* Page-local styles. Every length here is on the same rem scale the
-       shared sv__ components use (0.25rem steps); this block carried a mix of
-       10px, 11.5px, 12.5px, 14px, 20px and 34px, which is what a page looks
-       like after several passes that each guessed. Every colour is a token:
-       one rule was painting a raw #7E889E through a --color-muted variable
-       that does not exist. */
-
-    .sp-sessions { margin-top: 2.5rem; }
-    .sp-alloc { margin-bottom: 1.5rem; }
-    /* The card is the whole page here, not a column beside a feed, so the
-       register fills it: 34rem of table in an 80rem card left the hole on the
-       right that a measure cap leaves in a full-width band. The card's own
-       register only: the review band inside the card draws registers of its
-       own, and they keep theirs. */
-    .sp-alloc__body .sv__sleeves { max-width: none; }
-    /* An external link, in the second of the two link treatments this site
-       uses: reading ink with a quiet rule, and Beam arriving on hover. It was
-       cyan at rest, which put the accent on a hostname. */
-    .sp-links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem;
-                font-family: var(--font-mono); font-size: 0.72rem; }
-    .sp-links a { color: var(--color-text); text-decoration: none;
-                  border-bottom: 1px solid var(--color-border-light);
-                  transition: border-color 0.16s ease; }
-    .sp-links a:hover, .sp-links a:focus-visible { border-bottom-color: var(--color-accent); }
-    /* Chart and legend sit side by side while there is room for both, and the
-       legend drops under the figure once the row would squeeze the bands. The
-       figure keeps a floor of ~300px so it never compresses to a stripe. */
-    .sp-chart__body { display: flex; flex-wrap: wrap; align-items: flex-start;
-                      gap: 0.5rem 1.5rem; margin: 1rem 0 0; }
-    .sp-chart__svg { flex: 1 1 300px; min-width: 0; }
-    .sp-chart__svg svg { display: block; width: 100%; height: auto; }
-    .sp-legend { flex: 0 1 auto; list-style: none; margin: 0; padding: 0;
-                 font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.9; }
-    .sp-legend li { display: flex; align-items: baseline; gap: 0.5rem; white-space: nowrap; }
-    /* A square, matching the band it names — not the rounded dot the rest of the
-       site uses for a reading. */
-    .sp-legend__key { flex: none; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
-                      transform: translateY(1px); }
-    .sp-legend__token { color: var(--color-text); }
-    /* The share is a supporting figure, not the label: muted, and pushed to a
-       column of its own so the numbers align down the legend. */
-    .sp-legend__pct { margin-left: auto; padding-left: 0.75rem; color: var(--color-text-muted);
-                      font-variant-numeric: tabular-nums; }
-    /* Stacked under the figure, the legend goes wide — let the rows flow into a
-       band instead of one tall column pinned to the left. */
-    @media (max-width: 620px) {
-      .sp-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; width: 100%; }
-      .sp-legend__pct { margin-left: 0; padding-left: 0; }
-    }
+    /* Page-local: the book's chart and wallet list. The record's components
+       are shared in views.css (.rr-*). */
     .sp-wallets li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
     .sp-wallet__label { font-size: 0.8rem; }
-    .sp-wallets code { font-family: var(--font-mono); font-size: 0.72rem;
-                       color: var(--color-text-muted); }
-    .sp-note { font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
-
-    /* The latest review sits inside the targets card, under its note: a
-       bordered block of its own, with a heading one step below the card's. */
-    .sp-alloc .sr { margin-top: 1.25rem; }
-    .sp-alloc .sr__title { font-size: 1.05rem; }
-    .sp-alloc__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
-      gap: 0.4rem 1.5rem; }
-    .sp-alloc__head .sv__cov-lnk { margin-top: 0; }
+    .sp-wallets code { font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
+    .sp-sessions .sv__session-card { display: table-row; border: 0; padding: 0; background: none; }
+    .sp-sessions .sv__session-title { font-family: var(--font-sans); font-size: 0.8125rem; text-transform: none; letter-spacing: 0; }
   </style>
 </section>

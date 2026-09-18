@@ -15,11 +15,12 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
+import { sleeveExplorer, actionLabel } from "../lib/sleeve-explorer.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -603,6 +604,7 @@ export function registerStaticViews(Alpine) {
   // One string, four swarm surfaces. See lib/swarm-disclaimer.js for
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
+  Alpine.data("sleeveExplorer", sleeveExplorer);
 
   Alpine.data("swarmTakeReceipt", () => ({
     ...helpers,
@@ -1079,7 +1081,19 @@ export function registerStaticViews(Alpine) {
     // recent-session refs can name their subjects.
     subjectNames: {},
     snapshot: null,
+    // Every published session on this subject, newest first, as index rows.
+    sessionIndex: [],
+    // The detailed rows: the current history page. sessions[0] on page 1 is
+    // the latest review.
     sessions: [],
+    historyPage: 0,
+    historyBusy: false,
+    historyError: "",
+    historySize: 12,
+    // The book chart's hover: the reading under the crosshair, and the band a
+    // legend entry has put in focus.
+    chartAt: null,
+    chartFocus: null,
     // How many days of history the concentration chart reads. The API returns
     // every snapshot ever taken (311 on the demo stack), and a two-year stack of
     // 1px columns says nothing a reader can act on.
@@ -1131,7 +1145,9 @@ export function registerStaticViews(Alpine) {
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
-        this.sessions = await this.loadSessions(id);
+        this.sessionIndex = await this.loadSessionIndex(id);
+        this.sessions = await this.loadSessionPage(0);
+        this.latestRow = this.sessions[0] || null;
         // The brief the last session opened with. Guarded like the rest: the
         // page describes the handover with or without it, and only the
         // figures depend on having a real one.
@@ -1206,27 +1222,30 @@ export function registerStaticViews(Alpine) {
       } catch (_) { /* fall through to the archive */ }
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
-    latest() { return this.sessions[0] || null; },
+    latestRow: null,
+    latest() { return this.latestRow; },
     hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
     hasLatestReview() {
       const l = this.latest();
       return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
     },
-    async loadSessions(id) {
+    // Every published session on the subject, newest first, as index rows.
+    // The public list has no subject filter yet (#991), so the whole index is
+    // read and filtered here, with the static archive behind it.
+    async loadSessionIndex(id) {
       const pick = (list) => list
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
-        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-        .slice(0, 20)
-        // `id` is carried through because it is now the ONLY unique handle on a
-        // session: a subject may convene more than once a day, so the template
-        // cannot key rows on (date, subjectId) without colliding — and a
-        // duplicate key makes Alpine render the whole list as nothing. The
-        // static archive has no ids, so fall back to the old composite there.
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+          || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+        // `id` is the ONLY unique handle on a session: a subject may convene
+        // more than once a day. The static archive has no ids, so it falls
+        // back to the composite, which sessionHref() recognises.
         .map((s) => ({
           id: s.id ?? `${s.date}-${s.subjectId ?? s.subject_id}`,
           date: s.date,
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
+          generatedAt: s.generatedAt ?? s.generated_at ?? null,
         }));
       const remember = (list) => {
         const names = { ...this.subjectNames };
@@ -1237,72 +1256,219 @@ export function registerStaticViews(Alpine) {
         }
         this.subjectNames = names;
       };
-      let index = [];
       try {
         const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
         remember(all);
-        index = pick(all);
+        const index = pick(all);
+        if (index.length) return index;
       } catch (_) { /* fall through to the archive */ }
-      // Same archive fallback the snapshots take. index.json is snake_case while
-      // the API is camelCase, so pick() reads both rather than silently matching
-      // nothing and rendering "no published session yet" over a full archive.
-      if (!index.length) {
-        try {
-          const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
-          remember(all);
-          index = pick(all);
-        } catch (_) {
-          return [];
-        }
+      try {
+        const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
+        remember(all);
+        return pick(all);
+      } catch (_) {
+        return [];
       }
-      // The FULL detail is fetched per session either way — that request was
-      // already being made and all but `synthesis` discarded. Keeping
-      // swarmRecommendation is what lets this page show the stance spread, the
-      // consensus and what the session decided, exactly as /swarm does, at no
-      // extra cost. See lib/session-summary.js.
-      return Promise.all(index.map(async (s) => {
-        try {
-          const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-          const full = camelSession(detail.session || detail);
-          return {
-            ...s,
-            synthesis: full?.synthesis || "",
-            swarmRecommendation: full?.swarmRecommendation || null,
-            // The regime read this session was given. camelSession already
-            // built it out of a response this loop is already making, and the
-            // row threw it away — so the subject page had no regime at all
-            // while the session page drew a whole panel from it.
-            regimeSummary: full?.regimeSummary || null,
-            takes: (detail.takes || []).length,
-            // The BODIES, not just the count. This response is already in
-            // hand, so the expander reads them from the row instead of
-            // re-fetching the detail it was built from. See
-            // lib/session-takes.js toggleTakes().
-            takeRows: (detail.takes || []).map(camelTake),
-          };
-        } catch (_) {
-          if (archivePreferred(s.date)) {
-            try {
-              const archive = await loadArchiveSession(s.date, s.subjectId);
-              return {
-                ...s,
-                synthesis: archive.session?.synthesis || "",
-                swarmRecommendation: archive.session?.swarmRecommendation || null,
-                regimeSummary: archive.session?.regimeSummary || null,
-                takes: (archive.takes || []).length,
-                // loadArchiveSession already camelTakes these. Without them
-                // the expander falls through to fetchSessionDetail, which asks
-                // an API that has no row for an archived session and answers
-                // "These takes could not be loaded" over takes that are
-                // sitting in memory.
-                takeRows: archive.takes || [],
-              };
-            } catch (_) { /* fall through */ }
-          }
-          return { ...s, synthesis: "", swarmRecommendation: null, takes: 0 };
+    },
+    // One page of history, in full: the session detail (recommendation, regime,
+    // takes) and the brief it opened with, which is the only honest source of
+    // the reference weights a row is compared against. Guarded per session,
+    // with the static archive behind each.
+    async loadSessionPage(page) {
+      const rows = this.sessionIndex.slice(page * this.historySize, (page + 1) * this.historySize);
+      return Promise.all(rows.map((s) => this.loadSessionRow(s)));
+    },
+    async loadSessionRow(s) {
+      const archiveId = s.id === `${s.date}-${s.subjectId}`;
+      const briefFor = async () => {
+        if (!archiveId) {
+          const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
+          if (b && !b.error) return b;
         }
+        return archivePreferred(s.date)
+          ? fetchJson(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).catch(() => null)
+          : null;
+      };
+      const withBrief = async (row) => ({ ...row, reference: referenceWeights(await briefFor()) });
+      try {
+        const detail = archiveId
+          ? await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }))
+          : await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        const full = camelSession(detail.session || detail);
+        return withBrief({
+          ...s,
+          synthesis: full?.synthesis || "",
+          swarmRecommendation: full?.swarmRecommendation || null,
+          regimeSummary: full?.regimeSummary || null,
+          publishedAt: full?.publishedAt || null,
+          takes: (detail.takes || []).length,
+          takeRows: (detail.takes || []).map(camelTake),
+        });
+      } catch (_) {
+        if (archivePreferred(s.date)) {
+          try {
+            const archive = await loadArchiveSession(s.date, s.subjectId);
+            return withBrief({
+              ...s,
+              synthesis: archive.session?.synthesis || "",
+              swarmRecommendation: archive.session?.swarmRecommendation || null,
+              regimeSummary: archive.session?.regimeSummary || null,
+              takes: (archive.takes || []).length,
+              takeRows: archive.takes || [],
+            });
+          } catch (_) { /* fall through */ }
+        }
+        return { ...s, synthesis: "", swarmRecommendation: null, takes: 0, takeRows: [], reference: null };
+      }
+    },
+    historyPageCount() { return Math.max(1, Math.ceil(this.sessionIndex.length / this.historySize)); },
+    async goHistory(page) {
+      if (this.historyBusy || page < 0 || page >= this.historyPageCount()) return;
+      this.historyBusy = true;
+      this.historyError = "";
+      try {
+        this.sessions = await this.loadSessionPage(page);
+        this.historyPage = page;
+        document.getElementById("history")?.scrollIntoView({ block: "start" });
+      } catch (_) {
+        this.historyError = "This page of history could not be loaded. The previous page is still shown.";
+      } finally {
+        this.historyBusy = false;
+      }
+    },
+    historyRange() {
+      const from = this.historyPage * this.historySize + 1;
+      const to = Math.min(this.sessionIndex.length, from + this.historySize - 1);
+      return `${from}–${to} of ${this.sessionIndex.length}`;
+    },
+    // ── the record's figures (RM-121) ───────────────────────────────────────
+    // The four sleeves in published order, as table columns.
+    sleeveColumns() {
+      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), hue: bucketHue(key, i) }));
+    },
+    // A subject whose sessions recommend sleeve weights reads as a weights
+    // history; any other reads as a verdict history.
+    isWeightsSubject() {
+      return this.isFramework() || this.sessions.some((r) => r?.swarmRecommendation?.type === "bucket_weights");
+    },
+    // A row's recommended weights in column order, percent, null where absent.
+    rowWeights(row) {
+      const rows = this.sessionWeights(row) || [];
+      return BUCKET_ORDER.map((key) => {
+        const hit = rows.find((r) => r.key === key);
+        return hit ? hit.pct : null;
+      });
+    },
+    // The moves a row recommends against the reference ITS OWN brief carried.
+    // No reference, no moves: today's framework is never read back onto an
+    // older session.
+    rowMoves(row) {
+      if (!row?.reference) return null;
+      const w = this.rowWeights(row);
+      if (w.every((v) => v == null)) return null;
+      return BUCKET_ORDER.map((key, i) => {
+        const was = row.reference[key];
+        const d = weightChange.weightDelta(w[i], was == null ? null : was);
+        return { key, label: bucketLabel(key), was, d };
+      }).filter((m) => m.d != null && m.d !== 0);
+    },
+    // The positions a portfolio recommendation moves, holds left out: the
+    // outcome line already counts them.
+    rowActions(row) {
+      const rec = row?.swarmRecommendation;
+      if (!rec || rec.type === "bucket_weights" || rec.quorum || rec.stances) return [];
+      return (Array.isArray(rec.actions) ? rec.actions : [])
+        .filter((a) => a && a.action && String(a.action).toLowerCase() !== "hold")
+        .map((a) => ({ token: a.token, action: String(a.action).toLowerCase(), label: actionLabel(a.action) }));
+    },
+    rowOutcome(row) {
+      const rec = row?.swarmRecommendation;
+      if (rec?.type !== "bucket_weights") {
+        const acts = (Array.isArray(rec?.actions) ? rec.actions : []).filter((a) => a && a.action);
+        if (!acts.length || rec.quorum || rec.stances) return "";
+        const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
+        return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
+      }
+      if (!this.rowWeights(row).some((v) => v != null)) return "Recommendation unavailable";
+      const moves = this.rowMoves(row);
+      if (moves == null) return "Reference unavailable";
+      return moves.length ? `${moves.length} ${moves.length === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
+    },
+    // The latest review's legend: each sleeve, its recommended weight, and its
+    // move against the reference that session was handed.
+    latestLegend() {
+      const row = this.latest();
+      const w = this.rowWeights(row);
+      return this.sleeveColumns().map((c, i) => {
+        const was = row?.reference ? row.reference[c.key] : null;
+        return { ...c, pct: w[i], was: was == null ? null : was, d: row?.reference ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
+      }).filter((r) => r.pct != null);
+    },
+    // The explorer for the latest review: the recommended mix on a weights
+    // subject, the book on that session's date with its actions otherwise.
+    latestActions() {
+      const rec = this.latest()?.swarmRecommendation;
+      // Rollups aggregated 2026-08-06 to 09-04 carry two hardcoded actions
+      // derived from no member input (see the session page's authoredActions).
+      if (!rec || rec.quorum || rec.stances) return [];
+      return (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
+    },
+    latestBook() {
+      const d = this.latest()?.date;
+      return d ? pickSnapshotFor(this.snapshots, d) : null;
+    },
+    hasBook() { return this.recommendation(this.latest())?.kind !== "weights" && !!this.latestBook() && this.latestActions().length > 0; },
+    hasExplorer() { return this.recommendation(this.latest())?.kind === "weights" || this.hasBook(); },
+    explorerSource() { return this.latest(); },
+    explorerSvg() {
+      return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.latest());
+    },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    explorerCenter() {
+      return this.hasBook()
+        ? { value: this.fmtUsdShort(this.latestBook()?.totalValueUsd), label: "Holdings" }
+        : { value: "100%", label: "Recommended" };
+    },
+    fmtUsdShort(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "—";
+      return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
+    },
+    bookColour(token) {
+      const book = this.latestBook();
+      const tokens = [...(book?.positions || []).map((p) => p.token), ...this.latestActions().map((a) => a.token)];
+      return resolveTokenColors([...new Set(tokens.filter(Boolean))])[token] || assetDot(token);
+    },
+    explorerRows() {
+      if (this.hasBook()) return bookExplorerRows(this.latestBook(), this.latestActions(), (t) => this.bookColour(t), (v) => this.fmtUsd(v));
+      const row = this.latest();
+      const legend = this.latestLegend();
+      const sleeveWeight = new Map(legend.map((r) => [normKeyOf(r.key), r.pct == null ? null : r.pct / 100]));
+      const within = new Map(withinBucketsFor(row?.swarmRecommendation, this.brief, null, sleeveWeight).map((w) => [normKeyOf(w.bucket), w]));
+      return legend.map((r) => ({
+        ...r,
+        meta: `${this.fmtPctTrim(r.pct)} of allocation`, action: "", rationale: "",
+        d: row?.reference ? r.d : null,
+        was: row?.reference ? r.was : null,
+        basis: "target",
+        assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
       }));
     },
+    pctLabel(v) { return weightChange.fmtPctTrim(v); },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeGlyph(d) { return weightChange.changeGlyph(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    rowTime(row) {
+      const at = row?.publishedAt || row?.generatedAt;
+      if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
+      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
+    },
+    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    sessionsJsonHref() { return ROUTES.swarm.sessions; },
     // What KIND of subject this is, from the record rather than from the slug.
     // A `framework` subject is the allocation recipe and has no book: its own
     // structural notes open with "no portfolio to scrape", which the page was
@@ -1315,7 +1481,7 @@ export function registerStaticViews(Alpine) {
     // is the less useful of the two: a reader wants to know how current the
     // page is, not when it started.
     lastReviewedLabel() {
-      const s = this.sessions[0];
+      const s = this.sessionIndex[0];
       return s?.date ? this.formatDate(s.date, "short") : "";
     },
     positionRows() {
@@ -1438,16 +1604,17 @@ export function registerStaticViews(Alpine) {
         token: b.token,
         color: b.color,
         pct: this.fmtPct1(b.shares[b.shares.length - 1] || 0),
-      })).reverse(); // top band first, so the legend reads down the stack
+      })); // largest first: the legend runs left to right under the chart
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
     // them days would misdescribe the x-axis.
-    spanLabel() {
+    chartSpan() {
       const w = this.windowed();
       if (w.length < 2) return "";
-      return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} readings`;
+      return `${this.formatDate(w[0].date, "short")} – ${this.formatDate(w[w.length - 1].date, "short")} · ${w.length} readings`;
     },
+    // ── the book over time (RM-121) ─────────────────────────────────────────
     // Share-of-NAV over time, one stacked BAND per position. A holdings table is
     // a single day; the question a reader has is whether the book is
     // concentrating or diversifying, and only a series answers that.
@@ -1457,63 +1624,119 @@ export function registerStaticViews(Alpine) {
     // top of each other (the vault subject holds MORPHO/AAVE/COMPOUND at 33.3%
     // each and rendered as ONE line), and the long tail of sub-5% holdings piles
     // into an unreadable tangle along the axis. Stacked to a fixed 100%, share
-    // is read as area — equal weights are three equal bands, and "is one
-    // position taking over" is the bottom band's height, no decoding required.
+    // is read as area: equal weights are three equal bands, and "is one position
+    // taking over" is the bottom band's height.
     //
-    // This does put cyan on screen as a mass where the brand grammar wants it as
-    // a line, on any book whose largest holding happens to be ROBOTMONEY.
-    // David's explicit call: legibility of the part-to-whole read wins here, and
-    // this panel now matches what robotmoney.net has always published.
-    concentrationArea() {
+    // Geometry lives in a 1000 x 100 unit box that stretches to the column, and
+    // every label (the axes, the ticks, the tooltip) is HTML over it, so text
+    // stays at its real size at any width instead of scaling with the SVG.
+    chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();
-      if (rows.length < 2 || !series.length) return "";
-      const W = 640, H = 150, padB = 16, padT = 4, padL = 28;
-      const plotH = H - padB - padT;
-      const y = (frac) => padT + plotH - this.clampPct(frac * 100) / 100 * plotH;
+      if (rows.length < 2 || !series.length) return null;
       // x by DATE, not by index. The archive path carries one reading per
       // session rather than one per day, so evenly-spaced points drew a
-      // three-week gap the same width as a one-day one and made a stale book
-      // look continuously observed. Index spacing stays as the fallback for
-      // snapshots whose dates will not parse.
+      // three-week gap the same width as a one-day one. Index spacing stays as
+      // the fallback for snapshots whose dates will not parse.
       const stamps = rows.map((r) => Date.parse(`${r?.date}T00:00:00Z`));
       const dated = stamps.every((t) => Number.isFinite(t)) && stamps[stamps.length - 1] > stamps[0];
-      const plotW = W - padL;
       const span = dated ? stamps[stamps.length - 1] - stamps[0] : 0;
-      const xs = rows.map((_, i) => (dated
-        ? padL + plotW * ((stamps[i] - stamps[0]) / span)
-        : padL + plotW * (i / (rows.length - 1))));
-      // Bands are drawn bottom-up over a running baseline. Each polygon runs
-      // along its own top edge left-to-right, then back along the baseline
-      // beneath it — so the band's height at any x IS that position's share.
-      const base = rows.map(() => 0);
-      const bands = series.map((b) => {
+      const xs = rows.map((_, i) => (dated ? 1000 * ((stamps[i] - stamps[0]) / span) : 1000 * (i / (rows.length - 1))));
+      return { rows, series, xs };
+    },
+    // The bands, bottom-up over a running baseline, the largest position on the
+    // bottom (only the bottom band has a flat, honest baseline). Each band is a
+    // calm fill with a crisp top edge in its own colour, separated from its
+    // neighbour by a hairline of the page ground.
+    chartSvg() {
+      const m = this.chartModel();
+      if (!m) return "";
+      const y = (frac) => (100 - this.clampPct(frac * 100)).toFixed(2);
+      const base = m.rows.map(() => 0);
+      const fills = [];
+      const edges = [];
+      for (const b of m.series) {
         const top = base.map((v, i) => v + b.shares[i]);
-        const upper = top.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`);
-        const lower = base.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`).reverse();
+        const upper = top.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`);
+        const lower = base.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`).reverse();
         for (let i = 0; i < base.length; i++) base[i] = top[i];
-        // A hairline in the page ground separates neighbours, so two adjacent
-        // hues of similar value still read as two bands rather than one blur.
-        return `<polygon points="${upper.concat(lower).join(" ")}" fill="${b.color}"
-          stroke="var(--color-deep)" stroke-width="1" stroke-linejoin="round"/>`;
-      }).join("");
-      // Drawn ON TOP of the fills, and in a light wash rather than the dim slate
-      // a gridline takes on an empty ground — over a saturated band, slate is
-      // invisible. 50% is the line a single position crosses when it becomes the
-      // majority of the book, which is the one threshold this panel exists to
-      // show. 0 and 100 need no label: the stack fills the frame by construction.
-      const mid = `<line x1="${padL}" y1="${y(0.5).toFixed(1)}" x2="${W}" y2="${y(0.5).toFixed(1)}"
-          stroke="rgba(255,255,255,0.32)" stroke-width="1" stroke-dasharray="3 4"/>
-        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
-      const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
-      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
-        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
-      // The legend is HTML beside the figure, so the accessible name here spells
-      // out what the bands are for a reader who gets only the image.
-      const named = series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Top positions as a share of net asset value, stacked to 100%, ${this.escapeHtml(rows[0].date || "")} to ${this.escapeHtml(rows[rows.length - 1].date || "")}. Latest reading, largest first: ${this.escapeHtml(named)}.">
-        ${bands}${mid}${axis}${ends}</svg>`;
+        const tok = this.escapeHtml(b.token);
+        fills.push(`<polygon data-token="${tok}" points="${upper.concat(lower).join(" ")}" fill="${b.color}" fill-opacity="0.62"`
+          + ` stroke="var(--color-void)" stroke-width="1" vector-effect="non-scaling-stroke"/>`);
+        edges.push(`<polyline data-token="${tok}" points="${upper.join(" ")}" fill="none" stroke="${b.color}"`
+          + ` stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
+      }
+      // Gridlines over the fills, faint: at 50% a single position becomes the
+      // majority of the book.
+      const grid = [25, 50, 75].map((t) => `<line x1="0" x2="1000" y1="${100 - t}" y2="${100 - t}"`
+        + ` stroke="rgba(237,239,241,${t === 50 ? 0.22 : 0.1})" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
+      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${fills.join("")}${edges.join("")}${grid}</svg>`;
+    },
+    chartLabel() {
+      const m = this.chartModel();
+      if (!m) return "";
+      const named = m.series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
+      return `Share of the book by position, stacked to 100%, ${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+    },
+    // A tick under every reading; the first and last carry their year, and the
+    // ones between drop out on a narrow screen.
+    chartXTicks() {
+      const m = this.chartModel();
+      if (!m) return [];
+      const last = m.rows.length - 1;
+      const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
+      return m.rows.map((r, i) => ({
+        key: `${r.date}-${i}`,
+        left: m.xs[i] / 10,
+        label: md(r.date),
+        i,
+        cls: i === 0 ? "is-first" : i === last ? "is-last" : "is-mid",
+      }));
+    },
+    // One reading, for the crosshair and its tooltip: every band's share on
+    // that date, top band first, as the stack reads.
+    chartPoint(i) {
+      const m = this.chartModel();
+      if (!m || i == null || !m.rows[i]) return null;
+      const snap = m.rows[i];
+      const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd);
+      return {
+        left: m.xs[i] / 10,
+        date: this.formatDate(snap.date, "short"),
+        total: Number.isFinite(total) && total > 0 ? this.fmtUsd(total) : "",
+        // Positions the book did not hold on that date are left out.
+        items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
+          .map((b) => ({ token: b.token, color: b.color, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
+      };
+    },
+    // The crosshair snaps to the nearest reading under the pointer.
+    chartMove(ev) {
+      const m = this.chartModel();
+      if (!m) return;
+      const rect = ev.currentTarget.getBoundingClientRect();
+      const at = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 1000;
+      let best = 0;
+      for (let i = 1; i < m.xs.length; i++) if (Math.abs(m.xs[i] - at) < Math.abs(m.xs[best] - at)) best = i;
+      this.chartAt = best;
+    },
+    chartKey(ev) {
+      const m = this.chartModel();
+      if (!m) return;
+      const last = m.rows.length - 1;
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const from = this.chartAt ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+        this.chartAt = Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+      } else if (ev.key === "Home") { ev.preventDefault(); this.chartAt = 0; }
+      else if (ev.key === "End") { ev.preventDefault(); this.chartAt = last; }
+      else if (ev.key === "Escape") { this.chartAt = null; }
+    },
+    // A band in focus (from the legend): the others recede, as the ring's arcs
+    // do. Classes, not a redraw, so the fade runs on a transition.
+    syncBands(host) {
+      for (const el of host.querySelectorAll("[data-token]")) {
+        el.classList.toggle("is-muted", this.chartFocus !== null && el.getAttribute("data-token") !== this.chartFocus);
+      }
     },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the
@@ -1536,7 +1759,55 @@ export function registerStaticViews(Alpine) {
       return (this.subject?.nftContracts || []).filter(Boolean).map((n) => ({
         name: n.name || n.label || String(n.address || "").slice(0, 10),
         chain: n.chain || "",
+        address: n.address || "",
       }));
+    },
+    // A position as the chart draws it: its own band when it earns one, else
+    // the residual "other" band it is folded into, in that band's grey. The
+    // table row and the chart then name the same thing in the same colour.
+    positionBand(token) {
+      return this.chartTokens().includes(token) ? token : OTHER_TOKEN;
+    },
+    positionColor(token) {
+      return this.positionBand(token) === OTHER_TOKEN ? OTHER_COLOR : this.seriesColor(token);
+    },
+    // Everything the book is read from, in one list: the tracked wallets, then
+    // the NFT contracts the operator declared (which are not valued).
+    bookSources() {
+      return [
+        ...this.trackedWallets().map((w) => ({ name: w.label || "wallet", kind: "Wallet", chain: w.chain, address: w.address })),
+        ...this.nftContracts().map((n) => ({ name: n.name, kind: "NFT contract", chain: n.chain, address: n.address })),
+      ];
+    },
+    // A token amount at the precision it deserves: billions and millions
+    // compact, thousands grouped without decimals, units to two places, dust
+    // to four significant digits.
+    fmtAmount(v) {
+      const n = Number(v);
+      if (v == null || !Number.isFinite(n)) return "—";
+      const a = Math.abs(n);
+      if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+      if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+      if (a >= 1e3) return Math.round(n).toLocaleString("en-US");
+      if (a >= 1) return n.toFixed(2);
+      return a === 0 ? "0" : n.toPrecision(4);
+    },
+    // A unit price: cents above a dollar, four significant digits below it.
+    fmtPrice(v) {
+      const n = Number(v);
+      if (v == null || !Number.isFinite(n) || n <= 0) return "—";
+      if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      return `$${Number(n.toPrecision(4)).toString()}`;
+    },
+    // The chains the book is read on, in the order its wallets list them.
+    walletChains() {
+      return [...new Set(this.trackedWallets().map((w) => w.chain).filter(Boolean))];
+    },
+    // An address on a chain whose explorer is known. Base only for now; other
+    // chains print the address without a link rather than guess a URL.
+    explorerHref(chain, address) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(address || ""))) return "";
+      return String(chain).toLowerCase() === "base" ? `https://basescan.org/address/${address}` : "";
     },
     takeCountLabel(s) {
       const n = Number(s?.takes || 0);
@@ -1864,6 +2135,20 @@ export function registerStaticViews(Alpine) {
     members: [],
     // subject id → name, for the brief's recent-session refs, which carry ids.
     subjectNames: {},
+    // The consensus receipt's state, read after the page renders: it is
+    // evidence about the record, not part of it, so a slow or failed read
+    // never holds the session back.
+    receiptStatus: "Checking…",
+    // The sessions either side of this one on the same subject, for the
+    // record's own prev/next. Filled after render, like the receipt.
+    neighbours: { older: null, newer: null },
+    // A failed load offers a retry instead of a dead end.
+    retry() {
+      this.error = null;
+      this.loading = true;
+      this.session = null;
+      this.init();
+    },
     async init() {
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
@@ -1883,8 +2168,9 @@ export function registerStaticViews(Alpine) {
           const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
-        } catch (_) {
-          this.error = "Session not found";
+          this.loadEvidence();
+        } catch (e) {
+          this.error = /** @type {any} */ (e)?.status === 404 ? "Session not found" : "This session could not be loaded. Try again.";
         } finally {
           this.loading = false;
         }
@@ -1907,6 +2193,7 @@ export function registerStaticViews(Alpine) {
         // in the database, the archive is a FALLBACK for checkouts with no
         // backend, not a competing source of truth for old dates.
         await this.loadApi(date, subject);
+        this.loadEvidence();
       } catch (primary) {
         try {
           // Fall back to the static archive. It only carries dates through
@@ -1914,6 +2201,7 @@ export function registerStaticViews(Alpine) {
           // falling back is even worth attempting.
           if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
+          this.loadEvidence();
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
         }
@@ -2121,7 +2409,8 @@ export function registerStaticViews(Alpine) {
     // colour they own and the rest take a free one, resolved over the rows
     // this table draws, so no two rows share a key.
     tokenColor(token) {
-      return resolveTokenColors(this.positionRows().slice(0, 8).map((p) => p.token))[token] || assetDot(token);
+      const tokens = [...this.positionRows().slice(0, 8).map((p) => p.token), ...this.authoredActions().map((a) => a.token)];
+      return resolveTokenColors([...new Set(tokens)])[token] || assetDot(token);
     },
     // The snapshot's notable lines, minus the ones that are the subject's own
     // operator notes, which the handover already prints under that name.
@@ -2290,27 +2579,45 @@ export function registerStaticViews(Alpine) {
     // (so Morpho is one colour on both pages), under the name the brief or the
     // published framework gives it rather than the payload's slug.
     withinBucketWeights() {
-      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const body = this.brief?.body || this.brief;
-      const policyOf = (bucket) => {
-        const n = norm(bucket);
-        const fromBrief = (body?.allocation?.buckets || []).find((b) => norm(b.id) === n || norm(b.name) === n);
-        if (fromBrief?.items?.length) return fromBrief.items.map((it) => ({ id: it.id || "", name: it.name || it.id || "" }));
-        return (this.allocationFramework?.buckets || []).find((b) => norm(b.id) === n || norm(b.name) === n)?.items || [];
-      };
-      const sleeveWeight = new Map(this.bucketWeights().map((b) => [norm(b.id || b.name), b.recommended]));
-      return withinBucketWeightsFrom(this.session?.swarmRecommendation)
-        .map((b, i) => {
-          const policy = policyOf(b.bucket);
-          const items = b.items.map((it, j) => {
-            const at = policy.findIndex((p) => norm(p.id) === norm(it.name) || norm(p.name) === norm(it.name));
-            const order = at >= 0 ? at : policy.length + j;
-            return { ...it, label: at >= 0 ? policy[at].name : it.name, order, colour: CATEGORICAL[order % CATEGORICAL.length] };
-          }).sort((x, y) => x.order - y.order);
-          const w = sleeveWeight.get(norm(b.bucket));
-          return { ...b, label: bucketLabel(b.bucket), hue: bucketHue(b.bucket, i), weight: w == null ? null : w * 100, items, rank: bucketRank(b.bucket) };
-        })
-        .sort((a, b) => a.rank - b.rank);
+      const sleeveWeight = new Map(this.bucketWeights().map((b) => [normKeyOf(b.id || b.name), b.recommended]));
+      return withinBucketsFor(this.session?.swarmRecommendation, this.brief, this.allocationFramework, sleeveWeight);
+    },
+    // The explorer: the recommended mix on a weights subject, the book with
+    // the session's actions on a portfolio subject.
+    hasBook() { return !this.isBucketWeights() && !!this.snapshot && this.authoredActions().length > 0; },
+    hasExplorer() { return this.isBucketWeights() || this.hasBook(); },
+    explorerSource() { return this.reviewRow(); },
+    explorerSvg() {
+      return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.reviewRow());
+    },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    explorerCenter() {
+      return this.hasBook()
+        ? { value: this.fmtUsdShort(this.snapshot?.totalValueUsd), label: "Holdings" }
+        : { value: "100%", label: "Recommended" };
+    },
+    fmtUsdShort(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "—";
+      return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
+    },
+    explorerRows() {
+      if (this.hasBook()) return bookExplorerRows(this.snapshot, this.authoredActions(), (t) => this.tokenColor(t), (v) => this.fmtUsd(v));
+      const within = new Map(this.withinBucketWeights().map((w) => [normKeyOf(w.bucket), w]));
+      const fair = !!this.gapBasis() && !this.targetPostdatesSession();
+      const basis = this.gapBasis() === "actual" ? "book" : "target";
+      return this.bucketRows().map((b, i) => {
+        const key = BUCKET_ORDER[bucketRank(b.id || b.name)] || String(b.id || b.name || i);
+        const pct = b.recommended == null ? null : b.recommended * 100;
+        const was = this.gapBasis() === "actual" ? b.actual : b.target;
+        return {
+          key, label: b.name, hue: b.hue, pct, meta: `${this.fmtPctTrim(pct)} of allocation`, action: "", rationale: "",
+          d: fair ? b.gap : null, was: fair && was != null ? was * 100 : null, basis,
+          assets: explorerAssets(within.get(normKeyOf(b.id || b.name)) || within.get(normKeyOf(b.name)), pct),
+        };
+      });
     },
     isBucketWeights() {
       const rec = this.session?.swarmRecommendation;
@@ -2447,5 +2754,343 @@ export function registerStaticViews(Alpine) {
     hasDiscussion() {
       return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0;
     },
+
+    // ── the research record (RM-121) ────────────────────────────────────────
+    // Evidence read after render: the consensus receipt (live sessions only)
+    // and this session's neighbours on its subject. Neither blocks the page.
+    async loadEvidence() {
+      const s = this.session;
+      if (!s) return;
+      if (this.source === "api" && s.id) {
+        api.get(path(ROUTES.swarm.sessionConsensusReceipt, { id: s.id }))
+          .then((r) => { this.receiptStatus = r?.verified === true ? "Verified" : "Not verified"; })
+          .catch((e) => { this.receiptStatus = e?.status === 404 ? "Not published" : "Unavailable"; });
+      }
+      subjectSessionIndex(s.subjectId).then((list) => {
+        const at = list.findIndex((x) => (s.id && x.id === s.id) || (!String(x.id).match(/^[0-9a-f-]{36}$/) && x.date === s.date));
+        if (at < 0) return;
+        this.neighbours = { newer: list[at - 1] || null, older: list[at + 1] || null };
+      }).catch(() => {});
+    },
+    // A session is addressed by id when it has a real one, by date otherwise.
+    sessionHrefOf(s) {
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s?.id || ""))
+        ? `/swarm/sessions/${encodeURIComponent(s.id)}`
+        : `/swarm/${s?.date}/${encodeURIComponent(s?.subjectId || this.session?.subjectId || "")}`;
+    },
+    // The time of day matters once a subject convenes more than once a day.
+    sessionTime() {
+      const at = this.session?.publishedAt || this.session?.generatedAt;
+      if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
+      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
+    },
+    sessionJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return path(ROUTES.swarm.sessionById, { id: s.id });
+      return `/data/swarm/sessions/${s?.date}-${s?.subjectId}.json`;
+    },
+    briefJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return `${ROUTES.swarm.brief}?session=${encodeURIComponent(s.id)}`;
+      return `/data/swarm/briefs/${s?.date}-${s?.subjectId}.json`;
+    },
+    receiptHref() {
+      return this.session?.id ? path(ROUTES.swarm.sessionConsensusReceipt, { id: this.session.id }) : "#";
+    },
+    hasRecommendationSection() {
+      return this.hasOutcome() || !!this.recommendationRationale();
+    },
+    // The decision in one line, measured against what the session was given.
+    // Nothing when there is no fair comparison: the legend still shows the mix.
+    outcomeHeadline() {
+      if (this.isBucketWeights()) {
+        if (!this.gapBasis() || this.targetPostdatesSession()) return "";
+        const rows = this.bucketRows().filter((b) => b.gap != null);
+        if (!rows.length) return "";
+        const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
+        // The subject page's wording (rowOutcome), so the same session reads
+        // the same on both pages.
+        const what = this.gapBasis() === "actual" ? "the book" : "target";
+        if (!moved) return this.gapBasis() === "actual" ? "Holds the book as it stands" : "Target weights retained";
+        return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${what}`;
+      }
+      const acts = this.authoredActions();
+      if (!acts.length) return "";
+      const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
+      return moved ? `${moved} of ${acts.length} positions ${moved === 1 ? "changes" : "change"}` : `All ${acts.length} positions held`;
+    },
+    outcomeColumnsLabel() {
+      const cols = [this.hasTargetColumn() && "target", this.hasActualColumn() && "actual", "recommended", "change"].filter(Boolean);
+      return cols.join(", ");
+    },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
+    // ── the vote, as a chart ────────────────────────────────────────────────
+    // Each member at their stance (a fifth of the width each, bearish to
+    // bullish) and their confidence. Members sharing a stance spread apart
+    // inside its column, ordered by confidence, so no two dots sit on top of
+    // each other.
+    // The confidence axis fits the room: members rarely report under half, so
+    // a fixed 0-100 scale pressed every dot into one line along the top and
+    // left the chart two-thirds empty. The floor steps down in tens to clear
+    // the lowest reading; it is a dot plot, so a floor above zero misstates
+    // nothing.
+    voteDomain() {
+      const vals = (this.takes || []).map((t) => Number(t.confidence) * 100).filter((n) => Number.isFinite(n));
+      const min = vals.length ? Math.min(...vals) : 50;
+      const lo = Math.max(0, Math.min(50, Math.floor((min - 5) / 10) * 10));
+      const step = 100 - lo <= 50 ? 10 : 25;
+      const ticks = [];
+      for (let v = 100; v >= lo; v -= step) ticks.push({ v, pos: ((v - lo) / (100 - lo)) * 100 });
+      return { lo, ticks };
+    },
+    votePos(pct) {
+      const { lo } = this.voteDomain();
+      return Math.max(0, Math.min(100, ((pct - lo) / (100 - lo)) * 100));
+    },
+    voteDots() {
+      const axis = ["bearish", "cautious", "neutral", "constructive", "bullish"];
+      const takes = (this.takes || []).filter((t) => axis.includes(String(t.stance || "").toLowerCase()));
+      const byCol = new Map();
+      for (const t of takes) {
+        const col = axis.indexOf(String(t.stance).toLowerCase());
+        if (!byCol.has(col)) byCol.set(col, []);
+        byCol.get(col).push(t);
+      }
+      const out = [];
+      for (const [col, list] of byCol) {
+        list.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+        list.forEach((t, j) => {
+          const conf = Number(t.confidence);
+          const spread = list.length > 1 ? (j - (list.length - 1) / 2) * Math.min(5, 14 / list.length) : 0;
+          const x = 10 + col * 20 + spread;
+          const y = Number.isFinite(conf) ? Math.round(this.clampPct(conf * 100)) : 0;
+          out.push({
+            key: t.memberId || t.id,
+            name: t.memberName || t.memberId,
+            stance: String(t.stance).toLowerCase(),
+            color: this.stanceColor(t.stance),
+            x,
+            y,
+            pos: this.votePos(y),
+            anchor: this.takeAnchor(t),
+            // Members sharing a stance put their names on opposite sides of
+            // their dots, so the labels never run into each other; the last
+            // column always labels to the left, away from the edge.
+            flip: col === 4 || (list.length > 1 && j % 2 === 0),
+          });
+        });
+      }
+      return out;
+    },
+    voteMean() {
+      const vals = (this.takes || []).map((t) => Number(t.confidence)).filter((n) => Number.isFinite(n));
+      if (!vals.length) return null;
+      return Math.round((vals.reduce((a, n) => a + n, 0) / vals.length) * 100);
+    },
+    voteLeanStance() { return this.leanStance(this.reviewRow()); },
+    // The consensus as a fact: the stance with the most members, or "split"
+    // when two or more tie for it.
+    consensusText() {
+      const row = this.reviewRow();
+      const lean = this.lean(row);
+      if (!lean) return "—";
+      if (!lean.stance) return "Split, no stance has a majority";
+      const word = lean.stance.charAt(0).toUpperCase() + lean.stance.slice(1);
+      return `${word}, ${this.leadShare(row)} members`;
+    },
+    voteLabel() {
+      const dots = this.voteDots();
+      return `How members voted, by stance and confidence. ${this.consensusText()}. `
+        + dots.map((d) => `${d.name} ${d.stance} at ${d.y}%`).join(", ") + ".";
+    },
+    // A structured take's CALL: the section about the subject under review.
+    // v0 takes open with REGIME (the market notes every member repeats), then
+    // ALLOCATION (the framework), then SUBJECT or YOUR PORTFOLIO (the book in
+    // front of them). A framework session's call is its allocation; a
+    // portfolio session's is its section on the portfolio. Null when the take
+    // has no such structure, and the card falls back to the opening of the
+    // body.
+    takeCall(t) {
+      const body = String(t?.body || "");
+      const re = /^\*\*([A-Z][A-Z \-\/&+]+)\*\*\s*$/gm;
+      const heads = [...body.matchAll(re)];
+      if (heads.length < 2) return null;
+      const sections = heads.map((m, i) => ({
+        head: m[1].trim(),
+        text: body.slice(m.index + m[0].length, i + 1 < heads.length ? heads[i + 1].index : body.length).trim(),
+      })).filter((x) => x.text);
+      const want = this.isFramework() ? ["ALLOCATION"] : ["SUBJECT", "YOUR PORTFOLIO", "ALLOCATION"];
+      // A heading may join two parts ("REGIME + ALLOCATION"); it matches
+      // either.
+      const parts = (h) => h.split(/\s*\+\s*/);
+      for (const w of want) {
+        const hit = sections.find((x) => parts(x.head).includes(w));
+        if (hit) {
+          const label = w === "ALLOCATION" ? "Allocation" : `On ${this.session?.subjectName || "this portfolio"}`;
+          // The first three points of it. A line clamp would drop the list
+          // markers; "Read full take" opens the rest.
+          const lines = hit.text.split("\n").filter((l) => l.trim());
+          return { label, text: lines.slice(0, 3).join("\n") };
+        }
+      }
+      return null;
+    },
+    // A member's proposed sleeve weights, when the take carries them (#963).
+    takeWeightRows(t) {
+      const entries = weightEntries(t?.weights || t?.payload?.weights);
+      if (entries.length < 2) return [];
+      const nums = entries.map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v) && v >= 0);
+      const total = nums.reduce((a, [, v]) => a + v, 0);
+      if (!total) return [];
+      return nums
+        .map(([k, v]) => ({ key: k, label: bucketLabel(k), pct: (v / total) * 100, colour: bucketHue(k), rank: bucketRank(k) }))
+        .sort((a, b) => a.rank - b.rank);
+    },
+    signatureHeadline() {
+      const t = this.takes || [];
+      if (!t.length) return "No takes filed";
+      if (t.every((x) => x.archival)) return "Archived, unsigned research";
+      const ok = t.filter((x) => x.verified).length;
+      return ok === t.length ? "Every take is signed and verified" : `${ok} of ${t.length} takes verified`;
+    },
+    signatureDetail() {
+      const t = this.takes || [];
+      if (!t.length) return "No member filed a take for this session.";
+      if (t.every((x) => x.archival)) return "These takes predate member key registration. They were never signed, which is different from a failed signature check.";
+      return "Each take shows its own signature state. A verified take was signed by the member's registered key. A recommendation records research; it does not show that capital moved.";
+    },
+    targetPolicyLabel() {
+      const src = this.targetSource();
+      if (src === "brief") {
+        const asof = (this.brief?.body || this.brief)?.allocation?.asof;
+        return asof ? `Handed to this session, dated ${this.formatDate(asof, "short")}` : "Handed to this session";
+      }
+      if (src === "framework" && this.allocationAsOf()) {
+        return this.targetPostdatesSession()
+          ? `Not recorded for this session. Current policy dated ${this.formatDate(this.allocationAsOf(), "short")}`
+          : `Published policy dated ${this.formatDate(this.allocationAsOf(), "short")}`;
+      }
+      return "Not recorded for this session";
+    },
   }));
+}
+
+/** @param {unknown} v */
+const normKeyOf = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Inside each sleeve: each sleeve under its published name and hue, and its
+// items in POLICY order, each in the colour its position gives it there (so
+// Morpho is one colour on every page), named as the brief or the published
+// framework names it rather than by the payload's slug.
+/** @param {any} rec @param {any} brief @param {any} framework @param {Map<string, number|null>} sleeveWeight */
+function withinBucketsFor(rec, brief, framework, sleeveWeight) {
+  const body = brief?.body || brief;
+  const policyOf = (/** @type {string} */ bucket) => {
+    const n = normKeyOf(bucket);
+    const fromBrief = (body?.allocation?.buckets || []).find((/** @type {any} */ b) => normKeyOf(b.id) === n || normKeyOf(b.name) === n);
+    if (fromBrief?.items?.length) return fromBrief.items.map((/** @type {any} */ it) => ({ id: it.id || "", name: it.name || it.id || "" }));
+    return (framework?.buckets || []).find((/** @type {any} */ b) => normKeyOf(b.id) === n || normKeyOf(b.name) === n)?.items || [];
+  };
+  return withinBucketWeightsFrom(rec)
+    .map((b, i) => {
+      const policy = policyOf(b.bucket);
+      const items = b.items.map((it, j) => {
+        const at = policy.findIndex((/** @type {any} */ p) => normKeyOf(p.id) === normKeyOf(it.name) || normKeyOf(p.name) === normKeyOf(it.name));
+        const order = at >= 0 ? at : policy.length + j;
+        return { ...it, label: at >= 0 ? policy[at].name : it.name, order, colour: CATEGORICAL[order % CATEGORICAL.length] };
+      }).sort((x, y) => x.order - y.order);
+      const w = sleeveWeight.get(normKeyOf(b.bucket));
+      return { ...b, label: bucketLabel(b.bucket), hue: bucketHue(b.bucket, i), weight: w == null ? null : w * 100, items, rank: bucketRank(b.bucket) };
+    })
+    .sort((a, b) => a.rank - b.rank);
+}
+
+// A book as the explorer draws it: each position with its share of the book,
+// and the action the session took on it. Positions past the seventh fold into
+// "Other", as the concentration chart folds them. An action on a token the
+// book does not hold still gets a row, at 0%, so no recommendation is dropped.
+/** @param {any} snapshot @param {any[]} actions @param {(t: string) => string} colourOf @param {(v: number) => string} usd */
+function bookExplorerRows(snapshot, actions, colourOf, usd) {
+  const total = Number(snapshot?.totalValueUsd) || 0;
+  if (!snapshot || total <= 0) return [];
+  const byToken = new Map((actions || []).map((a) => [String(a.token || "").toLowerCase(), a]));
+  const positions = (snapshot.positions || [])
+    .map((/** @type {any} */ p) => ({ token: String(p.token || p.symbol || ""), chain: p.chain || "", value: Number(p.value_usd ?? p.valueUsd) || 0 }))
+    .filter((p) => p.token)
+    .sort((a, b) => b.value - a.value);
+  const shown = positions.slice(0, 7);
+  const rest = positions.slice(7);
+  const row = (/** @type {any} */ p) => {
+    const act = byToken.get(p.token.toLowerCase());
+    const pct = (p.value / total) * 100;
+    return {
+      key: p.token, label: p.token, hue: colourOf(p.token), pct,
+      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(p.value)}${p.chain ? ` · ${p.chain}` : ""}`,
+      action: act ? String(act.action).toLowerCase() : "", rationale: act?.rationale || "",
+      d: null, was: null, basis: "", assets: [],
+    };
+  };
+  const rows = shown.map(row);
+  const restValue = rest.reduce((a, p) => a + p.value, 0);
+  if (restValue > 0) {
+    const pct = (restValue / total) * 100;
+    rows.push({ key: OTHER_TOKEN, label: `Other (${rest.length})`, hue: OTHER_COLOR, pct,
+      meta: `${weightChange.fmtPctTrim(pct)} of book · ${usd(restValue)}`, action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
+  }
+  const held = new Set(positions.map((p) => p.token.toLowerCase()));
+  for (const a of actions || []) {
+    const t = String(a.token || "");
+    if (!t || held.has(t.toLowerCase())) continue;
+    rows.push({ key: t, label: t, hue: colourOf(t), pct: 0, meta: "Not held on this date",
+      action: String(a.action).toLowerCase(), rationale: a.rationale || "", d: null, was: null, basis: "", assets: [] });
+  }
+  return rows;
+}
+
+// A sleeve's assets as the explorer lists them: share of the sleeve, and share
+// of the whole allocation that implies.
+/** @param {any} sleeve @param {number | null} pct */
+function explorerAssets(sleeve, pct) {
+  return (sleeve?.items || []).map((/** @type {any} */ it) => ({
+    key: it.name,
+    label: it.label || it.name,
+    colour: it.colour,
+    ofSleeve: it.weight * 100,
+    ofAllocation: pct == null ? null : it.weight * pct,
+  }));
+}
+
+// The sleeve weights a brief handed its session, as { bucket key: percent }.
+// Null when the brief carried none: the live brief does not yet (#961).
+/** @param {any} brief */
+function referenceWeights(brief) {
+  const body = brief?.body || brief;
+  const buckets = body?.allocation?.buckets;
+  if (!Array.isArray(buckets) || !buckets.length) return null;
+  /** @type {Record<string, number>} */
+  const out = {};
+  for (const b of buckets) {
+    const w = Number(b?.target_weight ?? b?.targetWeight);
+    const i = bucketRank(b?.id || b?.name);
+    if (Number.isFinite(w) && i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = w * 100;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// A subject's published sessions, newest first, as { id, date, subjectId }.
+// The public list has no subject filter yet (#991), so the whole index is read
+// and filtered here, with the static archive behind it.
+/** @param {string} subjectId */
+async function subjectSessionIndex(subjectId) {
+  const pick = (/** @type {any[]} */ list) => list
+    .filter((s) => (s.subjectId ?? s.subject_id) === subjectId && s.state === "published")
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+      || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
+  try {
+    const list = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+    if (list.length) return list;
+  } catch (_) { /* fall through to the archive */ }
+  return pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
 }
