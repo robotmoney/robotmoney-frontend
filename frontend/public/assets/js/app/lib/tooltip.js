@@ -36,6 +36,20 @@ export function placeTip(tip) {
   const bub = bubble(tip);
   if (!bub) return;
 
+  // Fixed bubbles escape scrollable data tables. The same placement also
+  // handles short screens and the bottom edge on touch devices.
+  if (tip.hasAttribute("data-floating")) {
+    const r = tip.getBoundingClientRect();
+    const width = Math.min(272, innerWidth - 24);
+    bub.style.width = `${width}px`;
+    bub.style.left = `${Math.max(12, Math.min(innerWidth - width - 12, r.left + r.width / 2 - width / 2))}px`;
+    bub.style.right = "auto";
+    const height = bub.getBoundingClientRect().height;
+    const top = r.top >= height + 12 ? r.top - height - 8 : r.bottom + 8;
+    bub.style.top = `${Math.max(12, Math.min(innerHeight - height - 12, top))}px`;
+    return;
+  }
+
   // Phones render the bubble as a pinned sheet, so only its vertical offset
   // needs setting, from the icon it belongs to.
   if (matchMedia("(max-width: 699px)").matches) {
@@ -77,11 +91,14 @@ export function initTooltips() {
   // Position on the way in, for hover and for keyboard focus alike.
   document.addEventListener("pointerover", (e) => {
     const tip = e.target instanceof Element ? e.target.closest(SEL) : null;
-    if (tip) placeTip(tip);
+    if (tip) {
+      if (!(e.relatedTarget instanceof Node) || !tip.contains(e.relatedTarget)) tip.removeAttribute("data-dismissed");
+      placeTip(tip);
+    }
   }, true);
   document.addEventListener("focusin", (e) => {
     const tip = e.target instanceof Element ? e.target.closest(SEL) : null;
-    if (tip) placeTip(tip);
+    if (tip) { tip.removeAttribute("data-dismissed"); placeTip(tip); }
   });
 
   document.addEventListener("click", (e) => {
@@ -90,6 +107,7 @@ export function initTooltips() {
     e.stopPropagation();
     const tip = btn.closest(SEL);
     const wasOpen = bubble(tip)?.hasAttribute(OPEN);
+    tip.removeAttribute("data-dismissed");
     close();
     if (!wasOpen) {
       placeTip(tip);
@@ -99,7 +117,14 @@ export function initTooltips() {
     }
   });
 
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const tip = open || document.activeElement?.closest(SEL);
+    close();
+    // Focus and hover may remain on the trigger after Escape. Suppress those
+    // CSS paths until the next deliberate entry or click, preserving focus.
+    tip?.setAttribute("data-dismissed", "1");
+  });
   addEventListener("resize", () => {
     close();
     document.querySelectorAll(SEL).forEach(placeTip);
@@ -112,5 +137,8 @@ export function initTooltips() {
   // or tap places it again from where things now are. A hover-opened bubble
   // needs nothing here; it is CSS, and scrolling takes the icon out from under
   // the pointer, which closes it.
-  addEventListener("scroll", () => close(), { passive: true });
+  addEventListener("scroll", () => {
+    document.querySelectorAll('.rm-tip[data-floating]').forEach(tip => tip.setAttribute('data-dismissed', '1'));
+    close();
+  }, { passive: true, capture: true });
 }

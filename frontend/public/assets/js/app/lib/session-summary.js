@@ -33,7 +33,7 @@ const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 // The bucket order the allocation framework publishes in. Weights are printed
 // in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
 // four sleeves every time.
-const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
+export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
 // Named, not humanised from the key: "real world assets" is the transform a
 // slug gives you and "Real World Assets" is what the framework publishes.

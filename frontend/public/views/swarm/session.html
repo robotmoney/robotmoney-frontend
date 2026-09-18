@@ -1,130 +1,100 @@
-<!-- Swarm session detail. It reads in the subject page's vocabulary, because a
-     session and the subject it reviews are two views of one thing: the same
-     header chips, the same review band (signal, reasoning, then what the
-     session recommended and what it was handed), then the takes. -->
-<section class="cv cv--detail" x-data="swarmSessionDetail()">
-  <div class="sv__body sv__body--narrow">
-    <!-- Up, to the subject this session reviewed: the page that lists every
-         session on it, and links here from its latest review. /swarm is one
-         level further up, in the nav. -->
-    <a :href="subjectHref()" class="sv__back" x-text="session?.subjectName || '/swarm'">/swarm</a>
-
+<!-- Swarm session detail, as a research record (RM-121): a breadcrumb, the
+     head, one hairline row of facts, then numbered sections. What the session
+     recommended, the reasoning and where members disagreed, each take, and the
+     evidence behind the record. The subject page opens the same way, so a
+     session and the subject it reviews read as one document.
+     Sections render only when the session carries what they draw; the
+     numbering is a CSS counter, so a missing section leaves no gap. -->
+<section class="cv cv--detail" x-data="swarmSessionDetail()" @hashchange.window="revealHashTake()" @click="researchAnchor($event)">
+  <div class="sv__body sv__body--narrow rr pr">
     <p class="sv__loading" x-show="loading">Loading session…</p>
-    <template x-if="error"><p class="sv__error" x-text="error"></p></template>
+    <template x-if="error && !loading">
+      <div class="rr-head">
+        <p class="sv__error" x-text="error"></p>
+        <p class="rr-links"><button type="button" class="rr-btn" @click="retry()">Try again</button><a class="rr-lnk" href="/swarm">All sessions</a></p>
+      </div>
+    </template>
 
     <template x-if="!loading && session">
       <div>
-        <header class="sv__detail-head">
-          <!-- The kind comes from the subject record, not from a hardcoded
-               word: this said "portfolio" on every session, including the ones
-               reviewing a framework that has no portfolio. -->
-          <p class="sv__eyebrow sv__eyebrow--quiet" x-text="subjectKindOf(subject)">portfolio</p>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <a :href="subjectHref()" x-text="session.subjectName || session.subjectId"></a><span aria-hidden="true">/</span>
+          <span aria-current="page" x-text="formatDate(session.date, 'short')"></span>
+        </nav>
+
+        <header class="rr-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet" x-text="`${subjectKindOf(subject)} · session`">portfolio · session</p>
           <h1 class="sv__detail-title session-title" x-text="session.subjectName"></h1>
-          <!-- WHICH session, and where it stands: the date this page is about,
-               set as a headline under the subject, and its phase beside it in
-               the marker /swarm's live strip uses. Both used to sit among the
-               regime chips, where the state read as one more reading of the
-               market and the date as an eyebrow. -->
-          <p class="ss-when">
+          <p class="rr-when">
             <time :datetime="session.date" x-text="formatDate(session.date, 'long')"></time>
+            <template x-if="sessionTime()"><span class="rr-mono" x-text="sessionTime()"></span></template>
             <span :class="phaseClass(session)" x-text="phaseLabel(session)"></span>
           </p>
-          <p class="sv__lede sv__lede--compact" x-show="subject?.thesisBlurb" x-text="subject?.thesisBlurb"></p>
-          <!-- Backdrop chips. Label and value are distinct elements: the old
-               markup nested a bare <span> inside a bare <span>, and the CSS
-               selector matched both, so every value was drawn its own box
-               inside the chip's box — the doubled, broken-looking frame. -->
-          <div class="sv__fact-row">
-            <template x-if="session.regimeSummary">
-              <span class="sv__fact"><em>composite</em><b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></span>
-            </template>
-            <template x-if="session.regimeSummary">
-              <span class="sv__fact">
-                <em>regime</em>
-                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
-                <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
-              </span>
-            </template>
-            <template x-if="session.regimeSummary?.macroRegime">
-              <span class="sv__fact">
-                <em>macro</em>
-                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.macroRegime)}`" aria-hidden="true"></i>
-                <b x-text="regimeLabel(session.regimeSummary?.macroRegime)"></b>
-              </span>
-            </template>
-            <template x-if="session.regimeSummary?.onchainRegime">
-              <span class="sv__fact">
-                <em>onchain</em>
-                <i class="sv__fact-dot" :style="`background:${regimeColor(session.regimeSummary?.onchainRegime)}`" aria-hidden="true"></i>
-                <b x-text="regimeLabel(session.regimeSummary?.onchainRegime)"></b>
-              </span>
-            </template>
-          </div>
         </header>
 
-        <!-- THE REVIEW: the subject page's latest-review band, fed this
-             session. What the market said (signal), how the swarm voted
-             (reasoning), what it recommended (outcome), and the brief it was
-             handed. Each column opens on a one-word state, then the one chart
-             that fits its data. Only what the data supports renders. -->
-        <template x-if="hasReview() || hasOutcome() || handoverParts().length">
-          <section class="sr ss-review" aria-label="The review">
-            <!-- OUTCOME first: what the session decided, then the signal and the
-                 reasoning behind it. The ring is the one every session card
-                 draws for a recommendation; the ledger beside it is
-                 /allocation's "What changed", the same columns and the same
-                 move glyphs, with the target as "was" and the recommendation
-                 as "now". -->
-            <template x-if="hasOutcome()">
-              <div class="sr__out">
-                <p class="sr__k">Outcome</p>
-                <template x-if="outcomeState()">
-                  <p class="sr__state"><b x-text="outcomeState().label"></b><span x-text="outcomeState().detail"></span></p>
+        <div class="rr-meta">
+          <span class="rr-meta__i">Takes <b x-text="takes.length"></b></span>
+          <template x-if="disagreements().length">
+            <span class="rr-meta__i">Disagreements <b x-text="disagreements().length"></b></span>
+          </template>
+          <template x-if="session.regimeSummary">
+            <span class="rr-meta__i">Composite <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></span>
+          </template>
+          <template x-if="session.regimeSummary?.regime">
+            <span class="rr-meta__i">Regime
+              <i :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
+              <b x-text="regimeLabel(session.regimeSummary?.regime)"></b>
+            </span>
+          </template>
+          <template x-if="isFramework()"><a class="rr-lnk" href="/allocation#vaults">Allocation &amp; vaults ↗</a></template>
+          <a class="rr-meta__lnk" :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON ↗</a>
+        </div>
+
+        <nav class="rr-jump" aria-label="Session sections">
+          <template x-for="j in jumpLinks()" :key="j.id">
+            <a :href="`#${j.id}`"><i x-text="j.label"></i><template x-if="j.count != null"><span x-text="j.count"></span></template></a>
+          </template>
+        </nav>
+
+        <template x-if="!isFramework()">
+          <section class="pr-session-view" aria-label="Swarm view">
+            <div class="pr-review"><div>
+              <p class="rr-k"><span x-text="session.state === 'published' ? 'Swarm view' : 'Member views so far'"></span> <span x-html="researchTooltip('view', 'session-view-tip')"></span></p>
+              <h2 class="pr-verdict"><template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template><span x-text="researchView(reviewRow())"></span></h2>
+              <p class="pr-vote-note" x-text="leadShare(reviewRow()) ? `${leadShare(reviewRow())} members share this stance` : 'No single stance leads'"></p>
+              <div x-html="stanceTallyMarkup(reviewRow())"></div>
+            </div><div class="pr-context">
+              <p class="rr-k">Research on this portfolio</p>
+              <p class="rr-note">Member views and proposed actions do not establish that the holdings changed.</p>
+              <p class="rr-links"><a class="rr-lnk" href="#takes">Read member takes →</a></p>
+            </div></div>
+          </section>
+        </template>
+
+        <!-- 01 · THE RECOMMENDATION. The decision and its reason on the left,
+             the mix on the right. The legend carries each sleeve's move, so the
+             full ledger and the sleeve contents wait behind disclosures. -->
+        <template x-if="hasRecommendationSection()">
+          <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
+            <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h" x-text="isFramework() ? 'The recommendation' : 'Proposed actions'">Proposed actions</h2></div>
+            <div class="rr-split" :class="isBucketWeights() ? '' : 'rr-split--one'">
+              <div>
+                <template x-if="outcomeHeadline()">
+                  <h3 class="rr-h3" x-text="outcomeHeadline()"></h3>
                 </template>
-                <template x-if="isBucketWeights()">
-                  <div class="sr__mix">
-                    <template x-if="weightDonutSvg(reviewRow())">
-                      <figure class="sr__ring">
-                        <span class="sv__wdonut-host" role="img" :aria-label="`Recommended weights: ${sessionWeightsLabel(reviewRow())}`"
-                              x-html="weightDonutSvg(reviewRow())"></span>
-                        <figcaption>Recommended</figcaption>
-                      </figure>
-                    </template>
-                    <div class="alp__tblwrap sr__ledger">
-                      <table class="alp__tbl alp__tbl--led">
-                        <thead>
-                          <tr>
-                            <th>Sleeve</th>
-                            <template x-if="hasTargetColumn()"><th>Target</th></template>
-                            <template x-if="hasActualColumn()"><th>Actual</th></template>
-                            <th>Recommended</th>
-                            <template x-if="gapBasis()"><th>Change</th></template>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <template x-for="b in bucketRows()" :key="b.id || b.name">
-                            <tr>
-                              <td><i class="alp__dot" data-mark="series" :style="`background:${b.hue}`"></i><span x-text="b.name"></span></td>
-                              <template x-if="hasTargetColumn()"><td class="q" x-text="fmtWeight(b.target)"></td></template>
-                              <template x-if="hasActualColumn()"><td class="q" x-text="fmtWeight(b.actual)"></td></template>
-                              <td x-text="fmtWeight(b.recommended)"></td>
-                              <template x-if="gapBasis()">
-                                <td>
-                                  <span class="alp__mv" :class="changeClass(b.gap)">
-                                    <i x-text="changeGlyph(b.gap)" aria-hidden="true"></i><span x-text="changeLabel(b.gap)"></span>
-                                  </span>
-                                </td>
-                              </template>
-                            </tr>
-                          </template>
-                        </tbody>
-                      </table>
+                <template x-if="recommendationRationale()">
+                  <div x-data="{ more: false }">
+                    <div class="rr-prose" :class="!more && isLong(recommendationRationale(), 520) ? 'is-clamped' : ''" style="--rr-lines:9">
+                      <p x-html="inlineMarks(recommendationRationale())"></p>
                     </div>
+                    <template x-if="isLong(recommendationRationale(), 520)">
+                      <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                        <span x-text="more ? 'Show less' : 'Read full rationale'"></span><small x-text="`${wordCount(recommendationRationale())} words`"></small>
+                      </button>
+                    </template>
                   </div>
                 </template>
-                <!-- Actions the members wrote (v0). The hardcoded pair every
-                     rollup carried from 2026-08-06 to 09-04 is not drawn: see
-                     authoredActions(). -->
                 <template x-if="authoredActions().length">
                   <dl class="sr__acts">
                     <template x-for="a in authoredActions()" :key="`${a.token}-${a.action}`">
@@ -135,53 +105,176 @@
                     </template>
                   </dl>
                 </template>
-                <template x-if="outcomeCaption()">
-                  <p class="sr__foot" data-target-asof x-text="outcomeCaption()"></p>
-                </template>
-                <template x-if="recommendationRationale()">
-                  <p class="sr__why" x-text="recommendationRationale()"></p>
-                </template>
-                <!-- Inside each sleeve: /allocation's sleeve cards, carrying the
-                     swarm's recommended weights inside each sleeve. Each bar is
-                     drawn to the sleeve's own hundred. -->
-                <template x-if="withinBucketWeights().length">
-                  <div class="sr__within">
-                    <p class="sr__k">Inside each sleeve</p>
-                    <div class="alp__cards">
-                      <template x-for="b in withinBucketWeights()" :key="b.bucket">
-                        <div class="alp__card">
-                          <div class="alp__card-top">
-                            <span class="alp__card-name"><i :style="`background:${b.hue}`"></i><b x-text="b.label"></b></span>
-                            <template x-if="b.weight != null">
-                              <span class="alp__card-w"><b x-text="fmtPctTrim(b.weight)"></b><small>recommended</small></span>
-                            </template>
-                          </div>
-                          <div class="alp__card-body">
-                            <div class="alp__stk" :class="b.weight === 0 ? 'zero' : ''">
-                              <template x-for="c in b.items" :key="`${b.bucket}-${c.name}`">
-                                <span data-mark="series" role="img" :aria-label="`${c.label}, ${fmtPctTrim(c.weight * 100)} of ${b.label}`"
-                                      :style="`width:${Math.max(0, Math.min(100, c.weight * 100))}%;background:${c.colour}`"></span>
-                              </template>
-                            </div>
-                            <div class="alp__names">
-                              <template x-for="c in b.items" :key="`${b.bucket}-${c.name}-n`">
-                                <span><i data-mark="series" :style="`background:${c.colour}`"></i><span x-text="c.label"></span><b x-text="fmtPctTrim(c.weight * 100)"></b></span>
-                              </template>
-                            </div>
-                          </div>
-                        </div>
+              </div>
+
+              <template x-if="isBucketWeights()">
+                <div>
+                  <div class="rr-mix">
+                    <template x-if="weightDonutSvg(reviewRow())">
+                      <figure class="rr-ring">
+                        <span class="sv__wdonut-host" role="img" :aria-label="`Recommended weights: ${sessionWeightsLabel(reviewRow())}`"
+                              x-html="weightDonutSvg(reviewRow())"></span>
+                        <figcaption>Recommended</figcaption>
+                      </figure>
+                    </template>
+                    <ul class="rr-legend">
+                      <template x-for="b in bucketRows()" :key="b.id || b.name">
+                        <li :class="b.recommended ? '' : 'is-zero'">
+                          <i data-mark="series" :style="`background:${b.hue}`" aria-hidden="true"></i>
+                          <span x-text="b.name"></span>
+                          <b x-text="fmtWeight(b.recommended)"></b>
+                          <template x-if="gapBasis() && !targetPostdatesSession()">
+                            <small>
+                              <span class="alp__mv" :class="changeClass(b.gap)"><i x-text="changeGlyph(b.gap)" aria-hidden="true"></i><span x-text="changeLabel(b.gap)"></span></span>
+                              <span x-text="` vs ${gapBasis() === 'actual' ? 'book' : 'target'} ${fmtWeight(gapBasis() === 'actual' ? b.actual : b.target)}`"></span>
+                            </small>
+                          </template>
+                        </li>
                       </template>
-                    </div>
+                    </ul>
                   </div>
-                </template>
+                  <template x-if="outcomeCaption()">
+                    <p class="rr-note" data-target-asof x-text="outcomeCaption()"></p>
+                  </template>
+                  <div style="margin-top:1.5rem">
+                    <template x-if="gapBasis()">
+                      <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                        <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="rec-ledger" @click="open = !open">
+                          Full comparison <small x-text="outcomeColumnsLabel()"></small>
+                        </button>
+                        <div class="rr-disc__anim" id="rec-ledger" role="region" aria-label="Full comparison" :inert="!open">
+                          <div class="rr-disc__clip"><div class="rr-disc__body">
+                            <div class="alp__tblwrap sr__ledger">
+                              <table class="alp__tbl alp__tbl--led">
+                                <thead>
+                                  <tr>
+                                    <th>Sleeve</th>
+                                    <template x-if="hasTargetColumn()"><th>Target</th></template>
+                                    <template x-if="hasActualColumn()"><th>Actual</th></template>
+                                    <th>Recommended</th>
+                                    <th>Change</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <template x-for="b in bucketRows()" :key="b.id || b.name">
+                                    <tr>
+                                      <td><i class="alp__dot" data-mark="series" :style="`background:${b.hue}`"></i><span x-text="b.name"></span></td>
+                                      <template x-if="hasTargetColumn()"><td class="q" x-text="fmtWeight(b.target)"></td></template>
+                                      <template x-if="hasActualColumn()"><td class="q" x-text="fmtWeight(b.actual)"></td></template>
+                                      <td x-text="fmtWeight(b.recommended)"></td>
+                                      <td><span class="alp__mv" :class="changeClass(b.gap)"><i x-text="changeGlyph(b.gap)" aria-hidden="true"></i><span x-text="changeLabel(b.gap)"></span></span></td>
+                                    </tr>
+                                  </template>
+                                </tbody>
+                              </table>
+                            </div>
+                          </div></div>
+                        </div>
+                      </div>
+                    </template>
+                    <template x-if="withinBucketWeights().length">
+                      <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                        <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="rec-within" @click="open = !open">
+                          Inside each sleeve <small>Assets within each sleeve</small>
+                        </button>
+                        <div class="rr-disc__anim" id="rec-within" role="region" aria-label="Inside each sleeve" :inert="!open">
+                          <div class="rr-disc__clip"><div class="rr-disc__body">
+                            <div class="alp__cards">
+                              <template x-for="b in withinBucketWeights()" :key="b.bucket">
+                                <div class="alp__card">
+                                  <div class="alp__card-top">
+                                    <span class="alp__card-name"><i :style="`background:${b.hue}`"></i><b x-text="b.label"></b></span>
+                                    <template x-if="b.weight != null">
+                                      <span class="alp__card-w"><b x-text="fmtPctTrim(b.weight)"></b><small>recommended</small></span>
+                                    </template>
+                                  </div>
+                                  <div class="alp__card-body">
+                                    <div class="alp__stk" :class="b.weight === 0 ? 'zero' : ''">
+                                      <template x-for="c in b.items" :key="`${b.bucket}-${c.name}`">
+                                        <span data-mark="series" role="img" :aria-label="`${c.label}, ${fmtPctTrim(c.weight * 100)} of ${b.label}`"
+                                              :style="`width:${Math.max(0, Math.min(100, c.weight * 100))}%;background:${c.colour}`"></span>
+                                      </template>
+                                    </div>
+                                    <div class="alp__names">
+                                      <template x-for="c in b.items" :key="`${b.bucket}-${c.name}-n`">
+                                        <span><i data-mark="series" :style="`background:${c.colour}`"></i><span x-text="c.label"></span><b x-text="fmtPctTrim(c.weight * 100)"></b></span>
+                                      </template>
+                                    </div>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
+                          </div></div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </section>
+        </template>
+
+        <!-- The book this session reviewed. A framework subject has none. -->
+        <template x-if="snapshot">
+          <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="hold-h">Holdings at review</h2>
+              <span class="rr-sec__aside" x-text="`${fmtUsd(snapshot?.totalValueUsd)} · ${snapshot?.date}`"></span>
+            </div>
+            <div x-data="{ all: false }">
+              <div x-html="holdingsMarkup(snapshot, all)"></div>
+              <template x-if="portfolioRows(snapshot).length > 8"><button type="button" class="rr-more" @click="all = !all" :aria-expanded="all" x-text="all ? 'Show top 8 positions' : `Show all ${portfolioRows(snapshot).length} positions`"></button></template>
+            </div>
+            <template x-if="notableItems().length">
+              <div class="rr-block" style="margin-top:1.5rem">
+                <p class="rr-k">Notable</p>
+                <ul class="rr-list" style="margin-top:0.75rem">
+                  <template x-for="n in notableItems()" :key="n"><li x-text="n"></li></template>
+                </ul>
               </div>
             </template>
+          </section>
+        </template>
 
-            <template x-if="hasReview()">
-              <div class="sr__cols">
-                <template x-if="signalRows().length">
-                  <div class="sr__col">
-                    <p class="sr__k">Signal</p>
+        <!-- 02 · REASONING & DISAGREEMENT. What was written, beside the market
+             reading the session was given. -->
+        <template x-if="hasDiscussion() || signalRows().length">
+          <section class="rr-sec" id="reasoning" aria-labelledby="why-h">
+            <div class="rr-sec__head"><h2 class="rr-sec__h" id="why-h">Reasoning &amp; disagreement</h2></div>
+            <div class="rr-split">
+              <div>
+                <template x-if="showSynthesis()">
+                  <div class="rr-block" x-data="{ more: false }">
+                    <h3 class="rr-h3">Session synthesis</h3>
+                    <div class="rr-prose" :class="!more && isLong(session.synthesis, 700) ? 'is-clamped' : ''" style="--rr-lines:10"
+                         x-html="linkified(session.synthesis)"></div>
+                    <template x-if="isLong(session.synthesis, 700)">
+                      <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                        <span x-text="more ? 'Show less' : 'Read full synthesis'"></span><small x-text="`${wordCount(session.synthesis)} words`"></small>
+                      </button>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="consensusItems().length">
+                  <div class="rr-block">
+                    <h3 class="rr-h3">Where members agree</h3>
+                    <ul class="rr-list">
+                      <template x-for="item in consensusItems()" :key="item"><li x-html="inlineMarks(item)"></li></template>
+                    </ul>
+                  </div>
+                </template>
+                <template x-if="!showSynthesis() && !consensusItems().length && !disagreements().length">
+                  <p class="rr-note" style="margin-top:0">No written synthesis for this session. The takes below carry each member's reasoning.</p>
+                </template>
+              </div>
+              <template x-if="signalRows().length">
+                <div>
+                  <div class="rr-panel">
+                    <div class="rr-panel__head">
+                      <p class="rr-k">Market context</p>
+                      <span class="rr-k" x-text="formatDate(session.date, 'short')"></span>
+                    </div>
                     <p class="sr__state">
                       <i :style="`background:${regimeColor(backdrop.regime)}`" aria-hidden="true"></i>
                       <b x-text="regimeLabel(backdrop.regime)"></b>
@@ -213,303 +306,265 @@
                     </div>
                     <p class="sr__foot">Percentile of its own three-year history.<template x-if="!backdropV0"><span> Factor is context, not part of the composite.</span></template></p>
                   </div>
-                </template>
-                <template x-if="voteTotal(reviewRow())">
-                  <div class="sr__col">
-                    <p class="sr__k">Reasoning</p>
-                    <p class="sr__state">
-                      <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
-                      <b x-text="leanLabel(reviewRow())"></b>
-                      <span x-text="leadShare(reviewRow())"></span>
-                    </p>
-                    <template x-if="hasVoteMembers(reviewRow())">
-                      <div class="vote" role="img" :aria-label="`How members voted: ${spreadLabel(reviewRow())}.`">
-                        <template x-for="c in voteColumns(reviewRow())" :key="c.stance">
-                          <div class="vote__col" :class="{ 'is-lead': c.stance === leanStance(reviewRow()) }">
-                            <div class="vote__stack">
-                              <template x-for="m in c.members" :key="m.key">
-                                <a class="vote__m" :href="m.href || undefined">
-                                  <i :style="`background:${stanceColor(c.stance)}`" aria-hidden="true"></i><span x-text="m.name"></span>
-                                </a>
+                </div>
+              </template>
+            </div>
+
+            <template x-if="disagreements().length">
+              <div class="rr-block" style="margin-top:2.25rem">
+                <h3 class="rr-h3">Where views differ</h3>
+                <template x-for="(d, i) in disagreements()" :key="d.topic">
+                  <div class="rr-disc rr-q" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                    <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
+                      <span><span class="rr-k" x-text="`Question ${i + 1}`"></span><b x-text="d.topic"></b></span>
+                      <small x-text="`${(d.positions || []).length} views`"></small>
+                    </button>
+                    <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
+                      <div class="rr-disc__clip"><div class="rr-disc__body">
+                        <div class="rr-views">
+                          <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
+                            <div class="rr-view">
+                              <a class="rr-lnk" style="justify-self:start" :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
+                              <span>
+                                <template x-if="takeOf(p.member_id)">
+                                  <span class="ss-stance"><i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`" aria-hidden="true"></i><span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span></span>
+                                </template>
+                                <template x-if="!takeOf(p.member_id)"><span class="rr-note" style="margin:0">No take</span></template>
+                              </span>
+                              <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
+                              <template x-if="isEcho(p.view) && takeOf(p.member_id)">
+                                <p><a class="rr-lnk" :href="`#${takeAnchor(takeOf(p.member_id))}`" @click="revealResearchTake(takeOf(p.member_id))">Read their take →</a></p>
                               </template>
                             </div>
-                            <span class="vote__axis" x-text="c.stance"></span>
-                          </div>
-                        </template>
-                      </div>
-                    </template>
-                    <template x-if="!hasVoteMembers(reviewRow())">
-                      <p class="vote__sq" :aria-label="`How members voted: ${spreadLabel(reviewRow())}.`">
-                        <template x-for="q in voteSquares(reviewRow())" :key="q.key"><i :style="`background:${stanceColor(q.stance)}`"></i></template>
-                      </p>
-                    </template>
-                    <p class="sr__foot">
-                      <span x-text="quorumText(reviewRow())"></span><template x-if="meanConfidenceText(reviewRow())"><span x-text="` · ${meanConfidenceText(reviewRow())}`"></span></template>
-                      <!-- Who could have voted and did not. Resolved to names
-                           where the roster knows them; an id it does not know
-                           still prints rather than understating who missed it. -->
-                      <template x-if="absentNames().length">
-                        <span> · absent
-                          <template x-for="id in (session.swarmRecommendation?.absent || [])" :key="id">
-                            <a class="sv__take-absent-who" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
                           </template>
-                        </span>
-                      </template>
-                    </p>
+                        </div>
+                        <template x-if="d.what_settles">
+                          <p class="rr-settles"><span class="rr-k">What would settle it</span><br><span x-text="d.what_settles"></span></p>
+                        </template>
+                      </div></div>
+                    </div>
                   </div>
                 </template>
               </div>
             </template>
-
-            <!-- What the swarm was handed: a record of this session's brief,
-                 one row per part it actually contains. -->
-            <template x-if="handoverParts().length">
-              <div class="sp-brief" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                <button type="button" class="sp-brief__sum" :aria-expanded="open ? 'true' : 'false'"
-                        aria-controls="session-handover" @click="open = !open">
-                  <span class="sp-brief__sum-k">What the swarm was handed</span>
-                  <span class="sp-brief__sum-m"><i aria-hidden="true">⌄</i></span>
-                </button>
-                <div class="sp-brief__anim" id="session-handover" role="region"
-                     aria-label="What the swarm was handed" :inert="!open">
-                  <div class="sp-brief__clip">
-                    <dl class="hand">
-                      <template x-for="part in handoverParts()" :key="part.key">
-                        <div class="hand__row" :data-part="part.key">
-                          <dt x-text="part.label"></dt>
-                          <dd>
-                            <template x-if="part.quote"><q x-text="part.quote"></q></template>
-                            <template x-if="part.facts">
-                              <div class="sv__fact-row">
-                                <template x-for="f in part.facts" :key="f.key">
-                                  <span class="sv__fact">
-                                    <em x-text="f.k"></em>
-                                    <template x-if="f.dot"><i class="sv__fact-dot" :style="`background:${f.dot}`" aria-hidden="true"></i></template>
-                                    <b x-text="f.v"></b>
-                                  </span>
-                                </template>
-                              </div>
-                            </template>
-                            <template x-if="part.bars">
-                              <div class="sv__sleeves">
-                                <template x-for="t in part.bars" :key="t.key">
-                                  <div class="sv__sleeve">
-                                    <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
-                                    <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, t.pct))}%`"></i></span>
-                                    <span class="sv__sleeve-v" x-text="`${t.pct}%`"></span>
-                                  </div>
-                                </template>
-                              </div>
-                            </template>
-                            <template x-if="part.links">
-                              <ul class="hand__links">
-                                <template x-for="l in part.links" :key="l.key">
-                                  <li>
-                                    <template x-if="l.href"><a class="rm-link" :href="l.href" x-text="l.text"></a></template>
-                                    <template x-if="!l.href"><span x-text="l.text"></span></template>
-                                  </li>
-                                </template>
-                              </ul>
-                            </template>
-                            <template x-if="part.pills">
-                              <span class="hand__pills">
-                                <template x-for="p in part.pills" :key="p.key">
-                                  <span class="hand__pill-wrap">
-                                    <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
-                                    <template x-if="!p.href"><span class="hand__pill" x-text="p.text"></span></template>
-                                  </span>
-                                </template>
-                              </span>
-                            </template>
-                            <template x-if="part.list">
-                              <ul><template x-for="n in part.list" :key="n.key"><li x-text="n.text"></li></template></ul>
-                            </template>
-                          </dd>
-                        </div>
-                      </template>
-                    </dl>
-                  </div>
-                </div>
-              </div>
-            </template>
           </section>
         </template>
 
-        <!-- The book this session reviewed, in the subject page's holdings
-             markup. A framework subject has none (see loadApi()). -->
-        <template x-if="snapshot">
-          <section class="sv__portfolio">
-            <div class="sv__panel-head">
-              <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
-              <span class="sv__tag" x-text="snapshot?.date"></span>
-            </div>
-            <div class="sp-holdings">
-              <div class="sv__table-wrap">
-                <table class="sv__data-table">
-                  <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
-                  <tbody>
-                    <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
-                      <tr>
-                        <td><i class="sp-key" :style="`--k:${tokenColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
-                        <td x-text="p.chain"></td>
-                        <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
-                        <td class="sv__num" x-text="fmtPct1(p.share)"></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <template x-if="notableItems().length">
-              <div class="sv__notables">
-                <p class="sv__panel-label">Notable</p>
-                <ul>
-                  <template x-for="n in notableItems()" :key="n"><li x-text="n"></li></template>
-                </ul>
-              </div>
-            </template>
-          </section>
-        </template>
-
-        <!-- THE DISCUSSION, when somebody wrote it: a v0 session's synthesis,
-             consensus and disagreements, or a judge's disagreements. A live
-             aggregate's are templates over figures the band already draws. -->
-        <template x-if="hasDiscussion()">
-          <section class="ss-sec">
-            <div class="sv__sec"><div><h2 class="sv__sec-h">Discussion</h2></div></div>
-            <template x-if="showSynthesis()">
-              <div class="sv__synthesis" x-html="linkified(session.synthesis)"></div>
-            </template>
-            <template x-if="consensusItems().length">
-              <div class="ss-block">
-                <p class="sr__k">Consensus</p>
-                <!-- inlineMarks, not linkified: consensus entries are single
-                     points, so they take bold/links but must not open block
-                     elements inside a list item. -->
-                <ul class="ss-list">
-                  <template x-for="item in consensusItems()" :key="item"><li x-html="inlineMarks(item)"></li></template>
-                </ul>
-              </div>
-            </template>
-            <template x-if="disagreements().length">
-              <div class="ss-block">
-                <p class="sr__k">Disagreements</p>
-                <div class="sv__disagreements">
-                  <template x-for="d in disagreements()" :key="d.topic">
-                    <article class="sv__disagreement">
-                      <h3 x-text="d.topic"></h3>
-                      <ul>
-                        <template x-for="p in d.positions" :key="`${d.topic}-${p.member_id}`">
-                          <li>
-                            <a :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
-                            <!-- Stance and view are SEPARATE grid cells, so the
-                                 views are a column a reader can scan down. -->
-                            <span class="sv__dis-stance-cell">
-                              <template x-if="takeOf(p.member_id)">
-                                <span class="sv__dis-stance" :style="stanceStyle(takeOf(p.member_id)?.stance)">
-                                  <i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`"></i>
-                                  <span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span>
-                                </span>
-                              </template>
-                              <template x-if="!takeOf(p.member_id)">
-                                <span class="sv__dis-nostance">no take</span>
-                              </template>
-                            </span>
-                            <span class="sv__dis-view">
-                              <template x-if="!isEcho(p.view)"><span x-html="inlineMarks(p.view)"></span></template>
-                              <!-- A view that is a take body verbatim links to the
-                                   take on this page instead of reprinting it. -->
-                              <template x-if="isEcho(p.view) && takeOf(p.member_id)">
-                                <a class="sv__dis-read" :href="`#${takeAnchor(takeOf(p.member_id))}`">Read their take →</a>
-                              </template>
-                            </span>
-                          </li>
-                        </template>
-                      </ul>
-                      <template x-if="d.what_settles"><p><em>Settles when:</em> <span x-text="d.what_settles"></span></p></template>
-                    </article>
-                  </template>
-                </div>
-              </div>
-            </template>
-          </section>
-        </template>
-
-        <!-- THE TAKES. The index is the way into five long cards: who took
-             part, how they voted and how sure they were, each row a jump to
-             the card. Keyed on the MEMBER, not the row id (issue #573): a
-             member may file several revisions of a take, each an immutable
-             row with its own uuid, and the member is what this list has one
-             row of. The server resolves latest-per-member (domain.ts
-             withTakes); this is the second, independent guarantee. -->
+        <!-- 03 · TAKES. How the room voted, then each take, clamped. -->
         <template x-if="takes.length">
-          <section class="sv__takes-section ss-sec">
-            <div class="sv__sec">
-              <div><h2 class="sv__sec-h">Member takes</h2></div>
-              <span class="sv__session-count" x-text="`${takes.length} ${takes.length === 1 ? 'take' : 'takes'}`"></span>
+          <section class="rr-sec sv__takes-section" id="takes" aria-labelledby="takes-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="takes-h">Member takes</h2>
+              <span class="rr-sec__aside" x-text="`${takes.length} ${takes.length === 1 ? 'take' : 'takes'}`"></span>
             </div>
-            <div class="sv__table-wrap session-submissions">
-              <table class="sv__data-table">
-                <thead><tr><th>Member</th><th>Stance</th><th class="sv__num">Confidence</th></tr></thead>
-                <tbody>
-                  <template x-for="t in takes" :key="t.memberId || t.id">
-                    <tr>
-                      <td><a class="rm-link" :href="`#${takeAnchor(t)}`" x-text="t.memberName"></a></td>
-                      <td><span class="ss-stance"><i :style="`background:${stanceColor(t.stance)}`" aria-hidden="true"></i><span x-text="t.stance"></span></span></td>
-                      <td class="sv__num" x-text="fmtPct(t.confidence)"></td>
-                    </tr>
+            <template x-if="voteTotal(reviewRow()) && isFramework()">
+              <div class="rr-block" style="margin-bottom:1rem">
+                <p class="rr-k">How members voted</p>
+                <p class="sr__state">
+                  <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
+                  <b x-text="leanLabel(reviewRow())"></b>
+                  <span x-text="leadShare(reviewRow())"></span>
+                </p>
+                <template x-if="hasVoteMembers(reviewRow())">
+                  <div class="vote" role="img" :aria-label="`How members voted: ${spreadLabel(reviewRow())}.`">
+                    <template x-for="c in voteColumns(reviewRow())" :key="c.stance">
+                      <div class="vote__col" :class="{ 'is-lead': c.stance === leanStance(reviewRow()) }">
+                        <div class="vote__stack">
+                          <template x-for="m in c.members" :key="m.key">
+                            <a class="vote__m" :href="m.href || undefined">
+                              <i :style="`background:${stanceColor(c.stance)}`" aria-hidden="true"></i><span x-text="m.name"></span>
+                            </a>
+                          </template>
+                        </div>
+                        <span class="vote__axis" x-text="c.stance"></span>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <p class="sr__foot">
+                  <span x-text="quorumText(reviewRow())"></span><template x-if="meanConfidenceText(reviewRow())"><span x-text="` · ${meanConfidenceText(reviewRow())}`"></span></template>
+                  <template x-if="absentNames().length">
+                    <span> · absent
+                      <template x-for="id in (session.swarmRecommendation?.absent || [])" :key="id">
+                        <a class="sv__take-absent-who" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
+                      </template>
+                    </span>
                   </template>
-                </tbody>
-              </table>
-            </div>
-            <div class="sv__takes sv__takes--ported">
-              <template x-for="t in takes" :key="t.memberId || t.id">
-                <article class="sv__take sv__take--ported" :id="takeAnchor(t)">
-                  <header class="sv__take-head">
-                    <div class="sv__take-member">
-                      <!-- Seeded `fingerprint || id`, the same expression as the
-                           roster row and the profile hero, so one member is one
-                           mark everywhere. Locked in step by
-                           scripts/tests/unit/member-mark-distinctness.test.ts. -->
-                      <!-- BOTH link sites on this page pass the IMMUTABLE id and
-                           let memberHref resolve the address (issue #598). -->
+                </p>
+              </div>
+            </template>
+
+            <template x-if="takes.length">
+              <div>
+                <div class="pr-controls">
+                  <label>Find a member or argument<input type="search" x-model="takeQuery" @input="takeLimit = 6" placeholder="Search names and full takes"></label>
+                  <label>Stance<select x-model="takeStance" @change="takeLimit = 6"><option value="">All stances</option><template x-for="stance in takeStances()" :key="stance"><option :value="stance" x-text="stance"></option></template></select></label>
+                  <button type="button" class="rr-btn" @click="resetTakeFilter()" :disabled="!takeQuery && !takeStance">Clear</button>
+                  <span x-html="researchTooltip('confidence', 'takes-confidence-tip')"></span>
+                </div>
+                <p class="pr-takes-status" role="status" aria-live="polite" x-text="`${visibleResearchTakes().length} of ${filteredResearchTakes().length} matching takes`"></p>
+                <template x-if="!filteredResearchTakes().length"><p class="rr-prose">No takes match these filters.</p></template>
+              </div>
+            </template>
+            <div class="sv__takes--ported">
+              <template x-for="t in visibleResearchTakes()" :key="t.memberId || t.id">
+                <article class="rr-take" :id="takeAnchor(t)" x-data="{ more: false }">
+                  <div class="rr-take__top">
+                    <div class="rr-take__who">
                       <a class="sv__avatar sv__avatar--mark" :href="memberHref(t.memberId)" :aria-label="t.memberName"
-                         x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 40, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
+                         x-html="memberMark(t.memberKeyFingerprint || t.memberId, t.memberName, 36, memberById(t.memberId)?.avatar?.path, memberById(t.memberId)?.handle)"></a>
                       <div>
-                        <a class="sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
-                        <div class="sv__take-lens" x-text="memberLens(t.memberId)"></div>
+                        <a class="rr-take__name sv__member-link" :href="memberHref(t.memberId)" x-text="t.memberName"></a>
+                        <div class="rr-take__lens sv__take-lens" x-text="memberLens(t.memberId)"></div>
                       </div>
                     </div>
-                    <!-- Stance and confidence apart, as /swarm's take rows set
-                         them: the badge is the position, the figure beside it
-                         how sure the member was. -->
-                    <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
-                      <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
-                    </span>
-                    <template x-if="Number.isFinite(Number(t.confidence))">
-                      <span class="mp-conf">confidence <b x-text="fmtPct(t.confidence)"></b></span>
+                    <div class="rr-take__stance">
+                      <span class="sv__stance-badge" :style="stanceStyle(t.stance)">
+                        <i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="t.stance"></span>
+                      </span>
+                      <template x-if="t.confidence != null && t.confidence !== '' && Number.isFinite(Number(t.confidence))">
+                        <span class="mp-conf">Confidence <b x-text="fmtPct(t.confidence)"></b></span>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="rr-take__main" :class="takeWeightRows(t).length ? 'has-aside' : ''">
+                    <div>
+                      <div class="sv__take-body rr-prose" :class="!more && isLong(t.body, 420) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(t.body || '')"></div>
+                      <template x-if="isLong(t.body, 420)">
+                        <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                          <span x-text="more ? 'Show less' : 'Read full take'"></span><small x-text="`${wordCount(t.body)} words`"></small>
+                        </button>
+                      </template>
+                    </div>
+                    <template x-if="takeWeightRows(t).length">
+                      <aside class="rr-take__aside">
+                        <p class="rr-k">Proposed weights</p>
+                        <ul class="rr-legend" style="margin-top:0.5rem">
+                          <template x-for="w in takeWeightRows(t)" :key="w.key">
+                            <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="`${fmtPctTrim(w.pct)}`"></b></li>
+                          </template>
+                        </ul>
+                      </aside>
                     </template>
-                    <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
+                  </div>
+                  <div class="rr-take__foot">
+                    <span class="sv__vfy sv__vfy--inline" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
                           data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified, t.archival)"
-                          tabindex="0" :aria-label="`${verifyLabel(t.verified, t.archival)}. ${verifyTip(t.verified, t.archival)}`">
-                      <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                        <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                        <path :d="verifyPath(t.verified, t.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
-                      </svg>
-                      <span class="sv__vfy-label" x-show="!t.verified" x-text="verifyLabel(t.verified, t.archival)"></span>
-                      <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified, t.archival)"></span>
-                    </span>
-                  </header>
-                  <div class="sv__take-body" x-html="linkified(t.body || '')"></div>
-                  <p class="ss-links" x-show="source === 'api' || t.memoUrl">
-                    <a class="sv__memo-link" x-show="source === 'api'" :href="takeHref(t)" data-take-permalink>Verification receipt →</a>
-                    <a class="sv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
-                  </p>
+                          :title="verifyTip(t.verified, t.archival)" x-text="verifyLabel(t.verified, t.archival)"></span>
+                    <template x-if="source === 'api'"><a :href="takeHref(t)" data-take-permalink>Verification receipt ↗</a></template>
+                    <template x-if="t.memoUrl"><a :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a></template>
+                    <a :href="`#${takeAnchor(t)}`">Link to this take</a>
+                    <a :href="memberHref(t.memberId)">Member profile</a>
+                  </div>
                 </article>
               </template>
             </div>
+            <template x-if="visibleResearchTakes().length < filteredResearchTakes().length"><button type="button" class="rr-btn" @click="takeLimit += 6" x-text="`Show more takes (${filteredResearchTakes().length - visibleResearchTakes().length} remaining)`"></button></template>
           </section>
         </template>
+
+        <!-- 04 · EVIDENCE. Whether the takes are signed, what the session was
+             handed, and where the raw record lives. -->
+        <section class="rr-sec" id="evidence" aria-labelledby="ev-h">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="ev-h">Evidence &amp; provenance</h2></div>
+          <div class="rr-split">
+            <div>
+              <h3 class="rr-h3" x-text="signatureHeadline()"></h3>
+              <p class="rr-prose" style="font-size:0.875rem" x-text="signatureDetail()"></p>
+            </div>
+            <dl class="rr-dl">
+              <template x-if="source === 'api'">
+                <div><dt>Consensus receipt</dt><dd>
+                  <span x-text="receiptStatus"></span>
+                  <template x-if="receiptStatus === 'Verified' || receiptStatus === 'Not verified'">
+                    <span> · <a :href="receiptHref()" target="_blank" rel="noopener">Read receipt ↗</a></span>
+                  </template>
+                </dd></div>
+              </template>
+              <template x-if="session.generatedAt || session.generated_at">
+                <div><dt>Record generated</dt><dd class="rr-mono" x-text="session.generatedAt || session.generated_at"></dd></div>
+              </template>
+              <template x-if="isFramework() || isBucketWeights()"><div><dt>Target policy</dt><dd x-text="targetPolicyLabel()"></dd></div></template>
+              <div><dt>Session record</dt><dd><a :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON ↗</a></dd></div>
+              <template x-if="brief">
+                <div><dt>Session inputs</dt><dd><a :href="briefJsonHref()" target="_blank" rel="noopener">Brief JSON ↗</a></dd></div>
+              </template>
+            </dl>
+          </div>
+
+          <template x-if="handoverParts().length">
+            <div class="rr-disc" style="margin-top:2.25rem" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+              <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="session-handover" @click="open = !open">
+                What the swarm was handed <small>The brief this session opened with</small>
+              </button>
+              <div class="rr-disc__anim" id="session-handover" role="region" aria-label="What the swarm was handed" :inert="!open">
+                <div class="rr-disc__clip"><div class="rr-disc__body">
+                  <dl class="hand">
+                    <template x-for="part in handoverParts()" :key="part.key">
+                      <div class="hand__row" :data-part="part.key">
+                        <dt x-text="part.label"></dt>
+                        <dd>
+                          <template x-if="part.quote"><q x-text="part.quote"></q></template>
+                          <template x-if="part.facts">
+                            <div class="sv__fact-row">
+                              <template x-for="f in part.facts" :key="f.key">
+                                <span class="sv__fact">
+                                  <em x-text="f.k"></em>
+                                  <template x-if="f.dot"><i class="sv__fact-dot" :style="`background:${f.dot}`" aria-hidden="true"></i></template>
+                                  <b x-text="f.v"></b>
+                                </span>
+                              </template>
+                            </div>
+                          </template>
+                          <template x-if="part.bars">
+                            <div class="sv__sleeves">
+                              <template x-for="t in part.bars" :key="t.key">
+                                <div class="sv__sleeve">
+                                  <span class="sv__sleeve-n"><i class="sv__bucket-dot" :style="`background:${t.hue}`" aria-hidden="true"></i><span x-text="t.label"></span></span>
+                                  <span class="sv__sleeve-track"><i :style="`width:${Math.max(0, Math.min(100, t.pct))}%`"></i></span>
+                                  <span class="sv__sleeve-v" x-text="`${t.pct}%`"></span>
+                                </div>
+                              </template>
+                            </div>
+                          </template>
+                          <template x-if="part.links">
+                            <ul class="hand__links">
+                              <template x-for="l in part.links" :key="l.key">
+                                <li>
+                                  <template x-if="l.href"><a class="rm-link" :href="l.href" x-text="l.text"></a></template>
+                                  <template x-if="!l.href"><span x-text="l.text"></span></template>
+                                </li>
+                              </template>
+                            </ul>
+                          </template>
+                          <template x-if="part.pills">
+                            <span class="hand__pills">
+                              <template x-for="p in part.pills" :key="p.key">
+                                <span class="hand__pill-wrap">
+                                  <template x-if="p.href"><a class="hand__pill hand__pill--link" :href="p.href" x-text="p.text"></a></template>
+                                  <template x-if="!p.href"><span class="hand__pill" x-text="p.text"></span></template>
+                                </span>
+                              </template>
+                            </span>
+                          </template>
+                          <template x-if="part.list">
+                            <ul><template x-for="n in part.list" :key="n.key"><li x-text="n.text"></li></template></ul>
+                          </template>
+                        </dd>
+                      </div>
+                    </template>
+                  </dl>
+                </div></div>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <nav class="rr-recnav" aria-label="Session navigation">
+          <span><template x-if="neighbours.older"><a :href="sessionHrefOf(neighbours.older)" x-text="`← ${formatDate(neighbours.older.date, 'short')}`"></a></template></span>
+          <a :href="subjectHref()">All sessions on this subject</a>
+          <span><template x-if="neighbours.newer"><a :href="sessionHrefOf(neighbours.newer)" x-text="`${formatDate(neighbours.newer.date, 'short')} →`"></a></template></span>
+        </nav>
       </div>
     </template>
 
@@ -523,41 +578,15 @@
   </div>
 
   <style>
-    /* Page-local: the spacing and small parts only this page has. The band,
-       the registers and the handover are shared components in views.css. */
-    /* The session's own headline: its date in the display face, one step
-       under the subject's name, and its phase beside it. */
-    .ss-when { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 1.25rem; margin: 0.55rem 0 0; }
-    .ss-when time { font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-      font-size: 1.45rem; line-height: 1.1; letter-spacing: -0.005em; color: var(--color-text-soft);
-      font-variant-numeric: tabular-nums; }
-    .ss-when .rm-sphase { font-size: 0.72rem; }
-    .ss-review { margin-top: 2rem; }
-    .ss-review ~ .sv__portfolio { margin-top: 2rem; }
-    /* The absent names read as part of the foot line they sit in, not in the
-       index card's larger byline face. */
+    /* Page-local: the handful of pieces only this page has. The record's
+       components are shared in views.css (.rr-*). */
+    .ss-stance { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.75rem; }
+    .ss-stance i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
     .sr__foot .sv__take-absent-who { font-size: inherit; font-weight: 400; color: var(--color-text-soft);
       text-decoration: underline; text-decoration-color: var(--color-border-light); text-underline-offset: 3px; }
-    .sr__foot .sv__take-absent-who:hover, .sr__foot .sv__take-absent-who:focus-visible {
-      color: var(--color-text); text-decoration-color: var(--color-accent); }
-    /* The comma between two names sits outside either underline: an atomic
-       inline does not inherit its link's decoration. */
     .sr__foot .sv__take-absent-who + .sv__take-absent-who::before { content: ","; display: inline-block;
       margin-right: 0.35em; text-decoration: none; color: var(--color-text-muted); }
-    .ss-sec { margin-top: 2.75rem; }
-    .ss-block { margin-top: 1.75rem; }
-    .ss-list { list-style: none; margin: 0.65rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
-    .ss-list li { position: relative; padding-left: 0.85rem; font-size: 0.9rem; line-height: 1.55; color: var(--color-text-soft); }
-    .ss-list li::before { content: ""; position: absolute; left: 0; top: 0.72em; width: 4px; height: 1px;
-      background: var(--color-text-muted); }
-    .ss-block .sv__disagreements { margin-top: 0.65rem; }
-    .session-submissions { margin-top: 1.1rem; }
-    .ss-stance { display: inline-flex; align-items: center; gap: 0.45rem; }
-    .ss-stance i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-    .sv__takes--ported { margin-top: 1.5rem; }
-    .sv__takes--ported .sv__take { scroll-margin-top: 6rem; }
-    /* The body runs the card's width, like every other block in the column. */
-    .sv__takes--ported .sv__take-body { max-width: none; }
-    .ss-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.75rem; margin: 1.1rem 0 0; }
+    .sv__vfy--inline { font-family: var(--font-mono); font-size: 0.6875rem; text-transform: none; letter-spacing: 0; }
+    .rr-split--one { grid-template-columns: minmax(0, 1fr); }
   </style>
 </section>

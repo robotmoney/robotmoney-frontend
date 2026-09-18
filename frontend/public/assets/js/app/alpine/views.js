@@ -16,6 +16,7 @@ import { registerWalletPerfView } from "./views/wallet-perf.js";
 import { registerFeeChart } from "./views/fee-chart.js";
 import { registerBlogCharts } from "./views/blog-charts.js";
 import { registerBuybackSummary } from "./views/buyback-summary.js";
+import { registerVaultView } from "./views/vault.js";
 import { registerAllocationView } from "./views/allocation.js";
 import { registerSwarmView } from "./views/swarm.js";
 import { registerCommentsThread } from "./views/comments.js";
@@ -52,6 +53,7 @@ export function registerViews(Alpine) {
   registerBlogCharts(Alpine);
   registerBuybackSummary(Alpine);
   registerAllocationView(Alpine);
+  registerVaultView(Alpine);
   registerSwarmView(Alpine);
   registerCommentsThread(Alpine);
   registerApplyForm(Alpine);

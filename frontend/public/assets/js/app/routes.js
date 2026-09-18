@@ -1,14 +1,7 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// There is still no VAULT_VIEW, and now there is no views/vault.html either.
-// It was kept UNREACHABLE in the tree while RM-104's information architecture
-// was reworked, on the note that "the page comes back through that work". This
-// is that work: RM-115 supersedes the /vault page shape, and the vault is now
-// the implementation SECTION of /allocation (`#vault`) rather than a page of
-// its own. Its content, the venue-rate reference dataset included, moved into
-// views/allocation.html and alpine/views/allocation.js; the deleted file is in
-// history and on branch david/vault-ia-polish.
+export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -208,6 +201,8 @@ export function viewFor(pathname) {
   if (pathname === "/docs/investment-committee" || pathname.startsWith("/docs/investment-committee/")) {
     return viewFor("/docs/investment-swarm" + pathname.slice("/docs/investment-committee".length));
   }
+  if (/^\/vault\/(rmusdc|rmproto|rmagent|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
+  if (pathname.startsWith("/vault/")) return NOT_FOUND_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];
   // Dashboard routes (issue #380) checked next: DASH_ROUTES/DASH_PARAM_ROUTES
   // above are the single source of truth for both the fragment AND the

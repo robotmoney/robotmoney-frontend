@@ -15,11 +15,12 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
+import { researchRecord, researchTakeList, filterSessionDates } from "../components/subject-research.js";
 import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -1066,6 +1067,12 @@ export function registerStaticViews(Alpine) {
   // shaping over an API that was already answering.
   Alpine.data("subjectProfile", () => ({
     ...helpers,
+    ...researchRecord,
+    structuralNotesOf,
+    historyQuery: "",
+    historyFilter: "",
+    filteredHistoryIndex() { return filterSessionDates(this.sessionIndex, this.historyFilter); },
+    async searchHistory() { this.historyFilter = this.historyQuery; await this.goHistory(0); },
     ...sessionSummary,
     ...sessionTakes(),
     ...allocationFramework(),
@@ -1079,7 +1086,15 @@ export function registerStaticViews(Alpine) {
     // recent-session refs can name their subjects.
     subjectNames: {},
     snapshot: null,
+    // Every published session on this subject, newest first, as index rows.
+    sessionIndex: [],
+    // The detailed rows: the current history page. sessions[0] on page 1 is
+    // the latest review.
     sessions: [],
+    historyPage: 0,
+    historyBusy: false,
+    historyError: "",
+    historySize: 12,
     // How many days of history the concentration chart reads. The API returns
     // every snapshot ever taken (311 on the demo stack), and a two-year stack of
     // 1px columns says nothing a reader can act on.
@@ -1131,7 +1146,9 @@ export function registerStaticViews(Alpine) {
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
-        this.sessions = await this.loadSessions(id);
+        this.sessionIndex = await this.loadSessionIndex(id);
+        this.sessions = await this.loadSessionPage(0);
+        this.latestRow = this.sessions[0] || null;
         // The brief the last session opened with. Guarded like the rest: the
         // page describes the handover with or without it, and only the
         // figures depend on having a real one.
@@ -1153,6 +1170,7 @@ export function registerStaticViews(Alpine) {
         this.error = e.message || "Subject not found";
       } finally {
         this.loading = false;
+        this.$nextTick(() => this.restoreResearchAnchor());
       }
     },
     async loadSnapshots(id) {
@@ -1206,27 +1224,30 @@ export function registerStaticViews(Alpine) {
       } catch (_) { /* fall through to the archive */ }
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
-    latest() { return this.sessions[0] || null; },
+    latestRow: null,
+    latest() { return this.latestRow; },
     hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
     hasLatestReview() {
       const l = this.latest();
       return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
     },
-    async loadSessions(id) {
+    // Every published session on the subject, newest first, as index rows.
+    // The public list has no subject filter yet (#991), so the whole index is
+    // read and filtered here, with the static archive behind it.
+    async loadSessionIndex(id) {
       const pick = (list) => list
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
-        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-        .slice(0, 20)
-        // `id` is carried through because it is now the ONLY unique handle on a
-        // session: a subject may convene more than once a day, so the template
-        // cannot key rows on (date, subjectId) without colliding — and a
-        // duplicate key makes Alpine render the whole list as nothing. The
-        // static archive has no ids, so fall back to the old composite there.
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+          || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+        // `id` is the ONLY unique handle on a session: a subject may convene
+        // more than once a day. The static archive has no ids, so it falls
+        // back to the composite, which sessionHref() recognises.
         .map((s) => ({
           id: s.id ?? `${s.date}-${s.subjectId ?? s.subject_id}`,
           date: s.date,
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
+          generatedAt: s.generatedAt ?? s.generated_at ?? null,
         }));
       const remember = (list) => {
         const names = { ...this.subjectNames };
@@ -1237,72 +1258,157 @@ export function registerStaticViews(Alpine) {
         }
         this.subjectNames = names;
       };
-      let index = [];
       try {
         const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
         remember(all);
-        index = pick(all);
+        const index = pick(all);
+        if (index.length) return index;
       } catch (_) { /* fall through to the archive */ }
-      // Same archive fallback the snapshots take. index.json is snake_case while
-      // the API is camelCase, so pick() reads both rather than silently matching
-      // nothing and rendering "no published session yet" over a full archive.
-      if (!index.length) {
-        try {
-          const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
-          remember(all);
-          index = pick(all);
-        } catch (_) {
-          return [];
-        }
+      try {
+        const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
+        remember(all);
+        return pick(all);
+      } catch (_) {
+        return [];
       }
-      // The FULL detail is fetched per session either way — that request was
-      // already being made and all but `synthesis` discarded. Keeping
-      // swarmRecommendation is what lets this page show the stance spread, the
-      // consensus and what the session decided, exactly as /swarm does, at no
-      // extra cost. See lib/session-summary.js.
-      return Promise.all(index.map(async (s) => {
-        try {
-          const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-          const full = camelSession(detail.session || detail);
-          return {
-            ...s,
-            synthesis: full?.synthesis || "",
-            swarmRecommendation: full?.swarmRecommendation || null,
-            // The regime read this session was given. camelSession already
-            // built it out of a response this loop is already making, and the
-            // row threw it away — so the subject page had no regime at all
-            // while the session page drew a whole panel from it.
-            regimeSummary: full?.regimeSummary || null,
-            takes: (detail.takes || []).length,
-            // The BODIES, not just the count. This response is already in
-            // hand, so the expander reads them from the row instead of
-            // re-fetching the detail it was built from. See
-            // lib/session-takes.js toggleTakes().
-            takeRows: (detail.takes || []).map(camelTake),
-          };
-        } catch (_) {
-          if (archivePreferred(s.date)) {
-            try {
-              const archive = await loadArchiveSession(s.date, s.subjectId);
-              return {
-                ...s,
-                synthesis: archive.session?.synthesis || "",
-                swarmRecommendation: archive.session?.swarmRecommendation || null,
-                regimeSummary: archive.session?.regimeSummary || null,
-                takes: (archive.takes || []).length,
-                // loadArchiveSession already camelTakes these. Without them
-                // the expander falls through to fetchSessionDetail, which asks
-                // an API that has no row for an archived session and answers
-                // "These takes could not be loaded" over takes that are
-                // sitting in memory.
-                takeRows: archive.takes || [],
-              };
-            } catch (_) { /* fall through */ }
-          }
-          return { ...s, synthesis: "", swarmRecommendation: null, takes: 0 };
-        }
-      }));
     },
+    // One page of history, in full: the session detail (recommendation, regime,
+    // takes) and the brief it opened with, which is the only honest source of
+    // the reference weights a row is compared against. Guarded per session,
+    // with the static archive behind each.
+    async loadSessionPage(page) {
+      const rows = this.filteredHistoryIndex().slice(page * this.historySize, (page + 1) * this.historySize);
+      return Promise.all(rows.map((s) => this.loadSessionRow(s)));
+    },
+    async loadSessionRow(s) {
+      const archiveId = s.id === `${s.date}-${s.subjectId}`;
+      const briefFor = async () => {
+        if (!archiveId) {
+          const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
+          if (b && !b.error) return b;
+        }
+        return archivePreferred(s.date)
+          ? fetchJson(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).catch(() => null)
+          : null;
+      };
+      const withBrief = async (row) => ({ ...row, reference: referenceWeights(await briefFor()) });
+      try {
+        const detail = archiveId
+          ? await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }))
+          : await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        const full = camelSession(detail.session || detail);
+        return withBrief({
+          ...s,
+          synthesis: full?.synthesis || "",
+          swarmRecommendation: full?.swarmRecommendation || null,
+          regimeSummary: full?.regimeSummary || null,
+          publishedAt: full?.publishedAt || null,
+          takes: (detail.takes || []).length,
+          takeRows: (detail.takes || []).map(camelTake),
+        });
+      } catch (_) {
+        if (archivePreferred(s.date)) {
+          try {
+            const archive = await loadArchiveSession(s.date, s.subjectId);
+            return withBrief({
+              ...s,
+              synthesis: archive.session?.synthesis || "",
+              swarmRecommendation: archive.session?.swarmRecommendation || null,
+              regimeSummary: archive.session?.regimeSummary || null,
+              takes: (archive.takes || []).length,
+              takeRows: archive.takes || [],
+            });
+          } catch (_) { /* fall through */ }
+        }
+        return { ...s, synthesis: "", swarmRecommendation: null, takes: 0, takeRows: [], reference: null };
+      }
+    },
+    historyPageCount() { return Math.max(1, Math.ceil(this.filteredHistoryIndex().length / this.historySize)); },
+    async goHistory(page) {
+      if (this.historyBusy || page < 0 || page >= this.historyPageCount()) return;
+      this.historyBusy = true;
+      this.historyError = "";
+      try {
+        this.sessions = await this.loadSessionPage(page);
+        this.historyPage = page;
+        document.getElementById("history")?.scrollIntoView({ block: "start" });
+      } catch (_) {
+        this.historyError = "This page of history could not be loaded. The previous page is still shown.";
+      } finally {
+        this.historyBusy = false;
+      }
+    },
+    historyRange() {
+      const total = this.filteredHistoryIndex().length;
+      const from = total ? this.historyPage * this.historySize + 1 : 0;
+      const to = Math.min(total, from + this.historySize - 1);
+      return `${from}–${to} of ${total}`;
+    },
+    // ── the record's figures (RM-121) ───────────────────────────────────────
+    // The four sleeves in published order, as table columns.
+    sleeveColumns() {
+      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), hue: bucketHue(key, i) }));
+    },
+    // A subject whose sessions recommend sleeve weights reads as a weights
+    // history; any other reads as a verdict history.
+    isWeightsSubject() {
+      return this.isFramework() || this.sessions.some((r) => r?.swarmRecommendation?.type === "bucket_weights");
+    },
+    // A row's recommended weights in column order, percent, null where absent.
+    rowWeights(row) {
+      const rows = this.sessionWeights(row) || [];
+      return BUCKET_ORDER.map((key) => {
+        const hit = rows.find((r) => r.key === key);
+        return hit ? hit.pct : null;
+      });
+    },
+    // The moves a row recommends against the reference ITS OWN brief carried.
+    // No reference, no moves: today's framework is never read back onto an
+    // older session.
+    rowMoves(row) {
+      if (!row?.reference) return null;
+      const w = this.rowWeights(row);
+      if (w.every((v) => v == null)) return null;
+      return BUCKET_ORDER.map((key, i) => {
+        const was = row.reference[key];
+        const d = weightChange.weightDelta(w[i], was == null ? null : was);
+        return { key, label: bucketLabel(key), was, d };
+      }).filter((m) => m.d != null && m.d !== 0);
+    },
+    rowOutcome(row) {
+      if (!this.rowWeights(row).some((v) => v != null)) return "Recommendation unavailable";
+      const moves = this.rowMoves(row);
+      if (moves == null) return "Reference unavailable";
+      return moves.length ? `${moves.length} ${moves.length === 1 ? "sleeve moves" : "sleeves move"} from target` : "Target weights retained";
+    },
+    // The latest review's legend: each sleeve, its recommended weight, and its
+    // move against the reference that session was handed.
+    latestLegend() {
+      const row = this.latest();
+      const w = this.rowWeights(row);
+      return this.sleeveColumns().map((c, i) => {
+        const was = row?.reference ? row.reference[c.key] : null;
+        return { ...c, pct: w[i], was: was == null ? null : was, d: row?.reference ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
+      }).filter((r) => r.pct != null);
+    },
+    stanceTally(row) {
+      const c = this.stanceCounts(row) || {};
+      return ["bearish", "cautious", "neutral", "constructive", "bullish"]
+        .map((stance) => ({ stance, n: Number(c[stance]) || 0 }))
+        .filter((x) => x.n > 0);
+    },
+    pctLabel(v) { return weightChange.fmtPctTrim(v); },
+    changeGlyph(d) { return weightChange.changeGlyph(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    rowTime(row) {
+      const at = row?.publishedAt || row?.generatedAt;
+      if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
+      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
+    },
+    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    sessionsJsonHref() { return ROUTES.swarm.sessions; },
     // What KIND of subject this is, from the record rather than from the slug.
     // A `framework` subject is the allocation recipe and has no book: its own
     // structural notes open with "no portfolio to scrape", which the page was
@@ -1315,7 +1421,7 @@ export function registerStaticViews(Alpine) {
     // is the less useful of the two: a reader wants to know how current the
     // page is, not when it started.
     lastReviewedLabel() {
-      const s = this.sessions[0];
+      const s = this.sessionIndex[0];
       return s?.date ? this.formatDate(s.date, "short") : "";
     },
     positionRows() {
@@ -1841,6 +1947,8 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
+    ...researchRecord,
+    ...researchTakeList(),
     // The review band's vote and the recommendation ring, shared with /swarm
     // and the subject page. Spread BEFORE this page's own keys, and nothing
     // below redefines a name it carries: an own method of the same name would
@@ -1864,6 +1972,20 @@ export function registerStaticViews(Alpine) {
     members: [],
     // subject id → name, for the brief's recent-session refs, which carry ids.
     subjectNames: {},
+    // The consensus receipt's state, read after the page renders: it is
+    // evidence about the record, not part of it, so a slow or failed read
+    // never holds the session back.
+    receiptStatus: "Checking…",
+    // The sessions either side of this one on the same subject, for the
+    // record's own prev/next. Filled after render, like the receipt.
+    neighbours: { older: null, newer: null },
+    // A failed load offers a retry instead of a dead end.
+    retry() {
+      this.error = null;
+      this.loading = true;
+      this.session = null;
+      this.init();
+    },
     async init() {
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
@@ -1883,10 +2005,12 @@ export function registerStaticViews(Alpine) {
           const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
-        } catch (_) {
-          this.error = "Session not found";
+          this.loadEvidence();
+        } catch (e) {
+          this.error = /** @type {any} */ (e)?.status === 404 ? "Session not found" : "This session could not be loaded. Try again.";
         } finally {
           this.loading = false;
+        this.$nextTick(() => this.restoreResearchAnchor());
         }
         return;
       }
@@ -1894,6 +2018,7 @@ export function registerStaticViews(Alpine) {
       if (!match) {
         this.error = "Session not found";
         this.loading = false;
+        this.$nextTick(() => this.restoreResearchAnchor());
         return;
       }
       const [, date, subject] = match;
@@ -1907,6 +2032,7 @@ export function registerStaticViews(Alpine) {
         // in the database, the archive is a FALLBACK for checkouts with no
         // backend, not a competing source of truth for old dates.
         await this.loadApi(date, subject);
+        this.loadEvidence();
       } catch (primary) {
         try {
           // Fall back to the static archive. It only carries dates through
@@ -1914,11 +2040,13 @@ export function registerStaticViews(Alpine) {
           // falling back is even worth attempting.
           if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
+          this.loadEvidence();
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
         }
       } finally {
         this.loading = false;
+        this.$nextTick(() => this.restoreResearchAnchor());
       }
     },
     async loadArchive(date, subject) {
@@ -2447,5 +2575,155 @@ export function registerStaticViews(Alpine) {
     hasDiscussion() {
       return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0;
     },
+
+    // ── the research record (RM-121) ────────────────────────────────────────
+    // Evidence read after render: the consensus receipt (live sessions only)
+    // and this session's neighbours on its subject. Neither blocks the page.
+    async loadEvidence() {
+      this.revealHashTake();
+      const s = this.session;
+      if (!s) return;
+      if (this.source === "api" && s.id) {
+        api.get(path(ROUTES.swarm.sessionConsensusReceipt, { id: s.id }))
+          .then((r) => { this.receiptStatus = r?.verified === true ? "Verified" : "Not verified"; })
+          .catch((e) => { this.receiptStatus = e?.status === 404 ? "Not published" : "Unavailable"; });
+      }
+      subjectSessionIndex(s.subjectId).then((list) => {
+        const at = list.findIndex((x) => (s.id && x.id === s.id) || (!String(x.id).match(/^[0-9a-f-]{36}$/) && x.date === s.date));
+        if (at < 0) return;
+        this.neighbours = { newer: list[at - 1] || null, older: list[at + 1] || null };
+      }).catch(() => {});
+    },
+    // A session is addressed by id when it has a real one, by date otherwise.
+    sessionHrefOf(s) {
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s?.id || ""))
+        ? `/swarm/sessions/${encodeURIComponent(s.id)}`
+        : `/swarm/${s?.date}/${encodeURIComponent(s?.subjectId || this.session?.subjectId || "")}`;
+    },
+    // The time of day matters once a subject convenes more than once a day.
+    sessionTime() {
+      const at = this.session?.publishedAt || this.session?.generatedAt;
+      if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
+      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
+    },
+    sessionJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return path(ROUTES.swarm.sessionById, { id: s.id });
+      return `/data/swarm/sessions/${s?.date}-${s?.subjectId}.json`;
+    },
+    briefJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return `${ROUTES.swarm.brief}?session=${encodeURIComponent(s.id)}`;
+      return `/data/swarm/briefs/${s?.date}-${s?.subjectId}.json`;
+    },
+    receiptHref() {
+      return this.session?.id ? path(ROUTES.swarm.sessionConsensusReceipt, { id: this.session.id }) : "#";
+    },
+    hasRecommendationSection() {
+      return this.hasOutcome() || !!this.recommendationRationale();
+    },
+    jumpLinks() {
+      const out = [];
+      if (this.hasRecommendationSection()) out.push({ id: "recommendation", label: "Recommendation", count: null });
+      if (this.snapshot) out.push({ id: "holdings", label: "Holdings", count: null });
+      if (this.hasDiscussion() || this.signalRows().length) out.push({ id: "reasoning", label: "Reasoning", count: null });
+      if (this.takes.length) out.push({ id: "takes", label: "Takes", count: this.takes.length });
+      out.push({ id: "evidence", label: "Evidence", count: null });
+      return out;
+    },
+    // The decision in one line, measured against what the session was given.
+    // Nothing when there is no fair comparison: the legend still shows the mix.
+    outcomeHeadline() {
+      if (this.isBucketWeights()) {
+        if (!this.gapBasis() || this.targetPostdatesSession()) return "";
+        const rows = this.bucketRows().filter((b) => b.gap != null);
+        if (!rows.length) return "";
+        const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
+        const what = this.gapBasis() === "actual" ? "the book" : "target weights";
+        if (!moved) return this.gapBasis() === "actual" ? "Holds the book as it stands" : "Target weights retained";
+        return `${moved} ${moved === 1 ? "sleeve" : "sleeves"} move from ${what}`;
+      }
+      const acts = this.authoredActions();
+      if (!acts.length) return "";
+      const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
+      return moved ? `${moved} of ${acts.length} positions change` : `All ${acts.length} positions held`;
+    },
+    outcomeColumnsLabel() {
+      const cols = [this.hasTargetColumn() && "target", this.hasActualColumn() && "actual", "recommended", "change"].filter(Boolean);
+      return cols.join(", ");
+    },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    wordCount(text) { return String(text || "").trim().split(/\s+/).filter(Boolean).length; },
+    // A member's proposed sleeve weights, when the take carries them (#963).
+    takeWeightRows(t) {
+      const entries = weightEntries(t?.weights || t?.payload?.weights);
+      if (entries.length < 2) return [];
+      const nums = entries.map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v) && v >= 0);
+      const total = nums.reduce((a, [, v]) => a + v, 0);
+      if (!total) return [];
+      return nums
+        .map(([k, v]) => ({ key: k, label: bucketLabel(k), pct: (v / total) * 100, colour: bucketHue(k), rank: bucketRank(k) }))
+        .sort((a, b) => a.rank - b.rank);
+    },
+    signatureHeadline() {
+      const t = this.takes || [];
+      if (!t.length) return "No takes filed";
+      if (t.every((x) => x.archival)) return "Archived, unsigned research";
+      const ok = t.filter((x) => x.verified).length;
+      return ok === t.length ? "Every take is signed and verified" : `${ok} of ${t.length} takes verified`;
+    },
+    signatureDetail() {
+      const t = this.takes || [];
+      if (!t.length) return "No member filed a take for this session.";
+      if (t.every((x) => x.archival)) return "These takes predate member key registration. They were never signed, which is different from a failed signature check.";
+      return "Each take shows its own signature state. A verified take was signed by the member's registered key. A recommendation records research; it does not show that capital moved.";
+    },
+    targetPolicyLabel() {
+      const src = this.targetSource();
+      if (src === "brief") {
+        const asof = (this.brief?.body || this.brief)?.allocation?.asof;
+        return asof ? `Handed to this session, dated ${this.formatDate(asof, "short")}` : "Handed to this session";
+      }
+      if (src === "framework" && this.allocationAsOf()) {
+        return this.targetPostdatesSession()
+          ? `Not recorded for this session. Current policy dated ${this.formatDate(this.allocationAsOf(), "short")}`
+          : `Published policy dated ${this.formatDate(this.allocationAsOf(), "short")}`;
+      }
+      return "Not recorded for this session";
+    },
   }));
+}
+
+// The sleeve weights a brief handed its session, as { bucket key: percent }.
+// Null when the brief carried none: the live brief does not yet (#961).
+/** @param {any} brief */
+function referenceWeights(brief) {
+  const body = brief?.body || brief;
+  const buckets = body?.allocation?.buckets;
+  if (!Array.isArray(buckets) || !buckets.length) return null;
+  /** @type {Record<string, number>} */
+  const out = {};
+  for (const b of buckets) {
+    const w = Number(b?.target_weight ?? b?.targetWeight);
+    const i = bucketRank(b?.id || b?.name);
+    if (Number.isFinite(w) && i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = w * 100;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// A subject's published sessions, newest first, as { id, date, subjectId }.
+// The public list has no subject filter yet (#991), so the whole index is read
+// and filtered here, with the static archive behind it.
+/** @param {string} subjectId */
+async function subjectSessionIndex(subjectId) {
+  const pick = (/** @type {any[]} */ list) => list
+    .filter((s) => (s.subjectId ?? s.subject_id) === subjectId && s.state === "published")
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+      || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
+  try {
+    const list = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+    if (list.length) return list;
+  } catch (_) { /* fall through to the archive */ }
+  return pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
 }

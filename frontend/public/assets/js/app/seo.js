@@ -397,6 +397,8 @@ function normalize(pathname) {
  */
 function canonicalPath(pathname) {
   const p = normalize(pathname);
+  // The bare legacy vault alias does not rewrite the new detail routes.
+  if (p.startsWith("/vault/")) return p;
   for (const [from, to] of LEGACY_ALIASES) {
     if (p === from) return to;
     if (p.startsWith(from + "/")) return to + p.slice(from.length);
@@ -424,6 +426,8 @@ export function metaFor(pathname) {
   // page it actually renders. Without this, /committee/members/woon fell to
   // NOT_FOUND_META ("Page Not Found", noindex) while rendering a real member.
   const p = canonicalPath(pathname);
+  const vaultSymbol = { rmusdc: "rmUSDC", rmproto: "rmPROTO", rmagent: "rmAGENT", rmrwa: "rmRWA" }[p.replace("/vault/", "")];
+  if (p.startsWith("/vault/") && vaultSymbol) return { title: `${vaultSymbol} | Robot Money`, description: "Vault holdings, allocation, activity and mechanics.", robots: "noindex, follow" };
   if (META[p]) return META[p];
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {

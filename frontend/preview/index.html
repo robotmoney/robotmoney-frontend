@@ -59,6 +59,20 @@
         console.warn("Failed to load goldens:", e);
       }
 
+      if (new URLSearchParams(location.search).get('research') === 'stress') {
+        const { withSubjectStress } = await import('/prototypes/subjects/stress.js');
+        goldens = withSubjectStress(goldens);
+        document.getElementById('watermark').textContent = 'SYNTHETIC LAYOUT TEST · 48 sessions per subject · 18 analysts';
+      }
+
+      // Golden detail records are captured under dated routes. Alias only a
+      // matching record's actual ID so the production UUID links work here.
+      for (const [key, record] of Object.entries(goldens.routes)) {
+        if (/^\/api\/swarm\/sessions\/\d{4}-\d{2}-\d{2}\//.test(key) && record?.session?.id) {
+          goldens.routes[`/api/swarm/sessions/${record.session.id}`] = record;
+        }
+      }
+
       const frame = document.getElementById("frame");
       const frameWin = frame.contentWindow;
 

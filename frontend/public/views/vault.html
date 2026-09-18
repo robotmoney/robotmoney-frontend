@@ -1,0 +1,383 @@
+<article class="vv-page" x-data="vaultView()" @resize.window.debounce.100ms="measureHistory()">
+  <nav class="vv-breadcrumb" aria-label="Breadcrumb">
+    <a href="/allocation#vaults">Allocation</a><span>/</span
+    ><span x-text="vaultRecord().symbol"></span>
+  </nav>
+  <header class="vv-hero">
+    <div>
+      <span class="vv-kicker" x-text="vaultRecord().category"></span>
+      <h1>
+        <i
+          class="vv-key"
+          data-mark="series"
+          :style="`background:${vaultRecord().color}`"
+        ></i
+        ><span x-text="vaultRecord().symbol"></span>
+      </h1>
+      <h2 x-text="vaultRecord().name"></h2>
+      <p class="vv-intro" x-text="vaultRecord().strategy"></p>
+    </div>
+    <div class="vv-identity">
+      <span class="vv-network" x-text="networkLabel()"></span
+      ><b x-text="statusLabel(vaultRecord())"></b
+      ><span>Deposit asset · USDC</span
+      ><a
+        class="vv-link"
+        x-show="contractHref(vaultRecord().address)"
+        :href="contractHref(vaultRecord().address)"
+        target="_blank"
+        rel="noopener"
+        >Vault contract ↗</a
+      >
+    </div>
+  </header>
+  <p class="vv-notice" x-show="vaultOverview.network?.testData">
+    Test network. Figures do not represent production assets.
+  </p>
+  <p class="vv-notice" x-show="vaultRecord().availability === 'not_on_network'">
+    This vault is not live on this network. Deposits are unavailable.
+  </p>
+  <p
+    class="vv-notice"
+    x-show="vaultError || detailError"
+    x-text="vaultError || detailError"
+    role="status"
+  ></p>
+  <button
+    class="vv-button"
+    x-show="vaultError || detailError"
+    @click="loadDetail()"
+  >
+    Try again
+  </button>
+  <nav class="vv-tabs" aria-label="Vault sections">
+    <a href="#holdings" @click="researchAnchor($event)">Holdings</a
+    ><a href="#allocation" @click="researchAnchor($event)">Allocation</a
+    ><a href="#history" @click="researchAnchor($event)">History</a
+    ><a href="#activity" @click="researchAnchor($event)">Activity</a
+    ><a href="#mechanics" @click="researchAnchor($event)"
+      >Mechanics &amp; risks</a
+    >
+  </nav>
+  <div class="vv-stats vv-stats-four" :aria-busy="String(vaultLoading)">
+    <div>
+      <span>TVL</span
+      ><strong
+        x-text="vaultLoading ? 'Loading…' : money(vaultRecord().tvlUsd)"
+      ></strong>
+    </div>
+    <div>
+      <span>Share of all vaults</span
+      ><strong :class="{ 'vv-stat-missing': vaultRow()?.actualBps == null }" x-text="weight(vaultRow()?.actualBps)"></strong>
+    </div>
+    <div>
+      <span
+        >NAV per share
+        <span x-html="vaultTooltip('nav','vault-nav')"></span></span
+      ><strong
+        :class="{ 'vv-stat-missing': vaultRecord().sharePrice == null }"
+        x-text="vaultRecord().sharePrice == null ? 'Not reported' : '$' + Number(vaultRecord().sharePrice).toFixed(4)"
+      ></strong>
+    </div>
+    <div>
+      <span>Trailing net APY · 7D</span
+      ><strong :class="{ 'vv-stat-missing': vaultRecord().apy?.d7 == null }" x-text="apy(vaultRecord().apy?.d7)"></strong>
+    </div>
+  </div>
+  <p class="vv-meta" x-text="freshnessLabel()"></p>
+  <details class="vv-disclosure">
+    <summary>Capacity, fees and additional metrics</summary>
+    <dl class="vv-facts">
+      <div>
+        <dt>TVL cap</dt>
+        <dd x-text="money(vaultRecord().caps?.tvlCap)"></dd>
+      </div>
+      <div>
+        <dt>Utilization</dt>
+        <dd x-text="weight(vaultRecord().caps?.utilizationBps)"></dd>
+      </div>
+      <div>
+        <dt>Per-deposit cap</dt>
+        <dd x-text="money(vaultRecord().caps?.perDepositCap)"></dd>
+      </div>
+      <div>
+        <dt>Exit fee</dt>
+        <dd x-text="weight(vaultRecord().exitFeeBps)"></dd>
+      </div>
+      <div>
+        <dt>Trailing net APY · 30D</dt>
+        <dd x-text="apy(vaultRecord().apy?.d30)"></dd>
+      </div>
+      <div>
+        <dt>Depositors</dt>
+        <dd x-text="vaultRecord().depositors ?? 'Not reported'"></dd>
+      </div>
+      <div>
+        <dt>Inception</dt>
+        <dd x-text="dateLabel(vaultRecord().inception)"></dd>
+      </div>
+    </dl>
+    <p class="vv-meta" x-text="networkLabel()"></p>
+  </details>
+  <section class="vv-section" id="holdings">
+    <div class="vv-heading">
+      <h2>Holdings</h2>
+      <span class="vv-network" x-text="networkLabel()"></span>
+    </div>
+    <p class="vv-meta" x-text="dateLabel(vaultRecord().holdingsAsOf)"></p>
+    <p class="vv-empty" x-show="!holdings().length">
+      No holdings reported for this vault.
+    </p>
+    <div x-html="positionComposition(holdings(), allHoldings)"></div>
+    <button
+      class="vv-button"
+      x-show="holdings().length > 8"
+      @click="allHoldings=!allHoldings"
+      x-text="allHoldings ? 'Show fewer positions' : `Show all ${holdings().length} positions`"
+    ></button>
+  </section>
+  <section class="vv-section" id="allocation">
+    <div class="vv-heading">
+      <div>
+        <span class="vv-kicker">From recommendation to holdings</span>
+        <h2>Allocation</h2>
+      </div>
+      <span class="vv-network" x-text="networkLabel()"></span>
+    </div>
+    <div class="vv-allocation-split">
+      <div x-html="weightLayers(vaultRow() || {})"></div>
+      <div>
+        <p x-text="receiptLabel()"></p>
+        <a
+          class="vv-link"
+          :href="receiptHref(vaultOverview.recommendation?.sessionId)"
+          >Allocation research →</a
+        >
+        <p class="vv-meta">
+          Router changes direct new deposits. They do not move existing
+          positions.
+        </p>
+        <a class="vv-link" href="/allocation#vaults">Compare all four vaults →</a>
+      </div>
+    </div>
+    <details class="vv-disclosure">
+      <summary>Recommendation receipts and router weights</summary>
+      <p class="vv-empty" x-show="!receipts().length">
+        No recommendation receipts reported.
+      </p>
+      <template x-for="(r,i) in receipts()" :key="i"
+        ><div class="vv-event">
+          <a
+            class="vv-link"
+            :href="receiptHref(r.sessionId)"
+            x-text="dateLabel(r.t)"
+          ></a
+          ><b x-text="weight(r.recommendedBps)"></b
+          ><span
+            x-text="r.matched ? 'Matching application observed' : 'Matching application not observed'"
+          ></span></div
+      ></template>
+      <h3>Router weight history</h3>
+      <p class="vv-empty" x-show="!vaultRecord().history?.weights?.length">
+        No router weight history reported.
+      </p>
+      <template x-for="(r,i) in (vaultRecord().history?.weights || [])" :key="i"
+        ><div class="vv-event">
+          <span x-text="dateLabel(r.t)"></span
+          ><b x-text="weight(r.appliedBps)"></b
+          ><span x-text="r.kind"></span></div
+      ></template>
+    </details>
+  </section>
+  <section class="vv-section" id="history">
+    <div class="vv-heading">
+      <h2>History</h2>
+      <span class="vv-network" x-text="networkLabel()"></span>
+    </div>
+    <div class="vv-controls">
+      <div role="group" aria-label="History metric">
+        <button
+          :aria-pressed="historyMetric==='tvl'"
+          @click="historyMetric='tvl'; resetHistory()"
+        >
+          TVL</button
+        ><button
+          :aria-pressed="historyMetric==='sharePrice'"
+          @click="historyMetric='sharePrice'; resetHistory()"
+        >
+          Share price</button
+        ><button
+          :aria-pressed="historyMetric==='apy'"
+          @click="historyMetric='apy'; resetHistory()"
+        >
+          Trailing APY
+        </button>
+      </div>
+      <div role="group" aria-label="History period">
+        <button :aria-pressed="historyRange==='30'" @click="historyRange='30'; resetHistory()">
+          30D</button
+        ><button :aria-pressed="historyRange==='90'" @click="historyRange='90'; resetHistory()">
+          90D</button
+        ><button
+          :aria-pressed="historyRange==='all'"
+          @click="historyRange='all'; resetHistory()"
+        >
+          All
+        </button>
+      </div>
+    </div>
+    <div class="vv-chart" aria-live="polite">
+      <p class="vv-empty" x-show="!historyPoints().length">
+        No observations reported for this period.
+      </p>
+      <template x-if="historyPoints().length"
+        ><figure x-init="$nextTick(() => measureHistory())">
+          <div class="vv-history-reading" aria-live="polite"><div><span class="vv-kicker" x-text="historyMetric === 'tvl' ? 'Total value locked' : historyMetric === 'apy' ? 'Trailing net APY' : 'NAV per share'"></span><strong x-text="historyValue(historySelection()?.value)"></strong></div><span class="vv-meta" x-text="dateLabel(historySelection()?.t)"></span></div>
+          <div class="vv-chart-interaction" x-ref="historyPlot" role="slider" tabindex="0" aria-label="Historical observation" aria-valuemin="1" :aria-valuemax="historyPoints().length" :aria-valuenow="(selectedObservation ?? historyPoints().length - 1) + 1" :aria-valuetext="dateLabel(historySelection()?.t) + ', ' + historyValue(historySelection()?.value)" @keydown.right.prevent="moveHistory(1)" @keydown.left.prevent="moveHistory(-1)" @keydown.home.prevent="selectedObservation=0" @keydown.end.prevent="selectedObservation=historyPoints().length-1">
+          <svg :viewBox="`0 0 ${chartWidth} 200`" aria-hidden="true" @pointermove="selectHistory($event)" @click="selectHistory($event)">
+            <path class="vv-chart-grid" :d="`M60,30 H${chartWidth-16} M60,100 H${chartWidth-16} M60,170 H${chartWidth-16}`"></path>
+            <path
+              :d="chartPath()"
+              fill="none"
+              :stroke="vaultRecord().color"
+              stroke-width="2"
+            ></path>
+            <g x-html="chartAxisLabels()"></g>
+            <g x-html="chartMarkers()"></g>
+            <line class="vv-chart-guide" :x1="historySelection()?.x" :x2="historySelection()?.x" y1="20" y2="180"></line>
+            <circle :cx="historySelection()?.x" :cy="historySelection()?.y" r="6" fill="var(--color-void)" :stroke="vaultRecord().color" stroke-width="2"></circle>
+          </svg></div>
+          <figcaption>
+            <span x-text="dateLabel(historyPoints()[0].t)"></span
+            ><span x-text="dateLabel(historyPoints().at(-1).t)"></span>
+          </figcaption></figure
+      ></template>
+    </div>
+    <details class="vv-disclosure" x-show="historyPoints().length">
+      <summary>Historical observations</summary>
+      <template x-for="(p,i) in visibleObservations()" :key="i"
+        ><div class="vv-event">
+          <span x-text="dateLabel(p.t)"></span
+          ><b x-text="historyValue(p.value)"></b></div
+      ></template>
+      <nav class="vv-pagination" aria-label="Historical observations" x-show="historyPoints().length > 10"><button class="vv-button" :disabled="observationPage===0" @click="observationPage--">Previous</button><span x-text="`${observationPage*10+1}–${Math.min((observationPage+1)*10,historyPoints().length)} of ${historyPoints().length}`"></span><button class="vv-button" :disabled="(observationPage+1)*10 >= historyPoints().length" @click="observationPage++">Next</button></nav>
+    </details>
+  </section>
+  <section class="vv-section" id="activity">
+    <div class="vv-heading">
+      <h2>Activity</h2>
+      <span class="vv-network" x-text="networkLabel()"></span>
+    </div>
+    <p class="vv-empty" x-show="!activity().length">
+      No activity reported for this vault.
+    </p>
+    <template x-for="(a,i) in visibleActivity()" :key="i"
+      ><div class="vv-event">
+        <div>
+          <b x-text="a.kind"></b><small x-text="dateLabel(a.t)"></small>
+        </div>
+        <span
+          x-text="a.assets == null ? 'Amount not reported' : a.assets + ' USDC'"
+        ></span
+        ><a
+          class="vv-link"
+          x-show="txHref(a.tx)"
+          :href="txHref(a.tx)"
+          target="_blank"
+          rel="noopener"
+          >Transaction ↗</a
+        >
+      </div></template
+    >
+    <nav class="vv-pagination" aria-label="Activity pages" x-show="activity().length > 6"><button class="vv-button" :disabled="activityPage===0" @click="activityPage--">Previous</button><span role="status" x-text="`${activityPage*6+1}–${Math.min((activityPage+1)*6,activity().length)} of ${activity().length} events`"></span><button class="vv-button" :disabled="(activityPage+1)*6 >= activity().length" @click="activityPage++">Next</button></nav>
+  </section>
+  <section class="vv-section" id="mechanics">
+    <div class="vv-heading"><h2>Mechanics &amp; risks</h2></div>
+    <p class="vv-intro">
+      Vault holdings are exposed to smart contract, liquidity and valuation
+      risks. Capital and returns are not guaranteed.
+    </p>
+    <details class="vv-disclosure">
+      <summary>Deposits and withdrawals</summary>
+      <dl class="vv-facts">
+        <div>
+          <dt>Redemption</dt>
+          <dd
+            x-text="vaultRecord().mechanics?.redeemOnly === true ? 'Redeem shares; asset-denominated withdrawals unavailable' : vaultRecord().mechanics?.redeemOnly === false ? 'Asset withdrawals and share redemptions' : 'Not reported'"
+          ></dd>
+        </div>
+        <div>
+          <dt>Maximum slippage</dt>
+          <dd x-text="weight(vaultRecord().mechanics?.maxSlippageBps)"></dd>
+        </div>
+        <div>
+          <dt>Deposit status</dt>
+          <dd
+            x-text="vaultRecord().flags?.depositsPaused == null ? 'Not reported' : vaultRecord().flags.depositsPaused ? 'Paused' : 'Open'"
+          ></dd>
+        </div>
+        <div>
+          <dt>Withdrawal status</dt>
+          <dd
+            x-text="vaultRecord().flags?.withdrawalsPaused == null ? 'Not reported' : vaultRecord().flags.withdrawalsPaused ? 'Paused' : 'Open'"
+          ></dd>
+        </div>
+      </dl>
+    </details>
+    <details class="vv-disclosure">
+      <summary>Valuation, dependencies and safeguards</summary>
+      <dl class="vv-facts">
+        <div>
+          <dt>NAV deviation guard</dt>
+          <dd x-text="weight(vaultRecord().guards?.navDeviationGuardBps)"></dd>
+        </div>
+        <div>
+          <dt>Oracle freshness</dt>
+          <dd
+            x-text="vaultRecord().guards?.oracleFresh == null ? 'Not reported' : vaultRecord().guards.oracleFresh ? 'Fresh at observation' : 'Stale at observation'"
+          ></dd>
+        </div>
+        <div>
+          <dt>Venues</dt>
+          <dd
+            x-text="vaultRecord().mechanics?.venues?.join(', ') || 'Not reported'"
+          ></dd>
+        </div>
+        <div>
+          <dt>Audit status</dt>
+          <dd x-text="vaultRecord().auditStatus || 'Not reported'"></dd>
+        </div>
+        <div>
+          <dt>Admin and timelock</dt>
+          <dd x-text="vaultRecord().adminSummary || 'Not reported'"></dd>
+        </div>
+      </dl>
+    </details>
+    <details class="vv-disclosure">
+      <summary>Contracts</summary>
+      <dl class="vv-facts">
+        <template x-for="kind in ['vault','router','registry']" :key="kind"
+          ><div>
+            <dt x-text="kind"></dt>
+            <dd>
+              <span
+                x-text="vaultRecord().contracts?.[kind] || (kind==='vault' ? vaultRecord().address : null) || 'Not reported'"
+              ></span>
+            </dd></div
+        ></template>
+      </dl>
+    </details>
+  </section>
+  <section class="vv-section vv-deposit">
+    <h2>How to deposit</h2>
+    <template x-if="canDeposit()"
+      ><div>
+        <p>The rmUSDC deposit skill covers the Base vault.</p>
+        <a class="vv-button" href="/skill.md">Read the deposit skill ↗</a>
+      </div></template
+    >
+    <p x-show="!canDeposit()">
+      Deposit instructions are unavailable for this vault on this network.
+    </p>
+  </section>
+</article>

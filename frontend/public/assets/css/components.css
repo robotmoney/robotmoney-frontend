@@ -847,3 +847,9 @@
 .md-hero__lede, .cl__lede, .sk__lede {
   color: #aeb6c6 !important;
 }
+
+/* Escape dismisses a tooltip without moving keyboard focus. */
+.rm-tip[data-dismissed="1"] .rm-tip__bub { visibility: hidden; opacity: 0; pointer-events: none; }
+
+/* Fixed placement for tooltips inside scrollable figures and tables. */
+.rm-tip[data-floating] .rm-tip__bub { position:fixed; bottom:auto; transform:none; max-width:calc(100vw - 24px); z-index:120; }

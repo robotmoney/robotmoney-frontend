@@ -53,6 +53,10 @@ async function fetchView(file, signal) {
 let activeRender = null;
 
 async function render(pathname) {
+  if (pathname === "/vault" || pathname === "/vault/") {
+    history.replaceState({}, "", "/allocation" + location.search + "#vaults");
+    pathname = "/allocation";
+  }
   const host = viewEl();
   if (!host) return;
   activeRender?.abort();
@@ -149,12 +153,12 @@ const ANCHOR_OFFSET = 16;
 function scrollForRoute() {
   const id = location.hash ? decodeURIComponent(location.hash.slice(1)) : "";
   const target = id ? document.getElementById(id) : null;
-  if (!target) { window.scrollTo(0, 0); return; }
+  if (!target) { window.scrollTo({ top: 0, behavior: "instant" }); return; }
   // A frame later: the view is in the DOM but not yet laid out, and Alpine has
   // not had its pass, so anything above the target can still change height.
   requestAnimationFrame(() => {
     const top = target.getBoundingClientRect().top + window.scrollY - ANCHOR_OFFSET;
-    window.scrollTo(0, Math.max(0, Math.round(top)));
+    window.scrollTo({ top: Math.max(0, Math.round(top)), behavior: "instant" });
   });
 }
 
