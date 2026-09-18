@@ -25,6 +25,7 @@
     "smoke:stage": "bun scripts/smoke-stage.ts",
     "smoke:archive": "bun scripts/smoke.ts --smoke --static-port --db external",
     "eval": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bun test",
+    "eval:onboarding:isolated": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bash -c 'bun test onboarding/isolated/runtime.eval.test.ts; rc1=$?; bun test onboarding/isolated/skill-install.eval.test.ts onboarding/isolated/toolchain.eval.test.ts onboarding/isolated/keygen-signing.eval.test.ts; rc2=$?; exit $(( rc1 != 0 || rc2 != 0 ))'",
     "onboarding-eval": "bun scripts/onboarding-eval-local.ts",
     "smoke:down": "bun scripts/smoke-down.ts",
     "smoke:status": "bun scripts/smoke-status.ts",
@@ -35,6 +36,7 @@
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check",
     "smoke:twin": "bun scripts/smoke-twin.ts",
+    "smoke:twin:once": "bun scripts/smoke-twin-rehearse.ts",
     "smoke:twin --once": "bun scripts/smoke-twin-rehearse.ts"
   },
   "dependencies": {

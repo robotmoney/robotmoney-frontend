@@ -1,4 +1,4 @@
-// `bun run smoke:smoke-twin` — the STANDING digital smoke-twin, in one command.
+// `bun run smoke:twin` — the STANDING digital smoke-twin, in one command.
 //
 // Capture a fresh dump of the production replica, restore it locally, and boot
 // the real stack against it on the pinned tunnel port, then stay up. This is the
@@ -18,8 +18,8 @@
 //
 // HOW IT DIFFERS FROM ITS NEIGHBOURS:
 //   bun run smoke:stage    standing smoke, SIMULATED committee, ephemeral or .env db
-//   bun run smoke:smoke:smoke-twin --once one-shot rehearsal, docker-assigned port, tears down
-//   bun run smoke:smoke-twin          standing smoke, PRODUCTION data, pinned tunnel port, stays up
+//   bun run smoke:twin:once one-shot rehearsal, docker-assigned port, tears down
+//   bun run smoke:twin          standing smoke, PRODUCTION data, pinned tunnel port, stays up
 //
 // ⛔ THIS PUBLISHES A COPY OF PRODUCTION ON A PUBLIC URL. cloudflared routes
 // stage.robotmoney-labs.dev to the pinned port, so everything below is reachable
@@ -87,13 +87,13 @@ if (import.meta.main) {
   const plan = planTwin(process.argv.slice(2));
   if ("error" in plan) {
     console.error(`[${NAME}] ${plan.error}`);
-    console.error(`[${NAME}] usage: bun run smoke:smoke-twin [-- --reuse] [--backup-dir DIR] [--no-tui]`);
+    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR] [--no-tui]`);
     process.exit(2);
   }
 
   // Resolve the credential BEFORE the dump and the image build. Discovering a
   // missing key after several minutes of work is a wasted window — the same
-  // ordering smoke:smoke-twin --once uses, and the same resolver.
+  // ordering smoke:twin:once uses, and the same resolver.
   const zen = resolveZenKey();
   if ("error" in zen) {
     console.error(`[${NAME}] ${zen.error}`);
@@ -116,7 +116,7 @@ if (import.meta.main) {
       `[${NAME}] #   bun run smoke:clean --project <project from smoke:status>\n` +
       `[${NAME}] ############################################################`,
   );
-  log(`equivalent: ${plan.capture ? "bun run smoke:smoke:capture && " : ""}bun run smoke -- ${plan.args.join(" ")}`);
+  log(`equivalent: ${plan.capture ? "bun run smoke:capture && " : ""}bun run smoke -- ${plan.args.join(" ")}`);
 
   if (plan.capture) {
     const captureArgs = ["bun", "run", "--cwd", join(repoRoot, "backend"), "scripts/smoke-twin-capture.ts"];

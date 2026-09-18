@@ -53,8 +53,8 @@ export RM_BACKUP_DIR=~/rm-backup-v0XY
 ## 1. Where am I? — run this before reading anything else
 
 ```bash
-bun run rollout:where            # human-readable
-bun run rollout:where -- --json  # same state, for an agent
+bun backend/scripts/upgrades/runbook.ts           # human-readable
+bun backend/scripts/upgrades/runbook.ts --json    # same state, for an agent
 ```
 
 **This document does not record your position. The probe derives it, every
@@ -101,7 +101,7 @@ its exit code, verdict, the SHA and rc tag it ran at, the host, the **database
 identity** it actually connected to (§3.1's assertion, captured instead of read
 and forgotten), and the SHA-256 of every artifact it produced. Steps a person
 performs by hand are attested with
-`bun run rollout:where -- --record <step> --note "..."`, and are displayed as
+`bun backend/scripts/upgrades/runbook.ts --record <step> --note "..."`, and are displayed as
 attested — somebody's word, not a program's exit code.
 
 Receipts hold **no secrets**: database identity, never a credential. That is
@@ -737,7 +737,7 @@ restored data, `seed()`, and a full health-wait.
 > point.** `OPENCODE_API_KEY` must be set — in your shell, or in the
 > checkout's **`.env.readonly`**, and deliberately **not** `.env`. On a staging
 > host `.env` holds the application's writer `DATABASE_URL`, and this whole
-> family of commands (`smoke:capture`, `smoke:smoke-twin --once`, `stage-rehearsal.ts`,
+> family of commands (`smoke:capture`, `smoke:twin:once`, `stage-rehearsal.ts`,
 > preflight) is defined by not needing that credential; reading `.env` for the
 > key would have made them depend on the one file they exist to stay away from,
 > and made "which key did that run use?" a question with two answers. It

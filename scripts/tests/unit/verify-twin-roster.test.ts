@@ -8,7 +8,7 @@
 // API actually serves (verified against stage: takes carry `memberHandle`,
 // `memberId` and `archival`).
 import { describe, expect, test } from "bun:test";
-import { liveTakes, unseatedMembers } from "../../lib/verify/legs/twin-roster.ts";
+import { liveTakes, seatingVerdict, unseatedMembers } from "../../lib/verify/legs/twin-roster.ts";
 
 const member = (handle: string, over: { id?: string; status?: string } = {}) => ({
   id: over.id ?? `id-${handle}`,
@@ -76,5 +76,31 @@ describe("liveTakes", () => {
 
   test("an all-archival session contributes nothing, so the leg keeps looking", () => {
     expect(liveTakes([take("athena", { archival: true })])).toEqual([]);
+  });
+});
+
+describe("seatingVerdict — a shortfall that is merely EARLY is not a defect", () => {
+  const now = Date.parse("2026-09-18T12:00:00Z");
+  const openWindow = "2026-09-18T18:00:00Z";
+  const closedWindow = "2026-09-18T06:00:00Z";
+
+  test("collecting, inside its window → WARN (the rehearsal runs minutes after the brief)", () => {
+    // stage-rehearsal.ts fails on any non-zero verify, so a FAIL here would
+    // turn a good release rehearsal red purely on timing.
+    expect(seatingVerdict({ state: "collecting", windowClosesAt: openWindow }, now)).toBe("WARN");
+  });
+
+  test("collecting, window already closed → FAIL", () => {
+    expect(seatingVerdict({ state: "collecting", windowClosesAt: closedWindow }, now)).toBe("FAIL");
+  });
+
+  test("published without everyone → FAIL: it had its whole window", () => {
+    expect(seatingVerdict({ state: "published", windowClosesAt: openWindow }, now)).toBe("FAIL");
+  });
+
+  test("collecting with no window at all → FAIL, not a free pass", () => {
+    expect(seatingVerdict({ state: "collecting", windowClosesAt: null }, now)).toBe("FAIL");
+    expect(seatingVerdict({ state: "collecting" }, now)).toBe("FAIL");
+    expect(seatingVerdict({ state: "collecting", windowClosesAt: "not-a-date" }, now)).toBe("FAIL");
   });
 });

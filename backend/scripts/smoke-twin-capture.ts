@@ -1,4 +1,4 @@
-// `bun run smoke:smoke:capture` — produce the encrypted backup a digital smoke-twin restores.
+// `bun run smoke:capture` — produce the encrypted backup a digital smoke-twin restores.
 //
 // THE OTHER HALF OF `--db smoke-twin`. scripts/lib/restore-container.ts consumes four
 // files from a backup directory; until now nothing PRODUCED them. The procedure

@@ -214,13 +214,13 @@ starts no such container is refused by name.
 ### Rehearse an upgrade against a copy of production — `--db smoke-twin`
 
 ```bash
-bun run smoke:smoke-twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
-bun run smoke:smoke:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
+bun run smoke:twin                # ONE COMMAND: fresh capture + restore + boot on the PINNED tunnel port
+bun run smoke:capture        # dump the read-only REPLICA, gpg-encrypted (never the primary)
 bun smoke -- --db smoke-twin      # restore an existing dump and boot against it (Docker-assigned port)
-bun run smoke:smoke:smoke-twin --once       # one-shot rehearsal: boot + frontend checks, then tears itself down
+bun run smoke:twin:once       # one-shot rehearsal: boot + frontend checks, then tears itself down
 ```
 
-`bun run smoke:smoke-twin` is the standing one — it is to `bun run smoke:stage` what production
+`bun run smoke:twin` is the standing one — it is to `bun run smoke:stage` what production
 data is to simulation fixtures, and it takes the same pinned port cloudflared
 routes to. **It therefore publishes a copy of production on a public URL**, and
 the restored admin claim is usually UNCLAIMED, so whoever reaches the admin
@@ -242,7 +242,7 @@ discards, because the previous run migrated the copy.
 `--db smoke-twin` requires `--smoke`: a restored database is populated, and the smoke
 scenario's fixtures overwrite rows by design.
 
-`smoke:smoke-twin --once` grades restore + boot + serve and nothing release-specific — it is
+`smoke:twin:once` grades restore + boot + serve and nothing release-specific — it is
 how you check the smoke-twin machinery itself. A **release** gate is satisfied by that
 release's own entry point, which drives the same code and adds this release's
 postflight against the migrated smoke-twin plus its rollout receipts:
@@ -360,8 +360,8 @@ bun run smoke:reap -- --older-than 6h    # …then actually reap them (labels on
 bun run smoke -- --pg-data <host-dir>   # resumable smoke: bind postgres data to <host-dir>
 bun run smoke -- --db external          # run against the MANAGED Postgres in .env (no pg container)
 bun smoke -- --db smoke-twin                 # boot against a local restored copy of production
-bun run smoke:smoke:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
-bun run smoke:smoke:smoke-twin --once        # unattended digital-smoke-twin rehearsal (restore + boot + checks)
+bun run smoke:capture         # dump the production REPLICA, gpg-encrypted (rm_readonly)
+bun run smoke:twin:once        # unattended digital-smoke-twin rehearsal (restore + boot + checks)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

@@ -428,7 +428,13 @@ The rehearsal is a pass only when all of the following are true:
     Two things enforce it rather than leaving it to a reader: the boot itself
     throws if any active character is left unseated
     (`unseatedActiveCharacters()`), and `verify-live --tier full` records
-    `twin-roster:every-active-member-seated` against the live stack. Read the
+    `twin-roster:every-active-member-seated` against the live stack. That check
+    reports a WARN, not a FAIL, while the session is still inside its collection
+    window — the rehearsal runs minutes after the brief publishes, and member
+    containers file a few at a time, so "not everyone yet" is unproven rather
+    than disproven there. It FAILs once the window has closed or the session
+    published without them; the boot-time throw is what makes seating itself
+    deterministic. Read the
     boot's `swarm now N seats` line against the roster count — a twin that
     rehearses 3 of 7 members looks EXACTLY like a session where four members
     had nothing to say, which is how it went unnoticed on stage until

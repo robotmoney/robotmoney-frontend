@@ -1,4 +1,4 @@
-// Unit tests for `bun run smoke:smoke-twin` (scripts/smoke-twin.ts) — the standing smoke-twin.
+// Unit tests for `bun run smoke:twin` (scripts/smoke-twin.ts) — the standing smoke-twin.
 //
 // It is a thin wrapper, so what is worth pinning is the two decisions it makes
 // and refuses to make differently:

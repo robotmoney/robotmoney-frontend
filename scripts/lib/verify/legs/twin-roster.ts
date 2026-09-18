@@ -42,6 +42,7 @@ interface SessionRow {
   date: string;
   subjectId: string;
   state: string;
+  windowClosesAt?: string | null;
 }
 
 interface TakeRow {
@@ -70,6 +71,29 @@ export function unseatedMembers(active: readonly MemberRow[], takes: readonly Ta
     if (t.memberId) seated.add(t.memberId.toLowerCase());
   }
   return active.filter((m) => !seated.has((m.handle ?? m.id).toLowerCase()) && !seated.has(m.id.toLowerCase()));
+}
+
+/**
+ * Is a shortfall a DEFECT, or is the evidence simply not in yet?
+ *
+ * The rehearsal runs this driver minutes after the brief publishes, while the
+ * session is still collecting and member containers are still running four at a
+ * time. A missing take there means "not finished", and failing on it would turn
+ * a good release rehearsal red on timing — `stage-rehearsal.ts` treats any
+ * non-zero verify as a blocking failure.
+ *
+ * So: still `collecting`, inside its own advertised window → WARN, which this
+ * repo already uses for "nothing proven" (`swarm:vector-recomputable`). A
+ * session whose window has closed, or that published without everyone, had its
+ * chance — that is the 3-of-7 defect, and it FAILs.
+ */
+export function seatingVerdict(
+  row: { state: string; windowClosesAt?: string | null },
+  now: number = Date.now(),
+): "WARN" | "FAIL" {
+  if (row.state !== "collecting") return "FAIL";
+  const closes = row.windowClosesAt ? Date.parse(row.windowClosesAt) : NaN;
+  return Number.isFinite(closes) && now < closes ? "WARN" : "FAIL";
 }
 
 /** The takes a THIS-BOOT session produced: archival rows are restored history
@@ -121,16 +145,36 @@ export const twinRosterLeg: VerifyLeg = {
 
     if (!found) {
       const worst: Shortfall | undefined = closest;
-      const detail = worst
-        ? `newest live session ${worst.row.id} (${worst.row.subjectId}) seated ${worst.seated} of ` +
-          `${active.length} — missing: ${worst.missing.map((m) => m.handle ?? m.id).join(", ")}`
-        : "no session with a live (non-archival) take appeared within the deadline";
+      if (!worst) {
+        // No live take anywhere. If a session is collecting inside its window,
+        // the first takes are simply not in yet; otherwise nothing is running.
+        const body = await ctx.json<{ sessions?: SessionRow[] }>(ROUTES.swarm.sessions);
+        const newest = (body.sessions ?? [])[0];
+        const verdict = newest ? seatingVerdict(newest) : "FAIL";
+        checker.record(
+          "twin-roster:every-active-member-seated",
+          verdict,
+          verdict === "WARN"
+            ? `NOT A PASS: session ${newest!.id} is still collecting (window closes ${newest!.windowClosesAt}) and no ` +
+              `member has filed yet — seating is unproven here, not disproven. Re-run once the window has closed.`
+            : "no session with a live (non-archival) take appeared within the deadline",
+          "A twin seats every active restored member (scripts/lib/smoke-mode.ts adoptionFilter, twin branch).",
+        );
+        return;
+      }
+      const verdict = seatingVerdict(worst.row);
+      const who = worst.missing.map((m) => m.handle ?? m.id).join(", ");
       checker.record(
         "twin-roster:every-active-member-seated",
-        "FAIL",
-        detail,
+        verdict,
+        verdict === "WARN"
+          ? `NOT A PASS: session ${worst.row.id} (${worst.row.subjectId}) has ${worst.seated} of ${active.length} ` +
+            `so far and is still collecting until ${worst.row.windowClosesAt} — still to file: ${who}. ` +
+            `Unproven, not disproven: member containers run a few at a time and takes land over the window.`
+          : `session ${worst.row.id} (${worst.row.subjectId}) seated ${worst.seated} of ${active.length} ` +
+            `with its window closed — never seated: ${who}`,
         "A twin seats every active restored member (scripts/lib/smoke-mode.ts adoptionFilter, twin branch). " +
-          "A shortfall means adoption filtered someone out — check the boot's 'swarm now N seats' line against the roster.",
+          "A shortfall past the window means adoption filtered someone out — check the boot's 'swarm now N seats' line against the roster.",
       );
       return;
     }

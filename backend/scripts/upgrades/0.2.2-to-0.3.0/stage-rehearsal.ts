@@ -13,7 +13,7 @@
 // none of that was ever specific to a release: it is what "boot a smoke-twin and
 // check it" means. Sitting in a release directory only meant `main` — already
 // past v0.2.2 — had no smoke-twin entry point at all, which is now `bun run
-// smoke:smoke-twin --once`. v0.2.1-to-0.2.2's copy is left exactly as it executed; a
+// smoke:twin:once`. v0.2.1-to-0.2.2's copy is left exactly as it executed; a
 // shipped release directory is the record of what that release actually
 // checked, and rewriting it would destroy that.
 //

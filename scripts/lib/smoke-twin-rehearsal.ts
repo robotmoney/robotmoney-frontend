@@ -121,7 +121,7 @@ export const READONLY_ENV_FILE = ".env.readonly";
  * `.env.readonly` IS THE ONLY FILE CONSULTED, and `.env` is deliberately NOT in
  * the chain any more. On a staging host `.env` is where the application's WRITER
  * DATABASE_URL lives, and every command in this family — smoke:capture,
- * smoke:smoke-twin --once, `bun run smoke:smoke-twin`, the release preflight — is defined by NOT
+ * smoke:twin:once, `bun run smoke:twin`, the release preflight — is defined by NOT
  * needing that credential. Reading `.env` made the smoke-twin tooling depend on the
  * one file it exists to stay away from, and made "which key did that run use?"
  * a question with two possible answers. One low-privilege file now serves the
@@ -172,12 +172,12 @@ export interface RehearsalOptions {
    * This release's own checks, run against the migrated smoke-twin after the boot
    * serves and BEFORE teardown (G8). Return 0 to pass; any other value fails
    * the rehearsal. Omit it and the rehearsal grades restore + boot + serve
-   * only, which is what `bun run smoke:smoke:smoke-twin --once` does.
+   * only, which is what `bun run smoke:twin:once` does.
    *
    * THE DURATION OF THIS AWAIT IS THE TWIN'S LIFETIME. That is the whole
    * hold-open mechanism — there is no flag, and deliberately so (a flag would
    * mean an unsupervised standing smoke-twin holding production-derived data with a
-   * graded receipt attached to nothing, which is what `bun run smoke:smoke-twin` is for and
+   * graded receipt attached to nothing, which is what `bun run smoke:twin` is for and
    * why it carries the warning it does). A release that needs to observe
    * something slow — a scheduled job firing, a backfill completing — simply
    * takes longer to return, and `checkDeadlineMs` below is what keeps that

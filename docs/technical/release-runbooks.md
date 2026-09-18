@@ -185,7 +185,7 @@ The repo ships both halves, and a runbook names them rather than restating
 them:
 
 ```bash
-bun run smoke:smoke:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
+bun run smoke:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
 ```
 
 Every command in this family reads its credentials from **`.env.readonly`** and
@@ -254,11 +254,11 @@ The smoke-twin is a named data path, not an assembly:
 
 ```bash
 bun smoke -- --db smoke-twin      # restore the backup, boot the real stack against it
-bun run smoke:smoke:smoke-twin --once       # the same boot, unattended, plus the frontend checks
-bun run smoke:smoke-twin                # capture + restore + boot on the pinned tunnel port, and stay up
+bun run smoke:twin:once       # the same boot, unattended, plus the frontend checks
+bun run smoke:twin                # capture + restore + boot on the pinned tunnel port, and stay up
 ```
 
-`bun run smoke:smoke-twin` is for a smoke-twin that stays up for people to look at. It publishes
+`bun run smoke:twin` is for a smoke-twin that stays up for people to look at. It publishes
 production data on the public tunnel, so treat the unclaimed admin credential as
 a live exposure and claim it immediately; the gate itself does not need it.
 
@@ -266,7 +266,7 @@ a live exposure and claim it immediately; the gate itself does not need it.
 restores into a local container and points the stack at it, and the mode enum
 makes "smoke-twin" and "external" separate, non-substitutable choices.
 
-**Which command satisfies the gate.** `smoke:smoke-twin --once` grades restore + boot +
+**Which command satisfies the gate.** `smoke:twin:once` grades restore + boot +
 serve, and nothing release-specific — use it to check the smoke-twin machinery itself.
 The gate is satisfied by the release's own entry point, which runs the same
 driver and adds this release's checks plus the receipts:

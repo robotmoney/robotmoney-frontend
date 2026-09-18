@@ -3117,9 +3117,9 @@ Unknown flags are refused at parse time rather than ignored — an enum makes a 
 dangerous in a way a boolean was not, so the argv allowlist ships with it.
 
 The smoke-twin's tooling is version-agnostic and lives outside any release directory:
-`bun run smoke:smoke:capture` produces the encrypted backup (read-only role, replica only),
-`bun smoke -- --db smoke-twin` restores and boots against it, `bun run smoke:smoke:smoke-twin --once` does that
-unattended with the frontend checks, and `bun run smoke:smoke-twin` is the standing variant on the
+`bun run smoke:capture` produces the encrypted backup (read-only role, replica only),
+`bun smoke -- --db smoke-twin` restores and boots against it, `bun run smoke:twin:once` does that
+unattended with the frontend checks, and `bun run smoke:twin` is the standing variant on the
 pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
 
 **Who sits in a twin's sessions — the whole restored roster.** A `--db smoke-twin`
@@ -3941,11 +3941,12 @@ Layers 0-3 (issue #279) are implemented, named by claim, under
 `evals/onboarding/isolated/`: `runtime.eval.test.ts`,
 `skill-install.eval.test.ts`, `toolchain.eval.test.ts`,
 `keygen-signing.eval.test.ts`, with shared support in
-`evals/onboarding/support/`. They run nightly and on-demand via
-`.github/workflows/onboarding-evals-nightly.yml` (`CI_CLASS: heavy`; push to
-`main` + its nightly `schedule` mirror + `workflow_dispatch` — never
-`pull_request`), through the single
-`bun run eval:onboarding:isolated` target. `runtime` gates the run: a red
+`evals/onboarding/support/`. They run ON DEMAND through the single
+`bun run eval:onboarding:isolated` target, which runs `runtime` to completion in
+its own `bun test` process before the other three (the ordering the gating
+depends on). They are NOT on a schedule: issue #378 retired
+`.github/workflows/onboarding-evals-nightly.yml`, which used to run them as a
+`CI_CLASS: heavy`, schedule-only job. `runtime` gates the run: a red
 `runtime` reports `skill-install`/`toolchain`/`keygen-signing` as
 `not-measured`, never `failed` (`evals/onboarding/support/gating.ts`) — when
 `runtime` is green the three are mutually independent. Layer 4 (admission) runs
