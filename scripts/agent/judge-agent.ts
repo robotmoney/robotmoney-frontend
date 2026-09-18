@@ -35,7 +35,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMemberAgent, type MemberAgentModel } from "./member-agent.ts";
+import { memberAgentContainerName, runMemberAgent, type MemberAgentModel } from "./member-agent.ts";
 import { parseRunnerLine, type JudgeRunnerLine } from "./judge-runner.ts";
 import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
 
@@ -73,6 +73,42 @@ export const MIN_JUDGE_CONTAINER_TIMEOUT_MS = 5_000;
 export function judgeContainerTimeoutMs(requestedMs: number): number {
   if (!Number.isFinite(requestedMs) || requestedMs <= 0) return MIN_JUDGE_CONTAINER_TIMEOUT_MS;
   return Math.max(MIN_JUDGE_CONTAINER_TIMEOUT_MS, Math.floor(requestedMs) - LAUNCHER_RESPONSE_MARGIN_MS);
+}
+
+/**
+ * EVERY judge run id begins with this, so a judge container is identifiable by
+ * NAME alone — no label parsing, no bookkeeping file, nothing that a process
+ * killed mid-flight could have failed to write.
+ *
+ * That matters because the two in-process `finally` blocks that normally remove
+ * a judge container (this file's and runMemberAgent()'s) do not run when the
+ * LAUNCHER ITSELF is killed or restarted mid-judging, and `docker compose run
+ * --rm` cannot help either: the removal `--rm` promises is performed by the
+ * docker CLI client, which died with its parent. A container stranded that way
+ * is findable only by what the daemon already knows about it, which is its name.
+ */
+export const JUDGE_RUN_ID_PREFIX = "judge-";
+
+/**
+ * The `docker ps --filter name=` prefix matching every judge container of one
+ * compose project — derived from memberAgentContainerName() rather than spelled
+ * out, so the naming scheme has exactly one definition and a rename cannot leave
+ * the reaper looking for containers that are no longer called that.
+ */
+export function judgeContainerNamePrefix(composeProject: string): string {
+  return memberAgentContainerName(composeProject, JUDGE_RUN_ID_PREFIX);
+}
+
+// Judge containers this PROCESS started and has not yet seen removed. Read by
+// agent-launcher.ts's shutdown handler, which has to know what to remove at a
+// point where the `finally` blocks that would have removed them are never going
+// to run. Not persisted anywhere: a process that dies without running its
+// handlers leaves nothing behind to read, which is precisely why the launcher
+// ALSO sweeps by name at boot.
+const inFlightJudgeContainers = new Set<string>();
+
+export function inFlightJudgeContainerNames(): string[] {
+  return [...inFlightJudgeContainers];
 }
 
 export interface JudgeAgentRail {
@@ -152,9 +188,13 @@ export function judgeRailFromEnv(env: Record<string, string | undefined> = proce
 }
 
 export async function runJudgeAgent(rail: JudgeAgentRail, req: JudgeAgentRequest): Promise<JudgeAgentResult> {
-  const runId = `judge-${crypto.randomUUID().slice(0, 8)}`;
+  const runId = `${JUDGE_RUN_ID_PREFIX}${crypto.randomUUID().slice(0, 8)}`;
   const spool = rail.spoolDir ?? launcherSpoolDir();
   const runDir = join(spool, runId);
+  // The name runMemberAgent() will give the container, registered BEFORE the
+  // launch rather than after it: the window this registry exists to cover is the
+  // one where the launcher is killed while the container is still starting.
+  const containerName = memberAgentContainerName(rail.composeProject, runId);
   const timeoutMs = judgeContainerTimeoutMs(req.timeoutMs);
   const modelConfig: MemberAgentModel = {
     model: req.model,
@@ -167,6 +207,7 @@ export async function runJudgeAgent(rail: JudgeAgentRail, req: JudgeAgentRequest
     apiKey: rail.apiKey,
   };
   mkdirSync(runDir, { recursive: true });
+  inFlightJudgeContainers.add(containerName);
   try {
     const runnerArtifact = await buildRunnerArtifact(rail.repoRoot, runDir);
     const promptPath = join(runDir, "judge-prompt.txt");
@@ -204,6 +245,13 @@ export async function runJudgeAgent(rail: JudgeAgentRail, req: JudgeAgentRequest
     // halves run on EVERY exit path — success, timeout, crash and a throw out of
     // the bundler alike — which is what "no leaked containers or volumes" means
     // when the thing leaked would be a prompt full of member-authored text.
+    //
+    // The third half — the one NEITHER of those `finally` blocks can reach — is
+    // the launcher process itself dying mid-judging. That is what the registry
+    // below is for: agent-launcher.ts removes what is still in it on SIGTERM/
+    // SIGINT, and sweeps by name at boot for the case where not even a handler
+    // got to run (SIGKILL, OOM, a killed CI job).
+    inFlightJudgeContainers.delete(containerName);
     rmSync(runDir, { recursive: true, force: true });
   }
 }

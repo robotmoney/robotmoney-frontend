@@ -6,7 +6,7 @@
 // daemon, reaches a real HTTP endpoint, writes one real line back, and is GONE
 // afterwards on every exit path there is.
 //
-// THE FOUR EXIT PATHS, each asserted with a leak check:
+// THE SIX EXIT PATHS, each asserted with a leak check:
 //
 //   success        — the endpoint answers 200 with a completion
 //   vendor refusal — the endpoint answers 402; the container relays it, and the
@@ -14,6 +14,19 @@
 //   malformed      — the endpoint answers 200 with no assistant text
 //   hang           — the endpoint never answers and the container is killed at
 //                    its ceiling
+//   launcher stop  — the LAUNCHER PROCESS is asked to stop (SIGTERM) while a
+//                    judging is in flight
+//   launcher crash — the LAUNCHER PROCESS is SIGKILLed mid-judging, so no
+//                    handler and no `finally` of any kind can run
+//
+// The last two are the only ones that are not an ordinary return, and they are
+// the reason this file spawns the launcher as a REAL CHILD PROCESS rather than
+// calling runJudgeAgent() in-process: an exit path that kills the process cannot
+// be simulated by a process that has to survive to assert. They are also the
+// only paths `docker compose run --rm` cannot cover — the removal `--rm`
+// promises is performed by the docker CLI client the launcher spawned, and that
+// client dies orphaned when its parent does, leaving the container with the
+// daemon. See agent-launcher.ts's two-layer reaper for what actually ends them.
 //
 // "No leaked containers" is checked by NAME against the daemon after each case,
 // because that is the property runMemberAgent()'s finally-bracketed kill +
@@ -37,6 +50,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runJudgeAgent, type JudgeAgentRail } from "../../agent/judge-agent.ts";
+// The route constants come from the dependency-free contract leaf, not from
+// agent-launcher.ts, for the same reason the launcher itself reads them there:
+// one definition of the path both ends speak.
+import {
+  JUDGE_LAUNCH_PATH,
+  JUDGE_LAUNCHER_HEALTH_PATH,
+} from "../../../backend/src/swarm/judge-launcher.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -87,6 +107,84 @@ function volumeNames(project: string, env: Record<string, string>): string[] {
     throw new Error(`docker volume ls failed (exit ${r.exitCode}): ${new TextDecoder().decode(r.stderr as Uint8Array)}`);
   }
   return new TextDecoder().decode(r.stdout as Uint8Array).split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+// ── The launcher-as-a-real-process helpers (the last two cases only) ────────
+
+/** A port nothing holds right now, for a launcher child to bind. */
+function freePort(): number {
+  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
+  const port = probe.port;
+  probe.stop(true);
+  if (typeof port !== "number") throw new Error("could not reserve a port for the launcher child");
+  return port;
+}
+
+/**
+ * The environment docker-compose.yml's `agent-launcher` block hands the service,
+ * reproduced on the host. SMOKE_PROJECT and the docker-client plumbing already
+ * come from the stack's own spawn env, which is what makes the child's
+ * judgeRailFromEnv() resolve the SAME rail the in-process cases use.
+ */
+function launcherEnv(port: number): Record<string, string> {
+  return {
+    ...stack!.spawnEnv,
+    OPENCODE_API_KEY: rail!.apiKey,
+    SWARM_JUDGE_BASE_URL: rail!.baseUrl!,
+    SWARM_LAUNCHER_SPOOL_DIR: spoolDir!,
+    SWARM_AGENT_LAUNCHER_PORT: String(port),
+  };
+}
+
+/** Start the launcher as its own process and wait until it really serves. */
+async function startLauncher(port: number): Promise<Bun.Subprocess> {
+  const proc = Bun.spawn(["bun", join("scripts", "agent", "agent-launcher.ts")], {
+    cwd: repoRoot,
+    env: launcherEnv(port),
+    stdin: "ignore",
+    // Inherited, not piped: the boot sweep and the shutdown sweep both announce
+    // themselves on stderr, and that announcement is the operator-facing half of
+    // this mechanism. An undrained pipe would also deadlock the child.
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    if (proc.exitCode !== null) throw new Error(`agent-launcher exited before serving (code ${proc.exitCode})`);
+    const healthy = await fetch(`http://127.0.0.1:${port}${JUDGE_LAUNCHER_HEALTH_PATH}`)
+      .then((r) => r.ok)
+      .catch(() => false);
+    if (healthy) return proc;
+    if (Date.now() >= deadline) throw new Error(`agent-launcher never became healthy on :${port}`);
+    await Bun.sleep(250);
+  }
+}
+
+/**
+ * Ask a launcher for a judging and DO NOT await it. Both cases below use a stub
+ * that never answers, so the returned promise only settles when the launcher
+ * dies — which is the point.
+ */
+function postJudging(port: number): Promise<unknown> {
+  return fetch(`http://127.0.0.1:${port}${JUDGE_LAUNCH_PATH}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // Far larger than the case budget on purpose: the container must still be
+    // alive when the launcher is killed, so its own ceiling must never be what
+    // ends it. Only the reaper may.
+    body: JSON.stringify({ model: "stub-judge", prompt: "p", timeoutMs: 600_000 }),
+  }).catch(() => null);
+}
+
+/** Block until the daemon really holds a judge container for this project. */
+async function waitForJudgeContainer(): Promise<string[]> {
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    const names = containerNames(stack!.config.project, stack!.spawnEnv);
+    if (names.length > 0) return names;
+    if (Date.now() >= deadline) throw new Error("the launcher never created a judge container");
+    await Bun.sleep(250);
+  }
 }
 
 describe("judge container launch (Docker, no model spend)", () => {
@@ -299,5 +397,70 @@ describe("judge container launch (Docker, no model spend)", () => {
       expect(health.stdout).toContain("200 ");
     },
     SETUP_TIMEOUT_MS,
+  );
+
+  test(
+    "a launcher asked to STOP mid-judging removes its in-flight container before it exits",
+    async () => {
+      // SIGTERM is what `docker compose stop`, `docker compose restart` and
+      // `docker compose down` actually send this service, and it is an ORDINARY
+      // event for a `restart: unless-stopped` container — a deploy sends it. The
+      // in-process `finally` blocks never run on it, so the container would be
+      // stranded with the daemon while the docker CLI that owed it a `--rm`
+      // died orphaned.
+      respond = () => new Promise<Response>(() => {});
+      const port = freePort();
+      const launcher = await startLauncher(port);
+      const judging = postJudging(port);
+      const inFlight = await waitForJudgeContainer();
+      expect(inFlight).toHaveLength(1);
+
+      launcher.kill("SIGTERM");
+      await launcher.exited;
+      await judging;
+
+      expect(containerNames(stack!.config.project, stack!.spawnEnv)).toEqual([]);
+      respond = () => new Response("unset", { status: 500 });
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "a launcher SIGKILLed mid-judging strands its container, and the next launcher reaps it at boot",
+    async () => {
+      // THE ONE EXIT PATH NOTHING IN-PROCESS CAN COVER. SIGKILL cannot be
+      // handled — no `finally`, no signal handler, no atexit — so this case
+      // deliberately proves the leak FIRST and then proves what ends it: the
+      // next incarnation of the service, which is what `restart: unless-stopped`
+      // produces within seconds of an OOM kill, a crashed process or a killed
+      // CI job.
+      respond = () => new Promise<Response>(() => {});
+      const port = freePort();
+      const doomed = await startLauncher(port);
+      const judging = postJudging(port);
+      const stranded = await waitForJudgeContainer();
+      expect(stranded).toHaveLength(1);
+
+      doomed.kill("SIGKILL");
+      await doomed.exited;
+      await judging;
+
+      // The leak is REAL. Without this assertion the reap below could pass
+      // against a container that had already removed itself, which would make
+      // the whole case prove nothing.
+      expect(containerNames(stack!.config.project, stack!.spawnEnv)).toEqual(stranded);
+
+      const restarted = await startLauncher(port);
+      try {
+        // The boot sweep runs BEFORE the launcher serves, so by the time its
+        // health route answers there is nothing left of the previous life.
+        expect(containerNames(stack!.config.project, stack!.spawnEnv)).toEqual([]);
+      } finally {
+        restarted.kill("SIGTERM");
+        await restarted.exited;
+      }
+      respond = () => new Response("unset", { status: 500 });
+    },
+    CASE_TIMEOUT_MS,
   );
 });

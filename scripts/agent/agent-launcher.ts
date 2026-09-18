@@ -29,6 +29,8 @@
 // compose file — it is reachable only from the compose network, which is why it
 // needs no authentication of its own and must never gain a published port.
 import {
+  inFlightJudgeContainerNames,
+  judgeContainerNamePrefix,
   judgeRailFromEnv,
   runJudgeAgent,
   type JudgeAgentRail,
@@ -124,6 +126,116 @@ export function createLauncherFetch(rail: JudgeAgentRail): (req: Request) => Pro
   };
 }
 
+// ── THE EXIT PATH NO `finally` CAN COVER ────────────────────────────────────
+//
+// A judging's container is normally removed twice over: `docker compose run
+// --rm` on a clean exit, and runMemberAgent()'s finally-bracketed `docker rm -f`
+// on every other in-process ending (timeout, crash, a throw out of the bundler).
+// Both are in-process, and BOTH are skipped when THIS process is the thing that
+// ends — the launcher is a `restart: unless-stopped` service, so being stopped
+// and restarted mid-judging is an ordinary event, not a pathological one. Worse,
+// `--rm` cannot cover it either: that removal is performed by the docker CLI
+// CLIENT this process spawned, so a launcher killed with SIGKILL leaves the
+// client orphaned against a container the daemon will hold indefinitely.
+//
+// So cleanup is bracketed at the PROCESS boundary too, in two layers:
+//
+//   1. SIGTERM/SIGINT — the signals `docker compose stop|restart|down` and an
+//      operator's Ctrl-C actually send. Whatever is still in flight is removed
+//      by name before this process exits.
+//   2. A BOOT SWEEP — for the endings a handler never sees (SIGKILL, OOM kill,
+//      a killed CI job, the host rebooting). The next incarnation of the service
+//      reaps every judge container of its compose project before it serves a
+//      single request.
+//
+// Layer 2 removes containers this process did not start, which is correct here
+// and would not be everywhere: compose runs exactly ONE agent-launcher per
+// project (`restart: unless-stopped`, no `deploy.replicas`), so any judge
+// container alive at this process's boot belongs to a previous incarnation of
+// this same service by construction. A second concurrent launcher in one
+// project would break that assumption — which is why the sweep is scoped to
+// `rail.composeProject` and nothing broader.
+const decode = (b: unknown) => new TextDecoder().decode(b as Uint8Array);
+
+/** Judge containers of this project the daemon holds right now, by name. */
+export function listJudgeContainers(rail: JudgeAgentRail): string[] {
+  const r = Bun.spawnSync(
+    ["docker", "ps", "-a", "--filter", `name=${judgeContainerNamePrefix(rail.composeProject)}`, "--format", "{{.Names}}"],
+    { env: rail.composeSpawnEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) {
+    console.error(`[agent-launcher] could not list judge containers (exit ${r.exitCode}): ${decode(r.stderr).slice(0, 300)}`);
+    return [];
+  }
+  return decode(r.stdout).split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * `docker rm -f` each name, best effort — the SAME primitive runMemberAgent()
+ * uses in its own `finally`, so there is one way a judge container dies.
+ * Returns the names actually removed.
+ */
+export function forceRemoveContainers(names: string[], env: Record<string, string>): string[] {
+  const removed: string[] = [];
+  for (const name of names) {
+    const r = Bun.spawnSync(["docker", "rm", "-f", name], { env, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    // Exit 0 means removed; anything else means it was already gone or the
+    // daemon is unreachable, and neither is worth failing a shutdown over.
+    if (r.exitCode === 0) removed.push(name);
+  }
+  return removed;
+}
+
+/**
+ * LAYER 2. Called once at boot, BEFORE the first request is served. Loud when it
+ * finds anything: a reaped container is evidence that a previous incarnation of
+ * this service was killed mid-judging, and an operator should see that.
+ */
+export function reapOrphanedJudgeContainers(rail: JudgeAgentRail): string[] {
+  const orphans = listJudgeContainers(rail);
+  if (orphans.length === 0) return [];
+  const removed = forceRemoveContainers(orphans, rail.composeSpawnEnv);
+  console.error(
+    `[agent-launcher] boot sweep reaped ${removed.length}/${orphans.length} judge container(s) stranded by a ` +
+      `previous incarnation of this service: ${orphans.join(", ")}`,
+  );
+  return removed;
+}
+
+/**
+ * LAYER 1. Removes everything still in flight, then exits. Returns the names it
+ * removed so a caller (and the integration test) can assert on them.
+ */
+export function shutdownJudgeContainers(rail: JudgeAgentRail): string[] {
+  const inFlight = inFlightJudgeContainerNames();
+  if (inFlight.length === 0) return [];
+  const removed = forceRemoveContainers(inFlight, rail.composeSpawnEnv);
+  console.error(
+    `[agent-launcher] shutting down mid-judging — removed ${removed.length}/${inFlight.length} in-flight judge ` +
+      `container(s): ${inFlight.join(", ")}`,
+  );
+  return removed;
+}
+
+/** Wires layer 1 onto the signals a compose stop/restart actually sends. */
+export function installShutdownReaper(
+  rail: JudgeAgentRail,
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      try {
+        shutdownJudgeContainers(rail);
+      } catch (err) {
+        // A failed sweep must never stop the process from stopping — the boot
+        // sweep is the backstop for exactly this.
+        console.error(`[agent-launcher] shutdown sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      exit(0);
+    });
+  }
+}
+
 /**
  * A LAUNCHER THAT CANNOT LAUNCH, SAYING SO ON EVERY REQUEST.
  *
@@ -159,6 +271,12 @@ if (import.meta.main) {
     rail = judgeRailFromEnv();
   } catch (err) {
     unavailable = `agent-launcher cannot launch: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (rail) {
+    // BEFORE `Bun.serve`, deliberately: a judging accepted while a previous
+    // incarnation's container is still running would be swept by its own sweep.
+    reapOrphanedJudgeContainers(rail);
+    installShutdownReaper(rail);
   }
   Bun.serve({
     port,
