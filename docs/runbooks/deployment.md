@@ -505,8 +505,10 @@ if enabled.
 ### 4.3.1 Role-taxonomy cutover (human-run)
 
 The first cutover is deliberately not automated against production. A reviewed
-operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with a
-password-free bootstrap URL; `psql` prompts interactively and the helper never
+operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with the path to
+a `.env` file holding a password-free `MIGRATE_DATABASE_URL` (falling back to
+`DATABASE_URL`); the helper neither accepts a URL on the command line nor
+prints the URL it reads. `psql` prompts interactively and the helper never
 stores, prints, logs, or accepts credentials as command-line arguments. It
 creates/repairs `rm_owner`, `rm_app`, `rm_worker`, and `rm_readonly`, then
 prompts for each runtime password. Run the normal migration command once with

@@ -199,11 +199,14 @@ is the whole mechanism, and it does exactly two things: it runs
 `backend/migrations/0053_database_role_taxonomy.sql` through `psql` as the
 bootstrap login, then prompts `\password` for `rm_app`, `rm_worker`, and
 `rm_readonly` in turn. It never accepts, prints, writes, or logs a password —
-`psql` prompts on the terminal — so the URL you hand it must be
-**password-free** or it refuses:
+`psql` prompts on the terminal — so the URL inside the `.env` file it reads
+must be **password-free** or it refuses:
 
 ```bash
-scripts/ops/provision-db-role-taxonomy.sh 'postgres://<bootstrap-login>@<primary-host>:25060/defaultdb?sslmode=require'
+# provisioning.env — the .env file passed as the script's single argument:
+MIGRATE_DATABASE_URL=postgres://<bootstrap-login>@<primary-host>:25060/defaultdb?sslmode=require
+
+scripts/ops/provision-db-role-taxonomy.sh provisioning.env
 ```
 
 **The bootstrap login is whichever admin login you run that command as** —
