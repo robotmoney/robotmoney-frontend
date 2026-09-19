@@ -26,7 +26,12 @@ test.beforeEach(async ({ page }) => {
 function failOnBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+    if (message.type() !== "error") return;
+    // "Failed to load resource" carries no URL in its text; Chromium puts the
+    // failing resource in the message's location. Without it a full-stack
+    // failure named a 404 and nothing else.
+    const where = message.location()?.url;
+    errors.push(`console: ${message.text()}${where ? ` (${where})` : ""}`);
   });
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.stack || error.message}`));
   return errors;
