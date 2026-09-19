@@ -9,7 +9,7 @@
 //
 // A factory, because the reading is state.
 import { bucketHue } from "./session-summary.js";
-import { isKnownPage, metaFor } from "../seo.js";
+import { citeTitle, isKnownPage } from "../seo.js";
 
 // `helpers` belongs to the SURFACE, not to this module: regimeColor and
 // regimeLabel are spread into both factories that spread this one, and so are
@@ -136,22 +136,8 @@ export function sessionBrief() {
       const parts = [];
       const inst = txt(b.prompt?.user);
       if (inst) parts.push({ key: "instruction", label: "Instruction", quote: inst });
-      const r = b.regime;
-      if (r && (r.regime || r.composite != null)) {
-        // session.html's chips, word for word: composite is a number and has
-        // no dot; regime, macro and on-chain are readings and each wears its own.
-        const comp = Number(r.composite);
-        const macro = r.macro_regime || r.macroRegime;
-        const onchain = r.onchain_regime || r.onchainRegime;
-        const reading = (/** @type {string} */ k, /** @type {unknown} */ v) => ({ k, v: self.regimeLabel(v), dot: self.regimeColor(v) });
-        const facts = [
-          r.composite != null && Number.isFinite(comp) ? { k: "composite", v: comp.toFixed(3), dot: "" } : null,
-          r.regime ? reading("regime", r.regime) : null,
-          macro ? reading("macro", macro) : null,
-          onchain ? reading("on-chain", onchain) : null,
-        ].filter(Boolean).map((f, i) => ({ key: `regime-${i}`, ...f }));
-        parts.push({ key: "regime", label: "Market regime", facts });
-      }
+      // No regime part: the session page states the reading once, in its facts
+      // row and its market context, and this list sits in the same page.
       // The weights in force when the session opened, drawn as the targets
       // card draws the weights in force now, each sleeve in its published hue.
       const buckets = b.allocation?.buckets;
@@ -176,14 +162,15 @@ export function sessionBrief() {
           const href = k ? `/research/${encodeURIComponent(k)}` : "";
           // The page's own name when there is a page ("Late-Cycle Signals"),
           // the key humanised when there is not.
-          const title = href && isKnownPage(href) ? String(metaFor(href).title || "").split(" — ")[0].trim() : "";
+          const title = href ? citeTitle(href) : "";
           return { text: title || human(k), href };
         })) });
       } else if (Array.isArray(articles) && articles.length) {
         // v0's articles went into one member's prompt, not the swarm's: the
         // brief's own note says "research is Athena's context".
-        const to = /athena/i.test(String(b.research?._comment || "")) ? "Research, to Athena" : "Research";
-        parts.push({ key: "research", label: to, links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
+        // Which member's prompt the articles went into is an internal routing
+        // detail, so the part is "Research" either way.
+        parts.push({ key: "research", label: "Research", links: pills("research", articles.map((/** @type {any} */ x) => ({ text: txt(x?.title), href: txt(x?.slug) }))) });
       }
       const recent = b.recentSessions || b.recent_sessions;
       if (Array.isArray(recent) && recent.length) {

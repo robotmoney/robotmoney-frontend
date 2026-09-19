@@ -1128,16 +1128,14 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
 .hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
   background: var(--color-text-muted); }
-/* The header's chip row and the targets card's register, reused as they
-   are, one size down. */
-.hand .sv__fact-row { margin-top: 0; }
-.hand .sv__sleeves { max-width: 30rem; }
-.hand .sv__sleeve { padding: 0.22rem 0; }
-.hand .sv__sleeve-n, .hand .sv__sleeve-v { font-size: 0.76rem; }
-.hand .sv__sleeve-track { height: 4px; }
+/* The allocation targets the brief carried: sleeve and figure, no bars. */
+.hand .hand__targets { max-width: 22rem; gap: 0.25rem; }
+.hand .hand__targets li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: center; column-gap: 0.5rem;
+  padding-left: 0; font-size: 0.8125rem; color: var(--color-text-soft); }
+.hand .hand__targets li::before { content: none; }
+.hand .hand__targets i { width: 0.5rem; height: 0.5rem; }
+.hand .hand__targets b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .hand__links li { font-size: 0.84rem; color: var(--color-text); }
-/* The links take the site's convention (.rm-link); the arrow says each is a page. */
-.hand__links a::after { content: " \2192"; color: var(--color-text-muted); }
 /* A 10rem label column leaves a phone a sliver for the value, so the label
    goes on top. Same breakpoint the register drops its bars at. */
 @media (max-width: 720px) {

@@ -794,14 +794,9 @@ test("the latest recommendation carries its session's reading and vote, and its 
   await handBtn.click();
   const hand = page.locator("#session-handover");
   const keys = await hand.locator(".hand__row").evaluateAll((els) => els.map((e) => e.getAttribute("data-part")));
-  expect(keys).toEqual(["instruction", "regime", "research", "recent", "notes", "returns"]);
-  // The regime in the session page's own chips: every reading wears its dot,
-  // the composite (a number) does not.
-  const regime = hand.locator('[data-part="regime"] .sv__fact');
-  await expect(regime.locator("em")).toHaveText(["composite", "regime", "macro", "on-chain"]);
-  await expect(regime.locator("b")).toHaveText(["0.604", "risk-on", "risk-on", "neutral"]);
-  await expect(regime.first().locator(".sv__fact-dot")).toHaveCount(0);
-  await expect(regime.locator(".sv__fact-dot")).toHaveCount(3);
+  // No regime part: the page states the reading once, in its facts row and
+  // market context, and this list sits on the same page.
+  expect(keys).toEqual(["instruction", "research", "recent", "notes", "returns"]);
   // A recent session links to its session, by the dated address.
   const recent = hand.locator('[data-part="recent"] a.rr-lnk');
   await expect(recent).toHaveText(["Sep 10 · Woon Treasury"]);
@@ -846,11 +841,12 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   // subject page's register, each sleeve in the hue it wears there.
   await page.locator('button[aria-controls="session-handover"]').click();
   const hand = page.locator("#session-handover");
-  const bars = hand.locator('[data-part="targets"] .sv__sleeve');
-  await expect(bars.locator(".sv__sleeve-n")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
-  await expect(bars.locator(".sv__sleeve-v")).toHaveText(["95%", "5%", "0%", "0%"]);
-  await expect(bars.first().locator(".sv__sleeve-track i")).toHaveAttribute("style", /width:\s*95%/);
-  await expect(bars.first().locator(".sv__bucket-dot")).toHaveAttribute("style", cardHue || "missing");
+  // Figures, not bars: each sleeve and its target, in the hue it wears on the page.
+  const targets = hand.locator('[data-part="targets"] .hand__targets li');
+  await expect(targets.locator("span")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
+  await expect(targets.locator("b")).toHaveText(["95%", "5%", "0%", "0%"]);
+  await expect(hand.locator('[data-part="targets"] .sv__sleeve-track')).toHaveCount(0);
+  await expect(targets.first().locator("i")).toHaveAttribute("style", cardHue || "missing");
   // The archive's refs carry no subject; they are this subject's own sessions.
   await expect(hand.locator('[data-part="recent"] a.rr-lnk')).toHaveText(["Jun 21", "Jun 17", "Jun 13"]);
   await expect(hand.locator('[data-part="recent"] a.rr-lnk').first()).toHaveAttribute("href", "/swarm/2026-06-21/robotmoney-allocation");

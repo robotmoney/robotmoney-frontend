@@ -997,7 +997,8 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   // What it was handed, with the recent session named and linked.
   await page.locator("#evidence").getByRole("button", { name: /What the swarm was handed/ }).click();
   const hand = page.locator("#session-handover");
-  await expect(hand.locator('[data-part="regime"] .sv__fact em')).toHaveText(["composite", "regime", "macro", "on-chain"]);
+  // The regime is the page's facts row and market context, not a second copy here.
+  await expect(hand.locator('[data-part="regime"]')).toHaveCount(0);
   const recent = hand.locator('[data-part="recent"] a.rr-lnk');
   await expect(recent).toHaveText(["Sep 9 · Robot Money Vault"]);
   await expect(recent).toHaveAttribute("href", "/swarm/2026-09-09/robotmoney-vault");
