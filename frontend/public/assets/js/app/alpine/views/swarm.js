@@ -1,7 +1,7 @@
 // @ts-nocheck — buildless browser JS predating the root tsconfig's checkJs
 // coverage; issue #358 is the first thing to import this module from a
 import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
-import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
+import { timeAgo, timeLeft, absoluteUtc } from "../../lib/relative-time.js";
 import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
 import { operatorName } from "../../lib/operator.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
@@ -263,7 +263,11 @@ export function registerSwarmView(Alpine) {
         { k: "Sessions", v: String(published.length) },
       ];
       if (latest) rows.push({ k: "Latest session", v: this.formatDate(latest) });
-      if (this.nextSessionAt) rows.push({ k: "Next session", v: absoluteUtc(this.nextSessionAt) });
+      // Dated as "Latest session" is, with the hour it convenes.
+      if (this.nextSessionAt) {
+        const at = absoluteUtc(this.nextSessionAt);
+        if (at) rows.push({ k: "Next session", v: `${this.formatDate(this.nextSessionAt)} ${at.slice(11)}` });
+      }
       return rows;
     },
     // The newest published session on the allocation subject.
@@ -466,18 +470,8 @@ export function registerSwarmView(Alpine) {
     // Coarse on purpose: the window runs for hours, so a ticking second hand
     // would be precision this cadence does not have.
     liveRemaining() {
-      const s = this.liveSession();
       // A session with no deadline is open, but there is no countdown to show.
-      if (!s || !s.windowClosesAt) return "";
-      const ms = Date.parse(s.windowClosesAt) - this.now;
-      if (!Number.isFinite(ms)) return "";
-      if (ms <= 0) return "";
-      const mins = Math.floor(ms / 60000);
-      if (mins < 1) return "under a minute";
-      if (mins < 60) return `${mins} min`;
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      return m ? `${h}h ${m}m` : `${h}h`;
+      return timeLeft(this.liveSession()?.windowClosesAt, this.now);
     },
     liveClosesAbsolute() { return absoluteUtc(this.liveSession()?.windowClosesAt); },
     // "3 min ago" for a window that has already shut. Returns "" for one that

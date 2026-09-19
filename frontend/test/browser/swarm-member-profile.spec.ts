@@ -467,3 +467,43 @@ test("the exact instant, and which session it belongs to, are one hover away", a
 
   await expectNoBrowserErrors(errors);
 });
+
+// The member-takes route serves a session's state, not its deadline. A
+// `collecting` session past its deadline is shut (lib/session-phase.js), and
+// /swarm and the session page say "closed"; this page read the raw state and
+// said "collecting" one click away. A take still collecting reads its window
+// from its session, so the three pages agree.
+test("a take in a window that has passed reads closed, as on /swarm and the session page", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const now = Date.now();
+  const date = new Date(now).toISOString().slice(0, 10);
+  const row = (id: string, closesIn: number) => ({
+    sessionDate: date, subjectId: id, subjectName: id, sessionState: "collecting",
+    take: { id: `t-${id}`, member_id: "athena", stance: "cautious", confidence: 0.7, body: "A take.", verified: true, revision: 1, received_at: new Date(now - 30 * 60_000).toISOString() },
+    closesIn,
+  });
+  const rows = [row("overdue", -40), row("open", 200)];
+
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    const ok = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    if (/\/api\/swarm\/members\/athena\/takes/.test(pathname)) return ok({ takes: rows.map(({ closesIn: _, ...r }) => r) });
+    if (/\/api\/swarm\/members\/athena$/.test(pathname)) return ok(RENAMED_ATHENA);
+    const m = pathname.match(/^\/api\/swarm\/sessions\/\d{4}-\d{2}-\d{2}\/([^/]+)$/);
+    const r = m && rows.find((x) => x.subjectId === m[1]);
+    if (r) {
+      return ok({
+        session: { id: `s-${r.subjectId}`, date, subject_id: r.subjectId, state: "collecting", window_closes_at: new Date(now + r.closesIn * 60_000).toISOString() },
+        takes: [r.take],
+      });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/swarm/members/athena");
+  const card = (name: string) => page.locator("#latest .rr-take").filter({ has: page.locator(".rr-take__name", { hasText: name }) });
+  await expect(card("overdue").locator(".rm-sphase")).toHaveText("closed");
+  await expect(card("open").locator(".rm-sphase")).toHaveText("collecting");
+
+  await expectNoBrowserErrors(errors);
+});

@@ -683,6 +683,32 @@ test("a take's memo is linked from its card, and only when it is a web address",
   await expect(page.locator('#takes a[href^="javascript:"]')).toHaveCount(0);
 });
 
+// An open session, reached from /swarm's live strip ("See full session"),
+// states what the strip states: the takes filed out of the roster, and when
+// the window closes. The takes so far are not the vote, so no consensus is
+// drawn until the session publishes.
+test("an open session states its takes filed out of the roster and when its window closes, and no consensus yet", async ({ page }) => {
+  const closes = new Date(Date.now() + 200 * 60_000 + 30_000).toISOString();
+  const open = { ...positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"), state: "collecting", window_closes_at: closes, swarm_recommendation: null };
+  const onScale = TAKES.map((t, i) => ({ ...t, stance: ["cautious", "neutral", "cautious"][i], archival: false }));
+  await mockSessionApi(page, { session: open, takes: onScale.slice(0, 2), allocation: ALLOCATION });
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+
+  const meta = page.locator(".rr-meta").first();
+  await expect(meta).toContainText("Takes 2 of 3");
+  await expect(meta).toContainText("Window closes in 3h 20m");
+  await expect(page.locator(".rr-vote")).toBeVisible();
+  await expect(page.locator(".rr-vote__sum")).not.toContainText("Consensus");
+
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await mockSessionApi(page, { session: positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"), takes: onScale, allocation: ALLOCATION });
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+  await expect(page.locator(".rr-vote__sum")).toContainText("Consensus");
+  await expect(page.locator(".rr-meta").first()).toContainText("Takes 3");
+  await expect(page.locator(".rr-meta").first()).not.toContainText("of 3");
+  await expect(page.locator(".rr-meta").first()).not.toContainText("Window");
+});
+
 // review-data-integrity F4. /api/dashboards/allocation serves the single
 // CURRENT allocation_framework row, and it is admin-editable. Joining a
 // historical session against it measures the swarm against a target that did

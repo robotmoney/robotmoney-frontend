@@ -43,7 +43,13 @@
         </header>
 
         <div class="rr-meta">
-          <span class="rr-meta__i">Takes <b x-text="takes.length"></b></span>
+          <span class="rr-meta__i">Takes <b x-text="filedCount()"></b></span>
+          <template x-if="windowLeft()">
+            <span class="rr-meta__i">Window closes in <b :title="windowAt()" x-text="windowLeft()"></b></span>
+          </template>
+          <template x-if="!windowLeft() && windowAgo()">
+            <span class="rr-meta__i">Window closed <b :title="windowAt()" x-text="windowAgo()"></b></span>
+          </template>
           <template x-if="disagreements().length">
             <span class="rr-meta__i">Disagreements <b x-text="disagreements().length"></b></span>
           </template>
@@ -432,14 +438,17 @@
               <figure class="rr-vote" x-data="{ at: null }">
                 <figcaption class="rr-vote__sum">
                   <!-- The consensus as the same chip a take's stance wears; a
-                       tie reads "split" in the neutral chip. -->
-                  <span class="rr-meta__i">Consensus
-                    <span class="sv__stance-badge" :style="leanBadgeStyle(reviewRow())" :title="leanStance(reviewRow()) ? null : consensusText()">
-                      <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
-                      <span x-text="leanLabel(reviewRow())"></span>
+                       tie reads "split" in the neutral chip. An open window has
+                       no consensus yet: the takes so far are not the vote. -->
+                  <template x-if="!isLive()">
+                    <span class="rr-meta__i">Consensus
+                      <span class="sv__stance-badge" :style="leanBadgeStyle(reviewRow())" :title="leanStance(reviewRow()) ? null : consensusText()">
+                        <template x-if="leanStance(reviewRow())"><i :style="leanDotStyle(reviewRow())" aria-hidden="true"></i></template>
+                        <span x-text="leanLabel(reviewRow())"></span>
+                      </span>
+                      <template x-if="leadShare(reviewRow())"><em class="rr-vote__share" x-text="leadShare(reviewRow())"></em></template>
                     </span>
-                    <template x-if="leadShare(reviewRow())"><em class="rr-vote__share" x-text="leadShare(reviewRow())"></em></template>
-                  </span>
+                  </template>
                   <template x-if="absentNames().length">
                     <span class="rr-meta__i">Absent
                       <template x-for="id in (session.swarmRecommendation?.absent || [])" :key="id">

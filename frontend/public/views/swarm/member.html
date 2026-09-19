@@ -86,7 +86,7 @@
                     <div class="rr-take__what">
                       <a class="rr-take__name" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="subjectNameOf(row.session)"></a>
                       <span class="mp-when" tabindex="0" :aria-label="filedTitle(row)"><time class="mp-take__date" :datetime="filedAt(row)" x-text="filedLabel(row)"></time><span class="mp-when__tip" role="tooltip" x-text="filedTitle(row)"></span></span>
-                    <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
+                      <span :class="phaseChipClass(row.phase)" x-text="phaseLabel(row.phase)"></span>
                     </div>
                     <div class="rr-take__stance">
                       <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">

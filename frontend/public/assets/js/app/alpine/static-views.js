@@ -14,7 +14,7 @@ import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
-import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
+import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
@@ -2168,7 +2168,7 @@ export function registerStaticViews(Alpine) {
     async loadRows(memberId) {
       try {
         const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=50`);
-        return (res.takes || []).map((r) => ({
+        const rows = (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
           // camelTake, not the raw row: raw takes carry no `permalinkId`, only
           // `id`/`member_id`, so takeHref() silently returned null for every
@@ -2176,6 +2176,19 @@ export function registerStaticViews(Alpine) {
           take: camelTake(r.take),
           phase: this.takePhase(r.sessionState),
         }));
+        // This route serves a session's state and not its deadline, so an
+        // overdue `collecting` row read as open here and as closed on /swarm
+        // and the session page (#570). The few rows still collecting read the
+        // deadline from their session, matched on the take itself.
+        await Promise.all(rows.filter((r) => r.phase === "live").map(async (r) => {
+          try {
+            const d = await api.get(path(ROUTES.swarm.session, { date: r.session.date, subject: r.session.subjectId }));
+            if (!(d?.takes || []).some((t) => t.id === r.take.id)) return;
+            r.session.windowClosesAt = camelSession(d.session).windowClosesAt;
+            r.phase = this.rowPhase(r.session);
+          } catch (_) { /* the state stands */ }
+        }));
+        return rows;
       } catch (_) {
         return this.scanSessions();
       }
@@ -2224,7 +2237,7 @@ export function registerStaticViews(Alpine) {
           // from a real take `id` (never from `member_id`). loadArchiveSession
           // has already stamped `archival` on the ones it served.
           const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
-          return take ? { session, take, phase: this.takePhase(session.state) } : null;
+          return take ? { session, take, phase: this.rowPhase(session) } : null;
         })
         .filter(Boolean);
     },
@@ -2233,23 +2246,29 @@ export function registerStaticViews(Alpine) {
       if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
       return "published";
     },
+    // Only `collecting` turns on the deadline (lib/session-phase.js): past it,
+    // the window is shut whatever the row says, and nothing is working on it.
+    rowPhase(session) {
+      const p = this.takePhase(session?.state);
+      if (p !== "live" || !session?.windowClosesAt) return p;
+      return sessionPhase(session).isOpen ? "live" : "closed";
+    },
     // The same three words the swarm index, the apply page and the session
     // page use, from lib/session-phase.js. This page said "Collecting · window
     // open" where they said "collecting", which is one session reading as two
     // states depending on which page you were standing on. The pulsing mark on
     // .rm-sphase--open now carries what the extra words were carrying.
     //
-    // Still derived from the raw DB state, not from the deadline: the
-    // member-takes route does not serve windowClosesAt, so an overdue
-    // `collecting` row reads as open here and as closed everywhere else. That
-    // is issue #570's shape, and it needs the field before it can be fixed.
+    // An overdue `collecting` row reads "closed", as it does on /swarm and
+    // the session page (rowPhase()).
     phaseLabel(phase) {
       return phase === "live" ? "collecting"
         : phase === "closing" ? "aggregating"
+        : phase === "closed" ? "closed"
         : "published";
     },
     phaseChipClass(phase) {
-      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : "published";
+      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : phase === "closed" ? "closed" : "published";
       return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
@@ -2403,7 +2422,27 @@ export function registerStaticViews(Alpine) {
       this.session = null;
       this.init();
     },
+    // The clock behind an open window's countdown, on /swarm's cadence.
+    now: Date.now(),
+    clock: null,
+    destroy() {
+      if (this.clock) { clearInterval(this.clock); this.clock = null; }
+    },
+    // A session still in its window, stated as /swarm's live strip states it,
+    // so the reader who followed "See full session" finds the same count and
+    // deadline here.
+    isLive() {
+      const k = this.session ? sessionPhase(this.session, this.now).key : "";
+      return k === "open" || k === "aggregating" || k === "closed";
+    },
+    filedCount() {
+      return this.isLive() && this.members.length ? `${this.takes.length} of ${this.members.length}` : String(this.takes.length);
+    },
+    windowLeft() { return this.isLive() ? timeLeft(this.session?.windowClosesAt, this.now) : ""; },
+    windowAgo() { return this.isLive() ? timeAgo(this.session?.windowClosesAt, this.now) : ""; },
+    windowAt() { return absoluteUtc(this.session?.windowClosesAt); },
     async init() {
+      if (!this.clock) this.clock = setInterval(() => { this.now = Date.now(); }, 30 * 1000);
       const routeAtEntry = location.pathname;
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
