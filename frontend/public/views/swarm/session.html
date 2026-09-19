@@ -499,11 +499,10 @@
                   <div class="rr-take__main" :class="weightRows(t).length ? 'has-aside' : ''">
                     <div>
                       <div class="rr-take__text" x-ref="text">
+                        <!-- No section label over the excerpt: the page names the
+                             subject, and "On this portfolio" said it again. -->
                         <template x-if="!open && call(t.body)">
-                          <div>
-                            <p class="rr-k rr-take__call" x-text="call(t.body).label"></p>
-                            <div class="sv__take-body rr-prose" x-html="linkified(call(t.body).text)"></div>
-                          </div>
+                          <div class="sv__take-body rr-prose" x-html="linkified(call(t.body).text)"></div>
                         </template>
                         <template x-if="open || !call(t.body)">
                           <div class="sv__take-body rr-prose" :class="!open && long(t.body) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(t.body || '')"></div>
@@ -513,6 +512,11 @@
                         <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
                           <span x-text="open ? 'Show less' : 'Read full take'"></span>
                         </button>
+                      </template>
+                      <!-- A memo the member attached to the take. The shared card
+                           dropped it; a live take can carry one. -->
+                      <template x-if="memoHref(t.memoUrl)">
+                        <a class="rr-lnk sv__memo-link" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
                       </template>
                     </div>
                     <template x-if="weightRows(t).length">

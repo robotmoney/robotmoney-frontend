@@ -28,6 +28,7 @@ scripts/tests/unit/swarm-apply-form-and-status.test.ts
 scripts/tests/unit/swarm-initials-fallback-pin.test.ts
 scripts/tests/unit/swarm-initials-lockstep.test.ts
 scripts/tests/unit/swarm-synthesis-preview.test.ts
+scripts/tests/unit/swarm-take-memo-link.test.ts
 
 # Asserts on shipped client files
 scripts/tests/unit/admin-webauthn-local-assets.test.ts

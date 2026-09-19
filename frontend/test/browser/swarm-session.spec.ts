@@ -638,6 +638,29 @@ test("a live submission whose signature failed still gets the failed-check wordi
   await expect(badge).not.toHaveClass(/sv__vfy--arch/);
 });
 
+// A member can attach a memo to its take. The shared take card (RM-121)
+// dropped the link, and no archived take has a memo, so the static preview
+// never showed the loss. Member supplied, so only a web address is linked.
+test("a take's memo is linked from its card, and only when it is a web address", async ({ page }) => {
+  await mockSessionApi(page, {
+    session: positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"),
+    takes: [
+      { ...FAILED_TAKES[0], memo_url: "https://example.org/athena-memo" },
+      { id: "take-draco", member_id: "draco", member_name: "Draco", stance: "hold", confidence: 0.6, body: "Draco take body.", verified: false, archival: false, memo_url: "javascript:alert(1)" },
+    ],
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+
+  const memos = page.locator("#takes .rr-take a.sv__memo-link");
+  await expect(memos).toHaveCount(1);
+  await expect(memos).toHaveText("Read memo ↗");
+  await expect(memos).toHaveAttribute("href", "https://example.org/athena-memo");
+  await expect(memos).toHaveAttribute("rel", /noopener/);
+  await expect(page.locator('#takes a[href^="javascript:"]')).toHaveCount(0);
+});
+
 // review-data-integrity F4. /api/dashboards/allocation serves the single
 // CURRENT allocation_framework row, and it is admin-editable. Joining a
 // historical session against it measures the swarm against a target that did

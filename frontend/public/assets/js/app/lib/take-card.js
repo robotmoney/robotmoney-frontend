@@ -51,6 +51,14 @@ export function takeWeightRows(take) {
     .sort((a, b) => a.rank - b.rank);
 }
 
+// A take's memo link, only when it is a web address. The URL is member
+// supplied, so anything else (a javascript: or data: URL) is not linked.
+/** @param {unknown} url */
+export function memoHref(url) {
+  const s = String(url || "").trim();
+  return /^https?:\/\/[^\s]+$/i.test(s) ? s : "";
+}
+
 const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
 
 export function takeCard() {
@@ -58,6 +66,7 @@ export function takeCard() {
     open: false,
     call: takeCall,
     weightRows: takeWeightRows,
+    memoHref,
     pct: fmtPctTrim,
     /** @param {string} body */
     long(body) { return String(body || "").length > 420; },

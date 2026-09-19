@@ -126,6 +126,9 @@
                           <span x-text="open ? 'Show less' : 'Read full take'"></span>
                         </button>
                       </template>
+                      <template x-if="memoHref(row.take.memoUrl)">
+                        <a class="rr-lnk sv__memo-link" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                      </template>
                     </div>
                     <template x-if="weightRows(row.take).length">
                       <aside class="rr-take__aside">
@@ -239,6 +242,9 @@
                     <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
                       <span x-text="open ? 'Show less' : 'Read full take'"></span>
                     </button>
+                  </template>
+                  <template x-if="memoHref(row.take.memoUrl)">
+                    <a class="rr-lnk sv__memo-link" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
                   </template>
                 </div>
                 <template x-if="weightRows(row.take).length">
