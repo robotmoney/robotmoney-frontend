@@ -660,6 +660,12 @@ export function registerStaticViews(Alpine) {
         this.loading = false;
       }
     },
+    // The signer's page, at the public handle (issue #593): the breadcrumb, the
+    // head, the Signer list and the record link all go there.
+    signerHref() {
+      const ref = this.signer?.handle || this.take?.memberHandle || this.signer?.id || this.take?.memberId || "";
+      return `/swarm/members/${encodeURIComponent(ref)}`;
+    },
     // The backend stores a memo whose body is a verbatim copy of the take body
     // (same shape of duplication as the aggregator's consensus echo on the
     // session page), so this receipt printed the identical prose twice under
