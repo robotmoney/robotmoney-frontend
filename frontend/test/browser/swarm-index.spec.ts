@@ -253,6 +253,8 @@ test("a published session's history row states its recommendation, its lean and 
   // which sleeves and by how much is its session page's to say.
   const alloc = rows.nth(0);
   await expect(alloc.locator(".rr-hist__subj")).toHaveText("Robot Money Allocation");
+  // The subject is a way to its own page, as the session date is to its.
+  await expect(alloc.locator(".rr-hist__subj a")).toHaveAttribute("href", "/swarm/subjects/robotmoney-allocation");
   await expect(alloc.locator("th a")).toHaveText("Jul 15, 2026");
   await expect(alloc.locator("th small")).toHaveText("12:00 UTC · 4 takes");
   await expect(alloc.locator(".sv__stance-badge")).toHaveText("cautious");

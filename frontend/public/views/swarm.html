@@ -307,7 +307,7 @@
                         <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
                         <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
                       </th>
-                      <td class="rr-hist__subj" x-show="!subjectFilter" x-text="sessionSubjectName(s)"></td>
+                      <td class="rr-hist__subj" x-show="!subjectFilter"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(s.subjectId || '')}`" x-text="sessionSubjectName(s)"></a></td>
                       <td>
                         <template x-if="lean(s)">
                           <span class="sv__stance-badge" :style="leanBadgeStyle(s)"><i x-show="leanStance(s)" :style="leanDotStyle(s)"></i><span x-text="leanLabel(s)"></span></span>
