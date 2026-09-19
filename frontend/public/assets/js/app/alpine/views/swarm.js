@@ -326,14 +326,34 @@ export function registerSwarmView(Alpine) {
     // (the list carries it once #991 lands), else the published target when it
     // was already in force that day. None without either.
     movesOf(s) {
-      const ref = (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null) || targetsInForce(this.allocationFw, s?.date);
+      const ref = this.referenceOf(s);
       if (!ref) return [];
       return this.mixOf(s)
         .map((r) => ({ key: r.key, label: r.label, d: weightChange.weightDelta(r.pct, ref[r.key] ?? null) }))
         .filter((m) => m.d != null && m.d !== 0);
     },
-    /** @param {any} s @param {string} key */
-    moveOf(s, key) { return this.movesOf(s).find((m) => m.key === key) || null; },
+    /** @param {any} s */
+    referenceOf(s) {
+      return (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null) || targetsInForce(this.allocationFw, s?.date);
+    },
+    // A history row's verdict, in one word: did the session change anything.
+    // What changed, and by how much, is its session page's to say; listing
+    // every sleeve or position here made a column of mixed figures and chips.
+    // Rebalance when a weights session moved a sleeve against the target it
+    // was handed, or a portfolio session changed a position; Hold when it
+    // moved nothing. Otherwise the row names the gap, quietly.
+    /** @param {any} s */
+    verdictOf(s) {
+      const rec = this.recommendation(s);
+      if (!rec) return { label: "No recommendation published", quiet: true };
+      if (rec.kind === "weights") {
+        if (!this.referenceOf(s)) return { label: "No target recorded", quiet: true };
+        return { label: this.movesOf(s).length ? "Rebalance" : "Hold", quiet: false };
+      }
+      if (this.rowActions(s).length) return { label: "Rebalance", quiet: false };
+      if (this.rowHeld(s).length) return { label: "Hold", quiet: false };
+      return { label: "No position calls", quiet: true };
+    },
     takesOf(s) {
       const n = this.takesCount(s);
       return n ? `${n} ${n === 1 ? "take" : "takes"}` : "";

@@ -247,31 +247,24 @@ test("a published session's history row states its recommendation, its lean and 
   // The lean has its own column, headed the way the session page states it.
   await expect(hist.locator("thead th")).toHaveText(["Session", "Subject", "Consensus", "Recommendation"]);
 
-  // A weights session: the four figures ARE the recommendation, the stance
-  // wears the badge a take wears, and the row counts the takes filed.
+  // A weights session: the stance wears the badge a take wears, the row counts
+  // the takes filed, and the recommendation is one word. It moved sleeves
+  // against the target it was handed (90/10 against 95/5), so it rebalances;
+  // which sleeves and by how much is its session page's to say.
   const alloc = rows.nth(0);
   await expect(alloc.locator(".rr-hist__subj")).toHaveText("Robot Money Allocation");
   await expect(alloc.locator("th a")).toHaveText("Jul 15, 2026");
   await expect(alloc.locator("th small")).toHaveText("12:00 UTC · 4 takes");
   await expect(alloc.locator(".sv__stance-badge")).toHaveText("cautious");
-  const mix = alloc.locator(".rr-rowacts .rr-mixline > span");
-  await expect(mix).toHaveCount(4);
-  // Each weight carries its own move against the session's target, in
-  // percentage points, beside it: the row names each sleeve once.
-  await expect(mix.nth(0).locator("b")).toHaveText("90%");
-  await expect(mix.nth(0)).toContainText("Conservative DeFi Yield");
-  await expect(mix.nth(0).locator(".alp__mv")).toHaveText("−5 pp");
-  await expect(mix.nth(1).locator("b")).toHaveText("10%");
-  await expect(mix.nth(1).locator(".alp__mv")).toHaveText("+5 pp");
-  await expect(alloc.locator(".rr-rowacts > span:not(.rr-mixline)")).toHaveCount(0);
+  await expect(alloc.locator("td.rr-verdict")).toHaveText("Rebalance");
+  await expect(alloc.locator("td.rr-verdict .rr-mixline, td.rr-verdict .alp__mv")).toHaveCount(0);
 
-  // A portfolio session: the moves it recommends, and the positions it holds.
+  // A portfolio session that rotates a position rebalances too; no position,
+  // action chip or held count is listed in the row.
   const woon = rows.nth(1);
   await expect(woon.locator(".rr-hist__subj")).toHaveText("Woon");
-  await expect(woon.locator(".rr-rowacts .rr-act")).toHaveText(["⇄ rotate"]);
-  await expect(woon.locator(".rr-rowacts .rr-act + span")).toHaveText(["USDC"]);
-  await expect(woon.locator(".rr-held")).toHaveText("1 held");
-  await expect(woon.locator(".rr-held")).toHaveAttribute("title", "Held: PEAQ");
+  await expect(woon.locator("td.rr-verdict")).toHaveText("Rebalance");
+  await expect(woon.locator("td.rr-verdict .rr-act, td.rr-verdict .rr-held")).toHaveCount(0);
 
   // Who took part, and how sure they were, stated with the allocation's
   // latest recommendation. The spread is a count per stance, not a mark per
@@ -285,6 +278,35 @@ test("a published session's history row states its recommendation, its lean and 
   // prints either.
   await expect(hist).not.toContainText("concentration as the whole risk");
   await expect(hist).not.toContainText("window closed", { ignoreCase: true });
+});
+
+// The history's recommendation is one word, and never a claim the record does
+// not support: Hold only when nothing moved against something to measure by.
+test("a history row's verdict: hold, no calls, nothing published", async ({ page }) => {
+  const session = (id: string, subjectId: string, rec: unknown) => ({
+    id, date: "2026-07-15", subjectId, subjectName: subjectId, state: "published",
+    windowClosesAt: "2026-07-15T12:00:00Z", publishedAt: "2026-07-15T12:00:00Z",
+    regimeSummary: null, swarmRecommendation: rec, synthesis: "", socialDraftId: null, generatedAt: "2026-07-15T11:00:00Z",
+  });
+  await page.route("**/api/swarm/members*", (route) => route.fulfill(json({ members: [] })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      sessions: [
+        // The target in force on the day (the published 95/5/0/0), kept as is.
+        session("s-hold", "robotmoney-allocation", { type: "bucket_weights", weights: { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 }, rationale: "Hold." }),
+        // Every position held.
+        session("s-held", "woon", { type: "position_actions", actions: [{ token: "PEAQ", action: "hold" }, { token: "WOON", action: "hold" }], rationale: "Keep both." }),
+        // A live rollup: its rationale restates the tally and it named no position.
+        session("s-rollup", "robotmoney-treasury", { type: "position_actions", stances: { cautious: 1, neutral: 1 }, rationale: "Majority stance is cautious (1 of 2 submitted takes)." }),
+        session("s-none", "robotmoney-vault", null),
+      ],
+      nextCursor: null,
+    })));
+
+  await page.goto("/swarm");
+  const verdicts = page.locator(".rr-hist tbody tr td.rr-verdict");
+  await expect(verdicts).toHaveText(["Hold", "Hold", "No position calls", "No recommendation published"]);
+  await expect(page.locator(".rr-hist")).not.toContainText("Majority stance");
 });
 
 // The takes live on the session page, one click from each history row. The

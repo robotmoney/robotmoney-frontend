@@ -2059,6 +2059,9 @@ a.sv__vfy { text-decoration: none; }
 /* The same chip in an action list, where the dd's own column sets the width. */
 .sr__act dd .rr-act { min-width: 0; text-align: left; }
 .rr-rowtext { font-family: var(--font-sans); color: var(--color-text-soft); }
+/* /swarm's history verdict: one word, in the row's reading type. */
+.rr-verdict__l { font-family: var(--font-sans); color: var(--color-text); }
+.rr-verdict .rr-note { margin: 0; }
 .rr-held { color: var(--color-text-muted); cursor: default; }
 
 /* /swarm in the research record's grammar (RM-121). */

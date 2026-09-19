@@ -324,29 +324,10 @@
                         </template>
                         <template x-if="!lean(s)"><span>—</span></template>
                       </td>
-                      <td class="rr-rowacts">
-                        <template x-if="!recommendation(s)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
-                        <template x-if="mixOf(s).length">
-                          <span class="rr-mixline">
-                            <!-- Each sleeve's weight with its move beside it, in
-                                 percentage points against that session's target:
-                                 the name is said once, by the swatch. -->
-                            <template x-for="r in mixOf(s)" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b><template x-if="moveOf(s, r.key)"><span class="alp__mv" :class="changeClass(moveOf(s, r.key).d)" x-text="changeLabel(moveOf(s, r.key).d)"></span></template></span></template>
-                          </span>
-                        </template>
-                        <template x-for="a in rowActions(s)" :key="`${a.token}-${a.action}`">
-                          <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
-                        </template>
-                        <template x-if="rowHeld(s).length && rowActions(s).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`${rowHeld(s).length} held`"></span>
-                        </template>
-                        <template x-if="rowHeld(s).length && !rowActions(s).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(s).join(', ')}`" x-text="`All ${rowHeld(s).length} held`"></span>
-                        </template>
-                        <template x-if="recommendation(s)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(s).text"></span></template>
-                        <!-- A recommendation that made no call on any position says
-                             so: a blank cell reads as a failed load. -->
-                        <template x-if="recommendation(s) && recommendation(s).kind !== 'text' && !mixOf(s).length && !rowActions(s).length && !rowHeld(s).length"><span class="rr-note" style="margin:0">No position calls</span></template>
+                      <!-- One word per session: whether it changed anything.
+                           The session page has what changed and by how much. -->
+                      <td class="rr-verdict">
+                        <span :class="verdictOf(s).quiet ? 'rr-note' : 'rr-verdict__l'" x-text="verdictOf(s).label"></span>
                       </td>
                     </tr>
                   </template>
