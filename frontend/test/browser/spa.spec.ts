@@ -119,10 +119,15 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
   // A member's page is a research record now (RM-121); its h1 still carries
-  // .profile-name and the tagline under it .profile-role.
+  // .profile-name. The tagline under it (.profile-role) shows only what the
+  // member declared: the seeded member declares none, and the page used to
+  // invent "Athena reads the session through a macro lens." to fill the line.
+  // The declared lens is what every seat carries, so the rendered page is
+  // proven by it instead.
   await page.goto("/swarm/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
-  await expect(page.locator(".profile-role")).not.toHaveText("");
+  await expect(page.locator("#intent .rr-profile__lens")).not.toHaveText("");
+  await expect(page.locator(".profile-role")).not.toContainText("reads the session through");
 
   const woonDate = await resolveSeededSessionDate(page, "woon");
   await page.goto(`/swarm/${woonDate}/woon`);
