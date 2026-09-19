@@ -147,8 +147,10 @@ export function registerAllocationView(Alpine) {
     isSwarmManaged() {
       return this.hasTargets() && !!this.allocationFw?.provenance?.sessionId;
     },
+    // "—" until the weights land, and when they cannot be read: the empty
+    // ring under the rail says so.
     stateChip() {
-      if (!this.hasTargets()) return "unavailable";
+      if (!this.hasTargets()) return "—";
       return this.isSwarmManaged() ? "swarm-managed" : "seeded";
     },
 
@@ -309,10 +311,6 @@ export function registerAllocationView(Alpine) {
       });
     },
     combinedLabel() { return fmtUsd(this.overview()?.combined?.tvlUsd); },
-    liveLabel() {
-      const n = this.overview()?.combined?.vaultsLive;
-      return typeof n === "number" ? `${n} of ${VAULTS.length}` : "—";
-    },
     trackingErrorLabel() { return fmtBps(this.overview()?.trackingErrorBps); },
     freshness() { return freshnessLabel(this.overview()); },
     recommendation() { return this.overview()?.recommendation ?? null; },

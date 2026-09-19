@@ -248,7 +248,8 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
   await expect(rows.nth(0).locator("th small")).toHaveText("Conservative DeFi Yield");
 
   await expect(vaultFact(page, "Combined TVL")).toContainText(usd2(vault.tvlUsd));
-  await expect(vaultFact(page, "Vaults live")).toContainText("1 of 4");
+  // No "Vaults live" count: each row already says which vault is not live.
+  await expect(vaultFact(page, "Vaults live")).toHaveCount(0);
   await expect(vaultFact(page, "Network")).toContainText("Base");
   // The only published session carries position actions, not weights.
   await expect(vaultFact(page, "Recommendation")).toContainText("No recommendation published");
@@ -490,9 +491,8 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   for (const step of ["Regime", "Takes", "Consensus"]) {
     await expect(how).toContainText(step);
   }
-  // Validators are defined and unfilled. Describing the mechanism without
-  // that is a claim about seats nobody holds.
-  await expect(how).toContainText("Every seat is a proposer today");
+  // No role nobody holds: the mechanism describes the proposers that file.
+  await expect(how).not.toContainText("Validators");
   await expect(how.locator('a[href="/regime"]')).toBeVisible();
   await expect(how.locator('a[href="/swarm"]')).toBeVisible();
   // Last, and after the section it explains.

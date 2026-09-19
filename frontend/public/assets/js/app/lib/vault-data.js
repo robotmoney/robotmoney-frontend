@@ -123,8 +123,8 @@ export const VAULT_SLUGS = VAULTS.map((v) => v.slug);
 export const VAULTS_ENDPOINT = "/api/dashboards/robotmoney-vaults";
 
 // What each sleeve IS, keyed on the allocation DTO's bucket key: the swarm
-// pages' sleeve notes (lib/sleeve-notes.js), so /allocation's sleeve cards,
-// each vault page's lede and every (i) tip on a sleeve say the same thing.
+// pages' sleeve notes (lib/sleeve-notes.js), so each vault page's lede and
+// every (i) tip on a sleeve, /allocation's recipe included, say the same thing.
 /** @type {Record<string, string>} */
 export const SLEEVE_NOTE = {
   "defi-yield": BUCKET_NOTES.conservative_defi_yield,

@@ -476,7 +476,7 @@ test("/allocation on the devnet: four vaults against the recommendation, labelle
   await expect(protoGov.locator("i")).toHaveCount(0);
 
   await expect(vaultFact(page, "Combined TVL")).toContainText("$100,000");
-  await expect(vaultFact(page, "Vaults live")).toContainText("4 of 4");
+  await expect(vaultFact(page, "Vaults live")).toHaveCount(0);
   await expect(vaultFact(page, "Tracking error")).toContainText("7%");
   // A synthetic recommendation has no session to open: a date, not a link.
   const rec = vaultFact(page, "Recommendation");
@@ -517,7 +517,7 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
   }
   await expect(vaultCol(page, 2)).toHaveText(["95%", "3%", "0%", "2%"]);
   await expect(vaultCol(page, 4)).toHaveText(["+5 pp", "−3 pp", "0 pp", "−2 pp"]);
-  await expect(vaultFact(page, "Vaults live")).toContainText("1 of 4");
+  await expect(vaultRows(page).filter({ hasText: "Not live" })).toHaveCount(3);
   const rec = vaultFact(page, "Recommendation").locator("a");
   await expect(rec).toHaveText("Jun 24, 2026");
   await expect(rec).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");

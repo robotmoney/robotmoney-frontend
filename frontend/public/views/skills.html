@@ -543,8 +543,8 @@
 }
 
 /* The command reads in plain text, not accent. Cyan is the house colour and it
-   is already carrying the prompt, the CTA and the nav on this page; spending it
-   again on the longest string in the hero is what makes the band feel washed. */
+   already fills the CTA under this line; spending it again on the longest
+   string in the hero is what makes the band feel washed. */
 .sk__install-cmd {
   font-family: var(--font-mono);
   font-size: 0.85rem;
@@ -568,16 +568,16 @@
   width: 1.9rem;
   height: 1.9rem;
   background: none;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
   cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  transition: border-color 0.2s;
 }
-/* The hover frame is a hairline, not type, so it takes a border token rather
-   than a text colour: the retired dim rung used to sit a step above the
-   resting border, and --color-border-light is that step. */
-.sk__install-copy:hover { color: var(--color-text); border-color: var(--color-border-light); }
-.sk__install-copy.is-copied { color: var(--color-accent); border-color: var(--color-accent); }
+/* A secondary button with an icon for a label: the frame goes to the text
+   colour on hover, never to cyan. Copied is the tick, not a hue, so it holds
+   the hover state rather than a colour of its own. */
+.sk__install-copy:hover,
+.sk__install-copy.is-copied { border-color: var(--color-text); }
 
 .sk__install-note {
   font-size: 0.8rem;
@@ -587,25 +587,25 @@
   padding: 0 1rem 1rem;
 }
 
+/* The install card's action and the page's one labelled button, so it is the
+   primary: .btn-primary's filled cyan and type, at the card's width. */
 .sk__cta {
   display: block;
   margin: 0 1rem 1rem;
   text-align: center;
   padding: 0.85rem 1.75rem;
+  background: var(--color-accent);
+  color: var(--color-void);
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
+  letter-spacing: 0.1em;
   text-decoration: none;
-  transition: background-color 0.25s, color 0.25s;
+  transition: background-color 0.3s;
 }
 
-.sk__cta:hover {
-  background: var(--color-surface-light);
-  color: var(--color-accent);
-}
+.sk__cta:hover { background: #fff; }
 
 /* Card grid */
 
@@ -811,17 +811,14 @@
 .sk-addr {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: var(--color-text-muted);
+  color: var(--color-link);
   text-decoration: none;
   word-break: break-all;
-  border-bottom: 1px solid var(--color-border);
-  transition: color 0.2s, border-color 0.2s;
+  border-bottom: 1px solid var(--color-link-line);
+  transition: border-color 0.2s;
 }
 
-.sk-addr:hover {
-  color: var(--color-text);
-  border-bottom-color: var(--color-accent);
-}
+.sk-addr:hover { border-bottom-color: var(--color-link); }
 
 .sk-addr__ext {
   margin-left: 0.4rem;
@@ -885,9 +882,7 @@
   transition: color 0.2s;
 }
 
-.sk__footer-link:hover { color: var(--color-accent); }
-
-.sk__footer-link--primary { color: var(--color-accent); }
+.sk__footer-link:hover { color: var(--color-text); }
 
 /* Keyboard focus stays visible everywhere on the page */
 .sk a:focus-visible {

@@ -74,7 +74,7 @@
           <form class="ap-wait" @submit.prevent="joinWaitlist()">
             <input class="sv__input ap-wait__input" type="email" required placeholder="you@company.com"
                    x-model="waitEmail" aria-label="Email for the swarm waitlist" />
-            <button class="sv__submit sv__submit--ink" type="submit" :disabled="!waitEmail">Notify me</button>
+            <button class="sv__submit" type="submit" :disabled="!waitEmail">Notify me</button>
           </form>
           <p class="ap-docs">Or just <a href="/swarm">watch the swarm live</a>.</p>
         </div>
@@ -199,7 +199,7 @@
 
   <style>
     /* On-brand per .impeccable.md (Beam/Pool/Beacon, El Lissitzky). cyan is a LINE
-       only; radius ≤2px; flat planes; NO glow; condensed caps for display; body in
+       only; square corners; flat planes; NO glow; condensed caps for display; body in
        the sans (Space Grotesk); mono reserved for command, labels, and figures. */
     /* The eleven private --ap-* tokens are GONE. Six were exact copies of real
        tokens; three had drifted (--ap-void #06080C vs the page's #060810,
@@ -208,24 +208,23 @@
        each a shade off every other page. These alias the real ones so the rest
        of this stylesheet keeps working while nothing can drift again.
        See CONTRIBUTING.md "Reuse the component before you write a second one". */
-    .ap { --ap-void:#060810; --ap-ink:var(--color-surface); --ap-ink2:var(--color-surface-light);
+    .ap { --ap-void:#060810; --ap-ink:var(--color-surface);
           --ap-line:var(--color-border);
           --ap-text:var(--color-text); --ap-lede:var(--color-text-soft); --ap-muted:var(--color-text-muted);
-          --ap-beamc:var(--color-accent); --ap-pool:var(--color-green); --ap-beacon:#ff7a29;
-          --ap-cond:var(--font-display); }
+          --ap-beamc:var(--color-accent); --ap-pool:var(--color-green); --ap-beacon:#ff7a29; }
     /* mono is NOT the body voice — kill the mono lede, keep sans prose */
     .ap .sv__body-copy, .ap-hero__sub, .ap-cmd__follow, .ap-trust, .ap-noagent {
       font-family: var(--font-sans, system-ui, sans-serif); }
-    /* Links are the site convention in components.css: the text keeps its
-       surrounding colour and the rule under it takes the accent on hover.
+    /* Links are the site convention: lettered in the text colour over a
+       neutral rule that goes to full text colour on hover, never cyan.
        This page has carried three of its own versions of that — `.ap a`,
        .ap-link--primary !important, and this pair. */
-    .ap-noagent a, .ap-docs a { color: inherit; text-decoration: underline;
-      text-decoration-color: var(--color-border-light);
+    .ap-noagent a, .ap-docs a { color: var(--color-link); text-decoration: underline;
+      text-decoration-color: var(--color-link-line);
       text-decoration-thickness: 1px; text-underline-offset: 4px; }
     .ap-noagent a:hover, .ap-docs a:hover,
     .ap-noagent a:focus-visible, .ap-docs a:focus-visible {
-      color: var(--color-text); text-decoration-color: var(--color-accent); }
+      text-decoration-color: var(--color-link); }
 
     /* Live strip is .sv__live from views.css — the swarm page's own component.
        This page carried a copy, which is the duplication CONTRIBUTING.md now
@@ -300,15 +299,17 @@
 
     /* Way back to a known application. Deliberately quiet: it is a recovery
        path, not the page's action, and it must never compete with the prompt.
-       Cyan appears only as the 1px rule and the link, never as a fill. */
+       No cyan at all: a neutral frame and a monochrome link. */
     .ap-resume { margin: 1.6rem 0 0; padding: .95rem 1.1rem; background: var(--ap-ink);
-                 border: 1px solid var(--ap-line); border-radius: 2px; }
+                 border: 1px solid var(--ap-line); }
     .ap-resume__label { font-family: var(--font-mono, monospace); font-size: 10px; letter-spacing: .2em;
                         text-transform: uppercase; color: var(--ap-muted); margin: 0 0 .45rem; }
     .ap-resume__line { margin: 0; font-size: .95rem; color: var(--ap-text);
                        display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem; }
-    .ap-resume__line a { color: var(--ap-beamc); text-decoration: none; }
-    .ap-resume__line a:hover { text-decoration: underline; text-underline-offset: 3px; }
+    .ap-resume__line a { color: var(--color-link); text-decoration: underline;
+      text-decoration-color: var(--color-link-line);
+      text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .ap-resume__line a:hover { text-decoration-color: var(--color-link); }
     .ap-resume__note { margin: .5rem 0 0; font-size: .8rem; color: var(--ap-muted); max-width: 62ch; }
 
     /* Command monument */
@@ -319,7 +320,7 @@
                  text-transform: uppercase; color: var(--ap-muted); margin: 0; }
     .ap-cmd { margin: .5rem 0; }
     .ap-cmd pre { margin: 0; overflow-x: auto; background: var(--ap-void);
-                  border: 1px solid var(--ap-line); border-radius: 2px; padding: 13px 15px; font-size: 12px; }
+                  border: 1px solid var(--ap-line); padding: 13px 15px; font-size: 12px; }
     /* Clamped on a LINE boundary — a mid-line cut behind a fade read as a broken
        render, and a gradient is not in this system. -webkit-box in BOTH states
        so max-height can animate; a display swap cannot, which is what snapped. */
@@ -332,11 +333,11 @@
     .ap-cmd[data-open="1"] .ap-prompt { -webkit-line-clamp: 999; max-height: 30rem; overflow-y: auto; }
     .ap-more { display: inline-flex; align-items: center; min-height: 44px; margin-top: .1rem;
                font-family: var(--font-mono); font-size: .62rem; letter-spacing: .12em;
-               text-transform: uppercase; color: var(--ap-muted); background: none; border: 0;
+               text-transform: uppercase; color: var(--color-link); background: none; border: 0;
                padding: 0; cursor: pointer; }
-    .ap-more span { border-bottom: 1px solid var(--color-border-light); padding-bottom: 2px; }
-    .ap-more:hover { color: var(--ap-text); }
-    .ap-more:hover span { border-bottom-color: var(--ap-muted); }
+    /* A text action, so it is a link: its rule goes to full text colour on hover. */
+    .ap-more span { border-bottom: 1px solid var(--color-link-line); padding-bottom: 2px; }
+    .ap-more:hover span { border-bottom-color: var(--color-link); }
     @media (prefers-reduced-motion: reduce) { .ap-prompt { transition: none; } }
     /* Sized by its label, with the 44px touch target extended past the visible
        box rather than inflating it — the same trick the status page's copy-id
@@ -345,13 +346,13 @@
        the nav CTA — the sanctioned exception to "cyan is a line". */
     .ap-copy { position: relative; flex: 0 0 auto; display: inline-flex; align-items: center;
                justify-content: center; min-height: 44px; padding: .68rem 1.25rem;
-               font-family: var(--font-mono); font-size: .7rem; letter-spacing: .12em;
-               text-transform: uppercase; font-weight: 700; color: #03202a;
+               font-family: var(--font-mono); font-size: .7rem; letter-spacing: .1em;
+               text-transform: uppercase; font-weight: 500; color: var(--color-void);
                background: var(--ap-beamc); border: 0; border-radius: var(--radius);
-               cursor: pointer; transition: opacity .15s; }
+               cursor: pointer; transition: background-color .3s; }
     .ap-copy::after { content: ""; position: absolute; top: 50%; left: 50%; width: 100%; height: 44px;
                       transform: translate(-50%, -50%); }
-    .ap-copy:hover { opacity: .86; }
+    .ap-copy:hover { background: #fff; }
     .ap-copy:focus-visible { outline: 1px solid var(--ap-beamc); outline-offset: 2px; }
     /* Both labels in one grid cell: the widest wins, forever, so the control
        never changes size and nothing around it can reflow. */
@@ -377,14 +378,12 @@
     .ap-wait .sv__submit { flex: 0 0 auto; }
     .ap-docs { font-size: .82rem; color: var(--ap-muted); margin-top: .8rem; }
 
-    /* Waitlist controls */
-    .ap .sv__submit, .ap .sv__submit--ink { background: var(--ap-ink); color: var(--ap-text);
-      border: 1px solid var(--ap-beamc); border-radius: 2px; font-family: var(--ap-cond); font-weight: 700;
-      text-transform: uppercase; letter-spacing: .08em; font-size: 14px; padding: 12px 22px; min-height: 44px;
-      cursor: pointer; box-shadow: none; }
-    .ap .sv__submit:hover:not(:disabled) { background: var(--ap-ink2); }
-    .ap .sv__submit:disabled { border-color: var(--ap-line); color: var(--ap-muted); background: transparent; cursor: not-allowed; }
-    .ap .sv__input { background: var(--ap-ink); border: 1px solid var(--ap-line); border-radius: 2px; color: var(--ap-text); box-shadow: none; }
+    /* Waitlist controls. With the roster full the prompt is hidden and "Notify
+       me" is the page's one action, so it stays the primary button .sv__submit
+       draws; only its size is local, to sit level with the input. */
+    .ap .sv__submit { font-size: 14px; padding: 12px 22px; min-height: 44px; box-shadow: none; }
+    .ap .sv__submit:disabled { cursor: not-allowed; }
+    .ap .sv__input { background: var(--ap-ink); border: 1px solid var(--ap-line); color: var(--ap-text); box-shadow: none; }
     .ap .sv__input:focus { border-color: var(--ap-beamc); outline: none; }
 
   </style>

@@ -673,14 +673,16 @@
 }
 
 .faq__link {
-  color: var(--color-accent);
+  color: var(--color-link);
   text-decoration: underline;
-  text-underline-offset: 2px;
-  transition: color 0.2s;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.2s;
 }
 
 .faq__link:hover {
-  color: var(--color-text);
+  text-decoration-color: var(--color-link);
 }
 
 /* Outro */
@@ -691,14 +693,6 @@
   font-size: 0.9rem;
   line-height: 1.7;
   color: var(--color-text-muted);
-}
-
-.faq__outro .faq__link {
-  color: var(--color-text-muted);
-}
-
-.faq__outro .faq__link:hover {
-  color: var(--color-text);
 }
 
 /* Mobile-first → larger screens */

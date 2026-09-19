@@ -52,7 +52,7 @@
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
         Four sleeves, weighted by the investment swarm of agents and in force
-        until a session changes them. Each sleeve gets its own vault.
+        until a recommendation changes them. Each sleeve gets its own vault.
       </p>
     </div>
   </header>
@@ -67,7 +67,7 @@
          own figures are the Vaults section's. -->
     <div class="alp__meta">
       <span>In force since <b x-text="allocationAsOfLabel()">—</b></span>
-      <span>Weights <b class="alp__chip" x-text="stateChip()">seeded</b></span>
+      <span>Weights <b class="alp__chip" x-text="stateChip()">—</b></span>
       <template x-if="routerHref()">
         <a class="alp__nav--addr" :href="routerHref()" target="_blank" rel="noopener"
            aria-label="Router contract on BaseScan">Router <b x-text="routerShort()"></b></a>
@@ -210,7 +210,6 @@
       <p class="alp__empty" x-show="vaultError()" x-cloak>Vault data unavailable</p>
       <div class="rr-meta" x-show="!vaultError()">
         <span class="rr-meta__i">Combined TVL <b x-text="combinedLabel()">—</b></span>
-        <span class="rr-meta__i">Vaults live <b x-text="liveLabel()">—</b></span>
         <span class="rr-meta__i">Tracking error <b x-text="trackingErrorLabel()">—</b></span>
         <span class="rr-meta__i">Recommendation
           <template x-if="recState() === 'linked'"><b><a class="rr-lnk" :href="recommendationHref()" x-text="recommendationDate()"></a></b></template>
@@ -337,14 +336,12 @@
       <li>
         <b>Takes</b>
         <span>Proposers file a signed position with its reasoning, its sources
-          and a confidence. Validators score those takes rather than filing a
-          view of their own. Every seat is a proposer today.</span>
+          and a confidence.</span>
       </li>
       <li>
         <b>Consensus</b>
         <span>The window closes, the takes aggregate into one recommendation,
-          and it publishes with its quorum and mean confidence. Only that moves
-          these weights.</span>
+          and it publishes with its quorum and mean confidence.</span>
       </li>
     </ol>
     <p class="alp__how-links">
@@ -366,12 +363,6 @@
   margin: 0 auto;
   padding: 0 1.5rem 6rem;
   color: var(--color-text);
-}
-
-.alp__eyebrow {
-  font-family: var(--font-mono); font-size: 0.6rem; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.18em;
-  color: var(--color-text-muted); margin: 0;
 }
 
 /* ── shared hero component ─────────────────────────────────────────────── */
@@ -431,9 +422,7 @@
    explains where they come from. The steps sit in the same auto-fit grid as
    the two rails, so the page has one grid and not three. */
 .alp__how { border-top: 1px solid var(--color-border); padding-top: 1.75rem; }
-/* Its own top margin, where the other two sections get theirs from the
-   one-line sub under the headline. This section's content IS the explanation,
-   so a sub above it would be narration about narration. */
+/* Its own top margin: no section on this page carries a sub under its heading. */
 .alp__steps {
   list-style: none; margin: 1.5rem 0 0; padding: 0;
   display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
@@ -465,11 +454,6 @@
 /* Provenance is a fact about the weights, so it sits in the rail with the
    other facts about them rather than in a pill of its own. */
 .alp__chip { text-transform: none; }
-/* A swarm-managed policy would be marked by a Beam RULE, not by a cyan figure:
-   the chip's text stays a reading grey and only its edge carries the hue.
-   Nothing writes the provenance the chip reads yet, so today it never applies
-   and the chip reads "seeded". */
-.alp__chip--live { border-color: var(--color-accent-line); color: var(--color-text-soft); }
 
 /* The ring and its legend are the shared research-record figure (.rr-mix in
    views.css). The skeleton holds the same shape: the ring's track, then the
@@ -506,54 +490,32 @@
   display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
   gap: 0.5rem 1rem; margin-bottom: 0.25rem;
 }
-/* A heading with no .alp__sub under it keeps the sub's distance itself. */
+/* A heading with nothing between it and its content keeps that distance itself. */
 .alp__sec-head--bare { margin-bottom: 1.25rem; }
 .alp__h2 {
   font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
   font-size: clamp(1.15rem, 3vw, 1.9rem); line-height: 1.05; letter-spacing: -0.01em;
   margin: 0; color: var(--color-text);
 }
-/* No max-width. A section description runs the width of the section it
-   describes: a measure-capped paragraph in a full-width band leaves a hole
-   on the right that reads as an unfinished layout rather than as a choice. */
-.alp__sub { margin: 0 0 1.25rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6; }
-.alp__sub b { color: var(--color-text-soft); font-weight: 500; }
-.alp__sub code {
-  font-family: var(--font-mono); font-size: 0.9em; color: var(--color-text-soft);
-  background: var(--color-surface); padding: 0.25rem 0.25rem;
-}
-.alp__sub--after { margin: 1.25rem 0 0; }
 .alp__figslot.is-empty { min-height: 0; }
 .alp__nofig { justify-self: start; margin-top: 1.5rem; }
-/* TWO link treatments on this page, and only two.
-   .alp__link  — inline, inside prose or a table row. It inherits the type of
-                 whatever it sits in, so a link in a mono table reads as table
-                 text; only the colour and the Beam-at-rest rule mark it.
-   .alp__nav   — a place to go: the section action, the addresses, the row of
-                 links under the last review. Mono, tracked, quiet until you
-                 reach for it, and Beam arrives on hover as a LINE.
-   Before this there were three, and .alp__link rendered three different ways
-   depending on what its container happened to impose on it. */
-.alp__link {
-  color: var(--color-accent); text-decoration: none;
-  border-bottom: 1px solid var(--color-accent-line);
-  transition: border-color 150ms var(--ease-out-expo);
-}
-.alp__link:hover { border-bottom-color: var(--color-accent); }
+/* .alp__nav is a place to go: the section action and the links under How the
+   weights are set. Mono, tracked, quiet until you reach for it, when it and its
+   rule take the full text colour. Inline links are the shared .rr-lnk
+   (views.css). */
 .alp__nav {
   font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
   letter-spacing: 0.13em; color: var(--color-text-soft); text-decoration: none;
-  /* Beam at rest, which is the token's whole reason for existing: a rule that
-     marks a control without shouting. At border-light these read as labels
-     rather than as links. */
-  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
+  /* The link rule at rest: at border-light these read as labels rather than
+     as links. */
+  border-bottom: 1px solid var(--color-link-line); padding-bottom: 0.25rem;
   transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo);
 }
-.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.alp__nav:hover, .alp__nav:focus-visible { color: var(--color-text); border-bottom-color: var(--color-link); }
 .alp__nav:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 /* The router is one more fact about the weights, so it reads as a rail item
-   and not as a link sitting in a row of labels. Beam arrives on hover, which
-   is the treatment every non-navigational link on this page now takes. */
+   and not as a link sitting in a row of labels: the link rule sits under the
+   address alone, and takes the full text colour on hover. */
 .alp__nav--addr {
   color: inherit; text-decoration: none;
   transition: color 150ms var(--ease-out-expo);
@@ -564,17 +526,12 @@
    track rather than over the edge of the rail. */
 .alp__nav--addr b {
   display: inline-block; max-width: 100%; font-size: 0.8rem; letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--color-border-light);
+  border-bottom: 1px solid var(--color-link-line);
   transition: border-color 150ms var(--ease-out-expo);
 }
-.alp__nav--addr:hover b, .alp__nav--addr:focus-visible b { border-bottom-color: var(--color-accent); }
+.alp__nav--addr:hover b, .alp__nav--addr:focus-visible b { border-bottom-color: var(--color-link); }
 .alp__nav--addr:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
-/* the answer strip: the figures a section exists to give */
-/* What a depositor keeps is money, so it is Pool green like the figure beside
-   it. It was warm, which is a second saturated accent doing work the label
-   already does. */
-/* charts */
 /* ── motion, and the skeleton that removes the layout shift ─────────────── */
 /* 100/300/500: 150ms for feedback, 300ms for a layout change like the
    disclosure. Exponential easing, never bounce. Only opacity and
@@ -610,15 +567,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .alp__fade { animation: none; }
-  .alp__link, .alp__nav { transition: none !important; }
+  .alp__nav, .alp__nav--addr, .alp__nav--addr b { transition: none !important; }
 }
 
 /* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
 .alp__vtok { letter-spacing: 0.02em; }
-
-/* exposure */
-/* The same shape as /skills' own .sk__cta, which is where this button goes:
-   Beam as a LINE (the border) and as label type, never as a filled mass, and
-   never over a figure. The site's shared .btn-primary is a filled cyan block;
-   this page does not add another one. */
-/* notes */</style>
+</style>
