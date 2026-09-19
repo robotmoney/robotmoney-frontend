@@ -202,7 +202,7 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
   await page.waitForTimeout(300);
 
   expect(houseBook, "wallet-balances / wallet-sleeves are the house book (RM-103)").toEqual([]);
@@ -294,32 +294,31 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   await expectNoBrowserErrors(errors);
 });
 
-// A sleeve card is the recipe: its target constituents, and the vault that
-// implements it by symbol, to its page. What the vault holds is on that page.
-test("each sleeve card names its vault, and holds no status and no holdings table", async ({ page }) => {
+// A sleeve's recipe opens from the ring: its target constituents, what the
+// sleeve is, and the vault that implements it by symbol, to its page. What
+// the vault holds is on that page, and its status is the Vaults table's.
+test("a sleeve's recipe opens from the ring and names its vault, with no status and no holdings", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubEnvironment(page);
+  const framework = goldenFramework();
+  await stubEnvironment(page, { framework });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const cards = page.locator(".alp__card");
-  await expect(cards).toHaveCount(4);
-  const usdc = cards.nth(0).locator(".alp__vrail");
-  await expect(usdc).toHaveCount(1);
-  await expect(usdc.locator("a")).toHaveText("rmUSDC");
-  await expect(usdc).not.toContainText("Status");
-
-  const agent = cards.nth(1);
-  await expect(agent.locator(".alp__vrail")).toHaveCount(1);
-  // Exactly the symbol: the rail's uppercase label must not reach it.
-  await expect(agent.locator(".alp__vrail a")).toHaveText("rmAGENT");
-  expect(await agent.locator(".alp__vrail a").innerText()).toBe("rmAGENT");
-  await expect(agent.locator(".alp__vrail a")).toHaveAttribute("href", "/vault/rmagent");
-  // Its status is the Vaults table's, stated once.
-  await expect(agent.locator(".alp__vrail")).not.toContainText("Not live");
-  await expect(agent.locator(".alp__hold")).toHaveCount(0);
-  // What it DOES say is what the sleeve is.
-  await expect(agent.locator(".alp__card-what")).toContainText("$ROBOTMONEY");
+  const rows = page.locator(".alp__ring .rr-legend__row");
+  await expect(rows).toHaveCount(4);
+  await rows.nth(1).click();
+  const panel = page.locator(".alp__ring .rr-x__panel");
+  await expect(panel).toBeVisible();
+  // Exactly the symbol, to its page.
+  const vault = panel.locator(".rr-x__head a");
+  await expect(vault).toHaveText("rmAGENT");
+  expect(await vault.innerText()).toBe("rmAGENT");
+  await expect(vault).toHaveAttribute("href", "/vault/rmagent");
+  await expect(panel).not.toContainText("Not live");
+  await expect(panel).not.toContainText("Status");
+  // What the sleeve is, one hover away, and every constituent it targets.
+  await expect(panel.locator(".rm-tip__bub")).toContainText("$ROBOTMONEY");
+  await expect(panel.locator("tbody tr")).toHaveCount(framework.buckets[1].items.length);
   await expectNoBrowserErrors(errors);
 });
 
@@ -356,12 +355,9 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend).toHaveCount(framework.strategy.length);
   await expect(legend.first()).toContainText(framework.strategy[0].label);
-  // Under each name, how many assets it holds and nothing else: which vault
-  // carries the sleeve is the Vaults table's to say.
-  for (const [i, b] of framework.buckets.entries()) {
-    const n = b.items.length;
-    await expect(legend.nth(i).locator("small")).toHaveText(`${n} asset${n === 1 ? "" : "s"}`);
-  }
+  // A row carries its figures and nothing under them: what a sleeve holds is
+  // its recipe, opened from the row.
+  await expect(legend.locator("small")).toHaveCount(0);
   const swatchFill = await legend.nth(2).locator("> i").evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(CATEGORICAL_RGB).toContain(swatchFill);
 
@@ -370,26 +366,51 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   await expect(ring.locator("figcaption")).toContainText(framework.strategy[0].label);
 });
 
+// Where the money is, beside the target: each sleeve's vault's share of the
+// combined TVL and the gap in points. On Base only rmUSDC is live, holding
+// everything against a 95% target.
+test("the ring's legend sets each sleeve's actual share against its target", async ({ page }) => {
+  await stubEnvironment(page, { sessions: [weightsSession()] });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await expect(vaultRows(page).nth(0).locator("td").first()).not.toHaveText("—");
+
+  await expect(page.locator(".alp__ring .rr-legend__head")).toHaveText("SleeveTargetActualGap");
+  const rows = page.locator(".alp__ring .rr-legend__row");
+  await expect(rows.nth(0).locator("> b")).toHaveText("95%");
+  await expect(rows.nth(0).locator(".rr-legend__was")).toHaveText("Actual 100%");
+  await expect(rows.nth(0).locator(".rr-legend__d")).toHaveText("Gap +5 pp");
+  await expect(rows.nth(1).locator(".rr-legend__d")).toHaveText("Gap −5 pp");
+  // No gap, no figure: an empty cell rather than "0 pp".
+  await expect(rows.nth(2).locator(".rr-legend__d .alp__mv")).toHaveCount(0);
+  // The four vaults' combined holdings are the vault subject's.
+  await expect(page.locator('#vaults a.rr-meta__lnk')).toHaveText("Combined holdings");
+  await expect(page.locator('#vaults a.rr-meta__lnk')).toHaveAttribute("href", "/swarm/subjects/robotmoney-vault#holdings");
+});
+
 // Constituents restart at the front of the palette inside their own sleeve,
 // keyed on their position in the POLICY, so a name keeps its hue in the bar
 // and in the list under it whatever order a feed returns.
-test("a constituent keeps one hue in its sleeve's bar and in its name", async ({ page }) => {
+test("a constituent keeps its hue in its sleeve's recipe, and reads against the sleeve and the whole", async ({ page }) => {
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const card = page.locator(".alp__card").first();
+  await page.locator(".alp__ring .rr-legend__row").first().click();
+  const assets = page.locator(".alp__ring .rr-x__assets tbody tr");
   const items = framework.buckets[0].items;
-  const segments = card.locator(".alp__stk > span");
-  await expect(segments).toHaveCount(items.length);
-  const barFills = await segments.evaluateAll((els) =>
+  await expect(assets).toHaveCount(items.length);
+  const fills = await assets.locator("th i").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(barFills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
-
-  const nameFills = await card.locator(".alp__names > span > i").evaluateAll((els) =>
-    els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(nameFills).toEqual(barFills);
+  expect(fills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
+  // % of sleeve is the policy's own figure; % of allocation is it times the
+  // sleeve's target.
+  const pct = (v: number) => `${v.toFixed(1).replace(/\.0$/, "")}%`;
+  const sleeve = Number(framework.strategy[0].targetPct);
+  const first = Number(items[0].targetPct);
+  await expect(assets.first().locator("td").nth(0)).toHaveText(pct(first));
+  await expect(assets.first().locator("td").nth(1)).toHaveText(pct((first * sleeve) / 100));
 });
 
 // A vault wears its sleeve's hue: the Vaults table's dot, the sleeve's arc
@@ -439,7 +460,7 @@ test("the change ledger reports was, now and a flat move for every sleeve", asyn
   expect(flatColour).toBe("rgb(143, 154, 176)");
 
   // Four columns and no fifth. The Note column carried vault status, which
-  // each sleeve's own card states beside the vault it is about.
+  // the Vaults table states.
   await expect(page.locator("#what-changed thead th")).toHaveCount(4);
   await expectNoBrowserErrors(errors);
 });
@@ -454,7 +475,7 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   await stubEnvironment(page, { sessions: [allocationSession()] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   await expect(page.locator(".alp__latest")).toHaveCount(0);
   // The one link out of the ledger: every session that has reviewed these
@@ -477,11 +498,11 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   // Last, and after the section it explains.
   const isLast = await how.evaluate((el) => el === el.parentElement?.lastElementChild);
   expect(isLast, "the mechanism must be the last section on the page").toBe(true);
-  const [sleeves, mech] = await Promise.all([
-    page.locator("#inside-each-sleeve").boundingBox(),
+  const [changed, mech] = await Promise.all([
+    page.locator("#what-changed").boundingBox(),
     how.boundingBox(),
   ]);
-  expect(mech!.y).toBeGreaterThan(sleeves!.y);
+  expect(mech!.y).toBeGreaterThan(changed!.y);
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
   // stores or types it is ours to know.
@@ -582,7 +603,7 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   const findings = await page.evaluate((CATEGORICAL: string[]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
@@ -671,12 +692,13 @@ test("every categorical fill on the page declares itself a series mark", async (
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   const marks = page.locator('section.alp [data-mark="series"]');
   expect(await marks.count()).toBeGreaterThan(8);
   await expect(page.locator('.alp__ring circle[data-sleeve][data-mark="series"]')).toHaveCount(2);
-  await expect(page.locator('.alp__stk > span:not([data-mark="series"])')).toHaveCount(0);
+  await page.locator(".alp__ring .rr-legend__row").first().click();
+  await expect(page.locator('.alp__ring .rr-x__assets i:not([data-mark="series"])')).toHaveCount(0);
   // The Vaults section: a dot per vault, and nothing else in a vault's hue.
   await expect(vaultRows(page).nth(0).locator("td").first()).not.toHaveText("—");
   await expect(page.locator('#vaults .rr-dot[data-mark="series"]')).toHaveCount(4);
@@ -688,7 +710,7 @@ test("the page carries no em dash in its own copy", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   // The em dash is also the site's null glyph (fmtUsd returns "—"), so only
   // runs of PROSE are checked: a lone "—" in a cell is a missing value, not
@@ -716,7 +738,7 @@ test("on a phone the ring keeps its size and nothing scrolls the page sideways",
   await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
+  await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   // The ring keeps its size above its legend rather than being swapped for a
   // list, which is what the fan it replaced had to do.

@@ -477,13 +477,14 @@ test("/allocation on the devnet: four vaults against the recommendation, labelle
   await expect(page.locator("[data-vault-label]")).toHaveCount(1);
   await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Devnet test data");
 
-  // Each recipe card names its vault by symbol, exactly: the rail's uppercase
-  // must not reach it. Every vault is active, so no card states a status.
-  const rail = page.locator(".alp__card").nth(1).locator(".alp__vrail a");
-  await expect(rail).toHaveAttribute("href", "/vault/rmagent");
-  expect(await rail.innerText()).toBe("rmAGENT");
-  await expect(page.locator(".alp__vrail")).toHaveCount(4);
-  await expect(page.locator("#inside-each-sleeve")).not.toContainText("Status");
+  // A sleeve's recipe names its vault by symbol, exactly, and states no
+  // status. The ring's Actual column is each vault's share of the TVL.
+  await expect(page.locator(".alp__ring .rr-legend__row").nth(0).locator(".rr-legend__was")).toHaveText("Actual 72%");
+  await page.locator(".alp__ring .rr-legend__row").nth(1).click();
+  const vault = page.locator(".alp__ring .rr-x__head a");
+  await expect(vault).toHaveAttribute("href", "/vault/rmagent");
+  expect(await vault.innerText()).toBe("rmAGENT");
+  await expect(page.locator(".alp__ring .rr-x__panel")).not.toContainText("Status");
   await expectNoBrowserErrors(errors);
 });
 
@@ -511,11 +512,12 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
   await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Saved Base snapshot");
   await expect(page.locator(".alp__meta")).toContainText("Router Not live on Base");
   // A vault's status is the Vaults table's, stated once.
-  await expect(page.locator("#inside-each-sleeve")).not.toContainText("Not live");
+  await expect(page.locator(".alp__ring")).not.toContainText("Not live");
 
   // The recipe renders on the static preview, from the archived framework.
-  await expect(page.locator(".alp__card")).toHaveCount(4);
-  await expect(page.locator(".alp__card").first().locator(".alp__names > span")).not.toHaveCount(0);
+  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(4);
+  await page.locator(".alp__ring .rr-legend__row").first().click();
+  await expect(page.locator(".alp__ring .rr-x__assets tbody tr")).not.toHaveCount(0);
   for (const devnetOnly of ["Devnet test data", "$72,000", "$100,000", "Staging devnet"]) {
     await expect(page.locator("#view")).not.toContainText(devnetOnly);
   }
@@ -663,7 +665,7 @@ test("devnet-stale and devnet-paused on /allocation: the read says stale, rmUSDC
   await vaultsLoaded(page);
   await expect(vaultFact(page, "Read")).not.toContainText("stale");
   await expect(vaultRows(page).nth(0).locator("th small")).toContainText("Paused");
-  await expect(page.locator("#inside-each-sleeve")).not.toContainText("Paused");
+  await expect(page.locator(".alp__ring")).not.toContainText("Paused");
 });
 
 test("32 holdings show 8 until asked; 3 readings draw as square points", async ({ page }) => {
@@ -945,7 +947,7 @@ test("the vault copy states facts: no em dash, no guarantee, no narration", asyn
   for (const mode of ["base", "devnet"] as const) {
     await openWithQuery(page, "/allocation", mode);
     await vaultsLoaded(page);
-    expect(await copyFindings(page, "#vaults, #inside-each-sleeve")).toEqual([]);
+    expect(await copyFindings(page, "#vaults, .alp__ring")).toEqual([]);
     for (const slug of ["rmusdc", "rmagent"]) {
       await navigate(page, `/vault/${slug}`);
       await expect(page.locator(".cv--detail h1")).toBeVisible();

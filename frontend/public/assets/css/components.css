@@ -390,7 +390,7 @@
    market-context reading (.sig__tip) all wear it. Each keeps only its own
    anchoring and trigger; none restyles the bubble. A chart's crosshair readout
    is a figure panel, not a tooltip, and is not in this list. */
-.rm-tip__bub, .sv__vfy-tip, .mp-when__tip, .sig__tip, .alp__tip {
+.rm-tip__bub, .sv__vfy-tip, .mp-when__tip, .sig__tip {
   padding: 0.65rem 0.75rem;
   background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
   font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);

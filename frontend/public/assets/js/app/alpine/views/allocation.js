@@ -53,7 +53,7 @@ import {
   vaultForBucket,
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { sessionSummary } from "../../lib/session-summary.js";
+import { sessionSummary, bucketShort } from "../../lib/session-summary.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -165,12 +165,6 @@ export function registerAllocationView(Alpine) {
         target: Number(strategy[i]?.targetPct ?? 0),
       }));
     },
-    // How many names are inside: the one question the donut cannot answer.
-    // Which vault holds the sleeve is the Vaults table's to say.
-    sleeveLegendLine(s) {
-      const n = this.constituents(s.key).length;
-      return `${n} asset${n === 1 ? "" : "s"}`;
-    },
     // The legend swatch. Every sleeve carries its hue, funded or not: the
     // colour identifies the sleeve, and a sleeve at zero is still the same
     // sleeve. Its row is dimmed by the view instead, which says "holds
@@ -187,10 +181,30 @@ export function registerAllocationView(Alpine) {
     // focus are lib/sleeve-explorer.js, the arcs session-summary's ringSvg.
     // Not normalised to its own sum: a policy that does not add to 100 leaves
     // the remainder of the track unfilled, and the centre names it.
+    //
+    // Beside each target, where the money is: the share of the four vaults'
+    // combined TVL held by the sleeve's vault (one vault per sleeve), and the
+    // gap between them in points. Selecting a sleeve opens its recipe.
     explorerRows() {
       const colours = this.sleeveColours();
-      return this.sleeves().map((s) => ({ key: s.key, label: s.name, hue: colours[s.key], pct: s.target, meta: this.sleeveLegendLine(s), assets: [] }));
+      return this.sleeves().map((s) => {
+        const bps = this.vaultRecord(vaultForBucket(s.key)?.slug ?? "")?.actualBps;
+        const actual = typeof bps === "number" && isFinite(bps) ? bps / 100 : null;
+        const items = this.constituents(s.key);
+        return {
+          key: s.key, label: s.name, hue: colours[s.key], pct: s.target, meta: "",
+          actual,
+          d: actual == null ? null : Math.round((actual - s.target) * 100) / 100,
+          assets: items.map((c, i) => ({
+            key: `${s.key}-${c.label}`, label: c.label, colour: itemColour(i),
+            ofSleeve: c.target, ofAllocation: (c.target * s.target) / 100,
+          })),
+        };
+      });
     },
+    // Actual and Gap have their columns once the vaults answer; a sleeve whose
+    // vault could not be read reads "—" there.
+    hasActual() { return !!this.overview(); },
     explorerSvg() { return sessionSummary.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))); },
     explorerLabel() { return this.explorerRows().map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", "); },
     ringRestLabel() {
@@ -198,6 +212,9 @@ export function registerAllocationView(Alpine) {
       return Math.abs(gap) >= 0.005 ? `${this.fmtPctTrim(Math.abs(gap))} ${gap > 0 ? "unallocated" : "over"}` : "In force";
     },
     hasBook() { return false; },
+    // The recipe panel's (i), and the legend's short names on a phone.
+    bucketNote(key) { return sleeveNote(key); },
+    bucketShort(name) { return bucketShort(name); },
     // Constituents restart at the front of the palette inside their own
     // sleeve, keyed on the constituent's index in the POLICY.
     constituentColour(i) { return itemColour(i); },
@@ -335,93 +352,14 @@ export function registerAllocationView(Alpine) {
       return "—";
     },
 
-    // ── the vault behind each sleeve card ───────────────────────────────────
-    // Its symbol, to its page. Its status is the Vaults table's.
+    // ── the vault behind each sleeve ────────────────────────────────────────
+    // Its symbol, to its page, in the sleeve's recipe. Its status is the
+    // Vaults table's.
     vaultHref(key) {
       const v = vaultForBucket(key);
       return v ? `/vault/${v.slug}` : null;
     },
     vaultSymbol(key) { return vaultForBucket(key)?.symbol ?? ""; },
-
-    // ── the donut's hover layer ─────────────────────────────────────────────
-    // Pointer only, and deliberately. Every figure the tooltip shows is
-    // already on the page as text in the legend beside it, so making four
-    // slices focusable would add tab stops that reach nothing new. The slices
-    // keep their <title>, which is what a screen reader reads.
-    // A constituent tooltip has to earn the hover, so it does NOT restate the
-    // name and weight printed two lines below the bar as its headline: it adds
-    // the same target read against the whole allocation rather than against
-    // its sleeve.
-    constituentTip(sleeve, item, index) {
-      const hue = itemColour(index);
-      const ofAlloc = (Number(item.target) * Number(sleeve.target)) / 100;
-      return this.tipMarkup(hue, item.label, [
-        ["Target in sleeve", this.fmtPct(item.target)],
-        ["Target overall", this.fmtPct(ofAlloc), true],
-      ]);
-    },
-    // A row's third element starts a new group: a hairline above it, because
-    // the figure below the rule is measured against a different denominator
-    // from the ones above it.
-    tipMarkup(hue, title, rows) {
-      let out = `<b><i style="background:${hue}"></i>${title}</b>`;
-      out += rows.map(([k, v, sep]) =>
-        `<span${sep ? ' class="alp__tip-sep"' : ""}><em>${k}</em>${v}</span>`).join("");
-      return out;
-    },
-    // Viewport coordinates, because the tooltip is shared by the donut and by
-    // every sleeve bar rather than living inside the figure.
-    tipAt(html, ev) {
-      const tip = this.$refs.allocTip;
-      if (!tip) return;
-      tip.innerHTML = html;
-      tip.style.opacity = "1";
-      this.moveTip(ev);
-    },
-    moveTip(ev) {
-      const tip = this.$refs.allocTip;
-      if (!tip || tip.style.opacity !== "1" || !ev) return;
-      const pad = 14;
-      const r = tip.getBoundingClientRect();
-      let left = ev.clientX + pad;
-      let top = ev.clientY + pad;
-      if (left + r.width > window.innerWidth - 8) left = ev.clientX - r.width - pad;
-      if (top + r.height > window.innerHeight - 8) top = ev.clientY - r.height - pad;
-      tip.style.left = Math.max(8, left) + "px";
-      tip.style.top = Math.max(8, top) + "px";
-    },
-
-    // Inside a card: hovering a block lights its name and recedes its
-    // neighbours, and hovering a name does the same to its block. Applied by
-    // hand rather than through Alpine state because the cards come out of an
-    // x-for and a per-card scope for one transient class would cost more than
-    // it explains.
-    hoverItem(ev, index, sleeve, item) {
-      if (sleeve && item) this.tipAt(this.constituentTip(sleeve, item, index), ev);
-      const card = ev.currentTarget.closest(".alp__card");
-      if (!card) return;
-      card.querySelectorAll(".alp__stk > span").forEach((node, i) => {
-        node.classList.toggle("dim", i !== index);
-      });
-      card.querySelectorAll(".alp__names > span").forEach((node, i) => {
-        node.classList.toggle("is-hot", i === index);
-        node.classList.toggle("dim", i !== index);
-      });
-    },
-    leaveItem(ev) {
-      this.hideTip();
-      const card = ev.currentTarget.closest(".alp__card");
-      if (!card) return;
-      card.querySelectorAll(".alp__stk > span, .alp__names > span").forEach((node) => {
-        node.classList.remove("dim", "is-hot");
-      });
-    },
-
-    hideTip() {
-      const tip = this.$refs.allocTip;
-      if (tip) tip.style.opacity = "0";
-    },
-
 
   }));
 }

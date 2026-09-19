@@ -1871,11 +1871,12 @@ a.sv__vfy { text-decoration: none; }
 /* A weights legend set against a basis reads as a table: Recommended, the
    Target (or Book) it is set against, and the Change in points, each in its
    own labelled column, so a reader never has to tell a move from a value. */
-.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 3.75rem; column-gap: 0.5rem; }
+.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 4.75rem; column-gap: 0.5rem; }
 .rr-legend__head { display: grid; padding: 0 0.5rem 0.5rem; border-bottom: 1px solid var(--color-border);
   font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
 .rr-legend__head > span:nth-child(n+3), .rr-legend--cols .rr-legend__row > b { text-align: right; }
-.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+/* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
+.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .rr-legend__was { color: var(--color-text-muted); }
 .rr-legend--cols .rr-legend__d .alp__mv { justify-content: flex-end; }
 .rr-legend__s { display: none; }
