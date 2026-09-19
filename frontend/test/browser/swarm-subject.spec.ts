@@ -921,7 +921,9 @@ test("a subject with a book reads its latest recommendation against the book, as
   // target it was handed: 95/5/0/0 against 95/5/0/0.
   const row = page.locator("#history .sv__session-card").first();
   await expect(row.locator(".sv__session-title")).toHaveText(/Jun 22, 2026/);
-  await expect(row.locator("td.rr-out")).toHaveText("Target weights retained");
+  // Nothing moved against the target it was handed: no move under any weight, and no state note.
+  await expect(row.locator(".sp-move")).toHaveCount(0);
+  await expect(row.locator(".sp-state")).toHaveCount(0);
 
   // Where the recommendation holds the book, both pages say so in the same
   // words, and the history row still reads the move from the target.
@@ -935,8 +937,7 @@ test("a subject with a book reads its latest recommendation against the book, as
   await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
   await page.goto("/swarm/subjects/robotmoney-vault");
   await expect(latest.locator("p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
-  await expect(row.locator("td.rr-out")).toContainText("Conservative DeFi Yield");
-  await expect(row.locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+    await expect(row.locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
 
   // The allocation subject holds nothing: its latest recommendation reads
   // against its target.
@@ -1034,7 +1035,7 @@ test("the history pages and searches on the server, with no brief fetched per ro
   await expect(first.locator(".sv__session-title")).toHaveText("Sep 18, 2026");
   await expect(first.locator(".sv__session-title")).toHaveAttribute("href", `/swarm/sessions/${spId(0)}`);
   await expect(first.locator("th small")).toHaveText("14:05 UTC · 3 takes");
-  await expect(first.locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+  await expect(first.locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
   await expect(rows.nth(1).locator("th small")).toHaveText("14:05 UTC · 4 takes");
   // Where the server stops is not known yet, so no total is printed.
   await expect(pager.locator('[role="status"]')).toHaveText("1–12");
@@ -1049,7 +1050,7 @@ test("the history pages and searches on the server, with no brief fetched per ro
   await pager.getByRole("button", { name: "Older" }).click();
   await expect(pager.locator('[role="status"]')).toHaveText("13–24");
   await expect(first.locator(".sv__session-title")).toHaveText("Sep 6, 2026");
-  await expect(first.locator("td.rr-out .alp__mv")).toHaveText(["▲+10.00%", "▼−10.00%"]);
+  await expect(first.locator(".sp-move")).toHaveText(["+10 pp", "−10 pp"]);
   expect(listed.at(-1)?.get("cursor")).toBe("12");
   // The last page ends the history, and now the count is known.
   await pager.getByRole("button", { name: "Older" }).click();
@@ -1133,7 +1134,7 @@ test("a backend that ignores the subject filter leaves the history on the browse
   await expect(rows).toHaveCount(3);
   await expect(rows.locator(".sv__session-title")).toHaveText(["Sep 18, 2026", "Sep 17, 2026", "Sep 16, 2026"]);
   await expect(rows.first().locator("th small")).toContainText("2 takes");
-  await expect(rows.first().locator("td.rr-out .alp__mv")).toHaveText(["▲+5.00%", "▼−5.00%"]);
+  await expect(rows.first().locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
   await expect(page.locator("#history")).not.toContainText("Woon");
   // The index is whole here, so its count is known; there is no search to offer.
   await expect(page.locator(".rr-meta__i", { hasText: "Sessions" }).locator("b")).toHaveText("3");

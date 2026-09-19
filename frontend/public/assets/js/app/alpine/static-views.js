@@ -1568,6 +1568,22 @@ export function registerStaticViews(Alpine) {
     // moves: a target published after the session is never read back onto it.
     // The history table measures every row this way, the latest included.
     rowMoves(row) { return this.movesAgainst(row, this.rowReference(row)); },
+    // The move in one sleeve's cell, beside its weight, or null when it did not
+    // move: the history table carries each change in its own column rather
+    // than in a last column that named every sleeve again.
+    /** @param {any} row @param {number} i */
+    moveAt(row, i) {
+      const key = this.sleeveColumns()[i]?.key;
+      return (this.rowMoves(row) || []).find((m) => m.key === key) || null;
+    },
+    // A weights row's state when its cells cannot say it: nothing loaded,
+    // nothing published, or no target to measure the weights against.
+    /** @param {any} row */
+    rowState(row) {
+      if (row?.failed) return "Could not be loaded";
+      if (!this.recommendation(row)) return "No recommendation published";
+      return this.rowMoves(row) == null ? "No target recorded" : "";
+    },
     movesAgainst(row, ref) {
       if (!ref) return null;
       const w = this.rowWeights(row);
@@ -1578,9 +1594,6 @@ export function registerStaticViews(Alpine) {
         return { key, label: bucketLabel(key), was, d };
       }).filter((m) => m.d != null && m.d !== 0);
     },
-    // The positions a portfolio recommendation moves, holds left out: the
-    // outcome line already counts them.
-    rowOutcome(row) { return this.outcomeAgainst(row, this.rowMoves(row), "target"); },
     outcomeAgainst(row, moves, basis) {
       const rec = row?.swarmRecommendation;
       if (rec?.type !== "bucket_weights") return this.actionsOutcome(row);
@@ -1688,7 +1701,6 @@ export function registerStaticViews(Alpine) {
     },
     pctLabel(v) { return weightChange.fmtPctTrim(v); },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
-    changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
     isLong(text, chars) { return String(text || "").length > chars; },
@@ -2938,7 +2950,6 @@ export function registerStaticViews(Alpine) {
     // Weights here are fractions, so they are scaled to percent first.
     fmtWeight(v) { return v == null ? "—" : weightChange.fmtPctTrim(v * 100); },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
-    changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
     hasOutcome() { return this.isBucketWeights() || this.authoredActions().length > 0; },

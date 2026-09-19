@@ -40,6 +40,7 @@ import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import * as weightChange from "../../lib/weight-change.js";
+import { bucketNote } from "../../lib/session-summary.js";
 
 // The ERC-4626 vault on Base. A public on-chain address, source of truth
 // frontend/public/skill.md.
@@ -59,11 +60,13 @@ const VAULT_TOKEN = "rmUSDC";
 // a feed: the allocation DTO serves labels and weights and no prose. It says
 // what the sleeve holds and why it exists, and deliberately does not re-list
 // the names, which are already printed under the bar.
+// The sleeve notes live with the other sleeve helpers (bucketNote in
+// lib/session-summary.js), so the swarm pages' tips say what these cards say.
 const SLEEVE_NOTE = {
-  "defi-yield": "Lending USDC on Base. The lowest-volatility sleeve, aimed at capital preservation.",
-  "agent-tokens": "Tokens of the agents that hold $ROBOTMONEY. The list is admin-managed.",
-  "protocol-tokens": "Large-cap crypto and DeFi assets.",
-  rwa: "Tokenised traditional instruments: equity index and commodities.",
+  "defi-yield": bucketNote("conservative_defi_yield"),
+  "agent-tokens": bucketNote("agent_tokens"),
+  "protocol-tokens": bucketNote("protocol_tokens"),
+  rwa: bucketNote("real_world_assets"),
 };
 const VAULT_CHAIN = "Base";
 
@@ -382,7 +385,6 @@ export function registerAllocationView(Alpine) {
     // point for loss and attention: here it is one arrow at type size.
     // One implementation with a session's outcome (lib/weight-change.js), so
     // the same move cannot read two ways on two pages.
-    changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
 

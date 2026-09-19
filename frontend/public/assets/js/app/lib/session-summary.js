@@ -100,6 +100,23 @@ export function bucketLabel(idOrName) {
   return String(idOrName || "").replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// What each sleeve holds, in one line: the note /allocation's sleeve cards
+// print, and the (i) tip wherever a swarm page names a sleeve (the explorer's
+// panel, the history's column heads). One source, so a sleeve is described
+// the same way everywhere it appears.
+/** @type {Record<string, string>} */
+const BUCKET_NOTES = {
+  conservative_defi_yield: "Lending USDC on Base. The lowest-volatility sleeve, aimed at capital preservation.",
+  agent_tokens: "Tokens of the agents that hold $ROBOTMONEY. The list is admin-managed.",
+  protocol_tokens: "Large-cap crypto and DeFi assets.",
+  real_world_assets: "Tokenised traditional instruments: equity index and commodities.",
+};
+/** @param {unknown} idOrName */
+export function bucketNote(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i >= 0 ? BUCKET_NOTES[BUCKET_ORDER[i]] || "" : "";
+}
+
 // Where a book sat, per sleeve, when a session read it: each framework
 // bucket's share of the snapshot's value, summed from the positions whose
 // token the framework assigns to that bucket. Keyed by the framework's bucket
@@ -148,6 +165,9 @@ export function weightsOutcomeLine(moved, basis) {
 }
 
 export const sessionSummary = {
+  // The one-line note on a sleeve, for its (i) tip; "" for a position.
+  /** @param {unknown} key */
+  bucketNote(key) { return bucketNote(key); },
   // The stance tally. The live pipeline aggregates it onto the record; the
   // static archive never did, and its sessions carry the stances only on the
   // takes themselves. Reading both is what puts the spread bar, the consensus

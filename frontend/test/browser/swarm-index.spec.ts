@@ -256,8 +256,14 @@ test("a published session's history row states its recommendation, its lean and 
   await expect(alloc.locator(".sv__stance-badge")).toHaveText("cautious");
   const mix = alloc.locator(".rr-rowacts .rr-mixline > span");
   await expect(mix).toHaveCount(4);
-  await expect(mix.nth(0)).toHaveText("Conservative DeFi Yield 90%");
-  await expect(mix.nth(1)).toHaveText("Agent Tokens 10%");
+  // Each weight carries its own move against the session's target, in
+  // percentage points, beside it: the row names each sleeve once.
+  await expect(mix.nth(0).locator("b")).toHaveText("90%");
+  await expect(mix.nth(0)).toContainText("Conservative DeFi Yield");
+  await expect(mix.nth(0).locator(".alp__mv")).toHaveText("−5 pp");
+  await expect(mix.nth(1).locator("b")).toHaveText("10%");
+  await expect(mix.nth(1).locator(".alp__mv")).toHaveText("+5 pp");
+  await expect(alloc.locator(".rr-rowacts > span:not(.rr-mixline)")).toHaveCount(0);
 
   // A portfolio session: the moves it recommends, and the positions it holds.
   const woon = rows.nth(1);
@@ -489,8 +495,8 @@ test("the latest allocation and the history state each fact once", async ({ page
   const alloc = page.locator("#allocation");
   const row = (name: string) => alloc.locator(".rr-legend__row").filter({ hasText: name });
   await expect(row("Agent Tokens")).toContainText("vs target 5%");
-  await expect(row("Agent Tokens").locator(".alp__mv")).toHaveText("▼−2.00%");
-  await expect(row("Real World Assets").locator(".alp__mv")).toHaveText("▲+2.00%");
+  await expect(row("Agent Tokens").locator(".alp__mv")).toHaveText("−2 pp");
+  await expect(row("Real World Assets").locator(".alp__mv")).toHaveText("+2 pp");
   await expect(row("Conservative DeFi Yield").locator("b")).toHaveText("95%");
   await expect(row("Conservative DeFi Yield")).not.toContainText("vs target");
   await expect(alloc.locator("p.rr-k.rr-sub")).toHaveCount(0);

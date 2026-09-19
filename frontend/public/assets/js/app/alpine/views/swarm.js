@@ -313,7 +313,6 @@ export function registerSwarmView(Alpine) {
       return this.explorerRows().some((r) => r.d != null && r.d !== 0) ? "" : "Target weights retained";
     },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
-    changeGlyph(d) { return weightChange.changeGlyph(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
     // A portfolio's newest published session, its own and not a folded one.
@@ -333,6 +332,8 @@ export function registerSwarmView(Alpine) {
         .map((r) => ({ key: r.key, label: r.label, d: weightChange.weightDelta(r.pct, ref[r.key] ?? null) }))
         .filter((m) => m.d != null && m.d !== 0);
     },
+    /** @param {any} s @param {string} key */
+    moveOf(s, key) { return this.movesOf(s).find((m) => m.key === key) || null; },
     takesOf(s) {
       const n = this.takesCount(s);
       return n ? `${n} ${n === 1 ? "take" : "takes"}` : "";

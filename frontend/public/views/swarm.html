@@ -144,7 +144,7 @@
                             <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
                             <template x-if="r.was != null && r.d">
                               <small>
-                                <span class="alp__mv" :class="changeClass(r.d)"><i x-text="changeGlyph(r.d)" aria-hidden="true"></i><span x-text="changeLabel(r.d)"></span></span>
+                                <span class="alp__mv" :class="changeClass(r.d)"><span x-text="changeLabel(r.d)"></span></span>
                                 <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
                               </small>
                             </template>
@@ -157,7 +157,7 @@
                         <template x-if="panelRow()">
                           <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
                             <div class="rr-x__head">
-                              <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><span x-text="panelRow().meta"></span></p>
+                              <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><span x-text="panelRow().meta"></span></p>
                               <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
                             <template x-if="panelRow().assets.length">
@@ -328,11 +328,11 @@
                         <template x-if="!recommendation(s)"><span class="rr-note" style="margin:0">No recommendation published</span></template>
                         <template x-if="mixOf(s).length">
                           <span class="rr-mixline">
-                            <template x-for="r in mixOf(s)" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b></span></template>
+                            <!-- Each sleeve's weight with its move beside it, in
+                                 percentage points against that session's target:
+                                 the name is said once, by the swatch. -->
+                            <template x-for="r in mixOf(s)" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b><template x-if="moveOf(s, r.key)"><span class="alp__mv" :class="changeClass(moveOf(s, r.key).d)" x-text="changeLabel(moveOf(s, r.key).d)"></span></template></span></template>
                           </span>
-                        </template>
-                        <template x-for="m in movesOf(s)" :key="`mv-${m.key}`">
-                          <span><span x-text="`${m.label} `"></span><span class="alp__mv" :class="changeClass(m.d)"><i x-text="changeGlyph(m.d)" aria-hidden="true"></i><span x-text="changeLabel(m.d)"></span></span></span>
                         </template>
                         <template x-for="a in rowActions(s)" :key="`${a.token}-${a.action}`">
                           <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>

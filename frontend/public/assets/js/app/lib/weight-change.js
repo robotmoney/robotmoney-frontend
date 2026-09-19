@@ -16,15 +16,17 @@ export function fmtPctTrim(v) {
   return bare === "—" ? bare : `${bare}%`;
 }
 
-// Direction is the GLYPH first and the colour second, so the column survives
-// colourblindness, greyscale and forced-colors. Up takes Pool green and down
-// takes --color-warn (see .alp__mv in views.css).
-/** @param {number | null} d */
-export function changeGlyph(d) { return d != null && d > 0 ? "▲" : d != null && d < 0 ? "▼" : ""; }
+// A change in a weight is in PERCENTAGE POINTS and says so: 5% to 3% is
+// "−2 pp". It printed "▼ −2.00%", which reads as a relative change (a 2% cut)
+// of what was in fact a 40% cut of that sleeve (David, 2026-09-19). No arrow:
+// an arrow over a percentage reads as a rate of change, and the sign already
+// carries direction through greyscale and forced-colors. Colour is second, as
+// ever: up takes Pool green and down --color-warn (.alp__mv in views.css).
 /** @param {number | null} d */
 export function changeLabel(d) {
   if (d == null || !Number.isFinite(d) || d === 0) return "—";
-  return (d > 0 ? "+" : "−") + Math.abs(Number(d)).toFixed(2) + "%";
+  const pts = Math.abs(Number(d)).toFixed(2).replace(/\.?0+$/, "");
+  return `${d > 0 ? "+" : "−"}${pts} pp`;
 }
 /** @param {number | null} d */
 export function changeClass(d) {
@@ -32,7 +34,7 @@ export function changeClass(d) {
   return d > 0 ? "up" : "down";
 }
 // The change between two weights, rounded to the hundredth of a point the
-// label prints, so a float residue (97 - 95 = 2.0000000000000018) can never
+// label prints at most, so a float residue (97 - 95 = 2.0000000000000018) can never
 // read as a move of its own and "flat" means the label says "—".
 /** @param {number | null} now @param {number | null} was */
 export function weightDelta(now, was) {
