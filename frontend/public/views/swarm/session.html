@@ -282,6 +282,10 @@
           <section class="rr-sec" id="reasoning" aria-labelledby="why-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="why-h">Reasoning &amp; disagreement</h2></div>
             <div class="rr-split">
+              <!-- Only when it holds something: a judged session can carry
+                   disagreements and no synthesis, and an empty first column
+                   pushed the market context right of a blank. -->
+              <template x-if="showSynthesis() || (!consensusItems().length && !disagreements().length)">
               <div>
                 <template x-if="showSynthesis()">
                   <div class="rr-block" x-data="{ more: false }">
@@ -299,6 +303,7 @@
                   <p class="rr-note" style="margin-top:0">No written synthesis</p>
                 </template>
               </div>
+              </template>
               <template x-if="signalRows().length">
                 <div>
                   <!-- The reading this session was given. The regime label itself

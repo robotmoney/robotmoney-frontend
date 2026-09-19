@@ -161,7 +161,7 @@
                     </template>
                   </dl>
                 </template>
-                <template x-if="recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length">
+                <template x-if="(recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none'">
                   <p class="rr-note" style="margin-top:0">No position calls</p>
                 </template>
                 <template x-if="!recommendation(latest())">

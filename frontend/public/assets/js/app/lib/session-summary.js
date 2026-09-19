@@ -385,7 +385,13 @@ export const sessionSummary = {
     const acts = (Array.isArray(rec.actions) ? rec.actions : [])
       .filter(/** @param {any} a */ (a) => a && a.action);
     if (acts.length) return { kind: "actions", actions: acts.slice(0, 2), more: Math.max(0, acts.length - 2) };
-    return rec.rationale ? { kind: "text", text: rec.rationale } : null;
+    // The rationale under the same trust rule as everywhere else (rationaleOf):
+    // a live rollup's is its template restating the tally, which printed
+    // "Majority stance is cautious (1 of 3…)" beside a SPLIT chip. That
+    // session did publish, and made no call on any position.
+    const why = this.rationaleOf(s);
+    if (why) return { kind: "text", text: why };
+    return rec.rationale ? { kind: "none" } : null;
   },
   // ── the vote, as a position on a scale (RM-121) ──────────────────────
   // Each member in their stance's column, bearish to bullish, so a reader
