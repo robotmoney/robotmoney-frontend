@@ -398,7 +398,7 @@
                   <tr>
                     <th scope="col">Session</th>
                     <template x-for="c in sleeveColumns()" :key="c.key">
-                      <th scope="col" class="q"><i data-mark="series" :style="`background:${c.hue}`" aria-hidden="true"></i><span x-text="c.label"></span><template x-if="bucketNote(c.key)"><span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" :aria-label="`About ${c.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(c.key)"></span></span></template></th>
+                      <th scope="col" class="q"><span class="sp-h" x-text="c.label"></span><span class="sp-h-short" aria-hidden="true" x-text="c.short"></span><template x-if="bucketNote(c.key)"><span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" :aria-label="`About ${c.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(c.key)"></span></span></template></th>
                     </template>
                   </tr>
                 </thead>
@@ -507,6 +507,7 @@
     /* Five columns fit any page width now the change column is gone, so the
        table never scrolls, and its header tips are never clipped. */
     .sp-sessions .sp-weights { min-width: 0; }
+    .sp-sessions .sp-weights .sp-h-short { display: none; }
     /* A sleeve's move sits under its weight, in its own column. */
     .sp-sessions .sp-weights .sp-move { display: block; margin-top: 0.125rem; font-size: 0.6875rem; }
     .sp-sessions .sp-weights .sp-state { display: block; margin-top: 0.125rem; color: var(--color-text-muted); }
@@ -514,9 +515,18 @@
        side by side on one grid line (a sleeve's head keeps its swatch, and its
        move sits under it), so nothing scrolls sideways. */
     @media (max-width: 640px) {
-      .sp-sessions .sp-weights thead tr, .sp-sessions .sp-weights tbody tr.sv__session-card { display: grid; grid-template-columns: 6.5rem repeat(var(--sleeves, 4), minmax(0, 1fr)); align-items: baseline; }
-      .sp-sessions .sp-weights tbody tr.sv__session-card { border-bottom: 1px solid var(--color-border); }
-      .sp-sessions .sp-weights thead th.q span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .sp-sessions .sp-weights thead tr, .sp-sessions .sp-weights tbody tr.sv__session-card { display: grid; grid-template-columns: 6.5rem repeat(var(--sleeves, 4), minmax(0, 1fr)); }
+      .sp-sessions .sp-weights tbody tr.sv__session-card { align-items: baseline; border-bottom: 1px solid var(--color-border); }
+      /* Every head cell runs the band's full height, its name set at the
+         bottom, so a two-line short name does not step the band. */
+      .sp-sessions .sp-weights thead tr { align-items: stretch; }
+      .sp-sessions .sp-weights thead th { display: flex; flex-direction: column; justify-content: flex-end; }
+      .sp-sessions .sp-weights thead th.q { align-items: flex-end; }
+      /* A phone heads each column with its short name; the full name stays
+         for screen readers, and the tip is left to the desktop table. */
+      .sp-sessions .sp-weights thead th.q .sp-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .sp-sessions .sp-weights thead th.q .sp-h-short { display: inline; }
+      .sp-sessions .sp-weights thead th.q .rm-tip { display: none; }
       .sp-sessions .sp-weights th, .sp-sessions .sp-weights td { padding-inline: 0.375rem; border-bottom: 0; }
       .sp-sessions .sp-weights tbody th a { white-space: nowrap; }
     }

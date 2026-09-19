@@ -107,7 +107,7 @@ export function bucketLabel(idOrName) {
 /** @type {Record<string, string>} */
 const BUCKET_NOTES = {
   conservative_defi_yield: "Lending USDC on Base. The lowest-volatility sleeve, aimed at capital preservation.",
-  agent_tokens: "Tokens of the agents that hold $ROBOTMONEY. The list is admin-managed.",
+  agent_tokens: "Tokens of the agents that hold $ROBOTMONEY.",
   protocol_tokens: "Large-cap crypto and DeFi assets.",
   real_world_assets: "Tokenised traditional instruments: equity index and commodities.",
 };

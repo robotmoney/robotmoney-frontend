@@ -1545,8 +1545,11 @@ export function registerStaticViews(Alpine) {
     },
     // ── the record's figures (RM-121) ───────────────────────────────────────
     // The four sleeves in published order, as table columns.
+    // `short` heads a column on a phone, where four full names do not fit.
     sleeveColumns() {
-      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), hue: bucketHue(key, i) }));
+      /** @type {Record<string, string>} */
+      const short = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), short: short[key] || bucketLabel(key), hue: bucketHue(key, i) }));
     },
     // A subject whose sessions recommend sleeve weights reads as a weights
     // history; any other reads as a verdict history.
