@@ -23,6 +23,9 @@ import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
+import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -628,6 +631,21 @@ export function registerStaticViews(Alpine) {
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
   Alpine.data("sleeveExplorer", sleeveExplorer);
+  // The same explorer over the vault stack's book (the Robot Money Vault
+  // subject's Holdings): one arc per vault at its actual weight, measured
+  // against the weights in force, and a vault's positions in its drawer.
+  // subjectProfile supplies vaultRingRows().
+  Alpine.data("vaultStackExplorer", () => ({
+    ...sleeveExplorer(),
+    explorerRows() { return this.vaultRingRows(); },
+    explorerSvg() {
+      return this.ringSvg(this.vaultRingRows().map((r) => ({ key: r.key, label: r.label, pct: r.pct, colour: r.hue })));
+    },
+    explorerCenter() { return { value: "", label: "Actual" }; },
+    explorerLabel() {
+      return this.vaultRingRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+  }));
   Alpine.data("takeCard", takeCard);
 
   Alpine.data("swarmTakeReceipt", () => ({
@@ -1171,6 +1189,18 @@ export function registerStaticViews(Alpine) {
     // is the donut list's own cap on the session page; the two must agree or the
     // same book reads as two different shapes across two pages.
     topN: 7,
+    // The Robot Money Vault's Holdings (isVaultStack): the book grouped by
+    // vault. On the devnet switch (lib/vault-source.js) its readings and
+    // wallets are the four-vault fixture's, kept apart from `snapshots` and
+    // `subject.wallets` so the latest recommendation and the history still
+    // measure real sessions against the real book. null reads those.
+    vaultSnapshots: null,
+    vaultWallets: null,
+    // The vault overview, for the router's applied weights: the Holdings
+    // target. Read after the page draws; until it settles no target shows,
+    // rather than one target and then another.
+    vaultStack: null,
+    vaultStackSettled: false,
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
       // The route this component was mounted on. The fetch below is not
@@ -1214,6 +1244,13 @@ export function registerStaticViews(Alpine) {
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
+        if (this.isVaultStack() && vaultMode().mode === "devnet") {
+          const fixture = await loadVaultSubjectFixture({ hostname: location.hostname });
+          if (fixture) {
+            this.vaultSnapshots = fixture.snapshots;
+            this.vaultWallets = fixture.wallets;
+          }
+        }
         await this.loadHistory(id);
         this.latestRow = this.sessions[0] || null;
         // The brief the last session opened with. Guarded like the rest: the
@@ -1246,6 +1283,13 @@ export function registerStaticViews(Alpine) {
         this.error = this.subject ? "This subject could not be loaded." : "Subject not found.";
       } finally {
         this.loading = false;
+      }
+      // Not awaited: the Holdings target follows once the overview answers.
+      if (!this.error && this.isVaultStack()) {
+        loadVaultOverview({ hostname: location.hostname, recommendation: false })
+          .then((r) => { this.vaultStack = r; })
+          .catch(() => { this.vaultStack = null; })
+          .finally(() => { this.vaultStackSettled = true; });
       }
     },
     async loadSnapshots(id) {
@@ -1781,7 +1825,7 @@ export function registerStaticViews(Alpine) {
     // said 9 readings. Fall back to the old cut only if the dates are unusable,
     // and never return fewer than the two points a series needs.
     windowed() {
-      const all = this.snapshots;
+      const all = this.isVaultStack() ? this.stackSnapshots() : this.snapshots;
       if (all.length < 2) return all;
       const day = (s) => Date.parse(`${s?.date}T00:00:00Z`);
       const last = day(all[all.length - 1]);
@@ -1821,6 +1865,7 @@ export function registerStaticViews(Alpine) {
     // only the bottom band has a flat baseline — every band above it is sheared
     // by the ones below, so the position that matters most gets the honest edge.
     concentrationSeries() {
+      if (this.isVaultStack()) return this.vaultSeries();
       const rows = this.windowed();
       const tokens = this.chartTokens();
       if (rows.length < 2 || !tokens.length) return [];
@@ -1854,13 +1899,18 @@ export function registerStaticViews(Alpine) {
     concentrationLegend() {
       const series = this.concentrationSeries();
       if (!series.length) return [];
-      return series.map((b) => ({
+      const items = series.map((b) => ({
         token: b.token,
         // The residual band's key is lowercase; printed as-is it reads as one
         // more token among the symbols. Keys and focus stay on `token`.
-        label: b.token === OTHER_TOKEN ? "Other" : b.token,
+        label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token),
         color: b.color,
+        mark: b.mark,
       })); // largest first: the legend runs left to right under the chart
+      // The vault stack's target lines, when any reading has a target, named
+      // by what they are: the router's applied weights, or the framework's.
+      if (this.isVaultStack() && this.vaultTargetLines().length) items.push({ token: "target", label: this.stackTargetName(), target: true });
+      return items;
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
@@ -1919,22 +1969,36 @@ export function registerStaticViews(Alpine) {
         const lower = base.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`).reverse();
         for (let i = 0; i < base.length; i++) base[i] = top[i];
         const tok = this.escapeHtml(b.token);
-        fills.push(`<polygon data-token="${tok}" points="${upper.concat(lower).join(" ")}" fill="${b.color}" fill-opacity="0.62"`
+        const mark = b.mark ? ` data-mark="${this.escapeHtml(b.mark)}"` : "";
+        fills.push(`<polygon data-token="${tok}"${mark} points="${upper.concat(lower).join(" ")}" fill="${b.color}" fill-opacity="0.62"`
           + ` stroke="var(--color-void)" stroke-width="1" vector-effect="non-scaling-stroke"/>`);
-        edges.push(`<polyline data-token="${tok}" points="${upper.join(" ")}" fill="none" stroke="${b.color}"`
+        edges.push(`<polyline data-token="${tok}"${mark} points="${upper.join(" ")}" fill="none" stroke="${b.color}"`
           + ` stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
       }
       // Gridlines over the fills, faint: at 50% a single position becomes the
       // majority of the book.
       const grid = [25, 50, 75].map((t) => `<line x1="0" x2="1000" y1="${100 - t}" y2="${100 - t}"`
         + ` stroke="rgba(237,239,241,${t === 50 ? 0.22 : 0.1})" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
-      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${fills.join("")}${edges.join("")}${grid}</svg>`;
+      // The vault stack's target over the bands: one dashed line per boundary
+      // between vaults, in one neutral colour, never a vault's hue.
+      const target = this.isVaultStack()
+        ? this.vaultTargetLines().map((points) => `<polyline data-token="target" points="${points}" fill="none" style="stroke:var(--color-text-soft)"`
+          + ` stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`).join("")
+        : "";
+      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${fills.join("")}${edges.join("")}${grid}${target}</svg>`;
     },
     chartLabel() {
       const m = this.chartModel();
       if (!m) return "";
-      const named = m.series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
-      return `Share of the book by position, stacked to 100%, ${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+      const named = m.series.map((b) => `${b.label ?? b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
+      const span = `${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}`;
+      if (this.isVaultStack()) {
+        const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
+        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
+        const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
+        return `Share of the book by vault, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
+      }
+      return `Share of the book by position, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
     },
     // A tick under every reading, month and day; the ones between the ends drop
     // out on a narrow screen. The last reading's year is the positions label's
@@ -1967,7 +2031,7 @@ export function registerStaticViews(Alpine) {
         total: Number.isFinite(total) && total > 0 ? this.fmtUsd(total) : "",
         // Positions the book did not hold on that date are left out.
         items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
-          .map((b) => ({ token: b.token, label: b.token === OTHER_TOKEN ? "Other" : b.token, color: b.color, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
+          .map((b) => ({ token: b.token, label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token), color: b.color, mark: b.mark, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
       };
     },
     // The crosshair snaps to the nearest reading under the pointer.
@@ -1999,6 +2063,245 @@ export function registerStaticViews(Alpine) {
         el.classList.toggle("is-muted", this.chartFocus !== null && el.getAttribute("data-token") !== this.chartFocus);
       }
     },
+    // ── the vault stack (the Robot Money Vault subject) ──────────────────────
+    // A PortfolioRouter and four leg vaults, one per sleeve. Its Holdings is
+    // one book grouped by vault: the total is the four vaults' sum, the ring
+    // is each vault's actual weight against the weights in force, and the
+    // chart stacks the vaults in their sleeves' hues with that target drawn
+    // over them. Every read below goes through stackSnapshots() and
+    // stackWalletList(), which are the devnet fixture's when the switch is on
+    // and the subject's own book otherwise.
+    isVaultStack() { return this.subject?.id === VAULT_SUBJECT_ID; },
+    // The page's lede. The vault's thesis_blurb is agent-facing session
+    // context written for the single Base vault, with the weights in it; the
+    // page states the subject only, however many vaults are live.
+    subjectLede() {
+      if (this.isVaultStack()) return "Depositor capital in the Robot Money vaults, one per sleeve. Distinct from the treasury wallet, which holds protocol-owned capital.";
+      return this.subject?.thesisBlurb || "";
+    },
+    // The devnet fixture's book is on (lib/vault-source.js): Holdings is test
+    // data, while the latest recommendation still reads the real book.
+    stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
+    stackSnapshots() { return this.vaultSnapshots ?? this.snapshots; },
+    stackSnapshot() {
+      if (!this.vaultSnapshots) return this.snapshot;
+      const list = this.vaultSnapshots;
+      return list.length ? normalizeSnapshot(list[list.length - 1]) : null;
+    },
+    stackWalletList() {
+      if (this.vaultWallets) return this.vaultWallets;
+      return (this.subject?.wallets?.length ? this.subject.wallets : this.snapshot?.wallets) || [];
+    },
+    // The fixture labels the devnet book; the subject's own book carries none.
+    vaultStackLabel() { return this.vaultSnapshots ? DEVNET_LABEL : null; },
+    // The vault a position sits in. A book read before positions named their
+    // vault is the single rmUSDC vault's; once any position names one, a
+    // position that does not is unassigned rather than guessed.
+    vaultOf(p, snap) {
+      const named = String(p?.vault ?? "").toLowerCase();
+      if (VAULT_SLUGS.includes(named)) return named;
+      const anyNamed = (snap?.positions || []).some((x) => x?.vault != null && x.vault !== "");
+      return anyNamed ? null : "rmusdc";
+    },
+    // Each vault's value on one reading, and the unassigned rest.
+    vaultValuesOf(snap) {
+      /** @type {Record<string, number>} */
+      const out = {};
+      let unassigned = 0;
+      for (const p of snap?.positions || []) {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const v = this.vaultOf(p, snap);
+        if (v) out[v] = (out[v] || 0) + value;
+        else unassigned += value;
+      }
+      return { byVault: out, unassigned };
+    },
+    // Read from: the router (it holds nothing, so no value) and each vault
+    // with its sleeve and its value on the latest reading. A wallet that
+    // predates `kind` is the rmUSDC vault when it is rmUSDC's Base address.
+    stackWallets() {
+      const snap = this.stackSnapshot();
+      const { byVault } = this.vaultValuesOf(snap);
+      const rank = (w) => (w.kind === "router" ? -1 : w.vault ? VAULT_SLUGS.indexOf(w.vault) : VAULT_SLUGS.length);
+      return this.stackWalletList().filter(Boolean).map((w) => {
+        let kind = w.kind === "router" || w.kind === "vault" ? w.kind : null;
+        let id = kind === "vault" ? vaultBySlug(w.vault) || vaultForBucket(w.sleeve) : null;
+        if (!kind && String(w.address || "").toLowerCase() === VAULTS[0].baseAddress) {
+          kind = "vault";
+          id = VAULTS[0];
+        }
+        const value = kind === "vault" && id && byVault[id.slug] != null ? byVault[id.slug] : null;
+        return {
+          kind,
+          // The router by its role, whatever the feed calls it (the class
+          // name, PortfolioRouter, is not a reader's word).
+          name: id ? id.symbol : kind === "router" ? "Router" : w.label || w.name || "",
+          vault: id ? id.slug : null,
+          sleeve: id ? (vaultForBucket(w.sleeve) || id).name : "",
+          color: id ? id.color : null,
+          chain: w.chain || "",
+          address: w.address || w.addr || "",
+          value,
+        };
+      }).sort((a, b) => rank(a) - rank(b));
+    },
+    // The chains the stack is read on: the wallets', else the positions'.
+    stackChains() {
+      const chains = this.stackWallets().map((w) => w.chain);
+      for (const p of this.stackSnapshot()?.positions || []) chains.push(p?.chain);
+      return [...new Set(chains.filter(Boolean).map((c) => String(c)))];
+    },
+    // A Chain column only when the stack spans more than one chain; with one,
+    // the total's line names it once.
+    stackMultiChain() { return this.stackChains().length > 1; },
+    // An Address column only when some row has an address to show.
+    stackHasAddress() { return this.stackWallets().some((w) => !!w.address); },
+    // The total's line: the chain it is read on and the reading's date, so a
+    // total that differs from a vault page's names its own date.
+    vaultStatSub() {
+      return [
+        this.stackChains().map((c) => this.chainLabel(c)).join(", "),
+        this.stackSnapshot()?.date ? this.formatDate(this.stackSnapshot().date, "short") : "",
+      ].filter(Boolean).join(" · ");
+    },
+    // The latest reading grouped by vault, in published order, each with its
+    // value, its share of the book and its positions (largest first, each a
+    // share of the book). Positions with no vault close the list as
+    // "Unassigned", so the groups always add up to the total.
+    vaultGroups() {
+      const snap = this.stackSnapshot();
+      const total = Number(snap?.totalValueUsd) || 0;
+      const rows = (snap?.positions || []).map((p) => {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const vaultSlug = this.vaultOf(p, snap);
+        // The name the vault's own page gives the position.
+        return { ...p, vaultSlug, label: positionName(p, vaultSlug), value, share: total > 0 ? value / total : 0 };
+      });
+      const group = (identity, positions) => {
+        const value = positions.reduce((n, p) => n + p.value, 0);
+        return { ...identity, value, share: total > 0 ? value / total : 0, positions: positions.slice().sort((a, b) => b.value - a.value) };
+      };
+      const groups = VAULTS
+        .map((v) => ({ v, positions: rows.filter((r) => r.vaultSlug === v.slug) }))
+        .filter((g) => g.positions.length)
+        .map((g) => group(g.v, g.positions));
+      const rest = rows.filter((r) => !r.vaultSlug);
+      if (rest.length) groups.push(group({ slug: "unassigned", symbol: "Unassigned", name: "", color: null }, rest));
+      return groups;
+    },
+    // The weights in force on `date`, in basis points by vault slug: the
+    // router's applied weights once they were applied, else the published
+    // framework target in force that day. null when neither is complete, and
+    // until the vault overview has answered.
+    stackTargetAt(date) {
+      return this.stackTargetOf(date)?.by ?? null;
+    },
+    // The same, with where it came from: "applied" (the router's weights) or
+    // "target" (the framework's).
+    stackTargetOf(date) {
+      if (!this.vaultStackSettled || !date) return null;
+      const day = String(date).slice(0, 10);
+      const ov = this.vaultStack?.overview;
+      if (ov) {
+        const applied = VAULTS.map((v) => ov.vaults.find((r) => r.slug === v.slug)?.appliedBps ?? null);
+        const at = String(ov.router?.appliedAt || "").slice(0, 10);
+        if (layerComplete(applied) && at && at <= day) {
+          return { basis: "applied", by: Object.fromEntries(VAULTS.map((v, i) => [v.slug, applied[i]])) };
+        }
+      }
+      const fw = targetsInForce(this.allocationFw, day);
+      if (!fw) return null;
+      /** @type {Record<string, number>} */
+      const out = {};
+      for (const [key, pct] of Object.entries(fw)) {
+        const v = vaultForBucket(key);
+        if (v) out[v.slug] = Math.round(Number(pct) * 100);
+      }
+      return layerComplete(VAULTS.map((v) => out[v.slug])) ? { basis: "target", by: out } : null;
+    },
+    // The chart legend's name for the line over the bands: "Applied" when
+    // every reading it is drawn on used the router's weights, else "Target".
+    stackTargetName() {
+      const m = this.chartModel();
+      const bases = (m?.rows || []).map((r) => this.stackTargetOf(r.date)?.basis).filter(Boolean);
+      return bases.length && bases.every((b) => b === "applied") ? "Applied" : "Target";
+    },
+    // The ring: all four vaults, each at its actual weight on the latest
+    // reading, against the target in force on that date.
+    // Each row names its reference ("target 95%", "applied 70%") and prints
+    // no delta: the latest recommendation above already gives the gap, and a
+    // second one here, measured the other way round, would point the other
+    // way.
+    vaultRingRows() {
+      const snap = this.stackSnapshot();
+      const groups = this.vaultGroups();
+      const target = snap ? this.stackTargetOf(snap.date) : null;
+      return VAULTS.map((v) => {
+        const g = groups.find((x) => x.slug === v.slug);
+        const pct = g ? g.share * 100 : 0;
+        const was = target ? target.by[v.slug] / 100 : null;
+        return {
+          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "",
+          was, basis: target?.basis ?? "target", action: "", rationale: "",
+          assets: (g?.positions || []).map((p) => ({
+            key: `${v.slug}-${p.token}-${p.chain}`,
+            label: positionName(p, v.slug),
+            colour: null,
+            ofSleeve: g && g.value > 0 ? (p.value / g.value) * 100 : null,
+          })),
+        };
+      });
+    },
+    // The chart's bands: each vault's share of the book on every reading, in
+    // published order, a vault that holds nothing across the window left out.
+    // What no vault accounts for is the residual band.
+    vaultSeries() {
+      const rows = this.windowed();
+      if (rows.length < 2) return [];
+      const shares = rows.map((snap) => {
+        const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd ?? 0);
+        const { byVault } = this.vaultValuesOf(snap);
+        return (slug) => (total > 0 ? (byVault[slug] || 0) / total : 0);
+      });
+      const bands = VAULTS
+        .map((v) => ({ token: v.slug, label: v.symbol, color: v.color, mark: "series", shares: shares.map((at) => at(v.slug)) }))
+        .filter((b) => b.shares.some((s) => s > 0));
+      if (!bands.length) return [];
+      const other = rows.map((_, i) => Math.max(0, 1 - bands.reduce((sum, b) => sum + b.shares[i], 0)));
+      if (other.some((v) => v > 0.005)) bands.push({ token: OTHER_TOKEN, label: "Other", color: OTHER_COLOR, mark: undefined, shares: other });
+      return bands;
+    },
+    // The target over the bands, as the SVG points of each dashed line: one
+    // per boundary between neighbouring vaults, stepping at the reading where
+    // the target changes and broken where there is none. A boundary at 0 or
+    // 100% on every reading is the chart's own edge, and two boundaries that
+    // coincide (a vault targeted at 0%) are drawn once.
+    vaultTargetLines() {
+      const m = this.chartModel();
+      if (!m) return [];
+      const targets = m.rows.map((r) => this.stackTargetAt(r.date));
+      const seen = new Set();
+      const out = [];
+      for (let k = 1; k < VAULTS.length; k++) {
+        const cum = targets.map((t) => (t ? VAULTS.slice(0, k).reduce((n, v) => n + t[v.slug], 0) / 100 : null));
+        if (cum.every((c) => c == null || c <= 0 || c >= 100)) continue;
+        const segments = [];
+        let seg = null;
+        cum.forEach((c, i) => {
+          if (c == null) { seg = null; return; }
+          if (!seg) { seg = []; segments.push(seg); } else seg.push([m.xs[i], cum[i - 1]]);
+          seg.push([m.xs[i], c]);
+        });
+        const lines = segments.filter((s) => s.length > 1)
+          .map((s) => s.map(([x, c]) => `${x.toFixed(1)},${(100 - c).toFixed(2)}`).join(" "));
+        const sig = lines.join("|");
+        if (!sig || seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(...lines);
+      }
+      return out;
+    },
+    vaultUsd(v) { return fmtVaultUsd(v); },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the
     // manifest, fall back to the snapshot, and de-duplicate by address.

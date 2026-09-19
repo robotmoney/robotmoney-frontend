@@ -1,0 +1,323 @@
+<!-- One vault, /vault/:slug (docs/plans/vault-pages.md), as a research record:
+     breadcrumb, head, one hairline row of facts, then sections. A live vault
+     shows its holdings, its allocation against the other three, and its
+     history and activity where the source serves them; a vault that is not
+     live shows the head, the facts, its allocation and its mechanics. When
+     the vaults cannot be read at all, the head still renders from the slug
+     and the error takes the place of the facts.
+     The source's label ("Devnet test data", "Saved Base snapshot", "Stub
+     data"), when it has one, is one fact in the facts row: the
+     data-vault-label element. The vault's hue is its sleeve's, the same on
+     /allocation and the swarm pages, and marks series only. -->
+<section class="cv cv--detail" x-data="vaultView()">
+  <div class="sv__body sv__body--narrow rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading vault</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-card"></div><div class="sv__skel-card"></div>
+    </div>
+    <template x-if="error && !id"><div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/allocation#vaults">Allocation</a></p></div></template>
+
+    <template x-if="!loading && id">
+      <div>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/allocation#vaults">Allocation</a><span aria-hidden="true">/</span>
+          <span class="rr-sym" aria-current="page" x-text="id.symbol"></span>
+        </nav>
+
+        <header class="rr-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet"><i class="rr-dot" data-mark="series" :style="`background:${id.color}`" aria-hidden="true"></i><span x-text="`Vault · ${id.name}`"></span></p>
+          <h1 class="sv__detail-title rr-sym" x-text="id.symbol"></h1>
+          <template x-if="lede()"><p class="sv__lede sv__lede--compact" x-text="lede()"></p></template>
+        </header>
+
+        <!-- Hidden, not removed, when the vaults could not be read, so it
+             stays the head's sibling; the error takes its place. -->
+        <div class="rr-meta" x-show="!error">
+          <span class="rr-meta__i">Network <b x-text="networkLabel()"></b></span>
+          <template x-if="dataLabel()"><span class="rr-meta__i" data-vault-label x-text="dataLabel()"></span></template>
+          <span class="rr-meta__i">Status <b x-text="status()"></b></span>
+          <span class="rr-meta__i">Deposit asset <b>USDC</b></span>
+          <template x-if="isLive() && sharePrice()"><span class="rr-meta__i">Share price <b x-text="sharePrice()"></b></span></template>
+          <span class="rr-meta__i">Read <b x-text="readLabel()"></b></span>
+          <template x-if="contractHref()">
+            <span class="rr-meta__i">Contract <a class="rr-lnk" :href="contractHref()" target="_blank" rel="noopener noreferrer" :title="record().address" x-text="contractLabel()"></a></span>
+          </template>
+        </div>
+
+        <template x-if="error"><p class="sv__error" x-text="error"></p></template>
+
+        <template x-if="!error">
+        <div>
+
+        <!-- HOLDINGS: the vault's value, then every position in it. -->
+        <template x-if="isLive()">
+          <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
+            </div>
+            <div class="rr-stat"><p class="rr-stat__v" x-text="fmtUsd(record().tvlUsd)"></p></div>
+            <template x-if="detailError"><p class="rr-note" x-text="detailError"></p></template>
+            <template x-if="!detailError && !holdings().length"><p class="rr-note">No holdings reported</p></template>
+            <template x-if="!detailError && holdings().length">
+              <div class="rr-block" style="margin-top:1.5rem">
+                <template x-if="holdingsDate()"><p class="rr-k rr-sub" x-text="`Positions on ${holdingsDate()}`"></p></template>
+                <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-holdings">
+                  <thead>
+                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(h, i) in visibleHoldings()" :key="`${i}-${h.label}`">
+                      <tr>
+                        <th scope="row">
+                          <template x-if="holdingHref(h)"><a class="rr-lnk" :href="holdingHref(h)" target="_blank" rel="noopener noreferrer" :title="h.address" x-text="`${h.label} ↗`"></a></template>
+                          <template x-if="!holdingHref(h)"><span x-text="h.label"></span></template>
+                          <template x-if="h.note"><small x-text="h.note"></small></template>
+                        </th>
+                        <td x-text="holdingType(h)"></td>
+                        <td class="q" x-text="fmtUsd(h.valueUsd)"></td>
+                        <td class="q">
+                          <template x-if="holdingsBars()">
+                            <span class="rr-share"><i data-mark="series" :style="`width:${shareWidth(h.weightBps)}%;background:${id.color}`" aria-hidden="true"></i><span x-text="fmtBps(h.weightBps)"></span></span>
+                          </template>
+                          <template x-if="!holdingsBars()"><span x-text="fmtBps(h.weightBps)"></span></template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table></div>
+                <template x-if="moreHoldings()">
+                  <button type="button" class="rr-more" :aria-expanded="showAllHoldings ? 'true' : 'false'" @click="showAllHoldings = !showAllHoldings"
+                          x-text="showAllHoldings ? 'Show fewer' : `Show all ${holdings().length}`"></button>
+                </template>
+              </div>
+            </template>
+          </section>
+        </template>
+
+        <!-- ALLOCATION: this vault's weight as recommended, as the router
+             applies it, and as the vault actually is against the other three.
+             Shown for every vault: a vault that is not live still has a
+             recommended weight. With no router weights (Base today) there is
+             no Applied layer, and one gap, actual against recommended. -->
+        <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="alloc-h">Allocation</h2>
+          </div>
+          <div class="rr-split">
+            <div>
+              <div class="rr-layers">
+                <template x-for="l in layers()" :key="l.key">
+                  <div class="rr-layers__row">
+                    <span class="rr-k" x-text="l.label"></span>
+                    <span class="rr-layers__bar" aria-hidden="true"><i data-mark="series" :style="`width:${shareWidth(l.bps)}%;background:${id.color}`"></i></span>
+                    <span class="rr-mono" x-text="fmtBps(l.bps)"></span>
+                  </div>
+                </template>
+              </div>
+              <div class="rr-meta">
+                <template x-for="g in gaps()" :key="g.key">
+                  <span class="rr-meta__i"><span x-text="g.name"></span> <b><span class="alp__mv" :class="g.part.cls"><span x-text="g.part.label"></span></span></b></span>
+                </template>
+              </div>
+            </div>
+            <div>
+              <dl class="rr-dl">
+                <div>
+                  <dt>Recommendation</dt>
+                  <dd>
+                    <template x-if="recState() === 'linked'"><a class="rr-lnk" :href="recommendationHref()" x-text="recommendationDate()"></a></template>
+                    <template x-if="recState() === 'date'"><span x-text="recommendationDate()"></span></template>
+                    <template x-if="recState() === 'none'"><span>No recommendation published</span></template>
+                    <template x-if="recState() === 'unknown'"><span>—</span></template>
+                  </dd>
+                </div>
+                <template x-if="released()"><div><dt>Released on chain</dt><dd x-text="released()"></dd></div></template>
+              </dl>
+            </div>
+          </div>
+
+          <!-- The router's weights over time, and the recommendations before
+               the latest, where the source serves them: nothing on Base
+               applies weights yet, and one recommendation is the row above. -->
+          <template x-if="showRouterWeights() || showReceipts()">
+            <div style="margin-top:1.5rem">
+              <template x-if="showRouterWeights()">
+                <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                  <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-router-weights" @click="open = !open">
+                    <span>Router weights</span><template x-if="routerWeights()"><small x-text="routerWeights().length"></small></template>
+                  </button>
+                  <div class="rr-disc__anim" id="vault-router-weights" role="region" aria-label="Router weights" :inert="!open">
+                    <div class="rr-disc__clip"><div class="rr-disc__body">
+                      <template x-if="detailError"><p class="rr-note" style="margin:0" x-text="detailError"></p></template>
+                      <template x-if="!detailError && !routerWeights()?.length"><p class="rr-note" style="margin:0">No router weights reported</p></template>
+                      <template x-if="!detailError && routerWeights()?.length">
+                        <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
+                          <thead><tr><th scope="col">Date</th><th scope="col" class="q">Applied</th></tr></thead>
+                          <tbody>
+                            <template x-for="(w, i) in routerWeights()" :key="`${i}-${w.t}`">
+                              <tr><th scope="row" x-text="fmtDate(w.t)"></th><td class="q" x-text="fmtBps(w.appliedBps)"></td></tr>
+                            </template>
+                          </tbody>
+                        </table></div>
+                      </template>
+                    </div></div>
+                  </div>
+                </div>
+              </template>
+              <template x-if="showReceipts()">
+                <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                  <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-receipts" @click="open = !open">
+                    <span>Recommendations</span><small x-text="receipts().length"></small>
+                  </button>
+                  <div class="rr-disc__anim" id="vault-receipts" role="region" aria-label="Recommendations" :inert="!open">
+                    <div class="rr-disc__clip"><div class="rr-disc__body">
+                      <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
+                        <thead><tr><th scope="col">Date</th><th scope="col" class="q">Recommended</th><th scope="col">Applied</th></tr></thead>
+                        <tbody>
+                          <template x-for="(r, i) in receipts()" :key="`${i}-${r.t}`">
+                            <tr><th scope="row" x-text="fmtDate(r.t)"></th><td class="q" x-text="fmtBps(r.recommendedBps)"></td><td x-text="r.applied ? 'Yes' : 'No'"></td></tr>
+                          </template>
+                        </tbody>
+                      </table></div>
+                    </div></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </section>
+
+        <!-- HISTORY: the vault's TVL over time, where the source serves it
+             (the Base feed does not). Seven readings or more draw a line,
+             broken wherever readings are more than three days apart; fewer
+             draw as points. -->
+        <template x-if="isLive() && (detailError || hasHistory())">
+          <section class="rr-sec" id="history" aria-labelledby="vhist-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="vhist-h">History</h2>
+            </div>
+            <template x-if="detailError"><p class="rr-note" style="margin:0" x-text="detailError"></p></template>
+            <template x-if="!detailError && !hist().points.length"><p class="rr-note" style="margin:0">No history reported</p></template>
+            <template x-if="!detailError && hist().points.length">
+              <figure class="rr-area">
+                <figcaption class="rr-area__head">
+                  <p class="rr-k">TVL</p>
+                  <span class="rr-k" x-text="histCount()"></span>
+                </figcaption>
+                <div class="rr-area__frame">
+                  <div class="rr-area__y" aria-hidden="true">
+                    <template x-for="t in histYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                  </div>
+                  <div class="rr-area__plot" tabindex="0" role="img" :aria-label="histLabel()"
+                       @pointermove="histMove($event)" @pointerdown="histMove($event)" @pointerleave="chartAt = null" @keydown="histKey($event)" @blur="chartAt = null">
+                    <div class="rr-area__svg" x-html="histSvg()"></div>
+                    <template x-for="p in histDots()" :key="p.key">
+                      <i class="rr-area__pt" data-mark="series" :style="`left:${p.left}%;top:${p.top}%;background:${id.color}`" aria-hidden="true"></i>
+                    </template>
+                    <template x-if="histPoint(chartAt)">
+                      <div class="rr-area__cross" :style="`left:${histPoint(chartAt).left}%`"></div>
+                    </template>
+                    <template x-if="histPoint(chartAt)">
+                      <div class="rr-area__tip" :class="histPoint(chartAt).left > 62 ? 'is-left' : ''" :style="`left:${histPoint(chartAt).left}%`">
+                        <p class="rr-area__tip-h" style="margin:0"><b x-text="histPoint(chartAt).date"></b><span x-text="histPoint(chartAt).value"></span></p>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="rr-area__x" aria-hidden="true">
+                    <template x-for="t in histXTicks()" :key="t.key"><span :class="[t.cls, t.i === chartAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                  </div>
+                </div>
+              </figure>
+            </template>
+          </section>
+        </template>
+
+        <!-- ACTIVITY: deposits and withdrawals, newest first, ten to a page,
+             where the source serves them (the Base feed does not). -->
+        <template x-if="isLive() && (detailError || hasActivity())">
+          <section class="rr-sec" id="activity" aria-labelledby="act-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="act-h">Activity</h2>
+            </div>
+            <template x-if="detailError"><p class="rr-note" style="margin:0" x-text="detailError"></p></template>
+            <template x-if="!detailError && !activity().length"><p class="rr-note" style="margin:0">No activity reported</p></template>
+            <template x-if="!detailError && activity().length">
+              <div>
+                <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="activityHasTx() ? 'has-tx' : ''">
+                  <thead>
+                    <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Transaction</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(a, i) in activityRows()" :key="`${activityPage}-${i}-${a.t}`">
+                      <tr>
+                        <th scope="row" x-text="fmtDate(a.t)"></th>
+                        <td x-text="activityKind(a)"></td>
+                        <td class="q" x-text="activityAmount(a)"></td>
+                        <td class="q">
+                          <template x-if="txHref(a)"><a class="rr-lnk" :href="txHref(a)" target="_blank" rel="noopener noreferrer" :title="a.tx" x-text="`${shortHash(a.tx)} ↗`"></a></template>
+                          <template x-if="!txHref(a)"><span>—</span></template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table></div>
+                <template x-if="activityPaged()">
+                  <nav class="rr-pager" aria-label="Activity pages">
+                    <span role="status" x-text="activityRange()"></span>
+                    <div>
+                      <button type="button" class="rr-btn" :disabled="activityPage === 0" @click="activityPage -= 1">Newer</button>
+                      <button type="button" class="rr-btn" :disabled="!activityOlder()" @click="activityPage += 1">Older</button>
+                    </div>
+                  </nav>
+                </template>
+              </div>
+            </template>
+          </section>
+        </template>
+
+        <!-- MECHANICS AND RISK: only what the source states, then the risk. -->
+        <section class="rr-sec" id="mechanics" aria-labelledby="mech-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="mech-h">Mechanics and risk</h2>
+          </div>
+          <template x-if="mechanics().length || contractLinks().length">
+            <dl class="rr-dl">
+              <template x-for="m in mechanics()" :key="m.k">
+                <div><dt x-text="m.k"></dt><dd x-text="m.v"></dd></div>
+              </template>
+              <template x-if="contractLinks().length">
+                <div>
+                  <dt>Contracts</dt>
+                  <dd class="rr-links" style="margin:0">
+                    <template x-for="c in contractLinks()" :key="c.label">
+                      <a class="rr-lnk" :href="c.href" target="_blank" rel="noopener noreferrer" :title="c.address" x-text="c.text"></a>
+                    </template>
+                  </dd>
+                </div>
+              </template>
+            </dl>
+          </template>
+          <p class="rr-note">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
+        </section>
+
+        <!-- DEPOSIT: rmUSDC on Base only, when it accepts deposits. Anywhere
+             else the Status fact already says why there is no way in. -->
+        <template x-if="canDepositHere()">
+          <section class="rr-sec" id="deposit" aria-labelledby="dep-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="dep-h">Deposit</h2>
+            </div>
+            <a class="rr-cta" href="/skills" style="margin-top:0"><span>Deposit skill</span><span aria-hidden="true">→</span></a>
+          </section>
+        </template>
+        </div>
+        </template>
+      </div>
+    </template>
+  </div>
+</section>

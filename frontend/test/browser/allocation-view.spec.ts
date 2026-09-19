@@ -1,23 +1,29 @@
-// Render spec for /allocation, the product sheet (RM-115).
+// Render spec for /allocation, the product sheet (RM-115), and its Vaults
+// section (docs/plans/vault-pages.md).
 //
 // The page this replaced reported two pools of money under one heading and
 // read four dashboard feeds. RM-115 splits them: the allocation is a POLICY
-// and this page is the policy, its implementation in the vault, and what it
-// pays. The house book (wallet-balances / wallet-sleeves) belongs to RM-103
-// and is not read here at all — the first test below asserts that as the
-// absence of the REQUEST, because a page that fetched the house book and
-// merely declined to print it would still be one edit from printing it again.
+// and this page is the policy and the four vaults that carry it out. The house
+// book (wallet-balances / wallet-sleeves) belongs to RM-103 and is not read
+// here at all — the first test below asserts that as the absence of the
+// REQUEST, because a page that fetched the house book and merely declined to
+// print it would still be one edit from printing it again.
 //
 // Same harness pattern as the spec it replaces: the SPA and the view HTML are
 // served by the backend at baseURL, the vendor CDN scripts are fulfilled from
-// node_modules, and both live surfaces are stubbed:
+// node_modules, and every live surface is stubbed:
+//   - GET /api/dashboards/robotmoney-vaults → 404: the four-vault route is not
+//     served yet, so lib/vault-source.js reads the Base feed below;
 //   - GET /api/dashboards/vault-economics → the COMMITTED GOLDEN
 //     (goldens/api-goldens.json), the single source of truth per
 //     docs/architecture.md's preview section, or a degraded variant of it;
 //   - GET /api/dashboards/allocation → the committed golden;
 //   - GET /api/swarm/sessions → an inline stub (the golden's sessions are on
-//     other portfolios, and the allocation's own session set is what the
-//     "latest recommendation" line reads).
+//     other portfolios, and the allocation's own published sessions are what
+//     the Vaults section's Recommended reads).
+// The page is served from a local host, so the mock-data switch applies; no
+// test here sets it, so every one runs in base mode. The devnet and review
+// states, and each vault's own page, are vault-pages.spec.ts's.
 //
 // Assertions are on the RENDERED page — text and computed styles — never on
 // the source. Two real defects on the committee tree were invisible in the CSS
@@ -99,6 +105,17 @@ function allocationSession(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// The same session publishing the four sleeve weights: what the Vaults
+// section's Recommended column reads.
+function weightsSession() {
+  return allocationSession({
+    swarmRecommendation: {
+      type: "bucket_weights",
+      weights: { conservative_defi_yield: 0.9, agent_tokens: 0.05, protocol_tokens: 0.03, real_world_assets: 0.02 },
+    },
+  });
+}
+
 async function stubEnvironment(
   page: Page,
   {
@@ -120,6 +137,10 @@ async function stubEnvironment(
   const json = (payload: unknown) => ({
     status: 200, contentType: "application/json", body: JSON.stringify(payload),
   });
+  // The four-vault route is not served yet: its absence sends the page to the
+  // Base feed, the way production reads today.
+  await page.route("**/api/dashboards/robotmoney-vaults**", (route) =>
+    route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not_found" }) }));
   // `null` means "this feed is DOWN", which is a different state from "this
   // feed returned an empty payload" and the page has to distinguish them.
   await page.route("**/api/dashboards/vault-economics", (route) =>
@@ -192,116 +213,110 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 
 // ── the live bindings ───────────────────────────────────────────────────────
 
-// The holdings table moved out of a Vault SECTION and into the sleeve that
-// owns it, merged with the policy it is measured against. Two tables made the
-// reader join four identical row labels by eye, two screens apart. The section
-// is gone and id="vault" moved onto that card, because /allocation#vault is
-// cited by the deposit skill and by the swarm's vault row.
-test("the sleeve's vault table binds every adapter to the golden, and reconciles to TVL", async ({ page }) => {
+const vaultRows = (page: Page) => page.locator("#vaults tbody tr");
+const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
+
+// Where the recommendation meets execution. Production today is rmUSDC alone
+// on Base, read from vault-economics; the other three vaults are not on Base,
+// and nothing on Base applies weights, so there is no Applied column and one
+// Gap, actual against recommended. Asset-level holdings are on /vault/rmusdc,
+// not here.
+test("the Vaults section binds rmUSDC to the golden and states the other three as not live on Base", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const vault = goldenVault();
-  const framework = goldenFramework();
-  await stubEnvironment(page, { vault, framework });
+  await stubEnvironment(page, { vault });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const card = page.locator(".alp__card").first();
-  await card.locator(".alp__hold-sum").click();
-  const rows = card.locator(".alp__hold tbody tr");
-  // One row per POLICY constituent, held or not, plus the total. Sky is in the
-  // policy and not in the vault, and its row is the largest drift on the page:
-  // dropping it would hide the finding.
-  await expect(rows).toHaveCount(framework.buckets[0].items.length + 1);
-
-  // Rows follow the POLICY's order, not the feed's, so the table reads in the
-  // same order as the bar above it and the colours line up. The golden serves
-  // Morpho first and the policy lists Aave first, so this is a real assertion
-  // rather than a coincidence of two lists agreeing.
-  for (const [i, item] of framework.buckets[0].items.entries()) {
-    const adapter = vault.adapters.find((a) => a.name.toLowerCase() === item.label.toLowerCase());
-    const row = rows.nth(i);
-    if (!adapter) {
-      // A policy name the vault does not hold keeps its row, with dashes where
-      // a balance would be. It is the largest drift on the page.
-      await expect(row).toContainText(item.label);
-      await expect(row).toContainText("not held");
-      await expect(row.locator("a")).toHaveCount(0);
-      continue;
-    }
-    await expect(row).toContainText(usd2(adapter.balanceUsd));
-    await expect(row).toContainText("$1.0000");
-    await expect(row.locator("a")).toHaveAttribute("href", `https://basescan.org/address/${adapter.address}`);
+  const rows = vaultRows(page);
+  await expect(rows).toHaveCount(4);
+  await expect(rows.locator("th a")).toHaveText(["rmUSDC", "rmAGENT", "rmPROTO", "rmRWA"]);
+  for (const [i, slug] of ["rmusdc", "rmagent", "rmproto", "rmrwa"].entries()) {
+    await expect(rows.nth(i).locator("th a")).toHaveAttribute("href", `/vault/${slug}`);
   }
-  // The page names the POSITION, not the protocol: Morpho's is a specific
-  // curated vault, and that is the difference between "three lending venues"
-  // and "two pooled markets and a vault somebody else sets the caps on".
-  await expect(rows).toContainText([/Aave V3 USDC/, /Gauntlet USDC Prime/, /Compound III USDC/, /Sky/, /Vault TVL/]);
-  await expect(card.locator("tr.tot")).toContainText(usd2(vault.tvlUsd));
+  // No router weights: TVL, Recommended, Actual, Gap. With no recommendation
+  // the gap is missing, not zero.
+  await expect(page.locator("#vaults thead th")).toHaveText(["Vault", "TVL", "Recommended", "Actual", "Gap"]);
+  await expect(rows.nth(0).locator("td")).toHaveText([usd2(vault.tvlUsd), "—", "100%", "—"]);
+  for (const i of [1, 2, 3]) {
+    // "Not live": the Network fact above the table names Base.
+    await expect(rows.nth(i).locator("th small")).toContainText("Not live");
+    await expect(rows.nth(i).locator("th small")).not.toContainText("on Base");
+    await expect(rows.nth(i).locator("td")).toHaveText(["—", "—", "0%", "—"]);
+  }
+  await expect(rows.nth(0).locator("th small")).toHaveText("Conservative DeFi Yield");
 
-  // The meta rail's live figure comes from the same payload.
-  await expect(page.locator(".alp__meta")).toContainText(`Deployed ${usd2(vault.tvlUsd)}`);
+  await expect(vaultFact(page, "Combined TVL")).toContainText(usd2(vault.tvlUsd));
+  await expect(vaultFact(page, "Vaults live")).toContainText("1 of 4");
+  await expect(vaultFact(page, "Network")).toContainText("Base");
+  // The only published session carries position actions, not weights.
+  await expect(vaultFact(page, "Recommendation")).toContainText("No recommendation published");
+  await expect(vaultFact(page, "Tracking error")).toContainText("—");
+  // A live chain read carries no data label.
+  await expect(page.locator("[data-vault-label]")).toHaveCount(0);
+
+  // The meta rail's Contract became the router, which holds nothing and is
+  // not on Base.
+  await expect(page.locator(".alp__meta")).toContainText("Router");
+  await expect(page.locator(".alp__meta")).toContainText("Not live on Base");
+  await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
+
+  // #vault, cited by the deposit skill and the swarm's vault row, lands on the
+  // Vaults heading; no holdings table or NAV line is left on this page.
+  await expect(page.locator("#vaults #vault")).toBeVisible();
+  await expect(page.locator(".alp__hold, .alp__pending")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
 });
 
-// The subtraction the section exists for. Every number is derived from the two
-// feeds: nothing here may be a copywritten constant, because the day Sky is
-// wired up these all have to move on their own.
-test("drift is computed from the two feeds, and names what is missing", async ({ page }) => {
+// Recommended is the latest published robotmoney-allocation recommendation,
+// laid over the Base feed; tracking error is half the absolute gaps between it
+// and Actual. Every number is derived: nothing here may be a copywritten
+// constant.
+test("a published recommendation sets Recommended, the gaps and the tracking error", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  const vault = goldenVault();
-  const framework = goldenFramework();
-  await stubEnvironment(page, { vault, framework });
+  const session = weightsSession();
+  await stubEnvironment(page, { sessions: [session] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const items = framework.buckets[0].items;
-  const tvl = Number(vault.tvlUsd);
-  const expected = items.map((item) => {
-    const adapter = vault.adapters.find(
-      (a) => a.name.toLowerCase() === item.label.toLowerCase() && a.configured !== false,
-    );
-    const held = adapter?.balanceUsd == null ? 0 : Number(adapter.balanceUsd);
-    return { label: item.label, policy: Number(item.targetPct), actual: (held / tvl) * 100 };
-  });
-  // Half the sum of absolute deviations: the standard reading of how far a
-  // book sits from its policy.
-  const te = expected.reduce((sum, r) => sum + Math.abs(r.actual - r.policy), 0) / 2;
+  const rows = vaultRows(page);
+  await expect(rows.locator("td:nth-of-type(2)")).toHaveText(["90%", "5%", "3%", "2%"]);
+  // Actual 100/0/0/0 against 90/5/3/2: (10 + 5 + 3 + 2) / 2.
+  await expect(vaultFact(page, "Tracking error")).toContainText("10%");
+  // No router on Base: no governance or flow gap, one Gap, actual against
+  // recommended.
+  await expect(page.locator("#vaults thead th")).toHaveText(["Vault", "TVL", "Recommended", "Actual", "Gap"]);
+  await expect(rows.locator(".alp__mv")).toHaveText(["+10 pp", "−5 pp", "−3 pp", "−2 pp"]);
+  const rec = vaultFact(page, "Recommendation").locator("a");
+  await expect(rec).toHaveText("Sep 1, 2026");
+  await expect(rec).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
+  await expectNoBrowserErrors(errors);
+});
 
-  const card = page.locator(".alp__card").first();
-  // The headline rides on the summary, so the finding is legible without
-  // opening anything.
-  await expect(card.locator(".alp__hold-sum"))
-    .toContainText(`${te.toFixed(2)}% off target`);
-  await card.locator(".alp__hold-sum").click();
+// A sleeve card is the recipe: its target constituents, and the vault that
+// implements it by symbol, to its page. What the vault holds is on that page.
+test("each sleeve card names its vault, and holds no status and no holdings table", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubEnvironment(page);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
 
-  // By index, not by label: the row NAMES the position rather than the
-  // protocol, so "Morpho" appears in the policy and "Gauntlet USDC Prime" in
-  // the row, and matching on text would quietly find nothing.
-  for (const [i, row] of expected.entries()) {
-    const drift = row.actual - row.policy;
-    const tr = card.locator(".alp__hold tbody tr").nth(i);
-    await expect(tr).toContainText(`${row.policy.toFixed(2)}%`);
-    await expect(tr).toContainText(`${row.actual.toFixed(2)}%`);
-    await expect(tr).toContainText(`${drift > 0 ? "+" : "−"}${Math.abs(drift).toFixed(2)}`);
-  }
-  // A policy name the vault does not hold is marked on its own row. It was
-  // also stated as a sentence under the table, which narrated the table.
-  const missingIndex = expected.findIndex((r) => r.actual === 0);
-  expect(missingIndex, "the golden should carry a policy name the vault does not hold")
-    .toBeGreaterThan(-1);
-  await expect(card.locator(".alp__hold tbody tr").nth(missingIndex))
-    .toContainText("not held");
-  await expect(card.locator(".alp__vd")).toHaveCount(0);
+  const cards = page.locator(".alp__card");
+  await expect(cards).toHaveCount(4);
+  const usdc = cards.nth(0).locator(".alp__vrail");
+  await expect(usdc).toHaveCount(1);
+  await expect(usdc.locator("a")).toHaveText("rmUSDC");
+  await expect(usdc).not.toContainText("Status");
 
-  // A sleeve with no contract says so, and offers no comparison and no
-  // invented receipt symbol for an address nobody has deployed.
-  // A sleeve with no contract shows NOTHING about a vault: no rail, no chip, no
-  // sentence. It used to say the same thing three ways, and the donut legend
-  // and the meta rail each state it once already.
-  const agent = page.locator(".alp__card").nth(1);
-  await expect(agent.locator(".alp__vrail")).toHaveCount(0);
+  const agent = cards.nth(1);
+  await expect(agent.locator(".alp__vrail")).toHaveCount(1);
+  // Exactly the symbol: the rail's uppercase label must not reach it.
+  await expect(agent.locator(".alp__vrail a")).toHaveText("rmAGENT");
+  expect(await agent.locator(".alp__vrail a").innerText()).toBe("rmAGENT");
+  await expect(agent.locator(".alp__vrail a")).toHaveAttribute("href", "/vault/rmagent");
+  // Its status is the Vaults table's, stated once.
+  await expect(agent.locator(".alp__vrail")).not.toContainText("Not live");
   await expect(agent.locator(".alp__hold")).toHaveCount(0);
-  await expect(agent).not.toContainText("rm");
   // What it DOES say is what the sleeve is.
   await expect(agent.locator(".alp__card-what")).toContainText("$ROBOTMONEY");
   await expectNoBrowserErrors(errors);
@@ -350,18 +365,21 @@ test("the donut draws one arc per funded sleeve, on the categorical palette, not
   const legend = page.locator(".alp__legend-list li");
   await expect(legend).toHaveCount(framework.strategy.length);
   await expect(legend.first()).toContainText(framework.strategy[0].label);
-  await expect(legend.first()).toContainText("vault live");
-  await expect(legend.nth(2)).toContainText("vault pending");
+  // Under each name, how many assets it holds and nothing else: which vault
+  // carries the sleeve is the Vaults table's to say.
+  for (const [i, b] of framework.buckets.entries()) {
+    const n = b.items.length;
+    await expect(legend.nth(i).locator("span").first()).toHaveText(`${n} asset${n === 1 ? "" : "s"}`);
+  }
   const swatchFill = await legend.nth(2).locator(".alp__swatch")
     .evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(CATEGORICAL_RGB).toContain(swatchFill);
 });
 
 // Constituents restart at the front of the palette inside their own sleeve,
-// keyed on their position in the POLICY. The vault table keys on the same
-// index, which is what makes a venue one colour wherever it appears: colouring
-// by the holdings feed's order would let the API repaint it.
-test("a constituent keeps one hue in its sleeve's bar and in its vault row", async ({ page }) => {
+// keyed on their position in the POLICY, so a name keeps its hue in the bar
+// and in the list under it whatever order a feed returns.
+test("a constituent keeps one hue in its sleeve's bar and in its name", async ({ page }) => {
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
@@ -375,11 +393,27 @@ test("a constituent keeps one hue in its sleeve's bar and in its vault row", asy
     els.map((el) => getComputedStyle(el).backgroundColor));
   expect(barFills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
 
-  await card.locator(".alp__hold-sum").click();
-  const rowDots = card.locator(".alp__hold tbody tr .alp__dot");
-  const rowFills = await rowDots.evaluateAll((els) =>
+  const nameFills = await card.locator(".alp__names > span > i").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(rowFills).toEqual(barFills);
+  expect(nameFills).toEqual(barFills);
+});
+
+// A vault wears its sleeve's hue: the Vaults table's dot, the sleeve's donut
+// slice and its legend swatch are one colour (lib/vault-data.js VAULTS[i].color
+// === CATEGORICAL[i]).
+test("each vault keeps its sleeve's hue, square", async ({ page }) => {
+  await stubEnvironment(page, { sessions: [weightsSession()] });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await expect(vaultRows(page).nth(0).locator("td").first()).not.toHaveText("—");
+
+  const dots = page.locator("#vaults tbody .rr-dot");
+  const dotStyles = await dots.evaluateAll((els) =>
+    els.map((el) => [getComputedStyle(el).backgroundColor, getComputedStyle(el).borderRadius]));
+  expect(dotStyles).toEqual(CATEGORICAL_RGB.slice(0, 4).map((c) => [c, "0px"]));
+  const swatches = await page.locator(".alp__legend-list .alp__swatch").evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).backgroundColor));
+  expect(swatches).toEqual(CATEGORICAL_RGB.slice(0, 4));
 });
 
 // The section that replaced the bullet bars. Every row reads flat today, and
@@ -464,76 +498,53 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   await expectNoBrowserErrors(errors);
 });
 
-test("the two figures with no route behind them render an explicit pending state", async ({ page }) => {
-  const errors = failOnBrowserErrors(page);
-  await stubEnvironment(page);
-  await page.goto("/index.html");
-  await navigate(page, "/allocation");
-
-  // One line, not two tiles set in display type. A figure that does not exist
-  // does not earn the top of a page, and the Beacon point is what marks it.
-  const pending = page.locator(".alp__pending");
-  await expect(pending).toHaveCount(1);
-  await expect(pending).toContainText("not published");
-  // No marker. Every clarification on this page used to wear a coloured bullet,
-  // which put Beacon in four places it did not belong on a page already
-  // carrying five categorical hues. The words carry it now.
-  await expect(pending.locator("i")).toHaveCount(0);
-
-  // The spot share price IS served, and is shown as a spot read rather than
-  // stretched into the series it is not. It sits with the holdings it belongs
-  // to now, not in a facts panel of its own.
-  const vault = goldenVault();
-  await page.locator(".alp__card .alp__hold-sum").first().click();
-  await expect(page.locator(".alp__hold-foot").first())
-    .toContainText(`$${Number(vault.sharePrice).toFixed(4)}`);
-  await expectNoBrowserErrors(errors);
-});
-
 // ── degradation, one state per test ─────────────────────────────────────────
+// The vault feed's per-position states (a stale adapter read, a scheduler
+// catch-up) are on /vault/rmusdc beside the positions they describe
+// (vault-pages.spec.ts). Here the whole section carries its source.
 
-test("a stub vault feed is flagged non-live rather than presented as a chain read (issue #50)", async ({ page }) => {
+test("a stub vault feed is labelled on the Vaults section, not presented as a chain read (issue #50)", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { vault: { ...goldenVault(), source: "stub" } });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp-vault-nonlive")).toBeVisible();
-  await expect(page.locator(".alp-vault-nonlive")).toContainText("non-live (stub) data");
+  await expect(page.locator("[data-vault-label]")).toHaveCount(1);
+  await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Stub data");
+  await expectNoBrowserErrors(errors);
 });
 
-test("a stale vault feed is flagged, and every degraded row names its observation time", async ({ page }) => {
-  const vault = goldenVault();
-  await stubEnvironment(page, {
-    vault: {
-      ...vault,
-      stale: true,
-      adapters: vault.adapters.map((a) => ({ ...a, provenance: "stale" })),
-    },
-  });
+test("a stale vault feed says so beside the time it was read", async ({ page }) => {
+  await stubEnvironment(page, { vault: { ...goldenVault(), stale: true } });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp-vault-stale")).toBeVisible();
-  // "stale" as a DATE, not as an adjective: the carried-over sleeveStaleLabel().
-  // The rows moved into the sleeve that owns them, so the badge moved with
-  // them; degrading a row is exactly the thing that must survive a redesign.
-  await page.locator(".alp__card .alp__hold-sum").first().click();
-  const badges = page.locator(".alp__card .alp__cell-badge", { hasText: /^stale \(/ });
-  await expect(badges.first()).toBeVisible();
-  await expect(page.locator(".alp__hold-foot").first()).toContainText("(stale)");
+  await expect(vaultFact(page, "Read")).toContainText("Jul 30, 2026, 4:20 PM UTC · stale");
 });
 
-test("a scheduler catch-up is flagged as backfilled, distinct from stale and from stub (issue #614 AC4)", async ({ page }) => {
-  const vault = goldenVault();
-  await stubEnvironment(page, {
-    vault: { ...vault, adapters: vault.adapters.map((a, i) => (i === 0 ? { ...a, provenance: "backfilled" } : a)) },
-  });
+// This spec's host is a local one, so a Base feed that is down falls back to
+// the saved snapshot, and says so. A production host says "Vault data
+// unavailable" instead (scripts/tests/unit/vault-data.test.ts).
+test("the vault feed down: the saved Base snapshot, labelled as such", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubEnvironment(page, { vault: null });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp-vault-backfilled")).toBeVisible();
-  await expect(page.locator(".alp-vault-backfilled")).toContainText("caught up late");
-  await expect(page.locator(".alp-vault-stale")).toBeHidden();
-  await expect(page.locator(".alp-vault-nonlive")).toBeHidden();
-  await page.locator(".alp__card .alp__hold-sum").first().click();
-  await expect(page.locator(".alp__card .alp__cell-badge", { hasText: "caught up late" })).toBeVisible();
+  await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Saved Base snapshot");
+  await expect(vaultRows(page).nth(0).locator("td").first()).toHaveText("$199.70");
+  await expectNoBrowserErrors(errors);
+});
+
+test("no vault read at all: the section names the gap and prints no figure", async ({ page }) => {
+  await stubEnvironment(page, { vault: null });
+  await page.route("**/data/vaults/**", (route) => route.fulfill({ status: 404, body: "gone" }));
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await expect(page.locator("#vaults .alp__empty")).toHaveText("Vault data unavailable");
+  await expect(page.locator("#vaults .rr-meta")).toBeHidden();
+  await expect(page.locator("#vaults table")).toBeHidden();
+  await expect(page.locator("[data-vault-label]")).toHaveCount(0);
+  await expect(page.locator(".alp__meta")).toContainText("Router —");
+  // The policy does not depend on the vaults.
+  await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
 });
 
 // The chip is the one place on this page it would be easy to lie, so it gets
@@ -552,6 +563,8 @@ test("the state chip reads seeded whatever source and managed say", async ({ pag
     // The date the weights have been in force is a fact about the weights, so
     // it is a rail item and not a sentence restating the rail beside it.
     await expect(page.locator(".alp__meta")).toContainText("In force since");
+    // The month-first date every other date on the page carries.
+    await expect(page.locator(".alp__meta")).toContainText(/In force since\s*[A-Z][a-z]{2} \d{1,2}, \d{4}/);
   }
 });
 
@@ -667,6 +680,11 @@ test("every categorical fill on the page declares itself a series mark", async (
   expect(await marks.count()).toBeGreaterThan(8);
   await expect(page.locator('.alp__donut svg path[data-mark="series"]')).toHaveCount(2);
   await expect(page.locator('.alp__stk > span:not([data-mark="series"])')).toHaveCount(0);
+  // The Vaults section: a dot per vault, and nothing else in a vault's hue.
+  await expect(vaultRows(page).nth(0).locator("td").first()).not.toHaveText("—");
+  await expect(page.locator('#vaults .rr-dot[data-mark="series"]')).toHaveCount(4);
+  await expect(page.locator('#vaults [data-mark="series"]')).toHaveCount(4);
+  await expect(page.locator('#vaults i[style]:not([data-mark="series"])')).toHaveCount(0);
 });
 
 test("the page carries no em dash in its own copy", async ({ page }) => {
@@ -712,7 +730,13 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   expect(donutBox!.width).toBeLessThanOrEqual(390);
   await expect(page.locator(".alp__legend-list li")).toHaveCount(4);
 
-  // Wide content scrolls inside its own container, never the body.
+  // The Vaults table fits the phone rather than hiding columns behind a
+  // sideways scroll: TVL gives way (each vault's page carries it), and every
+  // column left is on screen.
+  await expect(vaultRows(page)).toHaveCount(4);
+  await expect(page.locator("#vaults thead th:visible")).toHaveText(["Vault", "Recommended", "Actual", "Gap"]);
+  const wrap = await page.locator("#vaults .rr-tablewrap").evaluate((el) => [el.scrollWidth, el.clientWidth]);
+  expect(wrap[0]).toBeLessThanOrEqual(wrap[1]);
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);

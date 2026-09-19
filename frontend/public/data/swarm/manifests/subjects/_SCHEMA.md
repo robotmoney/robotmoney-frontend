@@ -19,7 +19,13 @@ Each IC subject is a single JSON file in this directory. Filename
     {
       "address": "0x...",
       "chain": "base",                      // base | peaq (extend chains.js to add more)
-      "label": "<freeform>"                 // e.g. "main", "holdings", "treasury"
+      "label": "<freeform>",                // e.g. "main", "holdings", "treasury"
+      "kind": "router" | "vault",           // optional, the Robot Money vault stack only: the
+                                            //   PortfolioRouter (holds nothing) or a leg vault
+      "vault": "<slug>",                    // optional, with kind "vault": rmusdc | rmagent |
+                                            //   rmproto | rmrwa
+      "sleeve": "<bucket id>"               // optional, with kind "vault": the allocation
+                                            //   bucket the vault implements
     }
   ],
   "nft_contracts": [                        // optional, declared not read in v1

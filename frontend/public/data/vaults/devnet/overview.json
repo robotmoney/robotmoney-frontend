@@ -1,0 +1,110 @@
+{
+  "asOf": "2026-09-17T10:00:00Z",
+  "network": {
+    "chainId": 918453,
+    "label": "Staging devnet",
+    "testData": true
+  },
+  "freshness": {
+    "blockNumber": 42819,
+    "indexedAt": "2026-09-17T10:00:00Z",
+    "stale": false
+  },
+  "combined": {
+    "tvlUsd": 100000,
+    "vaultsLive": 4
+  },
+  "trackingErrorBps": 700,
+  "router": {
+    "address": null,
+    "availability": "live",
+    "appliedAt": "2026-09-01T10:00:00Z"
+  },
+  "recommendation": {
+    "sessionId": null,
+    "publishedAt": "2026-09-16T10:00:00Z",
+    "releasedOnChain": false
+  },
+  "vaults": [
+    {
+      "slug": "rmusdc",
+      "symbol": "rmUSDC",
+      "name": "Conservative DeFi Yield",
+      "bucket": "conservative_defi_yield",
+      "availability": "live",
+      "status": "active",
+      "address": null,
+      "tvlUsd": 72000,
+      "sharePrice": 1.025,
+      "exitFeeBps": null,
+      "recommendedBps": 6500,
+      "appliedBps": 7000,
+      "actualBps": 7200,
+      "gaps": {
+        "governance": 500,
+        "flow": 200,
+        "total": 700
+      }
+    },
+    {
+      "slug": "rmagent",
+      "symbol": "rmAGENT",
+      "name": "Agent Tokens",
+      "bucket": "agent_tokens",
+      "availability": "live",
+      "status": "active",
+      "address": null,
+      "tvlUsd": 9000,
+      "sharePrice": 0.938,
+      "exitFeeBps": null,
+      "recommendedBps": 1500,
+      "appliedBps": 1000,
+      "actualBps": 900,
+      "gaps": {
+        "governance": -500,
+        "flow": -100,
+        "total": -600
+      }
+    },
+    {
+      "slug": "rmproto",
+      "symbol": "rmPROTO",
+      "name": "Protocol Tokens",
+      "bucket": "protocol_tokens",
+      "availability": "live",
+      "status": "active",
+      "address": null,
+      "tvlUsd": 14000,
+      "sharePrice": 1.064,
+      "exitFeeBps": null,
+      "recommendedBps": 1500,
+      "appliedBps": 1500,
+      "actualBps": 1400,
+      "gaps": {
+        "governance": 0,
+        "flow": -100,
+        "total": -100
+      }
+    },
+    {
+      "slug": "rmrwa",
+      "symbol": "rmRWA",
+      "name": "Real World Assets",
+      "bucket": "real_world_assets",
+      "availability": "live",
+      "status": "active",
+      "address": null,
+      "tvlUsd": 5000,
+      "sharePrice": 1.0115,
+      "exitFeeBps": null,
+      "recommendedBps": 500,
+      "appliedBps": 500,
+      "actualBps": 500,
+      "gaps": {
+        "governance": 0,
+        "flow": 0,
+        "total": 0
+      }
+    }
+  ]
+}

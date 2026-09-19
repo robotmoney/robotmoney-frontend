@@ -74,10 +74,12 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
   await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
 
-  // RM-115: the page reads the VAULT and the allocation framework, and the
-  // house book is gone from it entirely. Vault TVL is derived from the same
-  // endpoint the page reads so this stays correct as the in-CI Base RPC stub's
-  // fixtures evolve (issue #48; zero live Base mainnet calls).
+  // RM-115: the page reads the VAULTS and the allocation framework, and the
+  // house book is gone from it entirely. Until the four-vault route is served,
+  // the Vaults section reads rmUSDC from vault-economics (lib/vault-source.js),
+  // so its TVL is derived from that same endpoint and stays correct as the
+  // in-CI Base RPC stub's fixtures evolve (issue #48; zero live Base mainnet
+  // calls).
   const expected = await page.evaluate(async () => {
     const v = await fetch("/api/dashboards/vault-economics").then((r) => r.json());
     // Mirrors allocationView.fmtUsd2 INCLUDING its null branch. A documented
@@ -87,10 +89,12 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
       n == null ? "—" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return { vault: usd2(v.tvlUsd) };
   });
-  // The four-tile stat rail became a one-line meta rail: two of those tiles
-  // read "not yet published" in display type, which is not what the top of a
-  // page about money is for.
-  await expect(page.locator(".alp__meta")).toContainText(`Deployed ${expected.vault}`);
+  // The vault's TVL is the Vaults table's, rmUSDC's row; the meta rail above
+  // the weights carries the router, which holds nothing.
+  const vaultRows = page.locator("#vaults tbody tr");
+  await expect(vaultRows).toHaveCount(4);
+  await expect(vaultRows.first().locator("td").first()).toHaveText(expected.vault);
+  await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
 
   // THE CONSTRAINT A REVIEWER CHECKS FIRST (RM-115): depositor capital and the
   // protocol's own wallets are different money, and this page reads only the
@@ -104,19 +108,16 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   });
   await navigate(page, "/");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp__meta")).toContainText("Deployed");
+  await expect(vaultRows.first().locator("td").first()).toHaveText(expected.vault);
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
 
-  // The two figures with no route behind them say so rather than borrowing a
-  // number from the spot share price. One line now, not two display-type tiles.
-  await expect(page.locator(".alp__pending")).toContainText("not published");
+  // The NAV line went to the vault pages with the holdings it described.
+  await expect(page.locator(".alp__pending")).toHaveCount(0);
 
   // #vault is still the anchor the deposit skill and the swarm's vault row
-  // point at. The section it named is gone — the vault's holdings moved into
-  // the sleeve they implement — so the anchor moved onto that sleeve's card.
-  await expect(page.locator("#vault")).toBeVisible();
-  await expect(page.locator("#vault")).toHaveClass(/alp__card/);
+  // point at. It sits on the Vaults heading, inside #vaults.
+  await expect(page.locator("#vaults #vault")).toBeVisible();
   await expect(page.locator("#allocation")).toBeVisible();
 
   // Test performance page with Wallet Performance heading
@@ -375,14 +376,15 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
 }
 
 test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
-  await page.goto("/");
-  await navigate(page, "/vault");
-  // RM-115 retired views/vault.html into /allocation's `#vault` section, and
-  // /vault now resolves to the allocation view rather than to not-found. It is
-  // still an EXPLICIT entry, not an absence: the catch-all maps any unknown
-  // path to /views/<path>.html, so a bare deletion would 404 a live address.
+  // Bare /vault is the four vaults on /allocation: the router moves the
+  // address to /allocation#vaults before it renders, so navigate(), which
+  // waits for the render of the path it pushed, cannot drive it. A direct load
+  // can. It is still an EXPLICIT route, not an absence: the catch-all maps an
+  // unknown path to /views/<path>.html, which for /vault is now the per-vault
+  // page.
+  await page.goto("/vault");
+  await expect(page).toHaveURL(/\/allocation#vaults$/);
   await expect(page.locator("section.alp")).toHaveCount(1);
-  await expect(page.locator("h1.vp__title")).toHaveCount(0);
   // Two addresses, one page: seo.js names /allocation canonical for both so
   // they do not compete as duplicates, and the page stays indexable.
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(

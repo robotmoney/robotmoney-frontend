@@ -190,7 +190,10 @@ test("public subject profile lists no NFT contract for an archived subject with 
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
   const sources = page.locator(".rr-sources tbody tr");
   await expect(sources).toHaveCount(1);
-  await expect(sources.locator("td").first()).toHaveText("Wallet");
+  // The vault subject's one wallet is the rmUSDC vault (decision 4 of
+  // docs/plans/vault-pages.md): its Read from names it and links its page.
+  await expect(sources.locator("th a")).toHaveText("rmUSDC");
+  await expect(sources.locator("th a")).toHaveAttribute("href", "/vault/rmusdc");
   await expect(page.locator(".rr-sources")).not.toContainText("NFT contract");
   // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
