@@ -53,7 +53,9 @@ describe("session.html take loops key on the member, not the take row id", () =>
   test("the loops this test is about still exist", () => {
     // Guards the selector itself: a rename that made `takeLoopKeys` return []
     // would otherwise make every assertion below vacuously green.
-    expect(keys.length).toBeGreaterThanOrEqual(2);
+    // One loop since RM-121: the stance/confidence index table was folded
+    // into the vote chart, and the take cards are the only per-take loop.
+    expect(keys.length).toBeGreaterThanOrEqual(1);
   });
 
   test("every take loop keys on memberId FIRST", () => {

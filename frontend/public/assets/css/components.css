@@ -384,9 +384,17 @@
    standard treatment, a sheet pinned to the page gutters and positioned
    vertically from its icon by script.
 
-   NOTE: .sv__vfy-tip in views.css predates this and does the same job for the
-   verification mark alone. It should fold into this component; that is a
-   separate pass over every take card. */
+   ONE BUBBLE (David, 2026-09-19: "We should have a single tooltip that we
+   could use across the site"). The skin below is the only one: the (i) tips,
+   the seal's state (.sv__vfy-tip), a take's filed time (.mp-when__tip) and a
+   market-context reading (.sig__tip) all wear it. Each keeps only its own
+   anchoring and trigger; none restyles the bubble. A chart's crosshair readout
+   is a figure panel, not a tooltip, and is not in this list. */
+.rm-tip__bub, .sv__vfy-tip, .mp-when__tip, .sig__tip {
+  padding: 0.65rem 0.75rem;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
+  text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400; overflow-wrap: break-word; }
 .rm-tip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
 .rm-tip__btn { width: 13px; height: 13px; padding: 0; flex: 0 0 auto; display: grid; place-items: center;
   border: 1px solid var(--color-text-muted); border-radius: 50%; background: none;
@@ -413,17 +421,15 @@
 .rm-tip__bub { position: absolute; left: 50%; bottom: calc(100% + 8px);
   transform: translate(calc(-50% + var(--rm-tip-nudge, 0px)), 3px);
   width: min(17rem, 72vw); max-width: min(17rem, calc(100vw - 2rem));
-  padding: 0.65rem 0.75rem; z-index: 40;
-  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
-  font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
-  text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400;
-  /* A bubble is a paragraph wherever it is anchored, so it resets every text
-     property its host might set. white-space was the one it missed: the role
-     tip on the swarm roster hangs off a .sv__mtable th, which is nowrap, and
-     218 characters laid out as 1327px on a single line inside a 272px box —
-     one visible line and the rest off the side of the screen. Any caller in a
-     table header, a chip or a truncated cell would have done the same. */
-  white-space: normal; overflow-wrap: break-word;
+  z-index: 40;
+  /* A bubble is a paragraph wherever it is anchored, so the skin above resets
+     every text property its host might set. white-space was the one it missed:
+     the role tip on the swarm roster hangs off a .sv__mtable th, which is
+     nowrap, and 218 characters laid out as 1327px on a single line inside a
+     272px box — one visible line and the rest off the side of the screen. Any
+     caller in a table header, a chip or a truncated cell would have done the
+     same. */
+  white-space: normal;
   opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s; }
 .rm-tip:hover .rm-tip__bub, .rm-tip__btn:focus-visible + .rm-tip__bub, .rm-tip__bub[data-open="1"] {

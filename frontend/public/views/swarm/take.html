@@ -1,88 +1,154 @@
-<!-- Public, server-verified swarm take receipt (issue #207). -->
+<!-- Public, server-verified swarm take receipt (issue #207), as a research
+     record (RM-121): a breadcrumb, the head, one hairline row of facts, the
+     take itself, then who signed it. The member's page and a session page
+     draw the same take in the shared card; this is its permanent address. -->
 <section class="cv cv--detail" x-data="swarmTakeReceipt()" data-swarm-take-receipt>
-  <div class="sv__body sv__body--narrow">
-    <a href="/swarm" class="sv__back">← /swarm</a>
-
-    <p class="sv__loading" x-show="loading">Verifying take…</p>
-    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+  <div class="sv__body sv__body--narrow rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Verifying take</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-card"></div>
+    </div>
+    <template x-if="error && !loading">
+      <div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/swarm">Swarm</a></p></div>
+    </template>
 
     <template x-if="!loading && take">
-      <article class="sv__take sv__take--ported">
-        <header class="sv__detail-head">
-          <p class="sv__eyebrow">swarm take · verification receipt</p>
-          <h1 class="sv__detail-title">
-            <a class="tk-who" :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`"
-               x-text="signer?.name || take.memberName"></a>
-          </h1>
-          <!-- A receipt with no filing time is not a receipt. receivedAt has
-               always been in the payload and was never rendered. -->
-          <p class="tk-filed" x-show="take.receivedAt">
-            Filed <span x-text="formatDate(take.receivedAt, 'short')"></span>
-            <span class="tk-filed__t" x-text="new Date(take.receivedAt).toISOString().slice(11,16) + ' UTC'"></span>
-            <span class="tk-filed__t" x-show="take.revision > 1" x-text="`revision ${take.revision}`"></span>
+      <article>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <a href="/swarm#members">Members</a><span aria-hidden="true">/</span>
+          <a :href="signerHref()" x-text="signer?.name || take.memberName"></a><span aria-hidden="true">/</span>
+          <span aria-current="page">Take</span>
+        </nav>
+
+        <header class="rr-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet">Verification receipt</p>
+          <!-- The signer's name is the page's subject, so it is the way to
+               their record. -->
+          <h1 class="sv__detail-title"><a class="tk-who" :href="signerHref()" x-text="signer?.name || take.memberName"></a></h1>
+          <!-- A receipt with no filing time is not a receipt. -->
+          <p class="rr-when" x-show="take.receivedAt">
+            <span>Filed <time :datetime="take.receivedAt" x-text="formatDate(take.receivedAt, 'short')"></time></span>
+            <span class="rr-mono" x-text="new Date(take.receivedAt).toISOString().slice(11,16) + ' UTC'"></span>
+            <template x-if="take.revision > 1"><span class="rr-mono" x-text="`revision ${take.revision}`"></span></template>
           </p>
-          <!-- SUPERSEDED, NOT REPLACED (issue #573, ADR D32). This URL still
-               resolves, still verifies, and still shows the exact bytes that
-               were signed at the time it says they were filed — because the
-               member's amendment is a NEW row at a NEW permalink, never an edit
-               of this one. A receipt shared as proof of participation must
-               never silently change meaning; saying a later revision exists,
-               and linking to it, is how that promise is kept without lying by
-               omission. -->
-          <p class="tk-superseded" x-show="supersededBy" x-cloak>
-            <span>Superseded — this member filed a later revision of this take in the same session.</span>
-            <a :href="`/swarm/takes/${supersededBy?.id}`">
-              Superseded by revision <span x-text="supersededBy?.revision"></span> →
-            </a>
-          </p>
-          <div class="sv__receipt-status">
-            <span class="sv__stance-badge" :style="stanceStyle(take.stance)">
-              <i :style="`background:${stanceColor(take.stance)}`"></i>
-              <span x-text="`${take.stance} · ${fmtPct(take.confidence)}`"></span>
+        </header>
+
+        <!-- The take in figures, as its card sets them: stance, confidence and
+             the signature's state (the seal's tip says what that state means). -->
+        <div class="rr-meta">
+          <template x-if="take.stance">
+            <span class="rr-meta__i">Stance
+              <span class="sv__stance-badge" :style="stanceStyle(take.stance)"><i :style="`background:${stanceColor(take.stance)}`"></i><span x-text="take.stance"></span></span>
             </span>
-            <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !take.verified && !take.archival, 'sv__vfy--arch': take.archival }"
+          </template>
+          <template x-if="Number.isFinite(Number(take.confidence))">
+            <span class="rr-meta__i">Confidence <b x-text="fmtPct(take.confidence)"></b></span>
+          </template>
+          <span class="rr-meta__i">Signature
+            <span class="sv__vfy rr-vfy" :class="{ 'sv__vfy--bad': !take.verified && !take.archival, 'sv__vfy--arch': take.archival }"
                   data-verified-badge :data-take-id="take.id" :data-verified-state="verifyLabel(take.verified, take.archival)"
                   tabindex="0" :aria-label="`${verifyLabel(take.verified, take.archival)}. ${verifyTip(take.verified, take.archival)}`">
               <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
                 <path :d="verifyPath(take.verified, take.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
               </svg>
-              <span class="sv__vfy-label" x-show="!take.verified" x-text="verifyLabel(take.verified, take.archival)"></span>
+              <span class="sv__vfy-label" x-text="verifyLabel(take.verified, take.archival)"></span>
               <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified, take.archival)"></span>
             </span>
+          </span>
+        </div>
+
+        <!-- SUPERSEDED, NOT REPLACED (issue #573, ADR D32). This URL still
+             resolves, still verifies, and still shows the exact bytes that were
+             signed when it says they were filed: an amendment is a NEW row at a
+             NEW permalink, never an edit of this one. Saying a later revision
+             exists, and linking to it, keeps a receipt shared as proof of
+             participation from silently changing meaning. -->
+        <template x-if="supersededBy">
+          <p class="rr-note tk-superseded">A later revision of this take was filed in the same session. <a class="rr-lnk" :href="`/swarm/takes/${supersededBy?.id}`" x-text="`Revision ${supersededBy?.revision}`"></a></p>
+        </template>
+
+        <!-- The signed text, whole: a receipt shows every byte it verifies.
+             The member's proposed weights sit beside it as the ring the
+             subject and session pages draw, in the same place: the mix on the
+             left, the words on the right. Hovering or focusing a sleeve names
+             it in the ring's centre. -->
+        <section class="rr-sec" id="take" aria-labelledby="take-h" x-data="takeCard()">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="take-h">The take</h2></div>
+          <div class="rr-split" :class="explorerRows().length ? 'rr-split--rule' : 'rr-split--one'">
+            <template x-if="explorerRows().length">
+              <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+                <div class="rr-mix">
+                  <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                    <span class="sv__wdonut-host" role="img" :aria-label="`Proposed weights: ${explorerLabel()}`"
+                          x-html="explorerSvg()"
+                          x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                    <figcaption>
+                      <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
+                      <span x-text="activeRow() ? activeRow().label : 'Proposed'"></span>
+                    </figcaption>
+                  </figure>
+                  <div class="rr-legend">
+                    <template x-for="r in explorerRows()" :key="r.key">
+                      <button type="button" class="rr-legend__row"
+                              :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                              :aria-pressed="pinned === r.key ? 'true' : 'false'"
+                              @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                        <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                        <span><span class="rr-legend__l" x-text="r.label"></span></span>
+                        <b x-text="fmtPctTrim(r.pct)"></b>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div>
+              <div class="sv__take-body rr-prose" x-html="linkified(take.body || '')"></div>
+              <template x-if="memoHref(take.memoUrl)">
+                <a class="rr-lnk rr-take__act" :href="memoHref(take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+              </template>
+            </div>
           </div>
-        </header>
+        </section>
 
-        <div class="sv__take-body" x-html="linkified(take.body || '')"></div>
+        <!-- A memo the member hosted with us, when it says more than the take:
+             the backend can store the take's own text as its memo (memoIsEcho). -->
+        <template x-if="memo && !memoIsEcho()">
+          <section class="rr-sec" id="memo" aria-labelledby="memo-h">
+            <div class="rr-sec__head"><h2 class="rr-sec__h" id="memo-h" x-text="memo?.title || 'Memo'"></h2></div>
+            <div class="sv__take-body rr-prose" x-html="linkified(memo?.body || '')"></div>
+          </section>
+        </template>
 
-        <section class="sv__panel">
-          <p class="sv__panel-label">Signer</p>
-          <dl class="sv__meta-grid">
-            <dt>member</dt><dd><a :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`" x-text="signer?.name || take.memberName"></a></dd>
-            <dt>member id</dt><dd x-text="signer?.id || take.memberId"></dd>
-            <dt>public key fingerprint</dt><dd class="sv__fingerprint" x-text="signer?.publicKeyFingerprint || 'unavailable'"></dd>
+        <!-- Who signed it: the identity the payload was signed over, and the key
+             it verifies against. -->
+        <section class="rr-sec" id="signer" aria-labelledby="signer-h">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="signer-h">Signer</h2></div>
+          <dl class="rr-dl">
+            <div><dt>Member</dt><dd><a :href="signerHref()" x-text="signer?.name || take.memberName"></a></dd></div>
+            <div><dt>Member id</dt><dd class="rr-mono" x-text="signer?.id || take.memberId"></dd></div>
+            <div><dt>Public key fingerprint</dt><dd class="rr-mono tk-fp" x-text="signer?.publicKeyFingerprint || 'Unavailable'"></dd></div>
           </dl>
         </section>
 
-        <section class="sv__panel" x-show="memo && !memoIsEcho()">
-          <p class="sv__panel-label">Memo</p>
-          <h2 x-text="memo?.title || 'Member memo'"></h2>
-          <div class="sv__take-body" x-html="linkified(memo?.body || '')"></div>
-        </section>
-
-        <!-- What a reader can do next. The page was a dead end: it verified a
-             take and then offered nowhere to go, not even back to the member
-             whose record it belongs to. -->
-        <p class="tk-next">
-          <a :href="`/swarm/members/${encodeURIComponent(signer?.handle || take.memberHandle || signer?.id || take.memberId)}`">This member's full record →</a>
-          <a href="/swarm">The swarm live →</a>
-          <a href="/docs/investment-swarm/how-it-works">How verification works →</a>
-        </p>
+        <!-- Where a reader goes next: the member's record, the swarm, and how
+             a signature is checked. -->
+        <nav class="rr-recnav tk-next" aria-label="Related">
+          <a :href="signerHref()" x-text="`${signer?.name || take.memberName}'s record`"></a>
+          <a href="/swarm">The swarm</a>
+          <a href="/docs/investment-swarm/how-it-works">How verification works</a>
+        </nav>
       </article>
     </template>
 
-    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, four
-         swarm surfaces, production's wording verbatim. -->
+    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, every swarm
+         surface, production's wording verbatim. -->
     <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
       <p class="rm-disclaimer__label">Disclaimer</p>
       <p class="rm-disclaimer__body" x-text="text"></p>
@@ -90,26 +156,11 @@
   </div>
 
   <style>
-    /* The signer's name is the page's subject, so it is the link — the only
-       route to their record used to be a small row inside the Signer table. */
-    .tk-who { color: inherit; text-decoration: none; border-bottom: 1px solid var(--color-border); }
-    .tk-who:hover { border-bottom-color: var(--color-accent); }
-    .tk-filed { margin: 0.5rem 0 0; font-family: var(--font-mono); font-size: 0.74rem;
-                letter-spacing: 0.06em; color: var(--color-text-muted); }
-    .tk-filed__t { color: var(--color-text-muted); margin-left: 0.4rem; }
-    .tk-superseded { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline;
-                     margin: 0.8rem 0 0; padding: 0.6rem 0.8rem;
-                     border: 1px solid var(--color-border); border-left-width: 3px;
-                     font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
-                     color: var(--color-text-muted); }
-    .tk-superseded a { color: var(--color-accent); text-decoration: none;
-                       border-bottom: 1px solid transparent; }
-    .tk-superseded a:hover { border-bottom-color: var(--color-accent); }
-    .tk-next { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.6rem 0 0;
-               padding-top: 1.1rem; border-top: 1px solid var(--color-border);
-               font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; }
-    .tk-next a { color: var(--color-accent); text-decoration: none;
-                 border-bottom: 1px solid transparent; }
-    .tk-next a:hover { border-bottom-color: var(--color-accent); }
+    .tk-who { color: inherit; text-decoration: none; }
+    .tk-superseded { margin: 1.25rem 0 0; font-size: 0.875rem; }
+    /* A fingerprint is one unbreakable token; on a phone it wraps anywhere
+       rather than widening the page. */
+    .tk-fp { overflow-wrap: anywhere; white-space: normal; }
+    .tk-next { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; }
   </style>
 </section>

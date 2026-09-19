@@ -470,17 +470,16 @@ describe("frontend route resolution", () => {
     expect(noNft.nftContracts).toEqual([]);
   });
 
-  // subject.html gates the "Structural notes" panel on `x-show="structuralNotes().length"`,
-  // not on the raw field's truthiness. camelSubject defaults a missing
-  // structural_notes field to `[]`, which is itself truthy in JS — a plain
-  // `x-show="subject.structuralNotes"` would render an empty panel on every
-  // subject that declares none. structuralNotesOf must gate on .length.
+  // The "Brief to the swarm" disclosure gates on .length, not on the raw
+  // field's truthiness. camelSubject defaults a missing structural_notes field
+  // to `[]`, which is itself truthy in JS — a plain gate would put an empty
+  // disclosure on every subject that declares none.
   test("structuralNotesOf gates on .length, not truthiness of the raw field", () => {
     expect(structuralNotesOf({ structuralNotes: [] })).toEqual([]);
-    expect(structuralNotesOf({ structuralNotes: [] }).length).toBe(0);
     expect(structuralNotesOf(camelSubject({ id: "robotmoney-vault" }))).toEqual([]);
 
-    // A real list of notes passes through, filtered of any falsy entries.
+    // A real list passes through, filtered of falsy entries — the count is the
+    // disclosure's own label ("· 4 notes"), so a blank must not be counted.
     expect(structuralNotesOf({ structuralNotes: ["a", "", "b", null] })).toEqual(["a", "b"]);
 
     // Older manifests carry a single paragraph instead of a list; that still
@@ -491,6 +490,26 @@ describe("frontend route resolution", () => {
 
     // No subject at all (still loading / not found) must not throw.
     expect(structuralNotesOf(null)).toEqual([]);
+  });
+
+  // The eyebrow names an operator only when it is not this house. Every Robot
+  // Money subject declares `operator: "robotmoney"`, so the slot rendered
+  // "· operator robotmoney" beneath a headline already reading ROBOT MONEY
+  // ALLOCATION. An outside operator is the whole point of the slot: peaq runs
+  // Woon Treasury, and that must keep printing.
+  test("operatorOf names an outside operator and suppresses this house", () => {
+    expect(helpers.operatorOf({ operator: "peaq" })).toBe("peaq");
+    expect(helpers.operatorOf({ operator: "robotmoney" })).toBe("");
+
+    // The field is free text an admin types, so the house is matched
+    // case- and whitespace-insensitively rather than by exact string.
+    expect(helpers.operatorOf({ operator: "RobotMoney" })).toBe("");
+    expect(helpers.operatorOf({ operator: "  robotmoney  " })).toBe("");
+
+    // A subject that declares no operator renders no separator, and no
+    // subject at all (still loading / not found) must not throw.
+    expect(helpers.operatorOf({})).toBe("");
+    expect(helpers.operatorOf(null)).toBe("");
   });
 
   // issue #359: camelTake used to derive `id` with a member-id fallback
@@ -510,6 +529,16 @@ describe("frontend route resolution", () => {
     const withRealId = camelTake({ id: "take-9f2c1e0a", member_id: "athena", stance: "bullish", confidence: 0.9 });
     expect(withRealId.permalinkId).toBe("take-9f2c1e0a");
     expect(takeHref(withRealId)).toBe("/swarm/takes/take-9f2c1e0a");
+  });
+
+  // #963: the public take DTO serves each take's proposed weights. camelTake
+  // dropped every field it did not name, so the session page's "Proposed
+  // weights" panel never rendered against the live API.
+  test("camelTake keeps a take's proposed weights, and reads none as null", () => {
+    const weights = [{ bucket: "conservative_defi_yield", weight: 0.93 }, { bucket: "agent_tokens", weight: 0.07 }];
+    expect(camelTake({ id: "t1", member_id: "athena", stance: "cautious", confidence: 0.7, weights }).weights).toEqual(weights);
+    expect(camelTake({ id: "t2", member_id: "athena", stance: "cautious", confidence: 0.7, weights: null }).weights).toBeNull();
+    expect(camelTake({ member_id: "athena", stance: "cautious", confidence: 0.7 }).weights).toBeNull();
   });
 
   // The member profile page (/swarm/members/:id) builds its rows from two
@@ -617,8 +646,8 @@ describe("frontend route resolution", () => {
 
     expect(helpers.verifyLabel(archival.verified, archival.archival)).toBe("archived");
     const tip = helpers.verifyTip(archival.verified, archival.archival);
-    expect(tip).toContain("never member-signed");
-    expect(tip).toContain("not a failed signature check");
+    expect(tip).toContain("filed before members signed");
+    expect(tip).toContain("pre-launch record");
     // The exact copy that must not reach these rows.
     expect(tip).not.toContain("did not check out");
     expect(tip).not.toContain("unattributed");

@@ -1,7 +1,7 @@
 // @ts-nocheck — buildless browser JS predating the root tsconfig's checkJs
 // coverage; issue #358 is the first thing to import this module from a
 import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
-import { timeAgo, absoluteUtc } from "../../lib/relative-time.js";
+import { timeAgo, timeLeft, absoluteUtc } from "../../lib/relative-time.js";
 import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
 import { operatorName } from "../../lib/operator.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
@@ -18,8 +18,29 @@ import { operatorName } from "../../lib/operator.js";
 import { api, ROUTES, path } from "../../lib/api.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
+import { sessionSummary } from "../../lib/session-summary.js";
+import { sessionTakes } from "../../lib/session-takes.js";
+import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
+import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
+  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
+import * as weightChange from "../../lib/weight-change.js";
+
+// What the shared take card (lib/take-card.js) reads off its host: the
+// signature seal's wording and mark, the receipt link, and the take body's
+// markdown. Taken from static-views' helpers rather than copied, so the seal
+// says the same thing on /swarm as on a session and a member's page.
+const takeCardHost = {
+  verifyState: helpers.verifyState,
+  verifyLabel: helpers.verifyLabel,
+  verifyTip: helpers.verifyTip,
+  verifyPath: helpers.verifyPath,
+  takeHref: helpers.takeHref,
+  escapeHtml: helpers.escapeHtml,
+  inlineMarks: helpers.inlineMarks,
+  linkified: helpers.linkified,
+};
 
 // Every seat proposes today. There is no role field on the projection yet, and
 // the second role (validator) ships with its first holder, so this is a named
@@ -27,8 +48,6 @@ import { CATEGORICAL } from "../../lib/chart-theme.js";
 // lands, this function reads it and nothing else moves. RM-97's roles table.
 // Bearish through bullish, so the spread bar always runs the same direction
 // no matter which stances a session actually produced.
-const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish"];
-
 const DEFAULT_ROLE = "proposer";
 
 // The sessions list is paginated and the page used to render only the first
@@ -61,7 +80,7 @@ const SESSIONS_SHOWN_STEP = 20;
 // vault address, and a paragraph of flywheel; this page has a chart and a
 // link for those. Nothing else here depends on the map.
 const ROW_BLURBS = {
-  "Robot Money Vault": "Depositor capital in the ERC-4626 vault on Base. One implementation of the allocation above.",
+  "Robot Money Vault": "Depositor capital in the ERC-4626 vault. One implementation of the Robot Money Allocation.",
   "RM Protocol Labs Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "RM Protocol Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "Robot Money protocol wallets": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
@@ -73,6 +92,10 @@ const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlu
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
   Alpine.data("swarmView", () => ({
+    ...sessionSummary,
+    ...sessionTakes(),
+    ...takeCardHost,
+    ...allocationFramework(),
     loading: true,
     error: null,
     members: [],
@@ -89,21 +112,21 @@ export function registerSwarmView(Alpine) {
     now: Date.now(),
     liveTimer: null,
     liveTakes: null,
-    // sessionId -> { loading, error, takes } for the cards a reader expanded.
-    openTakes: {},
     // The published allocation: four sleeves and the weight each is held to.
     // Guarded, and the panel degrades by omission — it keeps its claim and
     // drops its register rather than printing a dash where a weight would be.
-    allocationFw: null,
     destroy() {
       if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     },
     async load() {
       this.liveTimer = setInterval(() => { this.now = Date.now(); }, LIVE_TICK_MS);
       try {
+        // The shipped archive stands in when the API is not there (a
+        // backendless checkout), the same fallback every other swarm page
+        // takes, so the directory still reads.
         const [memberData, sessionData] = await Promise.all([
-          api.get(ROUTES.swarm.members),
-          this.loadAllSessions(),
+          api.get(ROUTES.swarm.members).catch(() => this.archiveMembers()),
+          this.loadAllSessions().catch(() => this.archiveSessions()),
         ]);
         this.members = memberData.members || [];
         this.rosterCap = memberData.rosterCap ?? null;
@@ -121,8 +144,10 @@ export function registerSwarmView(Alpine) {
         // the page could paint.
         await Promise.all([this.loadLiveTakes(), this.loadAllocation()]);
         this.loading = false;
-      } catch (e) {
-        this.error = e.message;
+      } catch (_) {
+        // Our sentence, not the exception's: a raw "Failed to fetch" is
+        // machine noise to a reader.
+        this.error = "The swarm could not be loaded.";
         this.loading = false;
       }
     },
@@ -137,6 +162,7 @@ export function registerSwarmView(Alpine) {
         if (cursor) query.cursor = cursor;
         const res = await api.get(ROUTES.swarm.sessions, query);
         rows.push(...(res.sessions || []));
+        if (res.nextSessionAt !== undefined) this.nextSessionAt = res.nextSessionAt;
         cursor = res.nextCursor || null;
         if (!cursor) return rows;
       }
@@ -145,10 +171,45 @@ export function registerSwarmView(Alpine) {
       this.sessionsTruncated = true;
       return rows;
     },
+    // ── the shipped archive, when there is no API ─────────────────────────
+    async archiveMembers() {
+      const members = await Promise.all(KNOWN_ARCHIVE_MEMBERS.map((id) => loadArchiveMember(id).catch(() => null)));
+      return { members: members.filter(Boolean), rosterCap: null, seatsAvailable: null };
+    },
+    // Every archived session, published, newest first, each carrying its takes
+    // as `takeRows` so a card's takes open without asking an API that is not
+    // there. The composite `${date}-${subjectId}` id is what sessionHref()
+    // turns back into the dated address.
+    async archiveSessions() {
+      const index = await fetch("/data/swarm/sessions/index.json").then((r) => (r.ok ? r.json() : { sessions: [] }));
+      const rows = await Promise.all((index.sessions || []).map(async (e) => {
+        const subjectId = e.subjectId ?? e.subject_id;
+        try {
+          const d = await loadArchiveSession(e.date, subjectId);
+          return {
+            ...d.session,
+            id: `${e.date}-${subjectId}`,
+            date: e.date,
+            subjectId,
+            subjectName: d.session?.subjectName || e.subjectName || e.subject_name || subjectId,
+            state: "published",
+            takes: (d.takes || []).length,
+            takeRows: d.takes || [],
+          };
+        } catch (_) { return null; }
+      }));
+      // Two subjects can convene on one date; the later one leads, as each row
+      // prints its time.
+      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
+        || String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+    },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
+      // The API answers null for a subject it does not hold, so the archive
+      // manifest is asked on a miss as well as on a failure.
       const rows = await Promise.all(
-        ids.map((id) => api.get(path(ROUTES.swarm.subject, { id })).catch(() => null)),
+        ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).catch(() => null))
+          || loadArchiveSubject(id).catch(() => null)),
       );
       const cache = {};
       ids.forEach((id, i) => { if (rows[i]) cache[id] = rows[i]; });
@@ -172,7 +233,134 @@ export function registerSwarmView(Alpine) {
     // move out of the vault's row. Measuring one contract's holdings against
     // the policy is the conflation this section now exists to undo.
     async loadAllocation() {
-      this.allocationFw = await api.get(ROUTES.dashboards.allocation).catch(() => null);
+      await this.loadAllocationFw();
+      // The brief the latest allocation session opened with: the only honest
+      // source of the target its recommendation is measured against, and of
+      // the asset names inside each sleeve.
+      const s = this.allocLatest();
+      if (s) this.allocBrief = await this.briefFor(s);
+    },
+    async briefFor(s) {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) {
+        const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
+        if (b && !b.error) return b;
+      }
+      return fetch(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    },
+
+    // ── the research record's pieces (RM-121) ────────────────────────────
+    // /swarm reads like the subject and session pages: a row of facts, the
+    // flagship allocation's latest recommendation as the explorable ring, the
+    // portfolios and the recommendation history as tables.
+    nextSessionAt: null,
+    allocBrief: null,
+    facts() {
+      const published = this.publishedSessions();
+      const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
+      const rows = [
+        { k: "Members", v: String(this.members.length) },
+        { k: "Subjects", v: String(this.sessionFilters().length) },
+        { k: "Sessions", v: String(published.length) },
+      ];
+      if (latest) rows.push({ k: "Latest session", v: this.formatDate(latest) });
+      // Dated as "Latest session" is, with the hour it convenes.
+      if (this.nextSessionAt) {
+        const at = absoluteUtc(this.nextSessionAt);
+        if (at) rows.push({ k: "Next session", v: `${this.formatDate(this.nextSessionAt)} ${at.slice(11)}` });
+      }
+      return rows;
+    },
+    // The newest published session on the allocation subject.
+    allocLatest() {
+      const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
+      return this.publishedSessions().filter((s) => s.subjectId === id)[0] || null;
+    },
+    // The target the latest allocation session is measured against: the one
+    // its brief handed over, else the published target when it was already in
+    // force that day, as the session page reads it.
+    allocReference() {
+      const s = this.allocLatest();
+      return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null)
+        || targetsInForce(this.allocationFw, s?.date);
+    },
+    // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
+    // subject and session pages.
+    hasBook() { return false; },
+    explorerSource() { return this.allocLatest(); },
+    explorerSvg() { return this.weightDonutSvg(this.allocLatest()); },
+    // At rest the centre names the ring and nothing more: a recommended mix
+    // is the whole allocation by definition, so "100%" says nothing.
+    explorerCenter() { return { value: "", label: "Recommended" }; },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    explorerRows() {
+      const s = this.allocLatest();
+      const rows = this.sessionWeights(s) || [];
+      const ref = this.allocReference();
+      const sleeveWeight = new Map(rows.map((r) => [normKeyOf(r.key), r.pct / 100]));
+      const within = new Map(withinBucketsFor(s?.swarmRecommendation, this.allocBrief, null, sleeveWeight).map((w) => [normKeyOf(w.bucket), w]));
+      return rows.map((r) => {
+        const was = ref ? (ref[r.key] ?? null) : null;
+        return {
+          key: r.key, label: r.label, hue: r.colour, pct: r.pct,
+          meta: "", action: "", rationale: "",
+          d: ref ? weightChange.weightDelta(r.pct, was) : null, was, basis: "target",
+          assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
+        };
+      });
+    },
+    // Only what the legend cannot show, as on the subject and session pages:
+    // that no sleeve moved. A count of moves is the legend's rows that carry one.
+    allocOutcome() {
+      if (!this.allocReference()) return "";
+      return this.explorerRows().some((r) => r.d != null && r.d !== 0) ? "" : "Target weights retained";
+    },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    // A portfolio's newest published session, its own and not a folded one.
+    portfolioLatest(p) {
+      return this.publishedSessions().find((s) => s.subjectId === p.id)
+        || this.publishedSessions().find((s) => this.parentFor(s.subjectId) === p.id) || null;
+    },
+    // A weights recommendation as its four figures, in the published order.
+    mixOf(s) { return this.sessionWeights(s) || []; },
+    // A weights row's moves against the target ITS OWN session was handed
+    // (the list carries it once #991 lands), else the published target when it
+    // was already in force that day. None without either.
+    movesOf(s) {
+      const ref = this.referenceOf(s);
+      if (!ref) return [];
+      return this.mixOf(s)
+        .map((r) => ({ key: r.key, label: r.label, d: weightChange.weightDelta(r.pct, ref[r.key] ?? null) }))
+        .filter((m) => m.d != null && m.d !== 0);
+    },
+    /** @param {any} s */
+    referenceOf(s) {
+      return (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null) || targetsInForce(this.allocationFw, s?.date);
+    },
+    // A history row's verdict, in one word: did the session change anything.
+    // What changed, and by how much, is its session page's to say; listing
+    // every sleeve or position here made a column of mixed figures and chips.
+    // Rebalance when a weights session moved a sleeve against the target it
+    // was handed, or a portfolio session changed a position; Hold when it
+    // moved nothing. Otherwise the row names the gap, quietly.
+    /** @param {any} s */
+    verdictOf(s) {
+      const rec = this.recommendation(s);
+      if (!rec) return { label: "No recommendation published", quiet: true };
+      if (rec.kind === "weights") {
+        if (!this.referenceOf(s)) return { label: "No target recorded", quiet: true };
+        return { label: this.movesOf(s).length ? "Rebalance" : "Hold", quiet: false };
+      }
+      if (this.rowActions(s).length) return { label: "Rebalance", quiet: false };
+      if (this.rowHeld(s).length) return { label: "Hold", quiet: false };
+      return { label: "No position calls", quiet: true };
+    },
+    takesOf(s) {
+      const n = this.takesCount(s);
+      return n ? `${n} ${n === 1 ? "take" : "takes"}` : "";
     },
 
     // ── the published allocation ─────────────────────────────────────────
@@ -190,52 +378,6 @@ export function registerSwarmView(Alpine) {
     // book that crossed their 99.5% coverage test would have silently sprouted
     // columns measuring a contract against a policy, inside the block built to
     // separate the two.
-    allocationTargets() {
-      const rows = this.allocationFw?.strategy;
-      if (!Array.isArray(rows) || !rows.length) return [];
-      return rows.map((r, i) => ({
-        // "Sleeve" is the published word for one of the four allocation rows;
-        // `buckets` stays the manifest's own field name and is not renamed.
-        label: r?.label || `Sleeve ${i + 1}`,
-        pct: Number.isFinite(Number(r?.targetPct)) ? Number(r.targetPct) : null,
-        hue: CATEGORICAL[i % CATEGORICAL.length],
-      }));
-    },
-    // Bar width, clamped to the scale. A framework whose weights do not sum to
-    // 100 draws tracks that do not fill; it is never normalised to its own
-    // sum, which would rescale an incomplete policy to look complete.
-    //
-    // null is not 0. A published zero gets an empty track and a muted figure;
-    // an absent target gets no track and an em dash. The two must not look
-    // alike, so the track is what separates them.
-    sleeveBar(t) {
-      const pct = Number(t?.pct);
-      if (t?.pct === null || !Number.isFinite(pct)) return null;
-      return Math.max(0, Math.min(100, pct));
-    },
-    allocationAsOf() {
-      const d = this.allocationFw?.asOf;
-      return d ? this.formatDate(d) : "";
-    },
-    // The note carries what the register cannot, and nothing it cannot back.
-    //
-    // "No session has changed these weights yet" is read from the code rather
-    // than from the feed: `allocation_framework` has exactly one writer, the
-    // seed, and this row has not moved since it was written. When a real
-    // writer lands, this sentence is the whole of the change.
-    allocationNote() {
-      if (!this.allocationFw) return "The published target could not be read.";
-      const zeros = this.allocationTargets().filter((t) => t.pct === 0).length;
-      const head = "No session has changed these weights yet.";
-      if (!zeros) return head;
-      // Counted, not written into the string. The framework is 95/5/0/0 today,
-      // and a hardcoded "two" becomes false the first time a weight is edited.
-      const word = ["", "one", "two", "three", "four"][zeros] || String(zeros);
-      return zeros === 1
-        ? `${head} The ${word} sleeve at zero is a target, not a gap.`
-        : `${head} The ${word} sleeves at zero are targets, not gaps.`;
-    },
-
     // ── the allocation's own sessions ────────────────────────────────────
     // The framework subject is not a portfolio row, but its sessions are in
     // the feed. The panel count reads the same published set the list does.
@@ -317,7 +459,7 @@ export function registerSwarmView(Alpine) {
       const n = this.liveTakes;
       const seats = this.members.length;
       if (n == null || !seats) return "";
-      return `${n}/${seats} takes in.`;
+      return `${n} of ${seats} takes filed`;
     },
     liveSubjectName() {
       const s = this.liveSession();
@@ -328,32 +470,13 @@ export function registerSwarmView(Alpine) {
     // Coarse on purpose: the window runs for hours, so a ticking second hand
     // would be precision this cadence does not have.
     liveRemaining() {
-      const s = this.liveSession();
       // A session with no deadline is open, but there is no countdown to show.
-      if (!s || !s.windowClosesAt) return "";
-      const ms = Date.parse(s.windowClosesAt) - this.now;
-      if (!Number.isFinite(ms)) return "";
-      if (ms <= 0) return "";
-      const mins = Math.floor(ms / 60000);
-      if (mins < 1) return "under a minute";
-      if (mins < 60) return `${mins} min`;
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      return m ? `${h}h ${m}m` : `${h}h`;
+      return timeLeft(this.liveSession()?.windowClosesAt, this.now);
     },
     liveClosesAbsolute() { return absoluteUtc(this.liveSession()?.windowClosesAt); },
     // "3 min ago" for a window that has already shut. Returns "" for one that
     // has not, so the open branch keeps the countdown and this one stays empty.
     liveClosedAgo() { return timeAgo(this.liveSession()?.windowClosesAt, this.now); },
-    // Link by SESSION ID. Two rows sharing a (date, subject) are two different
-    // sessions — a subject may convene more than once a day — and the dated URL
-    // resolves to the later of them, so linking by it would leave the earlier
-    // session unreachable and make the pair look like one page listed twice.
-    // The dated form remains the fallback for any row without an id (the static
-    // archive), and remains valid as a URL in its own right.
-    sessionHref(s) {
-      return s?.id ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${s.subjectId}`;
-    },
 
     // ── portfolios ───────────────────────────────────────────────────────
     // A framework subject has no portfolio to scrape: it IS the allocation
@@ -426,7 +549,7 @@ export function registerSwarmView(Alpine) {
       if (!n) return "";
       const chains = this.chainsOf(p.wallets);
       const noun = n === 1 ? "wallet" : "wallets";
-      return chains.length ? `${n} ${noun} on ${chains.join(", ")}` : `${n} ${noun}`;
+      return chains.length ? `${n} ${noun} on ${chains.map((c) => this.chainLabel(c)).join(", ")}` : `${n} ${noun}`;
     },
     blurbOf(p) { return rowBlurb(p); },
     // Counted rather than written. Stage 5 of this redesign turns three
@@ -436,7 +559,7 @@ export function registerSwarmView(Alpine) {
       const n = this.portfolios().length;
       const word = ["No", "One", "Two", "Three", "Four", "Five"][n] ?? String(n);
       const noun = n === 1 ? "portfolio" : "portfolios";
-      return `${word} ${noun}. One is reviewed per session, and each review ends in a verdict or a recommendation.`;
+      return `${word} ${noun}. Each session convenes on one, and a published session ends in a recommendation.`;
     },
     portfolios() {
       const map = new Map();
@@ -474,17 +597,6 @@ export function registerSwarmView(Alpine) {
     // `bucket_weights`. Sessions since the 2026-08-06 cutover carry
     // `position_actions` instead, so this returns null rather than inventing a
     // number, and the row says "no weight change" instead.
-    sessionWeights(s) {
-      const rec = s?.swarmRecommendation;
-      if (rec?.type !== "bucket_weights" || !rec.weights) return null;
-      const order = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
-      const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const by = {};
-      for (const [k, v] of Object.entries(rec.weights)) by[norm(k)] = Number(v) * 100;
-      const vals = order.map((k) => by[norm(k)]).filter((v) => Number.isFinite(v));
-      return vals.length ? vals.map((v) => Math.round(v)).join(" / ") : null;
-    },
-
     // ── sessions ─────────────────────────────────────────────────────────
     // Portfolio encoding + filter, identical in behaviour to the member
     // profile's track record — the roster is the same problem at larger scale
@@ -542,13 +654,12 @@ export function registerSwarmView(Alpine) {
 
     // ── members ──────────────────────────────────────────────────────────
     memberRole() { return DEFAULT_ROLE; },
-    seatsLabel() {
-      if (this.rosterCap == null) return `${this.members.length} seats`;
-      return `${this.members.length} of ${this.rosterCap} seats taken`;
-    },
+    // The seats beside the Apply button: how many are open, of how many. The
+    // members holding the rest are the facts row's count.
     openSeatsLabel() {
       if (this.seatsAvailable == null) return "";
       if (this.seatsAvailable <= 0) return "No seats open right now";
+      if (this.rosterCap != null) return `${this.seatsAvailable} of ${this.rosterCap} seats open`;
       return this.seatsAvailable === 1 ? "One seat open" : `${this.seatsAvailable} seats open`;
     },
     // House or external, from the operator. A member with none set gets
@@ -584,43 +695,10 @@ export function registerSwarmView(Alpine) {
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
     // ── what a session came out with ─────────────────────────────────────
-    // The spread as proportions, in a fixed direction. Unknown stances keep
-    // their count and sort last rather than being dropped: a stance this
-    // build does not know is still a take somebody signed.
-    stanceSpread(s) {
-      const st = s?.swarmRecommendation?.stances || {};
-      const n = (k) => Number(st[k]) || 0;
-      const keys = [...STANCE_ORDER.filter(n), ...Object.keys(st).filter((k) => !STANCE_ORDER.includes(k) && n(k))];
-      const total = keys.reduce((a, k) => a + n(k), 0);
-      return total ? keys.map((k) => ({ stance: k, n: n(k), pct: n(k) / total })) : [];
-    },
-    spreadLabel(s) {
-      const rows = this.stanceSpread(s);
-      return rows.length ? rows.map((r) => `${r.n} ${r.stance}`).join(", ") : "";
-    },
-    // The one-word answer. A tie is a real outcome, not a rounding problem, so
-    // it is reported rather than resolved into a winner.
-    lean(s) {
-      const rows = this.stanceSpread(s);
-      if (!rows.length) return null;
-      const max = Math.max(...rows.map((r) => r.n));
-      const top = rows.filter((r) => r.n === max);
-      return top.length > 1 ? { stance: null, label: "split" } : { stance: top[0].stance, label: top[0].stance };
-    },
-    leanStance(s) { return this.lean(s)?.stance || ""; },
-    leanLabel(s) { return this.lean(s)?.label || ""; },
-    leanBadgeStyle(s) {
-      const st = this.leanStance(s);
-      return st ? stanceStyle(st) : "";
-    },
-    leanDotStyle(s) {
-      const st = this.leanStance(s);
-      return st ? `background:${stanceColor(st)}` : "";
-    },
-    meanConfidenceText(s) {
-      const c = s?.swarmRecommendation?.meanConfidence;
-      return Number.isFinite(c) ? `${Math.round(Number(c) * 100)}% mean confidence` : "";
-    },
+    // stanceSpread / lean / quorum / recommendation come from
+    // lib/session-summary.js, spread into this component above. A subject
+    // profile lists the same sessions this page does and must not read them a
+    // second way.
     closedAgo(s) { return timeAgo(s?.windowClosesAt, this.now); },
     closedAbsolute(s) { return absoluteUtc(s?.windowClosesAt); },
     fmtPct(value) {
@@ -628,113 +706,6 @@ export function registerSwarmView(Alpine) {
       return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "";
     },
 
-    // What the session DECIDED. The card printed the synthesis paragraph here,
-    // which is the reasoning: five lines of it, identical in shape on every
-    // row, burying the one line a reader came for. Weights where the portfolio
-    // takes weights, the load-bearing actions otherwise, and the aggregator's
-    // own one-line rationale when a session carried neither.
-    recommendation(s) {
-      const rec = s?.swarmRecommendation;
-      if (!rec) return null;
-      if (rec.type === "bucket_weights") {
-        const w = this.sessionWeights(s);
-        return w ? { kind: "weights", text: w } : null;
-      }
-      const acts = (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
-      if (acts.length) return { kind: "actions", actions: acts.slice(0, 2), more: Math.max(0, acts.length - 2) };
-      return rec.rationale ? { kind: "text", text: rec.rationale } : null;
-    },
-
-    // ── takes, on demand ─────────────────────────────────────────────────
-    // Not preloaded: the list route carries counts but no bodies, and fetching
-    // every session's takes to render a list nobody has asked to see would be
-    // one request per card on every page load.
-    takesState(s) { return this.openTakes[s?.id] || null; },
-    async toggleTakes(s) {
-      const id = s?.id;
-      if (!id) return;
-      if (this.openTakes[id]) {
-        const { [id]: _drop, ...rest } = this.openTakes;
-        this.openTakes = rest;
-        return;
-      }
-      this.openTakes = { ...this.openTakes, [id]: { loading: true, error: "", takes: [] } };
-      try {
-        const d = await this.fetchSessionDetail(s);
-        const takes = (d?.takes || []).slice().sort((a, b) => Number(b?.confidence || 0) - Number(a?.confidence || 0));
-        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "", takes } };
-      } catch (_) {
-        this.openTakes = { ...this.openTakes, [id]: { loading: false, error: "These takes could not be loaded.", takes: [] } };
-      }
-    },
-    // By id first, because a portfolio may convene twice in a day and the
-    // dated form resolves to the later one. The dated form is the fallback for
-    // a row with no id, and for the static archive.
-    async fetchSessionDetail(s) {
-      if (s?.id) {
-        try {
-          const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
-          if (Array.isArray(d?.takes)) return d;
-        } catch (_) { /* fall through to the dated form */ }
-      }
-      return api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-    },
-    // One line, not the whole memo: the memo is a click away on the session.
-    //
-    // Take bodies are sectioned "**REGIME** / **ALLOCATION** / **SUBJECT**"
-    // bullet lists, and the regime section opens every take with the same
-    // read of the same market — expanding a session would print four rows
-    // that agree about the composite and say nothing about the portfolio.
-    // SUBJECT is the member's read of the thing actually under review, so
-    // that is the bullet the row carries when it exists.
-    takeLine(t) {
-      const raw = String(t?.body || "");
-      if (!raw.trim()) return "";
-      const sections = raw.split(/\n(?=\*\*)/);
-      const pick = sections.find((sec) => /^\*\*\s*SUBJECT/i.test(sec.trim())) || sections[0] || raw;
-      const bullets = pick
-        .replace(/^\*\*[^*]*\*\*/, "")
-        .split("\n")
-        .map((l) => l.replace(/^[-*\u2022]\s*/, "").replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      // Skip a bullet that only restates the row it sits in. These sections
-      // open with "<subject> through a <lens> lens: <stance> at <n>
-      // confidence", and the row already prints the stance and the figure —
-      // so the excerpt would spend its one line saying nothing new.
-      const stance = String(t?.stance || "").toLowerCase();
-      const clean = bullets.find((l) => {
-        const low = l.toLowerCase();
-        return !(stance && low.includes(stance) && low.includes("confidence"));
-      }) || bullets[0] || "";
-      return clean.length > 190 ? `${clean.slice(0, 187).trimEnd()}...` : clean;
-    },
-    // The public roster is status=active only, so a member deactivated after
-    // this session is missing from `members` and we still print the id rather
-    // than drop them. A link to that id still resolves: the member route
-    // matches handle or id.
-    memberById(id) {
-      return this.members.find((m) => m.id === id || m.handle === id) || null;
-    },
-    memberHref(id) {
-      const m = this.memberById(id);
-      return `/swarm/members/${encodeURIComponent(m?.handle || id)}`;
-    },
-    absentOf(s) {
-      return (s?.swarmRecommendation?.absent || []).filter(Boolean).map((id) => ({
-        id,
-        name: this.memberById(id)?.name || id,
-        href: this.memberHref(id),
-      }));
-    },
-    quorumText(s) {
-      const q = s.swarmRecommendation?.quorum;
-      return q ? `${q.submitted} of ${q.active} took part` : "";
-    },
-    takesCount(s) {
-      const q = s?.swarmRecommendation?.quorum;
-      const n = Number(q?.submitted);
-      return Number.isFinite(n) ? n : this.stanceSpread(s).reduce((a, r) => a + r.n, 0);
-    },
     // One ramp, in lib/stance.js. This used to hold a second copy of the five
     // colours, so the same stance could be painted differently here than on a
     // member profile.
