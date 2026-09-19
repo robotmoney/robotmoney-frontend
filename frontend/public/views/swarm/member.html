@@ -127,7 +127,10 @@
                         </button>
                       </template>
                       <template x-if="memoHref(row.take.memoUrl)">
-                        <a class="rr-lnk sv__memo-link" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                      </template>
+                      <template x-if="takeHref(row.take)">
+                        <a class="rr-lnk rr-take__act" :href="takeHref(row.take)" data-take-permalink>Verification receipt</a>
                       </template>
                     </div>
                     <template x-if="weightRows(row.take).length">
@@ -244,7 +247,10 @@
                     </button>
                   </template>
                   <template x-if="memoHref(row.take.memoUrl)">
-                    <a class="rr-lnk sv__memo-link" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                    <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                  </template>
+                  <template x-if="takeHref(row.take)">
+                    <a class="rr-lnk rr-take__act" :href="takeHref(row.take)" data-take-permalink>Verification receipt</a>
                   </template>
                 </div>
                 <template x-if="weightRows(row.take).length">

@@ -535,7 +535,12 @@
                       <!-- A memo the member attached to the take. The shared card
                            dropped it; a live take can carry one. -->
                       <template x-if="memoHref(t.memoUrl)">
-                        <a class="rr-lnk sv__memo-link" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                      </template>
+                      <!-- The take's verification receipt, by name: the seal links
+                           there too, but an icon does not read as a way in. -->
+                      <template x-if="takeHref(t)">
+                        <a class="rr-lnk rr-take__act" :href="takeHref(t)" data-take-permalink>Verification receipt</a>
                       </template>
                     </div>
                     <template x-if="weightRows(t).length">

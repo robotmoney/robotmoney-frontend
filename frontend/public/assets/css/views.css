@@ -1682,11 +1682,11 @@ table.alp__tbl--led th:first-child { width: 40%; }
    around it, as .rr-meta__lnk has. */
 .rr-more::before { content: ""; position: absolute; inset: -0.625rem -0.5rem; }
 .rr-more:hover { border-bottom-color: var(--color-link); }
-/* A take's memo link is the card's other action, so it reads as "Read full
-   take" does, beside it rather than run into it. (0,2,0) over the legacy
-   mono-caps .sv__memo-link. */
-.rr-take .sv__memo-link { display: inline-block; margin-top: 0.75rem; font-family: inherit; font-size: 0.875rem; text-transform: none; letter-spacing: 0; }
-.rr-take .rr-more ~ .sv__memo-link { margin-left: 1.5rem; }
+/* A take's other actions (its memo, its verification receipt) read as "Read
+   full take" does, in a row beside it rather than run into it. (0,2,0) over
+   the legacy mono-caps .sv__memo-link. */
+.rr-take .rr-take__act { display: inline-block; margin-top: 0.75rem; font-family: inherit; font-size: 0.875rem; text-transform: none; letter-spacing: 0; }
+.rr-take .rr-more ~ .rr-take__act, .rr-take .rr-take__act ~ .rr-take__act { margin-left: 1.5rem; }
 @media (prefers-reduced-motion: reduce) {
   .rr-disc__anim, .rr-disc__btn::after { transition: none; }
 }
