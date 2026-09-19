@@ -543,14 +543,6 @@
           <div class="rr-split">
             <template x-if="takes.length"><div><p class="rr-k rr-sub" x-text="signatureHeadline()"></p></div></template>
             <dl class="rr-dl">
-              <template x-if="receiptApplies()">
-                <div><dt>Consensus receipt</dt><dd>
-                  <span x-text="receiptStatus"></span>
-                  <template x-if="receiptStatus === 'Verified' || receiptStatus === 'Not verified'">
-                    <span> · <a :href="receiptHref()" target="_blank" rel="noopener">Read receipt ↗</a></span>
-                  </template>
-                </dd></div>
-              </template>
               <template x-if="(session.generatedAt || session.generated_at) && generatedLabel() !== sessionTime()">
                 <div><dt>Record generated</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
               </template>

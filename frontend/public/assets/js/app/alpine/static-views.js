@@ -2368,12 +2368,8 @@ export function registerStaticViews(Alpine) {
     members: [],
     // subject id → name, for the brief's recent-session refs, which carry ids.
     subjectNames: {},
-    // The consensus receipt's state, read after the page renders: it is
-    // evidence about the record, not part of it, so a slow or failed read
-    // never holds the session back.
-    receiptStatus: "Checking…",
     // The sessions either side of this one on the same subject, for the
-    // record's own prev/next. Filled after render, like the receipt.
+    // record's own prev/next. Filled after render.
     neighbours: { older: null, newer: null },
     // A 404, as opposed to a load that failed: retrying cannot find a session
     // that does not exist, so the page offers no retry for it.
@@ -3022,25 +3018,18 @@ export function registerStaticViews(Alpine) {
     },
 
     // ── the research record (RM-121) ────────────────────────────────────────
-    // A consensus receipt carries the four sleeve weights, so only a published
-    // weights session can have one. Asking for any other session's receipt
-    // was a 404 on every portfolio page, and the browser logs a failed request
-    // even when the page handles it.
-    receiptApplies() {
-      const s = this.session;
-      return this.source === "api" && !!s?.id && s.state === "published"
-        && s.swarmRecommendation?.type === "bucket_weights";
-    },
-    // Evidence read after render: the consensus receipt (see receiptApplies)
-    // and this session's neighbours on its subject. Neither blocks the page.
+    // Evidence read after render: this session's neighbours on its subject. It
+    // does not block the page.
+    //
+    // NO CONSENSUS RECEIPT PROBE. The page used to ask for the session's
+    // receipt to print its status. No route says whether a receipt exists
+    // without answering 404, and a published weights session has none until it
+    // is published, so every such page logged a failed request (the full-stack
+    // smoke fails on any). The status belongs on the session payload; until the
+    // API carries it, the page does not guess.
     async loadEvidence() {
       const s = this.session;
       if (!s) return;
-      if (this.receiptApplies()) {
-        api.get(path(ROUTES.swarm.sessionConsensusReceipt, { id: s.id }))
-          .then((r) => { this.receiptStatus = r?.verified === true ? "Verified" : "Not verified"; })
-          .catch((e) => { this.receiptStatus = e?.status === 404 ? "Not published" : "Unavailable"; });
-      }
       subjectSessionIndex(s.subjectId).then((list) => {
         const at = list.findIndex((x) => (s.id && x.id === s.id) || (!String(x.id).match(/^[0-9a-f-]{36}$/) && x.date === s.date));
         if (at < 0) return;
@@ -3079,9 +3068,6 @@ export function registerStaticViews(Alpine) {
       const s = this.session;
       if (this.source === "api" && s?.id) return `${ROUTES.swarm.brief}?session=${encodeURIComponent(s.id)}`;
       return `/data/swarm/briefs/${s?.date}-${s?.subjectId}.json`;
-    },
-    receiptHref() {
-      return this.session?.id ? path(ROUTES.swarm.sessionConsensusReceipt, { id: this.session.id }) : "#";
     },
     hasRecommendationSection() {
       return this.hasOutcome() || !!this.recommendationRationale();

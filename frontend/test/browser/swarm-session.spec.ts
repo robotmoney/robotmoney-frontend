@@ -638,29 +638,26 @@ test("a live submission whose signature failed still gets the failed-check wordi
   await expect(badge).not.toHaveClass(/sv__vfy--arch/);
 });
 
-// A consensus receipt carries the four sleeve weights, so only a published
-// weights session has one. The page asked every live session for its receipt,
-// and a portfolio session's 404 surfaced as a console error that failed the
-// full-stack smoke; the Evidence row then read "Not published" for a receipt
-// that could never exist.
-test("only a published weights session asks for its consensus receipt, and only it shows the row", async ({ page }) => {
+// The session page never probes for a consensus receipt. No route says
+// whether a receipt exists without answering 404, and a published weights
+// session has none until it is published; the probe logged a failed request on
+// every such page, and the full-stack smoke fails on any. The status belongs on
+// the session payload, and the page shows none until the API carries it.
+test("a session page asks for no consensus receipt, whatever the session", async ({ page }) => {
   const receiptAsks: string[] = [];
-  page.on("request", (req) => { if (new URL(req.url()).pathname.endsWith("/consensus-receipt")) receiptAsks.push(req.url()); });
+  page.on("request", (req) => { if (new URL(req.url()).pathname.includes("/consensus-receipt")) receiptAsks.push(req.url()); });
 
   await mockSessionApi(page, { session: positionSession("2026-06-26", "woon", "Woon Treasury"), allocation: ALLOCATION });
   await page.goto("/swarm/2026-06-26/woon");
   await expect(page.locator(".rr-take").first()).toBeVisible();
-  await expect(page.locator("#evidence .rr-dl dt").filter({ hasText: "Consensus receipt" })).toHaveCount(0);
-  expect(receiptAsks).toEqual([]);
 
   await page.unrouteAll({ behavior: "ignoreErrors" });
   await mockSessionApi(page, { session: bucketSession("2026-06-26", { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 }), allocation: ALLOCATION });
   await page.goto("/swarm/2026-06-26/robotmoney-allocation");
-  const row = page.locator("#evidence .rr-dl > div").filter({ has: page.locator("dt", { hasText: "Consensus receipt" }) });
-  await expect(row).toHaveCount(1);
-  // The stub answers 404: a weights session whose receipt is not out yet.
-  await expect(row.locator("dd")).toContainText("Not published");
-  expect(receiptAsks).toHaveLength(1);
+  await expect(page.locator("#evidence")).toBeVisible();
+
+  expect(receiptAsks).toEqual([]);
+  await expect(page.locator("#evidence .rr-dl dt").filter({ hasText: "Consensus receipt" })).toHaveCount(0);
 });
 
 // A member can attach a memo to its take. The shared take card (RM-121)
