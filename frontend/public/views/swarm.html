@@ -100,6 +100,9 @@
                     <td class="q" x-text="operatorLabel(m) || '—'"></td>
                   </tr>
                 </template>
+                <template x-if="!members.length">
+                  <tr><td class="rr-table__empty" colspan="3"><span class="rr-empty__t">No members yet</span></td></tr>
+                </template>
               </tbody>
             </table>
           </div>
@@ -218,19 +221,19 @@
               </div>
             </div>
           </template>
-          <template x-if="!allocLatest()">
-            <p class="rr-note" style="margin-top:0">No recommendation published</p>
-          </template>
-          <template x-if="allocLatest() && !mixOf(allocLatest()).length">
-            <p class="rr-note" style="margin-top:0" x-text="`No recommendation published · ${formatDate(allocLatest().date)}`"></p>
+          <!-- Empty, the ring is drawn as its bare track with the fact inside. -->
+          <template x-if="!allocLatest() || !mixOf(allocLatest()).length">
+            <figure class="rr-ring rr-ring--empty">
+              <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+              <figcaption><span class="rr-empty__t" x-text="allocLatest() ? `No weights published · ${formatDate(allocLatest().date)}` : 'No recommendation yet'"></span></figcaption>
+            </figure>
           </template>
         </section>
 
         <!-- THE BOOKS. One row per portfolio: what it is and how its latest
-             review came out. Built from published sessions, so it is empty only
-             when nothing is published, which the facts row and the history
-             already say: absent then, rather than a heading over nothing. -->
-        <template x-if="portfolios().length"><section class="rr-sec" id="portfolios" aria-labelledby="port-h">
+             review came out. Built from published sessions, so it is empty
+             until one is published, and says so in its one row. -->
+        <section class="rr-sec" id="portfolios" aria-labelledby="port-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="port-h">Portfolios</h2>
           </div>
@@ -261,10 +264,13 @@
                     <td class="q"><template x-if="portfolioLatest(p)"><a class="rr-lnk" :href="sessionHref(portfolioLatest(p))" x-text="formatDate(p.latest)"></a></template></td>
                   </tr>
                 </template>
+                <template x-if="!portfolios().length">
+                  <tr><td class="rr-table__empty" colspan="4"><span class="rr-empty__t">No portfolio reviewed yet</span></td></tr>
+                </template>
               </tbody>
             </table>
           </div>
-        </section></template>
+        </section>
 
         <!-- THE RECOMMENDATION HISTORY, across every subject: the same row a
              subject page lists, with the subject named. The Subject column
@@ -290,42 +296,40 @@
               </button>
             </template>
           </div>
-          <template x-if="publishedSessions().length === 0">
-            <p class="sv__empty">No published session yet.</p>
-          </template>
-          <template x-if="publishedSessions().length">
-            <div class="rr-tablewrap">
-              <table class="rr-table rr-hist rr-stack">
-                <thead>
-                  <tr><th scope="col">Session</th><th scope="col" x-show="!subjectFilter">Subject</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
-                </thead>
-                <tbody>
-                  <!-- Keyed on the session id: a subject may convene more than
-                       once a day, and Alpine renders nothing for a duplicate. -->
-                  <template x-for="s in visibleSessions()" :key="s.id">
-                    <tr>
-                      <th scope="row">
-                        <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
-                        <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
-                      </th>
-                      <td class="rr-hist__subj" x-show="!subjectFilter"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(s.subjectId || '')}`" x-text="sessionSubjectName(s)"></a></td>
-                      <td>
-                        <template x-if="lean(s)">
-                          <span class="sv__stance-badge" :style="leanBadgeStyle(s)"><i x-show="leanStance(s)" :style="leanDotStyle(s)"></i><span x-text="leanLabel(s)"></span></span>
-                        </template>
-                        <template x-if="!lean(s)"><span>—</span></template>
-                      </td>
-                      <!-- One word per session: whether it changed anything.
-                           The session page has what changed and by how much. -->
-                      <td class="rr-verdict">
-                        <span :class="verdictOf(s).quiet ? 'rr-note' : 'rr-verdict__l'" x-text="verdictOf(s).label"></span>
-                      </td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
-            </div>
-          </template>
+          <div class="rr-tablewrap">
+            <table class="rr-table rr-hist rr-stack">
+              <thead>
+                <tr><th scope="col">Session</th><th scope="col" x-show="!subjectFilter">Subject</th><th scope="col">Consensus</th><th scope="col">Recommendation</th></tr>
+              </thead>
+              <tbody>
+                <!-- Keyed on the session id: a subject may convene more than
+                     once a day, and Alpine renders nothing for a duplicate. -->
+                <template x-for="s in visibleSessions()" :key="s.id">
+                  <tr>
+                    <th scope="row">
+                      <a class="rr-lnk" :href="sessionHref(s)" x-text="formatDate(s.date, 'short')"></a>
+                      <small x-text="[rowTime(s), takesOf(s)].filter(Boolean).join(' · ')"></small>
+                    </th>
+                    <td class="rr-hist__subj" x-show="!subjectFilter"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(s.subjectId || '')}`" x-text="sessionSubjectName(s)"></a></td>
+                    <td>
+                      <template x-if="lean(s)">
+                        <span class="sv__stance-badge" :style="leanBadgeStyle(s)"><i x-show="leanStance(s)" :style="leanDotStyle(s)"></i><span x-text="leanLabel(s)"></span></span>
+                      </template>
+                      <template x-if="!lean(s)"><span>—</span></template>
+                    </td>
+                    <!-- One word per session: whether it changed anything.
+                         The session page has what changed and by how much. -->
+                    <td class="rr-verdict">
+                      <span :class="verdictOf(s).quiet ? 'rr-note' : 'rr-verdict__l'" x-text="verdictOf(s).label"></span>
+                    </td>
+                  </tr>
+                </template>
+                <template x-if="!publishedSessions().length">
+                  <tr><td class="rr-table__empty" colspan="4"><span class="rr-empty__t">No session published yet</span></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
           <!-- The one count the list cannot give: how far into it the reader
                is, as the subject page's pager states it. -->
           <template x-if="hasMore()">

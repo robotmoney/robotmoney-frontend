@@ -241,29 +241,40 @@
             </div>
           </section>
         </template>
-        <!-- The same section when a published session drew nothing in it, so
-             the page says what every history row linking here says. Before
-             publication the phase beside the date says it. -->
-        <template x-if="!hasRecommendationSection() && phaseOf(session)?.key === 'published'">
+        <!-- The same section when there is nothing to draw in it: before
+             publication, or a published session that produced no
+             recommendation, the ring's bare track with the fact inside. A
+             published portfolio session that moved nothing says so, as every
+             history row linking here does. -->
+        <template x-if="!hasRecommendationSection()">
           <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
-            <p class="rr-note" style="margin-top:0" x-text="session.swarmRecommendation ? 'No position calls published' : 'No recommendation published'"></p>
+            <template x-if="phaseOf(session)?.key === 'published' && session.swarmRecommendation">
+              <p class="rr-note" style="margin-top:0">No position calls published</p>
+            </template>
+            <template x-if="phaseOf(session)?.key !== 'published' || !session.swarmRecommendation">
+              <figure class="rr-ring rr-ring--empty">
+                <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+                <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key === 'published' ? 'No recommendation published' : 'Not published yet'"></span></figcaption>
+              </figure>
+            </template>
           </section>
         </template>
 
         <!-- The book this session reviewed, when the recommendation above did
-             not already draw it. A framework subject has none. -->
-        <template x-if="snapshot && !hasBook()">
+             not already draw it. A framework subject has none; a portfolio
+             with no reading for this session keeps the table, empty. -->
+        <template x-if="(snapshot && !hasBook()) || (!snapshot && subject && !isFramework())">
           <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
-              <span class="rr-sec__aside" x-text="[fmtUsd(snapshot?.totalValueUsd), bookDate()].filter(Boolean).join(' · ')"></span>
+              <template x-if="snapshot"><span class="rr-sec__aside" x-text="[fmtUsd(snapshot?.totalValueUsd), bookDate()].filter(Boolean).join(' · ')"></span></template>
             </div>
             <!-- The subject page's positions table, every position, largest
                  first: the same book reads the same on both pages. -->
             <div class="rr-tablewrap rr-positions">
               <table class="rr-table rr-table--compact">
-                <caption class="rr-sr" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}`"></caption>
+                <caption class="rr-sr" x-text="snapshot ? `Positions on ${formatDate(snapshot?.date, 'short')}` : 'Positions'"></caption>
                 <thead>
                   <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
                 </thead>
@@ -277,6 +288,9 @@
                       <td class="q" x-text="fmtUsd(p.value_usd)"></td>
                       <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${holdingColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
                     </tr>
+                  </template>
+                  <template x-if="!positionRows().length">
+                    <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="snapshot ? 'No positions' : 'No holdings read'"></span></td></tr>
                   </template>
                 </tbody>
               </table>
@@ -424,7 +438,14 @@
           </section>
         </template>
 
-        <!-- TAKES. How the room voted, then each take, led by its call. -->
+        <!-- TAKES. How the room voted, then each take, led by its call. None
+             filed yet: the vote chart's frame with the fact inside. -->
+        <template x-if="!takes.length">
+          <section class="rr-sec sv__takes-section" id="takes" aria-labelledby="takes-h">
+            <div class="rr-sec__head"><h2 class="rr-sec__h" id="takes-h">Member takes</h2></div>
+            <div class="rr-empty rr-empty--chart"><p class="rr-empty__t">No takes filed yet</p></div>
+          </section>
+        </template>
         <template x-if="takes.length">
           <section class="rr-sec sv__takes-section" id="takes" aria-labelledby="takes-h">
             <div class="rr-sec__head">

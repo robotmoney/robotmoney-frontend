@@ -2128,6 +2128,7 @@ a.sv__vfy { text-decoration: none; }
   .rr-stack tbody td:nth-of-type(n+2) { grid-column: 1 / -1; }
   .rr-stack--full tbody tr > * { grid-column: 1 / -1; }
   .rr-stack--full tbody td.q { display: block; text-align: left; }
+  .rr-stack tbody td.rr-table__empty { grid-column: 1 / -1; padding: 1.5rem 0; text-align: center; }
   .rr-ports tbody th { width: auto; }
 }
 
@@ -2139,8 +2140,19 @@ a.sv__vfy { text-decoration: none; }
 .rr-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
 .rr-tags li { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light); font-family: var(--font-mono);
   font-size: 0.625rem; letter-spacing: 0.04em; color: var(--color-text-soft); }
-.rr-empty { padding: 1rem 0; }
-.rr-empty .rr-lnk { display: inline-block; margin-top: 0.5rem; }
+/* EMPTY STATES (RM-121). One pattern for every chart and table: the frame it
+   would fill stays, and one line in it states what is not there yet. A table
+   keeps its head and gets one row; a ring is drawn as its bare track with the
+   line in its centre; a chart or a list of cards keeps a frame of its size. */
+.rr-empty__t { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.6; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--color-text-muted); }
+.rr-empty { display: grid; place-content: center; justify-items: center; gap: 0.75rem; min-height: 7rem; padding: 1.5rem;
+  border: 1px solid var(--color-border); text-align: center; }
+.rr-empty--chart { min-height: 16rem; }
+.rr-table td.rr-table__empty { padding: 2.25rem 0.625rem; text-align: center; }
+.rr-ring--empty { width: 11.5rem; }
+.rr-ring--empty .sv__wdonut { display: block; width: 11.5rem; height: 11.5rem; }
+.rr-ring--empty figcaption { padding: 0 2.25rem; }
 @media (max-width: 560px) {
   .rr-profile { flex-direction: column; gap: 0.75rem; }
   .rr-profile__mark { width: 3.5rem; height: 3.5rem; }

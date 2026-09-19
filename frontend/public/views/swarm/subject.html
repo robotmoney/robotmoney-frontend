@@ -69,7 +69,17 @@
 
         <!-- THE LATEST RECOMMENDATION. The mix (or the actions) on the
              left; what it proposes and why on the right, and the one prominent
-             way into the session. -->
+             way into the session. Before the first session, the ring's bare
+             track with the fact inside. -->
+        <template x-if="!latest()">
+          <section class="rr-sec" id="latest" aria-labelledby="latest-h">
+            <div class="rr-sec__head"><h2 class="rr-sec__h" id="latest-h">Latest recommendation</h2></div>
+            <figure class="rr-ring rr-ring--empty">
+              <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+              <figcaption><span class="rr-empty__t">No recommendation yet</span></figcaption>
+            </figure>
+          </section>
+        </template>
         <template x-if="latest()">
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
@@ -288,29 +298,38 @@
                  opens with a label like the Read from table beside the figure,
                  which is why .rr-positions wraps the scroller rather than
                  being it. -->
-            <template x-if="positionRows().length">
-              <div class="rr-positions">
-                <p class="rr-k rr-sub" x-text="`Positions on ${formatDate(snapshot?.date, 'short')}`"></p>
-                <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
-                  <thead>
-                    <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
-                      <tr>
-                        <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
-                        <td x-text="chainLabel(p.chain)"></td>
-                        <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
-                        <td class="q" x-text="fmtPrice(p.price_usd)"></td>
-                        <td class="q" x-text="fmtUsd(p.value_usd)"></td>
-                        <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table></div>
-              </div>
-            </template>
+            <div class="rr-positions">
+              <p class="rr-k rr-sub" x-text="snapshot ? `Positions on ${formatDate(snapshot?.date, 'short')}` : 'Positions'"></p>
+              <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
+                <thead>
+                  <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
+                    <tr>
+                      <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
+                      <td x-text="chainLabel(p.chain)"></td>
+                      <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
+                      <td class="q" x-text="fmtPrice(p.price_usd)"></td>
+                      <td class="q" x-text="fmtUsd(p.value_usd)"></td>
+                      <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
+                    </tr>
+                  </template>
+                  <template x-if="!positionRows().length">
+                    <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="snapshot ? 'No positions' : 'No holdings read yet'"></span></td></tr>
+                  </template>
+                </tbody>
+              </table></div>
+            </div>
 
+            <!-- A line needs two readings: with one, the chart's frame says so.
+                 With none, the positions table above already has. -->
+            <template x-if="!chartModel() && snapshot">
+              <figure class="rr-area" style="margin-top:2.25rem">
+                <figcaption class="rr-area__head"><p class="rr-k">Share of the book by position</p></figcaption>
+                <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
+              </figure>
+            </template>
             <template x-if="chartModel()">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head">
@@ -386,14 +405,7 @@
             </template>
           </div>
 
-          <template x-if="!sessions.length && !historyQuery">
-            <p class="sv__empty">No published session yet.</p>
-          </template>
-          <template x-if="!sessions.length && historyQuery">
-            <p class="sv__empty">No sessions match</p>
-          </template>
-
-          <template x-if="sessions.length && isWeightsSubject()">
+          <template x-if="isWeightsSubject()">
             <div class="rr-tablewrap rr-tablewrap--tips">
               <table class="rr-table sp-weights" :style="`--sleeves:${sleeveColumns().length}`">
                 <thead>
@@ -425,12 +437,15 @@
                       </template>
                     </tr>
                   </template>
+                  <template x-if="!sessions.length">
+                    <tr><td class="rr-table__empty" :colspan="sleeveColumns().length + 1"><span class="rr-empty__t" x-text="historyEmptyLabel()"></span></td></tr>
+                  </template>
                 </tbody>
               </table>
             </div>
           </template>
 
-          <template x-if="sessions.length && !isWeightsSubject()">
+          <template x-if="!isWeightsSubject()">
             <div class="rr-tablewrap">
               <table class="rr-table rr-stack" style="min-width:36rem">
                 <thead>
@@ -467,6 +482,9 @@
                         <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span class="rr-note" style="margin:0">No position calls</span></template>
                       </td>
                     </tr>
+                  </template>
+                  <template x-if="!sessions.length">
+                    <tr><td class="rr-table__empty" colspan="3"><span class="rr-empty__t" x-text="historyEmptyLabel()"></span></td></tr>
                   </template>
                 </tbody>
               </table>

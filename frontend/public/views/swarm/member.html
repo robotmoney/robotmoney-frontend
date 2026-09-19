@@ -173,19 +173,13 @@
               </template>
             </div>
           </div>
-          <!-- A brand-new member lands here from onboarding: name the gap and
-               stop. Where takes land and how they verify is layout and backend. -->
-          <template x-if="recentTakes().length === 0 && inProgressTakes().length === 0">
-            <div class="rr-empty mp-empty">
-              <p class="rr-k">Awaiting first take</p>
-              <a class="rr-lnk" href="/swarm">See the swarm</a>
-            </div>
+          <!-- A brand-new member lands here from onboarding: the record's frame
+               with the gap named, as every empty list and chart states one. -->
+          <template x-if="recentTakes().length === 0">
+            <div class="rr-empty mp-empty"><p class="rr-empty__t" x-text="inProgressTakes().length ? 'No take published yet' : 'No takes filed yet'"></p></div>
           </template>
-          <template x-if="recentTakes().length === 0 && inProgressTakes().length > 0">
-            <p class="rr-note sv__empty">No published takes yet.</p>
-          </template>
-          <template x-if="subject && visibleTakes().length === 0">
-            <p class="rr-note sv__empty">No published takes for this subject yet.</p>
+          <template x-if="recentTakes().length > 0 && subject && visibleTakes().length === 0">
+            <div class="rr-empty"><p class="rr-empty__t">No take published on this subject yet</p></div>
           </template>
           <div class="rr-takes">
             <!-- Keyed on the session AND the take: an archived take has no id of

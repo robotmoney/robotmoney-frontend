@@ -1572,8 +1572,12 @@ export function registerStaticViews(Alpine) {
     // A subject whose sessions recommend sleeve weights reads as a weights
     // history; any other reads as a verdict history.
     isWeightsSubject() {
-      return this.isFramework() || this.sessions.some((r) => r?.swarmRecommendation?.type === "bucket_weights");
+      return this.isFramework() || this.subject?.recommendationType === "bucket_weights"
+        || this.sessions.some((r) => r?.swarmRecommendation?.type === "bucket_weights");
     },
+    // The history's one row when it has none: before the first session, or a
+    // search that matched nothing.
+    historyEmptyLabel() { return this.historyQuery ? "No session matches" : "No session published yet"; },
     // A row's recommended weights in column order, percent, null where absent.
     rowWeights(row) {
       const rows = this.sessionWeights(row) || [];
@@ -1882,6 +1886,8 @@ export function registerStaticViews(Alpine) {
     // Geometry lives in a 1000 x 100 unit box that stretches to the column, and
     // every label (the axes, the ticks, the tooltip) is HTML over it, so text
     // stays at its real size at any width instead of scaling with the SVG.
+    // The chart's empty frame: a line needs two readings.
+    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions to draw" : "One reading so far"; },
     chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();

@@ -95,7 +95,7 @@
          and the row count from the first paint, and the real content crossfades
          into it. No shimmer: a pulsing block is a decoration this brand does
          not spend, and a still one reads as "not here yet" just as clearly. -->
-    <div class="alp__figslot">
+    <div class="alp__figslot" :class="!loading && !hasTargets() ? 'is-empty' : ''">
     <div class="alp__split alp__sk" x-show="loading" x-cloak aria-hidden="true">
       <div class="alp__skring"></div>
       <div class="alp__skrows">
@@ -131,9 +131,13 @@
       </ul>
     </div>
 
-    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights unavailable.
-    </p>
+    <!-- Empty, the donut is its bare track with the fact inside, as every
+         ring on the site draws one, and the slot gives up the height it held
+         for the loaded figure. -->
+    <figure class="rr-ring rr-ring--empty alp__nofig" x-show="!loading && !hasTargets()" x-cloak>
+      <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+      <figcaption><span class="rr-empty__t">Target weights unavailable</span></figcaption>
+    </figure>
     </div>
 
     <!-- The two figures with no route behind them. They were two tiles set in
@@ -180,9 +184,7 @@
       Every session reviews these weights.
     </p>
 
-    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights unavailable.
-    </p>
+    <div class="rr-empty" x-show="!loading && !hasTargets()" x-cloak><p class="rr-empty__t">Target weights unavailable</p></div>
 
     <div class="alp__sk alp__skled" x-show="loading" x-cloak aria-hidden="true">
       <div class="alp__skline alp__skline--head"></div>
@@ -233,9 +235,7 @@
       Target weights inside each sleeve, and the vault holding them when available.
     </p>
 
-    <p class="alp__empty" x-show="!loading && !hasTargets()" x-cloak>
-      Target weights unavailable.
-    </p>
+    <div class="rr-empty" x-show="!loading && !hasTargets()" x-cloak><p class="rr-empty__t">Target weights unavailable</p></div>
 
     <div class="alp__sk alp__skcards" x-show="loading" x-cloak aria-hidden="true">
       <div class="alp__skcard"></div><div class="alp__skcard"></div>
@@ -654,7 +654,8 @@
   background: var(--color-surface); padding: 0.25rem 0.25rem;
 }
 .alp__sub--after { margin: 1.25rem 0 0; }
-.alp__empty { color: var(--color-text-muted); font-size: 0.875rem; margin: 0 0 1.25rem; }
+.alp__figslot.is-empty { min-height: 0; }
+.alp__nofig { justify-self: start; margin-top: 1.5rem; }
 /* TWO link treatments on this page, and only two.
    .alp__link  — inline, inside prose or a table row. It inherits the type of
                  whatever it sits in, so a link in a mono table reads as table

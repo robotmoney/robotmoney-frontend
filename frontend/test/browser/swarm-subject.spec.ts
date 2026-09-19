@@ -240,12 +240,12 @@ test("public subject profile lists no wallets for a subject serving an empty wal
   // ...with no "Read from" table: no wallet and no NFT contract to list.
   await expect(page.locator(".rr-sources")).toHaveCount(0);
   await expect(page.locator("#holdings")).not.toContainText("Read from");
-  // And the body rendered the whole way down: the history's empty state sits
+  // And the body rendered the whole way down: the history's empty row sits
   // past every gated part.
-  await expect(page.locator(".sv__empty")).toBeVisible();
+  await expect(page.locator("#history .rr-table__empty")).toBeVisible();
   // Said once, where the history would be: no "Sessions 0" among the facts,
   // and with no other fact to state, no facts row at all.
-  await expect(page.locator(".sv__empty")).toHaveText("No published session yet.");
+  await expect(page.locator("#history .rr-table__empty")).toHaveText("No session published yet");
   await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Sessions" })).toHaveCount(0);
   await expect(page.locator(".rr-meta")).toBeHidden();
 
@@ -574,7 +574,7 @@ test("a framework subject renders no book, even when the API serves it one", asy
   // drawn: this subject has no session, so its one item is the link to the
   // allocation it is.
   await expect(page.locator(".rr-meta")).toContainText("Asset allocation");
-  await expect(page.locator(".sv__empty")).toBeVisible();
+  await expect(page.locator("#history .rr-table__empty")).toBeVisible();
 
   // And the request is never made: a subject with no book has none to fetch.
   expect(snapshotsRequested).toBe(false);
@@ -1073,15 +1073,15 @@ test("the history pages and searches on the server, with no brief fetched per ro
   expect(listed.at(-1)?.get("search")).toBe("liquidity");
   expect(listed.at(-1)?.get("subject")).toBe(SP_SUBJECT);
   expect(listed.at(-1)?.get("cursor")).toBeNull();
-  // Nothing found is said in a fragment, where the rows were.
+  // Nothing found is said in the table's one row, where the rows were.
   await page.locator("#history-q").fill("no such phrase");
-  await expect(history.locator(".sv__empty")).toHaveText("No sessions match");
+  await expect(history.locator(".rr-table__empty")).toHaveText("No session matches");
   await expect(rows).toHaveCount(0);
   // An empty box puts the unfiltered first page back.
   await page.locator("#history-q").fill("");
   await expect(rows).toHaveCount(12);
   await expect(pager.locator('[role="status"]')).toHaveText("1–12 of 30");
-  await expect(history.locator(".sv__empty")).toHaveCount(0);
+  await expect(history.locator(".rr-table__empty")).toHaveCount(0);
 
   // Every request asked for this subject's published sessions only, and no
   // row was fetched to be drawn: the latest session is read in full once, for
