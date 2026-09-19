@@ -33,6 +33,10 @@ import {
   receiptSemanticErrors,
   validateReceipt,
 } from "@robotmoney/contract";
+import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
+// A judgement is a model's opinion now — there is no modelless path — so a
+// suite that needs one on file answers through the stub endpoint.
+useStubJudge();
 import {
   judge, parseJudgeResponse,
   type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
@@ -162,7 +166,7 @@ test("the two lower bounds coincide: zero positions is refused by the parser AND
   expect(schema.definitions.disagreement.properties.positions.minItems).toBe(1);
 });
 
-test("both judge() sources round-trip into an anchorable receipt, and source records which ran", async () => {
+test("a model judgement round-trips into an anchorable receipt, and `source` records that it was one", async () => {
   // The MODEL path, through the shipped orchestration rather than the parser
   // alone: a transport that returns the one-position answer.
   const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
@@ -170,24 +174,17 @@ test("both judge() sources round-trip into an anchorable receipt, and source rec
   expect(modelOutcome.source).toBe("model");
   expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
 
-  // The FALLBACK path: no transport at all. templateOpinion() is the same prose
-  // the aggregator produces, so nothing but `source` distinguishes the two.
-  const fallbackOutcome: JudgeOutcome = await judge(input, { transport: null });
-  expect(fallbackOutcome.source).toBe("fallback");
-  expect(fallbackOutcome.fallbackReason).toBe("model_unconfigured");
-
-  // THE FIELD EARNS ITS PLACE: every other pinned field is byte-identical
-  // across the two paths, so a receipt without `source` could not tell them
-  // apart at all.
-  expect(fallbackOutcome.promptHash).toBe(modelOutcome.promptHash);
-  expect(fallbackOutcome.inputsDigest).toBe(modelOutcome.inputsDigest);
-
-  for (const outcome of [modelOutcome, fallbackOutcome]) {
-    const receipt = assembleReceipt(outcome.opinion, outcome.source);
-    assertAnchorable(receipt);
-    expect(receipt.judge.source).toBe(outcome.source);
-    expect(canonicalizeReceipt(receipt, spec)).toContain(`"source":"${outcome.source}"`);
-  }
+  // THERE IS NO SECOND PATH ANY MORE. This used to assert the fallback half of
+  // the round trip — templateOpinion() prose recorded with `source:
+  // "fallback"`, identical to the model path in every other pinned field. That
+  // similarity was the danger, not the feature: a receipt could attest prose no
+  // model wrote and look exactly like one that did. A judge with no transport
+  // now refuses, so the only thing that can reach a receipt is the path above.
+  await expect(judge(input, {})).rejects.toThrow("model_unconfigured");
+  const receipt = assembleReceipt(modelOutcome.opinion, modelOutcome.source);
+  assertAnchorable(receipt);
+  expect(receipt.judge.source).toBe("model");
+  expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
 });
 
 test("every JudgeOpinion field has a receipt field, and the receipt invents none", () => {

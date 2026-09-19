@@ -30,6 +30,10 @@ import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
+// A judgement is a model's opinion now — there is no modelless path — so a
+// suite that needs one on file answers through the stub endpoint.
+useStubJudge();
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -292,7 +296,7 @@ test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `agg
   expect((await submit(m, date, subj, { body: "the take of record" })).status).toBe(201);
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await setJudgeConfig({ mode: "shadow" });
+  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
   const judged = await admin.judgeSessionAdmin(session.id, undefined);
   expect(judged.ok).toBe(true);
   const row = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;

@@ -6,6 +6,10 @@ import { judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judg
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
+// A judgement is a model's opinion now — there is no modelless path — so a
+// suite that needs one on file answers through the stub endpoint.
+useStubJudge();
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -65,7 +69,7 @@ test("grant/revoke preserves the existing credential and makes judging immediate
 
   // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
   // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
   const judged = await aggregated("judge_allowed");
   const allowed = await judgeSession(judged.session.id, { judgeMemberId: candidate.id, transport });
   expect(allowed.ok).toBe(true);
@@ -91,7 +95,7 @@ test("grant/revoke preserves the existing credential and makes judging immediate
 test("the in-house worker and a graduated member both leave named judgement parties", async () => {
   // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
   // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
   const inHouse = await aggregated("in_house");
   expect((await judgeSession(inHouse.session.id, { transport })).ok).toBe(true);
   expect((await latestJudgement(inHouse.session.id) as any).judged_by).toBe("robotmoney-in-house");
@@ -108,7 +112,7 @@ test("the in-house worker and a graduated member both leave named judgement part
 test("a non-judge is refused before a judgement row is written", async () => {
   // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
   // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
   const candidate = await member("ungraduated");
   const s = await aggregated("refusal");
   const refused = await judgeSession(s.session.id, { judgeMemberId: candidate.id, transport });
@@ -128,7 +132,7 @@ test("a judge who already submitted a take in the session is refused before a ju
   // the third-party gate) is actually what is under test here, rather than a
   // third-party refusal masking it — this candidate is not on
   // LIVE_ROSTER_HANDLES, so it is not otherwise exempt from that gate.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true });
+  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
 
   const candidate = await member("has_take");
   const s = await session("take_conflict");

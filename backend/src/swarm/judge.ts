@@ -15,14 +15,20 @@
 // actually finds in the takes, and an opinion on whether the session is safe to
 // release. All three are prose about numbers someone else computed.
 //
-// FAIL CLOSED, NEVER FAIL LOUD. This runs on a LIVE swarm on a cadence. A model
-// that times out, refuses, returns prose instead of JSON, returns JSON of the
-// wrong shape, or smuggles a weight in, must not stop a session — and must not
-// be allowed to half-land either. Every one of those paths falls back to the
-// SAME template producers the aggregator uses today (buildRationale /
-// buildDisagreements), records WHY it fell back, and carries on. There is no
-// state in which a session is blocked on the judge, and none in which a
-// partially-trusted model response reaches a session.
+// REFUSE, DO NOT SUBSTITUTE (changed 2026-09-19). This runs on a LIVE swarm on
+// a cadence, and the old rule here was "fail closed, never fail loud": a model
+// that timed out, refused, returned prose instead of JSON, returned JSON of the
+// wrong shape, or smuggled a weight in fell back to the SAME template producers
+// the aggregator uses (buildRationale / buildDisagreements), recorded why, and
+// carried on. Nothing was ever blocked — and the price was that the
+// AGGREGATOR'S OWN SENTENCES were recorded as the judge's opinion, and a
+// consensus receipt signed them as an opinion the session adopted. The only
+// thing separating that from a real judgement was one column nothing read.
+//
+// So every failure now THROWS JudgeUnavailable and writes nothing. A session is
+// still never BLOCKED on the judge — an unjudged session publishes, just
+// without a judge block and therefore without a receipt — and a
+// partially-trusted model response still never reaches one.
 //
 // PINNED INPUTS. `promptHash` is the digest of the instruction template, so a
 // stored opinion says which judge wrote it. `inputsDigest` is the digest of
@@ -46,6 +52,17 @@ export interface JudgeTake {
   stance: string;
   confidence: number | null;
   body: string;
+  /**
+   * The weights THIS MEMBER proposed, if any — their own numbers, not the
+   * session's.
+   *
+   * EVIDENCE FOR THE JUDGE, NEVER THE ANSWER. A member's numbers state what
+   * they meant, and the judge's job is to say whether that statement holds
+   * together with the position their prose argues. It stays out of the
+   * derivation: meanTakeWeights() computes the session's vector in domain.ts,
+   * before this file runs and unchanged by whether it runs at all.
+   */
+  weights?: { bucket: string; weight: number }[] | null;
 }
 
 export interface JudgeInput {
@@ -121,7 +138,8 @@ export function noDrops(): JudgeDrops {
 
 export interface JudgeOutcome {
   opinion: JudgeOpinion;
-  source: "model" | "fallback";
+  /** Always `"model"`. A judgement this repo records was authored by one. */
+  source: "model";
   /** Present iff source === "fallback"; the reason the model's answer was not used. */
   fallbackReason?: string;
   model: string | null;
@@ -198,10 +216,32 @@ export const JUDGE_PROMPT_TEMPLATE = [
   '  "release_safety": { "release": "safe" | "hold", "concerns": [string] }',
   "}",
   "",
-  "rationale: one short paragraph on why the submitted takes support the",
-  "session's read of the subject. Recommendation-voiced.",
+  "A take may carry the member's OWN proposed weights. Those numbers are",
+  "EVIDENCE OF WHAT THAT MEMBER MEANT — not the session's answer, and not a",
+  "number for you to adopt, average, adjust or restate as your own. Read them",
+  "the way you read their prose: as their submission.",
   "",
-  "disagreements: only REAL ones. `member_id` must be a member id from the take",
+  "JUDGE COHERENCE, WHICH IS THE PART ARITHMETIC CANNOT DO. For each member who",
+  "proposed numbers, decide whether those numbers hold together with the",
+  "position their own words argue — a member who calls the regime unconfirmed",
+  "and then proposes their largest tilt toward risk has said two things, and",
+  "which one they meant is a judgement, not a calculation. Say which members",
+  "cohere, name any whose numbers and prose pull apart, and say what the",
+  "divergence appears to mean. A member who proposed no numbers is not",
+  "incoherent — they argued in prose, and you judge the prose.",
+  "",
+  "You may quote a member's own figure inside your sentences as evidence for",
+  "that reading. You still output no weight of your own and no field named for",
+  "one: the ban is on AUTHORING numbers, not on reading the members'.",
+  "",
+  "rationale: one short paragraph on why the submitted takes support the",
+  "session's read of the subject, INCLUDING your coherence determination —",
+  "whether the members' numbers and their arguments say the same thing, and",
+  "where they do not. Recommendation-voiced.",
+  "",
+  "disagreements: only REAL ones — between members, or between one member's",
+  "numbers and the position their own prose argues. `member_id` must be a",
+  "member id from the take",
   "set and `view` must be that member's own position. `what_settles` must be an",
   "objective, checkable future observation. An empty array is a valid and",
   "correct answer when the takes do not disagree.",
@@ -245,6 +285,9 @@ function promptPayload(input: JudgeInput) {
       stance: t.stance,
       confidence: t.confidence,
       body: t.body,
+      // Null when the member proposed none. Present either way, so the digest
+      // covers the absence as much as the presence.
+      weights: t.weights ?? null,
     })),
   };
 }
@@ -696,6 +739,25 @@ export function resolveJudgeTransport(
   };
 }
 
+/**
+ * The judge could not produce a judgement, and none was recorded.
+ *
+ * Carries the same `reason` vocabulary `fallback_reason` used to hold
+ * (`model_timeout`, `weight_like_field:weights`, `model_unconfigured`), so an
+ * operator reads the identical words — they now arrive on a FAILED JOB instead
+ * of on a row that looked like a judgement.
+ */
+export class JudgeUnavailable extends Error {
+  readonly reason: string;
+  readonly model: string | null;
+  constructor(reason: string, model: string | null) {
+    super(`judge produced no judgement (${reason}${model ? `, model ${model}` : ""})`);
+    this.name = "JudgeUnavailable";
+    this.reason = reason;
+    this.model = model;
+  }
+}
+
 // ── The judge ───────────────────────────────────────────────────────────────
 
 export interface JudgeOptions {
@@ -707,8 +769,8 @@ export interface JudgeOptions {
 }
 
 /**
- * Form an opinion. NEVER throws: every failure is an outcome with
- * `source: "fallback"` and a reason. See this file's header for why.
+ * Form an opinion, or THROW JudgeUnavailable. There is no third answer: an
+ * outcome this returns was authored by a model.
  */
 export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<JudgeOutcome> {
   const transport = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
@@ -734,16 +796,34 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   // A fallback's opinion is template prose built from the frozen take set, so it
   // drops nothing by construction — its counters are zero, and each fallback
   // gets its OWN object so a later mutation can never reach across calls.
-  const fallback = (reason: string, model: string | null): JudgeOutcome => ({
-    ...base, opinion: templateOpinion(input), source: "fallback", fallbackReason: boundedReason(reason), model,
-    drops: noDrops(),
-  });
+  // NO FALLBACK. THERE IS NO SECOND KIND OF JUDGEMENT.
+  //
+  // This function used to answer every failure with templateOpinion() and a
+  // reason column — "fail closed, never fail loud", so a flaky model could not
+  // block a live session. It bought that at a price nobody could see: the
+  // AGGREGATOR'S OWN SENTENCES were recorded as the judge's, a consensus
+  // receipt signed them as an opinion the session adopted, and the only thing
+  // telling that apart from a real judgement was one column nothing read. A
+  // judge that cannot reach a model has not judged; saying otherwise inside a
+  // signed artifact is the failure, not the outage.
+  //
+  // So every path below THROWS and nothing is written. The queue makes that
+  // survivable: `swarm.judge` fails, retries, and an exhausted job leaves the
+  // session UNJUDGED — no receipt, which is the honest state. The reason still
+  // reaches an operator through `jobs.last_error` and `job_runs`, which is
+  // where a failed job is read anyway.
+  //
+  // Annotated, not inferred: a never-returning call only narrows control flow
+  // (so `transport` is non-null below) when the callee carries an explicit type.
+  const refuse: (reason: string, model: string | null) => never = (reason, model) => {
+    throw new JudgeUnavailable(boundedReason(reason), model);
+  };
 
-  if (!transport) return fallback("model_unconfigured", null);
+  if (!transport) refuse("model_unconfigured", null);
   // A session nobody submitted to has nothing to explain. Not an error — the
   // templates already say the right thing about an empty session, and spending
   // a model call to be told so is waste.
-  if (input.takes.length === 0) return fallback("no_takes", transport.model);
+  if (input.takes.length === 0) refuse("no_takes", transport.model);
   // A session where EVERY take is stance-only has no member-authored sentence
   // in it, so there is nothing any disagreement could quote and nothing the
   // model could attribute — `view` comes from the frozen bodies and from
@@ -751,7 +831,7 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   // with an empty `disagreements` array. Template prose says the same thing,
   // and `no_take_bodies` is the operator's signal that this is why.
   if (!input.takes.some((t) => typeof t.body === "string" && t.body.trim() !== "")) {
-    return fallback("no_take_bodies", transport.model);
+    refuse("no_take_bodies", transport.model);
   }
 
   // THE CONFIG READ IS ITSELF A FAILURE PATH. `resolveJudgeTimeoutMs()` throws
@@ -766,7 +846,7 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   try {
     timeoutMs = opts.timeoutMs ?? resolveJudgeTimeoutMs();
   } catch (err) {
-    return fallback(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
+    refuse(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -775,7 +855,7 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     raw = await transport.complete(renderJudgePrompt(input), controller.signal);
   } catch (err) {
     const reason = controller.signal.aborted ? "model_timeout" : `model_unavailable:${errorLabel(err)}`;
-    return fallback(reason, transport.model);
+    refuse(reason, transport.model);
   } finally {
     clearTimeout(timer);
   }
@@ -789,7 +869,7 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     return { ...base, opinion, source: "model", model: transport.model, drops };
   } catch (err) {
     const reason = err instanceof JudgeResponseError ? err.reason : `unparsable:${errorLabel(err)}`;
-    return fallback(reason, transport.model);
+    refuse(reason, transport.model);
   }
 }
 

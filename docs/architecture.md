@@ -1495,7 +1495,15 @@ Driver-created sessions have no such backlog: the driver enqueues the judging
 inside the run, so every session it starts from now on has one, and no session it
 started before has one no matter how long anyone waits.
 
-**Failure is an outcome, never an error.** Model unconfigured
+**Failure is a REFUSAL, and records nothing.** (Changed 2026-09-19. This
+paragraph used to read "Failure is an outcome, never an error", and described
+every failure below falling back to the SAME template producers the aggregator
+uses, recording the reason on the judgement row, and letting the session carry
+on. That kept a flaky model from blocking a live session — and bought it by
+recording the aggregator's own sentences AS THE JUDGE'S, which a consensus
+receipt then signed as an opinion the session adopted. The only thing telling
+such a row from a real judgement was one column nothing read. A judge that
+cannot reach a model has not judged.) Model unconfigured
 (`model_unconfigured`), a session with no takes at all (`no_takes`), a session
 where **every** take is stance-only so there is no member-authored sentence to
 quote (`no_take_bodies`), request timed out (`model_timeout`), the transport
@@ -1511,15 +1519,20 @@ submit (`unknown_member:<id>`), a weight-like field anywhere in the response
 (`weight_like_field:<path>`), **a
 malformed `SWARM_JUDGE_TIMEOUT_MS` in the environment**
 (`invalid_timeout_config:…`), and anything else thrown while parsing
-(`unparsable:…`) — each falls back to the
-SAME template producers the aggregator uses (`buildRationale`,
-`buildDisagreements`), records the reason on the judgement row, and lets the
-session carry on. Every recorded reason is capped at 120 characters, the two
-built out of the model's own text included. No session is ever blocked on the
-judge, and no partially-trusted model response ever reaches one.
+(`unparsable:…`) — each THROWS `JudgeUnavailable`
+carrying that reason, and writes NOTHING. `swarm.judge` fails, retries, and an
+exhausted job leaves the session unjudged: no judgement row, and therefore no
+consensus receipt, which is the honest state. Every reason is still capped at
+120 characters, the two built out of the model's own text included — it matters
+more now, not less, because the reason travels through an exception message into
+`jobs.last_error` and the admin API's error JSON.
+
+No session is BLOCKED on the judge — an unjudged session still publishes, it
+simply publishes without a judge block — and no partially-trusted model response
+ever reaches one.
 
 That list above is EXHAUSTIVE, and it is pinned to the source rather than
-maintained by hand: `scripts/tests/unit/judge-fallback-reasons-documented.test.ts`
+maintained by hand: `scripts/tests/unit/judge-refusal-reasons-documented.test.ts`
 extracts every reason `backend/src/swarm/judge.ts` can produce, extracts the
 literals enumerated here, and fails if either side has one the other does not.
 It was written because this list drifted within a day of being authored.

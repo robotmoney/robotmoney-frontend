@@ -82,8 +82,20 @@ const DEMO_COMPOSE_PASSTHROUGH = [
  * Absent key → absent entry, and `${VAR:-}` resolves empty exactly as before.
  */
 export function judgeCredentialEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
   const key = env.OPENCODE_API_KEY?.trim();
-  return key ? { OPENCODE_API_KEY: key } : {};
+  if (key) out.OPENCODE_API_KEY = key;
+  // AND ENOUGH TIME TO THINK. backend's DEFAULT_JUDGE_TIMEOUT_MS is 60s, sized
+  // for the judge's original ask (summarise, list disagreements). The
+  // instruction now also demands a COHERENCE DETERMINATION — read every
+  // member's numbers against the position their prose argues — over take bodies
+  // that run to hundreds of words each, and 60s stopped being enough: the first
+  // run under the new prompt timed out and fell back to template prose, which
+  // is the one outcome this release exists to prevent. A smoke/twin gets a
+  // bound that fits the question; production keeps its own default and its own
+  // operator-set value, which is honoured here when present.
+  out.SWARM_JUDGE_TIMEOUT_MS = env.SWARM_JUDGE_TIMEOUT_MS?.trim() || "180000";
+  return out;
 }
 
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {

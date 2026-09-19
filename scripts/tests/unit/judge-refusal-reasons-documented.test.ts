@@ -1,10 +1,10 @@
-// The judge fallback-reason enumeration in docs/architecture.md §9.7 is PINNED
+// The judge refusal-reason enumeration in docs/architecture.md §9.7 is PINNED
 // to backend/src/swarm/judge.ts. Neither side may gain a reason the other does
 // not have.
 //
-// WHY THIS EXISTS. §9.7's "Failure is an outcome, never an error." paragraph
+// WHY THIS EXISTS. §9.7's failure paragraph
 // claims exhaustiveness — it is the only place an operator reading a
-// `fallback_reason` off `swarm_session_judgements` can find out what the value
+// `JudgeUnavailable.reason` off `swarm_session_judgements` can find out what the value
 // means. It was written by hand in PR #778 (issue #773) and was ALREADY STALE
 // on the day it landed: PR #777 had merged `too_many_positions` and
 // `duplicate_position:<id>` hours earlier, and the freshly written list omitted
@@ -25,7 +25,7 @@
 // EXTRACTION IS STRUCTURALLY GUARDED. A citation gate that silently matches
 // nothing is worse than none, so the source scan does not merely collect what
 // its regexes happen to find: it counts every `new JudgeResponseError(` and
-// every `fallback(` call site and REFUSES to run if any of them is written in
+// every `refuse(` call site and REFUSES to run if any of them is written in
 // a shape it cannot read (a computed reason, a helper it does not know about).
 // A new failure path introduced in an unrecognised shape goes red as a
 // structural failure, not as a silent pass.
@@ -47,7 +47,7 @@ const DOC_PATH = "docs/architecture.md";
 // a reason list that drifted into another section would be found by a bare
 // grep but would no longer be where §9.7 promises it is.
 const SECTION_HEADING = "### 9.7 The consensus judge";
-const PARAGRAPH_ANCHOR = "**Failure is an outcome, never an error.**";
+const PARAGRAPH_ANCHOR = "**Failure is a REFUSAL, and records nothing.**";
 
 // A reason key: lowercase snake_case, optionally followed by `:` and a
 // runtime-supplied suffix. Deliberately narrow so that camelCase function
@@ -76,11 +76,11 @@ function countOf(source: string, re: RegExp): number {
  * Three producing shapes, and the guards that prove the scan saw all of them:
  *   1. `new JudgeResponseError("<reason>")` — caught at judge.ts's parse catch
  *      and recorded verbatim. Guard: every call site must pass a literal.
- *   2. `fallback("<reason>", model)` — the pre-transport outcomes. Guard: every
+ *   2. `refuse("<reason>", model)` — the pre-transport outcomes. Guard: every
  *      call site must pass either a literal or the identifier `reason`.
  *   3. `const reason = … "<reason>" …` — the two catch blocks that pick a
- *      reason before handing it to `fallback(reason, …)`. Guard: there must be
- *      one such assignment for every identifier-passing `fallback()` call site.
+ *      reason before handing it to `refuse(reason, …)`. Guard: there must be
+ *      one such assignment for every identifier-passing `refuse()` call site.
  *
  * Throws — loudly, not silently returning a short set — when a guard trips.
  */
@@ -110,30 +110,30 @@ function reachableReasonKeys(source: string): Set<string> {
     );
   }
 
-  // 2. fallback() with a literal.
-  const fallbackLiteralRe = /(?<![\w.$])fallback\(\s*(?:"([^"\\]*)"|`([^`\\]*)`)/g;
-  let fallbackLiteralCount = 0;
-  while ((m = fallbackLiteralRe.exec(source)) !== null) {
-    fallbackLiteralCount += 1;
-    collect(m[1] ?? m[2] ?? "", "fallback()");
+  // 2. refuse() with a literal.
+  const refuseLiteralRe = /(?<![\w.$])refuse\(\s*(?:"([^"\\]*)"|`([^`\\]*)`)/g;
+  let refuseLiteralCount = 0;
+  while ((m = refuseLiteralRe.exec(source)) !== null) {
+    refuseLiteralCount += 1;
+    collect(m[1] ?? m[2] ?? "", "refuse()");
   }
 
-  // 2b. fallback() with an identifier — only `reason` is understood.
-  const fallbackIdentRe = /(?<![\w.$])fallback\(\s*([A-Za-z_$][\w$]*)\s*,/g;
-  let fallbackIdentCount = 0;
-  while ((m = fallbackIdentRe.exec(source)) !== null) {
-    fallbackIdentCount += 1;
+  // 2b. refuse() with an identifier — only `reason` is understood.
+  const refuseIdentRe = /(?<![\w.$])refuse\(\s*([A-Za-z_$][\w$]*)\s*,/g;
+  let refuseIdentCount = 0;
+  while ((m = refuseIdentRe.exec(source)) !== null) {
+    refuseIdentCount += 1;
     if (m[1] !== "reason") {
       throw new Error(
-        `${SOURCE_PATH}: fallback() is called with an unrecognised variable \`${m[1]}\` — this scan only follows \`reason\`, so its value cannot be pinned to ${DOC_PATH}.`,
+        `${SOURCE_PATH}: refuse() is called with an unrecognised variable \`${m[1]}\` — this scan only follows \`reason\`, so its value cannot be pinned to ${DOC_PATH}.`,
       );
     }
   }
 
-  const fallbackSites = countOf(source, /(?<![\w.$])fallback\(/g);
-  if (fallbackLiteralCount + fallbackIdentCount !== fallbackSites) {
+  const refuseSites = countOf(source, /(?<![\w.$])refuse\(/g);
+  if (refuseLiteralCount + refuseIdentCount !== refuseSites) {
     throw new Error(
-      `${SOURCE_PATH}: ${fallbackSites} \`fallback(\` call sites but ${fallbackLiteralCount + fallbackIdentCount} readable (${fallbackLiteralCount} literal, ${fallbackIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
+      `${SOURCE_PATH}: ${refuseSites} \`refuse(\` call sites but ${refuseLiteralCount + refuseIdentCount} readable (${refuseLiteralCount} literal, ${refuseIdentCount} via \`reason\`) — an unreadable reason cannot be pinned to ${DOC_PATH}.`,
     );
   }
 
@@ -151,9 +151,9 @@ function reachableReasonKeys(source: string): Set<string> {
     }
     for (const lit of found) collect(lit, "reason assignment");
   }
-  if (reasonAssignCount !== fallbackIdentCount) {
+  if (reasonAssignCount !== refuseIdentCount) {
     throw new Error(
-      `${SOURCE_PATH}: ${fallbackIdentCount} \`fallback(reason, …)\` call sites but ${reasonAssignCount} \`reason =\` assignments — one of them is fed from somewhere this scan does not read.`,
+      `${SOURCE_PATH}: ${refuseIdentCount} \`refuse(reason, …)\` call sites but ${reasonAssignCount} \`reason =\` assignments — one of them is fed from somewhere this scan does not read.`,
     );
   }
 
@@ -267,16 +267,16 @@ describe("planted violations are caught", () => {
     expect(() => reachableReasonKeys(mutated)).toThrow(/call sites but only/);
   });
 
-  test("a fallback() fed by an unknown variable trips the structural guard", () => {
-    const mutated = source.replace("return fallback(reason, transport.model);", "return fallback(otherReason, transport.model);");
+  test("a refuse() fed by an unknown variable trips the structural guard", () => {
+    const mutated = source.replace("refuse(reason, transport.model);", "refuse(otherReason, transport.model);");
     expect(mutated).not.toBe(source);
     expect(() => reachableReasonKeys(mutated)).toThrow(/unrecognised variable/);
   });
 
-  test("a `fallback(reason, …)` with no matching assignment trips the structural guard", () => {
+  test("a `refuse(reason, …)` with no matching assignment trips the structural guard", () => {
     const mutated = source.replace(
-      'if (!transport) return fallback("model_unconfigured", null);',
-      'if (!transport) return fallback("model_unconfigured", null);\n  if (false) return fallback(reason, null);',
+      'if (!transport) refuse("model_unconfigured", null);',
+      'if (!transport) refuse("model_unconfigured", null);\n  if (false) refuse(reason, null);',
     );
     expect(mutated).not.toBe(source);
     expect(() => reachableReasonKeys(mutated)).toThrow(/assignments/);

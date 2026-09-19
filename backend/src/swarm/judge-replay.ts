@@ -19,7 +19,7 @@
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
 import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
-import { DIGEST_SCHEME, inputsDigest, judge, type JudgeOptions, type JudgeOutcome } from "./judge.ts";
+import { DIGEST_SCHEME, inputsDigest, type JudgeOptions } from "./judge.ts";
 import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
@@ -108,10 +108,10 @@ export interface JudgeReplayResult {
   /** Convenience: `weightsVerdict !== "mismatch"`. */
   weightsReproducible: boolean;
 
-  // ── 2. The kept, explicitly-named "judge wrote nothing" assertion.
+  // ── 2. The kept, explicitly-named "the replay wrote nothing" assertion.
   weightsBefore: unknown;
   weightsAfter: unknown;
-  /** The stored column is byte-identical either side of the `judge()` call. */
+  /** The stored column is byte-identical either side of this replay. */
   judgeWroteNothing: boolean;
 
   // ── 3. Per-session rationale/ladder agreement (the D42 half, one session).
@@ -131,7 +131,21 @@ export interface JudgeReplayResult {
   /** Convenience: true unless `digestVerdict === "mismatch"` — a historical divergence is not a fault. */
   digestReproducible: boolean;
 
-  outcome: JudgeOutcome;
+  // ── 5. What the RECORDED judgement says, read off the row.
+  //
+  // This used to be `outcome: JudgeOutcome` — a judgement this auditor authored
+  // ITSELF, by calling judge() during the replay. That was wrong twice over.
+  // It audited a fresh opinion instead of the one on file, which is the only
+  // one anything published; and with no model configured (the normal case for
+  // an offline audit) the opinion it graded was template prose, so the auditor's
+  // headline field described the fallback path rather than the record. An
+  // auditor reports what IS recorded.
+  /** `swarm_session_judgements.source` for the latest judgement, or null if never judged. */
+  judgementSource: string | null;
+  /** That row's `fallback_reason` — historical rows only; nothing writes one now. */
+  judgementFallbackReason: string | null;
+  /** That row's model, or null. */
+  judgementModel: string | null;
 }
 
 /**
@@ -206,7 +220,12 @@ export async function replaySessionJudge(
     ? "reproduced"
     : "mismatch";
 
-  const outcome = await judge(input, { model: config.model, ...opts });
+  // NO judge() CALL. The audit is arithmetic and comparison: meanTakeWeights()
+  // over the frozen set against the stored vector, and inputsDigest() over that
+  // same set against the digest on file. Authoring an opinion proved nothing
+  // about either, cost a model call per session at cutover scale, and — with no
+  // model configured — graded template prose. The "wrote nothing" assertion
+  // below is now a property of the whole replay rather than of one call inside it.
 
   // ── 2. The kept assertion, under its own name.
   const after = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
@@ -219,8 +238,10 @@ export async function replaySessionJudge(
   // already loaded above, and reported as a comparison rather than printed
   // as a bare value.
   const judgement = await latestJudgement(sessionId) as
-    | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown }
+    | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown; source?: unknown; fallback_reason?: unknown; model?: unknown }
     | null;
+  // Same row, read for §5 as well: the auditor reports the judgement ON FILE.
+  const judgementRow = judgement;
   let digestStored: string | null = null;
   let digestRederived: string | null = null;
   let digestScheme: string | null = null;
@@ -281,7 +302,9 @@ export async function replaySessionJudge(
     digestScheme,
     digestVerdict,
     digestReproducible: digestVerdict !== "mismatch",
-    outcome,
+    judgementSource: judgementRow?.source == null ? null : String(judgementRow.source),
+    judgementFallbackReason: judgementRow?.fallback_reason == null ? null : String(judgementRow.fallback_reason),
+    judgementModel: judgementRow?.model == null ? null : String(judgementRow.model),
   };
 }
 

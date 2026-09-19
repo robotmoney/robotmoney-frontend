@@ -23,6 +23,10 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { publishSession as publishSessionJob } from "../src/worker/handlers/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
+// A judgement is a model's opinion now — there is no modelless path — so a
+// suite that needs one on file answers through the stub endpoint.
+useStubJudge();
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -54,7 +58,7 @@ async function judgedButUnpublished(prefix: string, mode: "shadow" | "enforce") 
   const subjectId = rid(prefix);
   await ic.ensureSubject(subjectId, `${prefix} subject`);
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
-  await setJudgeConfig({ mode, minTakes: 2 });
+  await setJudgeConfig({ mode, minTakes: 2, model: STUB_JUDGE_MODEL });
   const session = await ic.openSession(subjectId);
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
