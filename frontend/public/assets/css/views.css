@@ -1874,6 +1874,23 @@ a.sv__vfy { text-decoration: none; }
 .rr-legend__row > b { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
 .rr-legend__row > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-legend__row .alp__mv { justify-content: flex-start; }
+/* A weights legend set against a basis reads as a table: Recommended, the
+   Target (or Book) it is set against, and the Change in points, each in its
+   own labelled column, so a reader never has to tell a move from a value. */
+.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 3.75rem; column-gap: 0.5rem; }
+.rr-legend__head { display: grid; padding: 0 0.5rem 0.5rem; border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
+.rr-legend__head > span:nth-child(n+3), .rr-legend--cols .rr-legend__row > b { text-align: right; }
+.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.rr-legend__was { color: var(--color-text-muted); }
+.rr-legend--cols .rr-legend__d .alp__mv { justify-content: flex-end; }
+.rr-legend__s { display: none; }
+@media (max-width: 560px) {
+  /* A phone names a sleeve by its short name; the full one stays for screen
+     readers. General sibling: x-if leaves its <template> between the two. */
+  .rr-legend--cols .rr-legend__l:has(~ .rr-legend__s) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rr-legend--cols .rr-legend__s { display: inline; }
+}
 .rr-legend__row.is-zero { color: var(--color-text-muted); }
 .rr-legend__row.is-muted { opacity: 0.55; }
 .rr-legend__row.is-active { background: var(--color-surface); border-color: var(--color-border); opacity: 1; }

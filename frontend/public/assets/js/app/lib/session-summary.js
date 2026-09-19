@@ -111,6 +111,14 @@ const BUCKET_NOTES = {
   protocol_tokens: "Large-cap crypto and DeFi assets.",
   real_world_assets: "Tokenised traditional instruments: equity index and commodities.",
 };
+// A sleeve's short name, for a narrow column on a phone.
+/** @type {Record<string, string>} */
+const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+/** @param {unknown} idOrName */
+export function bucketShort(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i >= 0 ? BUCKET_SHORT[BUCKET_ORDER[i]] : "";
+}
 /** @param {unknown} idOrName */
 export function bucketNote(idOrName) {
   const i = bucketIndex(idOrName);
@@ -168,6 +176,8 @@ export const sessionSummary = {
   // The one-line note on a sleeve, for its (i) tip; "" for a position.
   /** @param {unknown} key */
   bucketNote(key) { return bucketNote(key); },
+  /** @param {unknown} key */
+  bucketShort(key) { return bucketShort(key); },
   // The stance tally. The live pipeline aggregates it onto the record; the
   // static archive never did, and its sessions carry the stances only on the
   // takes themselves. Reading both is what puts the spread bar, the consensus

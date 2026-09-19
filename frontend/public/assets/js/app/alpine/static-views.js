@@ -1547,9 +1547,7 @@ export function registerStaticViews(Alpine) {
     // The four sleeves in published order, as table columns.
     // `short` heads a column on a phone, where four full names do not fit.
     sleeveColumns() {
-      /** @type {Record<string, string>} */
-      const short = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
-      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), short: short[key] || bucketLabel(key), hue: bucketHue(key, i) }));
+      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), short: this.bucketShort(key) || bucketLabel(key), hue: bucketHue(key, i) }));
     },
     // A subject whose sessions recommend sleeve weights reads as a weights
     // history; any other reads as a verdict history.
@@ -3085,6 +3083,10 @@ export function registerStaticViews(Alpine) {
       if (this.source === "api" && s?.id) return `${ROUTES.swarm.brief}?session=${encodeURIComponent(s.id)}`;
       return `/data/swarm/briefs/${s?.date}-${s?.subjectId}.json`;
     },
+    // The session as the subject page's summary reads a row: the record with
+    // its takes on it, so the stance tally and turnout under the rationale are
+    // drawn by the same helpers, from the same takes, as the subject page's.
+    recordRow() { return this.session ? { ...this.session, takeRows: this.takes } : null; },
     hasRecommendationSection() {
       return this.hasOutcome() || !!this.recommendationRationale();
     },

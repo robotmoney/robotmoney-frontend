@@ -90,23 +90,24 @@
                             <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                           </figcaption>
                         </figure>
-                        <div class="rr-legend">
+                        <div class="rr-legend" :class="legendBasis() ? 'rr-legend--cols' : ''">
+                          <template x-if="legendBasis()">
+                            <div class="rr-legend__head" aria-hidden="true"><span></span><span>Sleeve</span><span>Weight</span><span x-text="legendBasis()"></span><span>Change</span></div>
+                          </template>
                           <template x-for="r in explorerRows()" :key="r.key">
                             <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
                                     :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
                                     :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
                                     @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
                               <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
-                              <span x-text="r.label"></span>
+                              <span><span class="rr-legend__l" x-text="r.label"></span><template x-if="legendBasis() && bucketShort(r.key)"><span class="rr-legend__s" aria-hidden="true" x-text="bucketShort(r.key)"></span></template></span>
                               <b x-text="fmtPctTrim(r.pct)"></b>
                               <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
                               <template x-if="hasBook() && r.worth"><small class="rr-worth" x-text="r.worth"></small></template>
-                              <template x-if="r.was != null && r.d">
-                                <small>
-                                  <span class="alp__mv" :class="changeClass(r.d)"><span x-text="changeLabel(r.d)"></span></span>
-                                  <span x-text="` vs ${r.basis} ${fmtPctTrim(r.was)}`"></span>
-                                </small>
-                              </template>
+                              <!-- Against the basis, in its own columns: the weight it is set against,
+                                   and the move in percentage points (empty when it did not move). -->
+                              <template x-if="legendBasis()"><span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span></template>
+                              <template x-if="legendBasis()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Change </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
                             </button>
                           </template>
                         </div>

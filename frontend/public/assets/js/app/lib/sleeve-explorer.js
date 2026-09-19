@@ -65,6 +65,16 @@ export function sleeveExplorer() {
       return /** @type {any} */ (this).explorerRows().find((/** @type {any} */ r) => r.key === key) || null;
     },
     activeRow() { return this.rowFor(this.active()); },
+    // The legend's middle column: what a recommended weight is set against,
+    // "Target" or "Book" (a vault session reads against its book). "" when no
+    // row has a basis, and the legend shows the recommended weights alone. A
+    // book of positions is not a weights legend and has no such column.
+    legendBasis() {
+      const host = /** @type {any} */ (this);
+      if (host.hasBook && host.hasBook()) return "";
+      const r = host.explorerRows().find((/** @type {any} */ x) => x.was != null);
+      return r ? (r.basis === "book" ? "Book" : "Target") : "";
+    },
     // What the breakdown panel draws: the active sleeve, or the one it is
     // closing on.
     panelRow() { return this.activeRow() || this.rowFor(this.shown); },

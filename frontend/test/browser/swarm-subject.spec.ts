@@ -911,17 +911,17 @@ test("a subject with a book reads its latest recommendation against the book, as
   // The archived 2026-06-22 session: 95/5/0/0 recommended, the book entirely
   // in Conservative DeFi Yield (Aave, Compound, Morpho).
   await page.goto("/swarm/2026-06-22/robotmoney-vault");
-  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Conservative DeFi Yield" })).toContainText("vs book 100%");
+  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Book 100%");
   await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveCount(0);
   const onSession = await moves("#recommendation");
   expect(onSession).toHaveLength(2);
 
   await page.goto("/swarm/subjects/robotmoney-vault");
   const latest = page.locator("#latest");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Conservative DeFi Yield" })).toContainText("vs book 100%");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" })).toContainText("vs book 0%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Book 100%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).locator(".rr-legend__was")).toHaveText("Book 0%");
   expect(await moves("#latest")).toEqual(onSession);
-  await expect(latest).not.toContainText("vs target");
+  await expect(latest.locator(".rr-legend__head")).not.toContainText("Target");
   await expect(latest).not.toContainText("Target weights retained");
   // The history row for the same session still measures it against the
   // target it was handed: 95/5/0/0 against 95/5/0/0.
@@ -948,8 +948,8 @@ test("a subject with a book reads its latest recommendation against the book, as
   // The allocation subject holds nothing: its latest recommendation reads
   // against its target.
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" })).toContainText("vs target 5%");
-  await expect(latest).not.toContainText("vs book");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).locator(".rr-legend__was")).toHaveText("Target 5%");
+  await expect(latest.locator(".rr-legend__head")).not.toContainText("Book");
 
   await expectNoBrowserErrors(errors);
 });
