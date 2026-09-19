@@ -2077,8 +2077,7 @@ a.sv__vfy { text-decoration: none; }
 .rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-ports__blurb { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.5rem;
   font-family: var(--font-sans); font-weight: 400; font-size: 0.75rem; line-height: 1.55; color: var(--color-text-muted); }
-.rr-ports__rec, .rr-ports td { vertical-align: top; }
-.rr-ports__line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; font-family: var(--font-sans); color: var(--color-text); }
+.rr-ports td { vertical-align: top; }
 .rr-hist { min-width: 46rem; }
 /* (0,2,1), to beat .rr-table td's mono: a subject name reads sans here as it
    does in Portfolios. */

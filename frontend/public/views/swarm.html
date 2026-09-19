@@ -252,20 +252,10 @@
                       </template>
                       <template x-if="!lean(portfolioLatest(p))"><span>—</span></template>
                     </td>
-                    <td class="rr-ports__rec">
-                      <template x-if="portfolioLatest(p)">
-                        <span class="rr-ports__line">
-                          <template x-if="mixOf(portfolioLatest(p)).length">
-                            <span class="rr-mixline">
-                              <template x-for="r in mixOf(portfolioLatest(p))" :key="r.key"><span :title="r.label"><i :style="`background:${r.colour}`" aria-hidden="true"></i><span class="rr-sr" x-text="`${r.label} `"></span><b x-text="fmtPctTrim(r.pct)"></b></span></template>
-                            </span>
-                          </template>
-                          <template x-if="!mixOf(portfolioLatest(p)).length && actionsOutcome(portfolioLatest(p))">
-                            <span x-text="actionsOutcome(portfolioLatest(p))"></span>
-                          </template>
-                          <template x-if="!recommendation(portfolioLatest(p))"><span class="rr-note" style="margin:0">No recommendation published</span></template>
-                        </span>
-                      </template>
+                    <!-- The same one word the history gives each session. -->
+                    <td class="rr-verdict">
+                      <template x-if="portfolioLatest(p)"><span :class="verdictOf(portfolioLatest(p)).quiet ? 'rr-note' : 'rr-verdict__l'" x-text="verdictOf(portfolioLatest(p)).label"></span></template>
+                      <template x-if="!portfolioLatest(p)"><span class="rr-note">No session published</span></template>
                     </td>
                     <td class="q"><template x-if="portfolioLatest(p)"><a class="rr-lnk" :href="sessionHref(portfolioLatest(p))" x-text="formatDate(p.latest)"></a></template></td>
                   </tr>
