@@ -290,9 +290,9 @@
                 <template x-if="showSynthesis()">
                   <div class="rr-block" x-data="{ more: false }">
                     <p class="rr-k rr-sub">Synthesis</p>
-                    <div class="rr-prose" :class="!more && isLong(session.synthesis, 700) ? 'is-clamped' : ''" style="--rr-lines:10"
+                    <div class="rr-prose" :class="!more && isLong(session.synthesis, 400) ? 'is-clamped' : ''" style="--rr-lines:5"
                          x-html="linkified(session.synthesis)"></div>
-                    <template x-if="isLong(session.synthesis, 700)">
+                    <template x-if="isLong(session.synthesis, 400)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                         <span x-text="more ? 'Show less' : 'Read full synthesis'"></span>
                       </button>
@@ -331,6 +331,10 @@
                             <b class="sig__mid"></b>
                             <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
                             <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                            <!-- What the dot is, on hover of its row: the percentile
+                                 says where it sits, this says what it reads. -->
+                            <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`"
+                                  x-text="[r.label + (r.key === 'composite' && backdrop?.composite != null ? ' ' + fmtNum(backdrop.composite, 3) : ''), `${ordinal(r.pct)} percentile`, r.kind === 'context' ? 'not in the composite' : (r.regime ? regimeLabel(r.regime) : '')].filter(Boolean).join(' · ')"></span>
                           </span>
                           <span class="sig__v" x-text="ordinal(r.pct)"></span>
                         </div>

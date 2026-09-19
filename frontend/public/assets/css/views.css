@@ -322,15 +322,10 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    earn) or the warn colour (a failure that never happened). */
 .sv__vfy--arch { color: var(--color-text-muted); }
 .sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
-/* .mp-when__tip rides these rules rather than becoming a third copy of the
-   same bubble (this one, and .rm-tip__bub in components.css, were already
-   two). It only overrides which edge it hangs from — see member.html. */
+/* Anchoring only: the bubble's skin is the one in components.css (.rm-tip__bub
+   and friends). .mp-when__tip hangs from the other edge — see member.html. */
 .sv__vfy-tip, .mp-when__tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
-  width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-top: 1px solid currentColor; border-radius: var(--radius);
-  font-family: var(--font-sans, system-ui, sans-serif); font-size: 0.72rem; line-height: 1.5;
-  letter-spacing: 0; text-transform: none; color: var(--color-text-muted); text-align: left;
+  width: max-content; max-width: min(17rem, 72vw); white-space: normal;
   opacity: 0; visibility: hidden; transform: translateY(3px); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s; }
 .sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip,
@@ -892,6 +887,16 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sig__cut { position: absolute; top: 0; bottom: 0; border-left: 1px solid #3a4456; }
 .sig__dot { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%;
   transform: translate(-50%, -50%); background: var(--color-text-muted); }
+/* A dot's reading on hover of its row (the dot alone is 8px to aim at), in the
+   one bubble skin (components.css). It sits over the dot, and turns inward at
+   either end of the scale so it never leaves the card. */
+.sig__row:hover { cursor: default; }
+.sig__tip { position: absolute; bottom: calc(100% + 0.375rem); transform: translateX(-50%); z-index: 5;
+  white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 100ms var(--ease-out-expo), visibility 0s linear 100ms; }
+.sig__tip.is-start { transform: translateX(-0.5rem); }
+.sig__tip.is-end { transform: translateX(calc(-100% + 0.5rem)); }
+.sig__row:hover .sig__tip { opacity: 1; visibility: visible; transition-delay: 0s; }
 .sig__v { font-family: var(--font-mono); font-size: 0.72rem; text-align: right; color: var(--color-text-muted);
   font-variant-numeric: tabular-nums; }
 .sig__row.is-lead .sig__l, .sig__row.is-lead .sig__v { color: var(--color-text); }
