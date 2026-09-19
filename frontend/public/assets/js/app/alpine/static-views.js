@@ -21,7 +21,7 @@ import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
-import { takeCard } from "../lib/take-card.js";
+import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
@@ -632,6 +632,8 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("swarmTakeReceipt", () => ({
     ...helpers,
+    // The ring and its formatting, shared with the subject and session pages.
+    ...sessionSummary,
     loading: true,
     error: null,
     take: null,
@@ -660,6 +662,18 @@ export function registerStaticViews(Alpine) {
         this.loading = false;
       }
     },
+    // The member's proposed weights as the ring the subject and session pages
+    // draw (lib/sleeve-explorer.js). No breakdown drawer: a take proposes
+    // sleeves, not the assets inside them.
+    explorerRows() {
+      return this.take ? takeWeightRows(this.take).map((w) => ({ ...w, hue: w.colour, assets: [] })) : [];
+    },
+    explorerSvg() { return this.ringSvg(this.explorerRows()); },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    hasBook() { return false; },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
     // The signer's page, at the public handle (issue #593): the breadcrumb, the
     // head, the Signer list and the record link all go there.
     signerHref() {

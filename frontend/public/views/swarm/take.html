@@ -73,27 +73,47 @@
           <p class="rr-note tk-superseded">A later revision of this take was filed in the same session. <a class="rr-lnk" :href="`/swarm/takes/${supersededBy?.id}`" x-text="`Revision ${supersededBy?.revision}`"></a></p>
         </template>
 
-        <!-- The signed text, whole: a receipt shows every byte it verifies. The
-             member's proposed weights sit beside it, as on the take card. -->
+        <!-- The signed text, whole: a receipt shows every byte it verifies.
+             The member's proposed weights sit beside it as the ring the
+             subject and session pages draw, in the same place: the mix on the
+             left, the words on the right. Hovering or focusing a sleeve names
+             it in the ring's centre. -->
         <section class="rr-sec" id="take" aria-labelledby="take-h" x-data="takeCard()">
           <div class="rr-sec__head"><h2 class="rr-sec__h" id="take-h">The take</h2></div>
-          <div class="rr-split" :class="weightRows(take).length ? 'rr-split--rule' : ''">
+          <div class="rr-split" :class="explorerRows().length ? 'rr-split--rule' : 'rr-split--one'">
+            <template x-if="explorerRows().length">
+              <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+                <div class="rr-mix">
+                  <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                    <span class="sv__wdonut-host" role="img" :aria-label="`Proposed weights: ${explorerLabel()}`"
+                          x-html="explorerSvg()"
+                          x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                    <figcaption>
+                      <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
+                      <span x-text="activeRow() ? activeRow().label : 'Proposed'"></span>
+                    </figcaption>
+                  </figure>
+                  <div class="rr-legend">
+                    <template x-for="r in explorerRows()" :key="r.key">
+                      <button type="button" class="rr-legend__row"
+                              :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                              :aria-pressed="pinned === r.key ? 'true' : 'false'"
+                              @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                        <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                        <span><span class="rr-legend__l" x-text="r.label"></span></span>
+                        <b x-text="fmtPctTrim(r.pct)"></b>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
             <div>
               <div class="sv__take-body rr-prose" x-html="linkified(take.body || '')"></div>
               <template x-if="memoHref(take.memoUrl)">
                 <a class="rr-lnk rr-take__act" :href="memoHref(take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
               </template>
             </div>
-            <template x-if="weightRows(take).length">
-              <aside>
-                <p class="rr-k rr-sub">Proposed weights</p>
-                <ul class="rr-legend">
-                  <template x-for="w in weightRows(take)" :key="w.key">
-                    <li :class="w.pct > 0 ? '' : 'is-zero'"><i data-mark="series" :style="`background:${w.colour}`" aria-hidden="true"></i><span x-text="w.label"></span><b x-text="pct(w.pct)"></b></li>
-                  </template>
-                </ul>
-              </aside>
-            </template>
           </div>
         </section>
 
