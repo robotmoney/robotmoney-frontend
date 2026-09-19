@@ -100,6 +100,7 @@
                               <span x-text="r.label"></span>
                               <b x-text="fmtPctTrim(r.pct)"></b>
                               <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
+                              <template x-if="hasBook() && r.worth"><small class="rr-worth" x-text="r.worth"></small></template>
                               <template x-if="r.was != null && r.d">
                                 <small>
                                   <span class="alp__mv" :class="changeClass(r.d)"><span x-text="changeLabel(r.d)"></span></span>

@@ -69,6 +69,12 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
 
   await page.goto("/swarm/subjects/woon");
 
+  // Each position in the latest recommendation says what it is worth on its
+  // own row: its value and its units, beside the call on it. A manager reads
+  // "rotate USDC" against "$2,931 · 2,927 USDC" without opening the drawer.
+  await expect(page.locator('#latest [data-sleeve-btn="USDC"] .rr-worth')).toHaveText("$2,931 · 2,927 USDC");
+  await expect(page.locator('#latest [data-sleeve-btn="WOON"] .rr-worth')).toHaveText("$24,657 · 6.68B WOON");
+
   // The archive branch takes its name from the subject MANIFEST
   // (loadArchiveSubject -> /data/swarm/manifests/subjects/woon.json), so this
   // asserts the portfolio's current name and not the member named Woon.

@@ -3247,7 +3247,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
   if (!snapshot || total <= 0) return [];
   const byToken = new Map((actions || []).map((a) => [String(a.token || "").toLowerCase(), a]));
   const positions = (snapshot.positions || [])
-    .map((/** @type {any} */ p) => ({ token: String(p.token || p.symbol || ""), chain: p.chain || "", value: Number(p.value_usd ?? p.valueUsd) || 0 }))
+    .map((/** @type {any} */ p) => ({ token: String(p.token || p.symbol || ""), chain: p.chain || "", value: Number(p.value_usd ?? p.valueUsd) || 0, amount: p.balance ?? p.amount ?? null }))
     .filter((p) => p.token)
     .sort((a, b) => b.value - a.value);
   const shown = positions.slice(0, 7);
@@ -3255,9 +3255,15 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
   const row = (/** @type {any} */ p) => {
     const act = byToken.get(p.token.toLowerCase());
     const pct = (p.value / total) * 100;
+    // What the position is worth on the row itself: its value, and its units
+    // when the token is not the dollar it is valued in. A manager reads "add
+    // USDC" beside "$8,995 · 9,037 USDC" without opening the drawer, and a
+    // token priced far from $1 shows how many units that is.
+    const units = p.amount == null || !Number.isFinite(Number(p.amount)) ? "" : `${helpers.fmtAmount(p.amount)} ${p.token}`;
     return {
       key: p.token, label: p.token, hue: colourOf(p.token), pct,
-      meta: `${usd(p.value)}${p.chain ? ` · ${sessionSummary.chainLabel(p.chain)}` : ""}`,
+      worth: [usd(p.value), units].filter(Boolean).join(" · "),
+      meta: p.chain ? sessionSummary.chainLabel(p.chain) : "",
       action: act ? String(act.action).toLowerCase() : "", rationale: act?.rationale || "",
       d: null, was: null, basis: "", assets: [],
     };
@@ -3267,13 +3273,13 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
   if (restValue > 0) {
     const pct = (restValue / total) * 100;
     rows.push({ key: OTHER_TOKEN, label: `Other (${rest.length})`, hue: OTHER_COLOR, pct,
-      meta: usd(restValue), action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
+      worth: usd(restValue), meta: "", action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
   }
   const held = new Set(positions.map((p) => p.token.toLowerCase()));
   for (const a of actions || []) {
     const t = String(a.token || "");
     if (!t || held.has(t.toLowerCase())) continue;
-    rows.push({ key: t, label: t, hue: colourOf(t), pct: 0, meta: "Not held on this date",
+    rows.push({ key: t, label: t, hue: colourOf(t), pct: 0, worth: "Not held", meta: "",
       action: String(a.action).toLowerCase(), rationale: a.rationale || "", d: null, was: null, basis: "", assets: [] });
   }
   return rows;
