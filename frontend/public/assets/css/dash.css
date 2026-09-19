@@ -5,14 +5,16 @@
    rule can leak in. Every dashboard fragment puts `class="a3"` on its own
    root element (never on <body> or the shell shared with marketing).
 
-   Two brand-covenant conflicts force this dedicated scope instead of reusing
-   tokens.css directly (see the plan §2 for the full rationale):
-     1. Radius: repo-wide --radius is 2px; the dashboard needs 0.25rem (lg),
-        with -2px/-4px md/sm steps, matching the original's tailwind.config.
-     2. tokens.css declares cyan a LINE-only accent and retires --color-purple;
-        the dashboard look uses cyan FILLS (chips, active nav) and purple
-        throughout, so it re-derives its own local HSL tokens rather than
-        reference the marketing palette vars.
+   One brand-covenant conflict forces this dedicated scope instead of reusing
+   tokens.css directly (the plan §2 names two; the radius one is gone):
+   tokens.css declares cyan a LINE-only accent and retires --color-purple,
+   while the dashboard look uses cyan and purple throughout (logo tiles,
+   badge hues, glows, the ask-roboto bubble), so it re-derives its own local
+   HSL tokens rather than reference the marketing palette vars. The site-wide
+   rules are not part of that exception: corners are square (tokens.css
+   --radius), text links are monochrome (--color-link), buttons and chips are
+   the one mono-caps family, and a selected tab, chip or nav item is
+   --color-text, never cyan.
 
    Class names for PORTED components (.metric-card, .glow-cyan/.glow-purple,
    .status-active/.status-inactive, .data-label/.data-value,
@@ -59,9 +61,10 @@
   --chart-4: 38 90% 55%;
   --chart-5: 340 75% 55%;
 
-  --radius: 0.25rem;
-  --radius-md: calc(var(--radius) - 0.125rem);
-  --radius-sm: calc(var(--radius) - 0.25rem);
+  /* Corners follow the site's --radius (tokens.css, square). The original's
+     md/sm steps keep their names so ported rules read unchanged. */
+  --radius-md: var(--radius);
+  --radius-sm: var(--radius);
 
   background: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -73,6 +76,26 @@
 .a3 *, .a3 *::before, .a3 *::after { box-sizing: border-box; }
 .a3 a { color: inherit; text-decoration: none; }
 .a3 button { font: inherit; color: inherit; }
+/* Text links are monochrome, as on every page of the site: an underline in
+   --color-link-line that goes to --color-link on hover, never cyan. A bare
+   anchor (a name in a table, an address, a link in running copy) also takes
+   --color-link as its colour; the nav-style links in this list rest muted
+   and go to --color-text on hover in their own rules. Cards, chips, pills
+   and sidebar items are not text links and carry their own treatment. */
+.a3 a:not([class]) { color: var(--color-link); }
+.a3 a:not([class]), .a3 .a3-terminal__agent, .a3 .a3-back-link, .a3 .a3-gate__link,
+.a3 .a3-submit__back, .a3 .a3-profile__back, .a3 .a3-profile__links a, .a3 .a3-profile__provenance a,
+.a3 a.data-label {
+  text-decoration-line: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+.a3 a:not([class]):hover, .a3 .a3-terminal__agent:hover, .a3 .a3-back-link:hover, .a3 .a3-gate__link:hover,
+.a3 .a3-submit__back:hover, .a3 .a3-profile__back:hover, .a3 .a3-profile__links a:hover,
+.a3 .a3-profile__provenance a:hover, .a3 a.data-label:hover { text-decoration-color: var(--color-link); }
+.a3 a.data-label:hover { color: var(--color-text); }
 
 /* ── Typography ──────────────────────────────────────────────────────────
    "all h1-h6 = JetBrains Mono 700" (src/index.css base layer) — the one
@@ -101,7 +124,7 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.15rem 0.55rem;
-  border-radius: 9999px;
+  border-radius: var(--radius);
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.7rem;
   text-transform: uppercase;
@@ -143,7 +166,7 @@
 .a3 .no-scrollbar::-webkit-scrollbar { display: none; }
 .a3 .no-scrollbar { scrollbar-width: none; }
 .a3 .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
-.a3 .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+.a3 .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: var(--radius); }
 .a3 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
 .a3 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
 
@@ -171,8 +194,10 @@
 }
 .a3 .a3-table tbody tr:last-child td { border-bottom: none; }
 .a3 .a3-table tbody tr:hover { background: hsl(var(--muted) / 0.2); }
-/* Sorted column gets a subtle tint on both header + cells (§5.1). */
-.a3 .a3-table th.is-sorted, .a3 .a3-table td.is-sorted { background: hsl(var(--primary) / 0.05); }
+/* Sorted column gets a subtle neutral tint on both header + cells (§5.1),
+   and its header takes the text colour: an active state, so not cyan. */
+.a3 .a3-table th.is-sorted, .a3 .a3-table td.is-sorted { background: hsl(var(--muted) / 0.35); }
+.a3 .a3-table th.is-sorted { color: var(--color-text); }
 
 /* ── Badge / pill variants (protocol/type badges throughout list pages) ── */
 .a3 .a3-badge {
@@ -180,7 +205,7 @@
   align-items: center;
   gap: 0.3rem;
   padding: 0.1rem 0.5rem;
-  border-radius: 9999px;
+  border-radius: var(--radius);
   border: 1px solid hsl(var(--border));
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.65rem;
@@ -196,6 +221,17 @@
 .a3 .a3-badge--amber { color: hsl(var(--amber)); border-color: hsl(var(--amber) / 0.4); }
 .a3 .a3-badge--destructive { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / 0.4); }
 .a3 .a3-badge--muted { color: hsl(var(--muted-foreground)); }
+/* A badge that is an action (/list3's submit link and Evidence button) is a
+   small secondary button: a neutral outline, full text colour, the family's
+   mono caps. */
+.a3 a.a3-badge, .a3 button.a3-badge {
+  border-color: var(--color-border-light);
+  color: var(--color-text);
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+.a3 a.a3-badge:hover, .a3 button.a3-badge:hover { border-color: var(--color-text); background: var(--color-surface); }
 
 /* ── Animations (src/index.css keyframes, renamed a3* to avoid any global
    @keyframes collision — @keyframes cannot itself be class-scoped) ──────── */
@@ -224,33 +260,27 @@
   background: transparent;
   color: hsl(var(--muted-foreground));
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1em;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .a3 .a3-tab:hover { background: hsl(var(--muted) / 0.6); }
-.a3 .a3-tab.is-active { background: hsl(var(--primary) / 0.12); color: hsl(var(--primary)); font-weight: 600; }
+.a3 .a3-tab.is-active { background: hsl(var(--muted)); color: var(--color-text); font-weight: 600; }
 
 /* Tooltip (hover + rich content) — bubble is appended to <body> by the
    x-a3-tooltip directive, so it is NOT a `.a3` descendant; style it globally
    under its own a3- prefix instead, one exception the directive's doc comment
-   explains. */
+   explains. Its skin (padding, surface, border, type) is the site's one
+   tooltip skin, shared in components.css with .rm-tip__bub; only the
+   placement lives here. */
 .a3-tooltip-bubble {
   position: fixed;
   transform: translate(-50%, -100%);
   z-index: 80;
   max-width: 18rem;
-  padding: 0.4rem 0.6rem;
-  border-radius: var(--radius-sm, 2px);
-  border: 1px solid hsl(216 24% 18%);
-  background: hsl(218 28% 9%);
-  color: hsl(230 15% 90%);
-  font-family: 'Space Grotesk', system-ui, sans-serif;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 }
 
@@ -297,13 +327,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
-  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border-light);
   background: transparent;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-text);
   cursor: pointer;
 }
-.a3 .a3-dialog-close:hover, .a3 .a3-sheet-close:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+.a3 .a3-dialog-close:hover, .a3 .a3-sheet-close:hover { background: var(--color-surface); border-color: var(--color-text); }
 
 /* Select (custom listbox) */
 .a3 .a3-select { position: relative; display: inline-block; }
@@ -335,14 +365,14 @@
   overflow: hidden;
 }
 .a3 .a3-select-option { display: block; width: 100%; text-align: left; padding: 0.45rem 0.75rem; background: transparent; border: none; color: hsl(var(--foreground)); font-size: 0.8rem; cursor: pointer; }
-.a3 .a3-select-option:hover, .a3 .a3-select-option.is-active { background: hsl(var(--primary) / 0.1); color: hsl(var(--primary)); }
+.a3 .a3-select-option:hover, .a3 .a3-select-option.is-active { background: hsl(var(--muted)); color: var(--color-text); }
 
 /* Switch */
 .a3 .a3-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
 .a3 .a3-switch-track {
   width: 2.25rem;
   height: 1.25rem;
-  border-radius: 9999px;
+  border-radius: var(--radius);
   background: hsl(var(--muted));
   border: 1px solid hsl(var(--border));
   position: relative;
@@ -355,11 +385,12 @@
   left: 1px;
   width: 1rem;
   height: 1rem;
-  border-radius: 9999px;
+  border-radius: var(--radius);
   background: hsl(var(--foreground));
   transition: transform 0.15s ease;
 }
-.a3 .a3-switch.is-on .a3-switch-track { background: hsl(var(--primary) / 0.5); }
+/* On is the selected state, so it is the text colour, not cyan. */
+.a3 .a3-switch.is-on .a3-switch-track { background: var(--color-text); }
 .a3 .a3-switch.is-on .a3-switch-thumb { transform: translateX(1rem); background: hsl(var(--primary-foreground)); }
 .a3 .a3-switch-label { font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
 
@@ -372,15 +403,18 @@
   border-right: 1px solid hsl(var(--border));
   color: hsl(var(--muted-foreground));
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.7rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
   cursor: pointer;
 }
 .a3 .a3-toggle:last-child { border-right: none; }
-.a3 .a3-toggle.is-active { background: hsl(var(--primary) / 0.12); color: hsl(var(--primary)); }
+.a3 .a3-toggle.is-active { background: hsl(var(--muted)); color: var(--color-text); }
 
 /* Progress */
-.a3 .a3-progress { width: 100%; height: 0.4rem; border-radius: 9999px; background: hsl(var(--muted)); overflow: hidden; }
-.a3 .a3-progress-bar { height: 100%; background: hsl(var(--primary)); border-radius: 9999px; transition: width 0.2s ease; }
+.a3 .a3-progress { width: 100%; height: 0.4rem; border-radius: var(--radius); background: hsl(var(--muted)); overflow: hidden; }
+.a3 .a3-progress-bar { height: 100%; background: hsl(var(--primary)); border-radius: var(--radius); transition: width 0.2s ease; }
 
 /* Skeleton (loading placeholder) */
 .a3 .a3-skeleton {
@@ -411,20 +445,24 @@
 
 /* Copy button — reuses the SITE-WIDE data-copy handler already wired in
    main.js (no new JS needed here); this only supplies the dashboard's own
-   pixels for that same element. */
+   pixels for that same element: the site's secondary button, small. */
 .a3 .a3-copy-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--color-border-light);
   background: transparent;
-  color: hsl(var(--muted-foreground));
+  color: var(--color-text);
   border-radius: var(--radius-sm);
   padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
   cursor: pointer;
 }
-.a3 .a3-copy-btn:hover { color: hsl(var(--foreground)); background: hsl(var(--muted)); }
+.a3 .a3-copy-btn:hover { border-color: var(--color-text); background: var(--color-surface); }
 .a3 .a3-copy-btn.is-copied { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }
 
 /* Icon sprite sizing helper (assets/img/dash-icons.svg, referenced via
@@ -480,8 +518,10 @@
 
 .a3-shell__nav { flex: 1; overflow-y: auto; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.15rem; }
 .a3-shell__tools { border-top: 1px solid hsl(var(--border)); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.15rem; }
-.a3-shell__nav-link,
-.a3-shell__signout {
+/* Scoped under .a3 so the muted rest colour outranks the `.a3 a` and
+   `.a3 button` resets above; hover and the active item go to --color-text. */
+.a3 .a3-shell__nav-link,
+.a3 .a3-shell__signout {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -498,8 +538,8 @@
   text-align: left;
   white-space: nowrap;
 }
-.a3-shell__nav-link:hover, .a3-shell__signout:hover { background: hsl(var(--muted) / 0.5); }
-.a3-shell__nav-link.is-active { background: hsl(var(--primary) / 0.1); color: hsl(var(--primary)); font-weight: 600; }
+.a3 .a3-shell__nav-link:hover, .a3 .a3-shell__signout:hover { background: hsl(var(--muted) / 0.5); color: var(--color-text); }
+.a3 .a3-shell__nav-link.is-active { background: hsl(var(--muted)); color: var(--color-text); font-weight: 600; }
 .a3-shell__nav-icon { width: 1rem; height: 1rem; flex: none; }
 .a3-shell--collapsed .a3-shell__nav-label { display: none; }
 
@@ -568,23 +608,30 @@
 }
 .a3-gate__toggle { position: absolute; right: 0.6rem; display: inline-flex; background: transparent; border: none; color: hsl(var(--muted-foreground)); cursor: pointer; padding: 0; }
 .a3-gate__toggle:hover { color: hsl(var(--foreground)); }
-.a3-gate__submit {
+/* The access key is the one filled call to action; the passkey route below
+   it is the outlined secondary button. The transparent border keeps the two
+   the same height, and the .a3 scope lets the family's type outrank the
+   `.a3 button { font: inherit }` reset. */
+.a3 .a3-gate__submit {
   width: 100%;
   padding: 0.65rem;
   border-radius: var(--radius);
-  border: none;
+  border: 1px solid transparent;
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-weight: 500;
   font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   cursor: pointer;
 }
-.a3-gate__submit:disabled { opacity: 0.5; cursor: not-allowed; }
-.a3-gate__link { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
-.a3-gate__link:hover { color: hsl(var(--primary)); }
+.a3 .a3-gate__submit:hover:not(:disabled) { background: #fff; }
+.a3 .a3-gate__submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.a3 .a3-gate__submit--ghost { background: transparent; border-color: var(--color-border-light); color: var(--color-text); }
+.a3 .a3-gate__submit--ghost:hover:not(:disabled) { background: var(--color-surface); border-color: var(--color-text); }
+.a3 .a3-gate__link { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-gate__link:hover { color: var(--color-text); }
 
 /* Shared "coming soon" placeholder (views/dash/coming-soon.html) — every
    nav-wired dashboard route (issue #380) points here until its own phase
@@ -603,7 +650,7 @@
   background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius);
   padding: 1rem 1.25rem; margin-bottom: 1.5rem; cursor: pointer;
 }
-.a3 .a3-ticker-card:hover { border-color: hsl(var(--primary) / 0.4); }
+.a3 .a3-ticker-card:hover { border-color: var(--color-text-muted); }
 .a3 .a3-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; justify-content: space-between; margin: 1.5rem 0 1rem; }
 .a3 .a3-spark-empty { color: hsl(var(--muted-foreground)); font-size: 0.8rem; }
 .a3 .a3-row-highlight { background: hsl(var(--primary) / 0.1); box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.4); animation: a3Pulse 1s ease-in-out 4; }
@@ -634,16 +681,20 @@
 .a3 .a3-field-hint { font-size: 0.72rem; color: hsl(var(--muted-foreground)); }
 .a3 .a3-field-error { font-size: 0.72rem; color: hsl(var(--destructive)); }
 
+/* The site's button family: primary is the one filled cyan call to action,
+   outline is the secondary button (a neutral rule that goes to the text
+   colour on hover, never cyan). */
 .a3 .a3-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
   padding: 0.6rem 1rem; border-radius: var(--radius); border: 1px solid transparent;
-  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.75rem;
-  text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+  font-family: var(--font-mono); font-weight: 500; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer;
 }
 .a3 .a3-btn--primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.a3 .a3-btn--primary:hover:not(:disabled) { background: #fff; }
 .a3 .a3-btn--primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.a3 .a3-btn--outline { background: transparent; border-color: hsl(var(--border)); color: hsl(var(--foreground)); }
-.a3 .a3-btn--outline:hover { border-color: hsl(var(--primary) / 0.4); color: hsl(var(--primary)); }
+.a3 .a3-btn--outline { background: transparent; border-color: var(--color-border-light); color: var(--color-text); }
+.a3 .a3-btn--outline:hover { border-color: var(--color-text); background: var(--color-surface); }
 
 .a3 .a3-card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.5rem; }
 .a3 .a3-card--purple { border-color: hsl(var(--secondary) / 0.4); }
@@ -669,8 +720,8 @@
 .a3-submit__intro { text-align: center; margin-bottom: 1.5rem; }
 .a3-submit__form-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; margin-bottom: 1rem; }
 .a3-submit__form-title { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.85rem; color: hsl(var(--primary)); }
-.a3-submit__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-top: 0.5rem; }
-.a3-submit__back:hover { color: hsl(var(--primary)); }
+.a3 .a3-submit__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-top: 0.5rem; }
+.a3 .a3-submit__back:hover { color: var(--color-text); }
 .a3 pre.a3-code { background: hsl(var(--muted) / 0.4); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.75rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; overflow-x: auto; white-space: pre; }
 
 /* ── /market + /dashboard "Agent Activity Log" TerminalFeed (issue #392,
@@ -719,8 +770,7 @@
 .a3 .a3-terminal__status--success { color: hsl(var(--success)); }
 .a3 .a3-terminal__status--pending { color: hsl(var(--amber)); }
 .a3 .a3-terminal__status--rejected { color: hsl(var(--destructive)); }
-.a3 .a3-terminal__agent { color: hsl(var(--primary)); }
-.a3 .a3-terminal__agent:hover { text-decoration: underline; }
+.a3 .a3-terminal__agent { color: var(--color-link); }
 .a3 .a3-terminal__meta { color: hsl(var(--success) / 0.6); font-size: 0.72rem; display: block; padding-left: 1.2rem; }
 .a3 .a3-terminal__cursor {
   display: inline-block;
@@ -754,24 +804,25 @@
 .a3 .a3-page-subtitle { margin: 0.25rem 0 0; font-size: 0.85rem; color: hsl(var(--muted-foreground)); }
 .a3 .a3-page-header-actions { display: flex; align-items: center; gap: 0.6rem; }
 
-/* Outline button (Refresh / Scan now / Retry) — same visual family as
-   .a3-copy-btn, just a touch larger for a primary page action. */
+/* Outline button (Refresh / Scan now / Retry) — the site's secondary
+   button, like .a3-copy-btn, a touch larger for a page-level action. */
 .a3 .a3-outline-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--color-border-light);
   background: transparent;
-  color: hsl(var(--foreground));
+  color: var(--color-text);
   border-radius: var(--radius-sm);
   padding: 0.4rem 0.75rem;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1em;
   cursor: pointer;
 }
-.a3 .a3-outline-btn:hover:not(:disabled) { background: hsl(var(--muted)); }
+.a3 .a3-outline-btn:hover:not(:disabled) { border-color: var(--color-text); background: var(--color-surface); }
 .a3 .a3-outline-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .a3 .a3-summary-line { font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin: 0 0 0.85rem; }
@@ -783,8 +834,9 @@
 .a3 .a3-pct-up { color: hsl(var(--success)); }
 .a3 .a3-pct-down { color: hsl(var(--destructive)); }
 
-/* Filter/toggle chips (wallets §5.13 "X402 only" / "Hide empty"). Reuses the
-   .a3-tab pill look with an on/off dot rather than inventing a new control. */
+/* Filter/toggle chips (wallets §5.13 "X402 only" / "Hide empty"): the site's
+   chip, the button family's mono caps at the chip rung, with an on/off dot.
+   Selected is edged in the text colour, never cyan. */
 .a3 .a3-chip {
   display: inline-flex;
   align-items: center;
@@ -792,15 +844,16 @@
   border: 1px solid hsl(var(--border));
   background: transparent;
   color: hsl(var(--muted-foreground));
-  border-radius: 9999px;
+  border-radius: var(--radius);
   padding: 0.3rem 0.7rem;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.1em;
   cursor: pointer;
 }
-.a3 .a3-chip.is-on { color: hsl(var(--primary)); border-color: hsl(var(--primary) / 0.4); }
+.a3 .a3-chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
+.a3 .a3-chip.is-on { color: var(--color-text); border-color: var(--color-text); background: var(--color-surface); }
 .a3 .a3-chip-dot { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: currentColor; opacity: 0.5; }
 .a3 .a3-chip.is-on .a3-chip-dot { opacity: 1; }
 
@@ -834,6 +887,9 @@
 }
 .a3 .a3-roboto__chat { display: flex; flex-direction: column; gap: 1rem; }
 .a3-roboto__pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* The suggestion pills are chips, outlined like .a3-chip. */
+.a3 .a3-roboto__pills .a3-tab { border: 1px solid hsl(var(--border)); }
+.a3 .a3-roboto__pills .a3-tab:hover { color: var(--color-text); border-color: var(--color-border-light); }
 .a3-roboto__log { display: flex; flex-direction: column; gap: 0.85rem; max-height: 26rem; overflow-y: auto; padding-right: 0.25rem; }
 .a3-roboto__msg--user { display: flex; justify-content: flex-end; }
 .a3-roboto__msg--roboto { display: flex; justify-content: flex-start; }
@@ -853,7 +909,7 @@
    negative tracking, weight 500. Everything else here composes existing
    P0.1/P0.2 primitives (.metric-card, .a3-badge, .a3-progress, .a3-table). */
 .a3 .a3-back-link { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-bottom: 1rem; }
-.a3 .a3-back-link:hover { color: hsl(var(--primary)); }
+.a3 .a3-back-link:hover { color: var(--color-text); }
 
 .a3 .a3-dossier-head {
   display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1.5rem;
@@ -881,15 +937,20 @@
 .a3 .a3-dossier-desc { color: hsl(var(--muted-foreground)); font-size: 0.85rem; max-width: 40rem; margin: 0 0 0.6rem; }
 .a3 .a3-dossier-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .a3 .a3-dossier-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
+/* The dossier's website and X links are secondary buttons. The wallet pill
+   is a frame around an address (its copy button and explorer link are the
+   controls), so it keeps the address's own case and takes no hover. */
 .a3 .a3-dossier-pill {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.75rem;
-  border-radius: 9999px; border: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.3);
-  color: hsl(var(--foreground)); font-size: 0.75rem;
+  border-radius: var(--radius); border: 1px solid var(--color-border-light); background: transparent;
+  color: var(--color-text); font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.1em;
 }
-.a3 .a3-dossier-pill:hover { border-color: hsl(var(--primary) / 0.4); color: hsl(var(--primary)); }
+.a3 a.a3-dossier-pill:hover { border-color: var(--color-text); background: var(--color-surface); }
+.a3 div.a3-dossier-pill { text-transform: none; letter-spacing: 0; }
 
 .a3 .a3-money-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.a3 .a3-money-strip .metric-card { display: flex; flex-direction: column; gap: 0.3rem; border-radius: 1rem; }
+.a3 .a3-money-strip .metric-card { display: flex; flex-direction: column; gap: 0.3rem; }
 
 .a3 .a3-evidence-layout { display: grid; grid-template-columns: 1.35fr 0.9fr; gap: 1rem; margin-bottom: 1.5rem; }
 @media (max-width: 900px) { .a3 .a3-evidence-layout { grid-template-columns: 1fr; } }
@@ -917,7 +978,7 @@
    Hero/KPI/ratio/history/activity layout; table shell/badges/metric-card
    above are shared P0.1/P0.2 primitives reused as-is. */
 .a3 .a3-profile__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
-.a3 .a3-profile__back:hover { color: hsl(var(--primary)); }
+.a3 .a3-profile__back:hover { color: var(--color-text); }
 .a3 .a3-profile__hero { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: space-between; margin-top: 0.75rem; }
 .a3 .a3-profile__hero-main { display: flex; gap: 1rem; min-width: 0; }
 .a3 .a3-profile__logo {
@@ -929,13 +990,13 @@
 .a3 .a3-profile__pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0; }
 .a3 .a3-profile__links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.5rem; }
 .a3 .a3-profile__links a { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
-.a3 .a3-profile__links a:hover { color: hsl(var(--primary)); }
+.a3 .a3-profile__links a:hover { color: var(--color-text); }
 .a3 .a3-profile__score {
   min-width: 14rem; flex: none; border-left: 1px solid hsl(var(--border)); padding-left: 1.5rem;
   display: flex; flex-direction: column; gap: 0.5rem;
 }
 .a3 .a3-profile__scorebar { display: flex; align-items: center; gap: 0.5rem; font-size: 0.7rem; color: hsl(var(--muted-foreground)); }
-.a3 .a3-profile__scorebar-track { flex: 1; height: 4px; border-radius: 9999px; background: hsl(var(--muted)); overflow: hidden; }
+.a3 .a3-profile__scorebar-track { flex: 1; height: 4px; border-radius: var(--radius); background: hsl(var(--muted)); overflow: hidden; }
 .a3 .a3-profile__scorebar-fill { height: 100%; background: hsl(var(--primary)); }
 .a3 .a3-profile__notice { border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.6rem 0.9rem; margin: 0.75rem 0 0; text-transform: none; letter-spacing: normal; }
 .a3 .a3-profile__kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
@@ -958,7 +1019,7 @@
 .a3 .a3-profile__activity-row { padding: 0.5rem 0; border-top: 1px solid hsl(var(--border)); font-size: 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .a3 .a3-profile__provenance { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.75rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
 .a3 .a3-profile__provenance a { color: hsl(var(--muted-foreground)); }
-.a3 .a3-profile__provenance a:hover { color: hsl(var(--primary)); }
+.a3 .a3-profile__provenance a:hover { color: var(--color-text); }
 
 @media (max-width: 640px) {
   .a3 .a3-profile__hero { flex-direction: column; }
@@ -1000,12 +1061,15 @@
 
 .a3 .a3-dossier-chart-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
 .a3 .a3-dossier-chip-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* Linked-agent chips: the site's chip, a neutral edge that goes to the text
+   colour on hover. */
 .a3 .a3-dossier-chip {
   display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.65rem;
-  border: 1px solid hsl(var(--border)); border-radius: 9999px; font-size: 0.75rem;
-  color: hsl(var(--foreground));
+  border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--color-text);
 }
-.a3 .a3-dossier-chip:hover { border-color: hsl(var(--primary) / 0.5); color: hsl(var(--primary)); }
+.a3 .a3-dossier-chip:hover { border-color: var(--color-text); }
 
 /* Honest "not available yet" / staleness banner — reused for every P1.6/P1.7
    dependency gap and the D14 stale-wallet-balance notice (never a fabricated

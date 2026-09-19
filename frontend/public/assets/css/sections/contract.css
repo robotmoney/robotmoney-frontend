@@ -114,23 +114,26 @@
   .contract__address-code { font-size: 1rem; } /* sm:text-base */
 }
 
-/* button: shrink-0 px-5 py-2.5 text-xs font-mono uppercase tracking-widest border + hover */
+/* Copy: the button family's outlined secondary at the small size. A neutral
+   rule that goes to full text colour on hover, never cyan. */
 .contract__copy {
   flex-shrink: 0;
   padding: 0.625rem 1.25rem; /* py-2.5 px-5 */
   font-family: var(--font-mono);
   font-size: 0.75rem; /* text-xs */
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.1em; /* tracking-widest */
   color: var(--color-text);
   background: transparent;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-light);
+  border-radius: 0;
   cursor: pointer;
   transition: all 0.3s; /* duration-300 */
 }
 .contract__copy:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+  border-color: var(--color-text);
+  background: var(--color-surface);
 }
 
 /* Action links: flex flex-col sm:flex-row items-center justify-center gap-4 pt-4 */
@@ -146,21 +149,26 @@
   .contract__actions { flex-direction: row; }
 }
 
-/* a: px-8 py-4 border text-text-muted font-mono text-sm uppercase tracking-widest + hover */
+/* The two destinations are the button family's outlined secondary (a
+   --color-border-light outline, mono caps at 0.1em and weight 500, the border
+   going to --color-text on hover): no filled call to action here, and never
+   cyan. */
 .contract__action {
   padding: 1rem 2rem; /* py-4 px-8 */
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-light);
+  background: transparent;
+  color: var(--color-text);
   font-family: var(--font-mono);
   font-size: 0.875rem; /* text-sm */
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.1em; /* tracking-widest */
   text-decoration: none;
   transition: all 0.3s; /* duration-300 */
 }
 .contract__action:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+  border-color: var(--color-text);
+  background: var(--color-surface);
 }
 
 /* dexscreener link adds: flex items-center gap-3 */

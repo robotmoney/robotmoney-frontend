@@ -127,7 +127,7 @@
   justify-content: center;
 }
 
-/* ── Depositors pill ── */
+/* ── Depositors ── */
 .architecture__depositors {
   display: inline-flex;
   align-items: center;
@@ -135,7 +135,7 @@
   padding: 0.75rem 1.5rem;        /* py-3 px-6 */
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 2px;             /* rounded-sm */
+  border-radius: 0;               /* square, not the source's rounded-sm */
 }
 .architecture__dot {
   width: 0.5rem;
@@ -413,7 +413,9 @@
   word-break: break-all;          /* break-all */
 }
 
-/* CTA buttons */
+/* CTA buttons: the site's one button family. Install is the filled primary;
+   Learn More is the outlined secondary, a neutral rule that goes to full text
+   colour on hover and is never cyan. */
 .architecture__skill-cta {
   display: flex;
   gap: 0.75rem;                   /* gap-3 */
@@ -424,6 +426,7 @@
   padding: 0.625rem 1rem;         /* py-2.5 px-4 */
   font-family: var(--font-mono);
   font-size: 0.75rem;             /* text-xs */
+  font-weight: 500;               /* font-medium */
   text-transform: uppercase;
   letter-spacing: 0.1em;          /* tracking-widest */
   text-decoration: none;
@@ -431,18 +434,18 @@
 .architecture__btn--primary {
   background: var(--color-accent);
   color: var(--color-void);
-  font-weight: 500;               /* font-medium */
   transition: background-color 0.3s;
 }
 .architecture__btn--primary:hover { background: #ffffff; }
 .architecture__btn--ghost {
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
-  transition: border-color 0.3s, color 0.3s;
+  border: 1px solid var(--color-border-light);
+  background: transparent;
+  color: var(--color-text);
+  transition: border-color 0.3s, background-color 0.3s;
 }
 .architecture__btn--ghost:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+  border-color: var(--color-text);
+  background: var(--color-surface);
 }
 
 /* steps list (space-y-4) */

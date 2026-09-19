@@ -105,11 +105,18 @@ async function main() {
   ]);
   await checkView("/views/allocation.html", [
     "x-data=\"allocationView()\"",
-    "alp__tbl",                    // vault holdings table (rows reconcile to TVL)
-    "alp__meta",                   // the rail: in force since, provenance, vaults, deployed, chain
-    "sleeveStaleLabel(r.adapter)", // per-row stale provenance, carried over from the page this replaced
-    "vaultBackfilled()",           // scheduler catch-up badge (issue #614 AC4)
-    "id=\"vault\"",                // the anchor RM-115 fixes for the implementation section
+    "alp__tbl",                    // the change ledger (was, now, move per sleeve)
+    "alp__meta",                   // the rail: in force since, provenance, router
+    "id=\"vaults\"",               // the Vaults section, where bare /vault lands
+    "vaultRows()",                 // its four rows: recommended, applied, actual, gaps
+    "id=\"vault\"",                // the legacy anchor the deposit skill cites, on the Vaults heading
+  ]);
+  // One vault's page, /vault/:slug: the factsheet's Alpine view, its holdings
+  // table, and the data-source label that marks devnet and saved figures.
+  await checkView("/views/vault.html", [
+    "x-data=\"vaultView()\"",
+    "rr-holdings",
+    "data-vault-label",
   ]);
   // The wallet-performance charts (walletPerfView(), formerly embedded in
   // allocation.html) live on their own page under the

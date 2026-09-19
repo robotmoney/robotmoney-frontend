@@ -1,0 +1,257 @@
+{
+  "slug": "rmrwa",
+  "symbol": "rmRWA",
+  "name": "Real World Assets",
+  "bucket": "real_world_assets",
+  "availability": "live",
+  "status": "active",
+  "address": null,
+  "tvlUsd": 5000,
+  "sharePrice": 1.0115,
+  "exitFeeBps": null,
+  "recommendedBps": 500,
+  "appliedBps": 500,
+  "actualBps": 500,
+  "gaps": {
+    "governance": 0,
+    "flow": 0,
+    "total": 0
+  },
+  "network": {
+    "chainId": 918453,
+    "label": "Staging devnet",
+    "testData": true
+  },
+  "holdingsAsOf": "2026-09-17T10:00:00Z",
+  "flags": {
+    "depositsPaused": false,
+    "withdrawalsPaused": false,
+    "shutdown": false
+  },
+  "caps": null,
+  "apy": null,
+  "depositors": null,
+  "guards": null,
+  "auditStatus": null,
+  "contracts": {
+    "vault": null,
+    "router": null,
+    "registry": null
+  },
+  "mechanics": {
+    "redeemOnly": true,
+    "maxSlippageBps": null,
+    "venues": []
+  },
+  "holdings": [
+    {
+      "kind": "token",
+      "label": "SPY",
+      "symbol": "SPY",
+      "address": null,
+      "balance": null,
+      "valueUsd": 2600,
+      "weightBps": 5200,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Gold",
+      "symbol": "GOLD",
+      "address": null,
+      "balance": null,
+      "valueUsd": 2200,
+      "weightBps": 4400,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "idle",
+      "label": "Idle USDC",
+      "symbol": "USDC",
+      "address": null,
+      "balance": 200,
+      "valueUsd": 200,
+      "weightBps": 400,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    }
+  ],
+  "history": {
+    "tvl": [
+      {
+        "t": "2026-09-03T10:00:00Z",
+        "tvlUsd": 3000
+      },
+      {
+        "t": "2026-09-04T10:00:00Z",
+        "tvlUsd": 3142.86
+      },
+      {
+        "t": "2026-09-05T10:00:00Z",
+        "tvlUsd": 3285.71
+      },
+      {
+        "t": "2026-09-06T10:00:00Z",
+        "tvlUsd": 3428.57
+      },
+      {
+        "t": "2026-09-07T10:00:00Z",
+        "tvlUsd": 3571.43
+      },
+      {
+        "t": "2026-09-08T10:00:00Z",
+        "tvlUsd": 3714.29
+      },
+      {
+        "t": "2026-09-09T10:00:00Z",
+        "tvlUsd": 3857.14
+      },
+      {
+        "t": "2026-09-10T10:00:00Z",
+        "tvlUsd": 4000
+      },
+      {
+        "t": "2026-09-11T10:00:00Z",
+        "tvlUsd": 4142.86
+      },
+      {
+        "t": "2026-09-12T10:00:00Z",
+        "tvlUsd": 4285.71
+      },
+      {
+        "t": "2026-09-13T10:00:00Z",
+        "tvlUsd": 4428.57
+      },
+      {
+        "t": "2026-09-14T10:00:00Z",
+        "tvlUsd": 4571.43
+      },
+      {
+        "t": "2026-09-15T10:00:00Z",
+        "tvlUsd": 4714.29
+      },
+      {
+        "t": "2026-09-16T10:00:00Z",
+        "tvlUsd": 4857.14
+      },
+      {
+        "t": "2026-09-17T10:00:00Z",
+        "tvlUsd": 5000
+      }
+    ],
+    "sharePrice": [],
+    "weights": [
+      {
+        "t": "2026-09-01T10:00:00Z",
+        "appliedBps": 500,
+        "kind": "Effective weight"
+      }
+    ],
+    "receipts": [
+      {
+        "sessionId": null,
+        "t": "2026-09-16T10:00:00Z",
+        "recommendedBps": 500,
+        "applied": false
+      }
+    ]
+  },
+  "activity": [
+    {
+      "t": "2026-09-16T23:07:00Z",
+      "kind": "Deposit",
+      "assets": 705.14,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T23:19:00Z",
+      "kind": "Deposit",
+      "assets": 848.04,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T12:38:00Z",
+      "kind": "Deposit",
+      "assets": 473.34,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T06:45:00Z",
+      "kind": "Withdrawal",
+      "assets": 352.41,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T09:11:00Z",
+      "kind": "Deposit",
+      "assets": 270.14,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T03:09:00Z",
+      "kind": "Deposit",
+      "assets": 454.57,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T07:16:00Z",
+      "kind": "Deposit",
+      "assets": 829.77,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T02:01:00Z",
+      "kind": "Deposit",
+      "assets": 152.01,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-07T00:05:00Z",
+      "kind": "Deposit",
+      "assets": 355.37,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-05T08:14:00Z",
+      "kind": "Withdrawal",
+      "assets": 806.9,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-04T23:33:00Z",
+      "kind": "Deposit",
+      "assets": 898.03,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-04T06:48:00Z",
+      "kind": "Deposit",
+      "assets": 867.02,
+      "shares": null,
+      "tx": null
+    },
+    {
+      "t": "2026-09-03T00:31:00Z",
+      "kind": "Deposit",
+      "assets": 715.82,
+      "shares": null,
+      "tx": null
+    }
+  ]
+}

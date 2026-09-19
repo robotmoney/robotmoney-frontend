@@ -56,6 +56,13 @@ let activeRender = null;
 let renderedPath = null;
 
 async function render(pathname) {
+  // Bare /vault is the four vaults on /allocation. The address moves there,
+  // query kept (the vault data switch rides on it), so the page, its canonical
+  // and its #vaults section all agree on where the reader is.
+  if (pathname === "/vault" || pathname === "/vault/") {
+    history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
+    pathname = "/allocation";
+  }
   const host = viewEl();
   if (!host) return;
   renderedPath = pathname;
@@ -164,7 +171,9 @@ function anchorOffset() {
 }
 
 // Scroll to the element the fragment names; false when there is none.
-function scrollToFragment() {
+// Exported for a view whose sections draw only after its data lands (a vault
+// page's #holdings): it calls this once they exist.
+export function scrollToFragment() {
   let id = "";
   try { id = location.hash ? decodeURIComponent(location.hash.slice(1)) : ""; } catch (_) { return false; }
   const target = id ? document.getElementById(id) : null;

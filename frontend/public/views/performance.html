@@ -225,8 +225,14 @@
 }
 /* Same link treatment as .a2-foot__note below. There is no global <a> rule,
    so an unstyled link in the lede would render browser-default blue. */
-.a2-hero__lede a { color: var(--color-accent); text-decoration: none; }
-.a2-hero__lede a:hover { text-decoration: underline; }
+.a2-hero__lede a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.a2-hero__lede a:hover { text-decoration-color: var(--color-link); }
 
 /* Section */
 .a2-section { padding-top: 1rem; }
@@ -289,7 +295,6 @@
   margin: 0 0 1.5rem;
   padding: 0.85rem 1rem;
   border: 1px solid rgba(232, 166, 64, 0.5);
-  border-radius: 2px;
   background: rgba(232, 166, 64, 0.1);
   color: var(--color-warm, #e8a640);
   font-size: 0.85rem;
@@ -312,7 +317,6 @@
 .a2-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   padding: 1.25rem;
 }
 
@@ -348,22 +352,26 @@
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
+/* A text action, so it is set as a link: text colour over a neutral rule. */
 .a2-table__toggle {
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: var(--color-accent);
+  color: var(--color-link);
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
-.a2-table__toggle:hover { text-decoration: underline; }
+.a2-table__toggle:hover { text-decoration-color: var(--color-link); }
 .a2-table td.a2-r .a2-dim { color: var(--color-text-muted); }
 
 .a2-table__scroll {
   overflow-x: auto;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
 .a2-table {
@@ -435,8 +443,14 @@
   color: var(--color-text-muted);
   margin: 0;
 }
-.a2-foot__note a { color: var(--color-accent); text-decoration: none; }
-.a2-foot__note a:hover { text-decoration: underline; }
+.a2-foot__note a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.a2-foot__note a:hover { text-decoration-color: var(--color-link); }
 
 @media (min-width: 768px) {
   .a2 { padding: 0 2rem 5rem; }

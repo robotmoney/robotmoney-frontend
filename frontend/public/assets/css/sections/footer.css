@@ -64,13 +64,19 @@
   max-width: 42ch;
 }
 
-/* inline accent links inside the about copy */
-.footer__link-accent {
-  color: var(--color-accent);
-  text-decoration: none;
-}
-.footer__link-accent:hover {
+/* Inline links inside the about copy. Monochrome, like every text link on
+   the site (David, 2026-09-18): a step lighter than the muted paragraph, over
+   a neutral rule that goes to the link's own colour on hover. Never cyan. */
+.footer__about-link {
+  color: var(--color-link);
   text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.2s var(--ease-out-expo);
+}
+.footer__about-link:hover {
+  text-decoration-color: var(--color-link);
 }
 
 /* <h4 className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--color-text-muted)]"> */
@@ -93,16 +99,22 @@
   margin-top: 0.4rem; /* reduced from space-y-2 */
 }
 
-/* <a className="block text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"> */
+/* Column links are nav links: muted and bare at rest, since a column of
+   underlines is noise where every entry is a link, and on hover the words go
+   to full text colour over the link's rule. Never cyan, at rest or on hover. */
 .footer__link {
   display: block;
   font-size: 0.875rem; /* text-sm */
   color: var(--color-text-muted);
   text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
   transition: color 0.2s var(--ease-out-expo);
 }
 .footer__link:hover {
-  color: var(--color-accent);
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link);
 }
 
 /* Bottom bar inner:
