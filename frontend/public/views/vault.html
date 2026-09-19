@@ -111,31 +111,56 @@
           </section>
         </template>
 
-        <!-- ALLOCATION: this vault's weight as recommended, as the router
-             applies it, and as the vault actually is against the other three.
-             Shown for every vault: a vault that is not live still has a
-             recommended weight. With no router weights (Base today) there is
-             no Applied layer, and one gap, actual against recommended. -->
+        <!-- ALLOCATION: the ring every allocation view draws, each vault at
+             its share of the four vaults' combined TVL, set against the weight
+             the router applies (the recommendation, before a router applies
+             any) with the gap in points, this vault in focus. Shown for every
+             vault: a vault that is not live holds nothing, and says so. -->
         <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="alloc-h">Allocation</h2>
           </div>
-          <div class="rr-split">
+          <div class="rr-split rr-split--rule">
             <div>
-              <div class="rr-layers">
-                <template x-for="l in layers()" :key="l.key">
-                  <div class="rr-layers__row">
-                    <span class="rr-k" x-text="l.label"></span>
-                    <span class="rr-layers__bar" aria-hidden="true"><i data-mark="series" :style="`width:${shareWidth(l.bps)}%;background:${id.color}`"></i></span>
-                    <span class="rr-mono" x-text="fmtBps(l.bps)"></span>
+              <div class="rr-x" x-data="vaultAllocExplorer(slug)" @keydown.escape.window="close()" @pointerleave="leave()">
+                <div class="rr-mix">
+                  <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                    <span class="sv__wdonut-host" role="img" :aria-label="`Each vault's share of the combined TVL: ${explorerLabel()}`"
+                          x-html="explorerSvg()"
+                          x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                    <figcaption>
+                      <b x-text="activeRow()?.pct == null ? '—' : fmtPctTrim(activeRow().pct)"></b>
+                      <span x-text="activeRow() ? `${activeRow().label} actual` : 'Actual'"></span>
+                    </figcaption>
+                  </figure>
+                  <div class="rr-legend rr-legend--cols" :class="allocBasis().length > 8 ? 'rr-legend--long' : ''">
+                    <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Actual</span><span x-text="allocBasis()"></span><span>Gap</span></div>
+                    <template x-for="r in explorerRows()" :key="r.key">
+                      <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                              :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                              :aria-pressed="active() === r.key ? 'true' : 'false'"
+                              @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                        <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                        <span><span class="rr-legend__l" x-text="r.label"></span></span>
+                        <b x-text="r.pct == null ? '—' : fmtPctTrim(r.pct)"></b>
+                        <span class="rr-legend__was"><span class="rr-sr" x-text="`${allocBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span>
+                        <span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Gap </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span>
+                      </button>
+                    </template>
                   </div>
-                </template>
+                </div>
+                <span class="rr-sr" role="status" x-text="status"></span>
               </div>
-              <div class="rr-meta">
-                <template x-for="g in gaps()" :key="g.key">
-                  <span class="rr-meta__i"><span x-text="g.name"></span> <b><span class="alp__mv" :class="g.part.cls"><span x-text="g.part.label"></span></span></b></span>
-                </template>
-              </div>
+              <template x-if="pipelineFacts().length">
+                <div class="rr-meta">
+                  <template x-for="f in pipelineFacts()" :key="f.key">
+                    <span class="rr-meta__i"><span x-text="f.name"></span>
+                      <template x-if="f.part"><b><span class="alp__mv" :class="f.part.cls"><span x-text="f.part.label"></span></span></b></template>
+                      <template x-if="!f.part"><b x-text="f.value"></b></template>
+                    </span>
+                  </template>
+                </div>
+              </template>
             </div>
             <div>
               <dl class="rr-dl">

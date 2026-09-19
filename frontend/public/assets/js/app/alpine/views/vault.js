@@ -37,9 +37,16 @@ import {
   recommendationHref,
   sleeveNote,
   statusLabel,
+  VAULTS,
   vaultBySlug,
 } from "../../lib/vault-data.js";
 import { scrollToFragment } from "../../router.js";
+import { sessionSummary } from "../../lib/session-summary.js";
+import { sleeveExplorer } from "../../lib/sleeve-explorer.js";
+import * as weightChange from "../../lib/weight-change.js";
+
+/** @param {number | null} v */
+const fmtPctOrDash = (v) => (v == null ? "—" : weightChange.fmtPctTrim(v));
 
 const HOLDINGS_SHOWN = 8;
 const ACTIVITY_PAGE = 10;
@@ -83,6 +90,14 @@ const newestFirst = (a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0);
 const tickDate = (t, sameYear) => (sameYear ? fmtDate(t).replace(/, \d{4}$/, "") : fmtDate(t));
 
 export function registerVaultView(Alpine) {
+  // The ring's hover and focus (lib/sleeve-explorer.js) with one vault in
+  // focus at rest: the page's own. Hovering or selecting another vault names
+  // it in the centre, and letting go comes back to this one.
+  Alpine.data("vaultAllocExplorer", (focusKey) => ({
+    ...sleeveExplorer(),
+    focusKey,
+    active() { return this.pinned ?? this.hovered ?? this.focusKey; },
+  }));
   Alpine.data("vaultView", () => ({
     slug: "",
     id: null,           // the vault's identity (lib/vault-data.js VAULTS)
@@ -232,19 +247,50 @@ export function registerVaultView(Alpine) {
     threeLayers() {
       return hasAppliedLayer(this.overview());
     },
-    layers() {
+    // ── the allocation, as a ring ────────────────────────────────────────────
+    // The ring every allocation view draws: each vault at its share of the
+    // four vaults' combined TVL, set against the weight the router applies
+    // (the recommendation, before any router applies one), and the gap in
+    // points, this vault in focus. The vault subject's By vault ring, read
+    // from this vault.
+    explorerRows() {
+      const o = this.overview();
+      const three = this.threeLayers();
+      const pp = (v) => { const n = numberOrNull(v); return n === null ? null : n / 100; };
+      return VAULTS.map((v) => {
+        const r = o?.vaults?.find((x) => x.slug === v.slug) ?? null;
+        const gap = numberOrNull(three ? r?.gaps?.flow : r?.gaps?.total);
+        return {
+          key: v.slug, label: v.symbol, hue: v.color, meta: "", assets: [],
+          pct: pp(r?.actualBps),
+          was: pp(three ? r?.appliedBps : r?.recommendedBps),
+          d: gap === null ? null : Math.round(gap) / 100,
+        };
+      });
+    },
+    explorerSvg() {
+      return sessionSummary.ringSvg(this.explorerRows().map((r) => ({ ...r, pct: r.pct ?? 0, colour: r.hue })));
+    },
+    explorerLabel() {
+      return this.explorerRows().map((r) => `${r.label} ${fmtPctOrDash(r.pct)}`).join(", ");
+    },
+    // Named apart from the explorer's own legendBasis(), which the nested
+    // component would otherwise answer first.
+    allocBasis() { return this.threeLayers() ? "Applied" : "Recommended"; },
+    hasBook() { return false; },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    // What the legend does not carry, once a router applies its own weights:
+    // this vault's recommended weight and the governance gap to what the
+    // router applies.
+    pipelineFacts() {
+      if (!this.threeLayers()) return [];
       const r = this.row();
       return [
-        { key: "recommended", label: "Recommended", bps: r?.recommendedBps ?? null },
-        ...(this.threeLayers() ? [{ key: "applied", label: "Applied", bps: r?.appliedBps ?? null }] : []),
-        { key: "actual", label: "Actual", bps: r?.actualBps ?? null },
+        { key: "recommended", name: "Recommended", value: fmtBps(r?.recommendedBps) },
+        { key: "governance", name: "Governance gap", part: gapParts(r?.gaps?.governance) },
       ];
-    },
-    gaps() {
-      const g = this.row()?.gaps;
-      return this.threeLayers()
-        ? [{ key: "governance", name: "Governance gap", part: gapParts(g?.governance) }, { key: "flow", name: "Flow gap", part: gapParts(g?.flow) }]
-        : [{ key: "total", name: "Gap", part: gapParts(g?.total) }];
     },
     recommendation() {
       return this.overview()?.recommendation ?? null;

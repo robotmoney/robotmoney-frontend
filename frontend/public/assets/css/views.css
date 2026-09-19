@@ -1875,6 +1875,9 @@ a.sv__vfy { text-decoration: none; }
 .rr-legend__head { display: grid; padding: 0 0.5rem 0.5rem; border-bottom: 1px solid var(--color-border);
   font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
 .rr-legend__head > span:nth-child(n+3), .rr-legend--cols .rr-legend__row > b { text-align: right; }
+/* A basis named by a long word (a vault set against its Recommended weight)
+   takes the width its head needs. */
+.rr-legend--long .rr-legend__head, .rr-legend--long.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 5.5rem 4.75rem; }
 /* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
 .rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .rr-legend__was { color: var(--color-text-muted); }

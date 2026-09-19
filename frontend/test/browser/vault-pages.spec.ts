@@ -155,7 +155,18 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
 const pct = (bps: number | null) => (bps == null ? "—" : `${Number((bps / 100).toFixed(1))}%`);
 const dollars = (s: string) => Number(s.replace(/[$,]/g, ""));
 const usd2 = (n: number) => "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-const layerRow = (page: Page, label: string) => page.locator(".rr-layers__row").filter({ hasText: label }).locator(".rr-mono");
+// This vault's weight at one layer, as the Allocation ring's legend reads it:
+// Actual is the focused row's figure, the basis (Applied, or Recommended
+// before a router applies any) its second column, and a layer the legend does
+// not carry is a fact under the ring.
+const thisVault = (page: Page) => page.locator("#allocation .rr-legend__row.is-active");
+const layerRow = (page: Page, label: string) =>
+  label === "Actual"
+    ? thisVault(page).locator("> b")
+    : page.locator("#allocation .rr-legend--cols").filter({ has: page.locator(".rr-legend__head", { hasText: label }) })
+      .locator(".rr-legend__row.is-active .rr-legend__was > span:last-child")
+      .or(page.locator("#allocation .rr-meta__i").filter({ hasText: label }).locator("b"));
+const gapOf = (page: Page) => thisVault(page).locator(".rr-legend__d");
 const fact = (page: Page, label: string) => page.locator(".rr-head + .rr-meta .rr-meta__i").filter({ hasText: label });
 const sideways = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -211,9 +222,9 @@ for (const [i, v] of SLUGS.entries()) {
     await expect(layerRow(page, "Recommended")).toHaveText(pct(row.recommendedBps));
     await expect(layerRow(page, "Applied")).toHaveText(pct(row.appliedBps));
     await expect(layerRow(page, "Actual")).toHaveText(pct(row.actualBps));
-    for (const bar of await page.locator(".rr-layers__bar i").all()) {
-      expect(await bar.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(CATEGORICAL_RGB[i]);
-    }
+    // Its arc and its swatch in the vault's hue, and its row in focus.
+    expect(await page.locator(`#allocation circle[data-sleeve="${v.slug}"]`).evaluate((el) => getComputedStyle(el).stroke)).toBe(CATEGORICAL_RGB[i]);
+    expect(await thisVault(page).locator("> i").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(CATEGORICAL_RGB[i]);
 
     // The holdings reconcile to the vault's TVL, in whole dollars as the
     // swarm pages state a book: each figure rounds by at most half a dollar.
@@ -256,10 +267,12 @@ test("rmUSDC's devnet gaps and recommendation read as the overview states them",
   await stubSaved(page);
   await setMode(page, "devnet");
   await openVault(page, "rmusdc");
+  // The flow gap is the ring's Gap column for this vault; the governance gap,
+  // which the legend does not carry, a fact under it.
   const gaps = page.locator("#allocation .rr-meta");
   await expect(gaps.locator(".rr-meta__i", { hasText: "Governance gap" })).toContainText("+5 pp");
-  await expect(gaps.locator(".rr-meta__i", { hasText: "Flow gap" })).toContainText("+2 pp");
-  await expect(gaps.locator(".alp__mv.up")).toHaveCount(2);
+  await expect(gapOf(page)).toHaveText("Gap +2 pp");
+  await expect(page.locator("#allocation .rr-meta .alp__mv.up, #allocation .rr-legend__row.is-active .alp__mv.up")).toHaveCount(2);
   // A synthetic recommendation has no session to open: a date, not a link.
   const dl = page.locator("#allocation .rr-dl");
   await expect(dl).toContainText("Sep 16, 2026");
@@ -302,10 +315,10 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   // recommended, in place of the governance and flow gaps.
   await expect(layerRow(page, "Applied")).toHaveCount(0);
   await expect(layerRow(page, "Actual")).toHaveText("100%");
-  const gaps = page.locator("#allocation .rr-meta .rr-meta__i");
-  await expect(gaps).toHaveCount(1);
-  await expect(gaps).toContainText("Gap");
-  await expect(gaps).not.toContainText("Governance");
+  await expect(page.locator("#allocation .rr-legend__head")).toHaveText("VaultActualRecommendedGap");
+  await expect(page.locator("#allocation .rr-meta")).toHaveCount(0);
+  await expect(gapOf(page)).toContainText("Gap");
+  await expect(page.locator("#allocation")).not.toContainText("Governance");
 
   // The Base feed serves no history, activity or router weights: no empty
   // sections standing in for them.
@@ -337,7 +350,7 @@ test("rmUSDC on Base from the saved snapshot: the adapters, the contract, the de
   await expect(page.locator("[data-vault-label]").first()).toHaveText("Saved Base snapshot");
   // The archive's 2026-06-24 recommendation, 95/3/0/2.
   await expect(layerRow(page, "Recommended")).toHaveText("95%");
-  await expect(page.locator("#allocation .rr-meta__i", { hasText: "Gap" })).toContainText("+5 pp");
+  await expect(gapOf(page)).toContainText("+5 pp");
   await expect(page.locator("#allocation .rr-dl a")).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");
   await expectNoBrowserErrors(errors);
 });
@@ -352,7 +365,7 @@ test("rmUSDC on Base from the live feed: the same vault, and no data label", asy
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
   // The stubbed session's weights, linked to the session itself.
   await expect(layerRow(page, "Recommended")).toHaveText("90%");
-  await expect(page.locator("#allocation .rr-meta__i", { hasText: "Gap" })).toContainText("+10 pp");
+  await expect(gapOf(page)).toContainText("+10 pp");
   await expect(page.locator("#allocation .rr-dl a")).toHaveAttribute("href", `/swarm/sessions/${LIVE_SESSION.id}`);
   await expect(page.locator("#allocation .rr-dl a")).toHaveText("Sep 1, 2026");
   await expectNoBrowserErrors(errors);
@@ -403,7 +416,7 @@ test("rmAGENT on Base is not live: its allocation and mechanics, nothing to hold
   await expect(page.locator("#mechanics .rr-note")).toContainText("Capital and returns are not guaranteed.");
   await expect(layerRow(page, "Recommended")).toHaveText("3%");
   await expect(layerRow(page, "Actual")).toHaveText("0%");
-  await expect(page.locator("#allocation .rr-meta__i", { hasText: "Gap" })).toContainText("−3 pp");
+  await expect(gapOf(page)).toContainText("−3 pp");
   await expect(page.locator(".rr-disc")).toHaveCount(0);
   await expect(page.locator(".rr-cta")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
@@ -609,7 +622,8 @@ test("devnet-unreadable: rmPROTO cannot be read, so no vault has an actual weigh
   await expect(layerRow(page, "Actual")).toHaveText("—");
   await navigate(page, "/vault/rmusdc");
   await expect(layerRow(page, "Actual")).toHaveText("—");
-  await expect(page.locator("#allocation .rr-meta__i", { hasText: "Flow gap" })).toContainText("—");
+  // No actual, no gap: the cell stays empty rather than inventing one.
+  await expect(gapOf(page).locator(".alp__mv")).toHaveCount(0);
 });
 
 test("devnet-unreadable on /allocation: Actual, the combined TVL and the tracking error are missing", async ({ page }) => {
@@ -632,7 +646,11 @@ test("devnet-no-recommendation: Recommended and the governance gap are missing, 
   await expect(layerRow(page, "Recommended")).toHaveText("—");
   const gaps = page.locator("#allocation .rr-meta");
   await expect(gaps.locator(".rr-meta__i", { hasText: "Governance gap" })).toContainText("—");
-  await expect(gaps.locator(".rr-meta__i", { hasText: "Flow gap" })).toContainText("0 pp");
+  // On its applied weight: the Gap cell is empty, as a legend leaves a sleeve
+  // that did not move, beside the two figures that say so.
+  await expect(thisVault(page).locator(".rr-legend__was")).toHaveText("Applied 5%");
+  await expect(layerRow(page, "Actual")).toHaveText("5%");
+  await expect(gapOf(page).locator(".alp__mv")).toHaveCount(0);
   await expect(page.locator("#allocation .rr-dl")).toContainText("No recommendation published");
 });
 
@@ -838,7 +856,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 async function covenantFindings(page: Page, root: string): Promise<string[]> {
   return page.evaluate(([sel, HUES]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
-    const SQUARE = ".rr-dot, .rr-layers__bar i, .rr-area__pt, .rr-stat";
+    const SQUARE = ".rr-dot, .rr-legend__row > i, .rr-area__pt, .rr-stat";
     const out: string[] = [];
     const roots = Array.from(document.querySelectorAll(sel as string));
     if (!roots.length) return [`no ${sel}`];
@@ -891,7 +909,7 @@ for (const mode of ["devnet", "base"] as const) {
     await expect(page.locator("h1")).toHaveText(SYMBOLS[i]);
     await expect(page.locator("#holdings .rr-stat__v")).not.toHaveText("—");
     expect(await paintOf(page, ".cv--detail .rr-head .rr-dot", "backgroundColor")).toEqual([CATEGORICAL_RGB[i]]);
-    expect(new Set(await paintOf(page, ".cv--detail .rr-layers__bar i, .rr-holdings .rr-share i", "backgroundColor")))
+    expect(new Set(await paintOf(page, "#allocation .rr-legend__row.is-active > i, .rr-holdings .rr-share i", "backgroundColor")))
       .toEqual(new Set([CATEGORICAL_RGB[i]]));
     if (mode === "devnet") expect(await paintOf(page, "#history polyline", "stroke")).toEqual([CATEGORICAL_RGB[i]]);
     expect(await covenantFindings(page, ".cv--detail")).toEqual([]);
