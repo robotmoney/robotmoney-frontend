@@ -198,9 +198,9 @@ script prompts for the other three.
 is the whole mechanism, and it does exactly two things: it runs
 `backend/migrations/0053_database_role_taxonomy.sql` through `psql` as the
 bootstrap login, then prompts `\password` for `rm_app`, `rm_worker`, and
-`rm_readonly` in turn. It never accepts, prints, writes, or logs a password —
-`psql` prompts on the terminal — so the URL inside the `.env` file it reads
-must be **password-free** or it refuses:
+`rm_readonly` in turn. The script never prints, writes, or logs a password — a
+URL without an embedded password is completed from the `.env`'s
+`POSTGRES_PASSWORD` when present and only then prompts:
 
 ```bash
 # provisioning.env — the .env file passed as the script's single argument:

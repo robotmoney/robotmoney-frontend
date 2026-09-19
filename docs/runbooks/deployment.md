@@ -506,10 +506,12 @@ if enabled.
 
 The first cutover is deliberately not automated against production. A reviewed
 operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with the path to
-a `.env` file holding a password-free `MIGRATE_DATABASE_URL` (falling back to
-`DATABASE_URL`); the helper neither accepts a URL on the command line nor
-prints the URL it reads. `psql` prompts interactively and the helper never
-stores, prints, logs, or accepts credentials as command-line arguments. It
+a `.env` file holding a `MIGRATE_DATABASE_URL` (falling back to
+`DATABASE_URL`); a password embedded in that URL authenticates directly, while
+a URL without one is completed from the `.env`'s own `POSTGRES_PASSWORD` when
+present and only then falls back to a `psql` password prompt. The helper neither
+accepts a URL on the command line nor prints the URL it reads; it never
+prints, writes, logs, or accepts credentials as command-line arguments. It
 creates/repairs `rm_owner`, `rm_app`, `rm_worker`, and `rm_readonly`, then
 prompts for each runtime password. Run the normal migration command once with
 the short-lived migration credential, verify the role probes, then install only
