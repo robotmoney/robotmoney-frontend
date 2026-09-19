@@ -22,7 +22,7 @@ import { allocationFramework } from "../lib/allocation-framework.js";
 import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard } from "../lib/take-card.js";
-import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
+import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -577,7 +577,9 @@ export const helpers = {
     return this.escapeHtml(line)
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
-      .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, '$1<a href="$2">$2</a>');
+      // A site path reads as the page's title (seo.js citeTitle), which is
+      // escaped too; a path the site has no page for keeps its own text.
+      .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, (_, pre, path) => `${pre}<a href="${path}">${this.escapeHtml(citeTitle(path) || path)}</a>`);
   },
   // Render a member's take body.
   //

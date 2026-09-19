@@ -55,6 +55,11 @@
   /* Beam at rest, for a rule that marks a control without shouting. Still a
      LINE and still Beam's hue — only its weight changes, never its meaning. */
   --color-accent-line: rgba(0, 229, 255, 0.42);
+  /* Text links are monochrome (David, 2026-09-18): a lighter neutral than the
+     text around them over a neutral rule, never Beam. Cyan stays a chart line,
+     a filled button and a focus ring. */
+  --color-link: var(--color-text);
+  --color-link-line: rgba(242, 244, 249, 0.3);
   --color-warm: #e8a640;
   --color-warn: #ff6644;
   --color-green: #10b981;

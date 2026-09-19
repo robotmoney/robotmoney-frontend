@@ -1586,25 +1586,26 @@ table.alp__tbl--led th:first-child { width: 40%; }
    in front of an h2 reads as generated filler, and the headings name their
    sections on their own. */
 .rr a:not(.btn-primary) { color: inherit; text-decoration: none; }
-/* Two link treatments and no third. Inline: accent text over the accent
-   line (ink in a table, where a column of accent would shout). Nav: mono,
-   uppercase, text-soft over the accent line. Every selector is at least
-   (0,2,1), so it matches the reset above and, written after it, wins. */
+/* Two link treatments and no third, both monochrome (David, 2026-09-18: no
+   cyan links). Inline: --color-link, lighter than the text it sits in, over
+   --color-link-line (ink in a table). Nav: mono, uppercase, text-soft over the
+   same line. Every selector is at least (0,2,1), so it matches the reset above
+   and, written after it, wins. */
 .rr .rr-prose a, .rr .rr-dl a, .rr a.rr-lnk {
-  color: var(--color-accent); border-bottom: 1px solid var(--color-accent-line);
+  color: var(--color-link); border-bottom: 1px solid var(--color-link-line);
   transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
 .rr .rr-table a.rr-lnk { color: var(--color-text); border-bottom-color: var(--color-border-light); }
 .rr .rr-crumbs, .rr .rr-recnav, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
   font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-soft); }
 .rr .rr-crumbs a, .rr .rr-recnav a, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
-  border-bottom: 1px solid var(--color-accent-line); padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-link-line); padding-bottom: 0.25rem;
   transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
 .rr .rr-prose a:hover, .rr .rr-dl a:hover, .rr a.rr-lnk:hover, .rr .rr-table a.rr-lnk:hover,
 .rr .rr-prose a:focus-visible, .rr .rr-dl a:focus-visible, .rr a.rr-lnk:focus-visible, .rr .rr-table a.rr-lnk:focus-visible {
-  border-bottom-color: var(--color-accent); }
+  border-bottom-color: var(--color-link); }
 .rr .rr-crumbs a:hover, .rr .rr-recnav a:hover, .rr a.rr-meta__lnk:hover, .rr a.rr-sec__aside:hover,
 .rr .rr-crumbs a:focus-visible, .rr .rr-recnav a:focus-visible, .rr a.rr-meta__lnk:focus-visible, .rr a.rr-sec__aside:focus-visible {
-  color: var(--color-text); border-bottom-color: var(--color-accent); }
+  color: var(--color-text); border-bottom-color: var(--color-text); }
 .rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-k { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.5; text-transform: uppercase;
   letter-spacing: 0.11em; color: var(--color-text-muted); }
@@ -1682,7 +1683,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 /* A 23px line of text, repeated down a member's page: an invisible tap area
    around it, as .rr-meta__lnk has. */
 .rr-more::before { content: ""; position: absolute; inset: -0.625rem -0.5rem; }
-.rr-more:hover { border-bottom-color: var(--color-accent); }
+.rr-more:hover { border-bottom-color: var(--color-link); }
 /* A take's memo link is the card's other action, so it reads as "Read full
    take" does, beside it rather than run into it. (0,2,0) over the legacy
    mono-caps .sv__memo-link. */
@@ -1775,7 +1776,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 a.sv__vfy { text-decoration: none; }
 .rr-take a:focus-visible, .rr-take button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-take__name:hover, .rr-take__name:focus-visible { color: var(--color-text); text-decoration: underline;
-  text-decoration-color: var(--color-accent); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+  text-decoration-color: var(--color-link); text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; min-width: 0; }
 .rr-take__call { margin: 0 0 0.5rem; }
 .rr-take__text > div > .sv__take-body, .rr-take__text > .sv__take-body { margin-top: 0; }
