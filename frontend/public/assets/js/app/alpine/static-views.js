@@ -3022,12 +3022,21 @@ export function registerStaticViews(Alpine) {
     },
 
     // ── the research record (RM-121) ────────────────────────────────────────
-    // Evidence read after render: the consensus receipt (live sessions only)
+    // A consensus receipt carries the four sleeve weights, so only a published
+    // weights session can have one. Asking for any other session's receipt
+    // was a 404 on every portfolio page, and the browser logs a failed request
+    // even when the page handles it.
+    receiptApplies() {
+      const s = this.session;
+      return this.source === "api" && !!s?.id && s.state === "published"
+        && s.swarmRecommendation?.type === "bucket_weights";
+    },
+    // Evidence read after render: the consensus receipt (see receiptApplies)
     // and this session's neighbours on its subject. Neither blocks the page.
     async loadEvidence() {
       const s = this.session;
       if (!s) return;
-      if (this.source === "api" && s.id) {
+      if (this.receiptApplies()) {
         api.get(path(ROUTES.swarm.sessionConsensusReceipt, { id: s.id }))
           .then((r) => { this.receiptStatus = r?.verified === true ? "Verified" : "Not verified"; })
           .catch((e) => { this.receiptStatus = e?.status === 404 ? "Not published" : "Unavailable"; });

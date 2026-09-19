@@ -638,6 +638,31 @@ test("a live submission whose signature failed still gets the failed-check wordi
   await expect(badge).not.toHaveClass(/sv__vfy--arch/);
 });
 
+// A consensus receipt carries the four sleeve weights, so only a published
+// weights session has one. The page asked every live session for its receipt,
+// and a portfolio session's 404 surfaced as a console error that failed the
+// full-stack smoke; the Evidence row then read "Not published" for a receipt
+// that could never exist.
+test("only a published weights session asks for its consensus receipt, and only it shows the row", async ({ page }) => {
+  const receiptAsks: string[] = [];
+  page.on("request", (req) => { if (new URL(req.url()).pathname.endsWith("/consensus-receipt")) receiptAsks.push(req.url()); });
+
+  await mockSessionApi(page, { session: positionSession("2026-06-26", "woon", "Woon Treasury"), allocation: ALLOCATION });
+  await page.goto("/swarm/2026-06-26/woon");
+  await expect(page.locator(".rr-take").first()).toBeVisible();
+  await expect(page.locator("#evidence .rr-dl dt").filter({ hasText: "Consensus receipt" })).toHaveCount(0);
+  expect(receiptAsks).toEqual([]);
+
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await mockSessionApi(page, { session: bucketSession("2026-06-26", { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 }), allocation: ALLOCATION });
+  await page.goto("/swarm/2026-06-26/robotmoney-allocation");
+  const row = page.locator("#evidence .rr-dl > div").filter({ has: page.locator("dt", { hasText: "Consensus receipt" }) });
+  await expect(row).toHaveCount(1);
+  // The stub answers 404: a weights session whose receipt is not out yet.
+  await expect(row.locator("dd")).toContainText("Not published");
+  expect(receiptAsks).toHaveLength(1);
+});
+
 // A member can attach a memo to its take. The shared take card (RM-121)
 // dropped the link, and no archived take has a memo, so the static preview
 // never showed the loss. Member supplied, so only a web address is linked.
@@ -719,11 +744,9 @@ test("a date the static archive DOES cover is read from the API, not from the ch
   await expect(page.locator(".sv__error")).toBeHidden();
   await expect(page.locator(".rr-take .sv__take-body").first()).toContainText("ARCHIVE IMPORT MARKER");
   await expect(page.locator(".rr-take")).toHaveCount(3);
-  // Two things only the API path renders, so each is a direct assertion that
-  // the page did not fall back to the archive: the consensus receipt row
-  // (x-if="source === 'api'"), and a seal that links to the take's receipt,
-  // which needs a real take id the archive's rows do not carry.
-  await expect(page.locator("#evidence .rr-dl dt").filter({ hasText: "Consensus receipt" })).toHaveCount(1);
+  // Only the API path renders a seal that links to the take's receipt, which
+  // needs a real take id the archive's rows do not carry: a direct assertion
+  // that the page did not fall back to the archive.
   await expect(page.locator("[data-verified-badge]").first()).toBeVisible();
   await expect(page.locator("[data-verified-badge]").first()).toHaveAttribute("href", "/swarm/takes/take-athena");
 });

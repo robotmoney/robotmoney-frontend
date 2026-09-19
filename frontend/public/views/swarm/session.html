@@ -543,7 +543,7 @@
           <div class="rr-split">
             <template x-if="takes.length"><div><p class="rr-k rr-sub" x-text="signatureHeadline()"></p></div></template>
             <dl class="rr-dl">
-              <template x-if="source === 'api'">
+              <template x-if="receiptApplies()">
                 <div><dt>Consensus receipt</dt><dd>
                   <span x-text="receiptStatus"></span>
                   <template x-if="receiptStatus === 'Verified' || receiptStatus === 'Not verified'">
