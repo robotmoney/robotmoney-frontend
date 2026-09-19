@@ -300,9 +300,9 @@
                             <td x-show="stackMultiChain()" x-text="chainLabel(w.chain)"></td>
                             <td class="q" x-show="stackHasAddress()">
                               <template x-if="explorerHref(w.chain, w.address)">
-                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" :title="w.address" x-text="`${truncAddress(w.address)} ↗`"></a>
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="`${truncAddress(w.address)} ↗`"></a>
                               </template>
-                              <template x-if="!explorerHref(w.chain, w.address)"><span :title="w.address" x-text="truncAddress(w.address) || '—'"></span></template>
+                              <template x-if="!explorerHref(w.chain, w.address)"><span class="sp-addr" x-text="w.address || '—'"></span></template>
                             </td>
                           </tr>
                         </template>
@@ -325,9 +325,9 @@
                             <td x-text="chainLabel(w.chain)"></td>
                             <td class="q">
                               <template x-if="explorerHref(w.chain, w.address)">
-                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" :title="w.address" x-text="`${truncAddress(w.address)} ↗`"></a>
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="`${truncAddress(w.address)} ↗`"></a>
                               </template>
-                              <template x-if="!explorerHref(w.chain, w.address)"><span :title="w.address" x-text="truncAddress(w.address) || '—'"></span></template>
+                              <template x-if="!explorerHref(w.chain, w.address)"><span class="sp-addr" x-text="w.address || '—'"></span></template>
                             </td>
                           </tr>
                         </template>
@@ -363,18 +363,23 @@
                         <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                       </figcaption>
                     </figure>
-                    <div class="rr-legend">
+                    <!-- The columns every weights legend has: the vault's actual
+                         weight and the weight in force. No gap: the latest
+                         recommendation above gives one, measured its own way,
+                         and a second here would point the other way. -->
+                    <div class="rr-legend" :class="legendBasis() ? 'rr-legend--cols' : ''">
+                      <template x-if="legendBasis()">
+                        <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Actual</span><span x-text="legendBasis()"></span><span></span></div>
+                      </template>
                       <template x-for="r in explorerRows()" :key="r.key">
                         <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
                                 :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
                                 :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`vault-${r.key}`"
                                 @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
                           <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
-                          <span x-text="r.label"></span>
+                          <span><span class="rr-legend__l" x-text="r.label"></span></span>
                           <b x-text="fmtPctTrim(r.pct)"></b>
-                          <template x-if="r.was != null">
-                            <small x-text="`${r.basis} ${fmtPctTrim(r.was)}`"></small>
-                          </template>
+                          <template x-if="legendBasis()"><span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span></template>
                         </button>
                       </template>
                     </div>
@@ -449,7 +454,7 @@
                         <tr class="rr-in">
                           <th scope="row"><span x-text="p.label"></span></th>
                           <td x-show="stackMultiChain()" x-text="chainLabel(p.chain)"></td>
-                          <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
+                          <td class="q" x-text="fmtAmount(p.balance)"></td>
                           <td class="q" x-text="fmtPrice(p.price_usd)"></td>
                           <td class="q" x-text="vaultUsd(p.value)"></td>
                           <td class="q">
@@ -480,7 +485,7 @@
                       <tr>
                         <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
                         <td x-text="chainLabel(p.chain)"></td>
-                        <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
+                        <td class="q" x-text="fmtAmount(p.balance)"></td>
                         <td class="q" x-text="fmtPrice(p.price_usd)"></td>
                         <td class="q" x-text="fmtUsd(p.value_usd)"></td>
                         <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
@@ -604,8 +609,7 @@
                         <td class="q" :class="v === 0 ? 'is-zero' : ''">
                           <span x-text="v == null ? '—' : pctLabel(v)"></span>
                           <template x-if="moveAt(row, i)">
-                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, i).d)" x-text="changeLabel(moveAt(row, i).d)"
-                                  :title="`${changeLabel(moveAt(row, i).d)} vs target ${pctLabel(moveAt(row, i).was)}`"></span>
+                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, i).d)" x-text="changeLabel(moveAt(row, i).d)"></span>
                           </template>
                         </td>
                       </template>
@@ -647,10 +651,10 @@
                           <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
                         </template>
                         <template x-if="rowHeld(row).length && rowActions(row).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`${rowHeld(row).length} held`"></span>
+                          <span class="rm-tip rm-tip--label rm-tip--end rr-held"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="`${rowHeld(row).length} held`"></button><span class="rm-tip__bub" role="tooltip" x-text="`Held: ${rowHeld(row).join(', ')}`"></span></span>
                         </template>
                         <template x-if="rowHeld(row).length && !rowActions(row).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`All ${rowHeld(row).length} held`"></span>
+                          <span class="rm-tip rm-tip--label rm-tip--end rr-held"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="`All ${rowHeld(row).length} held`"></button><span class="rm-tip__bub" role="tooltip" x-text="`Held: ${rowHeld(row).join(', ')}`"></span></span>
                         </template>
                         <template x-if="recommendation(row)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(row).text"></span></template>
                         <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span class="rr-note" style="margin:0">No position calls</span></template>
@@ -686,6 +690,8 @@
   </div>
 
   <style>
+    /* An address with no explorer to link: whole, wrapping anywhere. */
+    .sp-addr { overflow-wrap: anywhere; }
     /* Page-local: the book's chart and wallet list. The record's components
        are shared in views.css (.rr-*). */
     .sp-wallets li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }

@@ -182,8 +182,9 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors).toEqual([]);
 }
 
+// Whole dollars, as vault-data's fmtUsd states a book.
 function usd2(v: number | null): string {
-  return v == null ? "—" : "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return v == null ? "—" : "$" + v.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
 // ── the constraint a reviewer checks first ──────────────────────────────────
@@ -322,58 +323,51 @@ test("each sleeve card names its vault, and holds no status and no holdings tabl
   await expectNoBrowserErrors(errors);
 });
 
-test("the donut draws one arc per funded sleeve, on the categorical palette, not normalised to its own sum", async ({ page }) => {
+test("the ring draws one arc per funded sleeve, on the categorical palette, not normalised to its own sum", async ({ page }) => {
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
 
-  const donut = page.locator(".alp__donut svg");
-  await expect(donut).toBeVisible();
+  // The ring every swarm page draws (lib/sleeve-explorer.js, ringSvg).
+  const ring = page.locator(".alp__ring .rr-ring");
+  await expect(ring).toBeVisible();
 
   // One arc per sleeve with a target above zero, and none for a sleeve without
   // one: 95/5/0/0 is two arcs, and the sliver is the truth about this
   // allocation rather than something to round away.
   const funded = framework.strategy.filter((row) => row.targetPct > 0);
-  await expect(donut.locator("path")).toHaveCount(funded.length);
+  const arcs = ring.locator("circle[data-sleeve]");
+  await expect(arcs).toHaveCount(funded.length);
 
-  // Slices come from lib/chart-theme.js CATEGORICAL, separated by HUE. This
-  // page drew a green LUMINANCE ramp until it was measured: four green steps
-  // separate at CVD dE 7.1 against 18.2 for these four, and a normal-vision
-  // floor below 15 means full-colour readers cannot tell the pair apart
-  // either. The palette's own comment names that mistake as the reason it
-  // exists.
-  const fills = await donut.locator("path").evaluateAll((els) =>
-    els.map((el) => getComputedStyle(el).fill));
-  for (const fill of fills) expect(CATEGORICAL_RGB).toContain(fill);
-  // Keyed on POSITION, so a sleeve keeps its hue when another one's weight
-  // changes. Colour follows the entity, never its rank.
-  expect(fills).toEqual(CATEGORICAL_RGB.slice(0, funded.length));
+  // Arcs come from lib/chart-theme.js CATEGORICAL, separated by HUE, keyed on
+  // POSITION, so a sleeve keeps its hue when another one's weight changes.
+  const strokes = await arcs.evaluateAll((els) => els.map((el) => getComputedStyle(el).stroke));
+  expect(strokes).toEqual(CATEGORICAL_RGB.slice(0, funded.length));
 
-  // The ring underneath is the full 360, so a policy that does not add to 100
-  // shows the remainder rather than being rescaled to look complete.
-  await expect(donut.locator("circle")).toHaveCount(1);
-
-  // The hole carries what the ring adds up to, which is the one fact the ring
-  // cannot state for itself: it is drawn to the full 360, so a policy adding
-  // to less than 100 leaves an arc unfilled and the hole names the remainder.
-  await expect(donut).toContainText("ALLOCATED");
-  await expect(donut).toContainText("100%");
+  // The track underneath is the full ring, so a policy that does not add to
+  // 100 shows the remainder rather than being rescaled to look complete; at
+  // rest the centre names what the ring is, or the remainder when there is one.
+  await expect(ring.locator("circle:not([data-sleeve])")).toHaveCount(1);
+  await expect(ring.locator("figcaption")).toHaveText("In force");
 
   // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
   // its hue: it holds nothing, which is not the same as having no identity.
-  const legend = page.locator(".alp__legend-list li");
+  const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend).toHaveCount(framework.strategy.length);
   await expect(legend.first()).toContainText(framework.strategy[0].label);
   // Under each name, how many assets it holds and nothing else: which vault
   // carries the sleeve is the Vaults table's to say.
   for (const [i, b] of framework.buckets.entries()) {
     const n = b.items.length;
-    await expect(legend.nth(i).locator("span").first()).toHaveText(`${n} asset${n === 1 ? "" : "s"}`);
+    await expect(legend.nth(i).locator("small")).toHaveText(`${n} asset${n === 1 ? "" : "s"}`);
   }
-  const swatchFill = await legend.nth(2).locator(".alp__swatch")
-    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const swatchFill = await legend.nth(2).locator("> i").evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(CATEGORICAL_RGB).toContain(swatchFill);
+
+  // Hovering a sleeve names it in the centre, as on /swarm.
+  await legend.first().hover();
+  await expect(ring.locator("figcaption")).toContainText(framework.strategy[0].label);
 });
 
 // Constituents restart at the front of the palette inside their own sleeve,
@@ -398,8 +392,8 @@ test("a constituent keeps one hue in its sleeve's bar and in its name", async ({
   expect(nameFills).toEqual(barFills);
 });
 
-// A vault wears its sleeve's hue: the Vaults table's dot, the sleeve's donut
-// slice and its legend swatch are one colour (lib/vault-data.js VAULTS[i].color
+// A vault wears its sleeve's hue: the Vaults table's dot, the sleeve's arc
+// and its legend swatch are one colour (lib/vault-data.js VAULTS[i].color
 // === CATEGORICAL[i]).
 test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   await stubEnvironment(page, { sessions: [weightsSession()] });
@@ -411,7 +405,7 @@ test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   const dotStyles = await dots.evaluateAll((els) =>
     els.map((el) => [getComputedStyle(el).backgroundColor, getComputedStyle(el).borderRadius]));
   expect(dotStyles).toEqual(CATEGORICAL_RGB.slice(0, 4).map((c) => [c, "0px"]));
-  const swatches = await page.locator(".alp__legend-list .alp__swatch").evaluateAll((els) =>
+  const swatches = await page.locator(".alp__ring .rr-legend__row > i").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
   expect(swatches).toEqual(CATEGORICAL_RGB.slice(0, 4));
 });
@@ -517,7 +511,7 @@ test("a stale vault feed says so beside the time it was read", async ({ page }) 
   await stubEnvironment(page, { vault: { ...goldenVault(), stale: true } });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(vaultFact(page, "Read")).toContainText("Jul 30, 2026, 4:20 PM UTC · stale");
+  await expect(vaultFact(page, "Read")).toContainText("Jul 30, 2026 16:20 UTC · stale");
 });
 
 // This spec's host is a local one, so a Base feed that is down falls back to
@@ -529,7 +523,7 @@ test("the vault feed down: the saved Base snapshot, labelled as such", async ({ 
   await page.goto("/index.html");
   await navigate(page, "/allocation");
   await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Saved Base snapshot");
-  await expect(vaultRows(page).nth(0).locator("td").first()).toHaveText("$199.70");
+  await expect(vaultRows(page).nth(0).locator("td").first()).toHaveText("$200");
   await expectNoBrowserErrors(errors);
 });
 
@@ -544,7 +538,7 @@ test("no vault read at all: the section names the gap and prints no figure", asy
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
   await expect(page.locator(".alp__meta")).toContainText("Router —");
   // The policy does not depend on the vaults.
-  await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
+  await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
 });
 
 // The chip is the one place on this page it would be easy to lie, so it gets
@@ -616,7 +610,7 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
         .filter((n) => n.nodeType === Node.TEXT_NODE)
         .map((n) => n.textContent || "").join("").trim();
       // A FIGURE, not merely a string with a digit in it: "Aave V3 USDC" is a
-      // name and may carry the interface hue, "$199.70" and "95%" may not. The
+      // name and may carry the interface hue, "$200" and "95%" may not. The
       // rule is digits present and at most two letters, which admits a unit
       // suffix (pp, %) and excludes every label on the page.
       const letters = (own.match(/[A-Za-z]/g) || []).length;
@@ -638,7 +632,10 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
       // be painted from the sanctioned palette and nothing else. An element
       // cannot use data-mark to smuggle in a hue of its own.
       if (el.getAttribute("data-mark") === "series") {
-        const fill = cs.backgroundColor === "rgba(0, 0, 0, 0)" ? cs.fill : cs.backgroundColor;
+        // A box by its background, a shape by its fill, and a ring's arc,
+        // which is a stroked circle with no fill, by its stroke.
+        const fill = cs.backgroundColor !== "rgba(0, 0, 0, 0)" ? cs.backgroundColor
+          : cs.fill && cs.fill !== "none" ? cs.fill : cs.stroke;
         if (!CATEGORICAL.includes(fill)) {
           out.push(`series mark off-palette on ${tag}: ${fill}`);
         }
@@ -668,7 +665,7 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
 });
 
 // The exemption above is only sound if the marks it exempts actually exist and
-// actually opt in, so this pins both: the donut's slices and the sleeve bars
+// actually opt in, so this pins both: the ring's arcs and the sleeve bars
 // declare themselves, and every declared mark is on-palette.
 test("every categorical fill on the page declares itself a series mark", async ({ page }) => {
   await stubEnvironment(page);
@@ -678,7 +675,7 @@ test("every categorical fill on the page declares itself a series mark", async (
 
   const marks = page.locator('section.alp [data-mark="series"]');
   expect(await marks.count()).toBeGreaterThan(8);
-  await expect(page.locator('.alp__donut svg path[data-mark="series"]')).toHaveCount(2);
+  await expect(page.locator('.alp__ring circle[data-sleeve][data-mark="series"]')).toHaveCount(2);
   await expect(page.locator('.alp__stk > span:not([data-mark="series"])')).toHaveCount(0);
   // The Vaults section: a dot per vault, and nothing else in a vault's hue.
   await expect(vaultRows(page).nth(0).locator("td").first()).not.toHaveText("—");
@@ -713,7 +710,7 @@ test("the page carries no em dash in its own copy", async ({ page }) => {
 
 // ── responsive ──────────────────────────────────────────────────────────────
 
-test("on a phone the fan becomes a list and nothing scrolls the page sideways", async ({ page }) => {
+test("on a phone the ring keeps its size and nothing scrolls the page sideways", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await stubEnvironment(page);
@@ -721,14 +718,14 @@ test("on a phone the fan becomes a list and nothing scrolls the page sideways", 
   await navigate(page, "/allocation");
   await expect(page.locator("#inside-each-sleeve .alp__card").first()).toBeVisible();
 
-  // The donut scales rather than being swapped for a list, which is what the
-  // fan it replaced had to do: its 16px in-diagram labels rendered at ~6px.
-  const donut = page.locator(".alp__donut svg");
-  await expect(donut).toBeVisible();
-  const donutBox = await donut.boundingBox();
-  expect(donutBox!.width).toBeGreaterThan(120);
-  expect(donutBox!.width).toBeLessThanOrEqual(390);
-  await expect(page.locator(".alp__legend-list li")).toHaveCount(4);
+  // The ring keeps its size above its legend rather than being swapped for a
+  // list, which is what the fan it replaced had to do.
+  const ring = page.locator(".alp__ring .rr-ring svg");
+  await expect(ring).toBeVisible();
+  const ringBox = await ring.boundingBox();
+  expect(ringBox!.width).toBeGreaterThan(120);
+  expect(ringBox!.width).toBeLessThanOrEqual(390);
+  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(4);
 
   // The Vaults table fits the phone rather than hiding columns behind a
   // sideways scroll: TVL gives way (each vault's page carries it), and every

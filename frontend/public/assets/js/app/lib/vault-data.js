@@ -384,15 +384,13 @@ function utcDate(v) {
 /** @param {Date} d */
 const dayPart = (d) => `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 /** @param {Date} d */
-const timePart = (d) => {
-  const h = d.getUTCHours();
-  return `${h % 12 || 12}:${String(d.getUTCMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} UTC`;
-};
+// 24-hour and UTC, as every time on the swarm pages reads: "16:20 UTC".
+const timePart = (d) => `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")} UTC`;
 
 /** @param {unknown} iso */
 function stampUtc(iso) {
   const d = utcDate(iso);
-  return d ? `${dayPart(d)}, ${timePart(d)}` : null;
+  return d ? `${dayPart(d)} ${timePart(d)}` : null;
 }
 
 // A degraded adapter read names its own observation time; a scheduler
@@ -657,7 +655,8 @@ export function historyModel(points, asOf) {
 export function fmtUsd(v) {
   const n = numberOrNull(v);
   if (n === null) return "—";
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Whole dollars, as the swarm pages state a book ("$18,390").
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
 // A date with its month name: "Sep 16, 2026".
@@ -667,11 +666,11 @@ export function fmtDate(v) {
   return d ? `${dayPart(d)}, ${d.getUTCFullYear()}` : "—";
 }
 
-// A date and time: "Jul 30, 2026, 4:20 PM UTC".
+// A date and time: "Jul 30, 2026 16:20 UTC".
 /** @param {unknown} v */
 export function fmtDateTime(v) {
   const d = utcDate(v);
-  return d ? `${dayPart(d)}, ${d.getUTCFullYear()}, ${timePart(d)}` : "—";
+  return d ? `${dayPart(d)}, ${d.getUTCFullYear()} ${timePart(d)}` : "—";
 }
 
 // A weight in basis points as a percentage: 6500 -> "65%", 0 -> "0%".

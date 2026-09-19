@@ -154,6 +154,10 @@ export function registerVaultView(Alpine) {
     isLive() {
       return this.row()?.availability === "live";
     },
+    // The read failed: the vault may well be live, and nothing it holds is known.
+    isUnreadable() {
+      return this.row()?.availability === "unavailable";
+    },
     dataLabel() {
       return this.load?.label ?? null;
     },

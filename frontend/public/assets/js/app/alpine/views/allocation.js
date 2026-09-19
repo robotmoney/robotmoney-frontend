@@ -33,7 +33,7 @@
 //   * A second version of the weights. `allocation_framework` has one writer,
 //     the database seed, so the change ledger's `was` is the row in force and
 //     every row reads flat until something can write another.
-import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
+import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { loadAllocationDto } from "../../lib/allocation-framework.js";
 import { loadVaultOverview } from "../../lib/vault-source.js";
@@ -53,21 +53,7 @@ import {
   vaultForBucket,
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { bucketNote } from "../../lib/session-summary.js";
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-/** @param {string} name @param {Record<string, string | number>} attrs */
-function svg(name, attrs) {
-  const node = document.createElementNS(SVG_NS, name);
-  for (const key in attrs) node.setAttribute(key, String(attrs[key]));
-  return node;
-}
-/** @param {Element} node @param {string} text */
-function label(node, text) {
-  node.textContent = text;
-  return node;
-}
+import { sessionSummary } from "../../lib/session-summary.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -86,45 +72,18 @@ const shortAddress = (a) => {
 //
 // Sleeves take CATEGORICAL by POSITION, all four of them, so a sleeve keeps
 // its hue whether or not it is funded and the legend row for a 0% sleeve is
-// keyed to the colour its slice would have. The vault that implements a sleeve
+// keyed to the colour its arc would have. The vault that implements a sleeve
 // wears the same hue (lib/vault-data.js VAULTS[i].color === CATEGORICAL[i]).
 // Constituents restart at the front inside their own sleeve, which is what the
 // mini bucket pies already do.
 const sleeveColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
 const itemColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
 
-/** One donut segment, as a path. Angles in degrees, clockwise from 12 o'clock. */
-function donutArc(cx, cy, outer, inner, a0, a1) {
-  // A whole ring cannot be one arc: its start and end points coincide, and an
-  // SVG arc between two equal points draws nothing. Two half circles each way,
-  // the inner ring wound against the outer so the hole stays open.
-  if (a1 - a0 >= 359.999) {
-    return `M${cx},${cy - outer} A${outer},${outer} 0 1 1 ${cx},${cy + outer}`
-      + ` A${outer},${outer} 0 1 1 ${cx},${cy - outer}`
-      + ` M${cx},${cy - inner} A${inner},${inner} 0 1 0 ${cx},${cy + inner}`
-      + ` A${inner},${inner} 0 1 0 ${cx},${cy - inner} Z`;
-  }
-  const rad = (a) => ((a - 90) * Math.PI) / 180;
-  const pt = (r, a) => [cx + r * Math.cos(rad(a)), cy + r * Math.sin(rad(a))];
-  const large = a1 - a0 > 180 ? 1 : 0;
-  const [x0, y0] = pt(outer, a0);
-  const [x1, y1] = pt(outer, a1);
-  const [x2, y2] = pt(inner, a1);
-  const [x3, y3] = pt(inner, a0);
-  return `M${x0.toFixed(2)},${y0.toFixed(2)}`
-    + ` A${outer},${outer} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`
-    + ` L${x2.toFixed(2)},${y2.toFixed(2)}`
-    + ` A${inner},${inner} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)}`
-    + " Z";
-}
-
 export function registerAllocationView(Alpine) {
   Alpine.data("allocationView", () => ({
     allocationFw: null, // loadAllocationDto(): GET /api/dashboards/allocation
     vaults: null,       // loadVaultOverview(): { overview, source, label, error, ... }
     loading: true,      // the policy; the vaults fill their own rows as they land
-    // The sleeve under the pointer, so the donut and its legend light together.
-    hotKey: null,
 
     // The allocation's own decision log is not built yet, so the sessions
     // live where the swarm keeps them.
@@ -137,7 +96,6 @@ export function registerAllocationView(Alpine) {
 
     init() {
       this.load();
-      this.$nextTick(() => this.draw());
     },
 
     // Both reads are fetched independently (allSettled semantics), so one
@@ -151,7 +109,6 @@ export function registerAllocationView(Alpine) {
         .then((d) => { this.allocationFw = d ?? null; }, () => { this.allocationFw = null; })
         .finally(() => {
           this.loading = false;
-          this.$nextTick(() => this.draw());
         });
       const vaults = loadVaultOverview({ hostname: host })
         .then((r) => { this.vaults = r; }, () => { this.vaults = { overview: null, label: null }; });
@@ -226,6 +183,21 @@ export function registerAllocationView(Alpine) {
     sleeveColours() {
       return Object.fromEntries(this.sleeves().map((row, i) => [row.key, sleeveColour(i)]));
     },
+    // The weights in force as the ring every swarm page draws: the hover and
+    // focus are lib/sleeve-explorer.js, the arcs session-summary's ringSvg.
+    // Not normalised to its own sum: a policy that does not add to 100 leaves
+    // the remainder of the track unfilled, and the centre names it.
+    explorerRows() {
+      const colours = this.sleeveColours();
+      return this.sleeves().map((s) => ({ key: s.key, label: s.name, hue: colours[s.key], pct: s.target, meta: this.sleeveLegendLine(s), assets: [] }));
+    },
+    explorerSvg() { return sessionSummary.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))); },
+    explorerLabel() { return this.explorerRows().map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", "); },
+    ringRestLabel() {
+      const gap = 100 - this.sleeves().reduce((n, r) => n + (Number(r.target) || 0), 0);
+      return Math.abs(gap) >= 0.005 ? `${this.fmtPctTrim(Math.abs(gap))} ${gap > 0 ? "unallocated" : "over"}` : "In force";
+    },
+    hasBook() { return false; },
     // Constituents restart at the front of the palette inside their own
     // sleeve, keyed on the constituent's index in the POLICY.
     constituentColour(i) { return itemColour(i); },
@@ -419,14 +391,6 @@ export function registerAllocationView(Alpine) {
       tip.style.top = Math.max(8, top) + "px";
     },
 
-    // Built through tipMarkup, like the constituent tooltip: one tooltip
-    // object on the page, not two that happen to share a box.
-    tipHtml(row) {
-      const rows = [["Target", this.fmtPct(row.target)]];
-      const items = this.constituents(row.key);
-      if (items.length) rows.push(["Assets", String(items.length)]);
-      return this.tipMarkup(this.sleeveColours()[row.key], row.name, rows);
-    },
     // Inside a card: hovering a block lights its name and recedes its
     // neighbours, and hovering a name does the same to its block. Applied by
     // hand rather than through Alpine state because the cards come out of an
@@ -453,104 +417,11 @@ export function registerAllocationView(Alpine) {
       });
     },
 
-    // A slice and its legend row are the same object, so they hover alike: the
-    // tooltip, and the dim on everything else. Both entry points, one handler.
-    hoverSleeve(row, ev) { this.showTip(row, ev); this.dimTo(row.key); },
-    leaveSleeve() { this.hideTip(); this.dimTo(null); },
-    showTip(row, ev) {
-      this.tipAt(this.tipHtml(row), ev);
-      this.hotKey = row.key;
-    },
     hideTip() {
       const tip = this.$refs.allocTip;
       if (tip) tip.style.opacity = "0";
-      this.hotKey = null;
-    },
-    // Applied to the paths directly: they are built in JS, so there is no
-    // Alpine binding to hang a class on.
-    dimTo(key) {
-      const host = this.$refs.donut;
-      if (!host) return;
-      host.querySelectorAll("path[data-sleeve]").forEach((node) => {
-        node.classList.toggle("dim", !!key && node.dataset.sleeve !== key);
-      });
     },
 
-    // ── the hero donut (hand-authored inline SVG; no chart dependency) ──────
-    draw() { this.drawDonut(); },
-
-    // One deposit, split into the sleeves it is allocated to: the recipe.
-    //
-    // NOT NORMALISED to its own sum. The ring underneath is the full 360, so a
-    // policy whose weights do not add to 100 leaves the remainder visibly
-    // unfilled rather than being rescaled to look complete. Same rule as
-    // swarm.js's sleeveBar().
-    drawDonut() {
-      const host = this.$refs.donut;
-      if (!host) return;
-      host.replaceChildren();
-      const rows = this.sleeves();
-      if (!rows.length) return;
-
-      const CX = 120, CY = 120, OUTER = 104, INNER = 66, GAP = 1.6;
-      const colours = this.sleeveColours();
-
-      // The unallocated remainder, and the track every slice sits on.
-      host.appendChild(svg("circle", {
-        cx: CX, cy: CY, r: (OUTER + INNER) / 2, fill: "none",
-        stroke: PALETTE.surfaceLight, "stroke-width": OUTER - INNER,
-      }));
-
-      const funded = rows.filter((r) => r.target > 0);
-      let cursor = 0;
-      rows.forEach((row) => {
-        if (!(row.target > 0)) return;
-        const sweep = (Math.min(100, row.target) / 100) * 360;
-        // A gap only where there is a neighbour to separate from.
-        const gap = funded.length > 1 ? GAP : 0;
-        const a0 = cursor + gap / 2;
-        const a1 = cursor + sweep - gap / 2;
-        cursor += sweep;
-        if (a1 <= a0) return;
-        // data-mark declares this a SERIES mark, which is what lets the
-        // covenant spec assert the strong rule (its fill is a CATEGORICAL hue)
-        // instead of the blunt one (nothing on the page is ever cyan-filled).
-        const path = svg("path", {
-          d: donutArc(CX, CY, OUTER, INNER, a0, a1), fill: colours[row.key], "data-mark": "series",
-        });
-        // Dimming the others rather than lifting the hovered one, so the ring
-        // keeps its geometry and only its emphasis moves.
-        path.addEventListener("pointerenter", (ev) => { this.showTip(row, ev); this.dimTo(row.key); });
-        path.addEventListener("pointermove", (ev) => this.showTip(row, ev));
-        path.addEventListener("pointerleave", () => { this.hideTip(); this.dimTo(null); });
-        path.dataset.sleeve = row.key;
-        host.appendChild(path);
-      });
-
-      // The hole carries what the ring adds up to: it is drawn to the full
-      // 360, so a policy adding to less than 100 leaves an unfilled arc, and
-      // this names what is missing from it.
-      const total = this.sleeves().reduce((n, r) => n + (Number(r.target) || 0), 0);
-      const gap = 100 - total;
-      host.appendChild(label(svg("text", {
-        x: CX, y: CY - 12, "text-anchor": "middle", fill: PALETTE.textMuted,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 9, "letter-spacing": "0.18em",
-      }), "ALLOCATED"));
-      host.appendChild(label(svg("text", {
-        x: CX, y: CY + 8, "text-anchor": "middle", fill: PALETTE.text,
-        "font-family": "'JetBrains Mono',monospace", "font-size": 15, "font-weight": 700,
-      }), this.fmtPctTrim(total)));
-      if (Math.abs(gap) >= 0.005) {
-        host.appendChild(label(svg("text", {
-          x: CX, y: CY + 24, "text-anchor": "middle", fill: PALETTE.textMuted,
-          "font-family": "'JetBrains Mono',monospace", "font-size": 9,
-        }), `${this.fmtPctTrim(Math.abs(gap))} ${gap > 0 ? "unallocated" : "over"}`));
-      }
-
-      host.setAttribute("aria-label", "Target allocation, "
-        + rows.map((s) => `${s.name} at a ${this.fmtPctTrim(s.target)} target`).join("; ")
-        + ".");
-    },
 
   }));
 }

@@ -72,7 +72,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   // The allocationView factory draws the allocation donut and the yield
   // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
-  await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
+  await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
 
   // RM-115: the page reads the VAULTS and the allocation framework, and the
   // house book is gone from it entirely. Until the four-vault route is served,

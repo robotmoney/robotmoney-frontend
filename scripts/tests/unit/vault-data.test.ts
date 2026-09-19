@@ -324,9 +324,9 @@ describe("formatters", () => {
     expect(fmtBps(6500)).toBe("65%");
     expect(fmtBps(1428.57)).toBe("14.3%");
     expect(fmtUsd(null)).toBe("—");
-    expect(fmtUsd(0)).toBe("$0.00");
-    expect(fmtUsd(199.697519)).toBe("$199.70");
-    expect(fmtUsd(100000)).toBe("$100,000.00");
+    expect(fmtUsd(0)).toBe("$0");
+    expect(fmtUsd(199.697519)).toBe("$200");
+    expect(fmtUsd(100000)).toBe("$100,000");
   });
 
   test("gaps: weight-change's label and class, in points, no arrow", () => {
@@ -343,8 +343,8 @@ describe("formatters", () => {
     expect(fmtDate(null)).toBe("—");
     expect(fmtDate("not a date")).toBe("—");
     const o = normalizeOverview(DEVNET);
-    expect(freshnessLabel(o)).toBe("Sep 17, 2026, 10:00 AM UTC");
-    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026, 10:00 AM UTC · stale");
+    expect(freshnessLabel(o)).toBe("Sep 17, 2026 10:00 UTC");
+    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026 10:00 UTC · stale");
     expect(freshnessLabel(null)).toBe("—");
   });
 
@@ -383,7 +383,7 @@ describe("the Base feed as an overview", () => {
     expect(o.router?.availability).toBe("not_on_network");
     expect(o.network).toEqual({ chainId: 8453, label: "Base", testData: false });
     expect(o.combined).toEqual({ tvlUsd: 199.697519, vaultsLive: 1 });
-    expect(fmtUsd(o.combined.tvlUsd)).toBe("$199.70");
+    expect(fmtUsd(o.combined.tvlUsd)).toBe("$200");
   });
 
   test("holdings are the three adapters under their display names; no idle row at zero", () => {
@@ -403,7 +403,7 @@ describe("the Base feed as an overview", () => {
     e.source = "stub";
     const raw = legacyRaw(e);
     const usdc: any = raw.vaults[0];
-    expect(usdc.holdings[1].note).toBe("stale (Jul 30, 4:20 PM UTC)");
+    expect(usdc.holdings[1].note).toBe("stale (Jul 30 16:20 UTC)");
     expect(usdc.holdings[2].note).toBe("caught up late");
     expect(usdc.holdings.at(-1)).toMatchObject({ kind: "idle", label: "Idle USDC", valueUsd: 5 });
     expect(raw.network.testData).toBe(true);

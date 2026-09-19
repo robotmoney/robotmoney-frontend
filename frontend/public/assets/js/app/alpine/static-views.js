@@ -645,6 +645,12 @@ export function registerStaticViews(Alpine) {
     explorerLabel() {
       return this.vaultRingRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
+    // The legend's third column: the weights the vaults are measured against,
+    // the router's applied weights once it applies them, else the target.
+    legendBasis() {
+      const r = this.vaultRingRows().find((x) => x.was != null);
+      return r ? (r.basis === "applied" ? "Applied" : "Target") : "";
+    },
   }));
   Alpine.data("takeCard", takeCard);
 

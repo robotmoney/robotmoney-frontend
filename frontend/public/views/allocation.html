@@ -104,29 +104,37 @@
       </div>
     </div>
 
-    <div class="alp__split alp__fade" x-show="hasTargets()" x-cloak x-ref="allocFig">
-      <div class="alp__donut">
-        <svg x-ref="donut" viewBox="0 0 240 240" role="img" aria-label="Target allocation across the sleeves"></svg>
+    <!-- The weights in force as the ring every swarm page draws
+         (lib/sleeve-explorer.js): hovering or focusing a sleeve names it in
+         the centre and recedes the rest. No breakdown drawer: each sleeve's
+         assets are its card under Inside each sleeve. -->
+    <div class="rr alp__ring alp__fade" x-show="hasTargets()" x-cloak>
+      <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+        <div class="rr-mix">
+          <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+            <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
+                  x-html="explorerSvg()"
+                  x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+            <figcaption>
+              <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
+              <span x-text="activeRow() ? activeRow().label : ringRestLabel()"></span>
+            </figcaption>
+          </figure>
+          <div class="rr-legend">
+            <template x-for="r in explorerRows()" :key="r.key">
+              <button type="button" class="rr-legend__row"
+                      :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                      :aria-pressed="pinned === r.key ? 'true' : 'false'"
+                      @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                <span><span class="rr-legend__l" x-text="r.label"></span></span>
+                <b x-text="fmtPctTrim(r.pct)"></b>
+                <small x-text="r.meta"></small>
+              </button>
+            </template>
+          </div>
+        </div>
       </div>
-      <!-- The hover legend the mini pies on this page have always had, kept
-           and pointed at the sleeves. Pointer only: every figure it shows is
-           in the legend row beside it, so focusable slices would add tab stops
-           that reach nothing new. Each slice keeps its <title> for readers. -->
-      <ul class="alp__legend-list">
-        <template x-for="s in sleeves()" :key="s.key">
-          <li :class="[s.target === 0 ? 'dim' : '', hotKey === s.key ? 'hot' : '']"
-              @pointerenter="hoverSleeve(s, $event)"
-              @pointermove="moveTip($event)"
-              @pointerleave="leaveSleeve()">
-            <i class="alp__swatch" data-mark="series" :style="sleeveSwatch(s)"></i>
-            <div>
-              <b x-text="s.name"></b>
-              <span x-text="sleeveLegendLine(s)"></span>
-            </div>
-            <span class="alp__legend-pct" x-text="fmtPctTrim(s.target)"></span>
-          </li>
-        </template>
-      </ul>
     </div>
 
     <!-- Empty, the donut is its bare track with the fact inside, as every
@@ -138,15 +146,10 @@
     </figure>
     </div>
 
-    <!-- The weights feed failing renders, rather than warning to a console.
-         The vault feed's own states (stub, stale, caught up late) are on the
-         vault pages beside the positions they describe, and its label on the
-         Vaults heading. -->
-    <div class="alp__prov" x-show="!loading" x-cloak>
-      <span class="alp__badge alp__badge--stale" x-show="!allocationFw" x-cloak>
-        Target weights unavailable
-      </span>
-    </div>
+    <!-- The weights feed failing renders, rather than warning to a console:
+         the empty ring above says so. The vault feed's own states (stub,
+         stale, caught up late) are on the vault pages beside the positions
+         they describe, and its label on the Vaults heading. -->
   </div>
 
   <div class="alp__tip alp__tip--alloc" x-ref="allocTip" aria-hidden="true"></div>
@@ -243,9 +246,6 @@
       <h2 class="alp__h2">What changed</h2>
       <a class="alp__nav" :href="historyHref">All sessions &rarr;</a>
     </div>
-    <p class="alp__sub">
-      Every session reviews these weights.
-    </p>
 
     <div class="rr-empty" x-show="!loading && !hasTargets()" x-cloak><p class="rr-empty__t">Target weights unavailable</p></div>
 
@@ -506,9 +506,9 @@
    slot is as tall as its tallest child whether that child is showing or not,
    so the swap changes nothing. The floor only has to cover the case where the
    skeleton is shorter than the figure, which is the stacked phone layout. */
-.alp__figslot { display: grid; min-height: 21.7rem; }
+.alp__figslot { display: grid; min-height: 20.2rem; }
 .alp__figslot > * { grid-area: 1 / 1; align-self: start; }
-@media (max-width: 679px) { .alp__figslot { min-height: 43rem; } }
+@media (max-width: 679px) { .alp__figslot { min-height: 33.2rem; } }
 /* Provenance is a fact about the weights, so it sits in the rail with the
    other facts about them rather than in a pill of its own. */
 .alp__chip { text-transform: none; }
@@ -518,47 +518,15 @@
    and the chip reads "seeded". */
 .alp__chip--live { border-color: var(--color-accent-line); color: var(--color-text-soft); }
 
-/* the donut and its legend. Side by side where there is room, stacked on a
-   phone; the donut scales rather than being swapped for a list, which is what
-   the fan needed because its 16px in-diagram labels rendered at about 6px. */
-.alp__split {
-  margin: 1.6rem 0 0; border: 1px solid var(--color-border); background: var(--color-deep);
-  padding: 1.4rem 1.2rem; display: grid; gap: 1.4rem 2rem; align-items: center;
-  grid-template-columns: 1fr;
-}
-/* The legend is a FIGURE legend, not prose, and it is tracked to the donut it
-   keys: let it take the full width of a wide viewport and the percentage ends
-   up a thousand pixels from the name it belongs to, which is a lookup rather
-   than a reading. The figure gets the proportions it was designed at and the
-   band ends where the figure ends. */
-@media (min-width: 680px) {
-  .alp__split { grid-template-columns: 300px minmax(0, 42rem); justify-content: start; }
-}
-.alp__donut { justify-self: center; width: 100%; max-width: 300px; }
-/* An SVG root inherits fill:black, so anything drawn without an explicit one
-   would paint black on a dark ground and vanish. Every shape here sets its
-   own; this makes the default a reading colour rather than a trap. */
-.alp__donut svg { display: block; width: 100%; height: auto; fill: var(--color-text); }
-.alp__legend-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.75rem; }
-.alp__legend-list li { display: grid; grid-template-columns: 0.7rem 1fr; gap: 0.75rem; align-items: start; }
-.alp__legend-list b { display: block; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
-.alp__legend-list span { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
-.alp__legend-list li.dim b { color: var(--color-text-muted); }
-.alp__swatch { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; display: block; }
-.alp__legend-list li { padding: 0.25rem 0.5rem; grid-template-columns: 0.7rem 1fr auto; }
-.alp__legend-list li.hot { background: var(--color-surface-light); }
-.alp__legend-pct {
-  font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-text);
-  font-variant-numeric: tabular-nums; align-self: center;
-}
-.alp__legend-list li.dim .alp__legend-pct { color: var(--color-text-muted); }
-.alp__legend-list li.dim .alp__swatch { opacity: 0.45; }
-/* The hovered slice keeps its geometry; the others recede. Lifting the hovered
-   one instead would move the ring under the pointer. */
-.alp__donut svg path { transition: opacity 0.12s linear; }
-.alp__donut svg path.dim { opacity: 0.3; }
-@media (prefers-reduced-motion: reduce) { .alp__donut svg path { transition: none; } }
-.alp__split { position: relative; }
+/* The ring and its legend are the shared research-record figure (.rr-mix in
+   views.css). The skeleton holds the same shape: the ring's track, then the
+   legend's rows, side by side where there is room. */
+.alp__ring, .alp__split { margin: 1.6rem 0 0; }
+/* The legend is tracked to the ring it keys: across a wide page its figures
+   would sit a thousand pixels from their names, a lookup rather than a read. */
+.alp__ring .rr-legend { max-width: 30rem; }
+.alp__split { display: grid; gap: 1.5rem 2.25rem; align-items: center; grid-template-columns: 11.5rem minmax(0, 1fr); }
+@media (max-width: 679px) { .alp__split { grid-template-columns: 1fr; } }
 
 /* The meta rail that replaced it: one line of facts, none of which is a
    figure that does not exist yet. */
@@ -577,14 +545,6 @@
   display: block; margin-top: 0.25rem; color: var(--color-text); font-weight: 500;
   text-transform: none; letter-spacing: 0.02em; font-size: 0.875rem;
 }
-/* provenance badges */
-.alp__prov { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
-.alp__badge {
-  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-  letter-spacing: 0.12em; padding: 0.25rem 0.5rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border-light); color: var(--color-text-muted);
-}
-.alp__badge--stale { color: var(--color-warm); border-color: var(--color-warm); }
 
 /* ── sections ──────────────────────────────────────────────────────────── */
 .alp__sec { margin-top: 3rem; }
@@ -674,9 +634,11 @@
    still one reads as "not here yet" just as clearly. */
 .alp__sk { pointer-events: none; }
 .alp__sk-b { display: block; background: var(--color-surface-light); }
+/* The ring's track at the size the shared ring draws it (a 42-unit viewBox at
+   11.5rem: the track's diameter is 0.853 of the box, its stroke 4 units). */
 .alp__skring {
-  width: 100%; max-width: 300px; aspect-ratio: 1; margin-inline: auto;
-  border-radius: 50%; border: 33px solid var(--color-surface-light);
+  width: 9.8rem; aspect-ratio: 1; margin: 0.85rem;
+  border-radius: 50%; border: 1.1rem solid var(--color-surface-light);
 }
 .alp__skrows { display: grid; gap: 0; }
 .alp__skrow {
@@ -699,14 +661,12 @@
   .alp__link, .alp__nav, .alp__card, .alp__stk > span, .alp__names > span { transition: none !important; }
 }
 
-/* The one tooltip on the page, shared by the donut's slices and by every
-   sleeve bar. Name on top, then label/value rows that line up. */
+/* The tooltip on a sleeve's bars: the site's one tooltip skin (components.css,
+   with the swarm pages' tips), placed at the pointer. Name on top, then
+   label/value rows that line up. */
 .alp__tip {
   position: fixed; pointer-events: none; opacity: 0; transition: opacity 0.1s;
-  white-space: normal; min-width: 11rem; max-width: 16rem;
-  background: var(--color-surface); border: 1px solid var(--color-border-light);
-  padding: 0.5rem 0.75rem 0.6rem; font-family: var(--font-mono); font-size: 0.7rem;
-  color: var(--color-text); z-index: 2;
+  white-space: normal; min-width: 11rem; max-width: 16rem; z-index: 2;
 }
 .alp__tip b {
   display: flex; align-items: baseline; gap: 0.5rem; font-weight: 500;
@@ -716,6 +676,7 @@
 .alp__tip b i { flex: 0 0 auto; width: 0.5rem; height: 0.5rem; transform: translateY(-0.05em); }
 .alp__tip span {
   display: flex; justify-content: space-between; gap: 1.5rem;
+  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text);
   font-variant-numeric: tabular-nums; line-height: 1.7;
 }
 .alp__tip em {
