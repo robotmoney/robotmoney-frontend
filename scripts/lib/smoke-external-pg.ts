@@ -30,8 +30,23 @@
 // smoke boot. It is imported by scripts/lib/smoke-main.ts and re-exported from
 // scripts/smoke.ts alongside resolveSmokeEnv.
 import { readFileSync } from "node:fs";
+import {
+  HOME_ENV_FILE as SHARED_HOME_ENV_FILE,
+  ROLES as SHARED_ROLES,
+  CONNECTION_TOKENS as SHARED_CONNECTION_TOKENS,
+  homeEnvFilePath as sharedHomeEnvFilePath,
+  parseEnvFile as sharedParseEnvFile,
+  loadEnvFile as sharedLoadEnvFile,
+  redactPostgresUrl as sharedRedactPostgresUrl,
+  urlForRole as sharedUrlForRole,
+  redactedTarget as sharedRedactedTarget,
+} from "./env-role.ts";
 
 /** The compose services whose `depends_on: postgres` must be dropped. */
+
+export { HOME_ENV_FILE, CONNECTION_TOKENS, ROLES } from "./env-role.ts";
+export { urlForRole, redactedTarget } from "./env-role.ts";
+
 export const POSTGRES_DEPENDENT_SERVICES = [
   "api",
   "worker-swarm",
@@ -140,6 +155,7 @@ export interface ExternalPgResolution {
  * A missing file is NOT an error here — the caller reports that with context.
  */
 export function parseEnvFile(text: string): Record<string, string> {
+  return sharedParseEnvFile(text);
   const out: Record<string, string> = {};
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
@@ -160,6 +176,7 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 export function loadEnvFile(path: string): Record<string, string> | undefined {
+  return sharedLoadEnvFile(path);
   try {
     return parseEnvFile(readFileSync(path, "utf8"));
   } catch {
@@ -169,6 +186,7 @@ export function loadEnvFile(path: string): Record<string, string> | undefined {
 
 /** Replace the password with `***`. Used for every printed/recorded form. */
 export function redactPostgresUrl(url: string): string {
+  return sharedRedactPostgresUrl(url);
   try {
     const u = new URL(url);
     if (u.password) u.password = "***";
@@ -184,6 +202,7 @@ export function redactPostgresUrl(url: string): string {
  * half-specified database is a mistake to report, not a default to invent.
  */
 export function urlFromDiscreteKeys(env: Record<string, string>): string | undefined {
+  return sharedUrlForRole(env, "rm_app");
   const host = env.host ?? env.PGHOST;
   const user = env.username ?? env.PGUSER;
   const password = env.password ?? env.PGPASSWORD;
