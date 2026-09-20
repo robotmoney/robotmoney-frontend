@@ -33,6 +33,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../../scripts/lib/env-role.ts";
 import {
   DEFAULT_BACKUP_DIR,
   changedSince,
@@ -391,16 +392,18 @@ function git(repoRoot: string, args: string[]): string {
   return new TextDecoder().decode(Bun.spawnSync(["git", ...args], { cwd: repoRoot, stderr: "pipe" }).stdout).trim();
 }
 
-/** Read-only identity from .env.readonly — presence and target, never the
+/** Read-only identity from $HOME/.env — presence and target, never the
  *  password, and deliberately without connecting (see the header: this probe
  *  has no side effects). "configured" is an honest claim; "reachable" would
- *  not be. */
+ *  not be. Reads the same single file the whole twin/rollout family uses
+ *  (issue #699): discrete tokens + the rm_readonly role line. */
 function replicaTarget(repoRoot: string): string | null {
-  const f = join(repoRoot, ".env.readonly");
-  if (!existsSync(f)) return null;
-  const get = (k: string) =>
-    readFileSync(f, "utf8").match(new RegExp(`^\\s*${k}\\s*=\\s*(.+)$`, "m"))?.[1]?.trim() ?? "?";
-  return `${get("username")}@${get("host")}:${get("port")}/${get("database")}`;
+  const env = loadEnvFile(homeEnvFilePath());
+  if (!env) return null;
+  const url = urlForRole(env, "rm_readonly");
+  if (!url) return null;
+  const u = new URL(url);
+  return `${u.username}@${u.hostname}:${u.port || "5432"}${u.pathname}`;
 }
 
 /**
@@ -470,7 +473,7 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   p("");
   p(`HOST     ${ctx.hostname}${" ".repeat(Math.max(1, 22 - ctx.hostname.length))}role=${ctx.hostRole.toUpperCase()}`);
   p(`         ${ctx.hostWhy}`);
-  p(`         replica: ${ctx.replica ?? "not configured (.env.readonly absent)"}`);
+  p(`         replica: ${ctx.replica ?? "not configured (no rm_readonly line in $HOME/.env)"}`);
   p(`         receipts: ${receiptsDir(ctx.backupDir)}`);
   if (ctx.committedDir) {
     const rejected = ctx.rejectedEvidence.size;

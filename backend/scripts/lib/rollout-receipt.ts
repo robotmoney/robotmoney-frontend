@@ -39,6 +39,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { homeEnvFilePath, loadEnvFile } from "../../../scripts/lib/env-role.ts";
 import { allowedSignersPath, committedReceiptsDir, resolveSigner, signDetached } from "./rollout-signing.ts";
 
 /** Default backup directory — the same one restore-container.ts resolves. */
@@ -549,17 +550,19 @@ export function summarise(results: { name: string; status: string }[]): CheckSum
  *
  * The distinction that matters for v0.2.2 is capability, not name: §7.3's boot
  * and every §8/§11/§12 `psql "$DATABASE_URL"` need the writer credential, and
- * that credential lives in the repo-root .env file (§6.5), read by
- * readFileSync — not in the environment. A box without that file cannot run
- * them at all, which is precisely the staging host's design
- * (docs/archive/v0-2-2-rollout.md §2).
+ * that credential lives in $HOME/.env as the rm_app role line (§6.5), read by
+ * loadEnvFile — not in the environment. A box without a writer role line
+ * cannot run them at all, which is precisely the staging host's design
+ * (docs/archive/v0-2-2-rollout.md §2). The staging host's $HOME/.env carries
+ * only rm_readonly; a cutover host's carries rm_app (and rm_worker).
  */
 export function deriveHostRole(repoRoot: string): { role: "stage" | "cutover"; why: string } {
-  const envFile = join(repoRoot, ".env");
-  if (existsSync(envFile)) {
-    const hasUrl = /^DATABASE_URL=\S/m.test(readFileSync(envFile, "utf8"));
-    if (hasUrl) return { role: "cutover", why: "repo-root .env carries DATABASE_URL (rollout-procedure.md §7.5)" };
-    return { role: "stage", why: "repo-root .env exists but has no DATABASE_URL (rollout-procedure.md §7.5)" };
+  const env = loadEnvFile(homeEnvFilePath());
+  if (env && env.rm_app) {
+    return { role: "cutover", why: "$HOME/.env carries the rm_app writer role line (rollout-procedure.md §7.5)" };
   }
-  return { role: "stage", why: "no repo-root .env — the cutover and everything after it cannot run here (rollout-procedure.md §7.5)" };
+  if (env) {
+    return { role: "stage", why: "$HOME/.env exists but has no rm_app role line (rollout-procedure.md §7.5)" };
+  }
+  return { role: "stage", why: "no $HOME/.env — the cutover and everything after it cannot run here (rollout-procedure.md §7.5)" };
 }
