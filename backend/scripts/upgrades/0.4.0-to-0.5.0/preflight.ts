@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
-import { runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
+import { homeEnvFilePath, runPreflightMain, type Db } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import { NEW_RELEASE_TABLES_BY_MIGRATION, PRIOR_RELEASE_MIGRATIONS, RELEASE_MIGRATIONS, TAG_GLOB } from "./release.ts";
 
@@ -328,7 +328,7 @@ export async function runChecks(
 if (import.meta.url === `file://${process.argv[1]}`) {
   const emit = process.argv.includes("--emit-receipt");
   const code = await runPreflightMain({
-    envPath: join(repoRoot, ".env.readonly"),
+    envPath: homeEnvFilePath(),
     name: "preflight-0.5.0",
     allowPrivilegedEnvVar: "PREFLIGHT_ALLOW_PRIVILEGED",
     runChecks: (db, checker) => runChecks(db, checker, { roleReadiness: true }),
