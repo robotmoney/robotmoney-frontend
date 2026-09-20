@@ -66,7 +66,7 @@ describe("planStageArgs — the data path follows .env", () => {
     // container itself). Asked to CHOOSE rather than told, the wrapper must
     // treat that as "no usable database" and boot the ephemeral one — a probe
     // must never turn a bad .env line into a failed boot.
-    const plan = planStageArgs(envFile("DATABASE_URL=postgres://u:p@localhost:5432/x\n"));
+    const plan = planStageArgs(envFile("host = localhost\nport = 5432\ndatabase = x\nrm_app = p\n"));
     expect(plan.dataPath).toBe("ephemeral");
   });
 

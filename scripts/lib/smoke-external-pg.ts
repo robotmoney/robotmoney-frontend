@@ -157,75 +157,29 @@ export interface ExternalPgResolution {
  */
 export function parseEnvFile(text: string): Record<string, string> {
   return sharedParseEnvFile(text);
-  const out: Record<string, string> = {};
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).replace(/^export\s+/, "").trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
-  }
-  return out;
 }
 
 export function loadEnvFile(path: string): Record<string, string> | undefined {
   return sharedLoadEnvFile(path);
-  try {
-    return parseEnvFile(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
 }
 
 /** Replace the password with `***`. Used for every printed/recorded form. */
 export function redactPostgresUrl(url: string): string {
   return sharedRedactPostgresUrl(url);
-  try {
-    const u = new URL(url);
-    if (u.password) u.password = "***";
-    return u.toString();
-  } catch {
-    return "(unparseable postgres url)";
-  }
 }
 
 /**
  * Assemble a URL from the discrete keys DigitalOcean's connection panel prints.
- * Returns undefined unless the four load-bearing parts are all present — a
- * half-specified database is a mistake to report, not a default to invent.
+ * Delegates to the shared single-role resolver: under the role taxonomy
+ * (issue #699) the discrete tokens + the rm_app role line assemble exactly ONE
+ * URL — the writer role a smoke boot needs. Returns undefined unless the
+ * connection tokens are all present AND the role line exists — a half-specified
+ * database is a mistake to report, not a default to invent.
  */
 export function urlFromDiscreteKeys(env: Record<string, string>): string | undefined {
   return sharedUrlForRole(env, "rm_app");
-  const host = env.host ?? env.PGHOST;
-  const user = env.username ?? env.PGUSER;
-  const password = env.password ?? env.PGPASSWORD;
-  const database = env.database ?? env.PGDATABASE;
-  if (!host || !user || !password || !database) return undefined;
-  const port = env.port ?? env.PGPORT ?? "5432";
-  const sslmode = env.sslmode ?? env.PGSSLMODE;
-  const u = new URL(`postgres://${host}`);
-  u.port = port;
-  u.username = encodeURIComponent(user);
-  u.password = encodeURIComponent(password);
-  u.pathname = `/${database}`;
-  if (sslmode) u.searchParams.set("sslmode", sslmode);
-  return u.toString();
 }
 
-/**
- * Reject the two addresses that LOOK right and are always wrong here, with the
- * reason rather than a generic refusal. Both fail at a distance otherwise: the
- * containers start, then every query dies with a connection error that names an
- * address the operator never typed.
- */
 export function assertReachableFromContainer(url: string): void {
   let host: string;
   try {
