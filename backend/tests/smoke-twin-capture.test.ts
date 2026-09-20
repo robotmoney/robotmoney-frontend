@@ -15,7 +15,8 @@ describe("parseArgs", () => {
     expect("error" in a).toBe(false);
     if ("error" in a) return;
     expect(a.out).toMatch(/rm-backup-v022$/);
-    expect(a.envFile).toMatch(/\.env\.readonly$/);
+    expect(a.envFile).toMatch(/\.env$/);
+    expect(a.envFile).not.toContain("readonly");
     expect(a.allowPrimary).toBe(false);
   });
 

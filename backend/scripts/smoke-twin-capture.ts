@@ -27,7 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadEnvFile, redactedTarget, urlFromDiscreteEnv } from "./lib/preflight-utils.ts";
+import { homeEnvFilePath, loadEnvFile, redactedTarget, urlFromDiscreteEnv } from "./lib/preflight-utils.ts";
 
 const NAME = "smoke:capture";
 const log = (m: string) => console.log(`[${NAME}] ${m}`);
@@ -71,7 +71,7 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   }
   return {
     out: resolve(val("--out") ?? defaultOutDir()),
-    envFile: resolve(val("--env-file") ?? join(repoRoot, ".env.readonly")),
+    envFile: resolve(val("--env-file") ?? homeEnvFilePath()),
     allowPrimary: argv.includes("--allow-primary"),
   };
 }
@@ -149,7 +149,7 @@ async function main(argv: string[]): Promise<number> {
 
   const env = loadEnvFile(envFile);
   if (!env) {
-    err(`no readable ${envFile}. Copy .env.readonly.example and fill in the rm_readonly role's details.`);
+    err(`no readable ${envFile}. Add host/port/database + a rm_readonly= line to $HOME/.env (see .env.example).`);
     return 2;
   }
   const resolved = urlFromDiscreteEnv(env);
