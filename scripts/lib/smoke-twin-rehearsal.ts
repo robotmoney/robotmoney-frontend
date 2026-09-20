@@ -46,6 +46,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homeEnvFilePath } from "./env-role.ts";
 import { smokeTwinUrlFromContainer } from "./smoke-twin.ts";
 
 /**
@@ -105,8 +106,10 @@ function readEnvKey(file: string, key: string): string | null {
   return null;
 }
 
-/** The ONE credential file every smoke-twin/rollout command reads. */
-export const READONLY_ENV_FILE = ".env.readonly";
+/** The ONE credential file every smoke-twin/rollout command reads: $HOME/.env
+ *  (the same file .env.example describes — discrete DO tokens plus one role
+ *  line per role; the staging host's copy carries only rm_readonly). */
+export const READONLY_ENV_FILE = homeEnvFilePath();
 
 /**
  * The funded OpenCode Zen credential, which this rehearsal REQUIRES.
@@ -118,14 +121,12 @@ export const READONLY_ENV_FILE = ".env.readonly";
  * that model choice is not neutral for swarm authorship (some families refuse
  * the persona task outright), so a green `free` run does not predict production.
  *
- * `.env.readonly` IS THE ONLY FILE CONSULTED, and `.env` is deliberately NOT in
- * the chain any more. On a staging host `.env` is where the application's WRITER
- * DATABASE_URL lives, and every command in this family — smoke:capture,
- * smoke:twin:once, `bun run smoke:twin`, the release preflight — is defined by NOT
- * needing that credential. Reading `.env` made the smoke-twin tooling depend on the
- * one file it exists to stay away from, and made "which key did that run use?"
- * a question with two possible answers. One low-privilege file now serves the
- * whole family, which is exactly what .env.readonly.example describes it as.
+ * $HOME/.env IS THE ONLY FILE CONSULTED (issue #699) — the single credential
+ * file for the whole twin/rollout family. It is never a repo-root file: the
+ * checkout carries only .env.example. A staging host's $HOME/.env holds the
+ * replica's discrete tokens + the rm_readonly password line (+ OPENCODE_API_KEY),
+ * never the writer credential, so "which key did that run use?" has exactly one
+ * answer.
  *
  * The process environment still wins, because that is how CI and a one-off shell
  * override supply it; it is not a file and cannot be the writer credential by
@@ -141,13 +142,13 @@ export function resolveZenKey(
 ): { key: string; source: string } | { error: string } {
   const fromEnv = env.OPENCODE_API_KEY?.trim();
   if (fromEnv) return { key: fromEnv, source: "process environment" };
-  const found = readEnvKey(join(repoRoot, READONLY_ENV_FILE), "OPENCODE_API_KEY");
+  const found = readEnvKey(READONLY_ENV_FILE, "OPENCODE_API_KEY");
   if (found) return { key: found, source: READONLY_ENV_FILE };
   return {
     error:
-      `OPENCODE_API_KEY is not set. This command reads it from ./${READONLY_ENV_FILE} (or the process ` +
-      `environment) — NOT from ./.env, which holds the writer credential this family of commands ` +
-      `deliberately does not use. Add OPENCODE_API_KEY to ./${READONLY_ENV_FILE} and re-run. ` +
+      `OPENCODE_API_KEY is not set. This command reads it from ${READONLY_ENV_FILE} (or the process ` +
+      `environment) — the single credential file for this family, never a repo-root .env. ` +
+      `Add OPENCODE_API_KEY to ${READONLY_ENV_FILE} and re-run. ` +
       "Do NOT work around this with AGENT_MODEL=free: that rehearses a different model than production, " +
       "and model choice materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
   };
