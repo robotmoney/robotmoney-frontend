@@ -189,7 +189,7 @@ instruction anyone can follow:
 | `rm_owner` | **NOLOGIN** | `0053` | owns every `public` object; DDL runs as it via `SET LOCAL ROLE` | **ABSENT** |
 | `rm_app` | LOGIN | `0053` | `DATABASE_URL` — the API runtime | **ABSENT** |
 | `rm_worker` | LOGIN | **`0016`, not `0053`** — `0053` only re-attributes it, `0054` narrows its grants | `WORKER_DATABASE_URL` — worker lanes | present, **without any of `0054`'s grants** |
-| `rm_readonly` | LOGIN | `0053` if absent | `.env.readonly` — preflight's own login | present (this runbook's preflight already authenticates as it) |
+| `rm_readonly` | LOGIN | `0053` if absent | `$HOME/.env` — preflight's own login | present (this runbook's preflight already authenticates as it) |
 
 `rm_owner` never authenticates and therefore never gets a password. The
 script prompts for the other three.
@@ -279,7 +279,7 @@ totals from `/allocation`. The baseline is what the D41 read-path switch and
 the `asset_prices` seed get compared against after cutover; it is not
 reconstructed after the fact.
 
-**4.4 — Live preflight (role/credential gate).** Run the live check against `.env.readonly` and confirm its redacted target is
+**4.4 — Live preflight (role/credential gate).** Run the live check against `$HOME/.env` and confirm its redacted target is
 the production replica:
 
 ```bash

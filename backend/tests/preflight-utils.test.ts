@@ -82,14 +82,14 @@ describe("runPreflightMain — the guards that must reject BEFORE any connection
 
   function writeReadonlyEnv(lines: string): string {
     dir = mkdtempSync(join(tmpdir(), "rm-preflight-utils-"));
-    const path = join(dir, ".env.readonly");
+    const path = join(dir, "cred.env");
     writeFileSync(path, lines, "utf8");
     return path;
   }
 
   test("no env file at the given path -> exit code 2, no connection attempted", async () => {
     dir = mkdtempSync(join(tmpdir(), "rm-preflight-utils-"));
-    const path = join(dir, ".env.readonly");
+    const path = join(dir, "cred.env");
     const code = await runPreflightMain({
       envPath: path,
       name: "test",

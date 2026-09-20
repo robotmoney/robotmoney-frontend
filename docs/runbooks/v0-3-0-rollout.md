@@ -858,8 +858,8 @@ ttl:         2h
 verify:      bun scripts/upgrades/0.2.2-to-0.3.0/preflight.ts --emit-receipt
 ```
 
-Run it from anywhere in the checkout — the `.env.readonly` path resolves off the
-script's own location, not the cwd.
+Run it from anywhere in the checkout — it reads `$HOME/.env` (the one credential
+file; see `.env.example`), never a repo file.
 
 ```bash
 export RM_BACKUP_DIR=~/rm-backup-v030
@@ -877,7 +877,7 @@ pass. The harness, receipt format and verdict wording are
 |---|---|---|
 | `server-version` | PG 11+ | 0034's `NOT NULL DEFAULT` is instant on 11+ and a full table REWRITE before it (§2.2) |
 | `schema-migrations` | pending set is **exactly** this release's twelve; none already applied; no orphans | Catches a half-applied release, and a checkout that is not the rc you think |
-| `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `.env.readonly` points somewhere else |
+| `prior-release` | all six v0.2.2 migrations present | The upgrade's premise. A miss means `$HOME/.env` points somewhere else |
 | `append-only-safety` | guard installed, and **no statement** in this release removes a row from a table protected *at the point that migration runs*, or disables a guard | §2.2.1 — this is what makes the out-of-order warning harmless |
 | `clean-targets` | the 10 tables and 29 columns do not exist yet | A target that already exists means an out-of-band change |
 | `catchup-baseline` | records `job_schedules` as it stands now | §4.3 — 0034 OVERWRITES these rows; §9 check 3 grades against this |

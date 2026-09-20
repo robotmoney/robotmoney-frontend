@@ -228,9 +228,11 @@ surface first takes admin on real member data. Claim it immediately, or use
 `bun smoke -- --db smoke-twin`, which is identical minus the tunnel port. Add `--reuse`
 to skip the capture and boot the backup you already have.
 
-All of these read `OPENCODE_API_KEY` from **`.env.readonly`**, never from `.env`
-— on a staging host that is where the writer credential lives, and this family of
-commands is defined by not needing it.
+All of these read `OPENCODE_API_KEY` and the read-only connection from the
+single credential file at the **root of `$HOME`** (`$HOME/.env`; see
+`.env.example`) — never a repo-root `.env`. On a staging host that file holds
+the replica's discrete tokens plus the `rm_readonly` role line, and this
+family of commands is defined by needing nothing else.
 
 
 The smoke-twin's data lives in a labelled named volume and follows the same contract as

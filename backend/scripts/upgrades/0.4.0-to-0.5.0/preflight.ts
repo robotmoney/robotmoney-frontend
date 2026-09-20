@@ -34,7 +34,7 @@ const TAXONOMY_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as con
  *  (docs/runbooks/deployment.md §4.3: DATABASE_URL = rm_app,
  *  WORKER_DATABASE_URL = rm_worker). config.ts resolves DATABASE_URL from the
  *  deployment's OWN process env (backend/src/config.ts:709) — the preflight
- *  deliberately connects from .env.readonly and cannot read the deployed
+ *  deliberately connects from $HOME/.env (rm_readonly) and cannot read the deployed
  *  value, so every role-level check operates on this documented derivation. */
 const API_BOOT_ROLE = "rm_app";
 

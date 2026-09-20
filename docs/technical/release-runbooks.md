@@ -188,9 +188,10 @@ them:
 bun run smoke:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
 ```
 
-Every command in this family reads its credentials from **`.env.readonly`** and
-never from `.env` — a staging host's `.env` holds the writer credential, and
-these commands are defined by not needing it.
+Every command in this family reads its credentials from the single file at the
+**root of `$HOME`** (`$HOME/.env`; see `.env.example`) — discrete tokens plus
+the `rm_readonly` role line, never a repo-root file, and these commands are
+defined by needing nothing else.
 
 `smoke:capture` refuses to run against the primary (`pg_is_in_recovery()` must be
 true), refuses the application's writer credential, refuses a `pg_dump` older

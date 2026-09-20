@@ -67,7 +67,7 @@ What the probe derives, and from what:
 
 | It tells you | Derived from | Never from |
 |---|---|---|
-| Which host you are on and what it can do | repo-root `.env` (§7.5), `.env.readonly` (§4) | a hostname you typed |
+| Which host you are on and what it can do | `$HOME/.env` (§4/§7.5 — the one credential file) | a hostname you typed |
 | Which release you are at | `git rev-parse HEAD`, `git tag --points-at HEAD` | a SHA written in this file |
 | Which steps are done | one receipt per step, written by that step's own script | a checked box |
 | Whether those still **count** | the three axes below | when it feels recent |
@@ -229,7 +229,7 @@ assume. Re-check them against the tip you pin in §1 before you rely on them.
 
 ⚠ **`DATABASE_URL` is not in your shell, and nothing in this workflow puts it
 there.** `--db external` reads it out of the repo-root `.env` **file** —
-`loadEnvFile()` is `readFileSync` (`scripts/lib/smoke-external-pg.ts:163-165`),
+`loadEnvFile()` is the shared module's explicit `readFileSync` (`scripts/lib/env-role.ts`),
 called at `:294`, and the value is taken at `:303` — and `process.env` is never
 consulted (§7.5).
 
@@ -270,10 +270,10 @@ for the cutover and for any post-restore work.
 The pre-flight and the dump must both run as a role that **cannot write**.
 Production has a dedicated **read-only replica node** (a separate DO Managed
 Postgres resource, its own hostname, streaming from the primary) — that
-replica, not the primary, is what `.env.readonly` points at and what every
+replica, not the primary, is what the staging host's `$HOME/.env` points at and what every
 `rm_readonly` connection in this runbook actually uses.
 
-> 🔴 **`.env.readonly` must never name the primary's host.** This is enforced
+> 🔴 **The staging host's `$HOME/.env` must never name the primary's host.** This is enforced
 > by policy, not by a technical block: Postgres roles are cluster-wide catalog
 > objects, replicated from the primary to the replica byte-for-byte — there is
 > only ONE `rm_readonly`, and it is created via the primary (below) because
@@ -299,7 +299,7 @@ operator action, not something to hand an agent execute-and-forget):
 > either mangles the password silently or errors; `#` and `?` silently
 > truncate the rest of the URI. **§4 is the one exception**: the pre-flight
 > script takes this password from a discrete `password=` key in
-> `.env.readonly`, not a pasted URI, and URI-escapes it itself
+> `$HOME/.env` (discrete tokens + role line), not a pasted URI, and URI-escapes it itself
 > (`encodeURIComponent`) before building the connection string — so the
 > restriction does not apply there. Take the length from a longer password,
 > not from a wider alphabet, since you need one alphabet that works
@@ -615,7 +615,7 @@ mechanism). What it does, entirely with Docker and your own encrypted files —
 
 1. Starts a throwaway local `postgres:18` container (matching production's
    major version) with its own freshly generated, local-only superuser —
-   nothing borrowed from `.env`/`.env.readonly`, and no production credential
+   nothing borrowed from any repo file, and no production credential
    anywhere in the path (§6.3 T1, T4).
 2. Decrypts and loads just the `rm_readonly`/`rm_worker` role definitions out
    of `rm-globals-<STAMP>.sql.gpg` (the rest of a real globals dump is DO
@@ -669,9 +669,9 @@ reached for at the one point in preflight where nothing needs it; the standing r
 is that preflight never touches the primary and never uses the writer.
 
 ```bash
-# Same connection §4's role uses, read out of .env.readonly. One helper, so a
+# Same connection §4's role uses, read out of $HOME/.env. One helper, so a
 # password containing '=' survives (only the FIRST '=' separates key/value).
-rokey() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" <checkout>/.env.readonly | head -1; }
+rokey() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$HOME/.env" | head -1; }
 
 export PGHOST="$(rokey host)"       PGPORT="$(rokey port)"
 export PGUSER="$(rokey username)"   PGPASSWORD="$(rokey password)"
@@ -735,7 +735,7 @@ restored data, `seed()`, and a full health-wait.
 
 > 💳 **This runs the production model on a funded key, and that is the
 > point.** `OPENCODE_API_KEY` must be set — in your shell, or in the
-> checkout's **`.env.readonly`**, and deliberately **not** `.env`. On a staging
+> **`$HOME/.env`**, the single credential file. On a staging
 > host `.env` holds the application's writer `DATABASE_URL`, and this whole
 > family of commands (`smoke:capture`, `smoke:twin:once`, `stage-rehearsal.ts`,
 > preflight) is defined by not needing that credential; reading `.env` for the
@@ -928,7 +928,7 @@ tokens, member access keys and every stored email address — the same inventory
 
 | # | Guarantee | Why |
 |---|---|---|
-| **T1** | **No production credential is used or needed.** The smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not `.env`, not `.env.readonly`, not `doadmin`. | This is what lets migrations run against real data with no production secret in play. **Two clauses of this row were corrected 2026-09-18.** It previously said migrations run "*for real*": they run against real data, but until `RM_TWIN_PRODUCTION_PRIVILEGES=1` they run at a privilege level no cutover has — see T2. It also said `doadmin` "applies migrations at no point in this runbook", which stopped being true with the role taxonomy (`0053`): a release carrying `0054`+ applies migrations through `MIGRATE_DATABASE_URL`, a bootstrap login holding `rm_owner` membership, which on the production primary is `doadmin`. `DATABASE_URL` (`rm_app`) cannot run them — it is refused `SET LOCAL ROLE rm_owner`. |
+| **T1** | **No production credential is used or needed.** The smoke-twin's superuser is created by the container from `POSTGRES_USER`, borrowed from nothing — not a repo-root file, not `doadmin`. | This is what lets migrations run against real data with no production secret in play. **Two clauses of this row were corrected 2026-09-18.** It previously said migrations run "*for real*": they run against real data, but until `RM_TWIN_PRODUCTION_PRIVILEGES=1` they run at a privilege level no cutover has — see T2. It also said `doadmin` "applies migrations at no point in this runbook", which stopped being true with the role taxonomy (`0053`): a release carrying `0054`+ applies migrations through `MIGRATE_DATABASE_URL`, a bootstrap login holding `rm_owner` membership, which on the production primary is `doadmin`. `DATABASE_URL` (`rm_app`) cannot run them — it is refused `SET LOCAL ROLE rm_owner`. |
 | **T2** | **The smoke-twin's superuser is a true superuser. That is safe, and it was wrongly treated as harmless.** It holds more Postgres privilege than `doadmin` does (DO withholds real superuser — §4's `pg_read_all_data` box is that limit in action), and reaches one disposable container that dies with it. | **Corrected 2026-09-18.** The safety argument is sound and unchanged: privilege and blast radius are independent, and this credential's blast radius is one container. What was wrong is the conclusion drawn from it — "and that is fine" full stop. Blast radius is not the only axis that matters: a rehearsal's whole purpose is FIDELITY, and this row identified the exact divergence from production ("more privilege than `doadmin`") and then dismissed it. Migrating as a superuser bypasses every ACL check a cutover faces, so an ownership or grant defect cannot fail on the twin. `0053` reached a production runbook with three of them on the strength of this reasoning. A release touching roles, ownership, or grants must set `RM_TWIN_PRODUCTION_PRIVILEGES=1` (release-runbooks.md §4.4), which keeps the container superuser for the RESTORE — extensions need it — and migrates as a non-superuser bootstrap login instead. |
 | **T2a** | **A verification leg that DRIVES the product may run against the twin, and only against the twin.** `scripts/verify-live.ts --tier full` publishes sessions, spends real inference and sends mail; `--tier readonly` only issues GETs. | The tier boundary is the same reasoning as T2, pointed the other way. The twin exists so destructive exercise is SAFE, which is exactly why the destructive legs belong here — and why they must never point at production, where they would manufacture the very history the readonly legs exist to audit. `readonly` is the default so the destructive direction has to be asked for; production postflight runs `--tier readonly` (release-runbooks.md §4.7.1). |
 | **T3** | **The published port must bind a non-routable address** — `127.0.0.1`, or the Docker bridge gateway when sibling containers must reach it (§6). **Never `0.0.0.0`.** | Docker inserts its own iptables rules ahead of ufw/firewalld, so a `0.0.0.0` bind can be reachable from outside the host *even when the firewall looks closed* (verified 2026-08-17). Given T4, the bind address is the only thing standing between a production-data copy and the internet. |
@@ -1158,7 +1158,7 @@ cat .env      # must contain, at minimum:
 ```
 
 `--db external` reads `DATABASE_URL` from **that file directly**
-(`scripts/lib/smoke-external-pg.ts:288-305`), not from `process.env`. A missing or
+(`scripts/lib/env-role.ts`), not from `process.env`. A missing or
 unreadable `.env` is a fatal exit 1 before anything starts.
 
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
@@ -1352,7 +1352,7 @@ not.
 |---|---|---|
 | `--smoke` | **MANDATORY.** Selects the production-shaped (archive) initializer over the default simulation one (`scripts/lib/smoke-db-mode.ts`'s `SMOKE_FLAG`) — `backend/scripts/db-preflight.ts` classifies the boot as `--initializer=archive` only when this is set, and treats a missing flag as simulation (fail-closed). | The boot runs as a simulation. Against an empty database this looks fine; against populated production data `db-preflight` correctly refuses it — the failure mode observed at the v0.4.0-rc.3 cutover, where `smoke:stage` (no `--smoke`) booted a simulation and was refused. |
 | `--static-port` | **MANDATORY for v0.4.0.** Pins the api's host port instead of letting Docker assign one — required because the production host driver, not backend crons, orders the judge step between aggregate and publish (`SWARM_SCHEDULES_ENABLED=0`, per-release runbook §2/§4). | A randomly assigned port each boot, which the static-port production driver assumption does not hold for. |
-| `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via `DATABASE_URL` from repo-root `.env` (`scripts/lib/smoke-external-pg.ts:288-305`). One enum flag names the data path — `ephemeral \| external \| smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
+| `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via the `rm_app` writer URL assembled from `$HOME/.env` (`scripts/lib/env-role.ts`). One enum flag names the data path — `ephemeral \| external \| smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
 
 **Flags you still state yourself:**
 

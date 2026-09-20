@@ -349,7 +349,7 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
     // release.ts keeps a byte-identical COPY rather than importing the module,
     // because append-only-guard.ts imports db/client.ts, which demands
     // DATABASE_URL at module load and builds the app's writer pool — and these
-    // gate scripts must connect exactly once, read-only, from .env.readonly.
+    // gate scripts must connect exactly once, read-only, from $HOME/.env's rm_readonly role.
     // Nothing else holds the two in agreement, so this does.
     const guard = readFileSync(join(repoRoot, "backend", "src", "db", "append-only-guard.ts"), "utf8");
     const m = guard.match(/APPEND_ONLY_MIGRATION\s*=\s*"([^"]+)"/);
@@ -363,7 +363,7 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // copies the append-only pair: the modules that own them pull in db/client.ts,
   // which demands DATABASE_URL at module load and builds the app's WRITER pool —
   // unacceptable in a gate script that must connect once, read-only, from
-  // .env.readonly.
+  // $HOME/.env (rm_readonly role).
   //
   // #739 (79063ab) changed the dispatcher's job kind in src/ and nothing failed.
   // The release's §7.1 observation went on grading `wallet.backfill_day`, a kind
