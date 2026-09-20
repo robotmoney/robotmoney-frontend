@@ -86,4 +86,4 @@ psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -f "$root/backend/migrat
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_app'
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_worker'
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_readonly'
-echo "Roles provisioned. Run the ordinary migration command once with MIGRATE_DATABASE_URL set only for that command, then install rm_app/rm_worker URLs on the host."
+echo "Roles provisioned. Run the ordinary migration command once with MIGRATE_DATABASE_URL set only for that command, then write each role's password into the host's $HOME/.env as a '<role> = <password>' line (see .env.example: discrete tokens + one role line per role)."
