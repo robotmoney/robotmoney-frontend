@@ -20,7 +20,8 @@
 // ambient environment — a stray exported `host` must never influence which
 // database a smoke writes to. Second, reading the file makes the source of the
 // value auditable: the resolution says which key of which file it came from.
-// `DATABASE_URL` (the form `.env.example` documents) always wins when present;
+// `urlFromDiscreteKeys` assembles exactly ONE URL — the rm_app writer role —
+// from $HOME/.env's discrete tokens + role line; nothing else is read;
 // otherwise the discrete DO-panel keys are assembled into one, so a pasted
 // connection panel works without hand-editing.
 //
@@ -144,7 +145,7 @@ export interface ExternalPgResolution {
   /** Host as parsed, for the boot banner. */
   host?: string;
   /** Which `.env` key the value came from, for the boot banner. */
-  source?: "DATABASE_URL" | "discrete keys";
+  source?: "discrete keys";
 }
 
 /**
@@ -236,7 +237,7 @@ export function assertReachableFromContainer(url: string): void {
     throw new Error(
       `--db external: the connection URL points at host "${EPHEMERAL_PG_SERVICE}", which IS the ephemeral ` +
         `compose service this flag exists to replace — that service is not started in external mode, so nothing ` +
-        `would be listening. Point DATABASE_URL at the managed server's hostname.`,
+        `would be listening. Point the rm_app role line at the managed server's hostname.`,
     );
   }
   if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
@@ -305,27 +306,25 @@ export function detectEnvPostgres(envFilePath: string): ExternalPgResolution {
 
 export function resolveExternalPg(
   argv: string[],
-  opts: { envFilePath: string } = { envFilePath: ".env" },
+  opts: { envFilePath: string } = { envFilePath: homeEnvFilePath() },
 ): ExternalPgResolution {
   if (!argv.includes("--db") && argv.includes("external")) return { enabled: false };
 
   const env = loadEnvFile(opts.envFilePath);
   if (!env) {
     throw new Error(
-      `--db external: no readable .env at ${opts.envFilePath}. This flag takes the connection details from ` +
-        `that file — add DATABASE_URL=postgres://user:password@host:port/database?sslmode=require (see .env.example), ` +
+      `--db external: no readable $HOME/.env at ${opts.envFilePath}. This flag takes the connection details from ` +
+        `that file — discrete tokens plus a rm_app= writer role line (see .env.example), ` +
         `or drop the flag to boot the ephemeral postgres container.`,
     );
   }
 
-  const direct = env.DATABASE_URL?.trim();
-  const assembled = direct ? undefined : urlFromDiscreteKeys(env);
-  const url = direct || assembled;
+  const url = urlFromDiscreteKeys(env);
   if (!url) {
     throw new Error(
-      `--db external: ${opts.envFilePath} has no DATABASE_URL, and not enough discrete keys to assemble one ` +
-        `(needs host, port, database, username, password — the fields DigitalOcean's connection panel prints). ` +
-        `Add DATABASE_URL=postgres://user:password@host:port/database?sslmode=require and re-run.`,
+      `--db external: ${opts.envFilePath} cannot assemble the rm_app writer URL — needs host, port, database ` +
+        `(the fields DigitalOcean's connection panel prints) plus a rm_app=<password> role line. ` +
+        `Fix $HOME/.env and re-run.`,
     );
   }
 
@@ -342,6 +341,6 @@ export function resolveExternalPg(
     url,
     redactedUrl: redactPostgresUrl(url),
     host: new URL(url).hostname,
-    source: direct ? "DATABASE_URL" : "discrete keys",
+    source: "discrete keys",
   };
 }

@@ -43,7 +43,9 @@ function envFileWith(contents: string): string {
   return path;
 }
 
-const REAL_ENV = envFileWith("DATABASE_URL=postgres://u:hunter2secret@db.example.com:25060/defaultdb\n");
+const REAL_ENV = envFileWith(
+  "host = db.example.com\nport = 25060\ndatabase = defaultdb\nrm_app = hunter2secret\n",
+);
 const NO_ENV = join(tmpdir(), "rm-db-mode-absent", ".env");
 const parse = (a: string[], envFilePath = REAL_ENV) => parseDataPath(a, { envFilePath });
 
@@ -67,7 +69,7 @@ describe("default and the three modes", () => {
 
   test("--db external resolves the address from the .env FILE", () => {
     const dp = parse(argv(DB_FLAG, "external")).dataPath;
-    expect(dp).toMatchObject({ kind: "external", host: "db.example.com", source: "DATABASE_URL" });
+    expect(dp).toMatchObject({ kind: "external", host: "db.example.com", source: "discrete keys" });
   });
 
   test("--db smoke-twin carries the backup dir when one is named", () => {
@@ -114,7 +116,7 @@ describe("loud refusals — every one before any restore work", () => {
   });
 
   test("--db external with an unreadable .env fails loudly, never falls back", () => {
-    expect(() => parse(argv(DB_FLAG, "external"), NO_ENV)).toThrow(/no readable \.env/);
+    expect(() => parse(argv(DB_FLAG, "external"), NO_ENV)).toThrow(/no readable \$HOME\/\.env/);
   });
 
   test("no env var can select a data path", () => {
@@ -195,10 +197,10 @@ const TWIN: ResolvedDataPath = {
 };
 const EXTERNAL: ResolvedDataPath = {
   kind: "external",
-  url: "postgres://u:hunter2secret@db.example.com:25060/defaultdb",
-  redactedUrl: "postgres://u:***@db.example.com:25060/defaultdb",
+  url: "postgres://rm_app:hunter2secret@db.example.com:25060/defaultdb",
+  redactedUrl: "postgres://rm_app:***@db.example.com:25060/defaultdb",
   host: "db.example.com",
-  source: "DATABASE_URL",
+  source: "discrete keys",
 };
 
 describe("the generated overlay", () => {

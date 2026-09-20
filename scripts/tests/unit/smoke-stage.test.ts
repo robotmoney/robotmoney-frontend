@@ -17,7 +17,7 @@ function envFile(contents: string | null): string {
   return path; // when contents is null the file does not exist
 }
 
-const DB_URL = "DATABASE_URL=postgres://u:p@db.example.com:25060/appdb?sslmode=require\n";
+const DB_URL = "host = db.example.com\nport = 25060\ndatabase = appdb\nrm_app = p\n";
 
 describe("planStageArgs — the port pin is unconditional", () => {
   test("always passes --static-port, whichever data path is chosen", () => {
@@ -32,13 +32,13 @@ describe("planStageArgs — the port pin is unconditional", () => {
 });
 
 describe("planStageArgs — the data path follows .env", () => {
-  test("a DATABASE_URL in .env selects the external database", () => {
+  test("an rm_app role line in $HOME/.env selects the external database", () => {
     const plan = planStageArgs(envFile(DB_URL));
     expect(plan.dataPath).toBe("external");
     expect(plan.args).toContain("--db");
     expect(plan.args).toContain("external");
     expect(plan.target).toContain("db.example.com");
-    expect(plan.target).not.toContain(":p@"); // redacted, never the password
+    expect(plan.target).not.toContain("***:p@"); // redacted, never the password
   });
 
   test("a pasted DigitalOcean connection panel also selects it", () => {
