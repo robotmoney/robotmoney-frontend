@@ -17,71 +17,58 @@
 // booting anything application-shaped.
 //
 // So: this file and every upgrade-specific preflight import `postgres`
-// (backend/package.json dependency) and node builtins, and NOTHING from
-// src/. Connection comes from a discrete-keys .env.readonly file — a
-// separate file from the application's own .env, holding a dedicated
-// read-only role's credentials — never DATABASE_URL, and it refuses to run
-// if the URL it assembles is identical to the application's DATABASE_URL.
-// The session is pinned read-only at the server and PROVEN before a single
-// check query runs (gateReadOnly, below).
+// (backend/package.json dependency), node builtins, and the ONE shared
+// credential resolver scripts/lib/env-role.ts (issue #699) — and NOTHING
+// from src/. Connection comes from $HOME/.env (the same file .env.example
+// describes): discrete connection tokens plus a `rm_readonly = <password>`
+// line, from which urlForRole assembles exactly one read-only URL — never
+// DATABASE_URL, and it refuses to run if the URL it assembles is identical
+// to the application's DATABASE_URL. The session is pinned read-only at the
+// server and PROVEN before a single check query runs (gateReadOnly, below).
 
-import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { createChecker, printVerdict } from "./checks.ts";
 import type { Checker, CheckResult, Status } from "./checks.ts";
 import { collectDbIdentity, emitReceipt, gitFacts, summarise } from "./rollout-receipt.ts";
 import type { DbIdentity } from "./rollout-receipt.ts";
+import {
+  CONNECTION_TOKENS,
+  homeEnvFilePath,
+  loadEnvFile,
+  parseEnvFile,
+  urlForRole,
+} from "../../../scripts/lib/env-role.ts";
 
 export type Db = postgresTypes.Sql<{}>;
 
-export const READONLY_ENV_REQUIRED_KEYS = ["host", "port", "username", "password", "database"] as const;
+/** The ONE role this whole family connects as. Its password line lives in
+ *  $HOME/.env under its own name — the role name IS the username, and the
+ *  role's discrete password is that line's value. */
+export const READONLY_ROLE = "rm_readonly" as const;
 
-/** Minimal KEY=VALUE parser — same shape as scripts/lib/smoke-external-pg.ts's,
- *  duplicated rather than imported to keep the standalone story intact. */
-export function parseEnvFile(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq === -1) continue;
-    const key = line.slice(0, eq).replace(/^export\s+/, "").trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
-  }
-  return out;
-}
+/** The keys that must be present for urlForRole to assemble the rm_readonly
+ *  URL: the connection tokens (sslmode optional, defaults to require) plus
+ *  the role's own password line. */
+export const READONLY_ENV_REQUIRED_KEYS = ["host", "port", "database", READONLY_ROLE] as const;
 
-export function loadEnvFile(path: string): Record<string, string> | undefined {
-  try {
-    return parseEnvFile(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
+// The ONE resolver, imported — never duplicated. env-role.ts is side-effect
+// free apart from the explicit readFileSync inside loadEnvFile, so the
+// standalone story above (nothing from src/, no ambient DATABASE_URL) holds.
+// Re-exported under the same names the capture/twin family imports.
+export { parseEnvFile, loadEnvFile, homeEnvFilePath };
 
 export type DiscreteUrlResolution = { url: string } | { missing: (typeof READONLY_ENV_REQUIRED_KEYS)[number][] };
 
-/** Assembles postgres://... from discrete keys and URI-escapes each field
- *  itself, so the reserved-character password restriction that applies to a
- *  hand-built URI does not apply to a discrete-keys env file. */
+/** The read-only URL for THIS family: exactly the rm_readonly role's URL,
+ *  assembled by the shared resolver from $HOME/.env's discrete tokens plus
+ *  the rm_readonly password line. Kept under the old facade name so callers
+ *  (smoke-twin-capture.ts, the preflight tests) stay untouched. */
 export function urlFromDiscreteEnv(env: Record<string, string>): DiscreteUrlResolution {
+  const url = urlForRole(env, READONLY_ROLE);
+  if (url) return { url };
   const missing = READONLY_ENV_REQUIRED_KEYS.filter((k) => !env[k]);
-  if (missing.length > 0) return { missing };
-  const u = new URL(`postgres://${env.host}`);
-  u.port = env.port;
-  u.username = encodeURIComponent(env.username);
-  u.password = encodeURIComponent(env.password);
-  u.pathname = `/${env.database}`;
-  u.searchParams.set("sslmode", env.sslmode ?? "require");
-  return { url: u.toString() };
+  return { missing };
 }
 
 /** Password-redacted target, the only form safe to print. */
@@ -243,8 +230,8 @@ export async function gateReadOnly(db: Db, checker: Checker, allowPrivilegedEnvV
 }
 
 export interface RunPreflightOpts {
-  /** Path to the discrete-keys env file. Caller resolves this relative to
-   *  its OWN location (see backend/scripts/upgrades/<version>/preflight.ts). */
+  /** Path to the credential env file ($HOME/.env on a real host; the suite
+   *  passes a tmp file). Caller resolves this — normally homeEnvFilePath(). */
   envPath: string;
   /** e.g. "rm-preflight-0.2.2" — used as both the Postgres application_name
    *  and the console.error prefix. */
@@ -320,8 +307,8 @@ async function runPreflightCore(opts: RunPreflightOpts, ctx: PreflightRunCtx): P
   if (!env) {
     err(`cannot read ${envPath}`);
     err("This script deliberately does NOT read DATABASE_URL or an ambient env var:");
-    err("it must run as a dedicated read-only role, configured explicitly in that");
-    err("file, never as the application's writer. See .env.readonly.example.");
+    err("it must run as a dedicated read-only role, configured by a `rm_readonly =` line");
+    err("in $HOME/.env, never as the application's writer (see .env.example).");
     return 2;
   }
   const resolved = urlFromDiscreteEnv(env);
