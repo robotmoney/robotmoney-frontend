@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { detectEnvPostgres } from "./lib/smoke-external-pg.ts";
+import { homeEnvFilePath } from "./lib/env-role.ts";
 import { DB_FLAG } from "./lib/smoke-db-mode.ts";
 
 export const STATIC_PORT_FLAG = "--static-port";
@@ -59,15 +60,15 @@ export function planStageArgs(envFilePath: string, passthrough: string[] = []): 
 if (import.meta.main) {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const passthrough = process.argv.slice(2);
-  const plan = planStageArgs(join(repoRoot, ".env"), passthrough);
+  const plan = planStageArgs(homeEnvFilePath(), passthrough);
 
   console.log(`[smoke:stage] host port: PINNED (${STATIC_PORT_FLAG}) — this is the boot a tunnel points at.`);
   console.log(
     plan.dataPath === "external"
-      ? `[smoke:stage] database: EXTERNAL, from .env — ${plan.target}\n` +
+      ? `[smoke:stage] database: EXTERNAL, from $HOME/.env — ${plan.target}\n` +
         `[smoke:stage]   this boot MIGRATES AND SEEDS that server and its workers write to it.`
-      : `[smoke:stage] database: the smoke's own ephemeral postgres container (no usable Postgres found in .env).\n` +
-        `[smoke:stage]   its data is deleted with the stack; add DATABASE_URL to .env for a persistent one.`,
+      : `[smoke:stage] database: the smoke's own ephemeral postgres container (no usable Postgres found in $HOME/.env).\n` +
+        `[smoke:stage]   its data is deleted with the stack; add a host/port/database + rm_app= line to $HOME/.env for a persistent one.`,
   );
   console.log(`[smoke:stage] equivalent: bun run smoke -- ${plan.args.join(" ")}`);
 

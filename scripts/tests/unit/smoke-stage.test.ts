@@ -43,7 +43,7 @@ describe("planStageArgs — the data path follows .env", () => {
 
   test("a pasted DigitalOcean connection panel also selects it", () => {
     const plan = planStageArgs(envFile(
-      "username = doadmin\npassword = s3cret\nhost = db.example.com\nport = 25060\ndatabase = defaultdb\n",
+      "host = db.example.com\nport = 25060\ndatabase = defaultdb\nrm_app = s3cret\n",
     ));
     expect(plan.dataPath).toBe("external");
     expect(plan.target).not.toContain("s3cret");

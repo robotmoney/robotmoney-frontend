@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
+import { homeEnvFilePath } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
@@ -221,7 +222,7 @@ if (staticPortMode) await stagePreflight();
 // than half-way through a bring-up.
 let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
 try {
-  const parsed = parseDataPath(process.argv, { envFilePath: join(repoRoot, ".env") });
+  const parsed = parseDataPath(process.argv, { envFilePath: homeEnvFilePath() });
   requestedDataPath = parsed.dataPath;
   for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
