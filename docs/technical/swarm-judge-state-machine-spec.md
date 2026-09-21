@@ -470,6 +470,10 @@ signed bytes, with no live service call.
 | 6 | Widen `canonicalizeDigestInputs()` and bump `DIGEST_SCHEME` | Off `derivation-v1`. The repo's own rule: bump in the same change that widens the covered set |
 | 7 | Carry the per-memo evaluations into the receipt | Otherwise INV-TG1 fails — the weight stops being reproducible |
 | 8 | Keep `meanTakeWeights()` as the arithmetic | Per 11.2, the judge filters and the function still computes |
+| 9 | Redefine `weights_not_authored_by_every_take` against the SURVIVING set | Per 11.5(a) it goes silent exactly when its own invariant breaks |
+| 10 | Split `take_count` into attested and contributing | INV-TG2 |
+| 11 | Add a recorded drop threshold on the `min_takes` pattern | Per 11.5(b), keeps the filter deterministic and auditable |
+| 12 | Recompute thin support against the contributing count | Per 11.5(c) |
 
 ### 11.4 The tension to resolve in wording
 
@@ -485,7 +489,63 @@ the surviving memos rather than from the judge's own view.
 This needs to be written into the prompt contract explicitly, because it is the
 line between an evaluator and a thirteenth analyst.
 
-### 11.5 Reproducibility hazard — canonical data moves
+### 11.5 An unreasonable memo is DROPPED from the vector
+
+Decided by Lucas, 2026-09-21. The filter is binary, not a confidence-weighted
+average. A memo the judge rules unreasonable contributes nothing to the vector.
+
+Four consequences follow, and the first is a silent failure.
+
+**(a) `weights_not_authored_by_every_take` stops protecting its own invariant.**
+
+That refusal exists to stop exactly this sentence, quoted from its own message:
+
+> `release_safety.take_count` would report every take while the numbers came
+> from a subset, and a bucket a member never named would be counted as that
+> member's explicit 0.00 vote.
+
+But its coded check (`consensus-receipt.ts:751-766`) only collects takes where
+`!isCanonicalFourVector(normalizedTakeWeights(payload.weights))` — takes carrying
+**no** vector. A dropped memo carries a perfectly valid vector. It passes the
+check untouched. So under the target design this refusal goes quiet precisely
+when its stated invariant is violated.
+
+It must be redefined against the **surviving** set, and `take_count` must split
+into two fields that are no longer the same number:
+
+- *attested* — how many takes the receipt covers
+- *contributing* — how many authored the vector
+
+INV-TG2. A receipt must state both counts. A reader must never have to infer
+which one a single `take_count` meant.
+
+**(b) The drop threshold must be recorded, not left to the model.**
+
+The judge reports a confidence figure per memo. A binary drop needs a threshold.
+If the model decides the cutoff internally, the drop is not reproducible and can
+drift between runs over identical inputs.
+
+The repo already has the right pattern in `min_takes`: a config column, recorded
+onto **every judgement row**, so a historical opinion is read against the
+threshold actually in force when it was made. The drop threshold should work the
+same way.
+
+That keeps the filter deterministic. Model output is the per-memo score. The
+drop is arithmetic over a signed score and a recorded threshold — so INV-TG1
+holds, and a verifier can re-derive not just the vector but the membership.
+
+**(c) Thin support must be recomputed against survivors.** `min_takes` compares
+against a take count. After filtering, the comparison has to use the
+contributing count. Otherwise a session where the judge dropped most memos still
+reports itself well-supported.
+
+**(d) Every memo dropped is a real, reachable state.** The vector is then absent,
+which is `weights_absent_for_bucket_weights_subject` — a TERMINAL refusal. The
+session still publishes and loses its receipt, which is correct under
+"the machine never stops". It must be a **named, alerted** condition rather than
+an accident, because it is also what a malfunctioning judge looks like.
+
+### 11.6 Reproducibility hazard — canonical data moves
 
 Macro data is revised. A judge that checked a claim against a series at judging
 time, and a verifier who re-reads that series a month later, do not see the same
@@ -500,9 +560,9 @@ snapshotted, identified in the judgement row, and covered by `inputs_digest`.
 
 ## 12. Open decisions
 
-1. When the judge rules a memo unreasonable, is that memo **dropped** from the
-   vector entirely, or **down-weighted** by its confidence score? This is the
-   one unanswered detail blocking §11.
+1. **What is the drop threshold, and where does it live?** §11.5(b) argues it
+   must be a recorded config value on the `min_takes` pattern, not a cutoff the
+   model picks. The value itself is still unchosen.
 2. Does `meanTakeWeights()` over the *unfiltered* set stay published alongside
    the filtered one? Keeping it is a cheap audit signal — a large gap between
    the two is exactly the symptom of a judge filtering too aggressively.
