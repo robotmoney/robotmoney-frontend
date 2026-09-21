@@ -287,20 +287,65 @@ git tag -a v0.5.1-rc.0 -m "v0.5.1 release candidate 0" $RC_SHA
 git push origin v0.5.1-rc.0
 ```
 
-**5.2 Stage rehearsal report.** Per `rollout-procedure.md` §6.5, saved beside
-the backup artifacts as `stage-rehearsal-report-<STAMP>.md`. Acceptance
-criteria for this release:
+**5.2 The four functional acceptance criteria.**
 
-1. `restore-check.ts` exits `0` against a dump captured on or after 2026-09-21.
-2. The stack reaches readiness and `/health` answers `200`.
-3. `smoke-frontend-check.ts` passes against the published port.
-4. Postflight's nine records are all PASS against the migrated twin.
-5. `no-wedged-sessions` is PASS — the release's own objective.
-6. The closed-day allocation total is unchanged across the D41 read path.
-7. The boot's `swarm now N seats` line equals the restored active-member count
+⛔ **These are the release.** v0.5.1 changes no schema, so every schema check is
+necessarily green before it does anything; what it actually claims is
+behavioural, and none of it is a fact about a row's existence. They run inside
+the rehearsal's graded postflight
+(`backend/scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal.ts`), against the
+live twin, and they gate the `P5.rehearsal` receipt.
+
+| # | Criterion | Check | Passes when |
+| --- | --- | --- | --- |
+| **(a)** | Wedged sessions **and schedulers** self-healed | `a-self-healed` | No session is past its close time and still open, no enabled schedule is >30m overdue, and no job is stuck pending past its `run_after` |
+| **(b)** | Sessions that expired or failed are **closed** | `b-expired-sessions-closed` | Every session past `window_closes_at` is `published` or `cancelled` |
+| **(c)** | New sessions **opened** | `c-new-sessions-opened` | At least one session convened after the twin's postmaster started |
+| **(d)** | A full session **submitted by proposers and judged** | `d-full-session-judged` | A session convened this boot has verified takes **and** a judgement naming its judge |
+
+**There is no grace period on (a)/(b), deliberately.** An earlier draft allowed
+a session 30 minutes past `window_closes_at` before counting it wedged, on the
+reasoning that the publish lane takes a few minutes. That reasoning smuggles the
+defect in: a grace period makes "closed late" indistinguishable from "never
+closed", and a wedge is precisely a session that is late forever. The window is
+the prescribed time — the system chose that timestamp itself — so the assertion
+is that every session past it is closed, compared against `now()` with nothing
+added. What absorbs a genuinely in-flight publish is the **observation window**,
+not the assertion: the check re-evaluates every 30s for up to 30 minutes, so a
+session mid-publish only has to finish.
+
+**The restored/new boundary is `pg_postmaster_start_time()`.** The twin's
+Postgres is created fresh per run and the dump restored into it, so every
+production row predates the postmaster and every row the rehearsal produced
+follows it. That needs no snapshot taken at the right instant and is not fooled
+by the driver having already driven the product — it runs `verify-live --tier
+full` before this hook, and those rows are correctly counted as new.
+
+**Criterion (c) exercises the steady-state loop, not cron.**
+`docker-compose.smoke.yml` pins `SWARM_SCHEDULES_ENABLED=0`, so the `swarm.*`
+schedules do not fire in a smoke boot. New sessions come from the steady-state
+session loop, which does run. Do not read a passing (c) as proof the cron
+schedules are healthy; that is what (a)'s schedule-staleness half covers.
+
+⚠ **The criteria are proven to discriminate.** `backend/tests/rehearsal-functional-0-5-1.test.ts`
+establishes the RED before the GREEN for each one, against a real database —
+including a session **one minute** past its window, the case the old grace
+period would have graded healthy. A criterion that passed on an empty result
+set would turn the whole rehearsal into theatre (`rollout-procedure.md` §9.1).
+
+**5.3 Stage rehearsal report.** Per `rollout-procedure.md` §6.5, saved beside
+the backup artifacts as `stage-rehearsal-report-<STAMP>.md`. It must record:
+
+1. `restore-check.ts` exit code, against a dump captured on or after 2026-09-21.
+2. Time to readiness, and the `/health` verdict.
+3. `smoke-frontend-check.ts` verdict against the published port.
+4. A result for **every** record the graded run emits — the schema checks, the
+   four criteria above, and the closed-day price check — since they now share
+   one verdict and one receipt.
+5. The boot's `swarm now N seats` line against the restored active-member count
    (`twin-roster:every-active-member-seated`), with the rc.9 bypass gone.
-8. The migration ledger after the run contains no migration this checkout lacks.
-9. Zero containers, volumes or processes survive teardown (G6).
+6. Zero containers, volumes or processes surviving teardown (G6).
+7. **GO / NO-GO**, with reason, and operator sign-off.
 
 ## 6. Production cutover
 
@@ -332,6 +377,7 @@ bun run verify:live --tier readonly --emit-receipt=P8.verify-prod
 | `third-party-judging-off` | `swarm_judge_config.third_party_enabled` is `false` |
 | `analytics-read-mode` | the `analytics_read_mode` row exists (mode recorded, not required) |
 | `no-wedged-sessions` | no recent session is stuck non-terminal — **the release's objective** |
+| *(rehearsal only)* | criteria (a)-(d) above run against the twin, not production: (c) and (d) DRIVE the product, and `--tier full` behaviour belongs on a twin and nowhere else (`rollout-procedure.md` T2a) |
 | `contract-freshness` | the installed `@robotmoney/contract` matches the checkout |
 
 **7.1 — `--tier readonly` is not optional.** `--tier full` publishes sessions,

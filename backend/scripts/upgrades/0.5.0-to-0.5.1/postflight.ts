@@ -135,9 +135,16 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
   }
 }
 
-const code = await runPostflightMain({
-  name: "postflight-0.5.1",
-  runChecks,
-  receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role } : undefined,
-});
-process.exitCode = code;
+// Guarded (import.meta.url) because stage-rehearsal.ts imports runChecks from
+// this module to fold the schema checks into the rehearsal's single graded
+// verdict. An unguarded body would run a SECOND postflight on import — and,
+// with --emit-receipt, write a second P5.rehearsal receipt recording only the
+// schema half, before the functional criteria had run at all.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const code = await runPostflightMain({
+    name: "postflight-0.5.1",
+    runChecks,
+    receipt: receiptStep ? { step: receiptStep, repoRoot, tagGlob: TAG_GLOB, hostRole: deriveHostRole(repoRoot).role } : undefined,
+  });
+  process.exitCode = code;
+}
