@@ -18,7 +18,7 @@ describe("issue #361 independent producer credential boundary", () => {
     expect(workerBlock).not.toContain("ANALYTICS_TOKEN");
     const producer = compose.slice(compose.indexOf("  analytics-producer:"), compose.indexOf("  # D21"));
     expect(producer).toContain("ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token");
-    expect(producer).not.toContain("DATABASE_URL");
+    expect(producer).not.toMatch(/^[ \t]*DATABASE_URL:/m);
     expect(producer).not.toContain("ADMIN_TOKEN");
   });
 

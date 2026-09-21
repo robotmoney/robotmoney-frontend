@@ -57,4 +57,3 @@ export function useStubJudge(): void {
   process.env.OPENCODE_API_KEY ||= "sk-stub-judge-key";
 }
 
-afterAll(() => server.stop(true));
