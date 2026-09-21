@@ -286,41 +286,62 @@ async function archiveRecommendation() {
 // The latest published recommendation for the allocation, from the API. Only
 // when the API cannot be reached, and only on a local host, from the shipped
 // archive. An API that answers with none is an answer: { rec: null }.
+//
+// The newest allocation session is often not the one with weights: on
+// production every session since Aug 3 published none, so reading only the
+// newest few said "No recommendation published" while Aug 3's stood. The list
+// is read page by page, newest first, until a session carries weights. The
+// subject filter is sent for the API that honours it; one that ignores it
+// still answers, a page of every subject at a time.
 /**
  * @param {{ hostname?: string }} [opts]
  * @returns {Promise<{ rec: ReturnType<typeof recommendationFromSession>, error: boolean }>}
  */
 export async function loadLatestRecommendation({ hostname = currentHostname() } = {}) {
-  /** @type {any[]} */
-  let rows;
-  try {
-    const res = await api.get(ROUTES.swarm.sessions, { subject: ALLOCATION_SUBJECT_ID, state: "published", limit: "12" });
-    rows = Array.isArray(res?.sessions) ? res.sessions : Array.isArray(res) ? res : [];
-  } catch {
-    if (!isLocalHost(hostname)) return { rec: null, error: true };
-    try {
-      return { rec: await archiveRecommendation(), error: false };
-    } catch {
-      return { rec: null, error: true };
-    }
-  }
-  const published = rows
-    .filter((s) => isPublishedAllocationSession({ subjectId: s?.subjectId ?? s?.subject_id, state: s?.state }))
-    .sort((a, b) => String(b?.publishedAt ?? b?.date ?? "").localeCompare(String(a?.publishedAt ?? a?.date ?? "")));
-  // Light index rows carry no recommendation: read the newest few in full.
   let failed = false;
-  const newest = await Promise.all(published.slice(0, 3).map(async (s) => {
-    if (sessionRecommendationOf(s) || !s?.id) return s;
+  let fullReads = 0;
+  /** @type {string | null} */
+  let cursor = null;
+  for (let page = 0; page < 40; page += 1) {
+    /** @type {Record<string, string>} */
+    const query = { subject: ALLOCATION_SUBJECT_ID, state: "published", limit: "50" };
+    if (cursor) query.cursor = cursor;
+    /** @type {any} */
+    let res;
     try {
-      const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
-      return d?.session ?? d;
+      res = await api.get(ROUTES.swarm.sessions, query);
     } catch {
-      failed = true;
-      return s;
+      if (page > 0) return { rec: null, error: true };
+      if (!isLocalHost(hostname)) return { rec: null, error: true };
+      try {
+        return { rec: await archiveRecommendation(), error: false };
+      } catch {
+        return { rec: null, error: true };
+      }
     }
-  }));
-  const rec = latestPublishedRecommendation([...newest, ...published.slice(3)]);
-  return { rec, error: !rec && failed };
+    const rows = Array.isArray(res?.sessions) ? res.sessions : Array.isArray(res) ? res : [];
+    const published = rows
+      .filter((/** @type {any} */ s) => isPublishedAllocationSession({ subjectId: s?.subjectId ?? s?.subject_id, state: s?.state }))
+      .sort((/** @type {any} */ a, /** @type {any} */ b) => String(b?.publishedAt ?? b?.date ?? "").localeCompare(String(a?.publishedAt ?? a?.date ?? "")));
+    for (const s of published) {
+      let full = s;
+      // Light index rows carry no recommendation: read the newest few in full.
+      if (!sessionRecommendationOf(s) && s?.id && fullReads < 3) {
+        fullReads += 1;
+        try {
+          const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+          full = d?.session ?? d;
+        } catch {
+          failed = true;
+        }
+      }
+      const rec = recommendationFromSession(full);
+      if (rec) return { rec, error: false };
+    }
+    cursor = res?.nextCursor || null;
+    if (!cursor) break;
+  }
+  return { rec: null, error: failed };
 }
 
 // ── the overview ─────────────────────────────────────────────────────────────

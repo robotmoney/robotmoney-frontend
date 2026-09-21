@@ -121,7 +121,15 @@
             <h2 class="rr-sec__h" id="alloc-h">Allocation recommendation</h2>
             <a class="rr-sec__aside" :href="allocationHref()">All allocation recommendations</a>
           </div>
-          <template x-if="allocLatest() && mixOf(allocLatest()).length">
+          <!-- Newer sessions that published no weights held the target: the
+               ring keeps the weights that stand, and the newest is named. -->
+          <template x-if="allocHeldBy() && mixOf(allocShown()).length">
+            <div class="rr-meta">
+              <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(allocHeldBy())" x-text="formatDate(allocHeldBy().date)"></a></b></span>
+              <span class="rr-meta__i">Recommendation <b>Target held</b></span>
+            </div>
+          </template>
+          <template x-if="allocShown() && mixOf(allocShown()).length">
             <div class="rr-split rr-split--rule">
               <div>
                   <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
@@ -196,36 +204,36 @@
                 <template x-if="allocOutcome()">
                   <p class="rr-k rr-sub" x-text="allocOutcome()"></p>
                 </template>
-                <template x-if="rationaleOf(allocLatest())">
+                <template x-if="rationaleOf(allocShown())">
                   <div>
-                    <div class="rr-prose" :class="!more && String(rationaleOf(allocLatest())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
-                         x-html="linkified(rationaleOf(allocLatest()))"></div>
-                    <template x-if="String(rationaleOf(allocLatest())).length > 480">
+                    <div class="rr-prose" :class="!more && String(rationaleOf(allocShown())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(rationaleOf(allocShown()))"></div>
+                    <template x-if="String(rationaleOf(allocShown())).length > 480">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                         <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
                       </button>
                     </template>
                   </div>
                 </template>
-                <template x-if="stanceTally(allocLatest()).length">
+                <template x-if="stanceTally(allocShown()).length">
                   <p class="rr-counts">
-                    <template x-for="x in stanceTally(allocLatest())" :key="x.stance">
+                    <template x-for="x in stanceTally(allocShown())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[turnoutText(allocLatest()), meanConfidenceText(allocLatest())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[turnoutText(allocShown()), meanConfidenceText(allocShown())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
-                <a class="rr-cta" :href="sessionHref(allocLatest())">
-                  <span x-text="`Read the ${formatDate(allocLatest().date)} session`"></span><span aria-hidden="true">→</span>
+                <a class="rr-cta" :href="sessionHref(allocShown())">
+                  <span x-text="`Read the ${formatDate(allocShown().date)} session`"></span><span aria-hidden="true">→</span>
                 </a>
               </div>
             </div>
           </template>
           <!-- Empty, the ring is drawn as its bare track with the fact inside. -->
-          <template x-if="!allocLatest() || !mixOf(allocLatest()).length">
+          <template x-if="!allocShown() || !mixOf(allocShown()).length">
             <figure class="rr-ring rr-ring--empty">
               <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-              <figcaption><span class="rr-empty__t" x-text="allocLatest() ? `No weights published · ${formatDate(allocLatest().date)}` : 'No recommendation yet'"></span></figcaption>
+              <figcaption><span class="rr-empty__t" x-text="allocShown() ? `No weights published · ${formatDate(allocShown().date)}` : 'No recommendation yet'"></span></figcaption>
             </figure>
           </template>
         </section>

@@ -237,7 +237,7 @@ export function registerSwarmView(Alpine) {
       // The brief the latest allocation session opened with: the only honest
       // source of the target its recommendation is measured against, and of
       // the asset names inside each sleeve.
-      const s = this.allocLatest();
+      const s = this.allocShown();
       if (s) this.allocBrief = await this.briefFor(s);
     },
     async briefFor(s) {
@@ -275,19 +275,30 @@ export function registerSwarmView(Alpine) {
       const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
       return this.publishedSessions().filter((s) => s.subjectId === id)[0] || null;
     },
+    // The session the flagship draws: the newest that published weights. A
+    // newer one that published none left the target where it was, so the
+    // ring keeps the weights that stand; allocHeldBy() names the newer one.
+    allocShown() {
+      const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
+      return this.publishedSessions().find((s) => s.subjectId === id && this.mixOf(s).length) || this.allocLatest();
+    },
+    allocHeldBy() {
+      const latest = this.allocLatest();
+      return latest && latest !== this.allocShown() ? latest : null;
+    },
     // The target the latest allocation session is measured against: the one
     // its brief handed over, else the published target when it was already in
     // force that day, as the session page reads it.
     allocReference() {
-      const s = this.allocLatest();
+      const s = this.allocShown();
       return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null)
         || targetsInForce(this.allocationFw, s?.date);
     },
     // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
     // subject and session pages.
     hasBook() { return false; },
-    explorerSource() { return this.allocLatest(); },
-    explorerSvg() { return this.weightDonutSvg(this.allocLatest()); },
+    explorerSource() { return this.allocShown(); },
+    explorerSvg() { return this.weightDonutSvg(this.allocShown()); },
     // At rest the centre names the ring and nothing more: a recommended mix
     // is the whole allocation by definition, so "100%" says nothing.
     explorerCenter() { return { value: "", label: "Recommended" }; },
@@ -295,7 +306,7 @@ export function registerSwarmView(Alpine) {
       return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
     explorerRows() {
-      const s = this.allocLatest();
+      const s = this.allocShown();
       const rows = this.sessionWeights(s) || [];
       const ref = this.allocReference();
       const sleeveWeight = new Map(rows.map((r) => [normKeyOf(r.key), r.pct / 100]));

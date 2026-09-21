@@ -532,6 +532,23 @@ describe("the latest published recommendation", () => {
     expect(requests.some((u) => u.startsWith("/data/"))).toBe(false);
   });
 
+  test("the list is read page by page until a session carries weights", async () => {
+    const row = (id: string, date: string, rec: unknown) => ({ id, date, subjectId: "robotmoney-allocation", state: "published", publishedAt: `${date}T12:00:00Z`, swarmRecommendation: rec });
+    const noCalls = { type: "position_actions", actions: [] };
+    const firstPage = ["2026-09-21", "2026-09-20", "2026-09-19", "2026-09-18"].map((d, i) => row(`held-${i}`, d, noCalls));
+    const weighted = row("aug-3", "2026-08-03", { type: "bucket_weights", weights: ALLOCATION_2026_06_24_FRACTIONS });
+    serve({
+      "/api/swarm/sessions": () => {
+        const cursor = new URL(requests.at(-1)!, "http://x").searchParams.get("cursor");
+        return json(cursor ? { sessions: [weighted], nextCursor: null } : { sessions: firstPage, nextCursor: "p2" })();
+      },
+    });
+    const got = await loadLatestRecommendation({ hostname: "robotmoney.network" });
+    expect(got.error).toBe(false);
+    expect(got.rec?.date).toBe("2026-08-03");
+    expect(got.rec?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+  });
+
   test("the archive answers only for a local host when the API cannot", async () => {
     serve();
     const local = await loadLatestRecommendation({ hostname: "127.0.0.1" });
