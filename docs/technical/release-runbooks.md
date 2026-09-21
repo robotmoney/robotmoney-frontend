@@ -207,7 +207,13 @@ on the smoke-twin, including:
 
 - preflight checks,
 - the cutover step that applies the upgrade,
-- postflight verification.
+- postflight verification,
+- **capture of every service's logs for the whole rehearsal window**, and the
+  standard assertion that no privilege or authentication failure appeared in
+  any of them (`upgrade-deployment-spec.md` §5, G9 — pending D46). A rehearsal
+  whose checks read only the database cannot see the failure shape that
+  dead-lettered 1,968 production jobs behind green healthchecks on
+  2026-09-21; the logs could.
 
 The smoke-twin must use the same release candidate that is planned for production.
 Any failure, warning, or unexpected state change discovered on the smoke-twin is a
@@ -245,7 +251,11 @@ executes migration SQL.
 So a release that touches roles, ownership, or grants must rehearse with
 `RM_TWIN_PRODUCTION_PRIVILEGES=1`, which reshapes the restored twin so a
 non-superuser bootstrap login owns `public` and points `MIGRATE_DATABASE_URL`
-at it. State the general rule plainly, because it outlives this mechanism: **a
+at it. **Under D46 the reshaped twin mirrors production's post-taxonomy shape
+— `rm_owner` owning `public`, `rm_migrator` holding the membership — and the
+rehearsal migrates as `rm_migrator`, the login production will actually use
+(`upgrade-deployment-spec.md` §5, G10). Rehearsing as a `doadmin`-shaped role
+rehearses a credential that is being retired.** State the general rule plainly, because it outlives this mechanism: **a
 gate that runs with more privilege than production proves less than it appears
 to.** When a check cannot be run at production's privilege level, say so in the
 release runbook rather than letting a green result imply coverage it does not
@@ -333,6 +343,18 @@ on a production machine. Follow the per-release runbook step by step. Every
 destructive or irreversible step must be explicitly marked in the runbook and
 authorized by the operator before execution.
 
+**The cutover is a sequence of receipted steps, each performed by one tool
+holding only the credential that step needs** (`upgrade-deployment-spec.md`
+§4, pending D46): assert the schema is current; apply pending migrations as
+`rm_migrator` — the only step that names a migration credential, and skipped
+with a receipt when nothing is pending; deploy, which is a restart and needs
+only the runtime roles; initialize; grade. The tool that stands the stack up
+never migrates a database it did not create, and refuses to start against a
+schema that is behind. Until D46's plan lands, the mechanism is the one
+`rollout-procedure.md` §8.2 documents — one command that migrates, seeds and
+boots — and the per-release runbook must say which of the two it is written
+against.
+
 Preflight must be re-run or re-confirmed on production before the cutover
 begins, even if the smoke-twin rehearsal passed, to ensure the production
 environment matches the smoke-twin assumptions.
@@ -419,7 +441,12 @@ runbook must:
   server from `.env`), `smoke-twin` (a local restored copy of production) — and the
   tooling that builds each is shared and version-agnostic. A runbook that
   re-derives a smoke-twin out of lower-level flags is how the last one ended up
-  pinned to a single release.
+  pinned to a single release,
+- **sequence tools; never let one tool stand in for another.** A runbook names
+  which tool performs each step and which role it holds
+  (`upgrade-deployment-spec.md` §1). A step the runbook cannot name a tool for —
+  "watch the logs", "confirm it migrated" — is a tool that is missing, and the
+  runbook says so rather than asking an operator to do it by eye.
 
 By convention the runbook lives on the release's `releases-A.B.x` branch,
 alongside the code it describes cutting over to, so a runbook change and the

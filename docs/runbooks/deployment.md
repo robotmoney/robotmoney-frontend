@@ -50,7 +50,7 @@ on vendor repo-watching:
 | Cloudflare — DNS + observability | Cloudflare API token (DNS + Health Checks, §3.1) |
 | Static — marketing → DO Spaces CDN | DO Spaces keys + DO API token (CDN + custom-domain cert), §4.1–4.2 |
 | API — droplets | SSH key **or** container registry + app secrets + Cloudflare **Origin CA cert** + DO Cloud Firewall, §4.4 / §3.4 |
-| Data — Managed Postgres HA | `DATABASE_URL` (§4.3) |
+| Data — Managed Postgres HA | `DATABASE_URL` (§4.3); schema changes by the migrate step as `rm_migrator`, never by a boot (D46) |
 
 ---
 
@@ -495,12 +495,22 @@ custom-domain certificate, provisioned via `DO_API_TOKEN` — no key to store.)
 From the cluster's **Connection Details**: host, port (`25060`), database, user,
 password, `sslmode=require`, and the **CA certificate** (download). Assemble into
 **`DATABASE_URL`** for `rm_app`; ship the CA as **`DO_DB_CA_CERT`** if your
-client needs the file. `doadmin` is break-glass only and never belongs on a
-persistent host. Set `WORKER_DATABASE_URL` to `rm_worker`. For a one-shot
-deployment migration, supply `MIGRATE_DATABASE_URL` only to that command; its
-login must be allowed to `SET ROLE rm_owner`, the non-login owner of tables and
-functions. For the HA cluster, prefer the **connection-pool** URI (PgBouncer)
-if enabled.
+client needs the file. Set `WORKER_DATABASE_URL` to `rm_worker`. For the HA
+cluster, prefer the **connection-pool** URI (PgBouncer) if enabled.
+
+**The migration login is `rm_migrator`, not `doadmin`** (D46;
+`docs/technical/upgrade-deployment-spec.md` §2). `rm_migrator` is `LOGIN
+NOINHERIT NOCREATEROLE NOCREATEDB` and holds `rm_owner` membership and nothing
+else — it can change this database's schema and cannot touch a role, a
+database, or a sibling database on the cluster. Its line lives in the cutover
+host's `$HOME/.env` and is read by exactly one command, the migrate step
+(`P7.migrate`); no boot, container or service ever receives it. `doadmin` is
+the provider's cluster admin: it runs the provisioning pre-step
+(§4.3.1) and provider-level break-glass, lives in the DO dashboard or an
+operator vault, and never belongs on a persistent host or in any `.env` line
+except transiently for that pre-step. Until the plan lands, `0053` grants
+`rm_owner` to whichever login runs the provisioning script, which on DO is
+`doadmin` — that is the defect D46 corrects, not the design.
 
 ### 4.3.1 Role-taxonomy cutover (human-run)
 

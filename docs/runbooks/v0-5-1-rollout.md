@@ -470,6 +470,17 @@ the backup artifacts as `stage-rehearsal-report-<STAMP>.md`. It must record:
 
 ## 6. Production cutover
 
+> **This release cuts over on the pre-D46 mechanic:** one command
+> (`rollout-procedure.md` §8.2) that migrates, seeds and boots, with the
+> operator capturing `BOOT_STATUS` by hand. D46
+> (`docs/technical/upgrade-deployment-spec.md`) replaces it with receipted
+> `P7.*` steps and retires `doadmin` as the migration login; per policy §4.6 that
+> lands on the release line after this one, not here. Two things it changes are
+> already true for this cutover and worth knowing: no runtime service declares
+> `MIGRATE_DATABASE_URL` any more (`de5efffa`), and the provisioning script
+> verifies the taxonomy end-state and passes the credential to `psql` without
+> putting it in `argv` (`2948e63f`, `30688688`).
+
 Mechanics are release-independent — `rollout-procedure.md` §7 (config), §8
 (stop/start), §9 (verification). v0.5.1 adds nothing to them and removes
 nothing.

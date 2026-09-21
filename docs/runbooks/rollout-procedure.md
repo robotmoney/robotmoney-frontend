@@ -78,8 +78,9 @@ A completed step stops counting for exactly three reasons, and they are
 independent:
 
 1. **Host** — the cutover and everything after it need the writer
-   `DATABASE_URL` that only lives in the
-   repo-root `.env` file (§7.5). A box without that file cannot run them at
+   `rm_app` role line that only lives in the cutover host's `$HOME/.env`
+   (§7.5; the one credential file of the #699 convention — there is no
+   repo-root `.env` any more). A box without that line cannot run them at
    all; the probe marks them ⛔ rather than letting you try.
 2. **Code** — each step declares the paths it actually executes (`depends-on`
    in its step block). A commit invalidates a step only if it lands on that
@@ -1147,19 +1148,30 @@ unclaimed.
 
 ### 7.5 ✅ What you actually set, and where
 
-The only supported configuration surface for this workflow is the **repo-root
-`.env` file** in the checkout you run `bun smoke` from. There is no deploy
-pipeline and no droplet-env injection step here.
+The only supported configuration surface for this workflow is the **`.env` at
+the root of `$HOME`** on the host you run `bun smoke` from — the single
+credential file of the #699 convention (`.env.example`,
+`scripts/lib/env-role.ts`). There is no repo-root `.env`, no deploy pipeline
+and no droplet-env injection step here.
 
 ```bash
-cd <checkout>
-cat .env      # must contain, at minimum:
-# DATABASE_URL=postgres://<app-user>:<pw>@<host>:25060/defaultdb?sslmode=require
+cat "$HOME/.env"      # must contain, at minimum, the discrete tokens plus the writer role line:
+# host = <cluster host>
+# port = 25060
+# database = defaultdb
+# sslmode = require
+# rm_app = <the rm_app role's password>
+# rm_worker = <the rm_worker role's password>
 ```
 
-`--db external` reads `DATABASE_URL` from **that file directly**
-(`scripts/lib/env-role.ts`), not from `process.env`. A missing or
-unreadable `.env` is a fatal exit 1 before anything starts.
+`--db external` assembles the `rm_app` writer URL from **that file directly**
+(`urlForRole`, `scripts/lib/env-role.ts`), not from `process.env`. A missing
+file or a missing `rm_app` line is a fatal exit 1 before anything starts.
+
+> **Pending D46** (`docs/technical/upgrade-deployment-spec.md` §2): the
+> migration login is `rm_migrator`, and its line belongs in this same file on
+> the cutover host — read by the migrate tool only, never by a boot. `doadmin`
+> never appears in this file except transiently for the provisioning pre-step.
 
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
 **`scripts/lib/smoke-main.ts:427-444` is the authoritative list** — read it there,
@@ -1282,11 +1294,26 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ### 8.2 The invocation
 
+> ⚠ **This mechanic is superseded by D46, and is documented here because it is
+> what the in-flight release line still runs.** Under
+> `docs/technical/upgrade-deployment-spec.md` §4 the cutover is four receipted
+> steps — `P7.schema-current`, `P7.migrate` (as `rm_migrator`, skipped with a
+> receipt when nothing is pending), `P7.deploy` (a restart needing only the
+> runtime roles) and `P7.initialize` — and the smoke tool **never migrates an
+> external database**. The single command below does all four at once, as the
+> next paragraph says, which is the coupling D46 removes. A per-release runbook
+> must state which mechanic it is written against; the plan
+> (`docs/plans/deploy-separation-engineering-plan.md`) lands the new one on the
+> release line after v0.5.1.
+
 > **Manifest step `P7.cutover`.** The machine-readable block for this step —
 > its id, artifacts, TTL and `verify:` command — lives in the **per-release**
 > runbook, because every one of those fields names that release's own scripts
 > and backup directory. This document describes the mechanic; the release binds
-> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`.
+> it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`. (No release has
+> yet carried a `P7.*` entry: v0.5.0's and v0.5.1's manifests go P6 → P8, and
+> the cutover's only evidence is the `BOOT_STATUS` the operator captures by
+> hand below. D46 makes it steps.)
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It writes to production three times before you can inspect

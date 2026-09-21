@@ -3583,3 +3583,64 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
   exists to remove.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
+
+## D46 — Smoke stands environments up and never migrates data it does not own; migrations are a runbook-sequenced step run as `rm_migrator`; `doadmin` is bootstrap-only (Lucas, 2026-09-21)
+
+**Decision.** Three rules, adopted together because each is what makes the
+others enforceable. The mechanism contract is
+[`technical/upgrade-deployment-spec.md`](./technical/upgrade-deployment-spec.md);
+the work is
+[`plans/deploy-separation-engineering-plan.md`](./plans/deploy-separation-engineering-plan.md).
+
+**1. A tool does one job and holds only the credential that job needs; runbooks
+sequence tools, tools never sequence each other.** The smoke tool stands an
+environment up and proves it serves. It migrates and seeds **only** a database
+it created — `ephemeral` or `smoke-twin`, which `scripts/lib/smoke-db-mode.ts`'s
+`ownsData()` already distinguishes from `external` and which `up()` never
+consulted. Against an `external` server it asserts the schema is current and
+refuses to start services if it is not. Applying migrations is a separate tool
+(`migrate:external`), a separate receipted step (`P7.migrate`), and the only
+step in a runbook that names a migration credential.
+
+**2. `rm_migrator` is the migration login. `doadmin` is deprecated below the
+provisioning script.** `0053_database_role_taxonomy.sql:56`'s `GRANT rm_owner
+TO current_user` welded whoever bootstraps the taxonomy into the permanent
+migration login — on DigitalOcean, the cluster admin. `0053` now also creates
+`rm_migrator` (`LOGIN NOINHERIT NOCREATEROLE NOCREATEDB`, member of `rm_owner`
+and nothing else) and that is what `MIGRATE_DATABASE_URL` names. `migrate.ts`
+refuses `doadmin` and both runtime roles; `config.ts` refuses a `doadmin`
+`DATABASE_URL` under every `RM_ENV`, not only `prod`.
+
+**3. The cutover is receipted steps, not one irreversible command.**
+`P7.schema-current`, `P7.migrate` (skipped with a receipt when nothing is
+pending), `P7.deploy`, `P7.initialize`. A redeploy is `P7.deploy` alone, and
+needs `rm_app` and `rm_worker` — nothing else. Rehearsals capture every
+service's logs for the whole window and fail on any privilege or
+authentication failure line (G9), and migrate as `rm_migrator` (G10).
+
+**Why now.** On 2026-09-21, every consequence of the coupling was observed at
+once: a routine redeploy required the cluster admin credential; that credential
+sat unread in five production containers for 19 hours; rotating it made
+production un-restartable with no schema change pending; and a grant defect
+that dead-lettered 1,968 jobs was invisible to every gate because the only
+evidence was a log line. `0053`'s own header describes the model this decision
+implements — *"Runtime processes authenticate only as `rm_app` or
+`rm_worker`"* — and the tooling had never implemented its first sentence.
+
+**Consequences.** A `--db external` boot against a server with pending
+migrations stops and names them; that is the feature. A code-only release's
+manifest records that no migration was needed as evidence, not as an absent
+step. `rollout-procedure.md` §8.2's "writes to production three times before you
+can inspect anything" becomes history. The rehearsal driver gains log capture
+that every release inherits. Production's composition (`RM_ENV=smoke`,
+`RM_ALLOW_INSECURE=1` via the always-appended smoke overlay) is the one row the
+spec leaves for its own decision — plan phase 5 — because untangling it changes
+what production *is*.
+
+**Relationship.** Does not amend D8 (one Postgres), D11 (single box) or D29
+(the api process is the cutover host). Sharpens `deployment.md` §1's "CI is the
+only actor that mutates infrastructure" into "and a migration is a named step
+that actor runs, not a side effect of starting a container". Does not adopt
+`stack-runbook-reconciliation.md`; every step here maps onto that document's
+gate table if it is adopted later. Sequenced per policy §4.6: phases 1–4 land
+on `main` for the release line after v0.5.1.
