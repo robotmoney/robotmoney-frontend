@@ -534,6 +534,30 @@ That keeps the filter deterministic. Model output is the per-memo score. The
 drop is arithmetic over a signed score and a recorded threshold — so INV-TG1
 holds, and a verifier can re-derive not just the vector but the membership.
 
+**The placeholder values** (chosen 2026-09-21; Lucas: immaterial for now, so
+these exist to make the design concrete and are expected to be tuned):
+
+| Item | Value | Reasoning |
+|---|---|---|
+| Scale | `0.0 … 1.0` | Matches the existing submitter `confidence` field, which the contract already bounds `minimum: 0, maximum: 1`. One scale, not two |
+| Column | `swarm_judge_config.min_memo_confidence` | The `min_takes` pattern, same table, stamped onto every judgement row |
+| Default | `0.5` | The judge must affirmatively say "less likely reasonable than not" before a memo is dropped |
+| Comparison | drop when `score < threshold` | Strictly less, so a score exactly at the threshold survives. Pinned now because this is the classic off-by-one argument |
+
+`0.5` is deliberately permissive. The expensive failure is not a bad memo
+surviving — the mean dilutes it. The expensive failure is mass dropping, which
+empties the vector and terminally refuses the receipt (see (d)). A first ship
+should under-filter.
+
+**Ship the filter in `shadow` first.** This is why the threshold really is
+immaterial today. The judge already has a `shadow` mode built for exactly this —
+"computing and recording an opinion that reaches no session — for as long as it
+takes to trust it" (D42). The filter should ride that same rail: record every
+per-memo score and the set that *would* have been dropped, change no vector.
+Then the threshold is chosen against observed score distributions on real
+sessions instead of being guessed now. The unfiltered-versus-filtered gap
+(§12.2) is the signal to read.
+
 **(c) Thin support must be recomputed against survivors.** `min_takes` compares
 against a take count. After filtering, the comparison has to use the
 contributing count. Otherwise a session where the judge dropped most memos still
@@ -560,9 +584,10 @@ snapshotted, identified in the judgement row, and covered by `inputs_digest`.
 
 ## 12. Open decisions
 
-1. **What is the drop threshold, and where does it live?** §11.5(b) argues it
-   must be a recorded config value on the `min_takes` pattern, not a cutoff the
-   model picks. The value itself is still unchosen.
+1. ~~What is the drop threshold?~~ **Resolved** — placeholder `0.5` on a
+   `0.0 … 1.0` scale, as `swarm_judge_config.min_memo_confidence`, drop when
+   `score < threshold`. See §11.5(b). Tune it from shadow-mode observations
+   rather than from argument.
 2. Does `meanTakeWeights()` over the *unfiltered* set stay published alongside
    the filtered one? Keeping it is a cheap audit signal — a large gap between
    the two is exactly the symptom of a judge filtering too aggressively.
