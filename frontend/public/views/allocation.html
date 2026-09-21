@@ -84,7 +84,7 @@
         <span>Latest session <b><a class="rr-lnk" :href="recHref(recHeldBy())" x-text="recDate(recHeldBy())"></a></b></span>
       </template>
       <template x-if="recHeldBy()">
-        <span>Recommendation <b x-text="`Target held since ${recDate(recSession)}`"></b></span>
+        <span>Recommendation <b>Target held since <span class="alp__nowrap" x-text="recDate(recSession)"></span></b></span>
       </template>
     </div>
 
@@ -594,6 +594,14 @@
 }
 .alp__nav--addr:hover b, .alp__nav--addr:focus-visible b { border-bottom-color: var(--color-link); }
 .alp__nav--addr:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* A date breaks before it, never inside it. */
+.alp__nowrap { white-space: nowrap; }
+/* A session date in the rail links as every inline link on the site does,
+   monochrome over its hairline (.rr a.rr-lnk, whose scope the rail is outside). */
+.alp__meta a.rr-lnk { color: var(--color-link); text-decoration: none; border-bottom: 1px solid var(--color-link-line);
+  transition: border-color 100ms var(--ease-out-expo); }
+.alp__meta a.rr-lnk:hover, .alp__meta a.rr-lnk:focus-visible { border-bottom-color: var(--color-link); }
+.alp__meta a.rr-lnk:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
 /* ── motion, and the skeleton that removes the layout shift ─────────────── */
 /* 100/300/500: 150ms for feedback, 300ms for a layout change like the
