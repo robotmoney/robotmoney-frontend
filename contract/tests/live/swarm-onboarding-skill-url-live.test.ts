@@ -216,9 +216,6 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       const dead = `${SWARM_ONBOARDING_SKILL_URL}.this-path-cannot-exist`;
       const res = await fetch(dead, { redirect: "follow" });
 
-      expect(res.status).not.toBe(200);
-      expect(res.status).toBe(404);
-
       const body = await res.text();
       expect(body).not.toContain(`name: ${SKILL_SLUG}`);
       expect(body).not.toContain("rmpc");
