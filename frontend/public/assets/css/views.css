@@ -1629,6 +1629,8 @@ table.alp__tbl--led th:first-child { width: 40%; }
 /* Facts as label and figure on one hairline row, not as bordered chips. */
 .rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; padding: 0.75rem 0;
   border-block: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A row of facts that opens a section, above a figure: clear of it. */
+.rr-meta--lead { margin-bottom: 1.5rem; }
 .rr-meta__i { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
 .rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
@@ -1893,6 +1895,9 @@ a.sv__vfy { text-decoration: none; }
 /* A basis named by a long word (a vault set against its Recommended weight)
    takes the width its head needs. */
 .rr-legend--long .rr-legend__head, .rr-legend--long.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 5.5rem 4.75rem; }
+/* A value before the share: Vault, Value, Share, Target (the vault subject's
+   By vault). The share stays the bright figure, the ring's own. */
+.rr-legend--value .rr-legend__head, .rr-legend--value.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem; }
 /* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
 .rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .rr-legend__was { color: var(--color-text-muted); }
@@ -2106,9 +2111,11 @@ a.sv__vfy { text-decoration: none; }
 .rr-area__pt { position: absolute; width: 0.4375rem; height: 0.4375rem; transform: translate(-50%, -50%); pointer-events: none; }
 /* /allocation's four vaults: up to seven columns, which scroll inside
    .rr-tablewrap on a narrow screen rather than squeezing the gaps onto two
-   lines. A phone drops the .rr-vaults__wide columns instead (TVL and the two
-   gaps), which each vault's page carries. */
+   lines. A phone drops the .rr-vaults__wide columns instead (the two gaps),
+   which each vault's page carries. */
 .rr-vaults { min-width: 40rem; }
+/* Each weight's dollars at the combined TVL, under it. */
+.rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 /* A vault's activity with no transaction to link has no Transaction column. */
 .rr-activity:not(.has-tx) th:nth-child(4), .rr-activity:not(.has-tx) td:nth-child(4) { display: none; }
 /* The Robot Money Vault's positions, grouped by vault: the vault's row reads

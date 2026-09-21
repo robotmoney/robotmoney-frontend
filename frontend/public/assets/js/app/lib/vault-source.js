@@ -48,8 +48,10 @@ import {
   numberOrNull,
   vaultBySlug,
   vaultForBucket,
+  withPolicyTargets,
   withRecommendation,
 } from "./vault-data.js";
+import { loadAllocationDto } from "./allocation-framework.js";
 import { weightEntries } from "./session-summary.js";
 import { ALLOCATION_SUBJECT_ID, isPublishedAllocationSession } from "./allocation-subject.js";
 
@@ -265,6 +267,9 @@ export function latestPublishedRecommendation(sessions) {
   return null;
 }
 
+// The archive's newest allocation session with weights, as the API read
+// answers it: the recommendation, its session and the newest session of all.
+/** @returns {Promise<{ rec: any, session?: any, latest?: any }>} */
 async function archiveRecommendation() {
   const index = await readStatic("/data/swarm/sessions/index.json");
   const rows = (Array.isArray(index?.sessions) ? index.sessions : [])
@@ -280,7 +285,11 @@ async function archiveRecommendation() {
       return null;
     }
   }));
-  return latestPublishedRecommendation(sessions.filter(Boolean));
+  const read = sessions.filter(Boolean);
+  const rec = latestPublishedRecommendation(read);
+  if (!rec) return { rec: null };
+  const session = read.find((s) => recommendationFromSession(s)?.date === rec.date) ?? null;
+  return session ? { rec, session, latest: read[0] ?? session } : { rec };
 }
 
 // The latest published recommendation for the allocation, from the API. Only
@@ -293,13 +302,19 @@ async function archiveRecommendation() {
 // is read page by page, newest first, until a session carries weights. The
 // subject filter is sent for the API that honours it; one that ignores it
 // still answers, a page of every subject at a time.
+//
+// With a recommendation it also answers the session behind it (`session`) and
+// the newest allocation session of all (`latest`): when they differ, the
+// newer ones published no weights and held the target.
 /**
  * @param {{ hostname?: string }} [opts]
- * @returns {Promise<{ rec: ReturnType<typeof recommendationFromSession>, error: boolean }>}
+ * @returns {Promise<{ rec: ReturnType<typeof recommendationFromSession>, error: boolean, session?: any, latest?: any }>}
  */
 export async function loadLatestRecommendation({ hostname = currentHostname() } = {}) {
   let failed = false;
   let fullReads = 0;
+  /** @type {any} */
+  let latest = null;
   /** @type {string | null} */
   let cursor = null;
   for (let page = 0; page < 40; page += 1) {
@@ -314,7 +329,7 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
       if (page > 0) return { rec: null, error: true };
       if (!isLocalHost(hostname)) return { rec: null, error: true };
       try {
-        return { rec: await archiveRecommendation(), error: false };
+        return { ...(await archiveRecommendation()), error: false };
       } catch {
         return { rec: null, error: true };
       }
@@ -325,6 +340,7 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
       .sort((/** @type {any} */ a, /** @type {any} */ b) => String(b?.publishedAt ?? b?.date ?? "").localeCompare(String(a?.publishedAt ?? a?.date ?? "")));
     for (const s of published) {
       let full = s;
+      latest ??= s;
       // Light index rows carry no recommendation: read the newest few in full.
       if (!sessionRecommendationOf(s) && s?.id && fullReads < 3) {
         fullReads += 1;
@@ -336,7 +352,7 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
         }
       }
       const rec = recommendationFromSession(full);
-      if (rec) return { rec, error: false };
+      if (rec) return { rec, error: false, session: full, latest };
     }
     cursor = res?.nextCursor || null;
     if (!cursor) break;
@@ -377,20 +393,32 @@ async function loadDevnet(m) {
  * @param {any} economics
  * @param {{ rec: any, error: boolean }} recResult
  * @param {"legacy" | "saved"} source
+ * @param {any} policy
  * @returns {VaultLoad}
  */
-function legacyLoad(economics, recResult, source) {
-  const overview = normalizeOverview(withRecommendation(legacyRaw(economics), recResult.rec));
+function legacyLoad(economics, recResult, source, policy) {
+  const overview = normalizeOverview(withPolicyTargets(withRecommendation(legacyRaw(economics), recResult.rec), policy));
   const label = source === "saved" ? SAVED_LABEL : economics?.source === "stub" ? STUB_LABEL : null;
   return { overview, source, mode: "base", state: null, label, error: null, recommendationError: recResult.error };
 }
 
+// A page that shows the recommendation itself passes its own read, so the
+// session list is walked once.
 /**
- * @param {string} hostname @param {boolean} recommendation
+ * @param {string} hostname @param {boolean | Promise<{ rec: any, error: boolean }>} recommendation
  * @returns {Promise<{ rec: any, error: boolean }>}
  */
 function recommendationFor(hostname, recommendation) {
+  if (recommendation && typeof recommendation === "object" && typeof recommendation.then === "function") return recommendation;
   return recommendation ? loadLatestRecommendation({ hostname }) : Promise.resolve({ rec: null, error: false });
+}
+
+// The published policy, whose sleeve targets are the vaults' targets until a
+// router reports its own. A page that reads the policy passes its own read.
+// A failed read is no target, never a made-up one.
+/** @param {string} hostname @param {Promise<any> | undefined} policy @returns {Promise<any>} */
+function policyFor(hostname, policy) {
+  return (policy ?? loadAllocationDto(hostname)).catch(() => null);
 }
 
 // No Base read answered. A local host shows the saved snapshot, labelled;
@@ -400,14 +428,15 @@ function recommendationFor(hostname, recommendation) {
  * @param {Promise<{ rec: any, error: boolean }>} recPromise
  * @returns {Promise<VaultLoad>}
  */
-async function savedSnapshot(hostname, recPromise) {
+async function savedSnapshot(hostname, recPromise, policyPromise = Promise.resolve(null)) {
   if (!isLocalHost(hostname)) return failed(modeOf("base"));
   try {
-    const [economics, recResult] = await Promise.all([
+    const [economics, recResult, policy] = await Promise.all([
       readStatic("/data/vaults/base/vault-economics.json"),
       recPromise,
+      policyPromise,
     ]);
-    return legacyLoad(economics, recResult, "saved");
+    return legacyLoad(economics, recResult, "saved", policy);
   } catch {
     return failed(modeOf("base"));
   }
@@ -415,11 +444,11 @@ async function savedSnapshot(hostname, recPromise) {
 
 /**
  * The overview for the current mode.
- * @param {{ hostname?: string, recommendation?: boolean, search?: string, storage?: StorageLike | null }} [opts]
+ * @param {{ hostname?: string, recommendation?: boolean | Promise<{ rec: any, error: boolean }>, policy?: Promise<any>, search?: string, storage?: StorageLike | null }} [opts]
  *   `search` and `storage` default to this page's; tests pass their own.
  * @returns {Promise<VaultLoad>}
  */
-export async function loadVaultOverview({ hostname = currentHostname(), recommendation = true, search, storage } = {}) {
+export async function loadVaultOverview({ hostname = currentHostname(), recommendation = true, policy, search, storage } = {}) {
   const m = resolveVaultMode({
     search: search ?? currentSearch(),
     hostname,
@@ -429,6 +458,7 @@ export async function loadVaultOverview({ hostname = currentHostname(), recommen
 
   if (!vaultsEndpointAbsent) {
     try {
+      // Authoritative: the four-vault route carries the router's weights.
       const dto = await api.get(VAULTS_ENDPOINT);
       return {
         overview: normalizeOverview(dto),
@@ -442,7 +472,7 @@ export async function loadVaultOverview({ hostname = currentHostname(), recommen
     } catch (e) {
       if (!endpointAbsent(e)) {
         return isLocalHost(hostname)
-          ? savedSnapshot(hostname, recommendationFor(hostname, recommendation))
+          ? savedSnapshot(hostname, recommendationFor(hostname, recommendation), policyFor(hostname, policy))
           : failed(modeOf("base"));
       }
       vaultsEndpointAbsent = true;
@@ -450,11 +480,13 @@ export async function loadVaultOverview({ hostname = currentHostname(), recommen
   }
 
   const recPromise = recommendationFor(hostname, recommendation);
+  const policyPromise = policyFor(hostname, policy);
   try {
     const economics = await api.get(ROUTES.dashboards.vaultEconomics);
-    return legacyLoad(economics, await recPromise, "legacy");
+    const [recResult, policyDto] = await Promise.all([recPromise, policyPromise]);
+    return legacyLoad(economics, recResult, "legacy", policyDto);
   } catch {
-    return savedSnapshot(hostname, recPromise);
+    return savedSnapshot(hostname, recPromise, policyPromise);
   }
 }
 

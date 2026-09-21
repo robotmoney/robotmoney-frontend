@@ -124,9 +124,10 @@
           <!-- Newer sessions that published no weights held the target: the
                ring keeps the weights that stand, and the newest is named. -->
           <template x-if="allocHeldBy() && mixOf(allocShown()).length">
-            <div class="rr-meta">
+            <div class="rr-meta rr-meta--lead">
               <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(allocHeldBy())" x-text="formatDate(allocHeldBy().date)"></a></b></span>
               <span class="rr-meta__i">Recommendation <b>Target held</b></span>
+              <span class="rr-meta__i">Since <b x-text="formatDate(allocShown().date)"></b></span>
             </div>
           </template>
           <template x-if="allocShown() && mixOf(allocShown()).length">

@@ -51,6 +51,7 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  *   exitFeeBps: number | null,
  *   recommendedBps: number | null,
  *   appliedBps: number | null,
+ *   targetBps: number | null,
  *   actualBps: number | null,
  *   gaps: Gaps,
  * }} VaultRow
@@ -63,6 +64,7 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  *   freshness: { blockNumber?: number | null, indexedAt?: string | null, stale?: boolean } | null,
  *   router: Router | null,
  *   recommendation: Recommendation | null,
+ *   targetSource: "router" | "policy" | null,
  *   vaults: VaultRow[],
  *   combined: { tvlUsd: number | null, vaultsLive: number | null },
  *   trackingErrorBps: number | null,
@@ -269,10 +271,16 @@ export function layerComplete(values) {
 //   actual     = a vault's TVL over the four vaults' TVL. A vault confirmed
 //                absent from the network counts as zero; an unreadable or
 //                missing one makes every actual null (never renormalised).
-//   governance = applied - recommended   (a vote not yet applied)
-//   flow       = actual - applied        (deposits not yet routed)
+//   target     = the weights in force: the router's applied weights once it
+//                reports them, else the published policy's targets
+//                (withPolicyTargets). A recommendation is not the target
+//                until it is applied (RM-115).
+//   governance = target - recommended    (a vote not yet applied)
+//   flow       = actual - target         (deposits not yet routed)
 //   total      = actual - recommended
-//   tracking error = half the sum of |total| over the four vaults.
+//   tracking error = half the sum of |flow| over the four vaults: how far the
+//                money is from the target, as the /allocation ring's gaps.
+//                Without a target, half the sum of |total|.
 /** @param {any} source @returns {Overview} */
 export function normalizeOverview(source) {
   const src = source && typeof source === "object" ? source : {};
@@ -298,11 +306,14 @@ export function normalizeOverview(source) {
       exitFeeBps: numberOrNull(raw.exitFeeBps),
       recommendedBps: hasRecommendation ? bps(raw.recommendedBps) : null,
       appliedBps: bps(raw.appliedBps),
+      policyBps: bps(raw.policyBps),
     };
   });
 
   const recommendedOk = layerComplete(rows.map((r) => r.recommendedBps));
   const appliedOk = layerComplete(rows.map((r) => r.appliedBps));
+  const policyOk = layerComplete(rows.map((r) => r.policyBps));
+  const targetSource = appliedOk ? "router" : policyOk ? "policy" : null;
 
   const complete = rows.every((r) => r.availability === "not_on_network" || (r.availability === "live" && r.tvlUsd !== null));
   const total = complete
@@ -313,6 +324,7 @@ export function normalizeOverview(source) {
   const vaults = rows.map((r) => {
     const recommended = recommendedOk ? r.recommendedBps : null;
     const applied = appliedOk ? r.appliedBps : null;
+    const target = targetSource === "router" ? applied : targetSource === "policy" ? r.policyBps : null;
     const actual = total !== null && total > 0
       ? r.availability === "not_on_network" ? 0 : round2((/** @type {number} */ (r.tvlUsd) * 10000) / total)
       : null;
@@ -320,10 +332,11 @@ export function normalizeOverview(source) {
       ...r,
       recommendedBps: recommended,
       appliedBps: applied,
+      targetBps: target,
       actualBps: actual,
       gaps: {
-        governance: diff(applied, recommended),
-        flow: diff(actual, applied),
+        governance: diff(target, recommended),
+        flow: diff(actual, target),
         total: diff(actual, recommended),
       },
     };
@@ -337,14 +350,57 @@ export function normalizeOverview(source) {
     freshness: src.freshness ?? null,
     router: src.router ?? null,
     recommendation: src.recommendation ?? null,
+    targetSource,
     vaults,
     combined: {
       tvlUsd: total,
       vaultsLive: known ? rows.filter((r) => r.availability === "live").length : null,
     },
-    trackingErrorBps: vaults.every((r) => r.gaps.total !== null)
-      ? round2(vaults.reduce((n, r) => n + Math.abs(/** @type {number} */ (r.gaps.total)), 0) / 2)
-      : null,
+    trackingErrorBps: trackingError(vaults, targetSource ? "flow" : "total"),
+  };
+}
+
+/** @param {VaultRow[]} vaults @param {"flow" | "total"} gap */
+function trackingError(vaults, gap) {
+  return vaults.every((r) => r.gaps[gap] !== null)
+    ? round2(vaults.reduce((n, r) => n + Math.abs(/** @type {number} */ (r.gaps[gap])), 0) / 2)
+    : null;
+}
+
+// Whether the four vaults have a target to be measured against: the router's
+// weights or the published policy's. With one, each vault has a governance
+// gap (target against the recommendation) and a flow gap (actual against the
+// target); without, one gap, actual against the recommendation.
+/** @param {any} overview */
+export function hasTargetLayer(overview) {
+  const rows = Array.isArray(overview?.vaults) ? overview.vaults : [];
+  return rows.length === VAULTS.length && rows.every((/** @type {any} */ r) => typeof r?.targetBps === "number");
+}
+
+// Lay the published policy's sleeve targets (GET /api/dashboards/allocation,
+// one target per sleeve, one vault per sleeve) over a raw overview as each
+// vault's target. The router's own weights, when it reports them, still win
+// in normalizeOverview.
+/** @param {any} raw @param {any} policy */
+export function withPolicyTargets(raw, policy) {
+  if (!raw || typeof raw !== "object" || !policy) return raw;
+  const buckets = Array.isArray(policy.buckets) ? policy.buckets : [];
+  const strategy = Array.isArray(policy.strategy) ? policy.strategy : [];
+  /** @type {Map<string, number | null>} */
+  const bySlug = new Map();
+  buckets.forEach((/** @type {any} */ b, /** @type {number} */ i) => {
+    const v = vaultForBucket(b?.key);
+    const pct = numberOrNull(strategy[i]?.targetPct);
+    if (v) bySlug.set(v.slug, pct === null ? null : Math.round(pct * 100));
+  });
+  if (!bySlug.size) return raw;
+  return {
+    ...raw,
+    policyAsOf: policy.asOf ?? null,
+    vaults: (Array.isArray(raw.vaults) ? raw.vaults : []).map((/** @type {any} */ v) => {
+      const slug = String(v?.slug ?? "").toLowerCase();
+      return bySlug.has(slug) ? { ...v, policyBps: bySlug.get(slug) } : v;
+    }),
   };
 }
 

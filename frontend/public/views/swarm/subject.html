@@ -371,14 +371,13 @@
                         <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
                       </figcaption>
                     </figure>
-                    <!-- The columns every weights legend has: the vault's actual
-                         weight and the weight in force. No gap: the latest
-                         recommendation above gives one, measured its own way,
-                         and a second here would point the other way. -->
-                    <div class="rr-legend" :class="legendBasis() ? 'rr-legend--cols' : ''">
-                      <template x-if="legendBasis()">
-                        <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Actual</span><span x-text="legendBasis()"></span><span></span></div>
-                      </template>
+                    <!-- Each vault's value, its share of the book, and the weight
+                         in force, as the Positions table under it reads Value
+                         and Share. No gap: the latest recommendation above
+                         gives one, measured its own way, and a second here
+                         would point the other way. -->
+                    <div class="rr-legend rr-legend--cols rr-legend--value">
+                      <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Value</span><span>Share</span><span x-text="legendBasis() || 'Target'"></span></div>
                       <template x-for="r in explorerRows()" :key="r.key">
                         <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
                                 :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
@@ -386,8 +385,9 @@
                                 @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
                           <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
                           <span><span class="rr-legend__l" x-text="r.label"></span></span>
-                          <b x-text="fmtPctTrim(r.pct)"></b>
-                          <template x-if="legendBasis()"><span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span></template>
+                          <span class="rr-legend__was"><span class="rr-sr">Value </span><span x-text="vaultUsd(r.value)"></span></span>
+                          <b><span class="rr-sr">Share </span><span x-text="fmtPctTrim(r.pct)"></span></b>
+                          <span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis() || 'Target'} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span>
                         </button>
                       </template>
                     </div>
@@ -511,7 +511,7 @@
                  With none, the positions table above already has. -->
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
-                <figcaption class="rr-area__head"><p class="rr-k">Share of the book by position</p></figcaption>
+                <figcaption class="rr-area__head"><p class="rr-k" x-text="isVaultStack() ? 'Share of the book by vault' : 'Share of the book by position'">Share of the book by position</p></figcaption>
                 <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
               </figure>
             </template>

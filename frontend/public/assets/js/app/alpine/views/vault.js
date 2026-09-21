@@ -28,7 +28,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
-  hasAppliedLayer,
+  hasTargetLayer,
   historyModel,
   holdingsComplete,
   numberOrNull,
@@ -242,16 +242,17 @@ export function registerVaultView(Alpine) {
     },
 
     // ── allocation ───────────────────────────────────────────────────────────
-    // Three layers once the router reports weights; until then Recommended
-    // and Actual, and the one gap between them.
+    // Three layers once there is a target (the router's weights, else the
+    // published policy's, RM-115); without one Recommended and Actual, and
+    // the one gap between them.
     threeLayers() {
-      return hasAppliedLayer(this.overview());
+      return hasTargetLayer(this.overview());
     },
     // ── the allocation, as a ring ────────────────────────────────────────────
     // The ring every allocation view draws: each vault at its share of the
-    // four vaults' combined TVL, set against the weight the router applies
-    // (the recommendation, before any router applies one), and the gap in
-    // points, this vault in focus. The vault subject's By vault ring, read
+    // four vaults' combined TVL, set against the target in force (the
+    // recommendation, when there is no target to read), and the gap in
+    // points, this vault in focus: the /allocation ring's gap. The vault subject's By vault ring, read
     // from this vault.
     explorerRows() {
       const o = this.overview();
@@ -263,7 +264,7 @@ export function registerVaultView(Alpine) {
         return {
           key: v.slug, label: v.symbol, hue: v.color, meta: "", assets: [],
           pct: pp(r?.actualBps),
-          was: pp(three ? r?.appliedBps : r?.recommendedBps),
+          was: pp(three ? r?.targetBps : r?.recommendedBps),
           d: gap === null ? null : Math.round(gap) / 100,
         };
       });
@@ -276,14 +277,13 @@ export function registerVaultView(Alpine) {
     },
     // Named apart from the explorer's own legendBasis(), which the nested
     // component would otherwise answer first.
-    allocBasis() { return this.threeLayers() ? "Applied" : "Recommended"; },
+    allocBasis() { return this.threeLayers() ? "Target" : "Recommended"; },
     hasBook() { return false; },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
     changeClass(d) { return weightChange.changeClass(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
-    // What the legend does not carry, once a router applies its own weights:
-    // this vault's recommended weight and the governance gap to what the
-    // router applies.
+    // What the legend does not carry, once there is a target: this vault's
+    // recommended weight and the governance gap between it and the target.
     pipelineFacts() {
       if (!this.threeLayers()) return [];
       const r = this.row();

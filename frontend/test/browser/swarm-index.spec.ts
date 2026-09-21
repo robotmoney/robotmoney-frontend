@@ -565,5 +565,7 @@ test("the flagship draws the newest weights and names a newer session that held 
   await expect(held.locator(".rr-meta__i").first()).toHaveText("Latest session Sep 21, 2026");
   await expect(held.locator("a")).toHaveAttribute("href", "/swarm/sessions/sess-held");
   await expect(held.locator(".rr-meta__i").nth(1)).toHaveText("Recommendation Target held");
+  // Since the session the ring draws, the one the link beside it opens.
+  await expect(held.locator(".rr-meta__i").nth(2)).toHaveText("Since Aug 3, 2026");
   await expect(alloc.locator(".rr-cta")).toContainText("Read the Aug 3, 2026 session");
 });

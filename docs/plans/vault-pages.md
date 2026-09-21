@@ -35,7 +35,7 @@ Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`; if that rout
 
 All under `frontend/public/data/vaults/`, synthetic: no addresses, no prices of real tokens, no return claims. They ship publicly with the site, and only a local host reads them.
 
-- `devnet/overview.json`: the overview DTO for the four-vault stack. Combined $100,000; Recommended 65/15/15/5, Applied 70/10/15/5, Actual 72/9/14/5; tracking error 700 bps.
+- `devnet/overview.json`: the overview DTO for the four-vault stack. Combined $100,000; Recommended 65/15/15/5, Applied 70/10/15/5, Actual 72/9/14/5; tracking error 200 bps (Actual against Applied, the target in force).
 - `devnet/{rmusdc,rmagent,rmproto,rmrwa}.json`: detail DTOs (holdings, 15 daily TVL readings, 11 to 14 activity rows, router weights, recommendation receipts). Each vault has its own share price and its own events. Token holdings are labelled as `/allocation` names the constituent (BTC, Gold) and carry the held token as `symbol` (WBTC, GOLD); they have no balance or price, since the fixtures price no real token.
 - `devnet/subject.json`: the vault subject's devnet book: the router and four vault wallets, and 15 daily snapshots whose positions carry `vault`.
 - `base/vault-economics.json`: the saved Base snapshot, verbatim from `goldens/api-goldens.json` (Jul 30, 2026, TVL $199.70).

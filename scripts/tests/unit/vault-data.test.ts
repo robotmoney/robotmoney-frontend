@@ -30,6 +30,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
+  hasTargetLayer,
   hasAppliedLayer,
   historyModel,
   holdingsComplete,
@@ -177,7 +178,10 @@ describe("normalizeOverview: the drift maths", () => {
   test("the devnet overview gives the documented figures", () => {
     const o = normalizeOverview(DEVNET);
     expect(o.combined).toEqual({ tvlUsd: 100000, vaultsLive: 4 });
-    expect(o.trackingErrorBps).toBe(700);
+    // Against the target in force, the router's Applied: half of |flow|.
+    expect(o.trackingErrorBps).toBe(200);
+    expect(o.targetSource).toBe("router");
+    expect(layer(o, "targetBps")).toEqual(layer(o, "appliedBps"));
     expect(layer(o, "actualBps")).toEqual([7200, 900, 1400, 500]);
     expect(bySlug(o, "rmusdc").gaps).toEqual({ governance: 500, flow: 200, total: 700 });
     expect(bySlug(o, "rmagent").gaps).toEqual({ governance: -500, flow: -100, total: -600 });
@@ -232,11 +236,11 @@ describe("normalizeOverview: the drift maths", () => {
     expect(bySlug(o, "rmusdc").gaps.governance).toBe(500);
   });
 
-  test("no recommendation: Recommended and tracking error are null, not zero; flow still reads", () => {
+  test("no recommendation: Recommended is null, not zero; flow and tracking error still read", () => {
     const o = normalizeOverview(applyReviewState(DEVNET, "no-recommendation"));
     expect(o.recommendation).toBeNull();
     expect(o.vaults.every((v) => v.recommendedBps === null && v.gaps.governance === null)).toBe(true);
-    expect(o.trackingErrorBps).toBeNull();
+    expect(o.trackingErrorBps).toBe(200);
     expect(bySlug(o, "rmrwa").gaps.flow).toBe(0);
     expect(gapParts(bySlug(o, "rmrwa").gaps.flow).label).toBe("0 pp");
   });
@@ -712,7 +716,7 @@ describe("loadVaultOverview", () => {
     const load = await loadVaultOverview(baseAt("robotmoney.network"));
     expect(load.source).toBe("api");
     expect(load.label).toBe("Devnet test data");
-    expect(load.overview?.trackingErrorBps).toBe(700);
+    expect(load.overview?.trackingErrorBps).toBe(200);
     expect(requests.some((u) => u.startsWith("/api/swarm"))).toBe(false);
   });
 
@@ -731,6 +735,34 @@ describe("loadVaultOverview", () => {
     serve({ [VAULTS_ENDPOINT]: spaShell, "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview(baseAt("127.0.0.1"));
     expect(load.source).toBe("legacy");
+  });
+
+  test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {
+    serve({
+      [VAULTS_ENDPOINT]: statusOnly(404),
+      "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS),
+      "/api/dashboards/allocation": json(GOLDEN_ALLOCATION),
+    });
+    const load = await loadVaultOverview(baseAt("127.0.0.1"));
+    const o = load.overview;
+    expect(o?.targetSource).toBe("policy");
+    expect(hasTargetLayer(o)).toBe(true);
+    const targets = GOLDEN_ALLOCATION.strategy.map((s: { targetPct: number }) => Math.round(s.targetPct * 100));
+    expect(layer(o, "targetBps")).toEqual(targets);
+    // The router reported nothing: Applied stays empty, only Target fills.
+    expect(layer(o, "appliedBps")).toEqual([null, null, null, null]);
+    const usdc = bySlug(o, "rmusdc");
+    expect(usdc.gaps.flow).toBe(10000 - targets[0]);
+    expect(usdc.gaps.governance).toBe(targets[0] - 9500);
+    expect(o?.trackingErrorBps).toBe(10000 - targets[0]);
+  });
+
+  test("with no policy to read, there is no target and one gap", async () => {
+    serve({ [VAULTS_ENDPOINT]: statusOnly(404), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
+    const load = await loadVaultOverview({ ...baseAt("robotmoney.network"), recommendation: false });
+    expect(load.overview?.targetSource).toBeNull();
+    expect(hasTargetLayer(load.overview)).toBe(false);
+    expect(bySlug(load.overview, "rmusdc").gaps.flow).toBeNull();
   });
 
   test("a stub feed is labelled", async () => {
@@ -752,7 +784,7 @@ describe("loadVaultOverview", () => {
     serve({ [VAULTS_ENDPOINT]: statusOnly(404), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
     const load = await loadVaultOverview({ ...baseAt("127.0.0.1"), recommendation: false });
     expect(load.overview?.recommendation).toBeNull();
-    expect(requests.some((u) => u.includes("/swarm/"))).toBe(false);
+    expect(requests.some((u) => u.includes("/swarm/sessions"))).toBe(false);
   });
 
   test("a 503 on a local host: the saved Base snapshot, labelled", async () => {

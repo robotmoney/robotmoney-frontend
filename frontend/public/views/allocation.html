@@ -106,63 +106,111 @@
          combined TVL, and the gap in points. Selecting a sleeve opens its
          recipe, the assets inside it, and names the vault that holds it. -->
     <div class="rr alp__ring alp__fade" x-show="hasTargets()" x-cloak>
-      <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
-        <div class="rr-mix">
-          <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
-            <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
-                  x-html="explorerSvg()"
-                  x-effect="active(); $nextTick(() => syncArcs($el))"></span>
-            <figcaption>
-              <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
-              <span x-text="activeRow() ? activeRow().label : ringRestLabel()"></span>
-            </figcaption>
-          </figure>
-          <div class="rr-legend" :class="hasActual() ? 'rr-legend--cols' : ''">
-            <template x-if="hasActual()">
-              <div class="rr-legend__head" aria-hidden="true"><span></span><span>Sleeve</span><span>Target</span><span>Actual</span><span>Gap</span></div>
-            </template>
-            <template x-for="r in explorerRows()" :key="r.key">
-              <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
-                      :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
-                      :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
-                      @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
-                <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
-                <span><span class="rr-legend__l" x-text="r.label"></span><template x-if="hasActual() && bucketShort(r.label)"><span class="rr-legend__s" aria-hidden="true" x-text="bucketShort(r.label)"></span></template></span>
-                <b x-text="fmtPctTrim(r.pct)"></b>
-                <template x-if="hasActual()"><span class="rr-legend__was"><span class="rr-sr">Actual </span><span x-text="r.actual == null ? '—' : fmtPctTrim(r.actual)"></span></span></template>
-                <template x-if="hasActual()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Gap </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
-              </button>
-            </template>
+      <!-- Beside the ring, as /swarm sets its own: the latest recommendation,
+           why, and the way to its session. The ring is the target in force;
+           a recommendation is not the target until it is applied (RM-115),
+           and the Vaults table below sets each one against the other. -->
+      <div class="rr-split rr-split--rule">
+        <div>
+        <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+          <div class="rr-mix">
+            <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+              <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
+                    x-html="explorerSvg()"
+                    x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+              <figcaption>
+                <b x-show="activeRow()" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : ''"></b>
+                <span x-text="activeRow() ? activeRow().label : ringRestLabel()"></span>
+              </figcaption>
+            </figure>
+            <div class="rr-legend" :class="hasActual() ? 'rr-legend--cols' : ''">
+              <template x-if="hasActual()">
+                <div class="rr-legend__head" aria-hidden="true"><span></span><span>Sleeve</span><span>Target</span><span>Actual</span><span>Gap</span></div>
+              </template>
+              <template x-for="r in explorerRows()" :key="r.key">
+                <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                        :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                        :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`sleeve-${r.key}`"
+                        @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                  <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                  <span><span class="rr-legend__l" x-text="r.label"></span><template x-if="hasActual() && bucketShort(r.label)"><span class="rr-legend__s" aria-hidden="true" x-text="bucketShort(r.label)"></span></template></span>
+                  <b x-text="fmtPctTrim(r.pct)"></b>
+                  <template x-if="hasActual()"><span class="rr-legend__was"><span class="rr-sr">Actual </span><span x-text="r.actual == null ? '—' : fmtPctTrim(r.actual)"></span></span></template>
+                  <template x-if="hasActual()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Gap </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
+                </button>
+              </template>
+            </div>
           </div>
-        </div>
-        <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
-          <div class="rr-x__clip">
-            <template x-if="panelRow()">
-              <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} recipe`">
-                <div class="rr-x__head">
-                  <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><template x-if="vaultHref(panelRow().key)"><span>Vault <a class="rr-lnk alp__vtok" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a></span></template></p>
-                  <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
+          <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
+            <div class="rr-x__clip">
+              <template x-if="panelRow()">
+                <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} recipe`">
+                  <div class="rr-x__head">
+                    <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><template x-if="vaultHref(panelRow().key)"><span>Vault <a class="rr-lnk alp__vtok" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a></span></template></p>
+                    <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
+                  </div>
+                  <table class="rr-table rr-x__assets">
+                    <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
+                    <tbody>
+                      <template x-for="a in panelRow().assets" :key="a.key">
+                        <tr>
+                          <th scope="row"><i data-mark="series" :style="`background:${a.colour}`" aria-hidden="true"></i><span x-text="a.label"></span></th>
+                          <td class="q" x-text="fmtPctTrim(a.ofSleeve)"></td>
+                          <td class="q" x-text="fmtPctTrim(a.ofAllocation)"></td>
+                        </tr>
+                      </template>
+                      <template x-if="!panelRow().assets.length">
+                        <tr><td class="rr-table__empty" colspan="3"><span class="rr-empty__t">No assets published</span></td></tr>
+                      </template>
+                    </tbody>
+                  </table>
                 </div>
-                <table class="rr-table rr-x__assets">
-                  <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
-                  <tbody>
-                    <template x-for="a in panelRow().assets" :key="a.key">
-                      <tr>
-                        <th scope="row"><i data-mark="series" :style="`background:${a.colour}`" aria-hidden="true"></i><span x-text="a.label"></span></th>
-                        <td class="q" x-text="fmtPctTrim(a.ofSleeve)"></td>
-                        <td class="q" x-text="fmtPctTrim(a.ofAllocation)"></td>
-                      </tr>
-                    </template>
-                    <template x-if="!panelRow().assets.length">
-                      <tr><td class="rr-table__empty" colspan="3"><span class="rr-empty__t">No assets published</span></td></tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </template>
+              </template>
+            </div>
           </div>
+          <span class="rr-sr" role="status" x-text="status"></span>
         </div>
-        <span class="rr-sr" role="status" x-text="status"></span>
+        </div>
+        <div class="alp__rec" x-data="{ more: false }">
+          <template x-if="recSession">
+            <div>
+              <p class="rr-k rr-sub">Latest recommendation</p>
+              <template x-if="recHeldBy()">
+                <div class="rr-meta rr-meta--lead">
+                  <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="recHref(recHeldBy())" x-text="recDate(recHeldBy())"></a></b></span>
+                  <span class="rr-meta__i">Recommendation <b>Target held</b></span>
+                  <span class="rr-meta__i">Since <b x-text="recDate(recSession)"></b></span>
+                </div>
+              </template>
+              <template x-if="recRationale()">
+                <div>
+                  <div class="rr-prose" :class="!more && String(recRationale()).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
+                       x-html="linkified(recRationale())"></div>
+                  <template x-if="String(recRationale()).length > 480">
+                    <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                      <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
+                    </button>
+                  </template>
+                </div>
+              </template>
+              <template x-if="recTally().length">
+                <p class="rr-counts">
+                  <template x-for="x in recTally()" :key="x.stance">
+                    <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
+                  </template>
+                  <em x-text="recTallyNote()"></em>
+                </p>
+              </template>
+              <a class="rr-cta" :href="recHref(recSession)">
+                <span x-text="`Read the ${recDate(recSession)} session`"></span><span aria-hidden="true">→</span>
+              </a>
+            </div>
+          </template>
+          <!-- None published is a fact; a read that failed is not "none". -->
+          <template x-if="recLoaded && !recSession">
+            <p class="rr-note" style="margin:0" x-text="recError ? 'Recommendation unavailable' : 'No recommendation published'"></p>
+          </template>
+        </div>
       </div>
     </div>
 
@@ -186,19 +234,25 @@
        Where the recommendation meets execution: four leg vaults, one per
        sleeve, behind a router that routes new deposits by its applied weights
        and holds nothing itself. Recommended is the latest published
-       robotmoney-allocation recommendation, Applied the router's weights,
-       Actual each vault's share of the four vaults' TVL. The governance gap is
-       applied minus recommended, the flow gap actual minus applied. With no
-       router weights (Base today) there is no Applied column and one Gap,
-       actual minus recommended. Every figure comes from one overview
-       (lib/vault-data.js normalizeOverview), so this table and each vault's
-       page cannot disagree.
+       robotmoney-allocation recommendation; Target the weights in force, the
+       router's once it reports them and the published policy's until then
+       (Base today), the same targets the ring above draws; Actual each
+       vault's share of the four vaults' TVL. The governance gap is target
+       minus recommended (a recommendation not applied), the flow gap actual
+       minus target (RM-115): on Base the ring's gap, both measured against
+       the policy. On the devnet the router's weights are the target, and the
+       fixture's policy is not what its router applied. With no target to read there is
+       no Target column and one Gap, actual minus recommended. Each figure
+       carries its dollars at the combined TVL: Actual's are the vault's TVL.
+       Every figure comes from one overview (lib/vault-data.js
+       normalizeOverview), so this table and each vault's page cannot
+       disagree.
        Built from the research record's .rr-* parts inside the page's own
        section shell. Static, not behind an x-if: the four rows paint from the
        first frame with "—" and fill in, so nothing below them moves, and the
        /vault redirect's scroll finds #vaults. No figure is written into the
-       markup: prerender inlines this fragment. On a phone the TVL and the two
-       gaps give way (.rr-vaults__wide): each vault's page carries them. -->
+       markup: prerender inlines this fragment. On a phone the two gaps give
+       way (.rr-vaults__wide): each vault's page carries them. -->
   <section class="alp__sec" id="vaults">
     <!-- id="vault": the legacy anchor the deposit skill and the swarm's vault
          row cite. -->
@@ -228,9 +282,8 @@
           <thead>
             <tr>
               <th scope="col">Vault</th>
-              <th scope="col" class="q rr-vaults__wide">TVL</th>
               <th scope="col" class="q">Recommended</th>
-              <template x-if="threeLayers()"><th scope="col" class="q">Applied</th></template>
+              <template x-if="threeLayers()"><th scope="col" class="q">Target</th></template>
               <th scope="col" class="q">Actual</th>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Governance gap</th></template>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Flow gap</th></template>
@@ -244,16 +297,15 @@
                   <i class="rr-dot" data-mark="series" :style="`background:${v.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="v.href" x-text="v.symbol"></a>
                   <small x-text="v.sub"></small>
                 </th>
-                <td class="q rr-vaults__wide" x-text="v.tvl"></td>
-                <td class="q" x-text="v.recommended"></td>
-                <template x-if="threeLayers()"><td class="q" x-text="v.applied"></td></template>
-                <td class="q" x-text="v.actual"></td>
+                <td class="q"><span x-text="v.recommended"></span><small x-text="v.recommendedUsd"></small></td>
+                <template x-if="threeLayers()"><td class="q"><span x-text="v.target"></span><small x-text="v.targetUsd"></small></td></template>
+                <td class="q"><span x-text="v.actual"></span><small x-text="v.actualUsd"></small></td>
                 <!-- In percentage points with the sign, as every move on the
                      site (lib/weight-change.js through gapParts): a zero gap is
                      a reading, "0 pp"; a missing one is "—". -->
-                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.governance.cls"><span x-text="v.governance.label"></span></span></td></template>
-                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.flow.cls"><span x-text="v.flow.label"></span></span></td></template>
-                <template x-if="!threeLayers()"><td class="q"><span class="alp__mv" :class="v.gap.cls"><span x-text="v.gap.label"></span></span></td></template>
+                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.governance.cls"><span x-text="v.governance.label"></span></span><small x-text="v.governanceUsd"></small></td></template>
+                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.flow.cls"><span x-text="v.flow.label"></span></span><small x-text="v.flowUsd"></small></td></template>
+                <template x-if="!threeLayers()"><td class="q"><span class="alp__mv" :class="v.gap.cls"><span x-text="v.gap.label"></span></span><small x-text="v.gapUsd"></small></td></template>
               </tr>
             </template>
           </tbody>
@@ -463,6 +515,10 @@
    page their figures would sit a thousand pixels from their names, a lookup
    rather than a read. */
 .alp__ring .rr-x { max-width: 44rem; }
+/* The ring and its four-column legend want more of the row than /swarm's
+   three-column one; the recommendation beside it is prose and wraps. */
+.alp__ring > .rr-split { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+@media (max-width: 860px) { .alp__ring > .rr-split { grid-template-columns: minmax(0, 1fr); } }
 .alp__split { display: grid; gap: 1.5rem 2.25rem; align-items: center; grid-template-columns: 11.5rem minmax(0, 1fr); }
 @media (max-width: 679px) { .alp__split { grid-template-columns: 1fr; } }
 

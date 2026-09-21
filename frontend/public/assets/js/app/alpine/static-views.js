@@ -644,7 +644,7 @@ export function registerStaticViews(Alpine) {
     explorerSvg() {
       return this.ringSvg(this.vaultRingRows().map((r) => ({ key: r.key, label: r.label, pct: r.pct, colour: r.hue })));
     },
-    explorerCenter() { return { value: "", label: "Actual" }; },
+    explorerCenter() { return { value: "", label: "Share" }; },
     explorerLabel() {
       return this.vaultRingRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
@@ -2113,11 +2113,43 @@ export function registerStaticViews(Alpine) {
     // The devnet fixture's book is on (lib/vault-source.js): Holdings is test
     // data, while the latest recommendation still reads the real book.
     stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
-    stackSnapshots() { return this.vaultSnapshots ?? this.snapshots; },
+    // Off the devnet switch, Holdings is the vault feed: the read /allocation
+    // and every /vault page make (lib/vault-source.js loadVaultOverview), one
+    // reading, now. Not the subject's own snapshots: on production those are
+    // the treasury's book scaled by 0.7234 (ROBOT and ETH in a USDC lending
+    // vault, $33.6k against a $250 vault) and stopped on Aug 6, so the page
+    // printed a book no vault holds. The sessions still show the book they
+    // reviewed; this is what the vaults hold today. Until the feed answers,
+    // nothing, rather than the snapshot and then the feed.
+    stackSnapshots() {
+      if (this.vaultSnapshots) return this.vaultSnapshots;
+      const live = this.liveStackSnapshot();
+      return live ? [live] : [];
+    },
     stackSnapshot() {
-      if (!this.vaultSnapshots) return this.snapshot;
+      if (!this.vaultSnapshots) return this.liveStackSnapshot();
       const list = this.vaultSnapshots;
       return list.length ? normalizeSnapshot(list[list.length - 1]) : null;
+    },
+    // The feed as one reading of the book: every live vault's holdings (a
+    // lending vault's adapters and idle USDC), else the vault at its TVL.
+    liveStackSnapshot() {
+      const ov = this.vaultStack?.overview;
+      if (!ov || !this.vaultStackSettled || ov.combined?.tvlUsd == null) return null;
+      const positions = [];
+      for (const v of ov.vaults || []) {
+        if (v.availability !== "live") continue;
+        const holdings = Array.isArray(v.holdings) ? v.holdings : [];
+        if (holdings.length) {
+          for (const h of holdings) {
+            positions.push({ token: h.symbol || h.label, name: h.label, chain: "base", vault: v.slug, value_usd: Number(h.valueUsd) || 0 });
+          }
+        } else if (v.tvlUsd != null) {
+          positions.push({ token: v.symbol, name: v.symbol, chain: "base", vault: v.slug, value_usd: v.tvlUsd });
+        }
+      }
+      const at = ov.freshness?.indexedAt || ov.asOf;
+      return { date: at ? String(at).slice(0, 10) : "", totalValueUsd: ov.combined.tvlUsd, positions, live: true };
     },
     stackWalletList() {
       if (this.vaultWallets) return this.vaultWallets;
@@ -2272,7 +2304,7 @@ export function registerStaticViews(Alpine) {
         const pct = g ? g.share * 100 : 0;
         const was = target ? target.by[v.slug] / 100 : null;
         return {
-          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "",
+          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
           was, basis: target?.basis ?? "target", action: "", rationale: "",
           assets: (g?.positions || []).map((p) => ({
             key: `${v.slug}-${p.token}-${p.chain}`,

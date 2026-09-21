@@ -14,7 +14,7 @@
     "tvlUsd": 100000,
     "vaultsLive": 4
   },
-  "trackingErrorBps": 700,
+  "trackingErrorBps": 200,
   "router": {
     "address": null,
     "availability": "live",

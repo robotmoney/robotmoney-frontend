@@ -36,7 +36,13 @@
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { loadAllocationDto } from "../../lib/allocation-framework.js";
-import { loadVaultOverview } from "../../lib/vault-source.js";
+import { loadLatestRecommendation, loadVaultOverview } from "../../lib/vault-source.js";
+import { sessionTakes } from "../../lib/session-takes.js";
+
+// sessionTakes() is a mixin factory; the panel needs only its session address.
+const { sessionHref } = sessionTakes();
+import { stanceColor } from "../../lib/stance.js";
+import { helpers } from "../static-views.js";
 import {
   VAULTS,
   explorerLink,
@@ -45,7 +51,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
-  hasAppliedLayer,
+  hasTargetLayer,
   recommendationDate,
   recommendationHref,
   sleeveNote,
@@ -84,6 +90,12 @@ export function registerAllocationView(Alpine) {
     allocationFw: null, // loadAllocationDto(): GET /api/dashboards/allocation
     vaults: null,       // loadVaultOverview(): { overview, source, label, error, ... }
     loading: true,      // the policy; the vaults fill their own rows as they land
+    // loadLatestRecommendation(): the newest allocation session that published
+    // weights, and the newest of all. The panel beside the ring reads them.
+    recSession: null,
+    recLatest: null,
+    recLoaded: false,
+    recError: false,
 
     // The allocation's own decision log is not built yet, so the sessions
     // live where the swarm keeps them.
@@ -103,16 +115,27 @@ export function registerAllocationView(Alpine) {
     // blanking a page about money. A failed read becomes null, never a
     // fabricated value. The policy does not wait for the vaults: the Vaults
     // table holds its four rows from the first paint and fills them in.
+    //
+    // The policy and the recommendation are read once and handed to the
+    // vaults' read too: the policy's targets are the vaults' targets, and the
+    // recommendation walks the session list, which is not walked twice.
     async load() {
       const host = location.hostname;
-      const policy = loadAllocationDto(host)
+      const policyRead = loadAllocationDto(host);
+      const recRead = loadLatestRecommendation({ hostname: host }).catch(() => ({ rec: null, error: true }));
+      const policy = policyRead
         .then((d) => { this.allocationFw = d ?? null; }, () => { this.allocationFw = null; })
         .finally(() => {
           this.loading = false;
         });
-      const vaults = loadVaultOverview({ hostname: host })
+      const rec = recRead.then((r) => {
+        this.recSession = r?.session ?? null;
+        this.recLatest = r?.latest ?? null;
+        this.recError = !!r?.error;
+      }).finally(() => { this.recLoaded = true; });
+      const vaults = loadVaultOverview({ hostname: host, recommendation: recRead, policy: policyRead })
         .then((r) => { this.vaults = r; }, () => { this.vaults = { overview: null, label: null }; });
-      await Promise.allSettled([policy, vaults]);
+      await Promise.allSettled([policy, rec, vaults]);
     },
 
     // A target weight at one decimal with a trailing ".0" trimmed: 95%, 14.3%.
@@ -225,6 +248,25 @@ export function registerAllocationView(Alpine) {
     // vault page's lede).
     sleeveNote(key) { return sleeveNote(key); },
 
+    // ── the latest recommendation, beside the ring ──────────────────────────
+    // As /swarm sets it beside its ring: the newest allocation session that
+    // published weights, why, and the way to it. A newer session that
+    // published none held the target, and is named above the rest.
+    recHeldBy() {
+      const latest = this.recLatest;
+      return latest && this.recSession && latest.id !== this.recSession.id ? latest : null;
+    },
+    recDate(s) { return s?.date ? fmtDate(s.date) : ""; },
+    recHref(s) { return sessionHref(s); },
+    recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },
+    recTally() { return this.recSession ? sessionSummary.stanceTally.call(sessionSummary, this.recSession) : []; },
+    recTallyNote() {
+      const s = this.recSession;
+      return s ? [sessionSummary.turnoutText.call(sessionSummary, s), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
+    },
+    linkified(text) { return helpers.linkified(text); },
+    stanceColor(s) { return stanceColor(s); },
+
     // ── constituents (small multiples) ──────────────────────────────────────
     // Within-sleeve target weights: the recipe. What a vault actually holds is
     // on that vault's page.
@@ -284,29 +326,59 @@ export function registerAllocationView(Alpine) {
       const s = statusLabel(r, o.network?.label);
       return s === "Active" ? null : s;
     },
-    // Recommended, Applied and Actual once the router reports weights, with
-    // the governance and flow gaps between them. Until then (Base today)
-    // Recommended and Actual, and the one gap between them.
-    threeLayers() { return hasAppliedLayer(this.overview()); },
+    // Recommended, Target and Actual once there is a target to read (the
+    // router's weights, else the published policy's), with the governance and
+    // flow gaps between them. Without one, Recommended and Actual, and the
+    // one gap between them.
+    threeLayers() { return hasTargetLayer(this.overview()); },
+    // A weight in whole dollars at the combined TVL; Actual's are the vault's
+    // own TVL. A gap in dollars is the difference of the two dollar figures
+    // beside it, not its points re-priced, so the row adds up as printed:
+    // $250 against $238 is "+$12", as the pp beside it reads "+5 pp".
+    usdAt(bps) {
+      const tvl = this.overview()?.combined?.tvlUsd;
+      return typeof bps === "number" && isFinite(bps) && typeof tvl === "number" ? Math.round((bps / 10000) * tvl) : null;
+    },
+    actualUsd(r) {
+      if (r?.availability === "not_on_network") return 0;
+      return typeof r?.tvlUsd === "number" ? Math.round(r.tvlUsd) : null;
+    },
+    usdLabel(v) { return v === null ? "" : fmtUsd(v); },
+    usdGap(a, b) {
+      if (a === null || b === null) return "";
+      const d = a - b;
+      return d === 0 ? "$0" : `${d > 0 ? "+" : "−"}${fmtUsd(Math.abs(d))}`;
+    },
     // The four identities from the first paint, so the table holds its shape
     // while the figures load; every figure reads "—" until then.
     vaultRows() {
       return VAULTS.map((id) => {
         const r = this.vaultRecord(id.slug);
         const status = this.vaultStatusOf(id.slug);
+        // Only figures the row also prints as a weight get dollars.
+        const usd = {
+          recommended: r?.recommendedBps == null ? null : this.usdAt(r.recommendedBps),
+          target: r?.targetBps == null ? null : this.usdAt(r.targetBps),
+          actual: r?.actualBps == null ? null : this.actualUsd(r),
+        };
         return {
           slug: id.slug,
           symbol: id.symbol,
           color: id.color,
           href: `/vault/${id.slug}`,
           sub: status ? `${id.name} · ${status}` : id.name,
-          tvl: fmtUsd(r?.tvlUsd),
           recommended: fmtBps(r?.recommendedBps),
-          applied: fmtBps(r?.appliedBps),
+          recommendedUsd: this.usdLabel(usd.recommended),
+          target: fmtBps(r?.targetBps),
+          targetUsd: this.usdLabel(usd.target),
           actual: fmtBps(r?.actualBps),
+          actualUsd: this.usdLabel(usd.actual),
           governance: gapParts(r?.gaps?.governance),
+          governanceUsd: this.usdGap(usd.target, usd.recommended),
           flow: gapParts(r?.gaps?.flow),
+          flowUsd: this.usdGap(usd.actual, usd.target),
           gap: gapParts(r?.gaps?.total),
+          gapUsd: this.usdGap(usd.actual, usd.recommended),
         };
       });
     },
