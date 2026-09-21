@@ -377,6 +377,12 @@ export interface SwarmJudgement {
   rationale: string;
   disagreements: SwarmDisagreement[];
   releaseSafety: SwarmReleaseSafety | null;
+  /**
+   * Whether the session's recommendation set weights. Only then does the
+   * judge's call have a target to update; a session that published no
+   * weights, or a portfolio review, has nothing to update.
+   */
+  recommendsWeights: boolean;
   createdAt: string;
 }
 

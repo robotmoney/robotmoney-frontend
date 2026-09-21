@@ -315,9 +315,9 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     id: "listSwarmSessionJudgements",
     method: "GET",
     path: ROUTES.swarm.sessionJudgements,
-    summary: "The consensus judges' public opinions on one session",
+    summary: "The consensus judge's public opinion on one session",
     description:
-      "One judgement per judge that judged this session, newest first: the judge's rationale, the disagreements it mapped between named members, and its release-safety advice. The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+      "A session has one judge: the house judge by default, one picked at random when several are seated, never one related to the session's subject or members. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmJudgementsResponse",

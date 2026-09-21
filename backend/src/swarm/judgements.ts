@@ -56,7 +56,19 @@ async function publicJudgements(scope: Fragment, limit?: number): Promise<SwarmJ
       SELECT DISTINCT ON (j.session_id, j.judged_by)
              j.id, j.session_id, j.judged_by, j.judged_by_member_id, j.source, j.model,
              j.prompt_hash, j.inputs_digest, j.opinion, j.created_at,
-             s.subject_id, s.date AS session_date
+             s.subject_id, s.date AS session_date,
+             -- Whether the session's recommendation set weights: only then has
+             -- the judge's call a target to update (a session that published
+             -- none, or a portfolio review, has nothing to update). A live
+             -- aggregate stores meanTakeWeights()'s array, a v0 session an
+             -- object; CASE, because AND does not fix evaluation order and
+             -- jsonb_array_length throws on an object.
+             COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
+               AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
+                     WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0
+                     WHEN 'object' THEN s.swarm_recommendation->'weights' <> '{}'::jsonb
+                     ELSE false
+                   END AS recommends_weights
         FROM swarm_session_judgements j
         JOIN swarm_sessions s ON s.id = j.session_id
        WHERE j.mode = 'enforce' AND j.applied AND s.state = 'published'

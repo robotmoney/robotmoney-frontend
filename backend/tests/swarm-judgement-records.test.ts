@@ -53,8 +53,11 @@ async function judgeMember(prefix: string) {
   return m;
 }
 
-async function submit(m: Member, date: string, subjectId: string, body = "a signed take on the subject") {
-  const payload = { memberId: m.id, date, subjectId, nonce: rid("n"), stance: "neutral", confidence: 0.5, body };
+async function submit(
+  m: Member, date: string, subjectId: string, body = "a signed take on the subject",
+  weights?: { bucket: string; weight: number }[],
+) {
+  const payload = { memberId: m.id, date, subjectId, nonce: rid("n"), stance: "neutral", confidence: 0.5, body, ...(weights ? { weights } : {}) };
   const signature = await signMessage(canonicalizeSubmission(payload), m.privateKey);
   const res = await ic.submitRecommendation(m.token, { ...payload, signature });
   if (res.status !== 201) throw new Error(`submit failed: ${JSON.stringify(res)}`);
@@ -208,12 +211,13 @@ test("a session's public judgements: enforce, applied and published only, one pe
   const [inHouse, seated] = list;
   expect(Object.keys(inHouse).sort()).toEqual([
     "createdAt", "disagreements", "id", "inputsDigest", "judgedBy", "judgedByMemberId", "model",
-    "promptHash", "rationale", "releaseSafety", "sessionDate", "sessionId", "source", "subjectId",
+    "promptHash", "rationale", "recommendsWeights", "releaseSafety", "sessionDate", "sessionId", "source", "subjectId",
   ]);
+  // A prose session sets no weights: its judges' calls have nothing to update.
   expect(inHouse).toMatchObject({
     sessionId: s.sessionId, subjectId: s.subjectId, sessionDate: s.date,
     judgedBy: IN_HOUSE, judgedByMemberId: null, source: "model", model: "test/judge",
-    disagreements: [],
+    disagreements: [], recommendsWeights: false,
   });
   // The opinion as recorded — two takes against min_takes 3 is thin support,
   // which the judge flags whatever the model said.
@@ -239,6 +243,31 @@ test("a session's public judgements: enforce, applied and published only, one pe
   // An unknown or malformed session is a 404, not an empty list.
   expect((await sessionJudgements(crypto.randomUUID())).status).toBe(404);
   expect((await sessionJudgements("not-a-uuid")).status).toBe(404);
+});
+
+test("a judgement on a weights session says its recommendation set weights: its call has a target to update", async () => {
+  const subjectId = rid("weights");
+  await ic.ensureSubject(subjectId, "weights subject");
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
+  const session = await ic.openSession(subjectId);
+  await ic.publishBrief(session.id, 60);
+  const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
+  const weights = [
+    { bucket: "conservative_defi_yield", weight: 0.9 }, { bucket: "agent_tokens", weight: 0.1 },
+    { bucket: "protocol_tokens", weight: 0 }, { bucket: "real_world_assets", weight: 0 },
+  ];
+  for (const voter of [await member("wv_a"), await member("wv_b")]) await submit(voter, date, subjectId, "a weighted take", weights);
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  expect((await recOf(String(session.id))).type).toBe("bucket_weights");
+  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
+  expect((await judgeSession(String(session.id), { transport: answer("Weights moved.") })).applied).toBe(true);
+  expect((await ic.publishSession(String(session.id))).state).toBe("published");
+
+  const list = (await sessionJudgements(String(session.id))).body.judgements as any[];
+  expect(list).toHaveLength(1);
+  expect(list[0].recommendsWeights).toBe(true);
+  expect((await judgementById(list[0].id)).body.recommendsWeights).toBe(true);
 });
 
 test("a date-shaped first segment still means (date, subject), not a session id", async () => {

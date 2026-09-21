@@ -304,6 +304,7 @@ export function toPublicJudgement(row: Row): SwarmJudgement {
     rationale: typeof opinion.rationale === "string" ? opinion.rationale : "",
     disagreements: Array.isArray(opinion.disagreements) ? opinion.disagreements : [],
     releaseSafety: opinion.release_safety ?? null,
+    recommendsWeights: row.recommends_weights === true,
     createdAt: instant(row.created_at) ?? "",
   };
 }
