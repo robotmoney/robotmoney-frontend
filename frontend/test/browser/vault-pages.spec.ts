@@ -123,7 +123,6 @@ async function stubSaved(page: Page) {
 
 async function stubLive(page: Page, economics: unknown = goldenVault()) {
   await stubSaved(page);
-  await page.route("**/api/dashboards/robotmoney-vaults**", (route) => route.fulfill(json({ error: "not_found" }, 404)));
   await page.route("**/api/dashboards/vault-economics", (route) => route.fulfill(json(economics)));
   await page.route("**/api/dashboards/allocation", (route) => route.fulfill(json(loadGolden("/api/dashboards/allocation"))));
   await page.route("**/api/swarm/sessions**", (route) => route.fulfill(json({ sessions: [LIVE_SESSION], nextCursor: null })));

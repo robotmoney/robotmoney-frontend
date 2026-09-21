@@ -82,18 +82,20 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   // calls).
   const expected = await page.evaluate(async () => {
     const v = await fetch("/api/dashboards/vault-economics").then((r) => r.json());
-    // Mirrors allocationView.fmtUsd2 INCLUDING its null branch. A documented
-    // #120 degrade (a null tvlUsd, say) has to surface here as a text diff
-    // against the rendered "—", not as an opaque TypeError inside evaluate().
-    const usd2 = (n: number | null) =>
-      n == null ? "—" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return { vault: usd2(v.tvlUsd) };
+    // Mirrors allocationView.actualUsd through fmtUsd, whole dollars,
+    // INCLUDING its null branch. A documented #120 degrade (a null tvlUsd, say)
+    // has to surface here as a text diff against the rendered "", not as an
+    // opaque TypeError inside evaluate().
+    const usd0 = (n: number | null) =>
+      typeof n !== "number" ? "" : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+    return { vault: usd0(v.tvlUsd) };
   });
-  // The vault's TVL is the Vaults table's, rmUSDC's row; the meta rail above
-  // the weights carries the router, which holds nothing.
+  // The vault's TVL is rmUSDC's Actual in dollars, in the Vaults table; the
+  // meta rail above the weights carries the router, which holds nothing.
   const vaultRows = page.locator("#vaults tbody tr");
+  const rmusdcTvl = vaultRows.first().locator("td[data-col=actual] small");
   await expect(vaultRows).toHaveCount(4);
-  await expect(vaultRows.first().locator("td").first()).toHaveText(expected.vault);
+  await expect(rmusdcTvl).toHaveText(expected.vault);
   await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
 
   // THE CONSTRAINT A REVIEWER CHECKS FIRST (RM-115): depositor capital and the
@@ -108,7 +110,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   });
   await navigate(page, "/");
   await navigate(page, "/allocation");
-  await expect(vaultRows.first().locator("td").first()).toHaveText(expected.vault);
+  await expect(rmusdcTvl).toHaveText(expected.vault);
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
 
