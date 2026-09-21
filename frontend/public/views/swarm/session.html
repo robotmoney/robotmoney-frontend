@@ -404,23 +404,28 @@
                             </button>
                             <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
                               <div class="rr-disc__clip"><div class="rr-disc__body">
-                                <div class="rr-views rr-views--stack">
-                                  <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
-                                    <div class="rr-view">
-                                      <a class="rr-lnk" style="justify-self:start" :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
-                                      <template x-if="!takeOf(p.member_id)"><span class="rr-note" style="margin:0">No take</span></template>
-                                      <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
-                                      <template x-if="isEcho(p.view) && takeOf(p.member_id)">
-                                        <p><a class="rr-lnk" :href="`#${takeAnchor(takeOf(p.member_id))}`">Read their take →</a></p>
+                                <!-- One row per member: the stance and confidence their take filed,
+                                     and one way to the take. -->
+                                <div class="rr-tablewrap">
+                                  <table class="rr-table rr-table--compact rr-views-t">
+                                    <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
+                                    <tbody>
+                                      <template x-for="r in viewRows(d)" :key="r.key">
+                                        <tr>
+                                          <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
+                                          <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
+                                          <td class="q" x-text="r.confidence"></td>
+                                          <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
+                                        </tr>
                                       </template>
-                                    </div>
-                                  </template>
+                                    </tbody>
+                                  </table>
                                 </div>
                                 <template x-if="judgeBlocks().length > 1 && d.by.length">
                                   <p class="rr-settles"><span class="rr-k">Raised by</span><br><span x-text="d.by.join(', ')"></span></p>
                                 </template>
                                 <template x-if="d.what_settles">
-                                  <p class="rr-settles"><span class="rr-k">What would settle it</span><br><span x-text="d.what_settles"></span></p>
+                                  <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
                                 </template>
                               </div></div>
                             </div>
@@ -511,20 +516,25 @@
                             </button>
                             <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
                               <div class="rr-disc__clip"><div class="rr-disc__body">
-                                <div class="rr-views rr-views--stack">
-                                  <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
-                                    <div class="rr-view">
-                                      <a class="rr-lnk" style="justify-self:start" :href="memberHref(p.member_id)" x-text="memberById(p.member_id)?.name || takeOf(p.member_id)?.memberName || p.member_id"></a>
-                                      <template x-if="!takeOf(p.member_id)"><span class="rr-note" style="margin:0">No take</span></template>
-                                      <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
-                                      <template x-if="isEcho(p.view) && takeOf(p.member_id)">
-                                        <p><a class="rr-lnk" :href="`#${takeAnchor(takeOf(p.member_id))}`">Read their take →</a></p>
+                                <!-- One row per member: the stance and confidence their take filed,
+                                     and one way to the take. -->
+                                <div class="rr-tablewrap">
+                                  <table class="rr-table rr-table--compact rr-views-t">
+                                    <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
+                                    <tbody>
+                                      <template x-for="r in viewRows(d)" :key="r.key">
+                                        <tr>
+                                          <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
+                                          <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
+                                          <td class="q" x-text="r.confidence"></td>
+                                          <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
+                                        </tr>
                                       </template>
-                                    </div>
-                                  </template>
+                                    </tbody>
+                                  </table>
                                 </div>
                                 <template x-if="d.what_settles">
-                                  <p class="rr-settles"><span class="rr-k">What would settle it</span><br><span x-text="d.what_settles"></span></p>
+                                  <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
                                 </template>
                               </div></div>
                             </div>

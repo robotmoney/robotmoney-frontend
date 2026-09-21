@@ -1755,16 +1755,16 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-list li::before { content: ""; position: absolute; left: 0; top: 0.8em; width: 0.375rem; height: 1px; background: var(--color-text-muted); }
 .rr-block ~ .rr-block { margin-top: 2.25rem; }
 
-/* A disagreement: a question row that opens onto each member's view. */
+/* A disagreement: a question row that opens onto its members, one table row
+   each (.rr-views-t): the stance and confidence their take filed and the one
+   way to it, then what resolves the question. */
 .rr-q .rr-disc__btn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; padding: 1rem 0; }
 .rr-q .rr-disc__btn b { display: block; font-weight: 500; font-size: 0.875rem; }
 .rr-q .rr-disc__btn::after { margin-left: 0; }
-.rr-views { display: grid; gap: 0; }
-.rr-view { display: grid; grid-template-columns: 10rem 11rem minmax(0, 1fr); gap: 0.5rem 1.5rem; padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border); font-size: 0.875rem; line-height: 1.6; }
-.rr-view > p { margin: 0; color: var(--color-text-soft); }
+.rr-views-t { min-width: 28rem; }
+.rr-views-t tbody th small { max-width: 36rem; white-space: normal; line-height: 1.5; }
+.rr-views-t .rr-dim { color: var(--color-text-muted); }
 .rr-settles { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-soft); }
-@media (max-width: 720px) { .rr-view { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
 
 /* A take: hairline-separated, body clamped, proposed weights aside. */
 .rr-take { padding: 1.5rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
@@ -2016,8 +2016,6 @@ a.sv__vfy { text-decoration: none; }
 .rr-pair { margin-top: 2.25rem; align-items: start; }
 .rr-disc--lead > .rr-disc__anim > .rr-disc__clip > .rr-disc__body { padding-top: 0.5rem; }
 .rr-disc--lead .rr-q:first-of-type { border-top: 0; }
-.rr-views--stack .rr-view { grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; }
-.rr-views--stack .rr-view > p { grid-column: 1 / -1; }
 /* A judge's opinion: its advice on release as a line of words, never a
    status chip, then its own account of the takes. */
 .rr-advice { margin: 0 0 1rem; }

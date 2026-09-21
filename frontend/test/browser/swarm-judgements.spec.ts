@@ -148,10 +148,18 @@ test("a session one judge worked on: its row, its account under it, named in the
   // Its disagreements, matched to the takes on the page.
   await page.getByRole("button", { name: "Where views differ" }).click();
   await page.getByRole("button", { name: /Whether the agent-token sleeve/ }).click();
-  const views = page.locator("#reasoning .rr-view");
-  await expect(views.locator("a.rr-lnk").first()).toHaveText("Athena");
-  // A view that is a take's own body reads as the way to it.
-  await expect(views.nth(1)).toContainText("Read their take →");
+  // One row per member: the stance and confidence their take filed, their
+  // words only when they are not the take's own body, and one way to the take.
+  const views = page.locator("#reasoning .rr-views-t tbody tr");
+  await expect(views.nth(0).locator("th > span")).toHaveText("Athena");
+  await expect(views.nth(0).locator("th small")).toContainText("sized for optionality");
+  await expect(views.nth(0).locator(".sv__stance-badge")).toHaveText("constructive");
+  await expect(views.nth(0).locator("td.q").first()).toHaveText("62%");
+  await expect(views.nth(0).locator("a.rr-lnk")).toHaveAttribute("href", "#take-m-athena");
+  await expect(views.nth(1).locator("th small")).toHaveCount(0);
+  await expect(views.nth(1).locator(".sv__stance-badge")).toHaveText("neutral");
+  await expect(views.nth(1).locator("a.rr-lnk")).toHaveText("Read take");
+  await expect(page.locator("#reasoning .rr-settles", { hasText: "Resolves when" })).toContainText("90-day median");
   // With one judge, who raised a question needs no saying.
   await expect(page.locator("#reasoning .rr-settles", { hasText: "Raised by" })).toHaveCount(0);
 
@@ -295,10 +303,13 @@ test("a judgement's own page: who, which session, its advice, its questions, and
   await expect(page.locator("#judgement .rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(page.locator("#judgement .rr-prose")).toContainText(THEMIS_PROSE);
 
-  // Each view is a way to that member's take: its receipt when it has one.
-  const views = page.locator("#differ .rr-view");
-  await expect(views.nth(0).locator("a").first()).toHaveAttribute("href", "/swarm/takes/take-athena");
-  await expect(views.nth(1)).toContainText("Read their take →");
+  // Each member's row: the stance its take filed, and one way to the take,
+  // its receipt when it has one.
+  const views = page.locator("#differ .rr-views-t tbody tr");
+  await expect(views.nth(0).locator(".sv__stance-badge")).toHaveText("constructive");
+  await expect(views.nth(0).locator("a.rr-lnk")).toHaveAttribute("href", "/swarm/takes/take-athena");
+  await expect(views.nth(1).locator("a.rr-lnk")).toHaveText("Read take");
+  await expect(page.locator("#differ .rr-settles")).toContainText("Resolves when");
   await expect(page.locator("#differ .rr-settles")).toContainText("90-day median");
 
   const prompt = page.locator("#provenance dd").first();

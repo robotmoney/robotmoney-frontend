@@ -72,24 +72,32 @@
         </section>
 
         <!-- Where it found the takes apart, each question open: every member's
-             view, a way to that member's take, and what would settle it. -->
+             stance and confidence, a way to their take, and the observation
+             that would show which side was right ("Resolves when"). -->
         <section class="rr-sec" id="differ" aria-labelledby="differ-h">
           <div class="rr-sec__head"><h2 class="rr-sec__h" id="differ-h">Where views differ</h2></div>
           <template x-for="d in judgement.disagreements" :key="d.topic">
             <div class="rr-block jd-q">
               <p class="jd-q__t" x-text="d.topic"></p>
-              <div class="rr-views rr-views--stack">
-                <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
-                  <div class="rr-view">
-                    <a class="rr-lnk" style="justify-self:start" :href="positionHref(p)" x-text="positionName(p)"></a>
-                    <template x-if="!takeOf(p.member_id) && takes.length"><span class="rr-note" style="margin:0">No take</span></template>
-                    <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
-                    <template x-if="isEcho(p.view)"><p><a class="rr-lnk" :href="positionHref(p)">Read their take →</a></p></template>
-                  </div>
-                </template>
+              <!-- One row per member: the stance and confidence their take filed,
+                   and one way to the take. -->
+              <div class="rr-tablewrap">
+                <table class="rr-table rr-table--compact rr-views-t">
+                  <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
+                  <tbody>
+                    <template x-for="r in viewRows(d)" :key="r.key">
+                      <tr>
+                        <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
+                        <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
+                        <td class="q" x-text="r.confidence"></td>
+                        <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
               </div>
               <template x-if="d.what_settles">
-                <p class="rr-settles"><span class="rr-k">What would settle it</span><br><span x-text="d.what_settles"></span></p>
+                <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
               </template>
             </div>
           </template>
@@ -133,7 +141,7 @@
 
   <style>
     /* Page-local: a question the judge found the takes apart on, open, as a
-       hairline block. Its views are the session page's (.rr-view). */
+       hairline block. Its members are the session page's table (.rr-views-t). */
     .jd-q { padding-top: 1rem; border-top: 1px solid var(--color-border); }
     .jd-q__t { margin: 0 0 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
   </style>

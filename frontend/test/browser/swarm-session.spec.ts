@@ -809,11 +809,12 @@ test("a renamed member's session links address the public handle, never the id t
   await expect(athenaTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/macro-desk");
   await expect(athenaTake.locator(".sv__avatar--mark")).toHaveAttribute("href", "/swarm/members/macro-desk");
 
-  // The disagreement panel holds no handle of its own — only the signed
-  // member_id — so a handle here proves the ROSTER carried it through
-  // camelMember. This link was /swarm/members/athena before the fix.
-  const athenaPosition = page.locator("#views-differ .rr-view").filter({ hasText: "Athena" });
-  await expect(athenaPosition.locator("a.rr-lnk").first()).toHaveAttribute("href", "/swarm/members/macro-desk");
+  // The disagreement panel names the member through the ROSTER (it holds only
+  // the signed member_id) and links no member page: its one link per row is
+  // the member's take card on this page. The byline is the member link.
+  const athenaPosition = page.locator("#views-differ .rr-views-t tbody tr").filter({ hasText: "Athena" });
+  await expect(athenaPosition.locator("a.rr-lnk")).toHaveAttribute("href", /^#take-/);
+  await expect(athenaPosition.locator('a[href^="/swarm/members/"]')).toHaveCount(0);
 
   // An unrenamed member (handle === id) is unaffected: the same address as
   // before migration 0030, which is what keeps every published link alive.
@@ -868,15 +869,16 @@ test("a renamed member that is later DEACTIVATED still gets one address from bot
 
   // The disagreement position, found by its view text rather than by a member
   // name: the panel's label is roster-derived and falls back to the signed id
-  // for a member the roster dropped. The href is what this issue is about.
-  const athenaPosition = page.locator("#views-differ .rr-view").filter({ hasText: "The long end is where this breaks." });
-  await expect(athenaPosition.locator("a.rr-lnk").first()).toHaveAttribute("href", "/swarm/members/macro-desk");
+  // for a member the roster dropped. Its one link is the take card on this
+  // page, never a member address that could disagree with the byline's.
+  const athenaPosition = page.locator("#views-differ .rr-views-t tbody tr").filter({ hasText: "The long end is where this breaks." });
+  await expect(athenaPosition.locator("a.rr-lnk")).toHaveAttribute("href", /^#take-/);
 
   // The unrenamed, still-active member is unaffected.
   const dracoTake = page.locator(".rr-take").filter({ hasText: "RENAME MARKER — draco take body." });
   await expect(dracoTake.locator(".sv__member-link")).toHaveAttribute("href", "/swarm/members/draco");
-  const dracoPosition = page.locator("#views-differ .rr-view").filter({ hasText: "Trim the tail first." });
-  await expect(dracoPosition.locator("a.rr-lnk").first()).toHaveAttribute("href", "/swarm/members/draco");
+  const dracoPosition = page.locator("#views-differ .rr-views-t tbody tr").filter({ hasText: "Trim the tail first." });
+  await expect(dracoPosition.locator("a.rr-lnk")).toHaveAttribute("href", /^#take-/);
 
   // ONE ADDRESS PER MEMBER, stated as a set rather than as two separate
   // equalities: this fails if EITHER link site regresses to the legacy id,
@@ -1128,9 +1130,12 @@ test("an archived allocation session measures its outcome against the targets it
   await expect(page.locator(".rr-sec__h")).toHaveText(["The recommendation", "Reasoning & disagreement", "Member takes", "Evidence & provenance"]);
   await expect(page.locator("#members-agree li")).toHaveCount(4);
   await expect(page.locator("#views-differ .rr-q")).toHaveCount(3);
-  // A view carries no stance chip: the member's stance and confidence are their take card's.
-  await expect(page.locator("#views-differ .rr-view").filter({ hasText: "Cut to 2%" }).locator(".ss-stance")).toHaveCount(0);
-  await expect(page.locator("#views-differ .rr-view").filter({ hasText: "Cut to 2%" }).locator(".rr-note")).toHaveCount(0);
+  // A view's row carries the stance and confidence the member's take filed,
+  // the member's words under the name, and the way to the take.
+  const cut = page.locator("#views-differ .rr-views-t tbody tr").filter({ hasText: "Cut to 2%" });
+  await expect(cut.locator(".sv__stance-badge")).toHaveCount(1);
+  await expect(cut.locator("td.q").first()).toHaveText(/^\d+%$/);
+  await expect(cut.locator("a.rr-lnk")).toHaveAttribute("href", /^#take-/);
   await expect(page.locator("#take-athena .sv__stance-badge")).toHaveText("cautious");
   await expect(page.locator("#take-athena .rr-conf")).toHaveText("Confidence 68%");
   await expect(page.locator(".rr-take")).toHaveCount(3);

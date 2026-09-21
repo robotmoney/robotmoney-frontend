@@ -890,6 +890,23 @@ export function registerStaticViews(Alpine) {
       const n = norm(text);
       return !!n && this.takes.some((t) => norm(t.body) === n);
     },
+    // A question's members as rows (views-table): the stance and confidence
+    // their take filed, and one way to it. Their view in words only when it
+    // is not their take's own body. With the takes not loaded, the way is to
+    // the session's takes; with them loaded and none of this member's, none.
+    viewRows(d) {
+      return (d?.positions || []).map((p) => {
+        const t = this.takeOf(p.member_id);
+        return {
+          key: `${d.topic}-${p.member_id}`,
+          name: this.positionName(p),
+          stance: t ? String(t.stance || "").toLowerCase() : "",
+          confidence: t && Number.isFinite(Number(t.confidence)) ? this.fmtPct(t.confidence) : "",
+          href: t || !this.takes.length ? this.positionHref(p) : null,
+          view: this.isEcho(p.view) ? "" : p.view || "",
+        };
+      });
+    },
   }));
 
   // Public application-status poller (docs/architecture.md §11 R2), the page
@@ -3672,6 +3689,23 @@ export function registerStaticViews(Alpine) {
     },
     // Where a take card sits on this page, for the index above the cards.
     takeAnchor(t) { return `take-${String(t?.memberId || t?.id || "").replace(/[^A-Za-z0-9_-]/g, "")}`; },
+    // A question's members as rows (views-table): the stance and confidence
+    // their take filed, and one way to it, its card on this page. Their view
+    // in words only when it is not their take's own body (a v0 member wrote a
+    // line of their own).
+    viewRows(d) {
+      return (d?.positions || []).map((p) => {
+        const t = this.takeOf(p.member_id);
+        return {
+          key: `${d.topic}-${p.member_id}`,
+          name: this.memberById(p.member_id)?.name || t?.memberName || p.member_id,
+          stance: t ? String(t.stance || "").toLowerCase() : "",
+          confidence: t && Number.isFinite(Number(t.confidence)) ? this.fmtPct(t.confidence) : "",
+          href: t ? `#${this.takeAnchor(t)}` : null,
+          view: this.isEcho(p.view) ? "" : p.view || "",
+        };
+      });
+    },
     // THE DISCUSSION, when somebody wrote it. A live aggregate's consensus,
     // disagreements and synthesis are templates over the stance tally, the
     // quorum, the mean confidence and the regime percentile (domain.ts
