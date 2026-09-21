@@ -56,7 +56,7 @@ interface StubRequest { method: string; path: string; auth: string | null }
 function startStubApi(expectedToken: string) {
   const requests: StubRequest[] = [];
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       const auth = req.headers.get("Authorization");

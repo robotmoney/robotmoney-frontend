@@ -213,7 +213,7 @@ test("a brief API outage is tolerated; a sustained one withholds the heartbeat",
 function readinessFixture(expectedToken: string): { server: ReturnType<typeof Bun.serve>; requests: string[] } {
   const requests: string[] = [];
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url);
       requests.push(url.pathname);

@@ -55,7 +55,7 @@ test(
     const TOKEN = "tok_analytics_parity_sweep_dispatch";
     const requests: { method: string; path: string; auth: string | null }[] = [];
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });

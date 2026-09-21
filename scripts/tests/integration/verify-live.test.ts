@@ -74,7 +74,7 @@ const MEMBER = (id: string, status = "active"): StubMember => ({ id, handle: id,
 /** A stub serving exactly the routes the legs read. */
 function serve(sessions: StubSession[], opts: { healthy?: boolean; members?: StubMember[] } = {}): string {
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/health") {

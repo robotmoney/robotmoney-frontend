@@ -93,7 +93,7 @@ test("serve validates the credential with the API before arming either schedule"
   const expectedToken = "correct-producer-secret";
   const requests: string[] = [];
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url);
       requests.push(`${url.pathname}:${req.headers.get("authorization") ?? "none"}`);

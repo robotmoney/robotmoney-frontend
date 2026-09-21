@@ -228,7 +228,7 @@ test(
     // Real Bun server wrapping the REAL analytics route handler (same code the
     // api process mounts), recording every request it serves.
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });
