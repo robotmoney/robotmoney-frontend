@@ -125,7 +125,7 @@
             </figure>
             <div class="rr-legend" :class="hasActual() ? 'rr-legend--cols' : ''">
               <template x-if="hasActual()">
-                <div class="rr-legend__head" aria-hidden="true"><span></span><span>Sleeve</span><span>Target</span><span>Actual</span><span>Gap</span></div>
+                <div class="rr-legend__head" aria-hidden="true"><span></span><span>Sleeve</span><span>Target</span><span>Actual</span><span>Drift</span></div>
               </template>
               <template x-for="r in explorerRows()" :key="r.key">
                 <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
@@ -136,7 +136,7 @@
                   <span><span class="rr-legend__l" x-text="r.label"></span><template x-if="hasActual() && bucketShort(r.label)"><span class="rr-legend__s" aria-hidden="true" x-text="bucketShort(r.label)"></span></template></span>
                   <b x-text="fmtPctTrim(r.pct)"></b>
                   <template x-if="hasActual()"><span class="rr-legend__was"><span class="rr-sr">Actual </span><span x-text="r.actual == null ? '—' : fmtPctTrim(r.actual)"></span></span></template>
-                  <template x-if="hasActual()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Gap </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
+                  <template x-if="hasActual()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Drift </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
                 </button>
               </template>
             </div>
@@ -241,7 +241,7 @@
        router's once it reports them and the published policy's until then
        (Base today), the same targets the ring above draws; Actual each
        vault's share of the four vaults' TVL. The governance gap is target
-       minus recommended (a recommendation not applied), the flow gap actual
+       minus recommended (a recommendation not applied), drift (RM-97) actual
        minus target (RM-115): on Base the ring's gap, both measured against
        the policy. On the devnet the router's weights are the target, and the
        fixture's policy is not what its router applied. With no target to read there is
@@ -289,7 +289,7 @@
               <template x-if="threeLayers()"><th scope="col" class="q">Target</th></template>
               <th scope="col" class="q">Actual</th>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Governance gap</th></template>
-              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Flow gap</th></template>
+              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Drift</th></template>
               <template x-if="!threeLayers()"><th scope="col" class="q">Gap</th></template>
             </tr>
           </thead>

@@ -134,7 +134,7 @@
                     </figcaption>
                   </figure>
                   <div class="rr-legend rr-legend--cols" :class="allocBasis().length > 8 ? 'rr-legend--long' : ''">
-                    <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Actual</span><span x-text="allocBasis()"></span><span>Gap</span></div>
+                    <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Actual</span><span x-text="allocBasis()"></span><span x-text="gapName()"></span></div>
                     <template x-for="r in explorerRows()" :key="r.key">
                       <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
                               :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
@@ -144,7 +144,7 @@
                         <span><span class="rr-legend__l" x-text="r.label"></span></span>
                         <b x-text="r.pct == null ? '—' : fmtPctTrim(r.pct)"></b>
                         <span class="rr-legend__was"><span class="rr-sr" x-text="`${allocBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span>
-                        <span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Gap </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span>
+                        <span class="rr-legend__d"><span class="rr-sr" x-show="r.d" x-text="`${gapName()} `"></span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span>
                       </button>
                     </template>
                   </div>

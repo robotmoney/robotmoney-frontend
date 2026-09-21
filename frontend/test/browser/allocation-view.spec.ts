@@ -226,7 +226,7 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 const vaultRows = (page: Page) => page.locator("#vaults tbody tr");
 const figures = (page: Page, i: number) => vaultRows(page).nth(i).locator("td > span:first-child");
 const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
-const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Flow gap"];
+const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Drift"];
 // The overview has answered once the combined TVL has a value.
 async function vaultsLoaded(page: Page) {
   await expect(vaultRows(page)).toHaveCount(4);
@@ -443,12 +443,12 @@ test("the ring's legend sets each sleeve's actual share against its target", asy
   await navigate(page, "/allocation");
   await vaultsLoaded(page);
 
-  await expect(page.locator(".alp__ring .rr-legend__head")).toHaveText("SleeveTargetActualGap");
+  await expect(page.locator(".alp__ring .rr-legend__head")).toHaveText("SleeveTargetActualDrift");
   const rows = page.locator(".alp__ring .rr-legend__row");
   await expect(rows.nth(0).locator("> b")).toHaveText("95%");
   await expect(rows.nth(0).locator(".rr-legend__was")).toHaveText("Actual 100%");
-  await expect(rows.nth(0).locator(".rr-legend__d")).toHaveText("Gap +5 pp");
-  await expect(rows.nth(1).locator(".rr-legend__d")).toHaveText("Gap −5 pp");
+  await expect(rows.nth(0).locator(".rr-legend__d")).toHaveText("Drift +5 pp");
+  await expect(rows.nth(1).locator(".rr-legend__d")).toHaveText("Drift −5 pp");
   // No gap, no figure: an empty cell rather than "0 pp".
   await expect(rows.nth(2).locator(".rr-legend__d .alp__mv")).toHaveCount(0);
   // The four vaults' combined holdings are the vault subject's.

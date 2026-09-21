@@ -278,6 +278,9 @@ export function registerVaultView(Alpine) {
     // Named apart from the explorer's own legendBasis(), which the nested
     // component would otherwise answer first.
     allocBasis() { return this.threeLayers() ? "Target" : "Recommended"; },
+    // Actual against the target is drift (RM-97); against a recommendation,
+    // with no target to read, it is only a gap.
+    gapName() { return this.threeLayers() ? "Drift" : "Gap"; },
     hasBook() { return false; },
     fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
     changeClass(d) { return weightChange.changeClass(d); },
