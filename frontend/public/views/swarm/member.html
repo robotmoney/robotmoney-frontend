@@ -27,10 +27,13 @@
           <div class="sv__avatar sv__avatar--mark rr-profile__mark"
                x-html="memberMark(member.keyFingerprint || member.id, member.name, 72, member.avatar?.path, member.handle)"></div>
           <div>
-            <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
-            <!-- A judge files no take: it explains the takes and advises on
-                 release. The role is a label, as a bias is. -->
-            <template x-if="isJudge(member)"><ul class="rr-tags rr-profile__role"><li>Judge</li></ul></template>
+            <!-- Every member's role, beside the name: an analyst files takes,
+                 a judge files none and explains them. Beside, not under, so
+                 the tagline keeps its place under the name. -->
+            <div class="rm-named">
+              <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
+              <span class="rm-role" x-text="roleLabel(member)"></span>
+            </div>
             <p class="sv__lede sv__lede--compact profile-role" x-show="memberTagline(member)" x-text="memberTagline(member)"></p>
           </div>
         </header>

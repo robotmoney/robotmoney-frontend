@@ -486,7 +486,7 @@ export const sessionSummary = {
     if ((rec.quorum || rec.stances) && !judgeWroteRationale(s)) return "";
     return rec.rationale || "";
   },
-  // "Judge · <name>" over a rationale a judge wrote, "" over any other. The
+  // The Judge pill and name over a rationale a judge wrote, "" over any other. The
   // name resolves through the roster when the surface holds one.
   /** @param {any} s @param {any[]} [roster] */
   rationaleJudgeLabel(s, roster = []) {

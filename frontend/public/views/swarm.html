@@ -80,7 +80,7 @@
               <thead>
                 <tr>
                   <th scope="col">Member</th>
-                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">A <b>proposer</b> files one signed take each session: position, reasoning and sources.<template x-if="hasJudge()"><span> A <b>judge</b> files no take. It explains the takes and advises on release.</span></template></span></span></th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">An <b>analyst</b> files one signed take each session: position, reasoning and sources.<template x-if="hasJudge()"><span> A <b>judge</b> files no take. It explains the takes and advises on release.</span></template></span></span></th>
                   <th scope="col" class="q">Operator</th>
                 </tr>
               </thead>
@@ -96,7 +96,7 @@
                         </span>
                       </span>
                     </th>
-                    <td x-text="memberRole(m)"></td>
+                    <td><span class="rm-role" x-text="memberRole(m)"></span></td>
                     <td class="q" x-text="operatorLabel(m) || '—'"></td>
                   </tr>
                 </template>

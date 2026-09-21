@@ -127,7 +127,8 @@ test("a session one judge worked on: its block, its advice in words, named in th
   const blocks = page.locator("#reasoning .rr-judge");
   await expect(blocks).toHaveCount(1);
   const block = blocks.first();
-  await expect(block.locator(".rr-k").first()).toHaveText("Judge · Themis");
+  await expect(block.locator(".rr-k").first()).toHaveText("Judge Themis");
+  await expect(block.locator(".rr-k .rm-role").first()).toHaveText("Judge");
   await expect(block.locator(".rr-k a")).toHaveAttribute("href", "/swarm/members/themis");
   // The count is the line's; the backend's own sentence for it is not listed again.
   await expect(block.locator(".rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
@@ -167,7 +168,7 @@ test("two judges, two blocks: each one's opinion, and a safe call prints nothing
 
   const blocks = page.locator("#reasoning .rr-judge");
   await expect(blocks).toHaveCount(2);
-  await expect(blocks.locator(":scope > .rr-k")).toHaveText(["Judge · Robot Money", "Judge · Themis"]);
+  await expect(blocks.locator(":scope > .rr-k")).toHaveText(["Judge Robot Money", "Judge Themis"]);
   // The house judge has no member page, and its safe call says nothing.
   await expect(blocks.nth(0).locator(".rr-k a")).toHaveCount(0);
   await expect(blocks.nth(0).locator(".rr-advice")).toHaveCount(0);
@@ -188,7 +189,7 @@ test("the judgement routes answering 404: the judge the recommendation names sta
 
   const block = page.locator("#reasoning .rr-judge");
   await expect(block).toHaveCount(1);
-  await expect(block.locator(":scope > .rr-k")).toHaveText("Judge · Themis");
+  await expect(block.locator(":scope > .rr-k")).toHaveText("Judge Themis");
   await expect(block.locator(".rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
   await expect(block.getByRole("button", { name: "Where views differ" })).toBeVisible();
   await expect(block.locator("a.rr-cta")).toHaveCount(0);
@@ -275,7 +276,8 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   }, seen);
   await page.goto("/swarm/members/themis");
 
-  await expect(page.locator(".rr-profile .rr-tags li")).toHaveText("Judge");
+  // The role pill beside the name, as every member's page wears one.
+  await expect(page.locator(".rr-profile .rm-named .rm-role")).toHaveText("Judge");
   const fact = (k: string) => page.locator(".rr-meta .rr-meta__i", { hasText: k }).locator("b");
   await expect(fact("Sessions judged")).toHaveText("2");
   await expect(fact("Holds advised")).toHaveText("1");
@@ -314,7 +316,7 @@ test("a member's page before the role existed reads as it always has", async ({ 
   }, seen);
   await page.goto("/swarm/members/athena");
   await expect(page.locator("#record .rr-empty__t")).toHaveText("No takes filed yet");
-  await expect(page.locator(".rr-profile .rr-tags")).toHaveCount(0);
+  await expect(page.locator(".rr-profile .rm-named .rm-role")).toHaveText("Analyst");
   expect(seen.filter((p) => p.includes("/judgements"))).toEqual([]);
 });
 
@@ -370,13 +372,14 @@ test("/swarm: a judge's role, members counted without it, and its words on the a
   await page.goto("/swarm");
 
   const themis = page.locator(".rr-members tbody tr", { hasText: "Themis" });
-  await expect(themis.locator("td").first()).toHaveText("judge");
-  await expect(page.locator(".rr-members tbody tr", { hasText: "Athena" }).locator("td").first()).toHaveText("proposer");
+  await expect(themis.locator("td .rm-role")).toHaveText("Judge");
+  // Every seat wears its role in the same pill: an analyst unless it judges.
+  await expect(page.locator(".rr-members tbody tr", { hasText: "Athena" }).locator("td .rm-role")).toHaveText("Analyst");
   await expect(page.locator(".rr-members thead .rm-tip__bub")).toContainText("A judge files no take. It explains the takes and advises on release.");
   await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Members" }).locator("b")).toHaveText("5");
 
   const alloc = page.locator("#allocation");
-  await expect(alloc.locator(".rr-k", { hasText: "Judge" })).toHaveText("Judge · Themis");
+  await expect(alloc.locator(".rr-k", { hasText: "Judge" })).toHaveText("Judge Themis");
   await expect(alloc.locator(".rr-prose")).toContainText("none argues for moving the target");
   await expect(alloc.locator(".rr-counts em")).toHaveText("4 of 5 took part · 60% mean confidence");
   await noSafe(page);

@@ -26,7 +26,7 @@ import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
   referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { analystCount, isJudge } from "../../lib/judgements.js";
+import { analystCount, isJudge, roleLabel } from "../../lib/judgements.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
 // signature seal's wording and mark, the receipt link, and the take body's
@@ -43,11 +43,9 @@ const takeCardHost = {
   linkified: helpers.linkified,
 };
 
-// A seat proposes unless the roster says it judges. The projection emits
-// `role` since #1017 ("member" | "judge"); a roster from before it has none,
-// and every seat on it proposes. RM-97's roles table.
-const DEFAULT_ROLE = "proposer";
-const JUDGE_ROLE = "judge";
+// A seat is an analyst unless the roster says it judges (lib/judgements.js
+// roleLabel). The projection emits `role` since #1017 ("member" | "judge"); a
+// roster from before it has none, and every seat on it is an analyst.
 
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
@@ -664,7 +662,7 @@ export function registerSwarmView(Alpine) {
     },
 
     // ── members ──────────────────────────────────────────────────────────
-    memberRole(m) { return isJudge(m) ? JUDGE_ROLE : DEFAULT_ROLE; },
+    memberRole(m) { return roleLabel(m); },
     // The Role tip describes a judge only once one is seated.
     hasJudge() { return this.members.some(isJudge); },
     // The seats beside the Apply button: how many are open, of how many. The

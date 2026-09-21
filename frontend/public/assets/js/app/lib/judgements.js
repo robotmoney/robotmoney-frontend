@@ -29,7 +29,7 @@ export const JUDGEMENT_ROUTES = {
 // The house's own judge, as the backend spells it when no seated member
 // judged. The house member reads "Robot Money" everywhere
 // (data/swarm/manifests/members/robotmoney.json), and every place this name
-// shows already says "Judge" beside it ("Judge · Robot Money", "Judged by").
+// shows already says "Judge" beside it (the role pill, "Judged by").
 export const HOUSE_JUDGE_ID = "robotmoney-in-house";
 export const HOUSE_JUDGE_NAME = "Robot Money";
 
@@ -38,6 +38,12 @@ export const MEMBER_JUDGEMENTS_MAX = 100;
 
 /** @param {any} member */
 export function isJudge(member) { return member?.role === "judge"; }
+
+// A member's role as the site names it, in the role pill (.rm-role) wherever a
+// role shows: "Judge" for a judge, "Analyst" for every other seat (the
+// roster's `role: "member"`, and a roster from before #1017 that has none).
+/** @param {any} member */
+export function roleLabel(member) { return isJudge(member) ? "Judge" : "Analyst"; }
 
 /**
  * The public DTO, read tolerantly: camelCase as the route serves it, and the
@@ -156,15 +162,17 @@ export function judgeHref(j, roster = []) {
 /** @param {unknown} v */
 const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] || ch);
 
-// "Judge · Themis", the name a way to its member page when it has one; plain
-// "Judge" when the record does not say who. Bound with x-html: the name comes
-// from a member's own profile, so it and the address are escaped here.
+// The role pill, then the judge's name, a way to its member page when it has
+// one; the pill alone when the record does not say who. Bound with x-html: the
+// name comes from a member's own profile, so it and the address are escaped
+// here.
+const JUDGE_PILL = '<span class="rm-role">Judge</span>';
 /** @param {any} j @param {any[]} [roster] */
 export function judgeLabelHtml(j, roster = []) {
   const name = judgeName(j, roster);
-  if (!name) return "Judge";
+  if (!name) return JUDGE_PILL;
   const href = judgeHref(j, roster);
-  return `Judge · ${href ? `<a class="rr-lnk" href="${escapeHtml(href)}">${escapeHtml(name)}</a>` : escapeHtml(name)}`;
+  return `${JUDGE_PILL} ${href ? `<a class="rr-lnk" href="${escapeHtml(href)}">${escapeHtml(name)}</a>` : escapeHtml(name)}`;
 }
 
 /** @param {any} j */

@@ -27,7 +27,7 @@ import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
-  adviceOf, analystAbsent, analystCount, isJudge, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  adviceOf, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
   MEMBER_JUDGEMENTS_MAX,
 } from "../lib/judgements.js";
@@ -2841,6 +2841,7 @@ export function registerStaticViews(Alpine) {
       return `rm-sphase rm-sphase--${key}`;
     },
     isJudge(m) { return isJudge(m); },
+    roleLabel(m) { return roleLabel(m); },
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
     // Worded, and only for a hold: a "safe" call prints nothing.

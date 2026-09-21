@@ -306,6 +306,18 @@
    flipped and every page audited for what actually needs the accent. */
 .rm-eyebrow--quiet, .sv__eyebrow--quiet { color: var(--color-text-muted); }
 
+/* A member's role, the same pill wherever a role shows (the roster, a
+   member's page, a take, a judgement, a judge's opinion): Analyst or Judge.
+   Mono caps on a hairline, square, and no hue: a role is a fact about the
+   seat, not a state or a value, so it wears no colour of its own. */
+.rm-role { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
+/* A page's title with the role pill beside it, centred on the title's line so
+   the line under the title stays where it was. */
+.rm-named { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.875rem; margin-top: 0.35rem; }
+.rm-named > .sv__detail-title { margin: 0; }
+
 /* loading / error states */
 .rm-loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
 

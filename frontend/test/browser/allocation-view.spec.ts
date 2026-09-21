@@ -561,7 +561,7 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   for (const step of ["Regime", "Takes", "Consensus"]) {
     await expect(how).toContainText(step);
   }
-  // No role nobody holds: the mechanism describes the proposers that file.
+  // No role nobody holds: the mechanism describes the analysts that file.
   await expect(how).not.toContainText("Validators");
   await expect(how.locator('a[href="/regime"]')).toBeVisible();
   await expect(how.locator('a[href="/swarm"]')).toBeVisible();

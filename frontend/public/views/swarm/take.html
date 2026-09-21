@@ -30,7 +30,11 @@
           <!-- The signer's name is the page's subject. The way to their record
                is the breadcrumb, the Signer list and the record link, so the
                title is not a fourth one. -->
-          <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
+          <!-- A take's signer is an analyst: a judge files none. -->
+          <div class="rm-named">
+            <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
+            <span class="rm-role">Analyst</span>
+          </div>
           <!-- A receipt with no filing time is not a receipt. -->
           <p class="rr-when" x-show="take.receivedAt">
             <span>Filed <time :datetime="take.receivedAt" x-text="formatDate(take.receivedAt, 'short')"></time></span>
