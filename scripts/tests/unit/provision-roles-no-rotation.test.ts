@@ -102,10 +102,49 @@ describe("provision-db-role-taxonomy.sh does not rotate passwords by default", (
       ["runtime roles excluded", /IS a member of rm_owner/],
       // What stops the whole class recurring on the next migration.
       ["default privileges", /no default SELECT on TABLES/],
+      // …for SEQUENCES too. That is the half 0053 revoked and never restored,
+      // and the half whose absence breaks pg_dump rather than the app -- so a
+      // check that covered only TABLES would have called the configuration
+      // healthy on the morning the backup refused to run.
+      ["default privileges (sequences)", /no default SELECT on SEQUENCES/],
+      // A table grant is worthless without USAGE on the schema holding it,
+      // and has_table_privilege does not consider USAGE at all.
+      ["schema usage", /no USAGE on schema public/],
+      // 0053 ends with GRANT rm_owner TO current_user, so provisioning as one
+      // login and migrating as another fails at 0054, at deploy time.
+      ["this login holds rm_owner", /does not hold rm_owner membership/],
+      // A role with no password holds every privilege and authenticates for
+      // nobody -- the exact end state of a first bootstrap without
+      // --set-passwords.
+      ["runtime roles can authenticate", /have NO password and cannot authenticate/],
     ];
     for (const [label, re] of required) {
       expect({ label, covered: re.test(verify) }).toEqual({ label, covered: true });
     }
+  });
+
+  test("the verification cannot be aborted by the privileges of the login running it", () => {
+    // Two ways the block killed itself instead of reporting, both found by
+    // executing it rather than reading it:
+    //
+    //   * `has_sequence_privilege` THROWS on a non-sequence, and the planner
+    //     is free to evaluate it before the relkind filter -- it died with
+    //     `ERROR: "pg_statistic" is not a sequence` on a database it had just
+    //     provisioned correctly. MATERIALIZED makes the filter a barrier.
+    //   * passing a table by NAME makes the CALLER resolve it, which needs
+    //     USAGE on schema public -- which 0053 revokes from everyone but the
+    //     three runtime roles. A bootstrap login that did not inherit it from
+    //     rm_owner got `permission denied for schema public`, losing every
+    //     other finding including the one naming that as the cause.
+    // Live SQL only: both hazards are named in the comments that explain them.
+    const verify = sh
+      .slice(sh.indexOf("Verifying the resulting role configuration"))
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n");
+    expect(verify).toMatch(/AS MATERIALIZED/);
+    expect(verify).not.toMatch(/has_(table|sequence)_privilege\([^)]*format\(/);
+    expect(verify).not.toMatch(/to_regclass/);
   });
 
   test("the closing message no longer asserts outcomes it has not checked", () => {

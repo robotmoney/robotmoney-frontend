@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Human-run production break-glass helper for issue #692.
-# The helper never prints, writes, or logs a password.  It reads a postgres URL
-# from the given .env file (MIGRATE_DATABASE_URL, falling back to DATABASE_URL).
-# Auth resolves in three tiers: a password embedded in the URL authenticates
-# directly; a URL without one is completed from the .env's own POSTGRES_PASSWORD
-# key when present; otherwise psql's --password flag prompts interactively.
+# The helper never prints, writes, or logs a password.  It takes a FILE on its
+# command line, never a URL, and reads the connection out of it: either the
+# discrete-token form every other consumer of $HOME/.env uses
+# (scripts/lib/env-role.ts, issue #699) or a legacy MIGRATE_DATABASE_URL /
+# DATABASE_URL line.
+#
+# Auth resolves ONCE, in this order: the bootstrap role's own `<role> = <pw>`
+# line, then POSTGRES_PASSWORD, then a single interactive prompt -- and reaches
+# psql through a 0600 PGPASSFILE rather than a URL on its argv.  A .env that
+# embeds the password in the URL is the one legacy shape still passed through
+# as-is; see the auth block below for why, and what it costs.
 #
 # THIS SCRIPT DOES NOT CREATE ACCOUNTS OR CHANGE PASSWORDS.
 #
@@ -27,7 +33,12 @@
 # prompted, and only a first-time bootstrap should need it.
 #
 # Role CREATION is likewise non-destructive: 0053 guards every CREATE ROLE with
-# IF NOT EXISTS, so an existing role keeps its password and its grants.
+# IF NOT EXISTS, so an existing role keeps its password and its grants.  That
+# was true of three roles and not the fourth until 2026-09-21: 0053 only
+# RE-ATTRIBUTED rm_worker (0016's role) and never created it, so this script --
+# the one path that applies 0053 with no migration having run first -- aborted
+# on `role "rm_worker" does not exist` against any cluster that had not already
+# been migrated.  0053 now guards all four.
 set -euo pipefail
 
 set_passwords=0
@@ -57,7 +68,9 @@ if [[ ${#args[@]} -ne 1 ]]; then
   echo "       <role> = <password>      e.g.  doadmin = ..." >&2
   echo "--role names the bootstrap login for form 2 (default: doadmin). It needs" >&2
   echo "CREATEROLE and, after 0053, rm_owner membership." >&2
-  echo "Auth: URL-embedded password, else the role's line, else POSTGRES_PASSWORD, else psql prompts." >&2
+  echo "Auth, resolved once and passed to psql via a 0600 PGPASSFILE (never on its argv):" >&2
+  echo "  the '<role> = <password>' line, else POSTGRES_PASSWORD, else ONE prompt." >&2
+  echo "  (A password embedded in a legacy URL is used as-is, and is visible in ps.)" >&2
   echo >&2
   echo "By default this command changes NO password and creates no account -- it is safe to re-run." >&2
   echo "--set-passwords additionally prompts for rm_app, rm_worker and rm_readonly. Every host's" >&2
@@ -91,7 +104,18 @@ done
 # "no MIGRATE_DATABASE_URL or DATABASE_URL" -- correct, and useless.
 discrete_pw=""
 if [[ -z "$url" ]]; then
-  ev() { sed -nE "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$env_file" | head -1 | tr -d '\042\047'; }
+  # The trailing \r strip is not defensive padding. scripts/lib/env-role.ts --
+  # the TypeScript resolver for this SAME file -- trims each line, so a `.env`
+  # pasted out of the DigitalOcean panel through a Windows clipboard (CRLF)
+  # parses correctly for every OTHER consumer in the family and parsed
+  # correctly here only up to the carriage return: `host = db.example.com\r`
+  # built `postgres://doadmin@db.example.com<CR>:25060<CR>/defaultdb<CR>` and
+  # psql failed on a hostname whose corruption is invisible in a terminal.
+  # Same input, same file, two readers: they have to agree.
+  ev() {
+    sed -nE "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$env_file" \
+      | head -1 | tr -d '\r' | sed -E 's/[[:space:]]+$//' | tr -d '\042\047'
+  }
   d_host="$(ev host)"; d_port="$(ev port)"; d_db="$(ev database)"; d_ssl="$(ev sslmode)"
   discrete_pw="$(ev "$admin_role")"
   if [[ -n "$d_host" && -n "$d_db" ]]; then
@@ -112,77 +136,106 @@ if [[ -z "$url" ]]; then
   exit 64
 fi
 
-# Inject :password into the URL's userinfo, percent-encoding anything outside
-# the unreserved set so the value cannot corrupt the URL. Never printed.
-url_with_password() {
-  local base="$1" pw="$2" scheme rest userinfo hostpart out="" s c enc
-  scheme="${base%%://*}"
-  rest="${base#*://}"
-  userinfo="${rest%%@*}"
-  hostpart="${rest#*@}"
-  s="$pw"
-  while [[ -n "$s" ]]; do
-    c="${s:0:1}"
-    case "$c" in
-      [A-Za-z0-9._~-]) out+="$c" ;;
-      *) printf -v enc '%%%02X' "'$c"; out+="$enc" ;;
-    esac
-    s="${s:1}"
-  done
-  printf '%s://%s:%s@%s' "$scheme" "$userinfo" "$out" "$hostpart"
-}
-
-# Auth resolution: a password embedded in the URL authenticates directly; a
-# URL without one is completed from the .env's own POSTGRES_PASSWORD key when
-# present; otherwise psql --password prompts interactively for the credential.
-password_flag=(-W)
+# Auth resolution, and WHY THE PASSWORD TRAVELS IN THE ENVIRONMENT.
+#
+# This script used to inject the password into the URL's userinfo and hand the
+# result to psql as a positional argument. Two things were wrong with that.
+#
+#  1. IT PUT THE CREDENTIAL IN argv, where `ps`, `/proc/<pid>/cmdline` and any
+#     process accounting on the box can read it for the life of the run. The
+#     header above, and deployment.md §4.3.1, both claimed this script "never
+#     prints, writes, logs, or accepts credentials as command-line arguments".
+#     The second half was true -- it takes a FILE, never a URL, on its own
+#     command line -- and the first half was not: it built one and passed it
+#     on psql's. A PGPASSFILE is a 0600 file read by libpq and removed on
+#     exit -- narrower than PGPASSWORD, which sits in /proc/<pid>/environ.
+#
+#  2. IT PROMPTED THREE TIMES, or four with --set-passwords. Without a password
+#     to inject, every psql invocation carried -W and prompted independently
+#     for the SAME bootstrap credential: once for 0053, once for 0062, once for
+#     the verification. An operator who typed it correctly twice and fumbled
+#     the third got a script that had applied 0053, applied 0062, and then
+#     aborted before verifying -- and the only way to tell that apart from a
+#     clean run was to have watched the scrollback.
+#
+# So the password is resolved ONCE, here, into a variable that is never echoed,
+# and every psql call goes through run_psql below. The one shape that still
+# authenticates from the URL is a .env that embeds the password in the URL
+# itself: percent-decoding that back out to re-encode it is a way to corrupt a
+# working credential, and it is the legacy form the discrete convention
+# replaced. It is passed through unchanged, with its argv caveat intact.
+pgpassword=""
 case "$url" in
   *://*:*@*)
-    password_flag=()
     echo "authenticating with the password embedded in $source_var" >&2
+    echo "NOTE: that URL is passed to psql as an argument and is briefly visible in ps." >&2
+    echo "      The discrete-token form (scripts/lib/env-role.ts) avoids this." >&2
     ;;
   *://*@*)
     # A discrete-token file carries the password on the role's own line.
     if [[ -n "$discrete_pw" ]]; then
-      url="$(url_with_password "$url" "$discrete_pw")"
-      password_flag=()
+      pgpassword="$discrete_pw"
       echo "built the connection from the '$admin_role' line in $env_file" >&2
-    elif pw="$(grep -m1 '^POSTGRES_PASSWORD=' "$env_file" | cut -d= -f2-)"; then
-      if [[ -n "$pw" ]]; then
-        url="$(url_with_password "$url" "$pw")"
-        password_flag=()
-        echo "built the connection with POSTGRES_PASSWORD from $env_file" >&2
+    elif pw="$(grep -m1 '^POSTGRES_PASSWORD=' "$env_file" | cut -d= -f2-)" && [[ -n "$pw" ]]; then
+      pgpassword="$pw"
+      echo "built the connection with POSTGRES_PASSWORD from $env_file" >&2
+    else
+      # No credential in the file at all. Ask once, rather than letting each
+      # psql ask for itself. A non-interactive caller gets a diagnosis naming
+      # the line to add instead of a psql prompt reading from a pipe.
+      if [[ ! -t 0 ]]; then
+        echo "no password for '$admin_role' in $env_file, and stdin is not a terminal." >&2
+        echo "Add a '$admin_role = <password>' line to that file (see .env.example)," >&2
+        echo "or run this command interactively." >&2
+        exit 64
       fi
+      read -rsp "Password for $admin_role (not echoed, not stored): " pgpassword
+      echo >&2
+      [[ -n "$pgpassword" ]] || { echo "empty password; refusing to continue." >&2; exit 64; }
     fi
     ;;
 esac
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# ONE PROMPT, not one per psql. This script makes four separate psql calls, so
-# -W asked the operator for the same password four times in a single run --
-# observed on the first production use. Prompt once here and hand psql a
-# 0600 PGPASSFILE for the rest of the run, removed on every exit path.
-# PGPASSFILE rather than PGPASSWORD or a URL-embedded password: the first is
-# readable in /proc/<pid>/environ, and the second lands in the process's argv.
-if [[ ${#password_flag[@]} -gt 0 ]]; then
-  read -rsp "Password for $admin_role: " _pw
-  echo
+# ONE CREDENTIAL, ONE PLACE, AND A 0600 FILE RATHER THAN argv OR THE ENVIRONMENT.
+#
+# Whatever tier above resolved it, the password now reaches psql through a
+# PGPASSFILE written here and removed on every exit path. Not argv, which `ps`
+# and /proc/<pid>/cmdline expose to any local user for the life of the call --
+# that is what the old URL-injection did, while the header claimed the script
+# "never ... accepts credentials as command-line arguments". And not
+# PGPASSWORD, which is narrower but still sits in /proc/<pid>/environ.
+#
+# The one shape that still authenticates from the URL is a .env that embeds the
+# password in the URL itself: percent-decoding it back out to re-encode it is a
+# way to corrupt a working credential, and it is the legacy form the discrete
+# convention replaced. It is passed through unchanged, with its argv caveat
+# disclosed above rather than denied.
+if [[ -n "$pgpassword" ]]; then
   _pgpass="$(mktemp)"
   chmod 600 "$_pgpass"
   trap 'rm -f "$_pgpass"' EXIT INT TERM
   # A pgpass field is colon-separated and backslash-escaped.
-  _esc="${_pw//\\/\\\\}"
+  _esc="${pgpassword//\\/\\\\}"
   _esc="${_esc//:/\\:}"
   printf '*:*:*:%s:%s\n' "$admin_role" "$_esc" > "$_pgpass"
-  unset _pw _esc
+  unset _esc
+  pgpassword=""
   export PGPASSFILE="$_pgpass"
-  password_flag=()
 fi
 
+# Every psql invocation goes through here, so the credential is established in
+# exactly one place and cannot drift between the apply steps and the
+# verification that is supposed to judge them.
+run_psql() {
+  psql -X -v ON_ERROR_STOP=1 "$url" "$@"
+}
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 echo "Using $source_var from $env_file."
-echo "This changes only the database named by that URL after psql confirms its password prompt."
+echo "This changes only the database that file names, and only once psql authenticates."
 echo "Run from a reviewed checkout; do not paste credentials into this script or shell history."
-psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -f "$root/backend/migrations/0053_database_role_taxonomy.sql"
+run_psql -f "$root/backend/migrations/0053_database_role_taxonomy.sql"
 
 # 0062 — the role/grant cleanup, applied HERE as well as at boot.
 #
@@ -206,16 +259,16 @@ psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -f "$root/backend/migrat
 # 0062 in the migration log even though you ran it here. That is 0053's
 # behaviour too (v0-5-0-rollout.md §4.1.3), and it is safe for the same reason:
 # every statement in the file is idempotent.
-psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -f "$root/backend/migrations/0062_rm_readonly_sequence_select.sql"
+run_psql -f "$root/backend/migrations/0062_rm_readonly_sequence_select.sql"
 if [[ "$set_passwords" -eq 1 ]]; then
   echo
   echo "--set-passwords: rotating rm_app, rm_worker and rm_readonly."
   echo "EVERY host that holds these credentials will stop authenticating until its"
   echo "\$HOME/.env is updated by hand. That includes the staging host's backup role,"
   echo "whose only symptom is smoke:capture failing at the NEXT release's first gate."
-  psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_app'
-  psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_worker'
-  psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_readonly'
+  run_psql -c '\password rm_app'
+  run_psql -c '\password rm_worker'
+  run_psql -c '\password rm_readonly'
 else
   echo
   echo "Passwords: UNCHANGED (no --set-passwords). Existing credentials keep working."
@@ -238,7 +291,7 @@ fi
 # Any failure exits non-zero and names what is wrong.
 echo
 echo "Verifying the resulting role configuration..."
-psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" <<'VERIFY'
+run_psql <<'VERIFY'
 DO $$
 DECLARE
   problems text[] := '{}';
@@ -269,6 +322,19 @@ BEGIN
   IF n = 0 THEN
     problems := problems || 'no LOGIN role is a member of rm_owner — migrations cannot SET ROLE rm_owner';
   END IF;
+
+  -- 2b. …and it must be THIS login. 0053 ends with `GRANT rm_owner TO
+  --     current_user`, so the login that runs this script is the one that ends
+  --     up holding the membership -- which makes it the login
+  --     MIGRATE_DATABASE_URL has to name at the migration step. Provision as
+  --     one login and migrate as another and 0054 fails with permission
+  --     denied, at deploy time, on a database this script has just called
+  --     healthy. v0-5-0-rollout.md §4.1.2 warns about it in prose; checking it
+  --     costs one catalog read.
+  IF NOT pg_has_role(current_user, 'rm_owner', 'MEMBER') THEN
+    problems := problems || format(
+      '%s does not hold rm_owner membership — migrate as this login and 0054 fails', current_user);
+  END IF;
   FOR r IN SELECT m.rolname FROM pg_auth_members am
       JOIN pg_roles g ON g.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
      WHERE g.rolname = 'rm_owner' AND m.rolname IN ('rm_app', 'rm_worker')
@@ -286,6 +352,20 @@ BEGIN
   -- Observed against production on the first real run of this block. The CTE
   -- forces the filter to happen first.
   FOR r IN SELECT unnest(ARRAY['rm_readonly', 'rm_app', 'rm_worker']) AS role LOOP
+    -- Schema USAGE FIRST, because has_table_privilege does not consider it.
+    -- 0053 does `REVOKE ALL ON SCHEMA public FROM PUBLIC` and re-grants USAGE
+    -- to exactly these three; lose that grant and every table ACL below still
+    -- reports true while every actual query dies on "permission denied for
+    -- schema public". That is not hypothetical -- it is the state 0062's own
+    -- header records rm_readonly_test being left in.
+    IF NOT has_schema_privilege(r.role, 'public', 'USAGE') THEN
+      problems := problems || format('%s has no USAGE on schema public — every query fails regardless of table grants', r.role);
+    END IF;
+
+    -- The same fence backend/tests/migration-0062-grants-effective.test.ts
+    -- carries, for the same reason. Reproduced off production too: on an empty
+    -- schema the relation it reaches first is `pg_statistic` rather than a
+    -- TOAST table, with the identical `is not a sequence` abort.
     WITH t AS MATERIALIZED (
       SELECT c.oid FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
        WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p')
@@ -302,13 +382,36 @@ BEGIN
   END LOOP;
 
   -- 4. The sampler tables rm_worker writes (0062 §4 — the production outage).
-  FOR r IN SELECT unnest(ARRAY['asset_prices', 'asset_price_floors', 'chain_address_floors']) AS t LOOP
-    IF EXISTS (SELECT FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
-                WHERE ns.nspname = 'public' AND c.relname = r.t AND c.relkind IN ('r','p'))
-       AND NOT (has_table_privilege('rm_worker', format('public.%I', r.t), 'INSERT')
-            AND has_table_privilege('rm_worker', format('public.%I', r.t), 'UPDATE'))
-    THEN
-      problems := problems || format('rm_worker lacks INSERT/UPDATE on %s — the wallet samplers will fail', r.t);
+  --
+  --    BY OID, NOT BY NAME. `has_table_privilege('rm_worker', 'public.foo', …)`
+  --    makes the CALLER resolve `public.foo`, which needs USAGE on schema
+  --    public -- and 0053 revokes that from PUBLIC and re-grants it to exactly
+  --    the three runtime roles. The bootstrap login only gets it by INHERITING
+  --    it from rm_owner, so this check silently depended on the provisioning
+  --    login both holding that membership and having rolinherit set. Where it
+  --    did not, the check did not report a problem: it raised `permission
+  --    denied for schema public` and aborted the whole verification, taking
+  --    every other finding with it -- including the one that would have named
+  --    the missing membership as the cause.
+  --
+  --    The oid therefore comes from a pg_class JOIN and NOT from
+  --    `to_regclass('public.' || …)`, which looks friendlier and fails the
+  --    same way: regclass input conversion resolves a NAME, so it wants the
+  --    same schema USAGE. A catalog join reads rows, and reading pg_class
+  --    needs nothing.
+  FOR r IN
+    SELECT t AS name,
+           (SELECT c.oid FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+             WHERE ns.nspname = 'public' AND c.relname = t AND c.relkind IN ('r','p')) AS oid
+      FROM unnest(ARRAY['asset_prices', 'asset_price_floors', 'chain_address_floors']) AS t
+  LOOP
+    -- A NULL oid is a table this database does not have. 0062 §4 skips those
+    -- deliberately (they are 0045/0046's, absent on an earlier baseline), so
+    -- absence is not a problem to report -- only a present-but-unwritable one.
+    CONTINUE WHEN r.oid IS NULL;
+    IF NOT (has_table_privilege('rm_worker', r.oid, 'INSERT')
+        AND has_table_privilege('rm_worker', r.oid, 'UPDATE')) THEN
+      problems := problems || format('rm_worker lacks INSERT/UPDATE on %s — the wallet samplers will fail', r.name);
     END IF;
   END LOOP;
 
@@ -320,6 +423,10 @@ BEGIN
 
   -- 6. The defaults, so a table added by a LATER migration is readable without
   --    that migration naming each role.
+  --    Both object types, because the SEQUENCE default is the half 0053
+  --    revoked and never restored, and the half whose absence broke the
+  --    backup rather than the app. Checking only 'r' would have reported this
+  --    configuration healthy on the morning pg_dump refused to run.
   FOR r IN SELECT unnest(ARRAY['rm_readonly', 'rm_app', 'rm_worker']) AS role LOOP
     IF NOT EXISTS (
       SELECT FROM pg_default_acl
@@ -329,7 +436,38 @@ BEGIN
     THEN
       problems := problems || format('no default SELECT on TABLES for %s — the next new table will be unreadable', r.role);
     END IF;
+    IF NOT EXISTS (
+      SELECT FROM pg_default_acl
+       WHERE pg_get_userbyid(defaclrole) = 'rm_owner'
+         AND defaclnamespace = 'public'::regnamespace
+         AND defaclobjtype = 'S' AND array_to_string(defaclacl, ',') LIKE '%' || r.role || '=r%')
+    THEN
+      problems := problems || format('no default SELECT on SEQUENCES for %s — the next new sequence breaks pg_dump', r.role);
+    END IF;
   END LOOP;
+
+  -- 7. Can the runtime roles actually LOG IN? Every check above is about
+  --    privilege, and a role with no password holds all of them while
+  --    authenticating for nobody. That is the exact end state of a fresh
+  --    cluster provisioned WITHOUT --set-passwords -- which is the documented
+  --    default, correct for the re-run case this script mostly serves and
+  --    wrong exactly once, at first bootstrap. The old script printed
+  --    "provisioned" there and the operator found out from the api's boot.
+  --
+  --    rolpassword lives in pg_authid, which a non-superuser bootstrap login
+  --    (doadmin is rolsuper=false) cannot read. So this REPORTS rather than
+  --    asserts when the catalog is closed: an unverifiable check must say it
+  --    is unverifiable, not pass quietly.
+  BEGIN
+    SELECT count(*) INTO n FROM pg_authid
+     WHERE rolname IN ('rm_app', 'rm_worker', 'rm_readonly') AND rolpassword IS NULL;
+    IF n > 0 THEN
+      problems := problems || format(
+        '%s runtime role(s) have NO password and cannot authenticate — re-run with --set-passwords', n);
+    END IF;
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'passwords NOT VERIFIED: % may not read pg_authid. If this is a first bootstrap, confirm the api and worker can connect.', current_user;
+  END;
 
   IF array_length(problems, 1) IS NULL THEN
     RAISE NOTICE 'role configuration OK: 4 roles, membership correct, all readers can read, samplers writable, no test role';

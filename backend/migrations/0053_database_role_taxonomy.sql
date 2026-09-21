@@ -15,6 +15,25 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_readonly') THEN
     CREATE ROLE rm_readonly LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
+  -- rm_worker is 0016's role, and for a long time this file only RE-ATTRIBUTED
+  -- it (the ALTER below) on the assumption that 0016 had already run.  That
+  -- holds in the migration runner, which applies 0016 before 0053, and in the
+  -- test harness, which clones a fully-migrated template -- so nothing in CI
+  -- could ever see the gap.  It does NOT hold on the one path that matters
+  -- here: scripts/ops/provision-db-role-taxonomy.sh applies THIS FILE ALONE,
+  -- out-of-band, before any migration can `SET LOCAL ROLE rm_owner`.  Against a
+  -- cluster where 0016 has never run -- a brand-new primary, a fresh staging
+  -- host, a restored twin started from an empty database -- the ALTER aborted
+  -- the whole provisioning run with `role "rm_worker" does not exist`, and the
+  -- operator got no roles at all rather than three of four.
+  --
+  -- Created with 0016's attributes, not 0054's grants: this block establishes
+  -- WHO the roles are, and the allow-list that says what rm_worker may write
+  -- stays 0054's job.  Guarded like its three siblings, so an existing
+  -- rm_worker keeps its password and its grants.
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_worker') THEN
+    CREATE ROLE rm_worker LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
   -- NO NOSUPERUSER/NOREPLICATION/NOBYPASSRLS HERE, deliberately.  Postgres
   -- requires SUPERUSER to set those three attributes in ALTER ROLE even when
   -- setting them to their negative (already-default) value, so including them

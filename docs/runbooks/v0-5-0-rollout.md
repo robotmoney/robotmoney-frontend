@@ -188,26 +188,44 @@ instruction anyone can follow:
 | --- | --- | --- | --- | --- |
 | `rm_owner` | **NOLOGIN** | `0053` | owns every `public` object; DDL runs as it via `SET LOCAL ROLE` | **ABSENT** |
 | `rm_app` | LOGIN | `0053` | `DATABASE_URL` — the API runtime | **ABSENT** |
-| `rm_worker` | LOGIN | **`0016`, not `0053`** — `0053` only re-attributes it, `0054` narrows its grants | `WORKER_DATABASE_URL` — worker lanes | present, **without any of `0054`'s grants** |
+| `rm_worker` | LOGIN | **`0016`** — and, since 2026-09-21, `0053` too. `0053` used to only re-attribute it, which aborted an out-of-band `0053` on any cluster `0016` had never reached; `0054` narrows its grants | `WORKER_DATABASE_URL` — worker lanes | present, **without any of `0054`'s grants** |
 | `rm_readonly` | LOGIN | `0053` if absent | `$HOME/.env` — preflight's own login | present (this runbook's preflight already authenticates as it) |
 
-`rm_owner` never authenticates and therefore never gets a password. The
-script prompts for the other three.
+`rm_owner` never authenticates and therefore never gets a password. The other
+three need one, but the script prompts for them **only** under
+`--set-passwords`: rotating a live credential is not something a re-run may do
+as a side effect. A brand-new cluster is the one case that needs the flag, and
+the script's verification reports a password-less runtime role wherever it is
+allowed to read `pg_authid`.
 
 **4.1.2 — What actually initializes them.** `scripts/ops/provision-db-role-taxonomy.sh`
-is the whole mechanism, and it does exactly two things: it runs
-`backend/migrations/0053_database_role_taxonomy.sql` through `psql` as the
-bootstrap login, then prompts `\password` for `rm_app`, `rm_worker`, and
-`rm_readonly` in turn. The script never prints, writes, or logs a password — a
-URL without an embedded password is completed from the `.env`'s
-`POSTGRES_PASSWORD` when present and only then prompts:
+is the whole mechanism. It applies `backend/migrations/0053_database_role_taxonomy.sql`
+(and, since v0.5.1, `0062`) through `psql` as the bootstrap login, then verifies
+the end state and exits non-zero if it is wrong. It changes **no** password
+unless `--set-passwords` is passed — see the ⚠ in `v0-5-1-rollout.md`, which is
+the same warning and the same reason.
+
+The `.env` it reads is the host's own `$HOME/.env`, in the discrete-token form
+every other consumer of that file uses (issue #699, `scripts/lib/env-role.ts`):
 
 ```bash
-# provisioning.env — the .env file passed as the script's single argument:
-MIGRATE_DATABASE_URL=postgres://<bootstrap-login>@<primary-host>:25060/defaultdb?sslmode=require
+# $HOME/.env, the single credential file. The bootstrap login (doadmin) is
+# normally ABSENT from it and the command prompts once, interactively.
+host = <primary-host>
+port = 25060
+database = defaultdb
+sslmode = require
+rm_app = <…>
+rm_worker = <…>
 
-scripts/ops/provision-db-role-taxonomy.sh provisioning.env
+scripts/ops/provision-db-role-taxonomy.sh "$HOME/.env"
 ```
+
+The pre-#699 shape — a `.env` carrying `MIGRATE_DATABASE_URL` — is still
+accepted. The script never prints, writes or logs a password; it resolves the
+bootstrap credential once and passes it to `psql` through `PGPASSWORD` rather
+than on its argv, the one exception being a password already embedded inside a
+legacy URL, which is used as-is and is briefly visible in `ps`.
 
 **The bootstrap login is whichever admin login you run that command as** —
 on the managed primary that is `doadmin`. It needs to be able to `CREATE

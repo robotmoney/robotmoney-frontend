@@ -505,18 +505,40 @@ if enabled.
 ### 4.3.1 Role-taxonomy cutover (human-run)
 
 The first cutover is deliberately not automated against production. A reviewed
-operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with the path to
-a `.env` file holding a `MIGRATE_DATABASE_URL` (falling back to
-`DATABASE_URL`); a password embedded in that URL authenticates directly, while
-a URL without one is completed from the `.env`'s own `POSTGRES_PASSWORD` when
-present and only then falls back to a `psql` password prompt. The helper neither
-accepts a URL on the command line nor prints the URL it reads; it never
-prints, writes, logs, or accepts credentials as command-line arguments. It
-creates/repairs `rm_owner`, `rm_app`, `rm_worker`, and `rm_readonly`, then
-prompts for each runtime password. Run the normal migration command once with
-the short-lived migration credential, verify the role probes, then install only
-the `rm_app` and `rm_worker` URLs on the host. Keep the bootstrap credential in
-the DO dashboard or an operator vault.
+operator invokes `scripts/ops/provision-db-role-taxonomy.sh` with the path to a
+`.env` file. **Pass the host's own `$HOME/.env`** — the single credential file
+of the issue-#699 convention (`.env.example`, `scripts/lib/env-role.ts`), whose
+discrete `host`/`port`/`database`/`sslmode` tokens the helper reads the same way
+every other consumer does. A `.env` holding a `MIGRATE_DATABASE_URL` (falling
+back to `DATABASE_URL`) is still accepted as the legacy shape.
+
+The bootstrap credential resolves **once**, in this order: the bootstrap role's
+own `doadmin = <password>` line, then `POSTGRES_PASSWORD`, then one interactive
+prompt — and reaches `psql` through `PGPASSWORD`, never on its argv. Add the
+`doadmin` line only for a host that must run this unattended; otherwise omit it
+and answer the prompt, keeping the bootstrap credential in the DO dashboard or
+an operator vault. (The one exception is a legacy `.env` that embeds the
+password *inside* the URL: that URL is passed to `psql` as an argument and is
+briefly visible in `ps`. The helper says so when it happens. Prefer the
+discrete form.)
+
+It creates/repairs `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`, applies
+`0053` and `0062`, and then **verifies the end state and exits non-zero if it is
+wrong** — role attributes, `rm_owner` membership (including that *this* login
+holds it), schema `USAGE`, every reader's table and sequence `SELECT`, the
+default privileges for both object types, `rm_worker`'s sampler writes, and the
+absence of `rm_readonly_test`. It changes **no** password unless you pass
+`--set-passwords`. Run the normal migration command once with the short-lived
+migration credential, then install only the `rm_app` and `rm_worker` credentials
+on the host.
+
+> **A brand-new cluster is the one case needing `--set-passwords`.** `0053`
+> creates the roles without passwords, so they hold every privilege and
+> authenticate for nobody. The verification reports this where it can read
+> `pg_authid`; a non-superuser bootstrap login (DO's `doadmin` is
+> `rolsuper=false`) cannot, and the helper says `passwords NOT VERIFIED`
+> instead of passing quietly. On a first bootstrap, confirm the api and worker
+> actually connect.
 
 Three mechanics that are not obvious from the script, and that an operator hits
 in order:

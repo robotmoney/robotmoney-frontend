@@ -241,8 +241,21 @@ as `0053`. Run it on the **PRIMARY**, as a login holding `rm_owner` membership
 replicates.
 
 ```bash
-bash scripts/ops/provision-db-role-taxonomy.sh /path/to/provisioning.env
+# The host's OWN $HOME/.env — the single credential file of the #699
+# convention, NOT a separate provisioning.env to be written for the occasion.
+bash scripts/ops/provision-db-role-taxonomy.sh "$HOME/.env"
 ```
+
+That file carries the discrete `host`/`port`/`database`/`sslmode` tokens and one
+`<role> = <password>` line per role. The bootstrap login is `doadmin`, which is
+**not** one of the runtime roles and is normally *absent* from the file — so the
+command prompts once for it and never stores it. Add a `doadmin = …` line only
+on a host that must run this unattended (`.env.example` documents both). Pass
+`--role <login>` if the bootstrap login is not `doadmin`.
+
+A `.env` holding `MIGRATE_DATABASE_URL` still works; it is the pre-#699 shape,
+and if its password is embedded in the URL it is visible in `ps` for the life of
+the run. The command says so when that happens.
 
 ⚠ **Do not pass `--set-passwords`.** Without it the command changes no
 password and creates no account, so it is safe to re-run — which matters,
