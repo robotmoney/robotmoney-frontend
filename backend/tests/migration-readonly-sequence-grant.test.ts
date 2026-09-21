@@ -51,6 +51,10 @@ function sequenceRevokes(sql: string): string[] {
   return flat.match(/REVOKE\s+[^;]*?\bON\s+(?:ALL\s+SEQUENCES|SEQUENCE)\b[^;]*?;/gi) ?? [];
 }
 
+/** The roles whose READ access is repaired and defaulted by 0062. Writes stay
+ *  fail-closed for all of them (0053's rule), so only SELECT is asserted. */
+const READERS = ["rm_readonly", "rm_app", "rm_worker"] as const;
+
 describe("no migration may revoke sequence access from rm_readonly", () => {
   test("RED CONTROL: the matcher finds the statements that caused this", () => {
     // Guards the case below against passing because the regex matches nothing.
@@ -80,6 +84,83 @@ describe("no migration may revoke sequence access from rm_readonly", () => {
     expect(sql).toMatch(/GRANT\s+SELECT\s+ON\s+ALL\s+SEQUENCES\s+IN\s+SCHEMA\s+public\s+TO\s+rm_readonly/i);
     expect(sql).toMatch(/ALTER\s+DEFAULT\s+PRIVILEGES\s+FOR\s+ROLE\s+rm_owner\s+IN\s+SCHEMA\s+public\s+GRANT\s+SELECT\s+ON\s+SEQUENCES\s+TO\s+rm_readonly/i);
     expect(sequenceRevokes(sql)).toEqual([]);
+  });
+
+  test("0062 drops rm_readonly_test, and guards the drop so a boot cannot fail on it", () => {
+    // DROP ROLE needs CREATEROLE. 0053 sets rm_owner NOCREATEROLE and
+    // migrate.ts runs every migration from 0054 on as rm_owner, so an
+    // unguarded DROP would fail the deploy. The exception handler is what lets
+    // one file serve both paths: the provisioning script (doadmin) performs
+    // the drop, the boot skips it with a notice.
+    const sql = readFileSync(join(MIGRATIONS, "0062_rm_readonly_sequence_select.sql"), "utf8");
+    expect(sql).toMatch(/DROP ROLE rm_readonly_test/);
+    expect(sql).toMatch(/DROP OWNED BY rm_readonly_test/);
+    expect(sql).toMatch(/EXCEPTION\s+WHEN\s+insufficient_privilege\s+THEN/i);
+    // The DROP must be inside the guard, never a bare top-level statement.
+    const bare = sql.split("\n").filter((l) => /^\s*DROP (ROLE|OWNED)/i.test(l));
+    expect(bare).toEqual([]);
+  });
+
+  test("0062 repairs AND defaults SELECT for every reader role", () => {
+    // The audit that prompted this found holes in all three, not just
+    // rm_readonly: rm_worker was missing 16 tables (1,214 dead production jobs)
+    // and rm_app one. A repair that fixed only the role that happened to be
+    // noticed would have left the same bug live under two other names.
+    const sql = readFileSync(join(MIGRATIONS, "0062_rm_readonly_sequence_select.sql"), "utf8");
+    const flat = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ");
+    for (const role of READERS) {
+      const repaired = new RegExp(`GRANT SELECT ON ALL (TABLES|SEQUENCES) IN SCHEMA public TO [^;]*\\b${role}\\b`, "i").test(flat);
+      const defaulted = new RegExp(`ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON (TABLES|SEQUENCES) TO [^;]*\\b${role}\\b`, "i").test(flat);
+      expect({ role, repaired, defaulted }).toEqual({ role, repaired: true, defaulted: true });
+    }
+  });
+
+  test("0062's only write grant is the named-table allow-list that fixes the outage", () => {
+    // NOT "0062 grants no writes" — an earlier version of this case asserted
+    // exactly that, and it was wrong in a way that would have shipped a
+    // migration which did not fix the incident it was written for. The live
+    // failure is `permission denied for table asset_prices` at
+    // writeAssetPrice() — an INSERT ... ON CONFLICT DO UPDATE, not a read.
+    //
+    // What must stay true is that writes are NAMED, never blanket: 0053's rule
+    // is that every runtime write capability is spelled out by a migration, so
+    // a missing grant fails closed instead of being silently covered.
+    const sql = readFileSync(join(MIGRATIONS, "0062_rm_readonly_sequence_select.sql"), "utf8");
+    const flat = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ");
+    const WRITE = /\b(INSERT|UPDATE|DELETE|TRUNCATE|USAGE)\b/i;
+
+    for (const stmt of flat.match(/(GRANT|ALTER DEFAULT PRIVILEGES)[^;]*;/gi) ?? []) {
+      // The guarded loop's EXECUTE format(...) is the named-table grant; it is
+      // not a top-level GRANT statement and is checked by its own case above.
+      if (!WRITE.test(stmt)) continue;
+      // A write may not be granted over ALL objects...
+      expect({ stmt: stmt.trim(), blanket: /ON ALL (TABLES|SEQUENCES)/i.test(stmt) })
+        .toEqual({ stmt: stmt.trim(), blanket: false });
+      // ...nor as a default, which would cover tables nobody has reviewed.
+      expect({ stmt: stmt.trim(), viaDefault: /ALTER DEFAULT PRIVILEGES/i.test(stmt) })
+        .toEqual({ stmt: stmt.trim(), viaDefault: false });
+    }
+  });
+
+  test("the write grant covers every table production proved rm_worker needs", () => {
+    // Taken from the empirical oracle — the distinct `permission denied for
+    // table X` values in jobs.last_error across the whole incident — not from
+    // grepping the source, which was too noisy to trust. asset_price_floors is
+    // the one code-evidence addition: asset-prices.ts:152 writes it from the
+    // same function that dies at line 116, so it has never been reached, and
+    // granting only the observed two would move the outage rather than end it.
+    const sql = readFileSync(join(MIGRATIONS, "0062_rm_readonly_sequence_select.sql"), "utf8");
+    const flat = sql.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ");
+    // The grant is issued from a guarded loop, not a bare statement — a plain
+    // `GRANT ... ON asset_prices` aborts the migration on any database built
+    // to an earlier baseline. So the table list is read from the loop's array.
+    const loop = (flat.match(/FOREACH t IN ARRAY ARRAY\[[^\]]*\]/i) ?? [""])[0];
+    for (const t of ["asset_prices", "asset_price_floors", "chain_address_floors"]) {
+      expect({ table: t, granted: loop.includes(`'${t}'`) }).toEqual({ table: t, granted: true });
+    }
+    expect(flat).toMatch(/GRANT INSERT, UPDATE ON public\.%I TO rm_worker/i);
+    // DELETE is deliberately absent: nothing deletes from these three.
+    expect(loop).not.toMatch(/\bDELETE\b/i);
   });
 
   test("the grandfather list is closed — every entry still exists and still offends", () => {

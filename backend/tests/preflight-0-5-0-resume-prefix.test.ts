@@ -34,9 +34,21 @@ const V4_TABLES = ["swarm_judge_config", "swarm_session_judgements", "swarm_cons
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 // `no-schema-delta` compares the ledger against the REAL migrations directory,
-// so "a fully migrated v0.4.0 database" means every .sql on disk that is not
-// part of this release — 0001-0044, not just PRIOR_RELEASE_MIGRATIONS' six.
-// Seeding only the six made all 38 earlier files read as unexpected-pending.
+// so "a fully migrated v0.4.0 database" means every .sql on disk up to and
+// including 0044 — 0001-0044, not just PRIOR_RELEASE_MIGRATIONS' six. Seeding
+// only the six made all 38 earlier files read as unexpected-pending.
+//
+// "NOT PART OF THIS RELEASE" IS THE RIGHT FILTER, AND IT INCLUDES LATER
+// RELEASES' FILES. `no-schema-delta` flags any on-disk migration that is
+// pending and not v0.5.0's, so to isolate the behaviour under test every OTHER
+// file must read as already applied — including 0062, which v0.5.1 added after
+// this suite was written. Marking it applied is what keeps "18 pending" about
+// v0.5.0's own set instead of about whatever the branch has accumulated since.
+//
+// A ceiling filter (`n <= 0044`) looks tidier and is wrong: it would leave
+// 0062 pending, and the check would correctly report it as unexpected drift,
+// failing every case here for a reason that has nothing to do with the resume
+// logic they exist to test.
 let BASELINE: string[] = [];
 
 let admin: ReturnType<typeof postgres>;
@@ -150,5 +162,16 @@ test("the baseline ledger really is a fully-migrated v0.4.0 (guards the fixture 
   // unexpectedly pending" rather than testing what it claims to.
   for (const m of PRIOR_RELEASE_MIGRATIONS) expect(BASELINE).toContain(m);
   for (const m of RELEASE_MIGRATIONS) expect(BASELINE).not.toContain(m);
-  expect(BASELINE.at(-1)).toBe(PRIOR_RELEASE_MIGRATIONS.at(-1));
+
+  // The v0.4.0 PREFIX must be complete — every on-disk file up to 0044.
+  // Asserted as a set rather than as `BASELINE.at(-1) === 0044`, which was the
+  // original form and broke the moment v0.5.1 added 0062: the last element of
+  // a "not this release" list is whatever the branch added most recently, not
+  // the baseline's tail. That assertion was a proxy for "nothing from the
+  // release leaked in", which the loop above already covers directly.
+  const ceiling = PRIOR_RELEASE_MIGRATIONS.at(-1)!;
+  const missingPrefix = BASELINE.filter((n) => n <= ceiling).filter((n) => !BASELINE.includes(n));
+  expect(missingPrefix).toEqual([]);
+  expect(BASELINE.filter((n) => n <= ceiling).at(-1)).toBe(ceiling);
+  expect(BASELINE.length).toBeGreaterThan(PRIOR_RELEASE_MIGRATIONS.length);
 });

@@ -235,15 +235,37 @@ that "gates everything below", because `0053` must create `rm_owner` before a
 migration session can `SET LOCAL ROLE rm_owner`. A boot cannot bootstrap its
 own permissions. This is the same class of problem with the same answer.
 
-Run on the **PRIMARY**, as a login holding `rm_owner` membership (`doadmin`).
-The replica is in recovery and cannot be granted on; the change replicates.
+**The pre-step is the provisioning script**, which now applies `0062` as well
+as `0053`. Run it on the **PRIMARY**, as a login holding `rm_owner` membership
+(`doadmin`). The replica is in recovery and cannot be granted on; the change
+replicates.
 
 ```bash
-psql -X -v ON_ERROR_STOP=1 "$PRIMARY_ADMIN_URL" \
-  -c "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly"
+bash scripts/ops/provision-db-role-taxonomy.sh /path/to/provisioning.env
 ```
 
-It grants no write, and it is idempotent. Confirm it took, against the replica:
+⚠ **Do not pass `--set-passwords`.** Without it the command changes no
+password and creates no account, so it is safe to re-run — which matters,
+because `0053`'s chicken-and-egg means this script gets run for reasons that
+have nothing to do with credentials. `--set-passwords` rotates `rm_app`,
+`rm_worker` and `rm_readonly`, and every host holding those credentials then
+stops authenticating until its `$HOME/.env` is updated by hand. Only a
+brand-new cluster needs it. See §4.1.3.
+
+It applies `0062` through `psql`, which does not write `schema_migrations`, so
+the boot still applies and records it — expect `0062` in the migration log
+even though you ran it here. That is `0053`'s behaviour too
+(`v0-5-0-rollout.md` §4.1.3), and it is safe for the same reason: every
+statement in the file is idempotent.
+
+**Two of `0062`'s three statements only work on this path.** The
+`rm_readonly_test` drop needs `CREATEROLE`; `rm_owner` is `NOCREATEROLE` and
+`migrate.ts` runs every migration from `0054` on as `rm_owner`, so at boot the
+drop is skipped with a notice. The script runs as the bootstrap login and
+performs it. Postflight's `test-role-removed` check is what distinguishes
+"`0062` is recorded" from "the role is gone".
+
+Confirm the grant took, against the replica:
 
 ```bash
 # expect: 0
@@ -256,13 +278,34 @@ psql "$REPLICA_READONLY_URL" -tAc "
 
 Then `bun run smoke:capture` succeeds and §4.2 proceeds normally.
 
-**`0062` still ships, and is still worth shipping.** After the manual GRANT it
-is very nearly a no-op on production — which is the point. It carries the
-`ALTER DEFAULT PRIVILEGES` half that the manual GRANT deliberately omits, so a
-sequence created by a *future* migration is readable without anyone
-remembering. And it means no other environment — a fresh database, a restored
-twin, a new staging host — ever needs this hand-step at all. The manual GRANT
-repairs one database; `0062` repairs the class.
+**`0062` still ships, and is still worth shipping.** After the script has run
+it is very nearly a no-op on production — which is the point. It means no
+other environment — a fresh database, a restored twin, a new staging host —
+ever needs this pre-step at all. The script repairs one database; `0062`
+repairs the class.
+
+**4.1.3 — ⚠ The credential drift this release traced, and why it recurred.**
+Two staging hosts failed `smoke:capture` with
+`password authentication failed for user "rm_readonly"` while both held a
+`rm_readonly` line that someone had recently written. There is no second
+account and no duplicate username — the failing value simply authenticates as
+no role on the cluster.
+
+It was the provisioning script. It used to end with three **unconditional**
+`\password` prompts, so every run rotated `rm_app`, `rm_worker` and
+`rm_readonly`, and propagation was a sentence in its closing message asking the
+operator to hand-copy the new values into each host's `$HOME/.env`. The run on
+2026-09-21 at 01:55Z rotated `rm_readonly`; a host `.env` written at 00:14Z
+kept the August value; nothing reconciled them.
+
+The trap was that this script **must** be re-run for reasons unrelated to
+passwords. So a routine, correct re-provision broke every host's backup, and
+the only symptom surfaced at the next release's first gate.
+
+Provisioning roles is idempotent and safe to repeat. Rotating passwords is
+neither. They are no longer the same command, and
+`scripts/tests/unit/provision-roles-no-rotation.test.ts` pins that — a comment
+saying "do not rotate" would not have survived this, a test does.
 
 **Preflight grades this correctly rather than refusing.**
 `readonly-sequence-access` is a **WARN** while the sequences are unreadable and

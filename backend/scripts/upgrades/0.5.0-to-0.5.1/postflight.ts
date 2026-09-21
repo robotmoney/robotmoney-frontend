@@ -83,6 +83,25 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
     "0062 grants SELECT on all sequences and restores the default. If any remain unreadable, a later migration re-revoked them — see backend/tests/migration-readonly-sequence-grant.test.ts.",
   );
 
+  // 0062's third statement drops rm_readonly_test, a test fixture
+  // (preflight-utils.test.ts:154) whose password is committed to the repo and
+  // which reached the PRODUCTION cluster. The drop needs CREATEROLE, which
+  // rm_owner lacks, so a boot-time apply skips it with a notice and only
+  // scripts/ops/provision-db-role-taxonomy.sh performs it. That split is
+  // exactly why this is checked rather than assumed: "0062 is recorded" does
+  // NOT imply the role is gone.
+  const [{ present: testRolePresent }] = (await db`
+    SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_readonly_test') AS present
+  `) as unknown as { present: boolean }[];
+  record(
+    "test-role-removed",
+    testRolePresent ? "FAIL" : "PASS",
+    testRolePresent
+      ? "rm_readonly_test still exists — a LOGIN role whose password is in the repository"
+      : "rm_readonly_test is absent",
+    "The boot cannot drop it (rm_owner is NOCREATEROLE). Run scripts/ops/provision-db-role-taxonomy.sh against the primary, which applies 0062 as the bootstrap login.",
+  );
+
   const absentRequired: string[] = [];
   for (const table of REQUIRED_TABLES) if (!(await tableExists(db, table))) absentRequired.push(table);
   record(
