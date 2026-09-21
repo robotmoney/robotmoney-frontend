@@ -1,0 +1,137 @@
+<!-- A consensus judge's public judgement, as a research record (RM-121): a
+     breadcrumb, the judge, one hairline row of facts, the judgement itself,
+     where it found the takes apart, then what pins it. A session's page shows
+     every judge's opinion in its own block; this is one opinion's permanent
+     address, as a take's receipt is. A judge scores no take and sets no
+     weight: its release call is advice, worded, and a "safe" call prints
+     nothing. -->
+<section class="cv cv--detail" x-data="swarmJudgement()">
+  <div class="sv__body sv__body--narrow rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading judgement</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-card"></div>
+    </div>
+    <template x-if="error && !loading">
+      <div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/swarm">Swarm</a></p></div>
+    </template>
+
+    <template x-if="!loading && judgement">
+      <article>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
+          <a :href="subjectHref()" x-text="subjectTitle()"></a><span aria-hidden="true">/</span>
+          <a :href="sessionHref()" x-text="formatDate(judgement.sessionDate, 'short')"></a><span aria-hidden="true">/</span>
+          <span aria-current="page">Judgement</span>
+        </nav>
+
+        <header class="rr-head">
+          <p class="sv__eyebrow sv__eyebrow--quiet">Judgement</p>
+          <!-- The judge is the page's subject. The way to its record is the
+               facts row and the links at the foot, so the title is plain. -->
+          <h1 class="sv__detail-title" x-text="judgeName()"></h1>
+        </header>
+
+        <div class="rr-meta">
+          <span class="rr-meta__i">Session <a class="rr-lnk" :href="sessionHref()" x-text="formatDate(judgement.sessionDate, 'short')"></a></span>
+          <span class="rr-meta__i">Subject <a class="rr-lnk" :href="subjectHref()" x-text="subjectTitle()"></a></span>
+          <span class="rr-meta__i">Judge
+            <template x-if="judgeHref()"><a class="rr-lnk" :href="judgeHref()" x-text="judgeName()"></a></template>
+            <template x-if="!judgeHref()"><b x-text="judgeName()"></b></template>
+          </span>
+          <template x-if="judgement.model"><span class="rr-meta__i">Model <b x-text="judgement.model"></b></span></template>
+          <template x-if="recordedAt()">
+            <span class="rr-meta__i">Recorded <b><time :datetime="judgement.createdAt" x-text="recordedAt()"></time></b></span>
+          </template>
+        </div>
+
+        <!-- The judgement: its advice on release when it advised a hold, then
+             its own account of why the takes support the session's read. -->
+        <section class="rr-sec" id="judgement" aria-labelledby="judgement-h">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="judgement-h">The judgement</h2></div>
+          <template x-if="advice()">
+            <div class="rr-advice">
+              <p class="rr-advice__l" x-text="advice().line"></p>
+              <template x-if="advice().concerns.length">
+                <ul class="rr-list"><template x-for="c in advice().concerns" :key="c"><li x-text="c"></li></template></ul>
+              </template>
+            </div>
+          </template>
+          <template x-if="rationale()">
+            <div class="rr-prose" x-html="linkified(rationale())"></div>
+          </template>
+          <template x-if="!rationale() && !advice()">
+            <p class="rr-note" style="margin-top:0">No written rationale</p>
+          </template>
+        </section>
+
+        <!-- Where it found the takes apart, each question open: every member's
+             view, a way to that member's take, and what would settle it. -->
+        <section class="rr-sec" id="differ" aria-labelledby="differ-h">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="differ-h">Where views differ</h2></div>
+          <template x-for="d in judgement.disagreements" :key="d.topic">
+            <div class="rr-block jd-q">
+              <p class="jd-q__t" x-text="d.topic"></p>
+              <div class="rr-views rr-views--stack">
+                <template x-for="p in (d.positions || [])" :key="`${d.topic}-${p.member_id}`">
+                  <div class="rr-view">
+                    <a class="rr-lnk" style="justify-self:start" :href="positionHref(p)" x-text="positionName(p)"></a>
+                    <template x-if="!takeOf(p.member_id) && takes.length"><span class="rr-note" style="margin:0">No take</span></template>
+                    <template x-if="!isEcho(p.view)"><p x-html="inlineMarks(p.view)"></p></template>
+                    <template x-if="isEcho(p.view)"><p><a class="rr-lnk" :href="positionHref(p)">Read their take →</a></p></template>
+                  </div>
+                </template>
+              </div>
+              <template x-if="d.what_settles">
+                <p class="rr-settles"><span class="rr-k">What would settle it</span><br><span x-text="d.what_settles"></span></p>
+              </template>
+            </div>
+          </template>
+          <template x-if="!judgement.disagreements.length">
+            <p class="rr-note" style="margin-top:0">No disagreement recorded</p>
+          </template>
+        </section>
+
+        <!-- What pins it: the prompt it was given and the take set it read,
+             each as a digest, and the record itself. -->
+        <section class="rr-sec" id="provenance" aria-labelledby="prov-h">
+          <div class="rr-sec__head"><h2 class="rr-sec__h" id="prov-h">Provenance</h2></div>
+          <dl class="rr-dl">
+            <template x-if="judgement.promptHash">
+              <div><dt>Prompt hash</dt><dd class="rr-mono" :title="judgement.promptHash" x-text="shortHash(judgement.promptHash)"></dd></div>
+            </template>
+            <template x-if="judgement.inputsDigest">
+              <div><dt>Inputs digest</dt><dd class="rr-mono" :title="judgement.inputsDigest" x-text="shortHash(judgement.inputsDigest)"></dd></div>
+            </template>
+            <template x-if="recordHref()">
+              <div><dt>Judgement record</dt><dd><a :href="recordHref()" target="_blank" rel="noopener">Judgement JSON ↗</a></dd></div>
+            </template>
+          </dl>
+        </section>
+
+        <nav class="rr-recnav rr-recnav--flow" aria-label="Related">
+          <template x-if="judgeHref()"><a :href="judgeHref()" x-text="`${judgeName()}'s record`"></a></template>
+          <a :href="sessionHref()">The session</a>
+          <a href="/docs/investment-swarm/how-it-works#the-judge">How the judge works</a>
+        </nav>
+      </article>
+    </template>
+
+    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, every swarm
+         surface, production's wording verbatim. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
+  </div>
+
+  <style>
+    /* Page-local: a question the judge found the takes apart on, open, as a
+       hairline block. Its views are the session page's (.rr-view). */
+    .jd-q { padding-top: 1rem; border-top: 1px solid var(--color-border); }
+    .jd-q__t { margin: 0 0 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
+  </style>
+</section>

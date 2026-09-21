@@ -62,6 +62,13 @@
               <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified, take.archival)"></span>
             </span>
           </span>
+          <!-- The session it was filed in, when that session could be read. -->
+          <template x-if="session">
+            <span class="rr-meta__i">Session <a class="rr-lnk" :href="sessionHref()" x-text="formatDate(session.date, 'short')"></a></span>
+          </template>
+          <template x-if="session && subjectHref()">
+            <span class="rr-meta__i">Subject <a class="rr-lnk" :href="subjectHref()" x-text="session.subjectName || session.subjectId"></a></span>
+          </template>
         </div>
 
         <!-- SUPERSEDED, NOT REPLACED (issue #573, ADR D32). This URL still
@@ -72,6 +79,17 @@
              participation from silently changing meaning. -->
         <template x-if="supersededBy">
           <p class="rr-note tk-superseded">A later revision of this take was filed in the same session. <a class="rr-lnk" :href="`/swarm/takes/${supersededBy?.id}`" x-text="`Revision ${supersededBy?.revision}`"></a></p>
+        </template>
+        <!-- Where a judge of that session found this take on one side of a
+             question, with the judge's name as the way to its judgement. A
+             judge scores nothing: this is where the takes parted, not a mark
+             against this one. -->
+        <template x-if="takeDisagreements().length">
+          <div class="rr-note tk-dis">
+            <template x-for="d in takeDisagreements()" :key="d.key">
+              <p>In disagreement: <span x-text="d.topic"></span> · <a class="rr-lnk" :href="d.href" x-text="d.judge"></a></p>
+            </template>
+          </div>
         </template>
 
         <!-- The signed text, whole: a receipt shows every byte it verifies.
@@ -140,8 +158,9 @@
 
         <!-- Where a reader goes next: the member's record, the swarm, and how
              a signature is checked. -->
-        <nav class="rr-recnav tk-next" aria-label="Related">
+        <nav class="rr-recnav rr-recnav--flow" aria-label="Related">
           <a :href="signerHref()" x-text="`${signer?.name || take.memberName}'s record`"></a>
+          <template x-if="sessionId"><a :href="sessionHref()">The session</a></template>
           <a href="/swarm">The swarm</a>
           <a href="/docs/investment-swarm/how-it-works">How verification works</a>
         </nav>
@@ -159,10 +178,11 @@
   <style>
     /* The column's width, as a take card's text runs: no measure cap of its own. */
     #take .sv__take-body { max-width: none; }
-    .tk-superseded { margin: 1.25rem 0 0; font-size: 0.875rem; }
+    .tk-superseded, .tk-dis { margin: 1.25rem 0 0; font-size: 0.875rem; }
+    .tk-dis p { margin: 0; }
+    .tk-dis p + p { margin-top: 0.5rem; }
     /* A fingerprint is one unbreakable token; on a phone it wraps anywhere
        rather than widening the page. */
     .tk-fp { overflow-wrap: anywhere; white-space: normal; }
-    .tk-next { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; }
   </style>
 </section>

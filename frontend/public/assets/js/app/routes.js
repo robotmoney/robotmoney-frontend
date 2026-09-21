@@ -248,6 +248,10 @@ export function viewFor(pathname) {
   if (/^\/swarm\/takes\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/swarm/take.html`;
   }
+  // A consensus judge's public judgement: its own record, as a take is.
+  if (/^\/swarm\/judgements\/[^/]+\/?$/.test(pathname)) {
+    return `${VIEW_DIR}/swarm/judgement.html`;
+  }
   // Application status page (docs/architecture.md §11 R2) — checked before the generic
   // catch-all below so /swarm/apply/<id> doesn't 404 by resolving to a
   // nonexistent per-id fragment. /swarm/apply (no id) still falls through

@@ -28,17 +28,22 @@
                x-html="memberMark(member.keyFingerprint || member.id, member.name, 72, member.avatar?.path, member.handle)"></div>
           <div>
             <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
+            <!-- A judge files no take: it explains the takes and advises on
+                 release. The role is a label, as a bias is. -->
+            <template x-if="isJudge(member)"><ul class="rr-tags rr-profile__role"><li>Judge</li></ul></template>
             <p class="sv__lede sv__lede--compact profile-role" x-show="memberTagline(member)" x-text="memberTagline(member)"></p>
           </div>
         </header>
 
         <!-- Whether it holds a seat now and since when, then the record in
              figures, then who runs it. -->
-        <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes">
+        <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes || judgements.length">
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
+          <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
+          <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
           <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip" x-text="takesCapped() ? `Signatures re-checked against this member’s key, over the latest ${recordStats().takes} takes.` : 'Signatures re-checked against this member’s key.'"></span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
@@ -140,6 +145,51 @@
           </section>
         </template>
 
+        <!-- A judge's record: each session it judged, its advice when it
+             advised a hold, how many questions it found the takes apart on,
+             and the way to the judgement itself. -->
+        <template x-if="isJudge(member)">
+        <section class="rr-sec" id="record" aria-labelledby="record-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="record-h">Track record</h2>
+            <template x-if="judgementsCapped()"><span class="rr-sec__aside" x-text="`Latest ${judgements.length}`"></span></template>
+          </div>
+          <!-- Under each date, what the row adds: the advice, and how many
+               questions it found the takes apart on, each in words so a phone
+               that drops the table's head still reads them. Neither prints
+               when there is nothing to say. -->
+          <div class="rr-tablewrap">
+            <table class="rr-table rr-stack rr-stack--full">
+              <thead>
+                <tr><th scope="col">Session</th><th scope="col">Subject</th></tr>
+              </thead>
+              <tbody>
+                <template x-for="j in judgements.slice(0, shown)" :key="j.id">
+                  <tr>
+                    <th scope="row">
+                      <a class="rr-lnk" :href="judgementHref(j)" x-text="formatDate(j.sessionDate, 'short')"></a>
+                      <template x-if="adviceLine(j)"><small x-text="adviceLine(j)"></small></template>
+                      <template x-if="j.disagreements.length"><small x-text="`${j.disagreements.length} ${j.disagreements.length === 1 ? 'disagreement' : 'disagreements'}`"></small></template>
+                    </th>
+                    <td class="rr-hist__subj"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a></td>
+                  </tr>
+                </template>
+                <template x-if="!judgements.length">
+                  <tr><td class="rr-table__empty" colspan="2"><span class="rr-empty__t">No judgement published yet</span></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <template x-if="judgements.length > shown">
+            <div class="rr-pager">
+              <span x-text="`${shown} of ${judgements.length}`"></span>
+              <div><button type="button" class="rr-btn" @click="shown += 20">Show more</button></div>
+            </div>
+          </template>
+        </section>
+        </template>
+
+        <template x-if="!isJudge(member)">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
@@ -250,6 +300,7 @@
             </div>
           </template>
         </section>
+        </template>
       </div>
     </template>
 

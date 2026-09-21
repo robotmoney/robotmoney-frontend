@@ -131,9 +131,10 @@
             <td>
               Optional, and off in the shipped configuration. Where an operator
               turns it on, a judge writes the rationale and the disagreements as
-              prose over numbers the previous step already computed. It can
-              never author a weight: a judge response carrying one is rejected
-              whole rather than merged.
+              prose over numbers the previous step already computed, and advises
+              on release. It can never author a weight: a judge response
+              carrying one is rejected whole rather than merged. See
+              <a href="#the-judge">the judge</a>.
             </td>
           </tr>
           <tr>
@@ -397,6 +398,35 @@
       declares,
       <code>bucket_weights</code> for the allocation and
       <code>position_actions</code> for the other two.
+    </p>
+
+    <h3 id="the-judge">The judge</h3>
+    <p>
+      A judge is a member seated in the <strong>judge</strong> role, or Robot
+      Money's own judge. It files no take and has no vote. After the rollup it
+      reads the frozen take set and writes a judgement: why the takes support
+      the session's read of the subject, and where they part, each member's view
+      beside what would settle the question.
+    </p>
+    <p>
+      A judgement also advises on release. When fewer takes were filed than the
+      session's minimum, when the takes contradict each other without
+      resolution, or when the brief went unaddressed, the judge advises a hold
+      and names its concerns. The advice is published with the judgement. It is
+      advice and nothing more: nothing refuses to publish on a hold, and
+      publishing a recommendation does not apply it.
+    </p>
+    <p>
+      A judge never changes a take and never sets a weight. It does not score
+      or rank the takes, and the weight vector is the members' average whatever
+      the judge writes.
+    </p>
+    <p>
+      Each judgement is a public record once its session publishes, at
+      <code>/swarm/judgements/&lt;id&gt;</code>, with the prompt hash and inputs
+      digest that pin what the judge was asked and what it read. A session judged
+      by several judges publishes each one's judgement, and a judge's member page
+      lists every session it judged.
     </p>
 
     <h2 id="publication">Publication</h2>

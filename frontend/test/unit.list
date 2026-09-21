@@ -27,6 +27,7 @@ scripts/tests/unit/sparkline.test.ts
 scripts/tests/unit/swarm-apply-form-and-status.test.ts
 scripts/tests/unit/swarm-initials-fallback-pin.test.ts
 scripts/tests/unit/swarm-initials-lockstep.test.ts
+scripts/tests/unit/swarm-judgements.test.ts
 scripts/tests/unit/swarm-synthesis-preview.test.ts
 scripts/tests/unit/swarm-take-memo-link.test.ts
 scripts/tests/unit/seo-cite-title.test.ts

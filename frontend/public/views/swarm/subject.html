@@ -228,6 +228,10 @@
                 </template>
                 <template x-if="latestProse()">
                   <div>
+                    <!-- Words a judge wrote carry its name. -->
+                    <template x-if="rationaleJudgeLabel(latest(), judgeRoster)">
+                      <p class="rr-k rr-sub" x-html="rationaleJudgeLabel(latest(), judgeRoster)"></p>
+                    </template>
                     <div class="rr-prose" :class="!more && isLong(latestProse(), 480) ? 'is-clamped' : ''" style="--rr-lines:8"
                          x-html="linkified(latestProse())"></div>
                     <template x-if="isLong(latestProse(), 480)">
@@ -242,7 +246,7 @@
                     <template x-for="x in stanceTally(latest())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[latest().swarmRecommendation?.quorum ? quorumText(latest()) : '', meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[latest().swarmRecommendation?.quorum ? quorumText(latest(), judgeRoster) : '', meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(latest())">

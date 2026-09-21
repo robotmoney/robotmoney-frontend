@@ -46,7 +46,7 @@
             <span class="sv__live-meta" x-show="liveIsOpen() && liveRemaining()">
               Window closes in <b class="sv__live-n" x-text="liveRemaining()" :title="liveClosesAbsolute()"></b>
             </span>
-            <!-- Only window_closed/aggregated may claim aggregation. A past
+            <!-- Only window_closed/aggregated/judged may claim aggregation. A past
                  deadline on a still-`collecting` row is the orphan case, so it
                  reports the closure and stops there. -->
             <span class="sv__live-meta" x-show="liveIsAggregating()">
@@ -80,7 +80,7 @@
               <thead>
                 <tr>
                   <th scope="col">Member</th>
-                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">A <b>proposer</b> files one signed take each session: position, reasoning and sources.</span></span></th>
+                  <th scope="col">Role<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What a role means">i</button><span class="rm-tip__bub" role="tooltip">A <b>proposer</b> files one signed take each session: position, reasoning and sources.<template x-if="hasJudge()"><span> A <b>judge</b> files no take. It explains the takes and advises on release.</span></template></span></span></th>
                   <th scope="col" class="q">Operator</th>
                 </tr>
               </thead>
@@ -207,6 +207,10 @@
                 </template>
                 <template x-if="rationaleOf(allocShown())">
                   <div>
+                    <!-- Words a judge wrote carry its name. -->
+                    <template x-if="rationaleJudgeLabel(allocShown(), members)">
+                      <p class="rr-k rr-sub" x-html="rationaleJudgeLabel(allocShown(), members)"></p>
+                    </template>
                     <div class="rr-prose" :class="!more && String(rationaleOf(allocShown())).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
                          x-html="linkified(rationaleOf(allocShown()))"></div>
                     <template x-if="String(rationaleOf(allocShown())).length > 480">
@@ -221,7 +225,7 @@
                     <template x-for="x in stanceTally(allocShown())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[turnoutText(allocShown()), meanConfidenceText(allocShown())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[turnoutText(allocShown(), members), meanConfidenceText(allocShown())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(allocShown())">

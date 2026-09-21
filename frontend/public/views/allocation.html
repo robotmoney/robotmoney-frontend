@@ -184,6 +184,9 @@
               </template>
               <template x-if="recRationale()">
                 <div>
+                  <template x-if="recRationaleLabel()">
+                    <p class="rr-k rr-sub" x-html="recRationaleLabel()"></p>
+                  </template>
                   <div class="rr-prose" :class="!more && String(recRationale()).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
                        x-html="linkified(recRationale())"></div>
                   <template x-if="String(recRationale()).length > 480">

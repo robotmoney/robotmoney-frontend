@@ -60,6 +60,7 @@ import {
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
 import { sessionSummary, bucketShort } from "../../lib/session-summary.js";
+import { loadRoster } from "../../lib/judgements.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -96,6 +97,10 @@ export function registerAllocationView(Alpine) {
     recLatest: null,
     recLoaded: false,
     recError: false,
+    // The public roster, read only when a judge worked on that session: its
+    // name goes over the words it wrote, and a seated judge is no seat a take
+    // could fill (lib/judgements.js).
+    recRoster: [],
 
     // The allocation's own decision log is not built yet, so the sessions
     // live where the swarm keeps them.
@@ -128,7 +133,9 @@ export function registerAllocationView(Alpine) {
         .finally(() => {
           this.loading = false;
         });
-      const rec = recRead.then((r) => {
+      const rec = recRead.then(async (r) => {
+        // Before the panel draws, so a judge's name never flashes as its id.
+        if (r?.session?.swarmRecommendation?.judge) this.recRoster = await loadRoster();
         this.recSession = r?.session ?? null;
         this.recLatest = r?.latest ?? null;
         this.recError = !!r?.error;
@@ -259,10 +266,12 @@ export function registerAllocationView(Alpine) {
     recDate(s) { return s?.date ? fmtDate(s.date) : ""; },
     recHref(s) { return sessionHref(s); },
     recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },
+    // "Judge · <name>" over a rationale a judge wrote.
+    recRationaleLabel() { return sessionSummary.rationaleJudgeLabel.call(sessionSummary, this.recSession, this.recRoster); },
     recTally() { return this.recSession ? sessionSummary.stanceTally.call(sessionSummary, this.recSession) : []; },
     recTallyNote() {
       const s = this.recSession;
-      return s ? [sessionSummary.turnoutText.call(sessionSummary, s), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
+      return s ? [sessionSummary.turnoutText.call(sessionSummary, s, this.recRoster), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
     },
     linkified(text) { return helpers.linkified(text); },
     stanceColor(s) { return stanceColor(s); },

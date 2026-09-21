@@ -26,6 +26,7 @@ import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
   referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
 import * as weightChange from "../../lib/weight-change.js";
+import { analystCount, isJudge } from "../../lib/judgements.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
 // signature seal's wording and mark, the receipt link, and the take body's
@@ -42,13 +43,11 @@ const takeCardHost = {
   linkified: helpers.linkified,
 };
 
-// Every seat proposes today. There is no role field on the projection yet, and
-// the second role (validator) ships with its first holder, so this is a named
-// constant rather than a string sprinkled through the template: when the field
-// lands, this function reads it and nothing else moves. RM-97's roles table.
-// Bearish through bullish, so the spread bar always runs the same direction
-// no matter which stances a session actually produced.
+// A seat proposes unless the roster says it judges. The projection emits
+// `role` since #1017 ("member" | "judge"); a roster from before it has none,
+// and every seat on it proposes. RM-97's roles table.
 const DEFAULT_ROLE = "proposer";
+const JUDGE_ROLE = "judge";
 
 // The sessions list is paginated and the page used to render only the first
 // page while presenting its counts as totals. 209 published sessions arrive in
@@ -257,8 +256,9 @@ export function registerSwarmView(Alpine) {
     facts() {
       const published = this.publishedSessions();
       const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
+      // Members who file takes: a judge sits on the roster and files none.
       const rows = [
-        { k: "Members", v: String(this.members.length) },
+        { k: "Members", v: String(analystCount(this.members)) },
         { k: "Subjects", v: String(this.sessionFilters().length) },
         { k: "Sessions", v: String(published.length) },
       ];
@@ -468,7 +468,7 @@ export function registerSwarmView(Alpine) {
     livePhaseLabel() { return this.livePhase()?.label || ""; },
     liveTakesLabel() {
       const n = this.liveTakes;
-      const seats = this.members.length;
+      const seats = analystCount(this.members);
       if (n == null || !seats) return "";
       return `${n} of ${seats} takes filed`;
     },
@@ -664,7 +664,9 @@ export function registerSwarmView(Alpine) {
     },
 
     // ── members ──────────────────────────────────────────────────────────
-    memberRole() { return DEFAULT_ROLE; },
+    memberRole(m) { return isJudge(m) ? JUDGE_ROLE : DEFAULT_ROLE; },
+    // The Role tip describes a judge only once one is seated.
+    hasJudge() { return this.members.some(isJudge); },
     // The seats beside the Apply button: how many are open, of how many. The
     // members holding the rest are the facts row's count.
     openSeatsLabel() {

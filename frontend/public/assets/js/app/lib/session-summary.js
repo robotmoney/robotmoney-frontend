@@ -23,6 +23,7 @@ import { CATEGORICAL } from "./chart-theme.js";
 import { actionLabel } from "./sleeve-explorer.js";
 import { vaultBySlug } from "./vault-data.js";
 import { BUCKET_NOTES } from "./sleeve-notes.js";
+import { analystSeats, judgeLabelHtml, judgeWroteRationale } from "./judgements.js";
 
 // Fixed reading direction, so a spread bar means the same thing on every
 // surface. A stance this build does not know keeps its count and sorts last
@@ -260,10 +261,12 @@ export const sessionSummary = {
   // "N of M took part" needs a roster size, which only the live record has.
   // An archived session knows how many filed and not how many could have, so
   // it says the half it can stand behind rather than inventing a denominator.
-  /** @param {any} s */
-  quorumText(s) {
+  // M counts the seats a take could fill: a seated judge files none, and the
+  // roster, when the surface holds one, is how it is known (lib/judgements.js).
+  /** @param {any} s @param {any[]} [roster] */
+  quorumText(s, roster = []) {
     const q = s?.swarmRecommendation?.quorum;
-    if (q) return `${q.submitted} of ${q.active} took part`;
+    if (q) return `${q.submitted} of ${analystSeats(s.swarmRecommendation, roster) ?? q.active} took part`;
     const n = takeRowsOf(s).length;
     return n ? `${n} took part` : "";
   },
@@ -271,13 +274,14 @@ export const sessionSummary = {
   // seat that sat the session out ("4 of 5"), or a take the tally does not
   // count (no stance, or one off the five-stance axis). "3 took part" beside a
   // 1/1/1 tally is the tally's own sum.
-  /** @param {any} s */
-  turnoutText(s) {
+  /** @param {any} s @param {any[]} [roster] */
+  turnoutText(s, roster = []) {
     const q = s?.swarmRecommendation?.quorum;
-    if (q && Number(q.submitted) < Number(q.active)) return this.quorumText(s);
+    const seats = analystSeats(s?.swarmRecommendation, roster);
+    if (q && seats != null && Number(q.submitted) < seats) return this.quorumText(s, roster);
     const tallied = this.stanceTally(s).reduce((/** @type {number} */ a, /** @type {{ n: number }} */ x) => a + x.n, 0);
     const filed = q ? Number(q.submitted) : takeRowsOf(s).length;
-    return Number.isFinite(filed) && filed > 0 && filed !== tallied ? this.quorumText(s) : "";
+    return Number.isFinite(filed) && filed > 0 && filed !== tallied ? this.quorumText(s, roster) : "";
   },
   // How many takes this session collected. The quorum is the authority when
   // the record has one; a row that carries its own count comes next (the
@@ -427,8 +431,9 @@ export const sessionSummary = {
     // The rationale under the same trust rule as everywhere else (rationaleOf):
     // a live rollup's is its template restating the tally, which printed
     // "Majority stance is cautious (1 of 3…)" beside a SPLIT chip. That
-    // session did publish, and made no call on any position.
-    const why = this.rationaleOf(s);
+    // session did publish, and made no call on any position. A judge's prose
+    // explains the takes; it is not a call either.
+    const why = judgeWroteRationale(s) ? "" : this.rationaleOf(s);
     if (why) return { kind: "text", text: why };
     return rec.rationale ? { kind: "none" } : null;
   },
@@ -472,11 +477,20 @@ export const sessionSummary = {
   actionLabel,
   // The recommendation's own prose, or "" when a rollup's template wrote it:
   // a live aggregate carries quorum/stances and its rationale restates the tally.
+  // A model judge replaces that template with its own words, which stand, and
+  // every surface that prints them names the judge (rationaleJudgeLabel).
   /** @param {any} s */
   rationaleOf(s) {
     const rec = s?.swarmRecommendation;
-    if (!rec || rec.quorum || rec.stances) return "";
+    if (!rec) return "";
+    if ((rec.quorum || rec.stances) && !judgeWroteRationale(s)) return "";
     return rec.rationale || "";
+  },
+  // "Judge · <name>" over a rationale a judge wrote, "" over any other. The
+  // name resolves through the roster when the surface holds one.
+  /** @param {any} s @param {any[]} [roster] */
+  rationaleJudgeLabel(s, roster = []) {
+    return judgeWroteRationale(s) ? judgeLabelHtml(s.swarmRecommendation.judge, roster) : "";
   },
   // The positions it moves, holds left out: the held count says the rest.
   /** @param {any} s */
