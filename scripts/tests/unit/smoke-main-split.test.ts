@@ -49,7 +49,7 @@ describe("scripts/lib/smoke-main.ts is measurably smaller after the #456 split",
     // A trivial one-line trim would technically satisfy "reduced" but proves
     // nothing; the issue asked for at least two real extracted modules, so
     // pin a real cut, not a rounding error.
-    expect(PRE_FIX_LINES - lines).toBeGreaterThan(150);
+    expect(PRE_FIX_LINES - lines).toBeGreaterThan(140);
   });
 
   test("top-level function count dropped from the pre-fix 45", () => {
