@@ -544,7 +544,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
             "- The principal risk is accidental identity rotation between duties.",
             "- Accept the take only under the originally admitted public key.",
             "",
-            "STANCE: neutral | CONFIDENCE: 0.61",
+            "STANCE: neutral | CONFIDENCE: 0.61 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25",
           ].join("\n");
           const opencodeShim = join(workDir, "opencode-prose-fixture");
           writeFileSync(

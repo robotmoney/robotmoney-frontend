@@ -836,6 +836,13 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
 // — the shipped default — nothing waits at all.
 const JUDGE_WAIT_MS = 120_000;
 
+/** The judge job succeeded and its judgement is recorded; the session just did not transition (#817). */
+class JudgedByRecord extends Error {
+  constructor(readonly recorded: number) {
+    super(`judged by record (${recorded})`);
+  }
+}
+
 /**
  * The judge wait's backstop ceiling, derived from the judge's OWN per-attempt
  * timeout rather than fixed below it.
@@ -848,13 +855,6 @@ const JUDGE_WAIT_MS = 120_000;
  * timeout, and the next two lifecycle waits failed behind it on the lane. Two
  * full attempts plus a minute of claim/backoff slack, never less than before.
  */
-/** The judge job succeeded and its judgement is recorded; the session just did not transition (#817). */
-class JudgedByRecord extends Error {
-  constructor(readonly recorded: number) {
-    super(`judged by record (${recorded})`);
-  }
-}
-
 export function judgeWaitCeilingMs(env: Record<string, string | undefined> = process.env): number {
   const perAttempt = Number(env.SWARM_JUDGE_TIMEOUT_MS?.trim()) || 180_000;
   return Math.max(JUDGE_WAIT_MS, 2 * perAttempt + 60_000);

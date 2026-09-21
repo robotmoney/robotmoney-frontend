@@ -1265,11 +1265,17 @@ async function main(): Promise<void> {
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
 
     // PRODUCT invariants, via the same driver a cutover runs (scripts/verify-live.ts).
-    // Called here so CI and production assert the same things from one
-    // implementation, instead of CI having legs the release's postflight does
-    // not. tier=full because this is a twin: it may drive the pipeline.
-    console.log("[smoke] verifying product invariants (verify-live)…");
-    await run(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", "full"], repoRoot,
+    // tier=full ONLY for a smoke-twin boot: the twin-roster and judge legs
+    // assert what a TWIN owes (every restored member seated, an ENFORCE
+    // judgement with a receipt). The CI e2e is NOT a twin — its simulation
+    // roster carries deliberate no-shows (draco, themis) and fixtures
+    // (cross-role-test, starter-rest) that never file takes, and its judge
+    // coverage is shadow-only (issue #845), so those legs FAIL there by
+    // construction. A demo boot runs tier=readonly — the swarm pipeline legs
+    // (published sessions, lifecycle completeness, D42 recompute) still assert.
+    const verifyTier = dataPath.kind === "smoke-twin" ? "full" : "readonly";
+    console.log(`[smoke] verifying product invariants (verify-live, tier=${verifyTier})…`);
+    await run(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", verifyTier], repoRoot,
       { ...process.env } as Record<string, string>, "live product verification");
 
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this

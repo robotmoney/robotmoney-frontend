@@ -30,6 +30,7 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
+import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import { assistantTextParts, describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
 import {
   classifyInferenceFailure,
@@ -149,20 +150,95 @@ export interface Persona {
 export interface ParsedTake {
   stance: string;
   confidence: number;
-  // Body with the trailing STANCE/CONFIDENCE control line removed.
+  // The member's OWN proposed allocation, parsed off the trailing control
+  // line (e.g. `WEIGHTS: agent_tokens=0.25, ...`). Carried on the submission
+  // so the published vector is meanTakeWeights() over REAL member proposals
+  // (D42) — without it a `bucket_weights` subject publishes a vector-less
+  // recommendation and every verify gate over the pipeline fails.
+  weights: { bucket: string; weight: number }[];
+  // Body with the trailing STANCE/CONFIDENCE/WEIGHTS control line removed.
   body: string;
 }
 
-// Parse a trailing "STANCE: <...> | CONFIDENCE: <0-1>" line from a model take
-// into { stance, confidence } and return the stored body with that control line
-// stripped. A missing or malformed control line THROWS — it renders the member
-// ABSENT, loudly (session.ts settles per-member failures into a no-show), and
-// NEVER degrades to a fabricated neutral/0.5 stance. The silent default this
-// function used to carry was a template remnant from the retired hermetic mode
-// (#301/#319): a fabricated stance is a fabricated signed vote, which is worse
-// than an honest absence. The happy-path parse still mirrors the reference
-// parser (generate-session.js parseStanceFromBody) so submitted and API takes
-// render identically.
+// The allocation contract the member prompt demands: every take proposes a
+// weight for each of the four canonical vault buckets (the SAME order the
+// consensus receipt emits them in — contract's RECEIPT_CANONICAL_BUCKET_ORDER).
+// `parseStanceFromBody` requires exactly this set, so a take that omits or
+// renames a bucket is an ABSENT member, never a silently-partial proposal
+// (the vector a member DID propose must be recomputable by anyone holding the
+// take set, which a member whose weights a reader cannot rebuild would break).
+export const TAKE_WEIGHTS_BUCKETS: readonly string[] = RECEIPT_CANONICAL_BUCKET_ORDER;
+
+// Parse the WEIGHTS clause of a take's trailing control line into entries.
+// The clause is `WEIGHTS: <bucket>=<fraction>, <bucket>=<fraction>, ...` and
+// MUST name every bucket in TAKE_WEIGHTS_BUCKETS exactly once, each with a
+// finite fraction in [0, 1], with the set summing to at least some positive
+// total (normalization happens in the backend derivation, not here). Throws on
+// any deviation — the member is ABSENT, never defaulted (same doctrine as
+// stance/confidence, #301/#319).
+export function parseWeightsClause(text: string): { bucket: string; weight: number }[] {
+  const m = text.match(/WEIGHTS:\s*([^|]+)$/i);
+  if (!m) {
+    throw new Error(
+      `model take is missing its trailing "WEIGHTS: <bucket>=<fraction>, ..." clause — ` +
+        `the member is rendered ABSENT, never defaulted to a fabricated allocation.`,
+    );
+  }
+  const pairs = m[1].split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  const entries: { bucket: string; weight: number }[] = [];
+  const seen = new Set<string>();
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) {
+      throw new Error(
+        `model take's WEIGHTS clause carries an unparseable pair ${JSON.stringify(pair)} — ` +
+          `expected "<bucket>=<fraction>"; the member is rendered ABSENT, never defaulted.`,
+      );
+    }
+    const bucket = pair.slice(0, eq).trim().toLowerCase();
+    const weight = Number(pair.slice(eq + 1).trim());
+    if (!bucket || seen.has(bucket)) {
+      throw new Error(
+        `model take's WEIGHTS clause names bucket ${JSON.stringify(bucket)} twice or empty — ` +
+          `the member is rendered ABSENT, never defaulted.`,
+      );
+    }
+    if (!Number.isFinite(weight) || weight < 0 || weight > 1) {
+      throw new Error(
+        `model take's WEIGHTS clause carries weight ${JSON.stringify(pair.slice(eq + 1).trim())} for ` +
+          `${JSON.stringify(bucket)} — expected a fraction in [0, 1]; the member is rendered ABSENT, never defaulted.`,
+      );
+    }
+    seen.add(bucket);
+    entries.push({ bucket, weight });
+  }
+  const missing = TAKE_WEIGHTS_BUCKETS.filter((b) => !seen.has(b));
+  if (missing.length) {
+    throw new Error(
+      `model take's WEIGHTS clause omits the canonical bucket(s) ${missing.join(", ")} — ` +
+        `expected exactly {${TAKE_WEIGHTS_BUCKETS.join(", ")}}; the member is rendered ABSENT, never defaulted.`,
+    );
+  }
+  const total = entries.reduce((sum, e) => sum + e.weight, 0);
+  if (!(total > 0)) {
+    throw new Error(
+      `model take's WEIGHTS clause sums to zero — the member is rendered ABSENT, never defaulted.`,
+    );
+  }
+  return entries;
+}
+
+// Parse a trailing "STANCE: <...> | CONFIDENCE: <0-1> | WEIGHTS: <bucket>=<f>, ..." line
+// from a model take into { stance, confidence, weights } and return the stored body
+// with that control line stripped. A missing or malformed control line THROWS —
+// it renders the member ABSENT, loudly (session.ts settles per-member failures
+// into a no-show), and NEVER degrades to a fabricated neutral/0.5 stance or a
+// fabricated allocation. The silent default this function used to carry was a
+// template remnant from the retired hermetic mode (#301/#319): a fabricated
+// stance is a fabricated signed vote, which is worse than an honest absence.
+// The happy-path parse still mirrors the reference parser
+// (generate-session.js parseStanceFromBody) so submitted and API takes render
+// identically.
 export function parseStanceFromBody(body: string): ParsedTake {
   const trimmed = body.trim();
   const lines = trimmed.split("\n");
@@ -170,7 +246,7 @@ export function parseStanceFromBody(body: string): ParsedTake {
   const m = last.match(/STANCE:\s*(\w+)\s*\|\s*CONFIDENCE:\s*([\d.]+)/i);
   if (!m) {
     throw new Error(
-      `model take is missing its trailing "STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>" control line — ` +
+      `model take is missing its trailing "STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1> | WEIGHTS: <bucket>=<fraction>, ..." control line — ` +
         `the member is rendered ABSENT, never defaulted to a fabricated neutral/0.5 stance. ` +
         `Last line of the take was: ${JSON.stringify(last.slice(0, 160))}`,
     );
@@ -189,9 +265,11 @@ export function parseStanceFromBody(body: string): ParsedTake {
         `the member is rendered ABSENT, never defaulted.`,
     );
   }
+  const weights = parseWeightsClause(last);
   return {
     stance,
     confidence: Math.max(0, Math.min(1, confidence)),
+    weights,
     body: lines.slice(0, -1).join("\n").trim(),
   };
 }
@@ -263,7 +341,11 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
     `- The first move you would make, with a trigger`,
     ``,
     `Stay in your voice. Conclude with one line exactly, and nothing after it:`,
-    `STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>`,
+    `STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1> | WEIGHTS: ${TAKE_WEIGHTS_BUCKETS.join("=<fraction>, ")}=<fraction>`,
+    ``,
+    `WEIGHTS is YOUR proposed allocation: one fraction in [0,1] for EACH of the four buckets ` +
+      `${TAKE_WEIGHTS_BUCKETS.join(", ")}, in exactly that order, summing to 1. ` +
+      `State it as plain "bucket=0.35" pairs on the control line — no prose, no percent signs.`,
   ].join("\n");
 }
 

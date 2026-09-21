@@ -60,7 +60,7 @@ writeFileSync(
     envKeys: Object.keys(process.env).sort(),
   }),
 );
-console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8" } }));
+console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25" } }));
 `);
   await chmod(fakeOpenCode, 0o755);
   process.env.OPENCODE_BIN = fakeOpenCode;
@@ -159,9 +159,41 @@ describe("opencode subprocess env is scrubbed down to the single model credentia
 // ── Issue #361 Phase 0: a malformed control line is a LOUD ABSENCE, never a
 // fabricated neutral/0.5 stance ─────────────────────────────────────────────
 describe("parseStanceFromBody throws on a missing or malformed control line", () => {
-  test("parses a well-formed trailing control line and strips it from the body", () => {
-    const parsed = parseStanceFromBody("**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8");
-    expect(parsed).toEqual({ stance: "bullish", confidence: 0.8, body: "**REGIME**\n- x" });
+test("parses a well-formed trailing control line and strips it from the body", () => {
+    const parsed = parseStanceFromBody(
+      "**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25",
+    );
+    expect(parsed).toEqual({
+      stance: "bullish",
+      confidence: 0.8,
+      weights: [
+        { bucket: "agent_tokens", weight: 0.25 },
+        { bucket: "conservative_defi_yield", weight: 0.25 },
+        { bucket: "protocol_tokens", weight: 0.25 },
+        { bucket: "real_world_assets", weight: 0.25 },
+      ],
+      body: "**REGIME**\n- x",
+    });
+  });
+
+  test("throws when the WEIGHTS clause is absent (no fabricated allocation)", () => {
+    expect(() => parseStanceFromBody("**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8")).toThrow(
+      /missing its trailing "WEIGHTS:.*rendered ABSENT/,
+    );
+  });
+
+  test("throws when the WEIGHTS clause omits a canonical bucket", () => {
+    expect(() =>
+      parseStanceFromBody("body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.5, conservative_defi_yield=0.5"),
+    ).toThrow(/omits the canonical bucket\(s\).*rendered ABSENT/);
+  });
+
+  test("throws when a WEIGHTS value is malformed or out of range", () => {
+    expect(() =>
+      parseStanceFromBody(
+        "body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=1.5",
+      ),
+    ).toThrow(/weight.*fraction in \[0, 1\].*rendered ABSENT/);
   });
 
   test("throws when the control line is absent (no neutral/0.5 default)", () => {
@@ -183,7 +215,9 @@ describe("parseStanceFromBody throws on a missing or malformed control line", ()
   });
 
   test("clamps out-of-range confidence into [0,1] without fabricating a stance", () => {
-    expect(parseStanceFromBody("body\nSTANCE: cautious | CONFIDENCE: 1.7").confidence).toBe(1);
+    expect(
+      parseStanceFromBody("body\nSTANCE: cautious | CONFIDENCE: 1.7 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25").confidence,
+    ).toBe(1);
   });
 });
 
@@ -459,7 +493,7 @@ test("an auxiliary GPT title error is classified separately from a successful De
   const bin = join(dir, "opencode-title-error");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("AI_APICallError: Model is disabled providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 `);
   await chmod(bin, 0o755);
   const previous = process.env.OPENCODE_BIN;
@@ -485,7 +519,7 @@ test("a legitimately selected gpt-5.4-nano primary is not mislabeled as an auxil
   const bin = join(dir, "opencode-gpt-primary");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("APIError providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 `);
   await chmod(bin, 0o755);
   const previousBin = process.env.OPENCODE_BIN;
@@ -514,7 +548,7 @@ test("a successful parent with a descendant retaining pipes remains hard-bounded
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {stdio:["ignore","inherit","inherit"]});
 child.unref();
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 process.exit(0);
 `);
   await chmod(bin, 0o755);

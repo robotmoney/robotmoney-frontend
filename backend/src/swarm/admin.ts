@@ -970,13 +970,33 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
       "swarm.judge": new Date(judgeMs),
       "swarm.publish": publishAt,
     };
+    // DO UPDATE, NOT DO NOTHING (the reschedule case this used to lose). A
+    // session re-created while still `scheduled` (the UPDATE branch above)
+    // keeps its original job rows — with DO NOTHING they also kept their
+    // ORIGINAL run_after, so a rescheduled session ran on its old timeline:
+    // a step whose old instant had already passed fired as a benign no-op
+    // (e.g. close_window against a `scheduled` session updates 0 rows and
+    // settles `succeeded`), and when the session actually reached the state
+    // that step exists for, the job was already spent — the window never
+    // closed and the session stayed `collecting` forever. On reschedule every
+    // job is re-armed to the NEW instants: `run_after` moves with the session
+    // and a no-op that already settled is revived as `pending` so it fires
+    // again at the right time. A fresh insert never conflicts, so the DO
+    // UPDATE branch is unreachable there.
     const jobIds: number[] = [];
     for (const kind of SESSION_JOB_KINDS) {
       const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
       const r = await tx`
         INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
         VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+          run_after = EXCLUDED.run_after,
+          status = 'pending',
+          attempts = 0,
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = NULL,
+          updated_at = now()
         RETURNING id`;
       if (r[0]) jobIds.push(Number(r[0].id));
     }
