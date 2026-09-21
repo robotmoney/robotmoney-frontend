@@ -35,7 +35,7 @@ const DEMO_COMPOSE_PASSTHROUGH = [
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
   "RM_ENV",
-  // NOT "WORKER_DATABASE_URL". It was on this list from the 2026-07-28 extraction
+  "WORKER_DATABASE_URL",
   // (9aaaaeec) until it cost a stage twin boot on 2026-09-18: the stage checkout's
   // `.env` carries the DEPLOYMENT's value (`…@postgres:5432/robotmoney`, the
   // rm_worker login of the persistent stack, deployment.md §4.3) and bun auto-loads
@@ -111,7 +111,6 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 // the reason its presence is worth a line of output rather than silence.
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
   [
-    "WORKER_DATABASE_URL",
     "the worker lanes take the stack's own DATABASE_URL (the twin, under --db smoke-twin). " +
       "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
       "not have, and every lane died in DNS while the boot reported only unhealthy workers",
