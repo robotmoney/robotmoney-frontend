@@ -359,9 +359,22 @@ Migration 0056's own tail comment flags the residue as unresolved:
 2. May such an opinion be published as a signed receipt?
 
 `main` answers yes/yes. `releases-0.5.x` answers no/no. yes/no is coherent and
-un-implemented: keep the fallback so a session still publishes, refuse it a
-certificate. That option deserves consideration precisely because it separates
-"the swarm keeps running" from "we signed something a model did not write".
+un-implemented: keep a clearly-labelled non-model opinion on the session for
+readers, and refuse it a certificate.
+
+**A judge failure does not stop a session on either branch.** This is worth
+stating plainly, because the fallback debate is easy to misread as an
+availability question. It is not. `judged` is optional, `aggregated → published`
+is legal, and `swarm.judge` is a separate job from `swarm.publish`. When judging
+fails, the session stays `aggregated`, the publish job still runs, and the
+session reaches `published`. What it loses is its certificate — `not_judged` is
+an *expected* receipt refusal, and the missing receipt is reported per session in
+the admin overview alert feed rather than passing in silence.
+
+So all three answers keep the machine running. They differ only in what a reader
+sees on the session, and in whether a certificate exists. The things that
+genuinely stop a session are in §10 — GAP-5 and GAP-8 — and they have nothing to
+do with judge policy.
 
 ## 10. Gaps between this machine and its implementation
 
