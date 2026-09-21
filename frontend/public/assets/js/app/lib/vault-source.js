@@ -24,9 +24,11 @@
 // ignored and never written, and no devnet, saved or archive figure is read.
 //
 // Base mode, in order:
-//   1. GET /api/dashboards/robotmoney-vaults (the four-vault read, when the
-//      backend serves it). Its recommendation is authoritative.
-//   2. That route absent (404, or the SPA shell answering an unknown path):
+//   1. GET /api/dashboards/robotmoney-vaults (the four-vault read), once the
+//      contract declares it as ROUTES.dashboards.robotmoneyVaults. Its
+//      recommendation is authoritative.
+//   2. That route undeclared, or absent (404, or the SPA shell answering an
+//      unknown path):
 //      GET /api/dashboards/vault-economics, the single Base vault, with the
 //      latest published robotmoney-allocation recommendation laid over it.
 //      The absence is remembered for the rest of the visit.
@@ -362,6 +364,15 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
 
 // ── the overview ─────────────────────────────────────────────────────────────
 
+// The backend registers exactly the contract's ROUTES, so a route missing
+// there has nothing behind it. Requesting it anyway logged a 404 on every
+// visit to the allocation page.
+/** @returns {string | null} */
+function declaredVaultsRoute() {
+  const r = /** @type {Record<string, string | undefined>} */ (ROUTES.dashboards).robotmoneyVaults;
+  return typeof r === "string" ? r : null;
+}
+
 // The four-vault route is either served or not; once it has answered "not
 // here", the rest of the visit goes straight to the Base feed. Data is not
 // cached, only the absence.
@@ -444,11 +455,12 @@ async function savedSnapshot(hostname, recPromise, policyPromise = Promise.resol
 
 /**
  * The overview for the current mode.
- * @param {{ hostname?: string, recommendation?: boolean | Promise<{ rec: any, error: boolean }>, policy?: Promise<any>, search?: string, storage?: StorageLike | null }} [opts]
- *   `search` and `storage` default to this page's; tests pass their own.
+ * @param {{ hostname?: string, recommendation?: boolean | Promise<{ rec: any, error: boolean }>, policy?: Promise<any>, search?: string, storage?: StorageLike | null, endpoint?: string | null }} [opts]
+ *   `search` and `storage` default to this page's, `endpoint` to the
+ *   contract's four-vault route; tests pass their own.
  * @returns {Promise<VaultLoad>}
  */
-export async function loadVaultOverview({ hostname = currentHostname(), recommendation = true, policy, search, storage } = {}) {
+export async function loadVaultOverview({ hostname = currentHostname(), recommendation = true, policy, search, storage, endpoint = declaredVaultsRoute() } = {}) {
   const m = resolveVaultMode({
     search: search ?? currentSearch(),
     hostname,
@@ -456,10 +468,10 @@ export async function loadVaultOverview({ hostname = currentHostname(), recommen
   });
   if (m.mode === "devnet" && isLocalHost(hostname)) return loadDevnet(m);
 
-  if (!vaultsEndpointAbsent) {
+  if (endpoint && !vaultsEndpointAbsent) {
     try {
       // Authoritative: the four-vault route carries the router's weights.
-      const dto = await api.get(VAULTS_ENDPOINT);
+      const dto = await api.get(endpoint);
       return {
         overview: normalizeOverview(dto),
         source: "api",

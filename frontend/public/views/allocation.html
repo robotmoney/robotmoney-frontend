@@ -306,7 +306,7 @@
                 </th>
                 <td class="q"><span x-text="v.recommended"></span><small x-text="v.recommendedUsd"></small></td>
                 <template x-if="threeLayers()"><td class="q"><span x-text="v.target"></span><small x-text="v.targetUsd"></small></td></template>
-                <td class="q"><span x-text="v.actual"></span><small x-text="v.actualUsd"></small></td>
+                <td class="q" data-col="actual"><span x-text="v.actual"></span><small x-text="v.actualUsd"></small></td>
                 <!-- In percentage points with the sign, as every move on the
                      site (lib/weight-change.js through gapParts): a zero gap is
                      a reading, "0 pp"; a missing one is "—". -->

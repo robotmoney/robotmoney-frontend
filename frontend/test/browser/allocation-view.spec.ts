@@ -12,8 +12,8 @@
 // Same harness pattern as the spec it replaces: the SPA and the view HTML are
 // served by the backend at baseURL, the vendor CDN scripts are fulfilled from
 // node_modules, and every live surface is stubbed:
-//   - GET /api/dashboards/robotmoney-vaults → 404: the four-vault route is not
-//     served yet, so lib/vault-source.js reads the Base feed below;
+//   - the four-vault route is not in the contract yet, so lib/vault-source.js
+//     never requests it and reads the Base feed below;
 //   - GET /api/dashboards/vault-economics → the COMMITTED GOLDEN
 //     (goldens/api-goldens.json), the single source of truth per
 //     docs/architecture.md's preview section, or a degraded variant of it;
@@ -140,10 +140,6 @@ async function stubEnvironment(
   const json = (payload: unknown) => ({
     status: 200, contentType: "application/json", body: JSON.stringify(payload),
   });
-  // The four-vault route is not served yet: its absence sends the page to the
-  // Base feed, the way production reads today.
-  await page.route("**/api/dashboards/robotmoney-vaults**", (route) =>
-    route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not_found" }) }));
   // `null` means "this feed is DOWN", which is a different state from "this
   // feed returned an empty payload" and the page has to distinguish them.
   await page.route("**/api/dashboards/vault-economics", (route) =>
