@@ -1,17 +1,18 @@
 // Postflight for the v0.5.0 -> v0.5.1 rollout. All database checks are
 // SELECT-only.
 //
-// v0.5.1 applies NO migration (release.ts), so unlike every prior release's
-// postflight this one is not asking "did the new migrations land?". It asks
-// the two questions a code-only release can actually get wrong:
-//   (a) did the deploy leave the v0.5.0 schema exactly as it found it, and
-//   (b) do the v0.5.0 data invariants still hold after the new code has run?
+// v0.5.1's application delta changes no schema; its single migration (0062) is
+// a gate repair. So this postflight asks three questions:
+//   (a) did 0062 land, and did it WORK -- `readonly-sequence-access` is the
+//       difference between "recorded" and "the backup can now run";
+//   (b) did the deploy leave the v0.5.0 schema otherwise exactly as it was;
+//   (c) do the v0.5.0 data invariants still hold after the new code has run?
 //
-// (b) is the load-bearing half. The v0.5.1 delta is swarm session lifecycle,
-// API pool timeouts, the judge-job wait and the e2e verify gates -- code that
-// writes swarm rows on every cycle. A release that cannot change the schema
-// can still corrupt what is in it, and the schema checks alone would report
-// green through that.
+// (c) is the load-bearing half for the release's own features. The v0.5.1
+// delta is swarm session lifecycle, API pool timeouts and the judge-job wait
+// -- code that writes swarm rows on every cycle. A release that barely touches
+// the schema can still corrupt what is in it, and schema checks alone would
+// report green through that.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,22 +45,42 @@ export async function runChecks(db: Db, { record }: Checker): Promise<void> {
     missing.length ? `missing: ${missing.join(", ")}` : `all ${PRIOR_RELEASE_MIGRATIONS.length} v0.4.0+v0.5.0 migrations remain recorded`,
   );
 
-  // The ledger must contain the v0.4.0+v0.5.0 set and nothing this release
-  // invented. Stated as "no migration outside the known set" rather than as a
-  // count delta, deliberately: on a smoke-twin restored from a production dump
-  // that had not yet reached v0.5.0, the boot legitimately applies the
-  // outstanding v0.5.0 migrations, so the ledger DOES grow during a rehearsal.
-  // What must never appear either there or in production is a migration this
-  // checkout does not carry.
-  const known = new Set<string>(PRIOR_RELEASE_MIGRATIONS);
+  // This release's own migration must be recorded, and nothing this checkout
+  // does not carry may be. Stated as "no migration outside the known set"
+  // rather than as a count delta: on a smoke-twin restored from a dump that
+  // had not yet reached v0.5.0, the boot legitimately applies the outstanding
+  // v0.5.0 migrations too, so the ledger DOES grow during a rehearsal.
+  const known = new Set<string>([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS]);
   const unexpected = [...applied].filter((name) => !known.has(name) && /^00(4[5-9]|5\d|6\d)/.test(name));
+  const missingRelease = RELEASE_MIGRATIONS.filter((name) => !applied.has(name));
   record(
-    "no-release-migrations",
-    RELEASE_MIGRATIONS.length === 0 && unexpected.length === 0 ? "PASS" : "FAIL",
-    unexpected.length
-      ? `migration(s) recorded that this checkout does not ship: ${unexpected.join(", ")}`
-      : "v0.5.1 added no migration of its own, and the ledger carries none this checkout lacks",
+    "release-migrations",
+    missingRelease.length === 0 && unexpected.length === 0 ? "PASS" : "FAIL",
+    [
+      ...(missingRelease.length ? [`this release's migration(s) are NOT recorded: ${missingRelease.join(", ")}`] : [`all ${RELEASE_MIGRATIONS.length} v0.5.1 migration(s) recorded`]),
+      ...(unexpected.length ? [`migration(s) recorded that this checkout does not ship: ${unexpected.join(", ")}`] : []),
+    ],
     "A migration the checkout does not carry means the target was migrated by a build from another branch — releases-0.6.x collides with this line at 0056-0061.",
+  );
+
+  // THE SELF-HEAL PROOF, and the reason 0062 exists. pg_dump reads every
+  // sequence's last_value as rm_readonly, so a single unreadable sequence
+  // breaks P3.backup — the FIRST gate of the next release. Asserting the count
+  // is zero is what turns "0062 is recorded" into "0062 worked".
+  const unreadableSeqs = (await db`
+    WITH s AS MATERIALIZED (
+      SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public' AND c.relkind = 'S'
+    )
+    SELECT relname FROM s WHERE NOT has_sequence_privilege('rm_readonly', oid, 'SELECT') ORDER BY relname
+  `) as unknown as { relname: string }[];
+  record(
+    "readonly-sequence-access",
+    unreadableSeqs.length === 0 ? "PASS" : "FAIL",
+    unreadableSeqs.length === 0
+      ? "rm_readonly can read every sequence in public — the next release's pg_dump will not be refused"
+      : `${unreadableSeqs.length} sequence(s) still deny rm_readonly a read after 0062: ${unreadableSeqs.slice(0, 15).map((r) => r.relname).join(", ")}`,
+    "0062 grants SELECT on all sequences and restores the default. If any remain unreadable, a later migration re-revoked them — see backend/tests/migration-readonly-sequence-grant.test.ts.",
   );
 
   const absentRequired: string[] = [];

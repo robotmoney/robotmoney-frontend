@@ -2,20 +2,27 @@
 export const TAG_GLOB = "v0.5.1*";
 
 /**
- * v0.5.1 IS A CODE-ONLY RELEASE. `RELEASE_MIGRATIONS` is empty, and that is
- * the release's defining fact rather than an omission: the migration set on
- * `releases-0.5.x` is byte-identical to the set `v0.5.0-rc.9` carried
- * (0043-0061, verified by `git ls-tree` on both refs). Everything v0.5.1 adds
- * over rc.9 is application and harness code -- the swarm session lifecycle
- * fixes, the API pool timeouts, the judge-job wait, and the e2e verify gates.
+ * v0.5.1 CARRIES EXACTLY ONE MIGRATION, and it exists to repair a defect the
+ * release did not cause.
  *
- * The consequence for the gates is exact and worth stating once here, because
- * every check below follows from it: this release cannot change the schema,
- * so preflight's job is no longer "prove the pending set is safe to apply" but
- * "prove there IS no pending set". A pending migration found on the live
- * target is, for v0.5.1, drift by definition.
+ * The release began as code-only: the application delta over `v0.5.0-rc.9` is
+ * the swarm session lifecycle fixes, the API pool timeouts, the judge-job wait
+ * and the e2e verify gates, none of which touches the schema. It stopped being
+ * code-only when the stage gates found that `pg_dump` could not run as
+ * `rm_readonly` -- twelve of production's forty `public` sequences deny it a
+ * read, so P3.backup fails before a rollout can start.
+ *
+ * `0062` is therefore a GATE REPAIR, not a feature: it is the migration that
+ * makes the next backup possible. It ships here rather than in v0.6 because
+ * the alternative is a manual `psql` GRANT against the production primary
+ * before every release, which is the kind of undocumented hand-step that
+ * produced the defect in the first place. Deploying v0.5.1 fixes production;
+ * nobody has to remember anything.
+ *
+ * See `backend/tests/migration-readonly-sequence-grant.test.ts` for the guard
+ * that stops the pattern returning, which is the durable half of the fix.
  */
-export const RELEASE_MIGRATIONS = [] as const;
+export const RELEASE_MIGRATIONS = ["0062_rm_readonly_sequence_select.sql"] as const;
 
 /**
  * Everything v0.5.1 must find already recorded and must preserve unchanged:
@@ -64,10 +71,10 @@ export const REQUIRED_TABLES = [
 ] as const;
 
 /**
- * v0.5.1 creates NO table. This is the empty counterpart of 0.5.0's
- * NEW_RELEASE_TABLES_BY_MIGRATION, kept as a named export so the "does this
- * release add tables?" question has the same shape of answer in every release
- * directory instead of being absent in the one release where the answer is no.
+ * v0.5.1 creates NO table. `0062` is grants only -- one GRANT over existing
+ * sequences and one ALTER DEFAULT PRIVILEGES. Kept as a named export so the
+ * "does this release add tables?" question has the same shape of answer in
+ * every release directory instead of being absent where the answer is no.
  */
 export const NEW_RELEASE_TABLES_BY_MIGRATION: Readonly<Record<string, readonly string[]>> = {};
 

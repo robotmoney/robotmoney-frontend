@@ -1,12 +1,17 @@
 // Read-only preflight for the v0.5.0 -> v0.5.1 rollout.
 //
-// WHAT IS DIFFERENT ABOUT THIS ONE, AND WHY EVERY CHECK BELOW INVERTS.
-// v0.5.1 is code-only (release.ts: RELEASE_MIGRATIONS is empty). Every prior
-// release's preflight proved "the pending set is exactly what this release
-// ships, and none of it has landed yet". There is no pending set here, so the
-// same question asked of this release reads: the live target must ALREADY be
-// at the full v0.5.0 schema, and the migration ledger must have nothing left
-// to apply. A pending migration is drift by definition, not a workload.
+// WHAT IS DIFFERENT ABOUT THIS ONE. v0.5.1's application delta is code-only;
+// its single migration (0062) is a GATE REPAIR that has nothing to do with the
+// release's features. So this preflight asks two questions at once: the target
+// must ALREADY be at the full v0.5.0 schema (there is no earlier work for this
+// release to do), and the only thing pending may be 0062 itself.
+//
+// The `readonly-sequence-access` record below is the unusual one, and it is
+// deliberately a WARN rather than a FAIL on a target that still has the
+// defect: it reports the very condition this release exists to repair, so
+// failing preflight on it would refuse to deploy the fix. It becomes a FAIL
+// only once 0062 is recorded and the sequences are STILL unreadable, which
+// would mean the repair did not take.
 //
 // The role/credential gate does NOT relax. v0.5.1 boots on the same taxonomy
 // v0.5.0 introduced -- config.ts:710 refuses a doadmin DATABASE_URL in
@@ -208,33 +213,58 @@ export async function runChecks(
     "Run the v0.5.0 rollout to completion first (docs/runbooks/v0-5-0-rollout.md); v0.5.1 is a code-only patch on top of it and cannot substitute for it.",
   );
 
-  // (2) Nothing pending, nothing orphaned. For v0.5.1 an empty pending set is
-  // the pass condition rather than a size assertion about RELEASE_MIGRATIONS.
+  // (2) The pending set must be EXACTLY this release's migration. v0.5.1
+  // carries one (0062, the rm_readonly sequence-grant repair), so a clean
+  // target shows that one pending and nothing else. Anything extra came from
+  // another branch -- releases-0.6.x collides with this line at 0056-0061 --
+  // and a boot would apply it as a side effect of the deploy.
   const onDisk = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
   const pending = onDisk.filter((name) => !applied.has(name));
+  const expected = new Set<string>(RELEASE_MIGRATIONS);
+  const unexpectedPending = pending.filter((name) => !expected.has(name));
   const orphans = rows.map((row) => row.name).filter((name) => !onDisk.includes(name));
   record(
-    "no-pending-migrations",
-    pending.length || orphans.length ? "FAIL" : "PASS",
-    pending.length || orphans.length
+    "pending-is-this-release-only",
+    unexpectedPending.length || orphans.length ? "FAIL" : "PASS",
+    unexpectedPending.length || orphans.length
       ? [
-          ...(pending.length ? [`pending migration(s) on a code-only release: ${pending.join(", ")}`] : []),
+          ...(unexpectedPending.length ? [`pending migration(s) this release does not ship: ${unexpectedPending.join(", ")}`] : []),
           ...(orphans.length ? [`recorded but absent from checkout: ${orphans.join(", ")}`] : []),
         ]
-      : `ledger matches the candidate checkout exactly — ${onDisk.length} migration(s) on disk, all recorded, none orphaned`,
-    "v0.5.1 ships no migration, so anything pending here came from somewhere else. Identify it before deploying — do not let a boot apply it as a side effect.",
+      : pending.length
+        ? `ledger matches the checkout aside from this release's own ${pending.length} migration(s): ${pending.join(", ")}`
+        : "nothing pending — this release's migration is already applied (a resume, not drift)",
+    "Identify the extra migration before deploying. Do not let a boot apply it as a side effect.",
   );
 
-  // (3) The release really is code-only. A guard against this manifest drifting
-  // out from under its own runbook: if someone adds a migration to v0.5.1, the
-  // gate above stops being the right question and this record says so.
+  // (3) THE REASON 0062 EXISTS, checked directly rather than inferred from the
+  // ledger. pg_dump reads every sequence's last_value, and rm_readonly is the
+  // role the backup runs as, so a sequence it cannot read breaks P3.backup --
+  // which is exactly how this release acquired a migration at all. Reported as
+  // a WARN, not a FAIL: it is the condition 0062 is here to REPAIR, so failing
+  // preflight on it would refuse to deploy the fix for the problem.
+  const seqRows = (await db`
+    WITH s AS MATERIALIZED (
+      SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public' AND c.relkind = 'S'
+    )
+    SELECT relname FROM s WHERE NOT has_sequence_privilege('rm_readonly', oid, 'SELECT') ORDER BY relname
+  `) as unknown as { relname: string }[];
+  const alreadyApplied = applied.has("0062_rm_readonly_sequence_select.sql");
   record(
-    "code-only",
-    RELEASE_MIGRATIONS.length === 0 ? "PASS" : "FAIL",
-    RELEASE_MIGRATIONS.length === 0
-      ? "RELEASE_MIGRATIONS is empty — v0.5.1 is code-only, as its runbook states"
-      : `RELEASE_MIGRATIONS lists ${RELEASE_MIGRATIONS.length} migration(s); v0.5.1 is documented as code-only`,
-    "Either the migration belongs in a numbered release of its own, or this runbook and its checks need rewriting for a schema-carrying release.",
+    "readonly-sequence-access",
+    seqRows.length === 0 ? "PASS" : alreadyApplied ? "FAIL" : "WARN",
+    seqRows.length === 0
+      ? "rm_readonly can read every sequence in public — pg_dump (P3.backup) will not be refused"
+      : [
+          `${seqRows.length} sequence(s) deny rm_readonly a read, so pg_dump fails: ${seqRows.slice(0, 15).join(", ")}`,
+          alreadyApplied
+            ? "0062 is ALREADY RECORDED and they are still unreadable — the repair did not take."
+            : "This is the condition 0062 repairs. Deploying this release is the fix.",
+        ],
+    alreadyApplied
+      ? "0062 ran but left sequences unreadable. Check whether a later migration re-revoked them (backend/tests/migration-readonly-sequence-grant.test.ts guards this)."
+      : "No action needed before the deploy — 0062 grants these on boot. Postflight asserts the count reaches zero.",
   );
 
   // (4) The v0.4.0 runtime tables.

@@ -70,27 +70,33 @@ describe("0.5.0-to-0.5.1 rollout manifest", () => {
   });
 });
 
-describe("v0.5.1 is code-only, and says so consistently", () => {
-  test("RELEASE_MIGRATIONS is empty", () => {
-    expect(RELEASE_MIGRATIONS).toEqual([]);
+describe("v0.5.1 carries exactly one migration, and it is the gate repair", () => {
+  test("RELEASE_MIGRATIONS is 0062 and nothing else", () => {
+    // The release began code-only and acquired 0062 to repair the backup gate
+    // (rm_readonly could not read twelve sequences, so pg_dump refused). If a
+    // FEATURE migration ever lands here, that is a different release.
+    expect([...RELEASE_MIGRATIONS]).toEqual(["0062_rm_readonly_sequence_select.sql"]);
+  });
+
+  test("0062 is not in PRIOR — the release does not claim its own repair as inherited", () => {
+    expect([...PRIOR_RELEASE_MIGRATIONS]).not.toContain("0062_rm_readonly_sequence_select.sql");
   });
 
   test("PRIOR_RELEASE_MIGRATIONS is exactly v0.4.0's set plus v0.5.0's", () => {
     // Restated by hand in release.ts (a release directory is a frozen artefact
-    // and must not import across directories), so this is the case that keeps
-    // the restatement honest.
+    // and must not import across directories), so this keeps it honest.
     expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([...V050_PRIOR, ...V050_RELEASE]);
   });
 
   test("the on-disk migration set matches the manifest — nothing landed after it was written", () => {
-    // THE case that can actually go red on a live branch. If a migration merges
-    // into releases-0.5.x, v0.5.1 stops being code-only and every gate built on
-    // that premise is asking the wrong question.
+    // THE case that can actually go red on a live branch: a migration merging
+    // into releases-0.5.x that neither list names. The gates are built on the
+    // manifest being the whole truth about this branch's schema.
     const onDisk = readdirSync(join(import.meta.dir, "..", "migrations"))
       .filter((n) => n.endsWith(".sql"))
       .sort();
     const newest = onDisk.filter((n) => n >= "0039");
-    expect(newest).toEqual([...PRIOR_RELEASE_MIGRATIONS].sort());
+    expect(newest).toEqual([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS].sort());
   });
 
   test("every preserved table is named by a v0.5.0 migration, and none is duplicated", () => {

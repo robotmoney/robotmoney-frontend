@@ -54,11 +54,12 @@ drift on a later read.
 
 ## 1. Release identity and objective
 
-v0.5.1 is the repository's **first code-only release**. It carries **no
-migration file**: the migration set on `releases-0.5.x` is byte-identical to
-the set `v0.5.0-rc.9` carried (`0043`–`0061`, verified with `git ls-tree` on
-both refs). The objective is to ship the v0.5.0 application's correctness
-fixes without touching its schema:
+v0.5.1's **application** delta is code-only: the feature-bearing migration set
+on `releases-0.5.x` is byte-identical to the set `v0.5.0-rc.9` carried
+(`0043`–`0061`, verified with `git ls-tree` on both refs). It carries exactly
+**one** migration, `0062`, and that migration implements no feature — it is a
+repair of the backup gate (§4.1.1). The objective is to ship the v0.5.0
+application's correctness fixes without touching its schema:
 
 - stop swarm sessions wedging in a non-terminal state across the session
   lifecycle (`ebbfc0bb`, `f2c21a56`);
@@ -74,14 +75,14 @@ fixes without touching its schema:
 
 The release-specific tools are in `backend/scripts/upgrades/0.5.0-to-0.5.1/`.
 
-**What "code-only" changes about the gates.** Every prior release's preflight
-proved *the pending migration set is exactly what this release ships, and none
-of it has landed yet*. There is no pending set here, so the same question
-inverts: the target must **already** be at the full v0.5.0 schema, and the
-ledger must have **nothing left to apply**. A pending migration is drift by
-definition — see `preflight.ts`'s `no-pending-migrations` record. If a
-migration ever merges onto this branch, `backend/tests/rollout-steps-0-5-1.test.ts`
-goes red on the on-disk comparison, which is the intended tripwire.
+**What this changes about the gates.** There is no earlier work for this
+release to do, so preflight asks two things at once: the target must **already**
+be at the full v0.5.0 schema, and the only thing pending may be `0062` itself
+(`pending-is-this-release-only`). Anything else came from another branch —
+`releases-0.6.x` collides with this line at `0056`–`0061` — and a boot would
+apply it as a side effect of the deploy. If a migration merges onto this branch
+that neither list names, `backend/tests/rollout-steps-0-5-1.test.ts` goes red on
+the on-disk comparison, which is the intended tripwire.
 
 ## 2. Code delta: systems upgraded and risks
 
@@ -161,50 +162,114 @@ analytics_overwrite_events_id_seq             swarm_brief_revisions_id_seq
 
 All twelve are owned by `rm_owner` and created by migrations `0056`–`0060`.
 
-**The mechanism, because it will recur otherwise.** `0053` revokes ALL on
-sequences from `rm_readonly`, and restoring the read is deliberately *not* a
-migration — it is `scripts/ops/provision-db-role-taxonomy.sh`'s job, which
-issues two statements: a `GRANT SELECT ON ALL SEQUENCES` (retroactive, covers
-what exists *now*) and an `ALTER DEFAULT PRIVILEGES` (prospective, covers what
-`rm_owner` creates *later*). Neither one covers a sequence created in the
-window **between** them and the migration boot. That is exactly what happened
-on 2026-09-21: `0053` applied at 01:55:03, the operator was still in the
-script's `\password` prompts, and the boot applied `0054`–`0061` at
-01:55:22–01:55:36, creating twelve sequences the retroactive grant had already
-passed over.
+**The mechanism — this is a CODE defect in `0053`, not an operator error.**
+An earlier revision of this section blamed the timing of the operator's run.
+That was wrong, and the measured evidence disproves it: the readable/unreadable
+split falls *exactly* at migration `0056`, with every sequence from `0055` and
+earlier granted and every sequence from `0056` on ungranted. A timing slip
+would not produce a boundary on a migration number.
 
-Contrast the ACLs — `jobs_id_seq` predates the grant and carries it,
-`analytics_data_vintages_id_seq` does not:
+`0053` revokes the default privilege on **both** tables and sequences, then
+restores it for tables only:
 
-```
-jobs_id_seq                     {rm_owner=rwU/rm_owner,rm_app=rU/rm_owner,rm_readonly=r/rm_owner,rm_worker=rU/rm_owner}
-analytics_data_vintages_id_seq  {rm_owner=rwU/rm_owner,rm_app=rU/rm_owner}
+```sql
+ALTER DEFAULT PRIVILEGES ... REVOKE ALL ON TABLES    FROM rm_app, rm_worker, rm_readonly;  -- line 103
+ALTER DEFAULT PRIVILEGES ... REVOKE ALL ON SEQUENCES FROM rm_app, rm_worker, rm_readonly;  -- line 104
+...
+ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES TO rm_readonly;                        -- line 118
+--                                          ^^^^^^ no SEQUENCES counterpart
 ```
 
-**The symptom is silent until the NEXT release.** Nothing at runtime reads
-those sequences as `rm_readonly`; the only consumer is `pg_dump`. So a release
-that provisions roles this way looks completely healthy and breaks the backup
-gate of the release that follows it — which is precisely where v0.5.1 found it.
+That asymmetry is the bug. It becomes destructive because **`0053` is applied
+twice by design** (`v0-5-0-rollout.md` §4.1.3): the provisioning script applies
+it through `psql`, which cannot write `schema_migrations`, so the boot applies
+and records it again. It must run out-of-band first because line 37 is
+`GRANT rm_owner TO current_user`, and migrations `0054`+ open with
+`SET LOCAL ROLE rm_owner` — the membership has to exist before the migration
+session starts.
 
-**Remediation — one command, on the PRIMARY, as a login holding `rm_owner`
-membership (`doadmin`).** It is idempotent and grants no write:
+So the real sequence is:
+
+```
+script: apply 0053          → sequence default REVOKED
+script: GRANT ON ALL SEQUENCES + ALTER DEFAULT ... GRANT ON SEQUENCES
+                            → existing sequences granted, default restored
+boot:   apply 0053 AGAIN    → sequence default REVOKED a second time  ← the defect
+boot:   apply 0054-0061     → twelve new sequences created with no default
+```
+
+**The script cannot win.** Any grant it makes between the two applications of
+`0053` is erased by the second. `0053`'s "safe by construction" audit is sound
+about `CREATE ROLE` (guarded by `IF NOT EXISTS`) and the ownership sweep
+(re-runnable, transactional). It simply never considered default privileges,
+which are absolute assignments rather than idempotent guards — re-running a
+`REVOKE` is not a no-op when something was granted in between.
+
+**The durable fix is one line in `0053`**, mirroring line 118 so the file
+converges on the right state however many times it runs:
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly;
+```
+
+Until that ships, the command below repairs the twelve that already exist.
+
+**⛔ 4.1.2 — THE CIRCULAR DEPENDENCY, and the one manual step that breaks it.**
+`0062` fixes this permanently, and `0062` cannot fix it here. The loop:
+
+```
+P3.backup   needs pg_dump to run as rm_readonly
+            needs SELECT on all sequences
+            needs 0062
+0062        is applied by migrate.ts at boot
+the boot    is P7.cutover
+P7.cutover  requires P3.backup   ←  closed loop
+```
+
+A migration cannot unblock the backup that gates its own deployment. So
+production needs **one manual GRANT, once**, before P3.backup can run.
+
+**This is a pre-step, not a workaround, and it has direct precedent.**
+`v0-5-0-rollout.md` §4.1 is exactly this shape: a human-run credential step
+that "gates everything below", because `0053` must create `rm_owner` before a
+migration session can `SET LOCAL ROLE rm_owner`. A boot cannot bootstrap its
+own permissions. This is the same class of problem with the same answer.
+
+Run on the **PRIMARY**, as a login holding `rm_owner` membership (`doadmin`).
+The replica is in recovery and cannot be granted on; the change replicates.
 
 ```bash
 psql -X -v ON_ERROR_STOP=1 "$PRIMARY_ADMIN_URL" \
-  -c "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly" \
-  -c "ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly"
+  -c "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly"
 ```
 
-Run it on the **primary** — the replica is in recovery and cannot be granted
-on; the change replicates. Then re-run `bun run smoke:capture` and confirm it
-reaches `dumping … -> rm-preupgrade-<STAMP>.dump`.
+It grants no write, and it is idempotent. Confirm it took, against the replica:
 
-**The lasting fix, for `release-runbooks.md` §4 rather than this release.**
-`provision-db-role-taxonomy.sh`'s retroactive `GRANT ... ON ALL SEQUENCES`
-must be re-run **after the final migration boot**, not only before it. A
-prospective `ALTER DEFAULT PRIVILEGES` alone cannot close a window that opens
-behind it. Until the script does that itself, the two-statement command above
-is a required post-cutover step for any release that adds a sequence.
+```bash
+# expect: 0
+psql "$REPLICA_READONLY_URL" -tAc "
+  WITH s AS MATERIALIZED (
+    SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'S')
+  SELECT count(*) FROM s WHERE NOT has_sequence_privilege('rm_readonly', oid, 'SELECT')"
+```
+
+Then `bun run smoke:capture` succeeds and §4.2 proceeds normally.
+
+**`0062` still ships, and is still worth shipping.** After the manual GRANT it
+is very nearly a no-op on production — which is the point. It carries the
+`ALTER DEFAULT PRIVILEGES` half that the manual GRANT deliberately omits, so a
+sequence created by a *future* migration is readable without anyone
+remembering. And it means no other environment — a fresh database, a restored
+twin, a new staging host — ever needs this hand-step at all. The manual GRANT
+repairs one database; `0062` repairs the class.
+
+**Preflight grades this correctly rather than refusing.**
+`readonly-sequence-access` is a **WARN** while the sequences are unreadable and
+`0062` is still pending, because that is the condition the release exists to
+repair — failing preflight on it would refuse to deploy the fix. It becomes a
+**FAIL** only once `0062` is recorded and sequences are still unreadable, which
+would mean the repair did not take. Postflight asserts the count is zero.
 
 **4.2 — Backup, restore proof, and baseline.**
 
