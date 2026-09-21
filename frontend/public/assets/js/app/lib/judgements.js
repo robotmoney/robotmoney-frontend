@@ -1,15 +1,15 @@
 // The consensus judge's public record: a judgement is its own record with its
-// own page, as a take is, and a session judged by several judges shows each
-// one's opinion rather than the one the session adopted (operators who run a
-// judge come looking for theirs).
+// own page, as a take is, and a judge's member page lists its judgements. A
+// session has one judge (the house judge by default, one picked at random
+// when several are seated, never one related to the session's subject or
+// members), and its page shows that judge's opinion.
 //
 // What a judgement is NOT, and what every surface below must not imply: it
 // never edits or scores a take, and it never sets a weight (the weights are
 // the members' average, computed before any judge runs). Its release call is
-// ADVICE. Nothing in the lifecycle refuses to publish on a hold, and
-// publishing is not applying, so the call is worded ("Advises: Hold") and
-// never drawn as a status. A "safe" call prints nothing at all: on a page
-// about money the word reads as a safety claim.
+// ADVICE, a Hold or Update badge (ADVICE_CALLS): nothing in the lifecycle
+// refuses to publish on a hold, and publishing is not applying. The data's
+// "safe" never prints: on a page about money the word reads as a safety claim.
 import { api, ROUTES, path } from "./api.js";
 
 // THE THREE PATHS. The frontend's route table is the vendored contract
@@ -67,6 +67,9 @@ export function normalizeJudgement(raw) {
     rationale: typeof raw.rationale === "string" ? raw.rationale : "",
     disagreements: Array.isArray(raw.disagreements) ? raw.disagreements : [],
     releaseSafety: rs && typeof rs === "object" ? rs : null,
+    // Whether its session's recommendation set weights (#1017): true only
+    // when the record says so.
+    recommendsWeights: (raw.recommendsWeights ?? raw.recommends_weights) === true,
     createdAt: String(raw.createdAt ?? raw.created_at ?? ""),
   };
 }
@@ -162,17 +165,21 @@ export function judgeHref(j, roster = []) {
 /** @param {unknown} v */
 const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] || ch);
 
-// The role pill, then the judge's name, a way to its member page when it has
-// one; the pill alone when the record does not say who. Bound with x-html: the
+// The judge, then its name, a way to its member page when it has one. As the
+// role pill (the judge's own block on a session) or, over prose a judge wrote
+// elsewhere, as a plain label, "Judge: Themis": the pill names who a member
+// is, and is not spent on every line a judge wrote. Bound with x-html: the
 // name comes from a member's own profile, so it and the address are escaped
 // here.
 const JUDGE_PILL = '<span class="rm-role">Judge</span>';
-/** @param {any} j @param {any[]} [roster] */
-export function judgeLabelHtml(j, roster = []) {
+/** @param {any} j @param {any[]} [roster] @param {{ pill?: boolean }} [opts] */
+export function judgeLabelHtml(j, roster = [], { pill = true } = {}) {
+  const lead = pill ? JUDGE_PILL : "Judge";
   const name = judgeName(j, roster);
-  if (!name) return JUDGE_PILL;
+  if (!name) return lead;
   const href = judgeHref(j, roster);
-  return `${JUDGE_PILL} ${href ? `<a class="rr-lnk" href="${escapeHtml(href)}">${escapeHtml(name)}</a>` : escapeHtml(name)}`;
+  const who = href ? `<a class="rr-lnk" href="${escapeHtml(href)}">${escapeHtml(name)}</a>` : escapeHtml(name);
+  return pill ? `${lead} ${who}` : `${lead}: ${who}`;
 }
 
 /** @param {any} j */
@@ -230,6 +237,20 @@ export function adviceOf(rs) {
 // Update none (.rr-advice-badge). Swapping a word is this table.
 /** @type {Record<"hold" | "safe", { key: "hold" | "update", label: string }>} */
 export const ADVICE_CALLS = { hold: { key: "hold", label: "Hold" }, safe: { key: "update", label: "Update" } };
+// Whether a judge's call has anything to act on: a recommendation that sets
+// weights, which Update would make the target. A session that published no
+// weights holds the target by itself, and a portfolio review sets none: there
+// a judge's reasons show and no call does (RM-97, 2026-09-21). A public
+// judgement says it (`recommendsWeights`, #1017); a page holding the session
+// reads it off the recommendation.
+/** @param {any} rec */
+export function setsWeights(rec) {
+  if (rec?.type !== "bucket_weights") return false;
+  const w = rec.weights;
+  const values = Array.isArray(w) ? w.map((x) => x?.weight) : w && typeof w === "object" ? Object.values(w) : [];
+  return values.some((v) => v != null && Number.isFinite(Number(v)));
+}
+
 /** @param {any} rs */
 export function adviceCall(rs) {
   /** @type {unknown} */

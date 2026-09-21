@@ -486,11 +486,11 @@ export const sessionSummary = {
     if ((rec.quorum || rec.stances) && !judgeWroteRationale(s)) return "";
     return rec.rationale || "";
   },
-  // The Judge pill and name over a rationale a judge wrote, "" over any other. The
+  // "Judge: <name>" over a rationale a judge wrote, "" over any other. The
   // name resolves through the roster when the surface holds one.
   /** @param {any} s @param {any[]} [roster] */
   rationaleJudgeLabel(s, roster = []) {
-    return judgeWroteRationale(s) ? judgeLabelHtml(s.swarmRecommendation.judge, roster) : "";
+    return judgeWroteRationale(s) ? judgeLabelHtml(s.swarmRecommendation.judge, roster, { pill: false }) : "";
   },
   // The positions it moves, holds left out: the held count says the rest.
   /** @param {any} s */

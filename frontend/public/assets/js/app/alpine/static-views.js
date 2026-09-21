@@ -27,7 +27,7 @@ import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
-  adviceOf, adviceCall, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  adviceOf, adviceCall, setsWeights, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
   MEMBER_JUDGEMENTS_MAX,
 } from "../lib/judgements.js";
@@ -680,13 +680,12 @@ export function registerStaticViews(Alpine) {
     // for why a superseded permalink resolves rather than 404s or substitutes.
     supersededBy: null,
     // The session it was filed in (the receipt names it since #1017): its date
-    // and subject, and the public judgements that place this take in a
-    // disagreement. Read before the receipt draws, so nothing under the facts
-    // moves when they land; a receipt with no session id waits on nothing.
+    // and subject. Read before the receipt draws, so nothing under the facts
+    // moves when it lands; a receipt with no session id waits on nothing. The
+    // page is this take's alone: what a judge made of the session is on the
+    // session and judgement pages.
     sessionId: null,
     session: null,
-    judgements: [],
-    roster: [],
     async init() {
       const match = location.pathname.match(/^\/swarm\/takes\/([^/]+)\/?$/);
       if (!match) {
@@ -713,34 +712,12 @@ export function registerStaticViews(Alpine) {
       if (!id) return;
       try {
         this.session = camelSession((await api.get(path(ROUTES.swarm.sessionById, { id })))?.session);
-      } catch (_) { return; }
-      // Only a judged session has judgements to ask for (see the session
-      // page's loadJudgements()).
-      if (this.session?.state !== "published" || !this.session?.swarmRecommendation?.judge) return;
-      const [judgements, roster] = await Promise.all([loadSessionJudgements(id), loadRoster()]);
-      this.roster = roster;
-      this.judgements = judgements;
+      } catch (_) { /* the take reads without its session's facts */ }
     },
     sessionHref() { return this.sessionId ? `/swarm/sessions/${encodeURIComponent(this.sessionId)}` : null; },
     subjectHref() {
       const id = this.session?.subjectId;
       return id ? `/swarm/subjects/${encodeURIComponent(id)}` : null;
-    },
-    // Each question a judge found this take on one side of, one line apiece,
-    // with the judge that raised it. A position names its member by id or by
-    // handle, and an imported v0 disagreement by an older slug, so the match
-    // is on letters and digits, as the session page's takeOf() makes it.
-    takeDisagreements() {
-      const norm = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const mine = new Set([this.take?.memberId, this.take?.memberHandle, this.signer?.id, this.signer?.handle].map(norm).filter(Boolean));
-      const out = [];
-      for (const j of this.judgements) {
-        for (const d of j.disagreements || []) {
-          if (!(d?.positions || []).some((p) => mine.has(norm(p?.member_id)))) continue;
-          out.push({ key: `${j.id}-${d.topic}`, topic: d.topic, judge: judgeName(j, this.roster) || "Judge", href: judgementHref(j) });
-        }
-      }
-      return out;
     },
     // The member's proposed weights as the ring the subject and session pages
     // draw (lib/sleeve-explorer.js). No breakdown drawer: a take proposes
@@ -841,7 +818,12 @@ export function registerStaticViews(Alpine) {
     // stored one, then the id, when the record did not load.
     subjectTitle() { return this.subject?.name || this.session?.subjectName || this.judgement?.subjectId || ""; },
     advice() { return adviceOf(this.judgement?.releaseSafety); },
-    call() { return adviceCall(this.judgement?.releaseSafety); },
+    // The call only where the recommendation sets weights (setsWeights): read
+    // off the session when it loaded, else off the judgement's own field.
+    call() {
+      const applies = this.session ? setsWeights(this.session.swarmRecommendation) : this.judgement?.recommendsWeights === true;
+      return applies ? adviceCall(this.judgement?.releaseSafety) : null;
+    },
     // Only a model's own words: a judgement recorded before the judge stopped
     // writing templates (source "fallback") restates the tally.
     rationale() { return this.judgement?.source === "model" ? this.judgement.rationale : ""; },
@@ -2863,7 +2845,9 @@ export function registerStaticViews(Alpine) {
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
     // A record card's call (the badge) and, for a hold, why.
-    adviceCall(j) { return adviceCall(j?.releaseSafety); },
+    // A card's call only where its session's recommendation set weights, as
+    // the judgement says (#1017); without the field, the reasons alone.
+    adviceCall(j) { return j?.recommendsWeights === true ? adviceCall(j?.releaseSafety) : null; },
     adviceReason(j) { return adviceOf(j?.releaseSafety)?.reason || ""; },
     // Only a model's own words, as on the session and judgement pages.
     judgementProse(j) { return j?.source === "model" ? j.rationale || "" : ""; },
@@ -3733,10 +3717,12 @@ export function registerStaticViews(Alpine) {
         || this.judgeBlocks().length > 0;
     },
     // ── the judge ────────────────────────────────────────────────────────
-    // ONE JUDGE PER SESSION, for now (David, 2026-09-21): how several judges
-    // share a session waits on the backend owner. The page shows the judge
-    // whose opinion the recommendation carries (its judge.judged_by), else the
-    // newest public judgement; every judge's judgement keeps its own page. On a
+    // ONE JUDGE PER SESSION (agreed with the backend owner, 2026-09-21): the
+    // house judge by default, one picked at random when several are seated,
+    // never one related to the session's subject or members. The page shows
+    // the judge whose opinion the recommendation carries (its judge.judged_by),
+    // else the newest public judgement, which covers a re-judged session; each
+    // judgement keeps its own page. On a
     // backend that does not serve judgements, the opinion the recommendation
     // carries stands in, under the judge it names, when a model wrote it; the
     // fallback judge writes the aggregator's templates.
@@ -3776,7 +3762,7 @@ export function registerStaticViews(Alpine) {
     // target by itself, and a portfolio review has no target; there the
     // judges' reasons show and no call does (RM-97, 2026-09-21).
     callApplies() {
-      if (!this.isBucketWeights()) return false;
+      if (!setsWeights(this.session?.swarmRecommendation) || !this.isBucketWeights()) return false;
       const known = this.bucketRows().filter((b) => b.recommended != null && b.target != null);
       return !known.length || known.some((b) => Math.abs(b.recommended - b.target) >= 0.0005);
     },

@@ -84,17 +84,6 @@
         <template x-if="supersededBy">
           <p class="rr-note tk-superseded">A later revision of this take was filed in the same session. <a class="rr-lnk" :href="`/swarm/takes/${supersededBy?.id}`" x-text="`Revision ${supersededBy?.revision}`"></a></p>
         </template>
-        <!-- Where a judge of that session found this take on one side of a
-             question, with the judge's name as the way to its judgement. A
-             judge scores nothing: this is where the takes parted, not a mark
-             against this one. -->
-        <template x-if="takeDisagreements().length">
-          <div class="rr-note tk-dis">
-            <template x-for="d in takeDisagreements()" :key="d.key">
-              <p>In disagreement: <span x-text="d.topic"></span> · <a class="rr-lnk" :href="d.href" x-text="d.judge"></a></p>
-            </template>
-          </div>
-        </template>
 
         <!-- The signed text, whole: a receipt shows every byte it verifies.
              The member's proposed weights sit beside it as the ring the
@@ -182,9 +171,7 @@
   <style>
     /* The column's width, as a take card's text runs: no measure cap of its own. */
     #take .sv__take-body { max-width: none; }
-    .tk-superseded, .tk-dis { margin: 1.25rem 0 0; font-size: 0.875rem; }
-    .tk-dis p { margin: 0; }
-    .tk-dis p + p { margin-top: 0.5rem; }
+    .tk-superseded { margin: 1.25rem 0 0; font-size: 0.875rem; }
     /* A fingerprint is one unbreakable token; on a phone it wraps anywhere
        rather than widening the page. */
     .tk-fp { overflow-wrap: anywhere; white-space: normal; }

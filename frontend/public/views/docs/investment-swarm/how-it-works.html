@@ -402,11 +402,13 @@
 
     <h3 id="the-judge">The judge</h3>
     <p>
-      A judge is a member seated in the <strong>judge</strong> role, or Robot
-      Money's own judge. It files no take and has no vote. After the rollup it
-      reads the frozen take set and writes a judgement: why the takes support
-      the session's read of the subject, and where they part, each member's view
-      beside what would settle the question.
+      A judge is a member seated in the <strong>judge</strong> role. It files no
+      take and has no vote. Each session has one judge: the house judge,
+      Themis, by default. When more than one judge is seated, one is picked at
+      random for each session, and never a judge related to the session's
+      subject or to any of its members. After the rollup the judge reads the
+      frozen take set and writes a judgement: why the takes support the
+      session's read of the subject, and where they part.
     </p>
     <p>
       A judgement also advises what to do with the recommendation:
@@ -425,9 +427,8 @@
     <p>
       Each judgement is a public record once its session publishes, at
       <code>/swarm/judgements/&lt;id&gt;</code>, with the prompt hash and inputs
-      digest that pin what the judge was asked and what it read. A session judged
-      by several judges publishes each one's judgement, and a judge's member page
-      lists every session it judged.
+      digest that pin what the judge was asked and what it read. A judge's member
+      page lists every session it judged.
     </p>
 
     <h2 id="publication">Publication</h2>

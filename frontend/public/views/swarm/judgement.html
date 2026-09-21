@@ -72,8 +72,7 @@
         </section>
 
         <!-- Where it found the takes apart, each question open: every member's
-             stance and confidence, a way to their take, and the observation
-             that would show which side was right ("Resolves when"). -->
+             stance and confidence, and a way to their take. -->
         <section class="rr-sec" id="differ" aria-labelledby="differ-h">
           <div class="rr-sec__head"><h2 class="rr-sec__h" id="differ-h">Where views differ</h2></div>
           <template x-for="d in judgement.disagreements" :key="d.topic">
@@ -96,9 +95,6 @@
                   </tbody>
                 </table>
               </div>
-              <template x-if="d.what_settles">
-                <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
-              </template>
             </div>
           </template>
           <template x-if="!judgement.disagreements.length">

@@ -104,7 +104,7 @@ const judgement = (over: Record<string, unknown>) => ({
   judgedBy: "m-themis", judgedByMemberId: "m-themis", source: "model", model: "deepseek-v4-flash",
   promptHash: "3f9a1c0e5b7d2a64c1e8f0b39d7a5c2e1f4b6a8d0c3e5f7a9b1d3c5e7f9a0b2c",
   inputsDigest: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d",
-  rationale: THEMIS_PROSE, disagreements: [DISAGREEMENT], releaseSafety: THIN_HOLD, createdAt: "2026-09-17T10:00:00Z",
+  rationale: THEMIS_PROSE, disagreements: [DISAGREEMENT], releaseSafety: THIN_HOLD, recommendsWeights: true, createdAt: "2026-09-17T10:00:00Z",
   ...over,
 });
 const THEMIS_J = judgement({});
@@ -155,7 +155,7 @@ test("a session one judge worked on: its block, its advice, its questions, named
   await expect(views.nth(1).locator("th small")).toHaveCount(0);
   await expect(views.nth(1).locator(".sv__stance-badge")).toHaveText("neutral");
   await expect(views.nth(1).locator("a.rr-lnk")).toHaveText("Read take");
-  await expect(block.locator(".rr-settles")).toHaveCount(0);
+  await expect(block).not.toContainText("90-day median");
   await expect(block.locator("a.rr-cta")).toHaveAttribute("href", "/swarm/judgements/41");
 
   // The facts row names the judge, a way to its block.
@@ -287,8 +287,8 @@ test("a judgement's own page: who, which session, its advice, its questions, and
   await expect(views.nth(0).locator(".sv__stance-badge")).toHaveText("constructive");
   await expect(views.nth(0).locator("a.rr-lnk")).toHaveAttribute("href", "/swarm/takes/take-athena");
   await expect(views.nth(1).locator("a.rr-lnk")).toHaveText("Read take");
-  await expect(page.locator("#differ .rr-settles")).toContainText("Resolves when");
-  await expect(page.locator("#differ .rr-settles")).toContainText("90-day median");
+  // The question and its members; what would resolve it is not printed.
+  await expect(page.locator("#differ")).not.toContainText("90-day median");
 
   const prompt = page.locator("#provenance dd").first();
   await expect(prompt).toHaveText("3f9a1c0e5b7d…7f9a0b2c");
@@ -314,7 +314,12 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await stub(page, {
     "/api/swarm/members/themis": ROSTER.members[5],
     "/api/swarm/members/themis/judgements": {
-      judgements: [THEMIS_J, judgement({ id: "38", sessionId: S3, subjectId: "woon", sessionDate: "2026-09-16", releaseSafety: SAFE, disagreements: [] })],
+      judgements: [
+        THEMIS_J,
+        judgement({ id: "38", sessionId: S3, subjectId: "woon", sessionDate: "2026-09-16", releaseSafety: SAFE, disagreements: [] }),
+        // A portfolio review sets no weights: nothing to update, so no call.
+        judgement({ id: "37", sessionId: S3, subjectId: "woon", sessionDate: "2026-09-15", releaseSafety: SAFE, disagreements: [], recommendsWeights: false }),
+      ],
     },
     "/api/swarm/subjects/robotmoney-allocation": { id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" } },
     "/api/swarm/subjects/woon": { id: "woon", name: "Woon Treasury", source: { type: "rpc" } },
@@ -324,14 +329,14 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   // The role pill beside the name, as every member's page wears one.
   await expect(page.locator(".rr-profile .rm-named .rm-role")).toHaveText("Judge");
   const fact = (k: string) => page.locator(".rr-meta .rr-meta__i", { hasText: k }).locator("b");
-  await expect(fact("Sessions judged")).toHaveText("2");
+  await expect(fact("Sessions judged")).toHaveText("3");
   await expect(fact("Holds advised")).toHaveText("1");
   await expect(page.locator(".rr-meta")).not.toContainText("Takes filed");
 
   // The analysts' record cards: subject and date, the call where a stance
   // sits, the disagreements where a confidence sits, and for a hold its reason.
   const cards = page.locator("#record .rr-take");
-  await expect(cards).toHaveCount(2);
+  await expect(cards).toHaveCount(3);
   await expect(cards.nth(0).locator(".rr-take__name")).toHaveText("Robot Money Allocation");
   await expect(cards.nth(0).locator(".mp-take__date")).toHaveText("Sep 17, 2026");
   await expect(cards.nth(0).locator(".rr-advice-badge--hold")).toHaveText("Hold");
@@ -342,6 +347,7 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await expect(cards.nth(1).locator(".rr-take__name")).toHaveText("Woon Treasury");
   await expect(cards.nth(1).locator(".rr-advice-badge--update")).toHaveText("Update");
   await expect(cards.nth(1).locator(".rr-conf, .rr-advice__why")).toHaveCount(0);
+  await expect(cards.nth(2).locator(".rr-advice-badge")).toHaveCount(0);
   // A judge files no takes, so none are asked for.
   expect(seen.filter((p) => p.endsWith("/takes"))).toEqual([]);
   await noSafe(page);
@@ -370,7 +376,7 @@ test("a member's page before the role existed reads as it always has", async ({ 
   expect(seen.filter((p) => p.includes("/judgements"))).toEqual([]);
 });
 
-test("a take's receipt links its session, and names each question a judge found it on one side of", async ({ page }) => {
+test("a take's receipt links its session, and says nothing of what a judge made of the session", async ({ page }) => {
   await stub(page, {
     "/api/swarm/takes/take-athena": {
       sessionId: S1,
@@ -388,27 +394,10 @@ test("a take's receipt links its session, and names each question a judge found 
   await expect(session).toHaveText("Sep 17, 2026");
   await expect(session).toHaveAttribute("href", `/swarm/sessions/${S1}`);
   await expect(page.locator(".rr-recnav a", { hasText: "The session" })).toHaveAttribute("href", `/swarm/sessions/${S1}`);
-  const lines = page.locator(".tk-dis p");
-  await expect(lines).toHaveText(["In disagreement: Whether the agent-token sleeve earns its 5% · Themis"]);
-  await expect(lines.locator("a")).toHaveAttribute("href", "/swarm/judgements/41");
+  // The page is this take's alone: the judge's questions are the session's
+  // and the judgement's, and no judgement is asked for here.
+  await expect(page.locator("body")).not.toContainText("Whether the agent-token sleeve");
   await noSafe(page);
-});
-
-test("a take no judge placed in a disagreement shows no line", async ({ page }) => {
-  await stub(page, {
-    "/api/swarm/takes/take-woon": {
-      sessionId: S1,
-      take: { id: "take-woon", member_id: "m-woon", member_handle: "woon", member_name: "Woon", stance: "constructive", confidence: 0.58, body: "WOON BODY", verified: true, archival: false, received_at: "2026-09-17T09:14:00Z" },
-      memo: null,
-      signer: { id: "m-woon", handle: "woon", name: "Woon", publicKeyFingerprint: "ef:01" },
-    },
-    [`/api/swarm/sessions/${S1}`]: { session: judgedSession(S1, THEMIS_BLOCK), takes: TAKES },
-    [`/api/swarm/sessions/${S1}/judgements`]: { judgements: [THEMIS_J] },
-    "/api/swarm/members": ROSTER,
-  });
-  await page.goto("/swarm/takes/take-woon");
-  await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Session" }).locator("a")).toHaveText("Sep 17, 2026");
-  await expect(page.locator(".tk-dis")).toHaveCount(0);
 });
 
 test("/swarm: a judge's role, members counted without it, and its words on the allocation named", async ({ page }) => {
@@ -429,7 +418,9 @@ test("/swarm: a judge's role, members counted without it, and its words on the a
   await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Members" }).locator("b")).toHaveText("5");
 
   const alloc = page.locator("#allocation");
-  await expect(alloc.locator(".rr-k", { hasText: "Judge" })).toHaveText("Judge Themis");
+  // Words a judge wrote, labelled "Judge: <name>", not with the role pill.
+  await expect(alloc.locator(".rr-k", { hasText: "Judge" })).toHaveText("Judge: Themis");
+  await expect(alloc.locator(".rr-k .rm-role")).toHaveCount(0);
   await expect(alloc.locator(".rr-prose")).toContainText("none argues for moving the target");
   await expect(alloc.locator(".rr-counts em")).toHaveText("4 of 5 took part · 60% mean confidence");
   await noSafe(page);

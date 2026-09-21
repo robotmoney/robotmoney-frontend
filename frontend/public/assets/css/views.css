@@ -1757,14 +1757,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
 
 /* A disagreement: a question row that opens onto its members, one table row
    each (.rr-views-t): the stance and confidence their take filed and the one
-   way to it, then what resolves the question. */
+   way to it. */
 .rr-q .rr-disc__btn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; padding: 1rem 0; }
 .rr-q .rr-disc__btn b { display: block; font-weight: 500; font-size: 0.875rem; }
 .rr-q .rr-disc__btn::after { margin-left: 0; }
 .rr-views-t { min-width: 28rem; }
 .rr-views-t tbody th small { max-width: 36rem; white-space: normal; line-height: 1.5; }
 .rr-views-t .rr-dim { color: var(--color-text-muted); }
-.rr-settles { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-soft); }
 
 /* A take: hairline-separated, body clamped, proposed weights aside. */
 .rr-take { padding: 1.5rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }

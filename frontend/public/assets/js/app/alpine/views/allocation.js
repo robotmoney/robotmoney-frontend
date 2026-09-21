@@ -266,7 +266,7 @@ export function registerAllocationView(Alpine) {
     recDate(s) { return s?.date ? fmtDate(s.date) : ""; },
     recHref(s) { return sessionHref(s); },
     recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },
-    // The Judge pill and name over a rationale a judge wrote.
+    // "Judge: <name>" over a rationale a judge wrote.
     recRationaleLabel() { return sessionSummary.rationaleJudgeLabel.call(sessionSummary, this.recSession, this.recRoster); },
     recTally() { return this.recSession ? sessionSummary.stanceTally.call(sessionSummary, this.recSession) : []; },
     recTallyNote() {

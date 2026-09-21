@@ -4,7 +4,7 @@
 // absent from a session nor a seat in its "n of m"; and the three routes
 // resolve whether or not the vendored contract names them yet.
 import { describe, expect, test } from "bun:test";
-import { adviceCall,
+import { setsWeights, adviceCall,
   adviceLine,
   adviceOf,
   analystAbsent,
@@ -60,6 +60,17 @@ describe("the advice", () => {
     expect(adviceCall({ release: "hold" })).toEqual({ key: "hold", label: "Hold" });
     expect(adviceCall({ release: "maybe" })).toBeNull();
     expect(adviceCall(null)).toBeNull();
+  });
+});
+
+describe("when a call has anything to act on", () => {
+  test("only a weights recommendation that sets weights: no weights, or a portfolio review, has nothing to update", () => {
+    expect(setsWeights({ type: "bucket_weights", weights: { conservative_defi_yield: 0.9, agent_tokens: 0.1 } })).toBe(true);
+    expect(setsWeights({ type: "bucket_weights", weights: [{ bucket: "agent_tokens", weight: 0.1 }] })).toBe(true);
+    expect(setsWeights({ type: "bucket_weights", weights: null })).toBe(false);
+    expect(setsWeights({ type: "bucket_weights" })).toBe(false);
+    expect(setsWeights({ type: "position_actions", actions: [] })).toBe(false);
+    expect(setsWeights(null)).toBe(false);
   });
 });
 
