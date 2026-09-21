@@ -114,6 +114,9 @@ GRANT SELECT, INSERT ON analytics_output_snapshots, analytics_report_snapshots, 
 GRANT USAGE, SELECT ON SEQUENCE
   analytics_output_snapshots_id_seq, analytics_report_snapshots_id_seq, swarm_brief_revisions_id_seq
   TO rm_app;
+GRANT SELECT ON SEQUENCE
+  analytics_output_snapshots_id_seq, analytics_report_snapshots_id_seq, swarm_brief_revisions_id_seq
+  TO rm_readonly;
 GRANT SELECT ON analytics_output_snapshots, analytics_report_snapshots, swarm_brief_revisions TO rm_readonly;
 
 COMMENT ON TABLE analytics_report_snapshots IS 'Immutable, byte-exact report per terminal analytics run (issue #978). One row per run_id, never per asof — a later run for the same market date gets its own row and its own id.';

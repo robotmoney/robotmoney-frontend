@@ -139,6 +139,7 @@ $$;
 -- runtime append path.
 REVOKE ALL ON analytics_overwrite_events FROM PUBLIC, rm_app, rm_worker;
 REVOKE ALL ON SEQUENCE analytics_overwrite_events_id_seq FROM PUBLIC, rm_app, rm_worker, rm_readonly;
+GRANT SELECT ON SEQUENCE analytics_overwrite_events_id_seq TO rm_readonly;
 GRANT SELECT ON analytics_overwrite_events TO rm_readonly;
 
 COMMENT ON TABLE analytics_overwrite_events IS

@@ -107,6 +107,7 @@ REVOKE ALL ON source_acquisitions, source_acquisition_events, source_payloads, s
 REVOKE ALL ON SEQUENCE source_acquisition_events_id_seq, source_value_versions_id_seq FROM PUBLIC, rm_worker, rm_readonly;
 GRANT SELECT, INSERT ON source_acquisitions, source_acquisition_events, source_payloads, source_fetches, source_value_versions TO rm_app;
 GRANT USAGE, SELECT ON SEQUENCE source_acquisition_events_id_seq, source_value_versions_id_seq TO rm_app;
+GRANT SELECT ON SEQUENCE source_acquisition_events_id_seq, source_value_versions_id_seq TO rm_readonly;
 GRANT SELECT ON source_acquisitions, source_acquisition_events, source_payloads, source_fetches, source_value_versions TO rm_readonly;
 
 COMMENT ON TABLE source_value_versions IS 'Immutable normalized source observations with distinct market time and database-assigned knowledge time (issue #976).';
