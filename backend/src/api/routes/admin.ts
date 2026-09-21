@@ -73,6 +73,16 @@ function parseCursor(raw: string | null): { id: number } | null {
   }
 }
 
+// Exact-id job lookup (the driver polls one known job by id — the judge job it
+// just enqueued — to wait on its TERMINAL state rather than a wall clock). A
+// non-numeric id is a 400, same discipline as the other strict filters.
+function parseJobId(raw: string | null): number | null {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new ValidationError("id must be a positive integer");
+  return n;
+}
+
 const JOB_STATUSES = ["pending", "running", "succeeded", "failed", "dead", "cancelled"];
 function parseJobStatus(raw: string | null): string | null {
   if (raw == null || raw === "") return null;
@@ -309,11 +319,13 @@ export async function handleAdmin(
       const cursor = parseCursor(url.searchParams.get("cursor"));
       const kind = url.searchParams.get("kind");
       const status = parseJobStatus(url.searchParams.get("status"));
+      const id = parseJobId(url.searchParams.get("id"));
       const { scopeType, scopeId } = parseScope(url);
       const createdFrom = parseDateParam(url.searchParams.get("createdFrom"), "createdFrom");
       const createdTo = parseDateParam(url.searchParams.get("createdTo"), "createdTo");
 
       const conds = [];
+      if (id != null) conds.push(sql`id = ${id}`);
       if (kind) conds.push(sql`kind = ${kind}`);
       if (status) conds.push(sql`status = ${status}`);
       if (scopeType) conds.push(sql`scope_type = ${scopeType}`);

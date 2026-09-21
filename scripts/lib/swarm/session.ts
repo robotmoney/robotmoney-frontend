@@ -717,6 +717,68 @@ export async function waitUntilWindowCloses(
 }
 
 /**
+ * Wait for a session state that a job on the SINGLE-CONCURRENCY swarm lane
+ * must produce, while watching the lane's own occupancy.
+ *
+ * The plain `waitForSessionState` waits against one deadline. That is wrong
+ * for the PUBLISH wait that follows a judge-wait backstop expiry: while the
+ * `swarm.judge` job is still `running`, the lane is occupied and the
+ * `swarm.publish` job — queued after it — CANNOT be claimed, so a 30s
+ * deadline expires against a lane nothing can free early, and the smoke dies
+ * at the publish line blaming a state wait for a lane-occupancy problem.
+ *
+ * So this wait extends its deadline while the judge job provably holds the
+ * lane (`status = running`): the publish is doing everything it can, the lane
+ * is the resource it is waiting on, and the wait says so. A `pending` judge
+ * does NOT extend the wait — a job in backoff releases the lane, so publish
+ * is claimable and the ordinary deadline applies. The extension is bounded by
+ * JUDGE_WAIT_MS so a genuinely wedged lane still fails loudly, naming the
+ * judge job's live status rather than a vague state-wait timeout.
+ */
+export async function waitForSessionStateAfterJob(
+  date: string,
+  subject: string,
+  expectedState: string,
+  judgeJobId: string | number | null,
+  automationToken?: string,
+  timeoutMs = 30_000,
+  deps: { readJob?: (jobId: string | number) => Promise<JudgeJobStatus | null>; laneCeilingMs?: number } = {},
+) {
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  const laneCeiling = started + (deps.laneCeilingMs ?? timeoutMs + JUDGE_WAIT_MS);
+  let laneHeld = false;
+  while (Date.now() < laneCeiling) {
+    const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
+    if (r.ok) {
+      const data = await responseJson(r);
+      if (data.session?.state === expectedState) return data;
+    }
+    if (judgeJobId != null) {
+      const job = deps.readJob
+        ? await deps.readJob(judgeJobId)
+        : await readJudgeJob(judgeJobId, automationToken);
+      laneHeld = job?.status === "running";
+      if (laneHeld) {
+        await sleep(500);
+        continue;
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms` +
+          (laneHeld ? " (the swarm lane was held by the judge job the whole time)" : ""),
+      );
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `session ${date}/${subject} did not reach '${expectedState}' within ${Math.round((laneCeiling - started) / 1000)}s — ` +
+      "the judge job held the swarm lane past both ceilings; check the swarm lane for a wedged job",
+  );
+}
+
+/**
  * Enqueue one lifecycle step, and FAIL LOUDLY IF IT DID NOT GET QUEUED
  * (issue #806).
  *
@@ -802,6 +864,103 @@ export async function countJudgements(
   }
 }
 
+// ── The judge job's own row is the clock (issue #806's expiry was a guess) ──
+// The driver used to wait for a judging by polling the SESSION state against
+// a wall-clock ceiling, and treated the ceiling's expiry as "the judge was
+// slow". On the single-concurrency swarm lane that is usually false: the
+// judge job may still be `running` (its model call legitimately in flight) or
+// `pending` (in exponential backoff after a failed attempt), and publish —
+// enqueued after the wait — cannot be claimed until the lane is free. The
+// blind expiry then enqueued publish BEHIND the still-running judge, and the
+// publish wait (30s) expired against a lane nothing could free early: the
+// smoke crashed at the publish wait, not the judge wait.
+//
+// The check the user asked for ("check when resources are available and
+// processes completed") is the JOB row: `GET /api/admin/jobs?id=<jobId>`
+// reports the judge job's actual status, attempts, and last_error. While the
+// job is `running` or `pending` the process has NOT completed — the driver
+// keeps waiting, and no wall clock is consulted. The ceiling survives only as
+// a backstop against a genuinely wedged lane (a job stuck `running` past all
+// its own bounds), and the expiry log names the job's live status instead of
+// guessing "slow judge".
+
+export interface JudgeJobStatus {
+  status: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  runAfter: string | null;
+}
+
+/** The judge job's row, or null when it cannot be read (never a guess). */
+export async function readJudgeJob(
+  jobId: string | number,
+  automationToken?: string,
+): Promise<JudgeJobStatus | null> {
+  try {
+    const r = await fetch(
+      `${backendUrl()}/api/admin/jobs?id=${encodeURIComponent(String(jobId))}`,
+      { headers: getAutomationHeaders(automationToken), signal: AbortSignal.timeout(5_000) },
+    );
+    if (!r.ok) return null;
+    const body = await responseJson<{ jobs?: Record<string, unknown>[] }>(r);
+    const job = (body.jobs ?? []).find((j) => String(j.id) === String(jobId));
+    if (!job) return null;
+    return {
+      status: String(job.status),
+      attempts: Number(job.attempts ?? 0),
+      maxAttempts: Number(job.max_attempts ?? 5),
+      lastError: job.last_error == null ? null : String(job.last_error),
+      runAfter: job.run_after == null ? null : String(job.run_after),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface JudgeJobWaitOutcome {
+  job: JudgeJobStatus | null;
+  /** Why the wait ended: the job went terminal, or the backstop ceiling hit. */
+  reason: "terminal" | "ceiling";
+}
+
+export interface JudgeJobWaitDeps {
+  read?: (jobId: string | number) => Promise<JudgeJobStatus | null>;
+  wait?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * Wait until the judge job reaches a TERMINAL state (`succeeded` or `dead`),
+ * or the ceiling backstop expires. `running`/`pending` never consume the
+ * ceiling: the process has not completed, so the wait continues. Returns the
+ * job's last-read row so the caller's log names the live status on expiry
+ * rather than asserting a slow judge.
+ */
+export async function waitForJudgeJobTerminal(
+  jobId: string | number,
+  automationToken: string | undefined,
+  ceilingMs: number,
+  deps: JudgeJobWaitDeps = {},
+): Promise<JudgeJobWaitOutcome> {
+  const read = deps.read ?? ((id: string | number) => readJudgeJob(id, automationToken));
+  const wait = deps.wait ?? sleep;
+  const now = deps.now ?? Date.now;
+  const deadline = now() + ceilingMs;
+  let last: JudgeJobStatus | null = null;
+  while (now() < deadline) {
+    const job = await read(jobId);
+    if (job) {
+      last = job;
+      if (job.status === "succeeded" || job.status === "dead") {
+        return { job, reason: "terminal" };
+      }
+    }
+    await wait(2_000);
+  }
+  return { job: last, reason: "ceiling" };
+}
+
 /**
  * What the judge step actually did, as the driver observed it (issue #817).
  *
@@ -822,6 +981,13 @@ export interface JudgeStepOutcome {
   waitedForJudged: boolean;
   judged: boolean;
   recorded: number | null;
+  /**
+   * The enqueued `swarm.judge` job's id — carried so runSession's PUBLISH wait
+   * can watch the same job: on the single-concurrency swarm lane, publish
+   * cannot be claimed while the judge job is still `running`/`pending`, so
+   * that wait must not expire against a lane nothing can free early.
+   */
+  judgeJobId: string | number | null;
 }
 
 /**
@@ -858,6 +1024,9 @@ export interface JudgeStepDeps {
   enqueue?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
   waitForJudged?: () => Promise<unknown>;
   countJudgements?: () => Promise<number | null>;
+  readJob?: (jobId: string | number) => Promise<JudgeJobStatus | null>;
+  /** Backstop ceiling for the judge-job wait; the tests inject a short one. */
+  judgeWaitCeilingMs?: number;
   log?: (line: string) => void;
 }
 
@@ -908,7 +1077,6 @@ export async function runJudgeStep(
   const readMode = deps.readMode ?? (() => readJudgeMode(automationToken));
   const enqueue = deps.enqueue
     ?? ((action: string, payload: Record<string, unknown>) => enqueueLifecycleJob(action, payload, automationToken));
-  const waitForJudged = deps.waitForJudged ?? (() => waitForSessionState(date, subjectId, "judged", JUDGE_WAIT_MS));
   const judgementCount = deps.countJudgements ?? (() => countJudgements(sessionId, automationToken));
   const log = deps.log ?? ((line: string) => console.log(line));
 
@@ -921,24 +1089,62 @@ export async function runJudgeStep(
   // slow judge and must not be absorbed by the wait's survivable-timeout
   // branch, which would publish the session and log the wrong cause.
   const queued = await enqueue("judge", { sessionId });
-  const queuedJobId = (queued as { jobId?: unknown } | undefined)?.jobId;
+  const rawJobId = (queued as { jobId?: unknown } | undefined)?.jobId;
+  const queuedJobId: string | number | null =
+    typeof rawJobId === "string" || typeof rawJobId === "number" ? rawJobId : null;
 
   if (mode !== "shadow" && mode !== "enforce") {
     log(`  judge mode=${mode ?? "unreadable"} — the queued judging drains as a clean skip; not waiting for 'judged'`);
-    return { mode, waitedForJudged: false, judged: false, recorded: null };
+    return { mode, waitedForJudged: false, judged: false, recorded: null, judgeJobId: queuedJobId ?? null };
   }
+  // THE WAIT IS ON THE JUDGE JOB'S ROW, NOT ON A SESSION STATE + WALL CLOCK.
+  // The session's `judged` state is produced by the job, so polling the state
+  // against a clock (a) expires while the job is legitimately still `running`
+  // or `pending`, and (b) then enqueues publish BEHIND the still-running
+  // judge on the single-concurrency lane — the publish wait that follows then
+  // expires too, and the smoke crashes at the publish line rather than the
+  // judge line. waitForJudgeJobTerminal ends when the job ENDS (succeeded or
+  // dead), and the ceiling is only a backstop against a wedged lane. A
+  // `dead` job is a permanent failure — the wait stops at once, naming
+  // last_error, instead of burning the ceiling.
+  const waitForJudged = deps.waitForJudged
+    ?? (async () => {
+      const ceilingMs = deps.judgeWaitCeilingMs ?? JUDGE_WAIT_MS;
+      const terminal = await waitForJudgeJobTerminal(
+        String(queuedJobId),
+        automationToken,
+        ceilingMs,
+        { read: deps.readJob },
+      );
+      if (terminal.reason === "terminal" && terminal.job?.status === "succeeded") {
+        // The judging LANDED. The session's `aggregated -> judged` transition
+        // is in the same transaction as the judgement row, so it is already
+        // committed; a short grace for the read path, not a second budget.
+        await waitForSessionState(date, subjectId, "judged", 15_000);
+        return;
+      }
+      const job = terminal.job;
+      if (terminal.reason === "terminal" && job?.status === "dead") {
+        throw new Error(
+          `swarm.judge job #${queuedJobId} went DEAD after ${job.attempts}/${job.maxAttempts} attempts` +
+            (job.lastError ? ` — ${job.lastError}` : ""),
+        );
+      }
+      throw new Error(
+        `swarm.judge job #${queuedJobId} still ${job ? job.status : "unreadable"} after the ${Math.round(ceilingMs / 1000)}s backstop ceiling` +
+          (job?.lastError ? ` — last_error: ${job.lastError}` : ""),
+      );
+    });
   try {
     await waitForJudged();
     log(`  judged (mode=${mode})`);
-    return { mode, waitedForJudged: true, judged: true, recorded: null };
+    return { mode, waitedForJudged: true, judged: true, recorded: null, judgeJobId: queuedJobId ?? null };
   } catch (err) {
-    // SAY WHICH FAILURE THIS IS (issue #806). "did not reach 'judged' in time"
-    // asserts a slow judge, and on the single-worker swarm lane that is usually
-    // untrue: publish is enqueued only after this wait returns and cannot be
-    // claimed while the judge holds the lane, so an expiry here is more often a
-    // judging that ran and was REFUSED, or one still queued behind a wedged
-    // lane, than one that was merely slow. The record answers it — a judgement
-    // row exists or it does not — so the log reports that instead of guessing.
+    // SAY WHICH FAILURE THIS IS (issue #806). The wait no longer expires on a
+    // mere slow judge — it ends on the job's terminal state or the backstop —
+    // so an expiry here names a DEAD job (its last_error) or a wedged lane
+    // (its live status), never a guess. The record answers whether the
+    // judging ran and was refused, so the log reports it instead of guessing.
     const recorded = await judgementCount();
     const record = recorded == null
       ? "could not read the judgement record"
@@ -947,11 +1153,11 @@ export async function runJudgeStep(
           "and the progress stream reports it as 'judged' on the strength of the record (issue #817)"
         : "NO judgement row was recorded — the judging did not run to completion";
     log(
-      `  judge job #${queuedJobId ?? "?"} was queued and this driver's wait for the session to reach 'judged' ` +
+      `  judge job #${queuedJobId ?? "?"} was queued and this driver's wait for the judging to LAND ` +
         `EXPIRED (mode=${mode}) — ${record}; publishing anyway rather than wedging the cadence: ` +
         `${err instanceof Error ? err.message : err}`,
     );
-    return { mode, waitedForJudged: true, judged: false, recorded };
+    return { mode, waitedForJudged: true, judged: false, recorded, judgeJobId: queuedJobId ?? null };
   }
 }
 
@@ -1502,7 +1708,13 @@ export async function runSession(
   if (judged) emitSession("judged", sessionId, judged);
 
   await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
-  await waitForSessionState(date, subject.id, "published");
+  // LANE-AWARE (the crash this replaces): if the judge-wait backstop expired
+  // with the judge job still `running`, the single-concurrency lane is still
+  // held and the publish job just enqueued cannot be claimed — a plain 30s
+  // state wait would expire against an occupied lane and kill the smoke.
+  // waitForSessionStateAfterJob keeps waiting while the judge holds the lane,
+  // and names it if the whole thing wedges.
+  await waitForSessionStateAfterJob(date, subject.id, "published", judgeOutcome.judgeJobId, rail.automationToken);
   emitSession("published", sessionId);
 
   const pub = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject: subject.id })}`).then(responseJson);
