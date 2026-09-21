@@ -371,38 +371,25 @@
                         </button>
                         <div class="rr-disc__anim" id="judge-differ" role="region" aria-label="Where views differ" :inert="!open">
                           <div class="rr-disc__clip"><div class="rr-disc__body">
-                            <template x-for="d in judge().disagreements" :key="d.topic">
-                              <div class="rr-disc rr-q" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                                <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
-                                  <span><b x-text="d.topic"></b></span>
-                                  <small x-text="`${(d.positions || []).length} views`"></small>
-                                </button>
-                                <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
-                                  <div class="rr-disc__clip"><div class="rr-disc__body">
-                                    <!-- One row per member: the stance and confidence their take filed,
-                                         and one way to the take. -->
-                                    <div class="rr-tablewrap">
-                                      <table class="rr-table rr-table--compact rr-views-t">
-                                        <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
-                                        <tbody>
-                                          <template x-for="r in viewRows(d)" :key="r.key">
-                                            <tr>
-                                              <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
-                                              <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
-                                              <td class="q" x-text="r.confidence"></td>
-                                              <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
-                                            </tr>
-                                          </template>
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                    <template x-if="d.what_settles">
-                                      <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
-                                    </template>
-                                  </div></div>
-                                </div>
-                              </div>
-                            </template>
+                            <!-- The members the judge found apart, each once: the
+                                 stance and confidence their take filed, and one
+                                 way to it. The questions it named, and what
+                                 would resolve each, are on its judgement page. -->
+                            <div class="rr-tablewrap">
+                              <table class="rr-table rr-table--compact rr-views-t">
+                                <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
+                                <tbody>
+                                  <template x-for="r in judgeViewRows()" :key="r.key">
+                                    <tr>
+                                      <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
+                                      <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
+                                      <td class="q" x-text="r.confidence"></td>
+                                      <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
+                                    </tr>
+                                  </template>
+                                </tbody>
+                              </table>
+                            </div>
                           </div></div>
                         </div>
                       </div>

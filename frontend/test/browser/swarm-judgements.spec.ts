@@ -139,11 +139,14 @@ test("a session one judge worked on: its block, its advice, its questions, named
   await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(block.locator(".rr-advice li")).toHaveText(["The takes do not address the brief's liquidity question."]);
   await expect(block.locator(".rr-prose")).toContainText("none argues for moving the target");
-  // Its questions: one row per member, the stance their take filed, one way
-  // to the take, and what resolves it.
+  // Who it found apart, one expand away: one row per member, the stance their
+  // take filed, one way to the take. The question itself and what would
+  // resolve it are the judgement page's.
   await block.getByRole("button", { name: "Where views differ" }).click();
-  await block.getByRole("button", { name: /Whether the agent-token sleeve/ }).click();
+  await expect(block.getByRole("button", { name: /Whether the agent-token sleeve/ })).toHaveCount(0);
+  await expect(block).not.toContainText(DISAGREEMENT.topic);
   const views = block.locator(".rr-views-t tbody tr");
+  await expect(views).toHaveCount(2);
   await expect(views.nth(0).locator("th > span")).toHaveText("Athena");
   await expect(views.nth(0).locator("th small")).toContainText("sized for optionality");
   await expect(views.nth(0).locator(".sv__stance-badge")).toHaveText("constructive");
@@ -152,8 +155,7 @@ test("a session one judge worked on: its block, its advice, its questions, named
   await expect(views.nth(1).locator("th small")).toHaveCount(0);
   await expect(views.nth(1).locator(".sv__stance-badge")).toHaveText("neutral");
   await expect(views.nth(1).locator("a.rr-lnk")).toHaveText("Read take");
-  await expect(block.locator(".rr-settles")).toContainText("Resolves when");
-  await expect(block.locator(".rr-settles")).not.toContainText("Raised by");
+  await expect(block.locator(".rr-settles")).toHaveCount(0);
   await expect(block.locator("a.rr-cta")).toHaveAttribute("href", "/swarm/judgements/41");
 
   // The facts row names the judge, a way to its block.

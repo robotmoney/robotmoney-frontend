@@ -3781,6 +3781,21 @@ export function registerStaticViews(Alpine) {
       return !known.length || known.some((b) => Math.abs(b.recommended - b.target) >= 0.0005);
     },
     judge() { return this.judgeBlocks()[0] || null; },
+    // Where the judge found the takes apart, as the members it named, each
+    // once. The questions, and what would resolve each, are its judgement
+    // page's; the session page says who differs and how they stood.
+    judgeViewRows() {
+      const seen = new Set();
+      const out = [];
+      for (const d of this.judge()?.disagreements || []) {
+        for (const r of this.viewRows(d)) {
+          if (seen.has(r.name)) continue;
+          seen.add(r.name);
+          out.push({ ...r, key: `jv-${r.name}` });
+        }
+      }
+      return out;
+    },
     // The judge, named in the facts row, a way to its block below.
     judgedBy() { return this.judgeBlocks().filter((b) => b.name); },
     // One count: the members' own disagreements on a v0 session, or the
