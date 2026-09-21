@@ -416,12 +416,103 @@ the session wedges in `collecting` permanently. *(Fixed on `releases-0.5.x` by
 
 GAP-9. **INV-A2 is unenforced** — see §8.
 
-## 11. Open decisions
+## 11. Target design — the judge as evaluator
 
-1. §9's two questions — may a non-model opinion exist, and may it be certified?
-2. Should GAP-1 through GAP-4 be closed by routing every transition through
+Product direction stated by Lucas, 2026-09-21. Recorded as the target. **Not
+current behavior.** Sections 1-10 describe what is built.
+
+### 11.1 The contract
+
+- Sessions always end.
+- The judge cannot commence work until the session's takes are frozen.
+- The judge's output is always typed JSON carrying **both**:
+  - a consensus weight, and
+  - one evaluation per submitted memo, each with a confidence field and
+    discursive text explaining that evaluation.
+- The judge brings no new evidence. Its evidence is what the agents submitted.
+- The judge **may** check the facts an agent asserts against canonical source
+  data the RM platform already serves (macro data APIs and similar).
+
+### 11.2 This preserves more of D42 than it first appears
+
+The phrasing matters: the judge reports *"the consensus weight the swarm agents
+provided"*, over the subset it judged reasonable. **The judge is not an
+allocator.** It does not author an allocation from its own market view. It
+filters, and reports the consensus of what survives.
+
+So the arithmetic stays arithmetic. The model contributes a *filter*, not a
+number. That admits a design where D42's core property survives an amendment
+rather than a repeal:
+
+1. The judge scores each memo. Those scores are model output.
+2. The vector is still computed by `meanTakeWeights()`, over the surviving takes.
+3. The receipt carries the takes **and** the per-memo scores, both signed.
+4. A verifier recomputes the vector exactly — apply the signed scores, run the
+   same mean, compare against the receipt.
+
+Reproducibility moves from *"from the take set"* to *"from the take set plus the
+judge's signed scores"*. It does not disappear. A dishonest judge becomes
+detectable in its scores rather than invisible in its arithmetic, which is a
+strictly smaller surface than a judge that authors the vector outright.
+
+INV-TG1. The vector in a receipt must be recomputable from that receipt's own
+signed bytes, with no live service call.
+
+### 11.3 Required changes
+
+| # | Change | Why |
+|---|---|---|
+| 1 | Amend D42 | It currently forbids the judge authoring any number |
+| 2 | Drop/replace `swarm_session_judgements_no_weights_check` | It refuses `weight`/`weights`/`allocation`/`vector` at any depth, so it rejects every target-shaped opinion |
+| 3 | Widen the opinion shape | Today `{rationale, disagreements, release_safety}`; target adds N per-memo evaluations |
+| 4 | Reorder the cadence | `aggregate` authors the vector today and runs **before** `judge`. Either judge moves ahead of aggregation, or aggregation re-runs after judging (`session_not_reaggregated` is precedent) |
+| 5 | Widen the prompt | The judge is shown "the brief and the takes and nothing else" today; fact-checking needs canonical data |
+| 6 | Widen `canonicalizeDigestInputs()` and bump `DIGEST_SCHEME` | Off `derivation-v1`. The repo's own rule: bump in the same change that widens the covered set |
+| 7 | Carry the per-memo evaluations into the receipt | Otherwise INV-TG1 fails — the weight stops being reproducible |
+| 8 | Keep `meanTakeWeights()` as the arithmetic | Per 11.2, the judge filters and the function still computes |
+
+### 11.4 The tension to resolve in wording
+
+"No new evidence" and "may check canonical data" are in tension as written.
+Checking a claim against a macro API *is* reading data the agents did not submit.
+
+The workable distinction: canonical data is a **verification oracle, not
+evidence**. The judge may use it to test a claim an agent made. The judge may not
+use it to form a position of its own. Enforceable in the output shape — every
+evaluation is *about* a submitted memo, and the consensus weight is derived from
+the surviving memos rather than from the judge's own view.
+
+This needs to be written into the prompt contract explicitly, because it is the
+line between an evaluator and a thirteenth analyst.
+
+### 11.5 Reproducibility hazard — canonical data moves
+
+Macro data is revised. A judge that checked a claim against a series at judging
+time, and a verifier who re-reads that series a month later, do not see the same
+numbers. Left alone this silently breaks INV-TG1.
+
+The fix is the pattern the repo already uses elsewhere: pin a snapshot. Sessions
+already carry `report_snapshot_id`, `swarm_subject_snapshots` and a digested
+`regimeComposite`. Whatever canonical series the judge consults must be
+snapshotted, identified in the judgement row, and covered by `inputs_digest`.
+
+**A fact-check against live, unpinned data is not auditable and must not ship.**
+
+## 12. Open decisions
+
+1. When the judge rules a memo unreasonable, is that memo **dropped** from the
+   vector entirely, or **down-weighted** by its confidence score? This is the
+   one unanswered detail blocking §11.
+2. Does `meanTakeWeights()` over the *unfiltered* set stay published alongside
+   the filtered one? Keeping it is a cheap audit signal — a large gap between
+   the two is exactly the symptom of a judge filtering too aggressively.
+3. §9's two questions — may a non-model opinion exist, and may it be certified?
+   §11 narrows this: an evaluator that cannot reach a model has nothing to say
+   about any memo, so the zero-fallback answer looks more natural under the
+   target design than under today's.
+4. Should GAP-1 through GAP-4 be closed by routing every transition through
    `transitionWithin`, making the domain primitives private?
-3. Should swarm judgement and receipt tables move to the stricter
+5. Should swarm judgement and receipt tables move to the stricter
    UPDATE-refusing registry (§8, GAP-9)?
-4. Are the already-published receipts over template prose retracted, left
+6. Are the already-published receipts over template prose retracted, left
    servable, or flagged?
