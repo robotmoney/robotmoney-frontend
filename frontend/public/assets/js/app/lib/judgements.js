@@ -230,6 +230,20 @@ export function adviceOf(rs) {
 // Update none (.rr-advice-badge). Swapping a word is this table.
 /** @type {Record<"hold" | "safe", { key: "hold" | "update", label: string }>} */
 export const ADVICE_CALLS = { hold: { key: "hold", label: "Hold" }, safe: { key: "update", label: "Update" } };
+// The session's call when several judges called it: ANY HOLD HOLDS (David,
+// 2026-09-21). Update only when every judge advises it; one Hold keeps the
+// target. Holding by mistake costs a session; updating by mistake moves money.
+// null for fewer than two calls: one judge's call is its own row's.
+/** @param {Array<{ key: string } | null | undefined>} calls */
+export function sessionCallOf(calls) {
+  const made = calls.filter(Boolean);
+  if (made.length < 2) return null;
+  const holds = made.filter((c) => c?.key === "hold").length;
+  return holds
+    ? { ...ADVICE_CALLS.hold, tally: `${holds} of ${made.length} advise holding` }
+    : { ...ADVICE_CALLS.safe, tally: `${made.length} of ${made.length} advise updating` };
+}
+
 /** @param {any} rs */
 export function adviceCall(rs) {
   /** @type {unknown} */

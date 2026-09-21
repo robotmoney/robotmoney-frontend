@@ -27,7 +27,7 @@ import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
-  adviceOf, adviceCall, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  adviceOf, adviceCall, sessionCallOf, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
   MEMBER_JUDGEMENTS_MAX,
 } from "../lib/judgements.js";
@@ -3714,12 +3714,16 @@ export function registerStaticViews(Alpine) {
       return adopted ? [this.judgeBlockOf({ ...adopted, id: "" })] : [];
     },
     judgeBlockOf(j) {
+      const advice = adviceOf(j.releaseSafety);
       return {
         key: j.id || "adopted",
         name: judgeName(j, this.members),
         label: judgeLabelHtml(j, this.members),
-        advice: adviceOf(j.releaseSafety),
-        call: adviceCall(j.releaseSafety),
+        advice,
+        // The call only where there is a target to act on (callApplies); the
+        // reason a judge held shows either way.
+        call: this.callApplies() ? adviceCall(j.releaseSafety) : null,
+        reason: advice ? advice.reason || advice.concerns[0] || "" : "",
         // A judgement recorded before the judge stopped writing templates
         // (source "fallback") restates the tally the page draws.
         rationale: j.source === "model" ? j.rationale : "",
@@ -3727,15 +3731,45 @@ export function registerStaticViews(Alpine) {
         page: judgementHref(j),
       };
     },
-    // The judges, named in the facts row, each a way to its block below.
-    judgedBy() { return this.judgeBlocks().filter((b) => b.name); },
-    // One count, where there is one: the members' own disagreements on a v0
-    // session, or the one judge's. Two judges list their own, and a sum of
-    // them would count one question twice.
-    disagreementCount() {
-      if (this.disagreements().length) return this.disagreements().length;
+    // Whether a judge's call has anything to act on: a weights recommendation
+    // that moves the target. A session that published no weights holds the
+    // target by itself, and a portfolio review has no target; there the
+    // judges' reasons show and no call does (RM-97, 2026-09-21).
+    callApplies() {
+      if (!this.isBucketWeights()) return false;
+      const known = this.bucketRows().filter((b) => b.recommended != null && b.target != null);
+      return !known.length || known.some((b) => Math.abs(b.recommended - b.target) >= 0.0005);
+    },
+    // The session's call when two or more judges called it: any Hold holds.
+    sessionCall() { return sessionCallOf(this.judgeBlocks().map((b) => b.call)); },
+    // The one judge's account, when there is one judge; with several, each
+    // account is on its judgement page and the table carries the rest.
+    soloJudge() {
       const blocks = this.judgeBlocks();
-      return blocks.length === 1 ? blocks[0].disagreements.length : 0;
+      return blocks.length === 1 ? blocks[0] : null;
+    },
+    // Where views differ, across every judge: one list of questions, each
+    // with the judges who raised it. The questions are about the analysts'
+    // takes, so two judges naming one are one question, not two.
+    judgeDisagreements() {
+      /** @type {Map<string, any>} */
+      const out = new Map();
+      for (const b of this.judgeBlocks()) {
+        for (const d of b.disagreements) {
+          const k = String(d.topic || "").trim().toLowerCase();
+          const cur = out.get(k);
+          if (cur) { if (b.name && !cur.by.includes(b.name)) cur.by.push(b.name); continue; }
+          out.set(k, { ...d, by: b.name ? [b.name] : [] });
+        }
+      }
+      return [...out.values()];
+    },
+    // The judges, named in the facts row, each a way to its row below.
+    judgedBy() { return this.judgeBlocks().filter((b) => b.name); },
+    // One count: the members' own disagreements on a v0 session, or the
+    // judges' questions, a question two judges both raised counted once.
+    disagreementCount() {
+      return this.disagreements().length || this.judgeDisagreements().length;
     },
 
     // ── the research record (RM-121) ────────────────────────────────────────
