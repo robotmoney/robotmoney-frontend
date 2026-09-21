@@ -95,7 +95,7 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // `judged` state that a disabled judge never produces: the job drains as
     // `{ skipped: "judge_disabled" }` and the session stays `aggregated`.
     expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: "off", waitedForJudged: false, judged: false, recorded: null });
+    expect(out).toEqual({ mode: "off", waitedForJudged: false, judged: false, recorded: null, judgeJobId: 77 });
     expect(h.logs.join("\n")).toContain("judge mode=off");
   });
 
@@ -109,12 +109,12 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     // refused, the whole judging transaction rolls back, and the soak records
     // nothing.
     expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
   });
 
   test("`enforce` waits on the same terms", async () => {
     const { h, result } = run("enforce");
-    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null });
+    expect(await result).toEqual({ mode: "enforce", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
     expect(h.calls).toEqual(["readMode", "enqueue:judge", "waitForJudged"]);
   });
 
@@ -122,7 +122,7 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const { h, result } = run(null);
     const out = await result;
     expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
-    expect(out).toEqual({ mode: null, waitedForJudged: false, judged: false, recorded: null });
+    expect(out).toEqual({ mode: null, waitedForJudged: false, judged: false, recorded: null, judgeJobId: 77 });
     expect(h.logs.join("\n")).toContain("unreadable");
   });
 
@@ -131,14 +131,14 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const out = await result;
     // `recorded` is carried out of the expiry path because it, not the wait's
     // opinion, is what the progress stream keys the `judged` event on (#817).
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0 });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
     // Loud, not silent: the operator reading the driver's log learns the
     // session published without its judging, and why.
     expect(h.logs.join("\n")).toContain("publishing anyway");
     // The line reports the WAIT expiring — an event this driver observed — and
     // no longer asserts "the judge did not reach 'judged' in time", which on
     // the single-worker lane is usually false (#817).
-    expect(h.logs.join("\n")).toContain("wait for the session to reach 'judged' EXPIRED");
+    expect(h.logs.join("\n")).toContain("wait for the judging to LAND EXPIRED");
     expect(h.logs.join("\n")).not.toContain("did not reach 'judged' in time");
   });
 
@@ -194,6 +194,92 @@ describe("runJudgeStep — the driver's judge step, executed", () => {
     const { h, result } = run("off", { enqueueFails: true });
     await expect(result).rejects.toThrow(/HTTP 403/);
     expect(h.calls).toEqual(["readMode", "enqueue:judge"]);
+  });
+});
+
+// ── The wait is on the JUDGE JOB'S ROW, not a wall clock (issue #806's
+//    expiry was a guess). These drive the DEFAULT wait — the injected
+//    waitForJudged is absent, so runJudgeStep uses the real job-terminal wait
+//    with only `readJob` stubbed. The session-state confirm inside the
+//    succeeded path is a real fetch; the fetch stub answers it. ─────────────
+describe("runJudgeStep's default wait reads the judge job's terminal state", () => {
+  const realFetch = globalThis.fetch;
+  const realBackend = process.env.BACKEND_URL;
+
+  function harnessWithJob(sequence: Array<{ status: string; attempts?: number; maxAttempts?: number; lastError?: string | null }>) {
+    let reads = 0;
+    const calls: string[] = [];
+    const logs: string[] = [];
+    const deps = {
+      readMode: async () => { calls.push("readMode"); return "shadow"; },
+      enqueue: async () => { calls.push("enqueue:judge"); return { jobId: 77, kind: "swarm.judge" }; },
+      // NO waitForJudged — the default (job-driven) wait is what is under test.
+      countJudgements: async () => { calls.push("countJudgements"); return 0; },
+      readJob: async () => {
+        calls.push("readJob");
+        const row = sequence[Math.min(reads, sequence.length - 1)];
+        reads++;
+        return { status: row.status, attempts: row.attempts ?? 1, maxAttempts: row.maxAttempts ?? 5, lastError: row.lastError ?? null, runAfter: null };
+      },
+      log: (line: string) => { logs.push(line); },
+    };
+    return { calls, logs, deps };
+  }
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realBackend === undefined) delete process.env.BACKEND_URL;
+    else process.env.BACKEND_URL = realBackend;
+  });
+
+  test("a `succeeded` judge job ends the wait — the judgement landed, judged=true", async () => {
+    process.env.BACKEND_URL = "http://judgejob.invalid";
+    // Session-state confirm fetch (the 15s grace) answers `judged`.
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.includes("/api/swarm/sessions/")) {
+        return new Response(JSON.stringify({ session: { state: "judged" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const h = harnessWithJob([{ status: "running" }, { status: "succeeded" }]);
+    const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
+    expect(h.calls).toContain("readJob");
+    expect(h.calls).not.toContain("countJudgements");
+  });
+
+  test("a `dead` judge job stops the wait AT ONCE, naming last_error — no ceiling burned", async () => {
+    process.env.BACKEND_URL = "http://judgejob.invalid";
+    globalThis.fetch = (async (_input: any): Promise<Response> => {
+      throw new Error("no session fetch should happen on the dead path");
+    }) as typeof fetch;
+
+    const h = harnessWithJob([{ status: "dead", attempts: 5, maxAttempts: 5, lastError: "HTTP 401: unsupported model id" }]);
+    const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    expect(h.logs.join("\n")).toContain("went DEAD after 5/5 attempts");
+    expect(h.logs.join("\n")).toContain("HTTP 401: unsupported model id");
+    expect(h.logs.join("\n")).toContain("publishing anyway");
+  });
+
+  test("a job still running at the backstop ceiling is named a wedged lane, not a slow judge", async () => {
+    process.env.BACKEND_URL = "http://judgejob.invalid";
+    globalThis.fetch = (async (_input: any): Promise<Response> => {
+      throw new Error("no session fetch should happen on the ceiling path");
+    }) as typeof fetch;
+
+    const h = harnessWithJob([{ status: "running" }]);
+    const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", {
+      ...h.deps,
+      judgeWaitCeilingMs: 50,
+    });
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    expect(h.logs.join("\n")).toContain("still running after the 0s backstop ceiling");
   });
 });
 
@@ -494,7 +580,7 @@ describe("the progress stream reports the judging (#817)", () => {
 
 describe("judgedProgress — the decision, graded directly", () => {
   const outcome = (o: Partial<Parameters<typeof judgedProgress>[0]>) =>
-    judgedProgress({ mode: null, waitedForJudged: false, judged: false, recorded: null, ...o });
+    judgedProgress({ mode: null, waitedForJudged: false, judged: false, recorded: null, judgeJobId: null, ...o });
 
   test("it fires only for shadow/enforce, and only when a judging actually landed", () => {
     expect(outcome({ mode: "shadow", judged: true })).toEqual({ judgeMode: "shadow" });

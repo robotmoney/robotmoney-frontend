@@ -100,6 +100,32 @@ test("job detail returns the job + its runs including the output/error logs", as
   expect((ok?.output as { note: string }).note).toBe("analytics ok");
 });
 
+// The `?id=` filter — the exact-lookup the swarm driver's judge wait uses to
+// poll ONE known job by id (`GET /api/admin/jobs?id=<jobId>`). Must return
+// precisely that job (never siblings sharing a kind), 400 on a malformed id,
+// and the SAME row shape the list serves.
+test("jobs list filters by exact id, and rejects a malformed id", async () => {
+  const jobId = await seed();
+  const otherId = await seed();
+
+  const res = await call(req("GET", `/api/admin/jobs?id=${jobId}`, PROD.adminToken), PROD);
+  expect(res?.status).toBe(200);
+  const body = res?.body as { jobs: { id: number; kind: string; status: string; attempts: number }[] };
+  expect(body.jobs).toHaveLength(1);
+  expect(Number(body.jobs[0]!.id)).toBe(jobId);
+  expect(body.jobs[0]!.kind).toBe(KIND);
+  expect(body.jobs[0]!.status).toBe("succeeded");
+
+  // A sibling sharing the same kind is NOT returned.
+  const onlyOther = await call(req("GET", `/api/admin/jobs?id=${otherId}`, PROD.adminToken), PROD);
+  const otherBody = onlyOther?.body as { jobs: { id: number }[] };
+  expect(otherBody.jobs.map((j) => Number(j.id))).toEqual([otherId]);
+
+  // Malformed id → 400, same discipline as the other strict filters.
+  expect((await call(req("GET", "/api/admin/jobs?id=abc", PROD.adminToken), PROD))?.status).toBe(400);
+  expect((await call(req("GET", "/api/admin/jobs?id=0", PROD.adminToken), PROD))?.status).toBe(400);
+});
+
 // AC3 (issue #151) — a non-fatal telemetry write failure must still be
 // visible in admin status. worker/loop.ts persists whatever the handler
 // returns (including a `telemetry` field folded in by
