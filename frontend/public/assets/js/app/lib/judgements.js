@@ -7,7 +7,7 @@
 // never edits or scores a take, and it never sets a weight (the weights are
 // the members' average, computed before any judge runs). Its release call is
 // ADVICE. Nothing in the lifecycle refuses to publish on a hold, and
-// publishing is not applying, so the call is worded ("Advises: Hold") and
+// publishing is not applying, so the call is worded ("Advises: Wait") and
 // never drawn as a status. A "safe" call prints nothing at all: on a page
 // about money the word reads as a safety claim.
 import { api, ROUTES, path } from "./api.js";
@@ -198,7 +198,7 @@ const THIN_CONCERN = /^thinly supported\b/i;
 const UNNAMED_CONCERN = /^judge withheld release without naming a specific concern\.?$/i;
 
 /**
- * A hold, in words: "Advises: Hold · 2 takes, below the minimum of 3", and the
+ * A hold, in words: "Advises: Wait · 2 takes, below the minimum of 3", and the
  * reason alone ("2 takes, below the minimum of 3") for beside the call's badge
  * (adviceCall). The reason is the count when support is thin, or the one
  * concern when there is one; anything more is listed under it. null for a
@@ -215,20 +215,21 @@ export function adviceOf(rs) {
   const concerns = (Array.isArray(rs.concerns) ? rs.concerns : [])
     .map((/** @type {unknown} */ c) => String(c ?? "").trim())
     .filter((/** @type {string} */ c) => c && !UNNAMED_CONCERN.test(c) && !(thin && THIN_CONCERN.test(c)));
-  const parts = ["Advises: Hold"];
+  const parts = ["Advises: Wait"];
   if (thin && counted) parts.push(`${n} ${n === 1 ? "take" : "takes"}, below the minimum of ${min}`);
   else if (concerns.length === 1) parts.push(/** @type {string} */ (concerns.shift()).replace(/\.$/, ""));
   // `reason` is the line without its call, for beside the call's badge.
   return { line: parts.join(" · "), reason: parts[1] || "", concerns };
 }
 
-// The judge's call, as its badge names it. The data says "hold" or "safe";
-// "safe" is never printed, since on a money page it reads as a safety claim
-// about the vault, so the call that clears the recommendation reads
-// "Proceed". Hold wears the attention hue, Proceed none (.rr-advice-badge).
-// Swapping the word is this table.
-/** @type {Record<"hold" | "safe", { key: "hold" | "proceed", label: string }>} */
-export const ADVICE_CALLS = { hold: { key: "hold", label: "Hold" }, safe: { key: "proceed", label: "Proceed" } };
+// The judge's call, as its badge names it: Wait or Proceed (RM-97,
+// 2026-09-21). The data says "hold" or "safe". "Safe" is never printed: on a
+// money page it reads as a safety claim about the vault. "Hold" is not
+// either: to a crypto reader it means keeping a position, and a
+// recommendation's own position actions already say "hold". Wait wears the
+// attention hue, Proceed none (.rr-advice-badge). Swapping a word is this table.
+/** @type {Record<"hold" | "safe", { key: "wait" | "proceed", label: string }>} */
+export const ADVICE_CALLS = { hold: { key: "wait", label: "Wait" }, safe: { key: "proceed", label: "Proceed" } };
 /** @param {any} rs */
 export function adviceCall(rs) {
   /** @type {unknown} */

@@ -2023,14 +2023,14 @@ a.sv__vfy { text-decoration: none; }
 .rr-advice { margin: 0 0 1rem; }
 .rr-advice__l { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text); }
 .rr-advice__k { font-size: 0.75rem; color: var(--color-text-muted); }
-/* The judge's call, in the stance badge's shape (.sv__stance-badge): Hold in
+/* The judge's call, in the stance badge's shape (.sv__stance-badge): Wait in
    Beacon, the brand's point for attention; Proceed in no hue at all, since
    green would read as money and a stance colour as a market view. */
-.rr-advice-badge--hold { border-color: color-mix(in srgb, var(--color-beacon) 40%, transparent); color: var(--color-beacon); }
-.rr-advice-badge--hold i { background: var(--color-beacon); }
+.rr-advice-badge--wait { border-color: color-mix(in srgb, var(--color-beacon) 40%, transparent); color: var(--color-beacon); }
+.rr-advice-badge--wait i { background: var(--color-beacon); }
 .rr-advice-badge--proceed { border-color: var(--color-border-light); color: var(--color-text-soft); }
 .rr-advice-badge--proceed i { background: var(--color-text-muted); }
-/* A record card's reason for a hold, over the judge's own words. */
+/* A record card's reason to wait, over the judge's own words. */
 .rr-advice__why { margin: 0 0 0.5rem; font-size: 0.875rem; color: var(--color-text); }
 .rr-advice .rr-list { margin-top: 0.5rem; }
 .rr-judge__differ { margin-top: 1.5rem; }

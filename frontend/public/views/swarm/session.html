@@ -337,7 +337,7 @@
                   </div>
                 </template>
                 <!-- Each judge's opinion, in its own block: whose it is, its
-                     advice on release (Hold or Proceed; the data's "safe" is
+                     advice on release (Wait or Proceed; the data's "safe" is
                      never printed), its own account of the takes, and where
                      it found them apart. A judge scores nothing and sets no
                      weight; its record is a click away. -->
@@ -345,7 +345,7 @@
                   <div class="rr-block rr-judge" :id="`judge-${j.key}`" x-data="{ more: false }">
                     <p class="rr-k rr-sub" x-html="j.label"></p>
                     <!-- The call as a badge, as a take's stance is one, and
-                         for a hold the reason beside it. -->
+                         for a wait the reason beside it. -->
                     <template x-if="j.call">
                       <div class="rr-advice">
                         <p class="rr-advice__l"><span class="rr-advice__k">Advice</span><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${j.call.key}`"><i aria-hidden="true"></i><span x-text="j.call.label"></span></span><template x-if="j.advice?.reason"><span x-text="j.advice.reason"></span></template></p>

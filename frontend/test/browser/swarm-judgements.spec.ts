@@ -132,8 +132,8 @@ test("a session one judge worked on: its block, its advice in words, named in th
   await expect(block.locator(".rr-k a")).toHaveAttribute("href", "/swarm/members/themis");
   // The call as a badge, the count beside it; the backend's own sentence for
   // the count is not listed again.
-  await expect(block.locator(".rr-advice-badge--hold")).toHaveText("Hold");
-  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
+  await expect(block.locator(".rr-advice-badge--wait")).toHaveText("Wait");
+  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceWait3 takes, below the minimum of 4");
   await expect(block.locator(".rr-advice li")).toHaveText(["The takes do not address the brief's liquidity question."]);
   await expect(block.locator(".rr-prose")).toContainText("none argues for moving the target");
   // Its disagreements, matched to the takes on the page.
@@ -178,7 +178,7 @@ test("two judges, two blocks: each one's opinion and its own call", async ({ pag
   await expect(blocks.nth(0).locator(".rr-advice__l")).toHaveText("AdviceProceed");
   await expect(blocks.nth(0).locator(".rr-advice li")).toHaveCount(0);
   await expect(blocks.nth(0).locator(".rr-prose")).toContainText(HOUSE_PROSE);
-  await expect(blocks.nth(1).locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
+  await expect(blocks.nth(1).locator(".rr-advice__l")).toHaveText("AdviceWait3 takes, below the minimum of 4");
   await expect(page.locator(".rr-meta__i", { hasText: "Judged by" }).locator("a")).toHaveText(["Robot Money", "Themis"]);
   // Two judges' questions are theirs to count; the facts row does not sum them.
   await expect(page.locator(".rr-meta")).not.toContainText("Disagreements");
@@ -195,7 +195,7 @@ test("the judgement routes answering 404: the judge the recommendation names sta
   const block = page.locator("#reasoning .rr-judge");
   await expect(block).toHaveCount(1);
   await expect(block.locator(":scope > .rr-k")).toHaveText("Judge Themis");
-  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
+  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceWait3 takes, below the minimum of 4");
   await expect(block.getByRole("button", { name: "Where views differ" })).toBeVisible();
   await expect(block.locator("a.rr-cta")).toHaveCount(0);
   await expect(page.locator(".rr-meta__i", { hasText: "Disagreements" }).locator("b")).toHaveText("1");
@@ -241,8 +241,8 @@ test("a judgement's own page: who, which session, its advice, its questions, and
   await expect(fact("Model").locator("b")).toHaveText("deepseek-v4-flash");
   await expect(fact("Recorded").locator("b")).toHaveText("Sep 17, 2026 10:00 UTC");
 
-  await expect(page.locator("#judgement .rr-advice-badge--hold")).toHaveText("Hold");
-  await expect(page.locator("#judgement .rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
+  await expect(page.locator("#judgement .rr-advice-badge--wait")).toHaveText("Wait");
+  await expect(page.locator("#judgement .rr-advice__l")).toHaveText("AdviceWait3 takes, below the minimum of 4");
   await expect(page.locator("#judgement .rr-prose")).toContainText(THEMIS_PROSE);
 
   // Each view is a way to that member's take: its receipt when it has one.
@@ -286,7 +286,7 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await expect(page.locator(".rr-profile .rm-named .rm-role")).toHaveText("Judge");
   const fact = (k: string) => page.locator(".rr-meta .rr-meta__i", { hasText: k }).locator("b");
   await expect(fact("Sessions judged")).toHaveText("2");
-  await expect(fact("Holds advised")).toHaveText("1");
+  await expect(fact("Advised to wait")).toHaveText("1");
   await expect(page.locator(".rr-meta")).not.toContainText("Takes filed");
 
   // The analysts' record cards: subject and date, the call where a stance
@@ -295,7 +295,7 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0).locator(".rr-take__name")).toHaveText("Robot Money Allocation");
   await expect(cards.nth(0).locator(".mp-take__date")).toHaveText("Sep 17, 2026");
-  await expect(cards.nth(0).locator(".rr-advice-badge--hold")).toHaveText("Hold");
+  await expect(cards.nth(0).locator(".rr-advice-badge--wait")).toHaveText("Wait");
   await expect(cards.nth(0).locator(".rr-conf")).toHaveText("Disagreements 1");
   await expect(cards.nth(0).locator(".rr-advice__why")).toHaveText("3 takes, below the minimum of 4");
   await expect(cards.nth(0).locator("a.rr-take__act")).toHaveAttribute("href", "/swarm/judgements/41");
