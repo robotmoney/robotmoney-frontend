@@ -321,12 +321,35 @@ export function upArgs(
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready
 // BEFORE migrating; if that ordering is ever rearranged, migrate fails loudly
 // with a connection error instead of implicitly starting postgres.
+//
+// THE MIGRATION CREDENTIAL BELONGS TO THIS EPHEMERAL CHILD, NOT TO A SERVICE.
+// `docker compose run` inherits the named service's `environment:` block, which
+// is why docker-compose.yml used to declare MIGRATE_DATABASE_URL on `api` — and
+// compose cannot scope that to the run-child, so the LONG-RUNNING api container
+// got it too, along with three worker lanes, analytics-producer and (meaning
+// nothing at all) postgres. Six persistent processes carrying a bootstrap login
+// that holds CREATEROLE and rm_owner membership, none of which ever read it:
+// `src/api/index.ts:51` says outright that the api process "invokes neither
+// migrate nor scripts/db-preflight.ts", and the worker lanes never did either.
+// That contradicts 0053's own rule -- "Runtime processes authenticate only as
+// rm_app or rm_worker" -- and deployment.md §4.3's "supply MIGRATE_DATABASE_URL
+// only to that command".
+//
+// Naming it BARE (`-e VAR`, no `=value`) rather than as a pair: docker then
+// reads the value from its own environment, which buildComposeEnv() already
+// populates through the MIGRATE_DATABASE_URL passthrough. A `-e VAR=secret`
+// pair would put the credential in the `docker compose` process's argv, where
+// `ps` shows it to every local user -- the same defect the provisioning script
+// was carrying until 2026-09-21.
+const MIGRATION_CREDENTIAL_VARS = ["MIGRATE_DATABASE_URL"] as const;
+
 export function migrateArgs(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): string[] {
   return [
     "run",
     "--rm",
     "--no-deps",
     "-T",
+    ...MIGRATION_CREDENTIAL_VARS.flatMap((k) => ["-e", k]),
     ...Object.entries(extraEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "api",
     "bun",

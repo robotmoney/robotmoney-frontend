@@ -189,7 +189,6 @@ services:
     logging: *default-logging
     environment:
       PG_POOL_MAX: "2"
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
       POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
@@ -220,7 +219,6 @@ services:
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-smoke}
       # website-server (nginx) now sits in front of `api` for EVERY request in
@@ -382,7 +380,6 @@ services:
     <<: *worker-base
     environment:
       PG_POOL_MAX: "2"
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       <<: *worker-env
       WORKER_LANE: swarm
       # Consensus judge (issue #752) — THIS LANE ONLY. `swarm.judge` runs here
@@ -402,7 +399,6 @@ services:
     <<: *worker-base
     environment:
       PG_POOL_MAX: "2"
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       <<: *worker-env
       WORKER_LANE: analytics
       # `analytics.parity_sweep` (issue #979 fix) claims on this lane and now
@@ -421,7 +417,6 @@ services:
     <<: *worker-base
     environment:
       
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       <<: *worker-env
       WORKER_LANE: research
 
@@ -437,7 +432,6 @@ services:
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       ANALYTICS_API_URL: http://api:8787
       ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}

@@ -248,10 +248,25 @@ describe("argv builders", () => {
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
     expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-smoke-schedules"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
       "-e", "DEMO_SEED_PROJECTS=1",
       "api", "bun", "run", "src/db/migrate.ts", "--seed-smoke-schedules",
     ]);
-    expect(migrateArgs()).toEqual(["run", "--rm", "--no-deps", "-T", "api", "bun", "run", "src/db/migrate.ts"]);
+    expect(migrateArgs()).toEqual([
+      "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
+      "api", "bun", "run", "src/db/migrate.ts",
+    ]);
+  });
+
+  test("the migration credential is named BARE, so it never enters docker's argv", () => {
+    // `-e VAR=secret` would be readable in `ps` for the life of the call.
+    // `-e VAR` makes docker read it from its own environment instead.
+    const args = migrateArgs();
+    const i = args.indexOf("MIGRATE_DATABASE_URL");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i - 1]).toBe("-e");
+    expect(args.some((a) => a.startsWith("MIGRATE_DATABASE_URL="))).toBe(false);
   });
 });
 
