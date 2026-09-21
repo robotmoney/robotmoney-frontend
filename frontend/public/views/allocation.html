@@ -75,6 +75,17 @@
       <template x-if="!routerHref()">
         <span>Router <b x-text="routerLabel()">—</b></span>
       </template>
+      <!-- Newer sessions that published no weights held the target, as
+           /swarm states it over its ring: here with the rail's other facts
+           about the target, not inside the panel beside the ring. The date
+           rides in the value so it cannot read as a second "since" beside
+           In force since. -->
+      <template x-if="recHeldBy()">
+        <span>Latest session <b><a class="rr-lnk" :href="recHref(recHeldBy())" x-text="recDate(recHeldBy())"></a></b></span>
+      </template>
+      <template x-if="recHeldBy()">
+        <span>Recommendation <b x-text="`Target held since ${recDate(recSession)}`"></b></span>
+      </template>
     </div>
 
     <!-- One deposit, split into the sleeves it is allocated to. A donut, not
@@ -175,13 +186,6 @@
           <template x-if="recSession">
             <div>
               <p class="rr-k rr-sub">Latest recommendation</p>
-              <template x-if="recHeldBy()">
-                <div class="rr-meta rr-meta--lead">
-                  <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="recHref(recHeldBy())" x-text="recDate(recHeldBy())"></a></b></span>
-                  <span class="rr-meta__i">Recommendation <b>Target held</b></span>
-                  <span class="rr-meta__i">Since <b x-text="recDate(recSession)"></b></span>
-                </div>
-              </template>
               <template x-if="recRationale()">
                 <div>
                   <div class="rr-prose" :class="!more && String(recRationale()).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
@@ -262,7 +266,7 @@
     </div>
     <div class="rr">
       <p class="alp__empty" x-show="vaultError()" x-cloak>Vault data unavailable</p>
-      <div class="rr-meta" x-show="!vaultError()">
+      <div class="rr-meta rr-meta--lead" x-show="!vaultError()">
         <span class="rr-meta__i">Combined TVL <b x-text="combinedLabel()">—</b></span>
         <span class="rr-meta__i">Tracking error <b x-text="trackingErrorLabel()">—</b></span>
         <span class="rr-meta__i">Recommendation
