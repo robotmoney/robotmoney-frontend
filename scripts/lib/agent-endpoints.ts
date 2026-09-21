@@ -198,7 +198,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.members,
     summary: "The Investment Swarm roster",
     description:
-      "Every swarm member: handle, display name, status (active, inactive, applied), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
+      "Every swarm member: handle, display name, status (active, inactive, applied), role (member, or judge for a consensus judge that files no takes), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
     backs: ["/swarm"],
     contractType: "{ members: SwarmMember[] }",
     sizeHint: "about 20 KB",
@@ -227,6 +227,21 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     ],
     contractType: "SwarmMemberTakesResponse",
     sizeHint: "about 18 KB with no limit, for an active member",
+  },
+  {
+    id: "getSwarmMemberJudgements",
+    method: "GET",
+    path: ROUTES.swarm.memberJudgements,
+    summary: "One judge's public judgements across sessions, newest first",
+    description:
+      "Every public opinion this consensus judge has written, newest first: one per published session it judged in `enforce` mode, the one that reached the session. Opinions recorded in `shadow` mode are never public. An unknown member, or a member that has never judged, returns an empty list. The default page is 20; `limit` must be an integer from 1 to 100.",
+    backs: ["/swarm"],
+    params: [
+      { name: "id", in: "path", required: true, description: "Member id or handle.", example: "themis" },
+      { name: "limit", in: "query", description: "Maximum judgements to return, 1 to 100.", example: "20" },
+    ],
+    contractType: "SwarmJudgementsResponse",
+    sizeHint: "about 2 KB per judgement",
   },
   {
     id: "listSwarmSessions",
@@ -290,11 +305,35 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.take,
     summary: "One signed take, verified at read time",
     description:
-      "A single member take with its Ed25519 signature and the canonical bytes that were signed, re-verified when you fetch it. This is the public receipt: a reader can check the signature against the member's public key from the roster without trusting this server.",
+      "A single member take with its Ed25519 signature and the canonical bytes that were signed, re-verified when you fetch it. This is the public receipt: a reader can check the signature against the member's public key from the roster without trusting this server. `sessionId` names the session the take was filed in.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Take id (UUID)." }],
     contractType: "SwarmTakeReceipt",
     sizeHint: "about 4 KB",
+  },
+  {
+    id: "listSwarmSessionJudgements",
+    method: "GET",
+    path: ROUTES.swarm.sessionJudgements,
+    summary: "The consensus judges' public opinions on one session",
+    description:
+      "One judgement per judge that judged this session, newest first: the judge's rationale, the disagreements it mapped between named members, and its release-safety advice. The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "SwarmJudgementsResponse",
+    sizeHint: "about 2 KB per judgement",
+  },
+  {
+    id: "getSwarmJudgement",
+    method: "GET",
+    path: ROUTES.swarm.judgement,
+    summary: "One public judgement",
+    description:
+      "A single consensus judge's opinion on one published session, with the judging party (`judgedBy`: a member id, or `robotmoney-in-house`), the model, and the prompt hash and inputs digest that pin what it was asked and what it read. `404` for any judgement the session's list would not serve.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Judgement id.", example: "42" }],
+    contractType: "SwarmJudgement",
+    sizeHint: "about 2 KB",
   },
   {
     id: "getConsensusReceipt",

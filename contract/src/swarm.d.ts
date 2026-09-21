@@ -59,6 +59,12 @@ export interface SwarmMember {
    */
   handle?: string;
   status: MemberStatus;
+  /**
+   * `judge` authors consensus judgements and files no takes; `member` files
+   * takes (migration 0043, docs/decisions.md D42's #812 amendment). Always
+   * emitted by the API, defaulting to `member`; optional only for payloads
+   * produced before this field existed (the shipped static archive JSON).
+   */
   role?: "member" | "judge";
   name: string;
   tagline: string | null;
@@ -182,6 +188,8 @@ export interface SwarmTakeSupersededBy {
 
 /** Public receipt; verification is recomputed by the server on every read. */
 export interface SwarmTakeReceipt {
+  /** The session this take was filed in (GET /api/swarm/sessions/:id). */
+  sessionId: string;
   take: SwarmTake;
   memo: SwarmMemo | null;
   signer: SwarmTakeSigner;
@@ -296,6 +304,85 @@ export interface SwarmRecommendation {
   actions?: SwarmRecommendedAction[];
   weights?: SwarmBucketWeight[];
   citedSignals?: Record<string, number>;
+  /**
+   * The judge's release-safety opinion. Present only once an `enforce`
+   * judgement has reached the session (backend applyOpinion); absent on a
+   * session that was never judged, or judged only in `shadow`.
+   */
+  release_safety?: SwarmReleaseSafety;
+  /** Which judgement the session carries. Present exactly when `release_safety` is. */
+  judge?: SwarmRecommendationJudge;
+}
+
+/**
+ * ADVICE, not a lock: nothing in the lifecycle refuses to publish on `hold`.
+ * Snake_case like the rest of the stored recommendation.
+ */
+export interface SwarmReleaseSafety {
+  release: "safe" | "hold";
+  thinly_supported: boolean;
+  take_count: number;
+  min_takes: number;
+  concerns: string[];
+}
+
+/**
+ * The fingerprint of the judgement a session adopted, written beside the
+ * judge's prose by applyOpinion. `prompt_hash` + `inputs_digest` pin what the
+ * judge was asked and what it read; they do NOT name the judge — two judges
+ * given the same prompt over the same take set share both — which is what
+ * `judged_by` is for.
+ */
+export interface SwarmRecommendationJudge {
+  /** `fallback` only on judgements recorded before the judge stopped writing template prose (issue #969). */
+  source: "model" | "fallback";
+  model: string | null;
+  prompt_hash: string;
+  inputs_digest: string;
+  fallback_reason?: string;
+  /**
+   * The judging party, as `swarm_session_judgements.judged_by` stores it: the
+   * judge's immutable member id, or `robotmoney-in-house` for the built-in
+   * worker. Absent on sessions judged before this field was written.
+   */
+  judged_by?: string;
+  /** Set only when the judge is a seated member; equals `judged_by` then. */
+  judged_by_member_id?: string;
+}
+
+/**
+ * One consensus judge's PUBLIC opinion on one published session — its own
+ * record, with its own permalink, like a take.
+ *
+ * Public means: recorded in `enforce` mode, it reached the session (`applied`),
+ * the session is `published`, and it is the newest such opinion from its judging
+ * party on that session. `shadow` opinions are never public (docs/decisions.md
+ * D42: that mode exists to keep them off public surfaces). A session judged by
+ * several judges has one public judgement per judge.
+ */
+export interface SwarmJudgement {
+  id: string;
+  sessionId: string;
+  subjectId: string;
+  sessionDate: string;
+  /** The judging party: an immutable member id, or `robotmoney-in-house`. */
+  judgedBy: string;
+  /** The judge's member id when the judge is a seated member, else null. */
+  judgedByMemberId: string | null;
+  /** `fallback` only on judgements recorded before issue #969. */
+  source: "model" | "fallback";
+  model: string | null;
+  promptHash: string;
+  inputsDigest: string;
+  rationale: string;
+  disagreements: SwarmDisagreement[];
+  releaseSafety: SwarmReleaseSafety | null;
+  createdAt: string;
+}
+
+/** GET /api/swarm/sessions/:id/judgements and GET /api/swarm/members/:id/judgements. */
+export interface SwarmJudgementsResponse {
+  judgements: SwarmJudgement[];
 }
 
 export interface SwarmSession {

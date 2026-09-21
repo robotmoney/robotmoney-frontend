@@ -389,7 +389,7 @@ function decodeSessionsCursor(cursor?: string | null): SessionsCursor | null {
 // Explicit-but-invalid limit is a 400 (thrown), not a silent clamp; an
 // absent/empty param falls back to the default. Mirrors api/routes/admin.ts's
 // parseLimit convention for the same reason (issue #155 AC).
-function parseSessionsLimit(raw?: number): number {
+export function parseSessionsLimit(raw?: number): number {
   if (raw == null) return SESSIONS_LIST_DEFAULT_LIMIT;
   if (!Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1 || raw > SESSIONS_LIST_MAX_LIMIT) {
     throw new Error(`limit must be an integer between 1 and ${SESSIONS_LIST_MAX_LIMIT}`);
@@ -660,6 +660,10 @@ export async function getTakeReceipt(id: string) {
   const take = await toVerifiedTake(row);
   const memoId = hostedMemoId(take.memoUrl ?? null);
   return {
+    // The session this take was filed in — a take carries no date/subject
+    // handle that resolves to ONE session (migration 0022), so a receipt page
+    // links back by id.
+    sessionId: String(row.session_id),
     take,
     memo: memoId == null ? null : await getMemo(memoId),
     supersededBy: superseding
