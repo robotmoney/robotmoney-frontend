@@ -83,7 +83,15 @@ echo "Using $source_var from $env_file."
 echo "This changes only the database named by that URL after psql confirms its password prompt."
 echo "Run from a reviewed checkout; do not paste credentials into this script or shell history."
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -f "$root/backend/migrations/0053_database_role_taxonomy.sql"
+# 0053 grants rm_readonly SELECT on TABLES only; pg_dump (smoke:capture §4.2)
+# must also read sequence state, and 0053 revoked ALL on sequences from
+# rm_readonly. Restore read-only sequence access here — this is the manual
+# offline command's job, deliberately NOT a migration (the operator runs it
+# against the primary; the grants replicate to the replica).
+psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" \
+  -c "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_readonly" \
+  -c "ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly"
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_app'
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_worker'
 psql -X "${password_flag[@]}" -v ON_ERROR_STOP=1 "$url" -c '\password rm_readonly'
-echo "Roles provisioned. Run the ordinary migration command once with MIGRATE_DATABASE_URL set only for that command, then write each role's password into the host's $HOME/.env as a '<role> = <password>' line (see .env.example: discrete tokens + one role line per role)."
+echo "Roles provisioned, including rm_readonly's sequence SELECT (pg_dump needs it for smoke:capture). Run the ordinary migration command once with MIGRATE_DATABASE_URL set only for that command, then write each role's password into the host's $HOME/.env as a '<role> = <password>' line (see .env.example: discrete tokens + one role line per role)."

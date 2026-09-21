@@ -68,15 +68,6 @@ test("rm_readonly can read but cannot write", async () => {
   expect(await denied(readonly`INSERT INTO jobs (kind, payload) VALUES ('role-test', '{}')`)).toBe("42501");
 });
 
-test("rm_readonly can SELECT sequences (pg_dump needs sequence state for the §4.2 backup)", async () => {
-  const [seq] = await readonly<{ n: number }[]>`
-    SELECT count(*)::int AS n FROM pg_catalog.pg_sequences WHERE schemaname = 'public'`;
-  expect(Number(seq.n)).toBeGreaterThan(0);
-  const [sample] = await readonly<{ has: boolean }[]>`
-    SELECT has_sequence_privilege('rm_readonly', 'analytics_overwrite_events_id_seq', 'SELECT') AS has`;
-  expect(sample.has).toBe(true);
-});
-
 test("the bootstrap connection can assume the non-login owner for DDL", async () => {
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");

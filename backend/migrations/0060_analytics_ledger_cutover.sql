@@ -75,7 +75,6 @@ REVOKE ALL ON analytics_parity_observations FROM PUBLIC, rm_worker;
 REVOKE ALL ON SEQUENCE analytics_parity_observations_id_seq FROM PUBLIC, rm_worker, rm_readonly;
 GRANT SELECT, INSERT ON analytics_parity_observations TO rm_app;
 GRANT USAGE, SELECT ON SEQUENCE analytics_parity_observations_id_seq TO rm_app;
-GRANT SELECT ON SEQUENCE analytics_parity_observations_id_seq TO rm_readonly;
 GRANT SELECT ON analytics_parity_observations TO rm_readonly;
 
 REVOKE ALL ON analytics_read_mode FROM PUBLIC, rm_worker;

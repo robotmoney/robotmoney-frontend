@@ -139,10 +139,6 @@ GRANT USAGE, SELECT ON SEQUENCE
   analytics_ledger_methodology_versions_id_seq, analytics_ledger_runs_id_seq,
   analytics_ledger_run_events_id_seq, analytics_data_vintages_id_seq, analytics_vintage_members_id_seq
   TO rm_app;
-GRANT SELECT ON SEQUENCE
-  analytics_ledger_methodology_versions_id_seq, analytics_ledger_runs_id_seq,
-  analytics_ledger_run_events_id_seq, analytics_data_vintages_id_seq, analytics_vintage_members_id_seq
-  TO rm_readonly;
 GRANT SELECT ON analytics_ledger_methodology_versions, analytics_ledger_runs, analytics_ledger_run_events, analytics_data_vintages, analytics_vintage_members TO rm_readonly;
 
 COMMENT ON TABLE analytics_ledger_runs IS 'Immutable analytics run header, written before the injected AnalyticsDataSource is first called (issue #977). Outcome lives only in analytics_ledger_run_events.';
