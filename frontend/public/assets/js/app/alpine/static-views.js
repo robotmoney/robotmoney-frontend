@@ -27,7 +27,7 @@ import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
-  adviceOf, adviceCall, sessionCallOf, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  adviceOf, adviceCall, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
   MEMBER_JUDGEMENTS_MAX,
 } from "../lib/judgements.js";
@@ -3732,15 +3732,21 @@ export function registerStaticViews(Alpine) {
       return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0
         || this.judgeBlocks().length > 0;
     },
-    // ── the judges ───────────────────────────────────────────────────────
-    // One block per judge: each public judgement of this session, so an
-    // operator finds its own judge's opinion, not only the one the session
-    // adopted. On a backend that does not serve judgements, the opinion the
-    // recommendation carries stands in, under the judge it names, when a model
-    // wrote it; the fallback judge writes the aggregator's templates.
+    // ── the judge ────────────────────────────────────────────────────────
+    // ONE JUDGE PER SESSION, for now (David, 2026-09-21): how several judges
+    // share a session waits on the backend owner. The page shows the judge
+    // whose opinion the recommendation carries (its judge.judged_by), else the
+    // newest public judgement; every judge's judgement keeps its own page. On a
+    // backend that does not serve judgements, the opinion the recommendation
+    // carries stands in, under the judge it names, when a model wrote it; the
+    // fallback judge writes the aggregator's templates.
     judgeBlocks() {
-      if (this.judgements.length) return this.judgements.map((j) => this.judgeBlockOf(j));
       const rec = this.session?.swarmRecommendation;
+      if (this.judgements.length) {
+        const by = rec?.judge?.judged_by_member_id || rec?.judge?.judged_by;
+        const carried = by ? this.judgements.find((j) => j.judgedByMemberId === by || j.judgedBy === by) : null;
+        return [this.judgeBlockOf(carried || this.judgements[0])];
+      }
       if (!this.isRollupRecommendation() || rec?.judge?.source !== "model") return [];
       const adopted = normalizeJudgement({
         ...rec.judge, rationale: rec.rationale, disagreements: rec.disagreements, release_safety: rec.release_safety,
@@ -3774,36 +3780,13 @@ export function registerStaticViews(Alpine) {
       const known = this.bucketRows().filter((b) => b.recommended != null && b.target != null);
       return !known.length || known.some((b) => Math.abs(b.recommended - b.target) >= 0.0005);
     },
-    // The session's call when two or more judges called it: any Hold holds.
-    sessionCall() { return sessionCallOf(this.judgeBlocks().map((b) => b.call)); },
-    // The one judge's account, when there is one judge; with several, each
-    // account is on its judgement page and the table carries the rest.
-    soloJudge() {
-      const blocks = this.judgeBlocks();
-      return blocks.length === 1 ? blocks[0] : null;
-    },
-    // Where views differ, across every judge: one list of questions, each
-    // with the judges who raised it. The questions are about the analysts'
-    // takes, so two judges naming one are one question, not two.
-    judgeDisagreements() {
-      /** @type {Map<string, any>} */
-      const out = new Map();
-      for (const b of this.judgeBlocks()) {
-        for (const d of b.disagreements) {
-          const k = String(d.topic || "").trim().toLowerCase();
-          const cur = out.get(k);
-          if (cur) { if (b.name && !cur.by.includes(b.name)) cur.by.push(b.name); continue; }
-          out.set(k, { ...d, by: b.name ? [b.name] : [] });
-        }
-      }
-      return [...out.values()];
-    },
-    // The judges, named in the facts row, each a way to its row below.
+    judge() { return this.judgeBlocks()[0] || null; },
+    // The judge, named in the facts row, a way to its block below.
     judgedBy() { return this.judgeBlocks().filter((b) => b.name); },
     // One count: the members' own disagreements on a v0 session, or the
-    // judges' questions, a question two judges both raised counted once.
+    // judge's questions.
     disagreementCount() {
-      return this.disagreements().length || this.judgeDisagreements().length;
+      return this.disagreements().length || this.judge()?.disagreements.length || 0;
     },
 
     // ── the research record (RM-121) ────────────────────────────────────────

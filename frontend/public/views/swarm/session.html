@@ -319,41 +319,10 @@
         <template x-if="hasDiscussion() || signalRows().length">
           <section class="rr-sec" id="reasoning" aria-labelledby="why-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="why-h">Reasoning &amp; disagreement</h2></div>
-            <!-- THE JUDGES, full width over the reasoning: the session's call
-                 when two or more judges called it (any Hold holds), then one
-                 row per judge. Ten judges are ten rows, not ten essays: each
-                 judge's account is on its judgement page. -->
-            <template x-if="judgeBlocks().length">
-              <div class="rr-judges">
-                <template x-if="sessionCall()">
-                  <p class="rr-advice__l rr-judges__call"><span class="rr-advice__k">Judges</span><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${sessionCall().key}`"><i aria-hidden="true"></i><span x-text="sessionCall().label"></span></span><span x-text="sessionCall().tally"></span></p>
-                </template>
-                <div class="rr-tablewrap">
-                  <table class="rr-table rr-table--compact rr-judges__t">
-                    <thead>
-                      <tr><th scope="col">Judge</th><th scope="col">Advice</th><th scope="col">Reason</th><th scope="col" class="q">Disagreements</th><th scope="col" class="q"><span class="rr-sr">Judgement</span></th></tr>
-                    </thead>
-                    <tbody>
-                      <template x-for="j in judgeBlocks()" :key="j.key">
-                        <tr :id="`judge-${j.key}`">
-                          <th scope="row"><span class="rr-judges__who" x-html="j.label"></span></th>
-                          <!-- The call where there is a target to act on
-                               (callApplies); its reason either way. -->
-                          <td><template x-if="j.call"><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${j.call.key}`"><i aria-hidden="true"></i><span x-text="j.call.label"></span></span></template></td>
-                          <td x-text="j.reason"></td>
-                          <td class="q" x-text="j.disagreements.length || ''"></td>
-                          <td class="q"><template x-if="j.page"><a class="rr-lnk" :href="j.page">Judgement</a></template></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </template>
             <div class="rr-split" :class="signalRows().length ? '' : 'rr-split--one'">
               <!-- Only when it holds something: an empty first column pushed
                    the market context right of a blank. -->
-              <template x-if="showSynthesis() || soloJudge()?.rationale || soloJudge()?.advice?.concerns.length || judgeDisagreements().length || (!judgeBlocks().length && !consensusItems().length && !disagreements().length)">
+              <template x-if="showSynthesis() || judge() || (!consensusItems().length && !disagreements().length)">
               <div>
                 <template x-if="showSynthesis()">
                   <div class="rr-block" x-data="{ more: false }">
@@ -367,75 +336,83 @@
                     </template>
                   </div>
                 </template>
-                <!-- One judge: its reasons to hold beyond the row's first, and
-                     its own account of the takes. -->
-                <template x-if="soloJudge()">
-                  <div class="rr-block rr-judge" x-data="{ more: false }">
-                    <template x-if="soloJudge().advice?.concerns.length">
-                      <ul class="rr-list rr-judge__concerns"><template x-for="c in soloJudge().advice.concerns" :key="c"><li x-text="c"></li></template></ul>
+                <!-- The session's judge (one per session, for now): whose
+                     opinion it is, its advice (a Hold or Update badge where
+                     the recommendation moves the target, its reasons either
+                     way; the data's "safe" is never printed), its own account
+                     of the takes, where it found them apart, and its
+                     judgement. A judge scores nothing and sets no weight. -->
+                <template x-if="judge()">
+                  <div class="rr-block rr-judge" :id="`judge-${judge().key}`" x-data="{ more: false }">
+                    <p class="rr-k rr-sub" x-html="judge().label"></p>
+                    <template x-if="judge().call || judge().reason">
+                      <div class="rr-advice">
+                        <p class="rr-advice__l"><span class="rr-advice__k">Advice</span><template x-if="judge().call"><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${judge().call.key}`"><i aria-hidden="true"></i><span x-text="judge().call.label"></span></span></template><template x-if="judge().reason"><span x-text="judge().reason"></span></template></p>
+                        <template x-if="judge().advice?.concerns.length">
+                          <ul class="rr-list"><template x-for="c in judge().advice.concerns" :key="c"><li x-text="c"></li></template></ul>
+                        </template>
+                      </div>
                     </template>
-                    <template x-if="soloJudge().rationale">
+                    <template x-if="judge().rationale">
                       <div>
-                        <div class="rr-prose" :class="!more && isLong(soloJudge().rationale, 480) ? 'is-clamped' : ''" style="--rr-lines:8"
-                             x-html="linkified(soloJudge().rationale)"></div>
-                        <template x-if="isLong(soloJudge().rationale, 480)">
+                        <div class="rr-prose" :class="!more && isLong(judge().rationale, 480) ? 'is-clamped' : ''" style="--rr-lines:8"
+                             x-html="linkified(judge().rationale)"></div>
+                        <template x-if="isLong(judge().rationale, 480)">
                           <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                             <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
                           </button>
                         </template>
                       </div>
                     </template>
-                  </div>
-                </template>
-                <!-- Where views differ, once for every judge: each question
-                     names the judges who raised it when there are several. -->
-                <template x-if="judgeDisagreements().length">
-                  <div class="rr-disc rr-disc--lead rr-judge__differ" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                    <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="judges-differ" @click="open = !open">
-                      Where views differ
-                    </button>
-                    <div class="rr-disc__anim" id="judges-differ" role="region" aria-label="Where views differ" :inert="!open">
-                      <div class="rr-disc__clip"><div class="rr-disc__body">
-                        <template x-for="d in judgeDisagreements()" :key="d.topic">
-                          <div class="rr-disc rr-q" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                            <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
-                              <span><b x-text="d.topic"></b></span>
-                              <small x-text="`${(d.positions || []).length} views`"></small>
-                            </button>
-                            <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
-                              <div class="rr-disc__clip"><div class="rr-disc__body">
-                                <!-- One row per member: the stance and confidence their take filed,
-                                     and one way to the take. -->
-                                <div class="rr-tablewrap">
-                                  <table class="rr-table rr-table--compact rr-views-t">
-                                    <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
-                                    <tbody>
-                                      <template x-for="r in viewRows(d)" :key="r.key">
-                                        <tr>
-                                          <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
-                                          <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
-                                          <td class="q" x-text="r.confidence"></td>
-                                          <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
-                                        </tr>
-                                      </template>
-                                    </tbody>
-                                  </table>
+                    <template x-if="judge().disagreements.length">
+                      <div class="rr-disc rr-disc--lead rr-judge__differ" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                        <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="judge-differ" @click="open = !open">
+                          Where views differ
+                        </button>
+                        <div class="rr-disc__anim" id="judge-differ" role="region" aria-label="Where views differ" :inert="!open">
+                          <div class="rr-disc__clip"><div class="rr-disc__body">
+                            <template x-for="d in judge().disagreements" :key="d.topic">
+                              <div class="rr-disc rr-q" x-data="{ open: false }" :class="open ? 'is-open' : ''">
+                                <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
+                                  <span><b x-text="d.topic"></b></span>
+                                  <small x-text="`${(d.positions || []).length} views`"></small>
+                                </button>
+                                <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
+                                  <div class="rr-disc__clip"><div class="rr-disc__body">
+                                    <!-- One row per member: the stance and confidence their take filed,
+                                         and one way to the take. -->
+                                    <div class="rr-tablewrap">
+                                      <table class="rr-table rr-table--compact rr-views-t">
+                                        <thead><tr><th scope="col">Member</th><th scope="col">Stance</th><th scope="col" class="q">Confidence</th><th scope="col" class="q"><span class="rr-sr">Take</span></th></tr></thead>
+                                        <tbody>
+                                          <template x-for="r in viewRows(d)" :key="r.key">
+                                            <tr>
+                                              <th scope="row"><span x-text="r.name"></span><template x-if="r.view"><small x-html="inlineMarks(r.view)"></small></template></th>
+                                              <td><template x-if="r.stance"><span class="sv__stance-badge" :style="stanceStyle(r.stance)"><i :style="`background:${stanceColor(r.stance)}`"></i><span x-text="r.stance"></span></span></template></td>
+                                              <td class="q" x-text="r.confidence"></td>
+                                              <td class="q"><template x-if="r.href"><a class="rr-lnk" :href="r.href">Read take</a></template><template x-if="!r.href"><span class="rr-dim">No take</span></template></td>
+                                            </tr>
+                                          </template>
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                    <template x-if="d.what_settles">
+                                      <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
+                                    </template>
+                                  </div></div>
                                 </div>
-                                <template x-if="judgeBlocks().length > 1 && d.by.length">
-                                  <p class="rr-settles"><span class="rr-k">Raised by</span><br><span x-text="d.by.join(', ')"></span></p>
-                                </template>
-                                <template x-if="d.what_settles">
-                                  <p class="rr-settles"><span class="rr-k">Resolves when</span><br><span x-text="d.what_settles"></span></p>
-                                </template>
-                              </div></div>
-                            </div>
-                          </div>
-                        </template>
-                      </div></div>
-                    </div>
+                              </div>
+                            </template>
+                          </div></div>
+                        </div>
+                      </div>
+                    </template>
+                    <template x-if="judge().page">
+                      <a class="rr-cta" :href="judge().page"><span>Read the judgement</span><span aria-hidden="true">→</span></a>
+                    </template>
                   </div>
                 </template>
-                <template x-if="!showSynthesis() && !judgeBlocks().length && !consensusItems().length && !disagreements().length">
+                <template x-if="!showSynthesis() && !judge() && !consensusItems().length && !disagreements().length">
                   <p class="rr-note" style="margin-top:0">No written synthesis</p>
                 </template>
               </div>

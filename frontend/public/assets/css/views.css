@@ -2032,17 +2032,7 @@ a.sv__vfy { text-decoration: none; }
 .rr-advice__why { margin: 0 0 0.5rem; font-size: 0.875rem; color: var(--color-text); }
 .rr-advice .rr-list { margin-top: 0.5rem; }
 .rr-judge__differ { margin-top: 1.5rem; }
-/* The judges over a session's reasoning, full width: the session's call when
-   two or more judges called it, then one compact row per judge, however many
-   there are. A phone scrolls the table rather than folding a row. */
-.rr-judges { margin: 0 0 2.25rem; }
-.rr-judges__call { margin: 0 0 1rem; }
-.rr-judges__t { min-width: 36rem; }
-.rr-judges__t th[scope="row"] { white-space: nowrap; }
-.rr-judges__who .rm-role { margin-right: 0.5rem; }
-.rr-judges__t td:nth-child(3) { font-family: var(--font-sans); color: var(--color-text-soft); }
-.rr-judge__concerns { margin: 0 0 1rem; }
-.rr-judge + .rr-judge__differ, .rr-judge__differ:first-child { margin-top: 0; }
+
 @media (max-width: 860px) {
   .rr-pair { row-gap: 0; }
   .rr-pair > .rr-disc ~ .rr-disc { border-top: 0; }
