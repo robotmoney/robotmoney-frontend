@@ -35,7 +35,6 @@ const DEMO_COMPOSE_PASSTHROUGH = [
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
   "RM_ENV",
-  "WORKER_DATABASE_URL",
   // (9aaaaeec) until it cost a stage twin boot on 2026-09-18: the stage checkout's
   // `.env` carries the DEPLOYMENT's value (`…@postgres:5432/robotmoney`, the
   // rm_worker login of the persistent stack, deployment.md §4.3) and bun auto-loads
