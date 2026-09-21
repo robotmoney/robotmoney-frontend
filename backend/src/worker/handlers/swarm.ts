@@ -21,7 +21,14 @@ export async function publishBrief(payload: Record<string, unknown>): Promise<un
 
 export async function closeWindow(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
-  return await ic.closeWindow(sessionId);
+  const result = await ic.closeWindow(sessionId);
+  const warnings = (result as { telemetryWarnings?: string[] }).telemetryWarnings;
+  if (warnings?.length) {
+    console.warn(
+      `close_window ${sessionId} closed but its absence telemetry partially failed:\n  ${warnings.join("\n  ")}`,
+    );
+  }
+  return result;
 }
 
 // STATE-GUARDED LIKE EVERY OTHER TRANSITION (issue #806). This used to call

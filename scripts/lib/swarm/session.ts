@@ -750,7 +750,7 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
 // and the judge job still has to be claimed off the swarm lane first, so this
 // is deliberately generous. It is a CEILING, not a budget: with the mode `off`
 // — the shipped default — nothing waits at all.
-const JUDGE_WAIT_MS = 190_000;
+const JUDGE_WAIT_MS = 120_000;
 
 /**
  * The judge's runtime mode, read from the switch itself

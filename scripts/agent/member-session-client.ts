@@ -352,6 +352,7 @@ async function participate(): Promise<void> {
     confidence: authored.confidence,
     body,
     memoUrl,
+    ...(authored.weights?.length ? { weights: authored.weights } : {}),
     ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);

@@ -347,6 +347,56 @@ test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt 
   expect(jobsAgain.length).toBe(5);
 });
 
+test("session reschedule re-arms the lifecycle jobs to the NEW timeline (run_after moves, settled no-ops revive)", async () => {
+  // The incident this guards: createSessionAdmin used `ON CONFLICT DO NOTHING`,
+  // so re-creating a still-scheduled session kept every job's ORIGINAL
+  // run_after. A step whose old instant had passed fired as a benign no-op
+  // against the still-`scheduled` session (e.g. close_window updates 0 rows
+  // and settles `succeeded`); when the session then actually opened, that job
+  // was already spent — the window never closed and the session stayed
+  // `collecting` forever, blocking every submission for its subject.
+  const subjectId = await activeSubject();
+  const date = "2026-08-02";
+  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
+  expect(created.status).toBe(201);
+  const sessionId = (created as any).session.id as string;
+
+  // Simulate the spent job: close_window fired at the OLD windowClosesAt
+  // (10:00Z) against the still-scheduled session and settled `succeeded`,
+  // exactly as the worker records a benign 0-row no-op.
+  await sql`
+    UPDATE jobs SET status = 'succeeded', run_after = ${`${date}T10:00:00Z`}
+    WHERE dedupe_key = ${`swarm:${sessionId}:close_window`}`;
+
+  // Reschedule the session to a LATER timeline.
+  const later = {
+    date,
+    briefOpensAt: `${date}T13:00:00Z`,
+    windowClosesAt: `${date}T14:00:00Z`,
+    publishAt: `${date}T14:05:00Z`,
+  };
+  const rescheduled = await admin.createSessionAdmin({ ...later, subjectId });
+  expect(rescheduled.status).toBe(200);
+
+  const jobs = await sql<{ kind: string; status: string; run_after: Date }[]>`
+    SELECT kind, status, run_after FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY kind`;
+  expect(jobs).toHaveLength(5);
+  // Still exactly 5 rows — dedupe held, nothing double-enqueued.
+  for (const job of jobs) {
+    const expected = {
+      "swarm.publish_brief": `${date}T13:00:00Z`,
+      "swarm.close_window": `${date}T14:00:00Z`,
+      "swarm.aggregate": `${date}T14:00:01Z`,
+      "swarm.judge": `${date}T14:00:02Z`,
+      "swarm.publish": `${date}T14:05:00Z`,
+    }[job.kind]!;
+    // run_after moved to the NEW instant...
+    expect(new Date(job.run_after).toISOString()).toBe(new Date(expected).toISOString());
+    // ...and the spent no-op is revived so it fires again at the right time.
+    expect(job.status).toBe("pending");
+  }
+});
+
 // DEGENERATE WINDOWS are now REFUSED, not clamped (issues #767, #806).
 //
 // #767 clamped both intermediate instants downward from publish so a window too
@@ -420,7 +470,9 @@ test("a session missing its swarm.judge job is repaired by re-creating it, and o
 
   const repaired = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
   expect(repaired.status).toBe(200);
-  expect((repaired as any).jobIds.length, "only the missing job is inserted").toBe(1);
+  // The four already-queued rows are re-armed in place (their ids are
+  // returned too — the reschedule DO UPDATE), and exactly ONE row is new.
+  expect((repaired as any).jobIds.length, "the four existing jobs re-armed, the judge inserted").toBe(5);
 
   const after = await sql<{ id: number; kind: string }[]>`
     SELECT id, kind FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY id`;
@@ -428,6 +480,9 @@ test("a session missing its swarm.judge job is repaired by re-creating it, and o
   expect(after.map((j) => j.kind)).toContain("swarm.judge");
   // The four that were already queued are the SAME rows, not re-enqueued ones.
   expect(after.slice(0, 4).map((j) => j.id)).toEqual(before.map((j) => j.id));
+  // Only the judge row is newly created.
+  expect(after.map((j) => j.id)).not.toEqual(before.map((j) => j.id));
+  expect(after[4]!.kind).toBe("swarm.judge");
 });
 
 // ── AC5: roster add/excuse/restore blocked once collection begins ──────────
