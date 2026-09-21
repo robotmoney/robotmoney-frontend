@@ -31,19 +31,33 @@
 set -euo pipefail
 
 set_passwords=0
+# The bootstrap login used to connect. It needs CREATEROLE (to create the
+# taxonomy and drop rm_readonly_test) and, after 0053, rm_owner membership.
+# On a DigitalOcean managed cluster that is `doadmin`.
+admin_role="doadmin"
 args=()
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --set-passwords) set_passwords=1 ;;
-    -*) echo "unknown option: $arg" >&2; exit 64 ;;
-    *) args+=("$arg") ;;
+    --role) shift; [[ $# -gt 0 ]] || { echo "--role needs a value" >&2; exit 64; }; admin_role="$1" ;;
+    --role=*) admin_role="${1#--role=}" ;;
+    -*) echo "unknown option: $1" >&2; exit 64 ;;
+    *) args+=("$1") ;;
   esac
+  shift
 done
 
 if [[ ${#args[@]} -ne 1 ]]; then
-  echo "usage: $0 [--set-passwords] /path/to/provisioning.env" >&2
-  echo "Pass a .env file holding a MIGRATE_DATABASE_URL (or DATABASE_URL) postgres URL." >&2
-  echo "Auth: URL-embedded password, else POSTGRES_PASSWORD from the .env, else psql prompts interactively." >&2
+  echo "usage: $0 [--set-passwords] [--role <login>] /path/to/provisioning.env" >&2
+  echo >&2
+  echo "The .env may be in EITHER supported shape:" >&2
+  echo "  1. a MIGRATE_DATABASE_URL (or DATABASE_URL) postgres URL; or" >&2
+  echo "  2. the discrete-token form (scripts/lib/env-role.ts, issue #699):" >&2
+  echo "       host = ...   port = ...   database = ...   sslmode = ..." >&2
+  echo "       <role> = <password>      e.g.  doadmin = ..." >&2
+  echo "--role names the bootstrap login for form 2 (default: doadmin). It needs" >&2
+  echo "CREATEROLE and, after 0053, rm_owner membership." >&2
+  echo "Auth: URL-embedded password, else the role's line, else POSTGRES_PASSWORD, else psql prompts." >&2
   echo >&2
   echo "By default this command changes NO password and creates no account -- it is safe to re-run." >&2
   echo "--set-passwords additionally prompts for rm_app, rm_worker and rm_readonly. Every host's" >&2
@@ -68,8 +82,33 @@ for var in MIGRATE_DATABASE_URL DATABASE_URL; do
     fi
   fi
 done
+# FALLBACK: the discrete-token form. $HOME/.env on the production and staging
+# hosts has carried discrete tokens plus one `role = password` line per role
+# since issue #699 -- there is no DATABASE_URL in it at all, which is the whole
+# point of that convention (see scripts/lib/env-role.ts: one file, one role per
+# connection, no URL to mis-assemble). This script predated the change and
+# accepted only a URL, so running it against the real /root/.env failed with
+# "no MIGRATE_DATABASE_URL or DATABASE_URL" -- correct, and useless.
+discrete_pw=""
 if [[ -z "$url" ]]; then
-  echo "no MIGRATE_DATABASE_URL or DATABASE_URL in $env_file" >&2
+  ev() { sed -nE "s/^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=[[:space:]]*//p" "$env_file" | head -1 | tr -d '\042\047'; }
+  d_host="$(ev host)"; d_port="$(ev port)"; d_db="$(ev database)"; d_ssl="$(ev sslmode)"
+  discrete_pw="$(ev "$admin_role")"
+  if [[ -n "$d_host" && -n "$d_db" ]]; then
+    url="postgres://${admin_role}@${d_host}:${d_port:-25060}/${d_db}?sslmode=${d_ssl:-require}"
+    source_var="discrete tokens (role=$admin_role)"
+  fi
+fi
+
+if [[ -z "$url" ]]; then
+  echo "cannot build a connection from $env_file" >&2
+  echo "Found neither a MIGRATE_DATABASE_URL/DATABASE_URL line nor the discrete tokens" >&2
+  echo "'host' and 'database' (scripts/lib/env-role.ts, issue #699)." >&2
+  echo "For the discrete form the file needs, at minimum:" >&2
+  echo "    host = <cluster host>" >&2
+  echo "    database = <database name>" >&2
+  echo "    $admin_role = <password>        # or omit and let psql prompt" >&2
+  echo "Pass --role <login> if the bootstrap login is not '$admin_role'." >&2
   exit 64
 fi
 
@@ -103,7 +142,12 @@ case "$url" in
     echo "authenticating with the password embedded in $source_var" >&2
     ;;
   *://*@*)
-    if pw="$(grep -m1 '^POSTGRES_PASSWORD=' "$env_file" | cut -d= -f2-)"; then
+    # A discrete-token file carries the password on the role's own line.
+    if [[ -n "$discrete_pw" ]]; then
+      url="$(url_with_password "$url" "$discrete_pw")"
+      password_flag=()
+      echo "built the connection from the '$admin_role' line in $env_file" >&2
+    elif pw="$(grep -m1 '^POSTGRES_PASSWORD=' "$env_file" | cut -d= -f2-)"; then
       if [[ -n "$pw" ]]; then
         url="$(url_with_password "$url" "$pw")"
         password_flag=()
