@@ -185,14 +185,14 @@ const sideways = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 // /allocation's Vaults section. Its cells in order: Recommended, Target,
-// Actual, Governance gap, Flow gap; with no target to read, Recommended,
+// Actual, Governance gap, Drift; with no target to read, Recommended,
 // Actual, Gap. Each cell is its figure, then its whole dollars at the
 // combined TVL under it (Actual's are the vault's own TVL).
 const vaultRows = (page: Page) => page.locator("#vaults tbody tr");
 const vaultCol = (page: Page, n: number) => page.locator(`#vaults tbody tr td:nth-of-type(${n}) > span:first-child`);
 const vaultUsd = (page: Page, n: number) => page.locator(`#vaults tbody tr td:nth-of-type(${n}) > small`);
 const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
-const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Flow gap"];
+const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Drift"];
 
 // The section paints its four rows from the first frame with "—"; the
 // overview has answered once the Network fact has a value.
@@ -292,11 +292,11 @@ test("rmUSDC's devnet gaps and recommendation read as the overview states them",
   await stubSaved(page);
   await setMode(page, "devnet");
   await openVault(page, "rmusdc");
-  // The flow gap is the ring's Gap column for this vault; the governance gap,
+  // Drift is the ring's Drift column for this vault; the governance gap,
   // which the legend does not carry, a fact under it.
   const gaps = page.locator("#allocation .rr-meta");
   await expect(gaps.locator(".rr-meta__i", { hasText: "Governance gap" })).toContainText("+5 pp");
-  await expect(gapOf(page)).toHaveText("Gap +2 pp");
+  await expect(gapOf(page)).toHaveText("Drift +2 pp");
   await expect(page.locator("#allocation .rr-meta .alp__mv.up, #allocation .rr-legend__row.is-active .alp__mv.up")).toHaveCount(2);
   // A synthetic recommendation has no session to open: a date, not a link.
   const dl = page.locator("#allocation .rr-dl");
@@ -339,10 +339,10 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   // No router on Base: the target is the published policy's, 95% for rmUSDC,
   // and the gap is actual against it. Recommended and the governance gap,
   // which the legend does not carry, are the facts under the ring.
-  await expect(page.locator("#allocation .rr-legend__head")).toHaveText("VaultActualTargetGap");
+  await expect(page.locator("#allocation .rr-legend__head")).toHaveText("VaultActualTargetDrift");
   await expect(layerRow(page, "Target")).toHaveText("95%");
   await expect(layerRow(page, "Actual")).toHaveText("100%");
-  await expect(gapOf(page)).toHaveText("Gap +5 pp");
+  await expect(gapOf(page)).toHaveText("Drift +5 pp");
   await expect(page.locator("#allocation .rr-meta .rr-meta__i")).toHaveText([/^Recommended/, /^Governance gap/]);
   await expect(page.locator("#allocation")).not.toContainText("Applied");
 
