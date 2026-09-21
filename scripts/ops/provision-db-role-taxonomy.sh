@@ -158,6 +158,27 @@ case "$url" in
 esac
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# ONE PROMPT, not one per psql. This script makes four separate psql calls, so
+# -W asked the operator for the same password four times in a single run --
+# observed on the first production use. Prompt once here and hand psql a
+# 0600 PGPASSFILE for the rest of the run, removed on every exit path.
+# PGPASSFILE rather than PGPASSWORD or a URL-embedded password: the first is
+# readable in /proc/<pid>/environ, and the second lands in the process's argv.
+if [[ ${#password_flag[@]} -gt 0 ]]; then
+  read -rsp "Password for $admin_role: " _pw
+  echo
+  _pgpass="$(mktemp)"
+  chmod 600 "$_pgpass"
+  trap 'rm -f "$_pgpass"' EXIT INT TERM
+  # A pgpass field is colon-separated and backslash-escaped.
+  _esc="${_pw//\\/\\\\}"
+  _esc="${_esc//:/\\:}"
+  printf '*:*:*:%s:%s\n' "$admin_role" "$_esc" > "$_pgpass"
+  unset _pw _esc
+  export PGPASSFILE="$_pgpass"
+  password_flag=()
+fi
+
 echo "Using $source_var from $env_file."
 echo "This changes only the database named by that URL after psql confirms its password prompt."
 echo "Run from a reviewed checkout; do not paste credentials into this script or shell history."
@@ -257,15 +278,26 @@ BEGIN
 
   -- 3. Every reader can read everything. This is what the BACKUP depends on:
   --    pg_dump reads last_value from every sequence as rm_readonly.
+  --
+  -- MATERIALIZED is load-bearing, not style. Without it the planner may
+  -- evaluate has_sequence_privilege() BEFORE the relkind filter and reach a
+  -- TOAST relation, which aborts the whole check with
+  --   ERROR: "pg_toast_28123" is not a sequence
+  -- Observed against production on the first real run of this block. The CTE
+  -- forces the filter to happen first.
   FOR r IN SELECT unnest(ARRAY['rm_readonly', 'rm_app', 'rm_worker']) AS role LOOP
-    SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
-     WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p')
-       AND NOT has_table_privilege(r.role, c.oid, 'SELECT');
+    WITH t AS MATERIALIZED (
+      SELECT c.oid FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+       WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'p')
+    )
+    SELECT count(*) INTO n FROM t WHERE NOT has_table_privilege(r.role, t.oid, 'SELECT');
     IF n > 0 THEN problems := problems || format('%s cannot SELECT %s table(s)', r.role, n); END IF;
 
-    SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
-     WHERE ns.nspname = 'public' AND c.relkind = 'S'
-       AND NOT has_sequence_privilege(r.role, c.oid, 'SELECT');
+    WITH sq AS MATERIALIZED (
+      SELECT c.oid FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+       WHERE ns.nspname = 'public' AND c.relkind = 'S'
+    )
+    SELECT count(*) INTO n FROM sq WHERE NOT has_sequence_privilege(r.role, sq.oid, 'SELECT');
     IF n > 0 THEN problems := problems || format('%s cannot SELECT %s sequence(s) — pg_dump will refuse', r.role, n); END IF;
   END LOOP;
 
