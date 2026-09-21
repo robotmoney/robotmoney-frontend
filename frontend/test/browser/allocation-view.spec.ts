@@ -343,7 +343,8 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
 });
 
 // A newer allocation session that published no weights held the target: the
-// panel beside the ring names it above the recommendation that stands.
+// rail over the ring names it with the target's other facts, and the panel
+// beside the ring is the recommendation that stands.
 test("a later session with no weights reads as the target held since the last recommendation", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const held = allocationSession({ id: "3c1f9a70-2d4b-4e8a-9b6c-51e0f7a2d913", date: "2026-09-08", publishedAt: "2026-09-08T23:20:00.000Z" });
@@ -353,9 +354,11 @@ test("a later session with no weights reads as the target held since the last re
   await navigate(page, "/allocation");
 
   const latest = page.locator(".alp__rec");
-  const facts = latest.locator(".rr-meta .rr-meta__i");
-  await expect(facts).toHaveText(["Latest session Sep 8, 2026", "Recommendation Target held", "Since Sep 1, 2026"]);
-  await expect(facts.first().locator("a")).toHaveAttribute("href", `/swarm/sessions/${held.id}`);
+  const rail = page.locator(".alp__meta");
+  await expect(rail.locator("span", { hasText: "Latest session" })).toHaveText("Latest session Sep 8, 2026");
+  await expect(rail.locator("span", { hasText: "Recommendation" })).toHaveText("Recommendation Target held since Sep 1, 2026");
+  await expect(rail.locator("span", { hasText: "Latest session" }).locator("a")).toHaveAttribute("href", `/swarm/sessions/${held.id}`);
+  await expect(latest.locator(".rr-meta")).toHaveCount(0);
   await expect(latest.locator(".rr-cta")).toHaveAttribute("href", `/swarm/sessions/${standing.id}`);
   // The Vaults section's Recommended is the standing recommendation's.
   await expect(vaultRows(page).locator("td:nth-of-type(1) > span")).toHaveText(["90%", "5%", "3%", "2%"]);
