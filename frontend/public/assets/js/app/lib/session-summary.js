@@ -528,12 +528,14 @@ export const sessionSummary = {
   // An unknown chain prints as its id rather than a guessed capitalisation.
   /** @param {unknown} c */
   chainLabel(c) { return CHAIN_LABELS[String(c || "").toLowerCase()] || c; },
-  // The publish time, when the record has one: a subject can convene twice in
-  // a day, and the date alone prints both rows identically. Archive rows carry
-  // a bare date, so they print nothing here.
+  // The time the session convened, beside the date it convened on: a subject
+  // can convene twice in a day, and the date alone prints both rows
+  // identically. Not the publish time, which lands the next day when a window
+  // runs past midnight, so "Sep 20 · 01:20" read as a time on the 20th that was
+  // the 21st. Archive rows carry a bare date, so they print nothing here.
   /** @param {any} row */
   rowTime(row) {
-    const at = row?.publishedAt || row?.generatedAt;
+    const at = row?.generatedAt || row?.publishedAt;
     if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
     return `${new Date(at).toISOString().slice(11, 16)} UTC`;
   },

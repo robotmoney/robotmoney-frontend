@@ -45,6 +45,9 @@ const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
+// The member-takes route's ceiling (it answers 400 above it) and it does not
+// page, so a member past it shows its latest takes and says so.
+const MEMBER_TAKES_MAX = 100;
 export const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
 
 async function fetchJson(url) {
@@ -1035,7 +1038,7 @@ export function registerStaticViews(Alpine) {
     // courtesy on this page, never a reason to fail it.
     async loadRecord() {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=${MEMBER_TAKES_MAX}`);
         this.record = res.takes || [];
         this.recordLoaded = true;
       } catch { /* leave the strip hidden rather than render a wrong zero */ }
@@ -1518,7 +1521,7 @@ export function registerStaticViews(Alpine) {
         this.subjectNames = names;
       };
       try {
-        const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+        const all = await publishedSessionList();
         remember(all);
         const index = pick(all);
         if (index.length) return index;
@@ -1656,6 +1659,9 @@ export function registerStaticViews(Alpine) {
     /** @param {any} row */
     rowState(row) {
       if (row?.failed) return "Could not be loaded";
+      // A row of this weights table that carries no weights: a rollup with
+      // none, or one typed position_actions on a weights subject.
+      if (this.rowWeights(row).every((v) => v == null)) return row?.swarmRecommendation ? "No weights published" : "No recommendation published";
       if (!this.recommendation(row)) return "No recommendation published";
       return this.rowMoves(row) == null ? "No target recorded" : "";
     },
@@ -1724,6 +1730,20 @@ export function registerStaticViews(Alpine) {
     },
     hasBook() { return this.recommendation(this.latest())?.kind !== "weights" && !!this.latestBook() && this.latestActions().length > 0; },
     hasExplorer() { return this.recommendation(this.latest())?.kind === "weights" || this.hasBook(); },
+    // A weights subject's session recommends only when it publishes weights.
+    hasLatestRecommendation() {
+      const r = this.recommendation(this.latest());
+      return this.isWeightsSubject() ? r?.kind === "weights" : !!r;
+    },
+    // The latest session's own words: its rationale, or its synthesis when it
+    // is not a rollup's. A rollup's synthesis is a template over the tally
+    // printed under it ("3 of 7 members … Stance split: 3 constructive"), and
+    // the session page leaves it out for the same reason.
+    latestProse() {
+      const s = this.latest();
+      const rec = s?.swarmRecommendation;
+      return this.rationaleOf(s) || (rec && (rec.quorum || rec.stances) ? "" : s?.synthesis || "");
+    },
     explorerSource() { return this.latest(); },
     explorerSvg() {
       return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.latest());
@@ -2496,7 +2516,7 @@ export function registerStaticViews(Alpine) {
     // full history — and it cost 21 requests to get the wrong answer.
     async loadRows(memberId) {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=${MEMBER_TAKES_MAX}`);
         const rows = (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
           // camelTake, not the raw row: raw takes carry no `permalinkId`, only
@@ -2601,6 +2621,8 @@ export function registerStaticViews(Alpine) {
       return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
+    // At the route's ceiling there may be more: the counts are the latest ones.
+    takesCapped() { return this.allTakes().length >= MEMBER_TAKES_MAX; },
     // The record at a glance. Counts every take, published or still collecting,
     // so a just-submitted one registers immediately rather than reading as zero
     // while its window is open. Conviction is the mean confidence across them.
@@ -3286,6 +3308,14 @@ export function registerStaticViews(Alpine) {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
+    // A subject whose recommendation is a set of weights: the framework, or a
+    // subject declared bucket_weights. Its session that publishes none says "No
+    // weights published", whatever type the payload claims; production's
+    // weights subjects published position_actions rollups from August on.
+    weightsSubject() {
+      return this.isFramework() || this.session?.swarmRecommendation?.type === "bucket_weights"
+        || this.subject?.recommendationType === "bucket_weights";
+    },
     // The outcome's rows: the recommendation, and the move it implies.
     //
     // The gap is measured against ACTUAL where we know it, because that is the
@@ -3432,7 +3462,8 @@ export function registerStaticViews(Alpine) {
     },
     // The time of day matters once a subject convenes more than once a day.
     sessionTime() {
-      const at = this.session?.publishedAt || this.session?.generatedAt;
+      // When it convened, the moment the date beside it names (rowTime).
+      const at = this.session?.generatedAt || this.session?.publishedAt;
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
@@ -3528,13 +3559,43 @@ export function registerStaticViews(Alpine) {
             pos: this.votePos(y),
             anchor: this.takeAnchor(t),
             // Members sharing a stance put their names on opposite sides of
-            // their dots, so the labels never run into each other; the last
-            // column always labels to the left, away from the edge.
+            // their dots; the last column always labels to the left, away
+            // from the edge.
             flip: col === 4 || (list.length > 1 && j % 2 === 0),
           });
         });
       }
-      return out;
+      return this.placeVoteLabels(out);
+    },
+    // Sides alone do not keep three names apart: three members at 60 to 62%
+    // in one column wrote "Athena", "Robot Money" and "Noop Analyst" over one
+    // another on production. A label that would overlap one already placed,
+    // or run across another member's dot, tries the dot's other side, then
+    // sits centred above or below its own dot, a label's height at a time
+    // until it clears; the dot stays where the vote put it. Units are % of
+    // the plot.
+    placeVoteLabels(dots) {
+      const H = 9;
+      const placed = [];
+      const clear = (d, x0, x1, y) => y >= 0 && y <= 100
+        && !placed.some((p) => p.x0 < x1 && x0 < p.x1 && Math.abs(p.y - y) < H)
+        && !dots.some((o) => o !== d && o.x > x0 && o.x < x1 && Math.abs(o.pos - y) < H / 2);
+      for (const d of [...dots].sort((a, b) => a.x - b.x)) {
+        const w = (String(d.name || "").length + 5) * 0.6;
+        const tries = [
+          { flip: d.flip, dy: 0 }, { flip: !d.flip, dy: 0 },
+          // A stacked name clears its own dot as well as its neighbours'.
+          ...[1, -1, 2, -2, 3, -3].map((step) => ({ stack: true, dy: step * (H + 2) })),
+        ];
+        const at = tries.find((t) => {
+          const x0 = t.stack ? d.x - w / 2 : t.flip ? d.x - w : d.x;
+          return clear(d, x0, x0 + w, d.pos + t.dy);
+        }) || tries[0];
+        const x0 = at.stack ? d.x - w / 2 : at.flip ? d.x - w : d.x;
+        placed.push({ x0, x1: x0 + w, y: d.pos + at.dy });
+        Object.assign(d, { flip: !!at.flip, stack: !!at.stack, dy: at.dy });
+      }
+      return dots;
     },
     voteMean() {
       const vals = (this.takes || []).map((t) => Number(t.confidence)).filter((n) => Number.isFinite(n));
@@ -3739,9 +3800,28 @@ function historyRowOf(s) {
   };
 }
 
+// Every published session the list answers, walking `nextCursor` as /swarm's
+// loadAllSessions() does. The list pages at 20 by default, so its first page
+// alone held 5 of the allocation's 63 sessions on production, and the subject
+// page said "Sessions 5". Capped so a runaway cursor cannot loop.
+async function publishedSessionList() {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 40; page += 1) {
+    /** @type {Record<string, string>} */
+    const query = { state: "published", limit: "50" };
+    if (cursor) query.cursor = cursor;
+    const res = await api.get(ROUTES.swarm.sessions, query);
+    rows.push(...(res?.sessions || []));
+    cursor = res?.nextCursor || null;
+    if (!cursor) break;
+  }
+  return rows;
+}
+
 // A subject's published sessions, newest first, as { id, date, subjectId }.
-// The public list has no subject filter yet (#991), so the whole index is read
-// and filtered here, with the static archive behind it.
+// A backend without #1007's subject filter answers every subject's rows, so
+// the whole index is read and filtered here, with the static archive behind it.
 /** @param {string} subjectId */
 async function subjectSessionIndex(subjectId) {
   const pick = (/** @type {any[]} */ list) => list
@@ -3750,7 +3830,7 @@ async function subjectSessionIndex(subjectId) {
       || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
     .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
   try {
-    const list = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+    const list = pick(await publishedSessionList());
     if (list.length) return list;
   } catch (_) { /* fall through to the archive */ }
   return pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);

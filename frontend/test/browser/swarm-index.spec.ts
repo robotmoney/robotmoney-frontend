@@ -256,7 +256,9 @@ test("a published session's history row states its recommendation, its lean and 
   // The subject is a way to its own page, as the session date is to its.
   await expect(alloc.locator(".rr-hist__subj a")).toHaveAttribute("href", "/swarm/subjects/robotmoney-allocation");
   await expect(alloc.locator("th a")).toHaveText("Jul 15, 2026");
-  await expect(alloc.locator("th small")).toHaveText("12:00 UTC · 4 takes");
+  // The time a row prints is when the session convened, as its page's is,
+  // not when it published.
+  await expect(alloc.locator("th small")).toHaveText("11:00 UTC · 4 takes");
   await expect(alloc.locator(".sv__stance-badge")).toHaveText("cautious");
   await expect(alloc.locator("td.rr-verdict")).toHaveText("Rebalance");
   await expect(alloc.locator("td.rr-verdict .rr-mixline, td.rr-verdict .alp__mv")).toHaveCount(0);

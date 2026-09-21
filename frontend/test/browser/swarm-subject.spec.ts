@@ -1039,9 +1039,10 @@ test("the history pages and searches on the server, with no brief fetched per ro
   const first = rows.first();
   await expect(first.locator(".sv__session-title")).toHaveText("Sep 18, 2026");
   await expect(first.locator(".sv__session-title")).toHaveAttribute("href", `/swarm/sessions/${spId(0)}`);
-  await expect(first.locator("th small")).toHaveText("14:05 UTC · 3 takes");
+  // Convened at 13:00, published at 14:05: the row prints when it convened.
+  await expect(first.locator("th small")).toHaveText("13:00 UTC · 3 takes");
   await expect(first.locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
-  await expect(rows.nth(1).locator("th small")).toHaveText("14:05 UTC · 4 takes");
+  await expect(rows.nth(1).locator("th small")).toHaveText("13:00 UTC · 4 takes");
   // Where the server stops is not known yet, so no total is printed.
   await expect(pager.locator('[role="status"]')).toHaveText("1–12");
   await expect(page.locator(".rr-meta__i", { hasText: "Sessions" })).toHaveCount(0);

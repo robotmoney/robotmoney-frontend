@@ -83,7 +83,7 @@
         <template x-if="latest()">
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
-              <h2 class="rr-sec__h" id="latest-h" x-text="recommendation(latest()) ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
+              <h2 class="rr-sec__h" id="latest-h" x-text="hasLatestRecommendation() ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
             </div>
             <div class="rr-split rr-split--rule">
               <div>
@@ -175,10 +175,18 @@
                     </template>
                   </dl>
                 </template>
-                <template x-if="(recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none'">
+                <!-- A weights subject's session with no weights reads as /swarm
+                     reads it: the ring's bare track. -->
+                <template x-if="isWeightsSubject() && recommendation(latest())?.kind !== 'weights'">
+                  <figure class="rr-ring rr-ring--empty">
+                    <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+                    <figcaption><span class="rr-empty__t" x-text="latest()?.swarmRecommendation ? 'No weights published' : 'No recommendation published'"></span></figcaption>
+                  </figure>
+                </template>
+                <template x-if="!isWeightsSubject() && ((recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none')">
                   <p class="rr-note" style="margin-top:0">No position calls</p>
                 </template>
-                <template x-if="!recommendation(latest())">
+                <template x-if="!isWeightsSubject() && !recommendation(latest())">
                   <p class="rr-note" style="margin-top:0">No recommendation published</p>
                 </template>
 
@@ -218,11 +226,11 @@
                 <template x-if="recommendation(latest())?.kind === 'weights' && !(latestMoves() || []).length && latestOutcome()">
                   <p class="rr-k rr-sub" x-text="latestOutcome()"></p>
                 </template>
-                <template x-if="rationaleOf(latest()) || latest().synthesis">
+                <template x-if="latestProse()">
                   <div>
-                    <div class="rr-prose" :class="!more && isLong(rationaleOf(latest()) || latest().synthesis, 480) ? 'is-clamped' : ''" style="--rr-lines:8"
-                         x-html="linkified(rationaleOf(latest()) || latest().synthesis)"></div>
-                    <template x-if="isLong(rationaleOf(latest()) || latest().synthesis, 480)">
+                    <div class="rr-prose" :class="!more && isLong(latestProse(), 480) ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(latestProse())"></div>
+                    <template x-if="isLong(latestProse(), 480)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                         <span x-text="more ? 'Show less' : (rationaleOf(latest()) ? 'Read full rationale' : 'Read full synthesis')"></span>
                       </button>

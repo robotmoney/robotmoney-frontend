@@ -27,9 +27,10 @@
 
         <header class="rr-head">
           <p class="sv__eyebrow sv__eyebrow--quiet">Verification receipt</p>
-          <!-- The signer's name is the page's subject, so it is the way to
-               their record. -->
-          <h1 class="sv__detail-title"><a class="tk-who" :href="signerHref()" x-text="signer?.name || take.memberName"></a></h1>
+          <!-- The signer's name is the page's subject. The way to their record
+               is the breadcrumb, the Signer list and the record link, so the
+               title is not a fourth one. -->
+          <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
           <!-- A receipt with no filing time is not a receipt. -->
           <p class="rr-when" x-show="take.receivedAt">
             <span>Filed <time :datetime="take.receivedAt" x-text="formatDate(take.receivedAt, 'short')"></time></span>
@@ -156,11 +157,8 @@
   </div>
 
   <style>
-    /* The signer's name is a link, so it carries the link rule like any other. */
-    .tk-who { color: var(--color-link); text-decoration: underline;
-      text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px;
-      text-underline-offset: 0.15em; }
-    .tk-who:hover { text-decoration-color: var(--color-link); }
+    /* The column's width, as a take card's text runs: no measure cap of its own. */
+    #take .sv__take-body { max-width: none; }
     .tk-superseded { margin: 1.25rem 0 0; font-size: 0.875rem; }
     /* A fingerprint is one unbreakable token; on a phone it wraps anywhere
        rather than widening the page. */

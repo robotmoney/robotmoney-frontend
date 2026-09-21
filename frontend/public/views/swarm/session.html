@@ -249,13 +249,13 @@
         <template x-if="!hasRecommendationSection()">
           <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
-            <template x-if="phaseOf(session)?.key === 'published' && session.swarmRecommendation">
+            <template x-if="phaseOf(session)?.key === 'published' && session.swarmRecommendation && !weightsSubject()">
               <p class="rr-note" style="margin-top:0">No position calls published</p>
             </template>
-            <template x-if="phaseOf(session)?.key !== 'published' || !session.swarmRecommendation">
+            <template x-if="phaseOf(session)?.key !== 'published' || !session.swarmRecommendation || weightsSubject()">
               <figure class="rr-ring rr-ring--empty">
                 <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-                <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key === 'published' ? 'No recommendation published' : 'Not published yet'"></span></figcaption>
+                <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key !== 'published' ? 'Not published yet' : session.swarmRecommendation && weightsSubject() ? 'No weights published' : 'No recommendation published'"></span></figcaption>
               </figure>
             </template>
           </section>
@@ -490,11 +490,11 @@
                       <div class="rr-vote__mean" :style="`top:${100 - votePos(voteMean())}%`"><span x-text="`Mean ${voteMean()}%`"></span></div>
                     </template>
                     <template x-for="d in voteDots()" :key="d.key">
-                      <a class="rr-vote__dot" :class="{ 'is-flip': d.flip, 'is-dim': at && at !== d.key }" :href="`#${d.anchor}`"
-                         :style="`left:${d.x}%;top:${100 - d.pos}%;--c:${d.color}`"
+                      <a class="rr-vote__dot" :class="{ 'is-flip': d.flip, 'is-stack': d.stack, 'is-dim': at && at !== d.key }" :href="`#${d.anchor}`"
+                         :style="`left:${d.x}%;top:${100 - d.pos}%;--c:${d.color};--dy:${(-(d.dy || 0) * 0.11).toFixed(2)}rem`"
                          @pointerenter="at = d.key" @pointerleave="at = null" @focus="at = d.key" @blur="at = null"
                          :aria-label="`${d.name}, ${d.stance}, ${d.y}% confidence. Read their take.`">
-                        <i aria-hidden="true"></i><span x-text="d.name"></span><b x-text="`${d.y}%`"></b>
+                        <i aria-hidden="true"></i><span class="rr-vote__lbl"><span x-text="d.name"></span><b x-text="`${d.y}%`"></b></span>
                       </a>
                     </template>
                   </div>

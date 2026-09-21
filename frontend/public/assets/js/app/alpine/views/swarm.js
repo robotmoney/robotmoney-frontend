@@ -201,7 +201,7 @@ export function registerSwarmView(Alpine) {
       // Two subjects can convene on one date; the later one leads, as each row
       // prints its time.
       return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
-        || String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+        || String(b.generatedAt || b.publishedAt || "").localeCompare(String(a.generatedAt || a.publishedAt || "")));
     },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
