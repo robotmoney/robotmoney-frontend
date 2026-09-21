@@ -89,6 +89,15 @@ function serve(sessions: StubSession[], opts: { healthy?: boolean; members?: Stu
         // The light index row: everything except `takes`, matching issue #243.
         return Response.json({ sessions: sessions.map(({ takes: _t, ...row }) => row) });
       }
+      const receiptMatch = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)\/consensus-receipt$/);
+      if (receiptMatch) {
+        return Response.json({
+          sessionId: receiptMatch[1],
+          schemaVersion: "1.0",
+          verified: true,
+          receipt: { judge: { source: "model", mode: "enforce" } },
+        });
+      }
       const m = url.pathname.match(/^\/api\/swarm\/sessions\/([^/]+)\/([^/]+)$/);
       if (m) {
         const found = sessions.find((s) => s.date === m[1] && s.subjectId === m[2]);

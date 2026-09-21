@@ -260,7 +260,7 @@ export function detectEnvPostgres(envFilePath: string): ExternalPgResolution {
 
 export function resolveExternalPg(
   argv: string[],
-  opts: { envFilePath: string } = { envFilePath: homeEnvFilePath() },
+  opts: { envFilePath: string } = { envFilePath: sharedHomeEnvFilePath() },
 ): ExternalPgResolution {
   if (!argv.includes("--db") && argv.includes("external")) return { enabled: false };
 

@@ -12,6 +12,7 @@
 // and the standalone main()'s former MCP-OAuth assertions changed.
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
+import { resolveAgentModel } from "../model-registry.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
 import { resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
 import type { SmokeCadence } from "../smoke-schedule.ts";
@@ -1072,14 +1073,15 @@ export async function enableTwinJudge(model: string, automationToken?: string): 
 export async function setJudgeMode(
   mode: "off" | "shadow" | "enforce",
   automationToken?: string,
+  model?: string,
 ): Promise<void> {
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify(model ? { mode, model } : { mode }),
   });
   if (!r.ok) {
-    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:${mode}} -> ${r.status}: ${await r.text()}`);
+    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:${mode}, model:${model}} -> ${r.status}: ${await r.text()}`);
   }
 }
 
@@ -1211,7 +1213,8 @@ export async function runJudgeRoleCoverage(
   const shippedJudgeMode = await readJudgeMode(automationToken);
   const restoreJudgeMode: "off" | "shadow" | "enforce" =
     shippedJudgeMode === "shadow" || shippedJudgeMode === "enforce" ? shippedJudgeMode : "off";
-  await setJudgeMode("shadow", automationToken);
+  const selectedJudgeModel = resolveAgentModel();
+  await setJudgeMode("shadow", automationToken, selectedJudgeModel);
   console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> shadow for this session only (issue #845)`);
   try {
     const judged = await runJudgedSession();
