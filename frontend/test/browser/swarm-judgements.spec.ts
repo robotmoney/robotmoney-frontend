@@ -130,8 +130,10 @@ test("a session one judge worked on: its block, its advice in words, named in th
   await expect(block.locator(".rr-k").first()).toHaveText("Judge Themis");
   await expect(block.locator(".rr-k .rm-role").first()).toHaveText("Judge");
   await expect(block.locator(".rr-k a")).toHaveAttribute("href", "/swarm/members/themis");
-  // The count is the line's; the backend's own sentence for it is not listed again.
-  await expect(block.locator(".rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
+  // The call as a badge, the count beside it; the backend's own sentence for
+  // the count is not listed again.
+  await expect(block.locator(".rr-advice-badge--hold")).toHaveText("Hold");
+  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(block.locator(".rr-advice li")).toHaveText(["The takes do not address the brief's liquidity question."]);
   await expect(block.locator(".rr-prose")).toContainText("none argues for moving the target");
   // Its disagreements, matched to the takes on the page.
@@ -158,7 +160,7 @@ test("a session one judge worked on: its block, its advice in words, named in th
   await noSafe(page);
 });
 
-test("two judges, two blocks: each one's opinion, and a safe call prints nothing", async ({ page }) => {
+test("two judges, two blocks: each one's opinion and its own call", async ({ page }) => {
   await stub(page, {
     [`/api/swarm/sessions/${S1}`]: { session: judgedSession(S1, THEMIS_BLOCK), takes: TAKES },
     [`/api/swarm/sessions/${S1}/judgements`]: { judgements: [HOUSE_J, THEMIS_J] },
@@ -169,11 +171,14 @@ test("two judges, two blocks: each one's opinion, and a safe call prints nothing
   const blocks = page.locator("#reasoning .rr-judge");
   await expect(blocks).toHaveCount(2);
   await expect(blocks.locator(":scope > .rr-k")).toHaveText(["Judge Robot Money", "Judge Themis"]);
-  // The house judge has no member page, and its safe call says nothing.
+  // The house judge has no member page. Its call clears the recommendation:
+  // "Proceed", with no reason and nothing listed; the data's word is not printed.
   await expect(blocks.nth(0).locator(".rr-k a")).toHaveCount(0);
-  await expect(blocks.nth(0).locator(".rr-advice")).toHaveCount(0);
+  await expect(blocks.nth(0).locator(".rr-advice-badge--proceed")).toHaveText("Proceed");
+  await expect(blocks.nth(0).locator(".rr-advice__l")).toHaveText("AdviceProceed");
+  await expect(blocks.nth(0).locator(".rr-advice li")).toHaveCount(0);
   await expect(blocks.nth(0).locator(".rr-prose")).toContainText(HOUSE_PROSE);
-  await expect(blocks.nth(1).locator(".rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
+  await expect(blocks.nth(1).locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(page.locator(".rr-meta__i", { hasText: "Judged by" }).locator("a")).toHaveText(["Robot Money", "Themis"]);
   // Two judges' questions are theirs to count; the facts row does not sum them.
   await expect(page.locator(".rr-meta")).not.toContainText("Disagreements");
@@ -190,7 +195,7 @@ test("the judgement routes answering 404: the judge the recommendation names sta
   const block = page.locator("#reasoning .rr-judge");
   await expect(block).toHaveCount(1);
   await expect(block.locator(":scope > .rr-k")).toHaveText("Judge Themis");
-  await expect(block.locator(".rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
+  await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(block.getByRole("button", { name: "Where views differ" })).toBeVisible();
   await expect(block.locator("a.rr-cta")).toHaveCount(0);
   await expect(page.locator(".rr-meta__i", { hasText: "Disagreements" }).locator("b")).toHaveText("1");
@@ -236,7 +241,8 @@ test("a judgement's own page: who, which session, its advice, its questions, and
   await expect(fact("Model").locator("b")).toHaveText("deepseek-v4-flash");
   await expect(fact("Recorded").locator("b")).toHaveText("Sep 17, 2026 10:00 UTC");
 
-  await expect(page.locator("#judgement .rr-advice__l")).toHaveText("Advises: Hold · 3 takes, below the minimum of 4");
+  await expect(page.locator("#judgement .rr-advice-badge--hold")).toHaveText("Hold");
+  await expect(page.locator("#judgement .rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(page.locator("#judgement .rr-prose")).toContainText(THEMIS_PROSE);
 
   // Each view is a way to that member's take: its receipt when it has one.
@@ -283,15 +289,20 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await expect(fact("Holds advised")).toHaveText("1");
   await expect(page.locator(".rr-meta")).not.toContainText("Takes filed");
 
-  const rows = page.locator("#record tbody tr");
-  await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0).locator("th a")).toHaveText("Sep 17, 2026");
-  await expect(rows.nth(0).locator("th a")).toHaveAttribute("href", "/swarm/judgements/41");
-  await expect(rows.nth(0).locator("th small")).toHaveText(["Advises: Hold · 3 takes, below the minimum of 4", "1 disagreement"]);
-  await expect(rows.nth(0).locator("td")).toHaveText("Robot Money Allocation");
-  // A safe call and no disagreement: nothing under the date.
-  await expect(rows.nth(1).locator("th small")).toHaveCount(0);
-  await expect(rows.nth(1).locator("td")).toHaveText("Woon Treasury");
+  // The analysts' record cards: subject and date, the call where a stance
+  // sits, the disagreements where a confidence sits, and for a hold its reason.
+  const cards = page.locator("#record .rr-take");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0).locator(".rr-take__name")).toHaveText("Robot Money Allocation");
+  await expect(cards.nth(0).locator(".mp-take__date")).toHaveText("Sep 17, 2026");
+  await expect(cards.nth(0).locator(".rr-advice-badge--hold")).toHaveText("Hold");
+  await expect(cards.nth(0).locator(".rr-conf")).toHaveText("Disagreements 1");
+  await expect(cards.nth(0).locator(".rr-advice__why")).toHaveText("3 takes, below the minimum of 4");
+  await expect(cards.nth(0).locator("a.rr-take__act")).toHaveAttribute("href", "/swarm/judgements/41");
+  // A call that clears, and no disagreement: the badge alone.
+  await expect(cards.nth(1).locator(".rr-take__name")).toHaveText("Woon Treasury");
+  await expect(cards.nth(1).locator(".rr-advice-badge--proceed")).toHaveText("Proceed");
+  await expect(cards.nth(1).locator(".rr-conf, .rr-advice__why")).toHaveCount(0);
   // A judge files no takes, so none are asked for.
   expect(seen.filter((p) => p.endsWith("/takes"))).toEqual([]);
   await noSafe(page);
@@ -303,7 +314,7 @@ test("a judge with nothing published keeps the record's frame", async ({ page })
     "/api/swarm/members/themis/judgements": { judgements: [] },
   });
   await page.goto("/swarm/members/themis");
-  await expect(page.locator("#record thead th")).toHaveText(["Session", "Subject"]);
+  await expect(page.locator("#record .rr-take")).toHaveCount(0);
   await expect(page.locator("#record .rr-empty__t")).toHaveText("No judgement published yet");
   await expect(page.locator(".rr-meta")).not.toContainText("Sessions judged");
 });

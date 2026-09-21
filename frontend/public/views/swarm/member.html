@@ -148,40 +148,57 @@
           </section>
         </template>
 
-        <!-- A judge's record: each session it judged, its advice when it
-             advised a hold, how many questions it found the takes apart on,
-             and the way to the judgement itself. -->
+        <!-- A judge's record, in the cards an analyst's record uses: the
+             subject and date where a take's are, the call where a take's
+             stance is (a Hold or Proceed badge), how many questions it found
+             the takes apart on where a take's confidence is, then for a hold
+             its reason, its own account, and the way to the judgement. -->
         <template x-if="isJudge(member)">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
             <template x-if="judgementsCapped()"><span class="rr-sec__aside" x-text="`Latest ${judgements.length}`"></span></template>
           </div>
-          <!-- Under each date, what the row adds: the advice, and how many
-               questions it found the takes apart on, each in words so a phone
-               that drops the table's head still reads them. Neither prints
-               when there is nothing to say. -->
-          <div class="rr-tablewrap">
-            <table class="rr-table rr-stack rr-stack--full">
-              <thead>
-                <tr><th scope="col">Session</th><th scope="col">Subject</th></tr>
-              </thead>
-              <tbody>
-                <template x-for="j in judgements.slice(0, shown)" :key="j.id">
-                  <tr>
-                    <th scope="row">
-                      <a class="rr-lnk" :href="judgementHref(j)" x-text="formatDate(j.sessionDate, 'short')"></a>
-                      <template x-if="adviceLine(j)"><small x-text="adviceLine(j)"></small></template>
-                      <template x-if="j.disagreements.length"><small x-text="`${j.disagreements.length} ${j.disagreements.length === 1 ? 'disagreement' : 'disagreements'}`"></small></template>
-                    </th>
-                    <td class="rr-hist__subj"><a class="rr-lnk" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a></td>
-                  </tr>
-                </template>
-                <template x-if="!judgements.length">
-                  <tr><td class="rr-table__empty" colspan="2"><span class="rr-empty__t">No judgement published yet</span></td></tr>
-                </template>
-              </tbody>
-            </table>
+          <template x-if="!judgements.length">
+            <div class="rr-empty mp-empty"><p class="rr-empty__t">No judgement published yet</p></div>
+          </template>
+          <div class="rr-takes">
+            <template x-for="j in judgements.slice(0, shown)" :key="j.id">
+              <article class="rr-take rr-take--judgement" x-data="takeCard()">
+                <div class="rr-take__top">
+                  <div class="rr-take__what">
+                    <a class="rr-take__name" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a>
+                    <time class="mp-take__date" :datetime="j.sessionDate" x-text="formatDate(j.sessionDate, 'short')"></time>
+                  </div>
+                  <div class="rr-take__stance">
+                    <template x-if="adviceCall(j)">
+                      <span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${adviceCall(j).key}`"><i aria-hidden="true"></i><span x-text="adviceCall(j).label"></span></span>
+                    </template>
+                    <template x-if="j.disagreements.length">
+                      <span class="rr-conf">Disagreements <b x-text="j.disagreements.length"></b></span>
+                    </template>
+                  </div>
+                </div>
+                <div class="rr-take__main">
+                  <div>
+                    <template x-if="adviceReason(j)"><p class="rr-advice__why" x-text="adviceReason(j)"></p></template>
+                    <!-- The judge's own words, clamped and opened as a take's
+                         body is (lib/take-card.js). -->
+                    <template x-if="judgementProse(j)">
+                      <div class="rr-take__text" x-ref="text">
+                        <div class="sv__take-body rr-prose" :class="!open && long(judgementProse(j)) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(judgementProse(j))"></div>
+                      </div>
+                    </template>
+                    <template x-if="long(judgementProse(j))">
+                      <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
+                        <span x-text="open ? 'Show less' : 'Read full judgement'"></span>
+                      </button>
+                    </template>
+                    <a class="rr-lnk rr-take__act" :href="judgementHref(j)">Read the judgement</a>
+                  </div>
+                </div>
+              </article>
+            </template>
           </div>
           <template x-if="judgements.length > shown">
             <div class="rr-pager">

@@ -4,7 +4,7 @@
 // absent from a session nor a seat in its "n of m"; and the three routes
 // resolve whether or not the vendored contract names them yet.
 import { describe, expect, test } from "bun:test";
-import {
+import { adviceCall,
   adviceLine,
   adviceOf,
   analystAbsent,
@@ -37,14 +37,14 @@ describe("the advice", () => {
       release: "hold", thinly_supported: true, take_count: 2, min_takes: 3,
       concerns: ["Thinly supported: 2 takes submitted, below the minimum of 3 for this session.", "The brief went unaddressed."],
     });
-    expect(advice).toEqual({ line: "Advises: Hold · 2 takes, below the minimum of 3", concerns: ["The brief went unaddressed."] });
+    expect(advice).toEqual({ line: "Advises: Hold · 2 takes, below the minimum of 3", reason: "2 takes, below the minimum of 3", concerns: ["The brief went unaddressed."] });
   });
 
   test("one concern goes in the line; several are listed under it", () => {
     expect(adviceOf({ release: "hold", take_count: 5, min_takes: 3, concerns: ["The takes contradict each other on WOON."] }))
-      .toEqual({ line: "Advises: Hold · The takes contradict each other on WOON", concerns: [] });
+      .toEqual({ line: "Advises: Hold · The takes contradict each other on WOON", reason: "The takes contradict each other on WOON", concerns: [] });
     expect(adviceOf({ release: "hold", take_count: 5, min_takes: 3, concerns: ["One.", "Two."] }))
-      .toEqual({ line: "Advises: Hold", concerns: ["One.", "Two."] });
+      .toEqual({ line: "Advises: Hold", reason: "", concerns: ["One.", "Two."] });
   });
 
   test("a hold with no reason given reads as the hold alone", () => {
@@ -52,10 +52,14 @@ describe("the advice", () => {
       .toBe("Advises: Hold");
   });
 
-  test("a safe call prints nothing", () => {
+  test("a call that clears has no reason to give, and its badge reads Proceed, never the data's word", () => {
     expect(adviceOf({ release: "safe", take_count: 4, min_takes: 3, concerns: [] })).toBeNull();
     expect(adviceLine({ release: "safe" })).toBe("");
     expect(adviceLine(null)).toBe("");
+    expect(adviceCall({ release: "safe" })).toEqual({ key: "proceed", label: "Proceed" });
+    expect(adviceCall({ release: "hold" })).toEqual({ key: "hold", label: "Hold" });
+    expect(adviceCall({ release: "maybe" })).toBeNull();
+    expect(adviceCall(null)).toBeNull();
   });
 });
 
@@ -65,8 +69,8 @@ describe("who judged", () => {
     expect(judgeHref({ judged_by: "m-themis", judged_by_member_id: "m-themis" }, ROSTER)).toBe("/swarm/members/themis");
     expect(judgeName({ judgedBy: "robotmoney-in-house", judgedByMemberId: null }, ROSTER)).toBe(HOUSE_JUDGE_NAME);
     expect(judgeHref({ judgedBy: "robotmoney-in-house" }, ROSTER)).toBeNull();
-    // A block written before the backend named its judge says only "Judge".
-    expect(judgeLabelHtml({ source: "model" }, ROSTER)).toBe("Judge");
+    // A block written before the backend named its judge is the role pill alone.
+    expect(judgeLabelHtml({ source: "model" }, ROSTER)).toBe('<span class="rm-role">Judge</span>');
   });
 
   test("a name from a member's profile is escaped before it is bound as markup", () => {

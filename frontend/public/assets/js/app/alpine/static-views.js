@@ -27,7 +27,7 @@ import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
-  adviceOf, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
+  adviceOf, adviceCall, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
   MEMBER_JUDGEMENTS_MAX,
 } from "../lib/judgements.js";
@@ -841,6 +841,7 @@ export function registerStaticViews(Alpine) {
     // stored one, then the id, when the record did not load.
     subjectTitle() { return this.subject?.name || this.session?.subjectName || this.judgement?.subjectId || ""; },
     advice() { return adviceOf(this.judgement?.releaseSafety); },
+    call() { return adviceCall(this.judgement?.releaseSafety); },
     // Only a model's own words: a judgement recorded before the judge stopped
     // writing templates (source "fallback") restates the tally.
     rationale() { return this.judgement?.source === "model" ? this.judgement.rationale : ""; },
@@ -2844,8 +2845,11 @@ export function registerStaticViews(Alpine) {
     roleLabel(m) { return roleLabel(m); },
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
-    // Worded, and only for a hold: a "safe" call prints nothing.
-    adviceLine(j) { return adviceOf(j?.releaseSafety)?.line || ""; },
+    // A record card's call (the badge) and, for a hold, why.
+    adviceCall(j) { return adviceCall(j?.releaseSafety); },
+    adviceReason(j) { return adviceOf(j?.releaseSafety)?.reason || ""; },
+    // Only a model's own words, as on the session and judgement pages.
+    judgementProse(j) { return j?.source === "model" ? j.rationale || "" : ""; },
     judgementsCapped() { return this.judgements.length >= MEMBER_JUDGEMENTS_MAX; },
     judgeStats() {
       return {
@@ -3715,6 +3719,7 @@ export function registerStaticViews(Alpine) {
         name: judgeName(j, this.members),
         label: judgeLabelHtml(j, this.members),
         advice: adviceOf(j.releaseSafety),
+        call: adviceCall(j.releaseSafety),
         // A judgement recorded before the judge stopped writing templates
         // (source "fallback") restates the tally the page draws.
         rationale: j.source === "model" ? j.rationale : "",

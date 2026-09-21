@@ -3,8 +3,8 @@
      where it found the takes apart, then what pins it. A session's page shows
      every judge's opinion in its own block; this is one opinion's permanent
      address, as a take's receipt is. A judge scores no take and sets no
-     weight: its release call is advice, worded, and a "safe" call prints
-     nothing. -->
+     weight: its release call is advice, a Hold or Proceed badge (the data's
+     "safe" is never printed) with a hold's reason beside it. -->
 <section class="cv cv--detail" x-data="swarmJudgement()">
   <div class="sv__body sv__body--narrow rr">
     <p class="rm-visually-hidden" role="status" x-show="loading">Loading judgement</p>
@@ -55,10 +55,10 @@
              its own account of why the takes support the session's read. -->
         <section class="rr-sec" id="judgement" aria-labelledby="judgement-h">
           <div class="rr-sec__head"><h2 class="rr-sec__h" id="judgement-h">The judgement</h2></div>
-          <template x-if="advice()">
+          <template x-if="call()">
             <div class="rr-advice">
-              <p class="rr-advice__l" x-text="advice().line"></p>
-              <template x-if="advice().concerns.length">
+              <p class="rr-advice__l"><span class="rr-advice__k">Advice</span><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${call().key}`"><i aria-hidden="true"></i><span x-text="call().label"></span></span><template x-if="advice()?.reason"><span x-text="advice().reason"></span></template></p>
+              <template x-if="advice()?.concerns.length">
                 <ul class="rr-list"><template x-for="c in advice().concerns" :key="c"><li x-text="c"></li></template></ul>
               </template>
             </div>

@@ -198,12 +198,13 @@ const THIN_CONCERN = /^thinly supported\b/i;
 const UNNAMED_CONCERN = /^judge withheld release without naming a specific concern\.?$/i;
 
 /**
- * The release call as words: "Advises: Hold · 2 takes, below the minimum of
- * 3". The line carries the count when support is thin, or the one concern
- * when there is one; anything more is listed under it. null for "safe", which
- * prints nothing.
+ * A hold, in words: "Advises: Hold · 2 takes, below the minimum of 3", and the
+ * reason alone ("2 takes, below the minimum of 3") for beside the call's badge
+ * (adviceCall). The reason is the count when support is thin, or the one
+ * concern when there is one; anything more is listed under it. null for a
+ * call that is not a hold, which has no reason to give.
  * @param {any} rs
- * @returns {{ line: string, concerns: string[] } | null}
+ * @returns {{ line: string, reason: string, concerns: string[] } | null}
  */
 export function adviceOf(rs) {
   if (!rs || rs.release !== "hold") return null;
@@ -217,7 +218,22 @@ export function adviceOf(rs) {
   const parts = ["Advises: Hold"];
   if (thin && counted) parts.push(`${n} ${n === 1 ? "take" : "takes"}, below the minimum of ${min}`);
   else if (concerns.length === 1) parts.push(/** @type {string} */ (concerns.shift()).replace(/\.$/, ""));
-  return { line: parts.join(" · "), concerns };
+  // `reason` is the line without its call, for beside the call's badge.
+  return { line: parts.join(" · "), reason: parts[1] || "", concerns };
+}
+
+// The judge's call, as its badge names it. The data says "hold" or "safe";
+// "safe" is never printed, since on a money page it reads as a safety claim
+// about the vault, so the call that clears the recommendation reads
+// "Proceed". Hold wears the attention hue, Proceed none (.rr-advice-badge).
+// Swapping the word is this table.
+/** @type {Record<"hold" | "safe", { key: "hold" | "proceed", label: string }>} */
+export const ADVICE_CALLS = { hold: { key: "hold", label: "Hold" }, safe: { key: "proceed", label: "Proceed" } };
+/** @param {any} rs */
+export function adviceCall(rs) {
+  /** @type {unknown} */
+  const call = rs?.release;
+  return call === "hold" || call === "safe" ? ADVICE_CALLS[/** @type {"hold" | "safe"} */ (call)] : null;
 }
 
 /** @param {any} rs */
