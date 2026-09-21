@@ -60,9 +60,9 @@ async function publicJudgements(scope: Fragment, limit?: number): Promise<SwarmJ
              -- Whether the session's recommendation set weights: only then has
              -- the judge's call a target to update (a session that published
              -- none, or a portfolio review, has nothing to update). A live
-             -- aggregate stores meanTakeWeights()'s array, a v0 session an
-             -- object; CASE, because AND does not fix evaluation order and
-             -- jsonb_array_length throws on an object.
+             -- aggregate stores its averaged vector as an array, a v0 session
+             -- as an object; CASE, because AND does not fix evaluation order
+             -- and jsonb_array_length throws on an object.
              COALESCE(s.swarm_recommendation->>'type' = 'bucket_weights', false)
                AND CASE jsonb_typeof(s.swarm_recommendation->'weights')
                      WHEN 'array' THEN jsonb_array_length(s.swarm_recommendation->'weights') > 0
