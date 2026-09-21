@@ -39,7 +39,7 @@ export function stubJudgeReset(): void {
 }
 
 const server = Bun.serve({
-  port: 0, hostname: "127.0.0.1",
+  port: 0,
   hostname: "127.0.0.1",
   fetch: async () => Response.json({ choices: [{ message: { content: body } }] }),
 });

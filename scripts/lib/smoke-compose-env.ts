@@ -111,10 +111,11 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 // the reason its presence is worth a line of output rather than silence.
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
   [
+    "WORKER_DATABASE_URL",
     "the worker lanes take the stack's own DATABASE_URL (the twin, under --db smoke-twin). " +
       "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
       "not have, and every lane died in DNS while the boot reported only unhealthy workers",
-  ] as [string, string],
+  ],
 ];
 
 /**
