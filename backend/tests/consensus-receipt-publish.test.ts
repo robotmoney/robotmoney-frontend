@@ -28,7 +28,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 // judgeSessionAdmin, which has no injectable transport. Before issue #969 they
 // leaned on `model` being NULL and anchored the resulting TEMPLATE prose into a
 // signed receipt — the exact thing #969 makes impossible.
-import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+import { installJudgeStub, removeJudgeStub, resetJudgeStubAnswer, setJudgeStubAnswer, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
 beforeAll(installJudgeStub);
 afterAll(removeJudgeStub);
 
@@ -658,6 +658,57 @@ test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one 
   const [record] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${live.sessionId}`) as any[];
   expect(body.body.receipt.judge.rationale).toBe(record.swarm_recommendation.rationale);
   expect(body.body.receipt.judge.release_safety).toEqual(record.swarm_recommendation.release_safety);
+});
+
+// Issue #1019: the adopted judgement can be `source='fallback'` (D-A7 — a real,
+// ongoing outcome class main's judge.ts still writes on a genuine model
+// failure, e.g. a malformed response) WITHOUT the session ever having been in
+// `shadow`. `judgement_not_adopted` only catches "no opinion reached the
+// session" — a fallback opinion still gets applyOpinion()'d onto an `enforce`
+// session, so before this fix a receipt over TEMPLATE PROSE published exactly
+// like one over a model's own words. `judgement_not_authored` closes that.
+test("BLOCKER 3: a FALLBACK judgement (template prose) never reaches a receipt, by name — a model-authored one is unaffected", async () => {
+  const fallback = await collectingSession("recfallback", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  expect((await admin.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  expect((await admin.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+
+  // A body that is NOT valid judge JSON forces judge.ts's parse-failure
+  // fallback path (parseJudgeResponse throws, judge.ts:1280) — a real
+  // recorded outcome with `source: 'fallback'`, not a simulated field.
+  setJudgeStubAnswer("this is not a judge response");
+  let judgedFallback: any;
+  try {
+    judgedFallback = await admin.judgeSessionAdmin(fallback.sessionId, undefined);
+  } finally {
+    resetJudgeStubAnswer();
+  }
+  expect(judgedFallback.ok).toBe(true);
+  expect(judgedFallback.judge.applied).toBe(true);
+  expect(judgedFallback.judge.source).toBe("fallback");
+  expect(judgedFallback.judge.fallbackReason).toBeTruthy();
+  expect((await admin.publishSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+
+  // The session DID adopt it — this is not the judgement_not_adopted case.
+  const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${fallback.sessionId}`) as any[];
+  expect(sess.swarm_recommendation.judge).toBeDefined();
+
+  const refused = await admin.publishConsensusReceiptAdmin(fallback.sessionId);
+  expect(refused.ok).toBe(false);
+  expect((refused as any).error).toBe("judgement_not_authored");
+  expect((refused as any).message).toContain("source='fallback'");
+  const [none] = (await sql`
+    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${fallback.sessionId}`) as any[];
+  expect(none.n).toBe(0);
+
+  // A sibling session judged by the (stub) MODEL, over the same shape of
+  // takes, is entirely unaffected — no new refusal on the existing passing
+  // path.
+  const modelAuthored = await judgedSession("recauthored", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  const publishedModel = await admin.publishConsensusReceiptAdmin(modelAuthored.sessionId);
+  expect(publishedModel.ok).toBe(true);
+  const [stored] = (await sql`
+    SELECT session_id FROM swarm_consensus_receipts WHERE session_id = ${modelAuthored.sessionId}`) as any[];
+  expect(stored).toBeDefined();
 });
 
 test("a LATE FIRST take names its remedy instead of reading like a corrupted rollup", async () => {

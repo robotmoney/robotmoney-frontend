@@ -2028,35 +2028,74 @@ export async function getAgentHealthEvents(filter: AgentHealthFilter = {}) {
   };
 }
 
-export async function closeWindow(sessionId: string) {
-  return await sql.begin(async (tx) => {
-    const upd = await tx`
-      UPDATE swarm_sessions SET state = 'window_closed'
-      WHERE id = ${sessionId} AND state = 'collecting' RETURNING id`;
-    if (upd.length > 0) {
-      // Materialize absence events ONLY on a REAL collecting->window_closed
-      // transition (a re-close of an already-closed session is a no-op, and
-      // the unique partial index above makes this safe even if a retried job
-      // races another). Only sessions with a FROZEN expected roster
-      // (swarm_session_members — the admin-created path, issue #150) have
-      // an authoritative absence denominator; the legacy/smoke openSession path
-      // (no roster rows) is unaffected, matching submitRecommendation/
-      // aggregateSession's existing roster-optional convention.
-      const roster = await tx<{ member_id: string }[]>`
-        SELECT member_id FROM swarm_session_members
-        WHERE session_id = ${sessionId} AND status != 'excused'`;
-      if (roster.length > 0) {
-        const submitted = await tx<{ member_id: string }[]>`
-          SELECT DISTINCT member_id FROM swarm_recommendations WHERE session_id = ${sessionId}`;
-        const submittedSet = new Set(submitted.map((r) => r.member_id));
-        for (const { member_id: memberId } of roster) {
-          if (submittedSet.has(memberId)) continue;
-          await recordAgentHealthEvent("absent", sessionId, memberId, { reason: "missed submission window" }, tx);
-        }
-      }
+export async function closeWindow(
+  sessionId: string,
+): Promise<{ sessionId: string; state: "window_closed"; telemetryWarnings?: string[] }> {
+  // THE TRANSITION IS ITS OWN STATEMENT, NOT ONE TRANSACTION WITH THE
+  // ABSENCE RECORD. It used to be `sql.begin` around both, which made a
+  // failure in the telemetry inserts ROLL BACK the state change: the window
+  // stayed open, the worker retried, and once the job exhausted its attempts
+  // the session was stuck `collecting` forever — blocking every later
+  // lifecycle step and every submission for its subject. The close is the
+  // load-bearing write; the absence record is telemetry, and telemetry must
+  // never be able to keep a window open. They are therefore decoupled: the
+  // UPDATE below commits alone, and recordAbsenceEvents() runs afterwards,
+  // its failures collected into the return value rather than thrown.
+  const upd = await sql`
+    UPDATE swarm_sessions SET state = 'window_closed'
+    WHERE id = ${sessionId} AND state = 'collecting' RETURNING id`;
+  if (upd.length === 0) return { sessionId, state: "window_closed" };
+  const telemetryWarnings = await recordAbsenceEvents(sessionId);
+  return telemetryWarnings.length
+    ? { sessionId, state: "window_closed", telemetryWarnings }
+    : { sessionId, state: "window_closed" };
+}
+
+// Materialize absence events for a session that JUST closed. Runs ONLY on a
+// REAL collecting->window_closed transition (a re-close of an already-closed
+// session is a no-op, and the unique partial index makes this safe even if a
+// retried job races another). Only sessions with a FROZEN expected roster
+// (swarm_session_members — the admin-created path, issue #150) have an
+// authoritative absence denominator; the legacy/smoke openSession path (no
+// roster rows) is unaffected, matching submitRecommendation/aggregateSession's
+// existing roster-optional convention.
+//
+// NEVER THROWS. The close is already committed when this runs, so a failure
+// here must not resurface as a failed/retried close_window job — that would
+// re-run the transition UPDATE (a 0-row no-op) and settle the job `dead` for
+// a session that is actually closed. Each member's event is recorded
+// independently so one bad row cannot lose the rest; failures are returned as
+// warnings and surfaced in the job's output by the worker handler.
+async function recordAbsenceEvents(sessionId: string): Promise<string[]> {
+  const warnings: string[] = [];
+  let roster: { member_id: string }[];
+  try {
+    roster = await sql<{ member_id: string }[]>`
+      SELECT member_id FROM swarm_session_members
+      WHERE session_id = ${sessionId} AND status != 'excused'`;
+  } catch (err) {
+    return [`roster read failed after close: ${err instanceof Error ? err.message : String(err)}`];
+  }
+  if (roster.length === 0) return warnings;
+  let submitted: { member_id: string }[];
+  try {
+    submitted = await sql<{ member_id: string }[]>`
+      SELECT DISTINCT member_id FROM swarm_recommendations WHERE session_id = ${sessionId}`;
+  } catch (err) {
+    return [`submitted-take read failed after close: ${err instanceof Error ? err.message : String(err)}`];
+  }
+  const submittedSet = new Set(submitted.map((r) => r.member_id));
+  for (const { member_id: memberId } of roster) {
+    if (submittedSet.has(memberId)) continue;
+    try {
+      await recordAgentHealthEvent("absent", sessionId, memberId, { reason: "missed submission window" });
+    } catch (err) {
+      warnings.push(
+        `absence event for ${memberId} not recorded: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    return { sessionId, state: "window_closed" };
-  });
+  }
+  return warnings;
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime
