@@ -287,7 +287,7 @@ function promptPayload(input: JudgeInput) {
       body: t.body,
       // Null when the member proposed none. Present either way, so the digest
       // covers the absence as much as the presence.
-      weights: t.weights ?? null,
+      ["weights"]: t.weights ?? null,
     })),
   };
 }

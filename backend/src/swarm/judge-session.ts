@@ -151,7 +151,7 @@ export async function judgeInputFromFrozen(
     // every take in production today (1 of 1190 carries any), which is part of
     // why the judge is asked to read them: a member's numbers state their
     // intent, and their ABSENCE is a fact about the take too.
-    weights: Array.isArray(t.payload?.weights) ? t.payload.weights : null,
+    ["weights"]: Array.isArray(t.payload?.weights) ? (t.payload.weights as number[]) : null,
   }));
   const date = s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
   return {
