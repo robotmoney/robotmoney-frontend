@@ -114,7 +114,7 @@ const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
     "the worker lanes take the stack's own DATABASE_URL (the twin, under --db smoke-twin). " +
       "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
       "not have, and every lane died in DNS while the boot reported only unhealthy workers",
-  ],
+  ] as [string, string],
 ];
 
 /**

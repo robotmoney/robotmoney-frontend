@@ -162,16 +162,17 @@ export const twinRosterLeg: VerifyLeg = {
         );
         return;
       }
-      const verdict = seatingVerdict(worst.row);
-      const who = worst.missing.map((m) => m.handle ?? m.id).join(", ");
+      const w = worst!;
+      const verdict = seatingVerdict(w.row);
+      const who = w.missing.map((m) => m.handle ?? m.id).join(", ");
       checker.record(
         "twin-roster:every-active-member-seated",
         verdict,
         verdict === "WARN"
-          ? `NOT A PASS: session ${worst.row.id} (${worst.row.subjectId}) has ${worst.seated} of ${active.length} ` +
-            `so far and is still collecting until ${worst.row.windowClosesAt} — still to file: ${who}. ` +
+          ? `NOT A PASS: session ${w.row.id} (${w.row.subjectId}) has ${w.seated} of ${active.length} ` +
+            `so far and is still collecting until ${w.row.windowClosesAt} — still to file: ${who}. ` +
             `Unproven, not disproven: member containers run a few at a time and takes land over the window.`
-          : `session ${worst.row.id} (${worst.row.subjectId}) seated ${worst.seated} of ${active.length} ` +
+          : `session ${w.row.id} (${w.row.subjectId}) seated ${w.seated} of ${active.length} ` +
             `with its window closed — never seated: ${who}`,
         "A twin seats every active restored member (scripts/lib/smoke-mode.ts adoptionFilter, twin branch). " +
           "A shortfall past the window means adoption filtered someone out — check the boot's 'swarm now N seats' line against the roster.",
@@ -182,7 +183,7 @@ export const twinRosterLeg: VerifyLeg = {
     checker.record(
       "twin-roster:every-active-member-seated",
       "PASS",
-      `session ${found.row.id} (${found.row.subjectId}) carries a live take from all ${active.length} active member(s)`,
+      `session ${found!.row.id} (${found!.row.subjectId}) carries a live take from all ${active.length} active member(s)`,
     );
   },
 };
