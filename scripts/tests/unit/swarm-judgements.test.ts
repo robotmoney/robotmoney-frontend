@@ -37,27 +37,27 @@ describe("the advice", () => {
       release: "hold", thinly_supported: true, take_count: 2, min_takes: 3,
       concerns: ["Thinly supported: 2 takes submitted, below the minimum of 3 for this session.", "The brief went unaddressed."],
     });
-    expect(advice).toEqual({ line: "Advises: Wait · 2 takes, below the minimum of 3", reason: "2 takes, below the minimum of 3", concerns: ["The brief went unaddressed."] });
+    expect(advice).toEqual({ line: "Advises: Hold · 2 takes, below the minimum of 3", reason: "2 takes, below the minimum of 3", concerns: ["The brief went unaddressed."] });
   });
 
   test("one concern goes in the line; several are listed under it", () => {
     expect(adviceOf({ release: "hold", take_count: 5, min_takes: 3, concerns: ["The takes contradict each other on WOON."] }))
-      .toEqual({ line: "Advises: Wait · The takes contradict each other on WOON", reason: "The takes contradict each other on WOON", concerns: [] });
+      .toEqual({ line: "Advises: Hold · The takes contradict each other on WOON", reason: "The takes contradict each other on WOON", concerns: [] });
     expect(adviceOf({ release: "hold", take_count: 5, min_takes: 3, concerns: ["One.", "Two."] }))
-      .toEqual({ line: "Advises: Wait", reason: "", concerns: ["One.", "Two."] });
+      .toEqual({ line: "Advises: Hold", reason: "", concerns: ["One.", "Two."] });
   });
 
   test("a hold with no reason given reads as the hold alone", () => {
     expect(adviceLine({ release: "hold", take_count: 4, min_takes: 3, concerns: ["Judge withheld release without naming a specific concern."] }))
-      .toBe("Advises: Wait");
+      .toBe("Advises: Hold");
   });
 
-  test("a call that clears has no reason to give, and its badge reads Proceed, never the data's word", () => {
+  test("a call that clears has no reason to give, and its badge reads Update, never the data's word", () => {
     expect(adviceOf({ release: "safe", take_count: 4, min_takes: 3, concerns: [] })).toBeNull();
     expect(adviceLine({ release: "safe" })).toBe("");
     expect(adviceLine(null)).toBe("");
-    expect(adviceCall({ release: "safe" })).toEqual({ key: "proceed", label: "Proceed" });
-    expect(adviceCall({ release: "hold" })).toEqual({ key: "wait", label: "Wait" });
+    expect(adviceCall({ release: "safe" })).toEqual({ key: "update", label: "Update" });
+    expect(adviceCall({ release: "hold" })).toEqual({ key: "hold", label: "Hold" });
     expect(adviceCall({ release: "maybe" })).toBeNull();
     expect(adviceCall(null)).toBeNull();
   });

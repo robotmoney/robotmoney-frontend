@@ -46,7 +46,7 @@
           </template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
-          <template x-if="judgements.length"><span class="rr-meta__i">Advised to wait <b x-text="judgeStats().holds"></b></span></template>
+          <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
           <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip" x-text="takesCapped() ? `Signatures re-checked against this member’s key, over the latest ${recordStats().takes} takes.` : 'Signatures re-checked against this member’s key.'"></span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
@@ -150,8 +150,8 @@
 
         <!-- A judge's record, in the cards an analyst's record uses: the
              subject and date where a take's are, the call where a take's
-             stance is (a Wait or Proceed badge), how many questions it found
-             the takes apart on where a take's confidence is, then for a wait
+             stance is (a Hold or Update badge), how many questions it found
+             the takes apart on where a take's confidence is, then for a hold
              its reason, its own account, and the way to the judgement. -->
         <template x-if="isJudge(member)">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
