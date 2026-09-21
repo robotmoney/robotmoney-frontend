@@ -15,8 +15,8 @@
 // random-walk simulation around the current APY — fabricated data, and a
 // violation of this repo's honesty contract. `profile.yieldHistory` is
 // always `[]` today (no per-vault APY history table/writer exists), so this
-// view renders the chart frame + toggle group but always shows the honest
-// empty state, never a synthetic series.
+// view always shows the honest empty chart (.rm-nodata), never a synthetic
+// series.
 import { api, ROUTES, path } from "../../lib/api.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
 import { applyDashChartDefaults, dashChartOptions, dashLineDatasetDefaults } from "../lib/chart-theme.js";
@@ -61,7 +61,9 @@ export function registerVaultProfileView(Alpine) {
 
     setPeriod(id) {
       this.period = id;
-      this.drawChart();
+      // The canvas is only in the DOM while the period has a line to draw,
+      // so drawing waits for Alpine to add or remove it.
+      this.$nextTick(() => this.drawChart());
     },
     isPeriod(id) {
       return this.period === id;
@@ -74,10 +76,29 @@ export function registerVaultProfileView(Alpine) {
       return rows.filter((r) => new Date(r.date).getTime() >= cutoff);
     },
 
+    // The TVL chart's empty state (.rm-nodata). A line needs two daily
+    // readings: one alone is a lone invisible point (pointRadius 0) on blank
+    // axes. The detail only speaks when it adds something the title can't:
+    // that the vault does have history, just not in the chosen period, or
+    // that there is exactly one reading.
+    get tvlChartEmpty() {
+      return this.filteredTvlHistory.length < 2;
+    },
+    tvlChartEmptyTitle() {
+      return this.filteredTvlHistory.length ? "Not enough data yet" : "No data yet";
+    },
+    tvlChartEmptyDetail() {
+      const shown = this.filteredTvlHistory.length;
+      const total = this.profile?.tvlHistory?.length ?? 0;
+      if (shown === 1) return total > 1 ? "One reading in this period" : "One reading so far";
+      return total > 0 ? "No TVL history in this period" : "";
+    },
+
     drawChart() {
-      const canvas = this.$refs.tvlChart;
-      if (!canvas || !window.Chart) return;
       this._chart?.destroy();
+      this._chart = null;
+      const canvas = this.$refs.tvlChart;
+      if (!canvas || !window.Chart || this.tvlChartEmpty) return;
       const rows = this.filteredTvlHistory;
       this._chart = new window.Chart(canvas, {
         type: "line",

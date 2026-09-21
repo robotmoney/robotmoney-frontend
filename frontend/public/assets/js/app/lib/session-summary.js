@@ -383,7 +383,10 @@ export const sessionSummary = {
   /** @param {any[]} rows @param {string | null} [active] */
   ringSvg(rows, active = null) {
     const arcs = this.ringArcs(rows);
-    if (!arcs.length) return "";
+    // No rows is no ring. Rows that all weigh zero (a vault stack before any
+    // deposit, a policy of zeros) are a ring with nothing on it: its bare
+    // track, as every empty ring is drawn, not a hole where it would be.
+    if (!arcs.length && !(Array.isArray(rows) && rows.length)) return "";
     const ring = (/** @type {string} */ stroke, /** @type {string} */ extra) =>
       `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${stroke}" stroke-width="4"${extra}></circle>`;
     // The track is drawn first and stays visible wherever the arcs do not

@@ -63,7 +63,9 @@ export function registerCoinProfileView(Alpine) {
     // ── period toggle ──────────────────────────────────────────────────────
     setPeriod(id) {
       this.period = id;
-      this.drawChart();
+      // The canvas is only in the DOM while the period has a line to draw,
+      // so drawing waits for Alpine to add or remove it.
+      this.$nextTick(() => this.drawChart());
     },
     isPeriod(id) {
       return this.period === id;
@@ -76,10 +78,29 @@ export function registerCoinProfileView(Alpine) {
       return rows.filter((r) => new Date(r.date).getTime() >= cutoff);
     },
 
+    // The chart's empty state (.rm-nodata). A line needs two daily readings:
+    // one alone is a lone invisible point (pointRadius 0) on blank axes. The
+    // detail only speaks when it adds something the title can't: that the
+    // coin does have history, just not in the chosen period, or that there is
+    // exactly one reading.
+    get chartEmpty() {
+      return this.filteredHistory.length < 2;
+    },
+    chartEmptyTitle() {
+      return this.filteredHistory.length ? "Not enough data yet" : "No data yet";
+    },
+    chartEmptyDetail() {
+      const shown = this.filteredHistory.length;
+      const total = this.profile?.priceHistory?.length ?? 0;
+      if (shown === 1) return total > 1 ? "One reading in this period" : "One reading so far";
+      return total > 0 ? "No price history in this period" : "";
+    },
+
     drawChart() {
-      const canvas = this.$refs.priceChart;
-      if (!canvas || !window.Chart) return;
       this._chart?.destroy();
+      this._chart = null;
+      const canvas = this.$refs.priceChart;
+      if (!canvas || !window.Chart || this.chartEmpty) return;
       const rows = this.filteredHistory;
       this._chart = new window.Chart(canvas, {
         type: "line",

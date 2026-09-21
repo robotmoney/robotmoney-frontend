@@ -3,7 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 // Every chart and table on the swarm pages keeps its frame when it has
 // nothing to show, and states what is not there in one line (RM-121): a table
 // keeps its head and gets one row, a ring is its bare track with the line in
-// its centre, and a chart or a list of cards keeps a frame of its size.
+// its centre, and a list of cards keeps a frame of its size. A chart keeps a
+// frame of its size with the shared empty chart (.rm-nodata): its ghost, the
+// state ("No data yet", "Not enough data yet"), then the fact.
 //
 // The API is stubbed so each page is reached with nothing in it. The subject,
 // session and member used here are not in the shipped archive, which the
@@ -72,6 +74,7 @@ test("a book read once draws the chart's frame, saying a line needs another read
   await page.goto("/swarm/subjects/empty-co");
 
   await expect(page.locator("#holdings .rr-positions tbody tr")).toHaveCount(1);
+  await expect(page.locator("#holdings .rr-area .rm-nodata__h")).toHaveText("Not enough data yet");
   await expect(page.locator("#holdings .rr-area .rr-empty__t")).toHaveText("One reading so far");
   await expect(page.locator("#holdings .rr-area .rr-area__head")).toContainText("Share of the book by position");
 });
@@ -88,6 +91,7 @@ test("a session whose window just opened keeps the recommendation ring and the t
   await page.goto("/swarm/2026-09-19/empty-co");
 
   await expect(emptyRing(page, "#recommendation")).toHaveText("Not published yet");
+  await expect(page.locator("#takes .rm-nodata__h")).toHaveText("No data yet");
   await expect(page.locator("#takes .rr-empty__t")).toHaveText("No takes filed yet");
   await expect(page.locator(".rr-meta").first()).toContainText("Takes 0 of 1");
 });

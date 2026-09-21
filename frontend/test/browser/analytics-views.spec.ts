@@ -362,6 +362,64 @@ test("late-cycle view renders live gauges, and no hardcoded readings beside them
   await expect(concentration.locator(".stub__read")).toContainText("late-cycle configuration");
 });
 
+// A research chart with nothing to draw keeps its box and says so with the
+// shared empty chart (.rm-nodata), and so does the live panel: a failed read
+// is "No data available" in every one of them, never the API's own error text.
+test("research views state a failed read in the live panel and every chart, captions kept", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.route("**/api/dashboards/research-signals/**", (route) =>
+    route.fulfill({ status: 503, contentType: "text/plain", body: "down" }));
+  await page.goto("/");
+
+  await navigate(page, "/research/channel-divergence");
+  await expect(page.locator(".rs__series-canvas .rm-nodata--fill .rm-nodata__h")).toHaveText(Array(3).fill("No data available"));
+  await expect(page.locator(".rs__gauges .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".rs__gauge-val")).toHaveCount(0);
+  await expect(page.locator(".rm-nodata__d:visible")).toHaveCount(0);
+  await expect(page.locator(".rs__figure .rs__figcap")).toHaveCount(3);
+  await expect(page.locator(".rs__figure .rs__note")).toHaveCount(3);
+  await expect(page.locator("#view")).not.toContainText("503");
+
+  await navigate(page, "/research/late-cycle-signals");
+  await expect(page.locator(".rs__series-canvas .rm-nodata__h")).toHaveText(Array(5).fill("No data available"));
+  await expect(page.locator(".rs__gauges .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".stub__series-label")).toHaveCount(5);
+});
+
+test("research charts say no data yet for a missing series and not enough for one reading, and draw the rest", async ({ page }) => {
+  await stubEnvironment(page);
+  const payload = {
+    ...CHANNEL_PAYLOAD,
+    indicators: {
+      btc_beta_vs_risk_appetite: [{ date: "2026-06-29", value: 0.412 }],
+      // All gaps is no data, the same as absent (stables_vs_qqq_flow).
+      btc_qqq_ratio_percentile: [{ date: "2026-06-28", value: null }, { date: "2026-06-29", value: null }],
+    },
+  };
+  await page.route("**/api/dashboards/research-signals/channel-divergence*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ signalKey: "channel-divergence", date: payload.asof, payload }) }));
+  await page.goto("/");
+  await navigate(page, "/research/channel-divergence");
+
+  const chart = (key: string) => page.locator(".rs__series-canvas", { has: page.locator(`canvas[data-series="${key}"]`) });
+  await expect(chart("btc_beta_vs_risk_appetite").locator(".rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(chart("btc_beta_vs_risk_appetite").locator(".rm-nodata__d")).toHaveText("One reading so far");
+  await expect(chart("btc_qqq_ratio_percentile").locator(".rm-nodata__h")).toHaveText("No data yet");
+  await expect(chart("stables_vs_qqq_flow").locator(".rm-nodata__h")).toHaveText("No data yet");
+  // The box keeps its size with nothing drawn in it.
+  const box = await chart("stables_vs_qqq_flow").boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(120);
+  // The gauges still render: only the charts are empty.
+  await expect(page.locator(".rs__gauge-val")).toHaveCount(CHANNEL_PAYLOAD.gauges.length);
+  await expect(page.locator(".rs__gauges .rm-nodata")).toHaveCount(0);
+
+  // A series with two readings draws, and carries no empty state.
+  await navigate(page, "/research/late-cycle-signals");
+  const mna = page.locator(".rs__series-canvas", { has: page.locator('canvas[data-series="mna_pct"]') });
+  await expect(mna.locator(".rm-nodata")).toHaveCount(0);
+  await expect.poll(() => mna.locator("canvas").evaluate((c) => Boolean((window as any).Chart?.getChart(c)))).toBe(true);
+});
+
 // The loud-staleness surface: when the analytics pipeline stops refreshing in a
 // deployment, the served snapshot freezes and the API reports staleness. The
 // dashboard must warn the viewer LOUDLY rather than render the frozen charts as
@@ -377,7 +435,7 @@ test("regime dashboard shows a loud staleness banner when the API reports stale 
 
   const banner = page.locator(".rv__stale");
   await expect(banner).toBeVisible();
-  await expect(banner).toContainText("15 days stale");
+  await expect(banner).toContainText("15 days old");
   await expect(banner).toContainText("2026-06-29");
   // The charts still render beneath the warning (data is shown, just flagged).
   await expect(page.locator(".rv__dash-title")).toBeVisible();

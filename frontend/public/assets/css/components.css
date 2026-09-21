@@ -308,6 +308,38 @@
 
 /* loading / error states */
 .rm-loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+
+/* A chart with nothing to draw, on every page that draws one: the chart's
+   ghost (its axes, faint gridlines and a dashed trace where the line would
+   run), then what is missing in two lines. The title is the state: "No data
+   yet", "Not enough data yet" or "No data available" for a read that failed;
+   the line under it, when there is one, is the fact ("One reading so far",
+   "No takes filed yet"). Line work only, in neutrals: an empty chart carries
+   no series hue, and Beacon never marks an empty state. The ghost is a mask,
+   so it takes the token colour and there is one drawing to change. */
+.rm-nodata { display: grid; place-content: center; justify-items: center; gap: 0.5rem; text-align: center; }
+.rm-nodata::before {
+  content: ""; width: 4.5rem; height: 2.8125rem; margin-bottom: 0.5rem; background: var(--color-text-muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='square'%3E%3Cpath d='M4.75 3v32.25H62'/%3E%3Cpath stroke-opacity='.45' stroke-dasharray='1.5 3' stroke-linecap='butt' d='M9 13h53M9 24h53'/%3E%3Cpath stroke-opacity='.8' stroke-dasharray='7 4' stroke-linecap='butt' stroke-linejoin='miter' d='M9 30l15-10 10 5 14-13 12 5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='square'%3E%3Cpath d='M4.75 3v32.25H62'/%3E%3Cpath stroke-opacity='.45' stroke-dasharray='1.5 3' stroke-linecap='butt' d='M9 13h53M9 24h53'/%3E%3Cpath stroke-opacity='.8' stroke-dasharray='7 4' stroke-linecap='butt' stroke-linejoin='miter' d='M9 30l15-10 10 5 14-13 12 5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.rm-nodata__h { margin: 0; font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.5; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--color-text-soft); }
+.rm-nodata__d, .rm-nodata .rr-empty__t { margin: 0; font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.5;
+  letter-spacing: 0; text-transform: none; color: var(--color-text-muted); }
+/* A pie or donut's ghost is a donut's outline and its slice edges, not a
+   line chart's axes. Still, with no brighter arc (a spinner) and no edges
+   from the centre (a clock). */
+.rm-nodata--ring::before {
+  width: 2.8125rem;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='20' cy='20' r='15' stroke-opacity='.6'/%3E%3Ccircle cx='20' cy='20' r='8' stroke-opacity='.6'/%3E%3Cpath d='M20 12V5M26.13 25.14l5.36 4.5M12.48 22.74l-6.58 2.39' stroke-opacity='.9'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='20' cy='20' r='15' stroke-opacity='.6'/%3E%3Ccircle cx='20' cy='20' r='8' stroke-opacity='.6'/%3E%3Cpath d='M20 12V5M26.13 25.14l5.36 4.5M12.48 22.74l-6.58 2.39' stroke-opacity='.9'/%3E%3C/svg%3E");
+}
+/* Laid over a canvas chart's own box when it has nothing to draw: the box
+   keeps its size, so nothing under it moves. Its parent is the positioned
+   chart container; the chart itself is not drawn. */
+.rm-nodata--fill { position: absolute; inset: 0; }
+@media (forced-colors: active) { .rm-nodata::before { background: CanvasText; } }
 .rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */

@@ -1368,6 +1368,8 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rs__loading { color: var(--color-text-muted); font-family: var(--font-mono); }
 .rs__error { color: var(--color-warn); font-family: var(--font-mono); }
 .rs__gauges { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 2rem 0; }
+/* The panel's empty state (.rm-nodata) spans the panel, not one gauge's column. */
+.rs__gauges > .rm-nodata { grid-column: 1 / -1; }
 .rs__gauge { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; }
 .rs__gauge-name { font-size: 0.95rem; }
 .rs__gauge-val { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--color-text); margin: 0.25rem 0; }
@@ -1390,7 +1392,8 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rs__series-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
 .rs__series-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 0.75rem 1rem 1rem; }
 .rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); margin-bottom: 0.5rem; }
-.rs__series-canvas { height: 120px; }
+/* Positioned: an empty chart's .rm-nodata--fill lies over this box. */
+.rs__series-canvas { height: 120px; position: relative; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* allocation (/allocation) residue — the page is built almost entirely from the

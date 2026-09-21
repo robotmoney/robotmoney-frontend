@@ -512,7 +512,7 @@
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head"><p class="rr-k" x-text="isVaultStack() ? 'Share of the book by vault' : 'Share of the book by position'">Share of the book by position</p></figcaption>
-                <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
+                <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
               </figure>
             </template>
             <template x-if="chartModel()">

@@ -74,12 +74,13 @@ export function registerRegimeView(Alpine) {
     },
 
     // ── freshness ─────────────────────────────────────────────────────────────
-    isStale() { return !!(this.staleness && this.staleness.stale); },
+    // Stale data is flagged over the charts it froze. No snapshot at all is
+    // not stale data: the empty chart in the dashboard's place says it.
+    isStale() { return !!(this.staleness && this.staleness.stale && this.staleness.asof != null); },
     staleMessage() {
       const s = this.staleness;
-      if (!s) return "";
-      if (s.ageDays == null || s.asof == null) return "No regime data is available — the analytics pipeline has not produced any snapshots in this deployment.";
-      return `Regime data is ${s.ageDays} day${s.ageDays === 1 ? "" : "s"} stale (latest ${s.asof}). The analytics pipeline is not refreshing in this deployment — the charts below are frozen and may not reflect current market data.`;
+      if (!s || s.ageDays == null || s.asof == null) return "";
+      return `Latest reading ${s.asof}, ${s.ageDays} day${s.ageDays === 1 ? "" : "s"} old.`;
     },
 
     // ── formatting ──────────────────────────────────────────────────────────
@@ -218,6 +219,24 @@ export function registerRegimeView(Alpine) {
       const data = this.latest?.backtest?.[bt.key] || {};
       return bt.strategies.filter(([k]) => data[k]).map(([k, label, desc]) => ({ key: k, label, desc, s: data[k], baseline: BASELINE_KEYS.has(k) }));
     },
+    // The strategies whose equity curve the chart can draw, in table order.
+    // drawBacktests() and the card's empty state both read this, so the chart
+    // and the line saying it has nothing to draw cannot disagree.
+    _curveKeys(key) {
+      const strategies = this.latest?.backtest?.[key];
+      if (!strategies) return [];
+      const bt = BACKTESTS.find((b) => b.key === key);
+      const order = bt ? bt.strategies.map(([k]) => k) : Object.keys(strategies);
+      return order.filter((sk) => STRATEGY_STYLE[sk] && Array.isArray(strategies[sk]?.equity_curve) && strategies[sk].equity_curve.length);
+    },
+    // An equity chart plots its curves against the history's dates, so it is
+    // empty when the history chart is, and when no strategy carries a curve.
+    // Null when there is something to draw.
+    btEmptyTitle(key) {
+      if (!this._curveKeys(key).length) return "No data yet";
+      return this.historyEmpty() ? this.historyEmptyTitle() : null;
+    },
+    btEmptyDetail(key) { return this._curveKeys(key).length ? this.historyEmptyDetail() : ""; },
     fmtNum2(v) { return v == null ? "—" : (+v).toFixed(2); },
     fmtPctSigned(v) { return v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%"; },
     fmtPctUnsigned(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; },
@@ -247,6 +266,11 @@ export function registerRegimeView(Alpine) {
     hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
     toggle(key) { this.visible[key] = !this.visible[key]; this.drawHistory(); },
+    // The history chart's empty state (.rm-nodata): a line needs two readings,
+    // and with one Chart.js draws its axes around nothing.
+    historyEmpty() { return this.history.length < 2; },
+    historyEmptyTitle() { return this.history.length === 1 ? "Not enough data yet" : "No data yet"; },
+    historyEmptyDetail() { return this.history.length === 1 ? "One reading so far" : ""; },
     _setChart(key, chart) { this._charts[key]?.destroy(); this._charts[key] = chart; },
     // Panel index on a history row: prefer the DTO camelCase, fall back to the
     // raw snapshot key so the chart works against either shape.
@@ -275,7 +299,9 @@ export function registerRegimeView(Alpine) {
 
     drawHistory() {
       const canvas = this.$refs.chart;
-      if (!canvas || !window.Chart || !this.history.length) return;
+      // Not drawn at all when empty: an empty Chart.js still paints its axes
+      // and gridlines under the empty state laid over the canvas.
+      if (!canvas || !window.Chart || this.historyEmpty()) return;
       const labels = this._denseCalendarDays(this.history);
       const byDate = new Map(this.history.map((h) => [h.date, h]));
       const val = (fn) => labels.map((d) => { const h = byDate.get(d); return h ? fn(h) : null; });
@@ -324,18 +350,13 @@ export function registerRegimeView(Alpine) {
       const regimes = labels.map((d) => byDate.get(d)?.regime ?? null);
       for (const canvas of this.$root.querySelectorAll("canvas[data-bt]")) {
         const key = canvas.getAttribute("data-bt");
+        if (this.btEmptyTitle(key)) continue;
         const strategies = this.latest.backtest[key];
-        if (!strategies) continue;
-        const bt = BACKTESTS.find((b) => b.key === key);
-        const order = bt ? bt.strategies.map(([k]) => k) : Object.keys(strategies);
-        const ds = [];
-        for (const sk of order) {
+        const ds = this._curveKeys(key).map((sk) => {
           const s = strategies[sk];
           const style = STRATEGY_STYLE[sk];
-          if (!s || !style || !Array.isArray(s.equity_curve) || !s.equity_curve.length) continue;
-          ds.push({ label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true });
-        }
-        if (!ds.length) continue;
+          return { label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true };
+        });
         const chart = new window.Chart(canvas, {
           type: "line",
           data: { labels, datasets: ds },

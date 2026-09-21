@@ -1963,7 +1963,10 @@ export function registerStaticViews(Alpine) {
     // every label (the axes, the ticks, the tooltip) is HTML over it, so text
     // stays at its real size at any width instead of scaling with the SVG.
     // The chart's empty frame: a line needs two readings.
-    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions to draw" : "One reading so far"; },
+    // The chart's empty state (.rm-nodata): the state, then the fact. Readings
+    // that hold nothing are no data; one reading is not enough for a line.
+    chartEmptyTitle() { return this.windowed().length > 1 ? "No data yet" : "Not enough data yet"; },
+    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions held" : "One reading so far"; },
     chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();

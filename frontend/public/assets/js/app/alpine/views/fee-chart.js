@@ -12,17 +12,24 @@ export function registerFeeChart(Alpine) {
   // cards) and the home page fee-routing card (Creator share vs Interface &
   // Protocol). Colours are presentation-only, keyed by the split label; the
   // percentages themselves are never fabricated — a failed fetch degrades to
-  // "—" and an undrawn pie rather than a baked default.
+  // "—" and an undrawn pie under the empty state, never a baked default.
   const FEE_COLOR = { Protocol: SERIES.emerald, Bankr: SERIES.amber, Clanker: SERIES.slate };
   Alpine.data("feeChart", () => ({
     _chart: null,
     metrics: null,
+    failed: false,
     async init() {
       try { this.metrics = await api.get(ROUTES.dashboards.tokenMetrics); }
-      catch (e) { this.metrics = null; }
+      catch (e) { this.metrics = null; this.failed = true; }
       this.$nextTick(() => this.draw());
     },
     feeSplit() { return this.metrics?.feeSplit || []; },
+    // The pie's empty state (.rm-nodata), once the read has settled: null
+    // while it is in flight and whenever there is a split to draw.
+    feeEmptyTitle() {
+      if (this.failed) return "No data available";
+      return this.metrics && !this.feeSplit().length ? "No data yet" : null;
+    },
     // Legend/card cell text: "Protocol (57%)" and the bare "57%".
     feeLegend(i) { const f = this.feeSplit()[i]; return f ? `${f.label} (${f.pct}%)` : "—"; },
     feePctLabel(i) { const f = this.feeSplit()[i]; return f ? `${f.pct}%` : "—"; },
@@ -38,7 +45,8 @@ export function registerFeeChart(Alpine) {
       if (!canvas || !window.Chart) return;
       const fs = this.feeSplit();
       this._chart?.destroy();
-      // Honest degrade: no live split → leave the canvas empty, never a baked pie.
+      // Honest degrade: no live split → leave the canvas undrawn under its empty
+      // state (feeEmptyTitle), never a baked pie.
       if (!fs.length) { this._chart = null; return; }
       this._chart = new window.Chart(canvas, {
         type: "pie",
