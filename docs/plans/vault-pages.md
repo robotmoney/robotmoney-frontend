@@ -29,7 +29,7 @@ The switch is a query parameter kept per tab in sessionStorage (`rm.vaults`), so
 - `/allocation?vaults=devnet-unreadable`, and likewise `devnet-no-recommendation`, `devnet-stale`, `devnet-paused`
 - `?vaults=base` switches back (the default).
 
-Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`; if that route is absent (404, or the SPA shell answering), `GET /api/dashboards/vault-economics` with the latest published robotmoney-allocation recommendation laid over it; if a read fails otherwise, the saved Base snapshot on a local host ("Saved Base snapshot"), "Vault data unavailable" elsewhere. On the static preview every `/api` call fails, so base mode shows the saved snapshot and the archive's 2026-06-24 recommendation (95/3/0/2).
+Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`, once contract ROUTES declares it; if it is undeclared or absent (404, or the SPA shell answering), `GET /api/dashboards/vault-economics` with the latest published robotmoney-allocation recommendation laid over it; if a read fails otherwise, the saved Base snapshot on a local host ("Saved Base snapshot"), "Vault data unavailable" elsewhere. On the static preview every `/api` call fails, so base mode shows the saved snapshot and the archive's 2026-06-24 recommendation (95/3/0/2).
 
 ## Fixtures
 
@@ -56,7 +56,7 @@ On Base today, Applied is null (no router on Base), so /allocation and each vaul
 
 ## Data contract (for Lucas)
 
-`GET /api/dashboards/robotmoney-vaults` and `/api/dashboards/robotmoney-vaults/:slug`, same origin. The path is `VAULTS_ENDPOINT` in `vault-data.js`, deliberately not in contract ROUTES until the route exists.
+`GET /api/dashboards/robotmoney-vaults` and `/api/dashboards/robotmoney-vaults/:slug`, same origin. The path is `VAULTS_ENDPOINT` in `vault-data.js`, deliberately not in contract ROUTES until the route exists. The frontend requests it only once `ROUTES.dashboards.robotmoneyVaults` is declared: add it there with the route, and the allocation page switches to it. Probing an undeclared route logged a 404 on every visit.
 
 ```
 overview: { asOf, network:{chainId, label, testData}, freshness:{blockNumber, indexedAt, stale},

@@ -713,7 +713,7 @@ describe("loadVaultOverview", () => {
 
   test("the four-vault route answering is authoritative, and labelled when it serves test data", async () => {
     serve({ [VAULTS_ENDPOINT]: json(DEVNET) });
-    const load = await loadVaultOverview(baseAt("robotmoney.network"));
+    const load = await loadVaultOverview({ ...baseAt("robotmoney.network"), endpoint: VAULTS_ENDPOINT });
     expect(load.source).toBe("api");
     expect(load.label).toBe("Devnet test data");
     expect(load.overview?.trackingErrorBps).toBe(200);
@@ -733,8 +733,15 @@ describe("loadVaultOverview", () => {
 
   test("the SPA shell answering the route counts as absent", async () => {
     serve({ [VAULTS_ENDPOINT]: spaShell, "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
-    const load = await loadVaultOverview(baseAt("127.0.0.1"));
+    const load = await loadVaultOverview({ ...baseAt("127.0.0.1"), endpoint: VAULTS_ENDPOINT });
     expect(load.source).toBe("legacy");
+  });
+
+  test("the route is not requested until the contract declares it", async () => {
+    serve({ [VAULTS_ENDPOINT]: json(DEVNET), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
+    const load = await loadVaultOverview(baseAt("robotmoney.network"));
+    expect(load.source).toBe("legacy");
+    expect(requests.some((u) => u.split("?")[0] === VAULTS_ENDPOINT)).toBe(false);
   });
 
   test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {
@@ -774,8 +781,8 @@ describe("loadVaultOverview", () => {
 
   test("the absence is probed once per visit", async () => {
     serve({ [VAULTS_ENDPOINT]: statusOnly(404), "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS) });
-    await loadVaultOverview(baseAt("127.0.0.1"));
-    await loadVaultOverview(baseAt("127.0.0.1"));
+    await loadVaultOverview({ ...baseAt("127.0.0.1"), endpoint: VAULTS_ENDPOINT });
+    await loadVaultOverview({ ...baseAt("127.0.0.1"), endpoint: VAULTS_ENDPOINT });
     expect(requests.filter((u) => u.split("?")[0] === VAULTS_ENDPOINT)).toHaveLength(1);
     expect(requests.filter((u) => u.startsWith("/api/dashboards/vault-economics"))).toHaveLength(2);
   });
@@ -867,7 +874,7 @@ describe("loadVaultDetail", () => {
       [`${VAULTS_ENDPOINT}/rmagent`]: json(rmusdc),
       [`${VAULTS_ENDPOINT}/rmproto`]: json({ ...readJson("data/vaults/devnet/rmproto.json"), network: { chainId: 8453, label: "Base", testData: false } }),
     });
-    const load = await loadVaultOverview({ hostname: "robotmoney.network", search: "", storage: null });
+    const load = await loadVaultOverview({ hostname: "robotmoney.network", search: "", storage: null, endpoint: VAULTS_ENDPOINT });
     expect((await loadVaultDetail("rmusdc", load)).detail.slug).toBe("rmusdc");
     expect(await loadVaultDetail("rmagent", load)).toEqual({ detail: null, error: "Vault detail unavailable" });
     expect(await loadVaultDetail("rmproto", load)).toEqual({ detail: null, error: "Vault detail unavailable" });
