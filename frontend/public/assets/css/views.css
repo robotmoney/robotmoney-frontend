@@ -1967,7 +1967,8 @@ a.sv__vfy { text-decoration: none; }
 .rr-area__x span { position: absolute; top: 0.5rem; transform: translateX(-50%); font-family: var(--font-mono); font-size: 0.625rem;
   color: var(--color-text-muted); white-space: nowrap; }
 .rr-area__x span::before { content: ""; position: absolute; left: 50%; top: -0.5rem; width: 1px; height: 0.3125rem; background: var(--color-border-light); }
-.rr-area__x .is-on { color: var(--color-text); }
+.rr-area__x .is-on { color: var(--color-text); z-index: 1; background: var(--color-void); }
+.rr-area__x .is-sparse:not(.is-on) { display: none; }
 .rr-area__x .is-first { transform: none; }
 .rr-area__x .is-first::before { left: 0; }
 .rr-area__x .is-last { transform: translateX(-100%); }

@@ -2030,10 +2030,15 @@ export function registerStaticViews(Alpine) {
     // out on a narrow screen. The last reading's year is the positions label's
     // above the chart, so the first tick carries its own year only when it
     // differs (windowed() can fall back to two readings a year or more apart).
+    // Past eight readings only every step-th is dated, or 69 dates print over
+    // one another (the vault subject on production); the rest show under the
+    // crosshair.
     chartXTicks() {
       const m = this.chartModel();
       if (!m) return [];
       const last = m.rows.length - 1;
+      const step = Math.max(1, Math.ceil(m.rows.length / 8));
+      const dated = (i) => i % step === 0 && last - i >= step / 2;
       const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
       const lastYear = String(m.rows[last]?.date || "").slice(0, 4);
       return m.rows.map((r, i) => ({
@@ -2041,7 +2046,7 @@ export function registerStaticViews(Alpine) {
         left: m.xs[i] / 10,
         label: i === 0 && String(r.date || "").slice(0, 4) !== lastYear ? this.formatDate(r.date, "short") : md(r.date),
         i,
-        cls: i === 0 ? "is-first" : i === last ? "is-last" : "is-mid",
+        cls: i === 0 ? "is-first" : i === last ? "is-last" : dated(i) ? "is-mid" : "is-mid is-sparse",
       }));
     },
     // One reading, for the crosshair and its tooltip: every band's share on
