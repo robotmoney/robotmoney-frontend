@@ -55,8 +55,11 @@ const fmtPctOrDash = (v) => (v == null ? "—" : weightChange.fmtPctTrim(v));
 const HOLDINGS_SHOWN = 8;
 const ACTIVITY_PAGE = 10;
 const KIND_LABEL = { adapter: "Lending venue", token: "Token", idle: "Idle" };
-// What a lending venue and idle cash are held in: every vault takes USDC.
+// What a lending venue and idle cash are held in: every vault takes USDC,
+// Circle's USDC on Base. The staging devnet is a fork of Base, so the token is
+// the same contract there.
 const DEPOSIT_ASSET = "USDC";
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 // An activity event as the feed names it, in the page's words. A kind this
 // map does not know is printed in sentence case rather than as a raw enum.
 const ACTIVITY_LABEL = {
@@ -217,6 +220,14 @@ export function registerVaultView(Alpine) {
     contractHref() {
       return explorerLink(this.network(), this.record()?.address);
     },
+    depositAssetHref() { return `https://basescan.org/token/${USDC_BASE}`; },
+    // The contract fact when there is no explorer to link: the address as
+    // read, or that the vault is not deployed on this network.
+    contractText() {
+      const r = this.record();
+      if (r?.availability === "not_on_network") return "Not deployed";
+      return r?.address ? shortAddress(r.address) : "—";
+    },
     contractLabel() {
       return shortAddress(this.record()?.address);
     },
@@ -245,6 +256,15 @@ export function registerVaultView(Alpine) {
     },
     holdingType(h) {
       return h?.venueType || KIND_LABEL[h?.kind] || "—";
+    },
+    // A position's price: its value over its amount, when the source reports
+    // both (a USDC venue is $1.00); "—" otherwise, never guessed.
+    holdingPrice(h) {
+      const v = numberOrNull(h?.valueUsd);
+      const n = numberOrNull(h?.balance);
+      if (v === null || n === null || n === 0) return "—";
+      const p = v / n;
+      return `$${p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: p < 1 ? 6 : 2 })}`;
     },
     // A position's size in its own unit: a lending venue and idle cash hold
     // the deposit asset, a token position its token. "—" when the source
@@ -290,7 +310,9 @@ export function registerVaultView(Alpine) {
         const r = o?.vaults?.find((x) => x.slug === v.slug) ?? null;
         const gap = numberOrNull(three ? r?.gaps?.flow : r?.gaps?.total);
         return {
-          key: v.slug, label: v.symbol, hue: v.color, meta: "", assets: [],
+          // By the sleeve it carries: this ring is the allocation across
+          // sleeves, as /allocation's, not what any one vault holds.
+          key: v.slug, label: v.name, hue: v.color, meta: "", assets: [],
           pct: pp(r?.actualBps),
           was: pp(three ? r?.targetBps : r?.recommendedBps),
           d: gap === null ? null : Math.round(gap) / 100,
@@ -474,10 +496,6 @@ export function registerVaultView(Alpine) {
     posSvg() {
       const m = this.posModel();
       return m ? shareChartSvg({ xs: m.xs, series: m.series }) : "";
-    },
-    posSpan() {
-      const n = this.posRows().length;
-      return n > 1 ? `${n} readings` : "";
     },
     posEmptyLabel() { return this.posRows().length === 1 ? "One reading so far" : "No position history yet"; },
     posTicks() {
