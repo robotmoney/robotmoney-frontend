@@ -145,10 +145,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // port. Still accepted, with a warning, so a committed cloudflared runbook or an
 // operator's muscle memory keeps working.
 const STATIC_PORT_FLAG = "--static-port";
-// `bun smoke` → `bun scripts/smoke.ts --smoke`. Every decision the flag implies
-// lives in scripts/lib/smoke-mode.ts (executed by
-// ); this file holds only the wiring. The scenario is orthogonal to `--seed`/`--db`.
-const smokeMode = isSmokeMode(process.argv);
+// A twin implies the production-shaped scenario: it is restored, populated real
+// data, so the boot must never run the simulation seed against it. The
+// deprecated `--smoke` flag forces the same thing. (smoke-mode.ts holds the
+// scenario decisions; this file is only the wiring.)
+const smokeMode = isSmokeMode(process.argv) || requestsTwin(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 

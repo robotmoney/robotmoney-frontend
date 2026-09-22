@@ -54,10 +54,33 @@ const NO_ENV = join(tmpdir(), "rm-db-mode-absent", ".env");
 const parse = (a: string[], envFilePath = REAL_ENV) => parseDataPath(a, { envFilePath });
 
 describe("default and the three modes", () => {
-  test("no flag → ephemeral, and no warning", () => {
+  test("no flag → the remote database (the default), and no warning", () => {
     const { dataPath, warnings } = parse(argv());
-    expect(dataPath).toEqual({ kind: "ephemeral" });
+    expect(dataPath.kind).toBe("external");
     expect(warnings).toEqual([]);
+  });
+
+  test("--local → a fresh local database", () => {
+    expect(parse(argv("--local")).dataPath).toEqual({ kind: "ephemeral" });
+  });
+
+  test("--local <path> → a local database on a saved volume", () => {
+    expect(parse(argv("--local", "/srv/pg")).dataPath).toEqual({ kind: "ephemeral", pgDataDir: "/srv/pg" });
+    expect(parse(argv("--local=/srv/pg")).dataPath).toEqual({ kind: "ephemeral", pgDataDir: "/srv/pg" });
+  });
+
+  test("--twin → a smoke-twin, no scenario flag needed", () => {
+    expect(parse(argv("--twin")).dataPath.kind).toBe("smoke-twin");
+  });
+
+  test("--twin and --local are mutually exclusive", () => {
+    expect(() => parse(argv("--twin", "--local"))).toThrow(/mutually exclusive/);
+  });
+
+  test("the deprecated --db / --pg-data / --smoke spellings still work, with a warning", () => {
+    expect(parse(argv(DB_FLAG, "ephemeral")).warnings.join(" ")).toMatch(/--db is deprecated/);
+    expect(parse(argv("--pg-data", "/srv/pg")).warnings.join(" ")).toMatch(/--pg-data is deprecated/);
+    expect(parse(argv("--twin", "--smoke")).warnings.join(" ")).toMatch(/--smoke is deprecated/);
   });
 
   for (const mode of DB_MODES) {
@@ -98,21 +121,23 @@ describe("loud refusals — every one before any restore work", () => {
     expect(() => parse(argv(DB_FLAG, "twni", "--smoke"))).toThrow(/smoke-twin/);
   });
 
-  test("--db smoke-twin without --smoke is refused, with the reason", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin"))).toThrow(/requires --smoke/);
-    expect(() => parse(argv(DB_FLAG, "smoke-twin"))).toThrow(/POPULATED/);
+  test("a twin no longer needs a scenario flag — it implies its own", () => {
+    expect(parse(argv("--twin")).dataPath.kind).toBe("smoke-twin");
+    expect(parse(argv(DB_FLAG, "smoke-twin")).dataPath.kind).toBe("smoke-twin");
   });
 
-  test("--db smoke-twin + --pg-data is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", "--pg-data", "/srv/pg"))).toThrow(
-      /mutually exclusive/,
+  test("a database path with a twin is refused", () => {
+    expect(() => parse(argv("--twin", "--pg-data", "/srv/pg"))).toThrow(/only applies to a local database/);
+  });
+
+  test("a database path with the remote database is refused", () => {
+    expect(() => parse(argv("--pg-data", "/srv/pg", DB_FLAG, "external"))).toThrow(
+      /only applies to a local database/,
     );
   });
 
-  test("--db external + --pg-data is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "external", "--pg-data", "/srv/pg"))).toThrow(
-      /mutually exclusive/,
-    );
+  test("--seed with a twin is refused — a twin is already full", () => {
+    expect(() => parse(argv("--twin", SEED_FLAG))).toThrow(/nothing to seed/);
   });
 
   test("--backup-dir without a smoke-twin is refused", () => {
@@ -123,47 +148,37 @@ describe("loud refusals — every one before any restore work", () => {
     expect(() => parse(argv(DB_FLAG, "external"), NO_ENV)).toThrow(/no readable \$HOME\/\.env/);
   });
 
-  test("--migrate with the default (ephemeral) mode is refused", () => {
-    expect(() => parse(argv(MIGRATE_FLAG))).toThrow(/only applies to/);
+  test("--migrate on the default (remote) database parses cleanly", () => {
+    expect(parse(argv(MIGRATE_FLAG)).dataPath.kind).toBe("external");
   });
 
-  test("--migrate with --db smoke-twin is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", MIGRATE_FLAG))).toThrow(
-      /only applies to/,
-    );
+  test("--migrate on a twin parses cleanly — a twin may be migrated", () => {
+    expect(parse(argv("--twin", MIGRATE_FLAG)).dataPath.kind).toBe("smoke-twin");
   });
 
-  test("--migrate with --db external parses cleanly", () => {
-    expect(parse(argv(DB_FLAG, "external", MIGRATE_FLAG)).dataPath.kind).toBe("external");
+  test("--seed on the default (remote) database parses cleanly", () => {
+    expect(parse(argv(SEED_FLAG)).dataPath.kind).toBe("external");
   });
 
-  test("--seed with the default (ephemeral) mode is refused", () => {
-    expect(() => parse(argv(SEED_FLAG))).toThrow(/only applies to/);
+  test("--seed on a local database parses cleanly", () => {
+    expect(parse(argv("--local", SEED_FLAG)).dataPath).toEqual({ kind: "ephemeral" });
   });
 
-  test("--seed with --db smoke-twin is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", SEED_FLAG))).toThrow(
-      /only applies to/,
-    );
-  });
-
-  test("--seed with --db external parses cleanly", () => {
-    expect(parse(argv(DB_FLAG, "external", SEED_FLAG)).dataPath.kind).toBe("external");
-  });
-
-  test("--migrate and --seed are independent, and combine on --db external", () => {
-    // A fresh external database needs both; a restart of a populated one needs
+  test("--migrate and --seed are independent, and combine", () => {
+    // A fresh remote database needs both; a restart of a populated one needs
     // neither. The flags do not imply each other.
-    expect(parse(argv(DB_FLAG, "external", MIGRATE_FLAG, SEED_FLAG)).dataPath.kind).toBe("external");
-    expect(requestsMigrate(argv(DB_FLAG, "external", SEED_FLAG))).toBe(false);
-    expect(requestsSeed(argv(DB_FLAG, "external", MIGRATE_FLAG))).toBe(false);
+    expect(parse(argv(MIGRATE_FLAG, SEED_FLAG)).dataPath.kind).toBe("external");
+    expect(requestsMigrate(argv(SEED_FLAG))).toBe(false);
+    expect(requestsSeed(argv(MIGRATE_FLAG))).toBe(false);
   });
 
-  test("no env var can select a data path", () => {
+  test("no env var can select a data path — only the flags do", () => {
     const before = process.env.DB;
     process.env.DB = "smoke-twin";
     try {
-      expect(parse(argv()).dataPath.kind).toBe("ephemeral");
+      // No flag → the remote default, never a mode smuggled in through the env.
+      expect(parse(argv()).dataPath.kind).toBe("external");
+      expect(parse(argv("--local")).dataPath.kind).toBe("ephemeral");
     } finally {
       if (before === undefined) delete process.env.DB;
       else process.env.DB = before;

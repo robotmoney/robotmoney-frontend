@@ -98,6 +98,28 @@ export const MIGRATE_FLAG = "--migrate";
  */
 export const SEED_FLAG = "--seed";
 
+/**
+ * Use a LOCAL database container instead of the remote database in `$HOME/.env`.
+ *
+ * Bare (`--local`) starts a fresh container. With a value (`--local <path>` or
+ * `--local=<path>`) it reuses a saved docker volume at that path, so a database
+ * an earlier local run left behind can be restarted. The value is optional —
+ * this is the one flag whose following token may or may not be present.
+ *
+ * Absent `--local` and `--twin`, a boot connects to the REMOTE database. That is
+ * the default: `.env` supplies an address, and smoke assumes it unless told to
+ * go local.
+ */
+export const LOCAL_FLAG = "--local";
+
+/**
+ * Prepare a local database from a dump of the LATEST remote database, with every
+ * key rotated so the copy is safe to work with, and boot against it. A twin is a
+ * local database by construction, so `--twin` is used on its own, never with
+ * `--local`. It may be migrated; it cannot be seeded (it is already full).
+ */
+export const TWIN_FLAG = "--twin";
+
 // WHAT `--pg-data <host-dir>` MEANS, and why it rides on the ephemeral variant.
 //
 // It bind-mounts the postgres data directory to <host-dir> so a rebooted smoke
@@ -196,8 +218,9 @@ export function isPrePopulated(dp: { kind: DbMode }): boolean {
 
 export interface FlagSpec {
   flag: string;
-  /** 0 = bare switch, 1 = takes the following token (or `--flag=value`). */
-  arity: 0 | 1;
+  /** 0 = bare switch, 1 = takes the following token (or `--flag=value`),
+   *  "?" = OPTIONAL following token (bare, `--flag=value`, or `--flag value`). */
+  arity: 0 | 1 | "?";
 }
 
 /**
@@ -211,15 +234,18 @@ export interface FlagSpec {
  * would let a real typo through.
  */
 export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
-  Object.freeze({ flag: DB_FLAG, arity: 1 as const }),
-  Object.freeze({ flag: BACKUP_DIR_FLAG, arity: 1 as const }),
-  Object.freeze({ flag: PG_DATA_FLAG, arity: 1 as const }),
-  Object.freeze({ flag: SMOKE_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: LOCAL_FLAG, arity: "?" as const }),
+  Object.freeze({ flag: TWIN_FLAG, arity: 0 as const }),
   Object.freeze({ flag: MIGRATE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: SEED_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: BACKUP_DIR_FLAG, arity: 1 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
   Object.freeze({ flag: "--no-tui", arity: 0 as const }),
+  // Deprecated spellings, still accepted (with a warning) — see parseDataPath.
+  Object.freeze({ flag: DB_FLAG, arity: 1 as const }),
+  Object.freeze({ flag: PG_DATA_FLAG, arity: 1 as const }),
+  Object.freeze({ flag: SMOKE_FLAG, arity: 0 as const }),
 ]);
 
 /** Levenshtein, bounded — only ever asked about short flag values. */
@@ -298,6 +324,14 @@ export function validateArgv(argv: readonly string[]): string[] {
       }
       i++; // consume the value so it is not read as a stray positional
     }
+    if (spec.arity === "?") {
+      // Optional value: bare is fine, `--flag=value` is fine, and a following
+      // non-flag token is consumed as the value so it is not flagged as a stray
+      // positional. Nothing is ever an error here.
+      if (inline) continue;
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) i++;
+    }
   }
   return errors;
 }
@@ -342,7 +376,8 @@ function has(argv: readonly string[], flag: string): boolean {
  * boolean and leaves every other question to parseDataPath().
  */
 export function requestsTwin(argv: readonly string[]): boolean {
-  const i = argv.indexOf(DB_FLAG);
+  if (has(argv, TWIN_FLAG)) return true;
+  const i = argv.indexOf(DB_FLAG); // deprecated spelling
   return i >= 0 && argv[i + 1] === "smoke-twin";
 }
 
@@ -374,66 +409,65 @@ export function parseDataPath(
     );
   }
 
-  const raw = valueOf(argv, DB_FLAG);
-  const dbFlagPresent = has(argv, DB_FLAG);
+  // ── Resolve the database from the flags ───────────────────────────────────
+  // Default is REMOTE (the server in $HOME/.env). `--local [path]` picks a local
+  // container; `--twin` a dump-derived local database. The old spelling — `--db
+  // <mode>`, `--pg-data`, `--smoke` — is still accepted, with a deprecation
+  // warning, and maps onto the same internal DbMode.
+  const wantsTwin = has(argv, TWIN_FLAG);
+  const wantsLocal = has(argv, LOCAL_FLAG);
+  const localPath = valueOf(argv, LOCAL_FLAG) ?? valueOf(argv, PG_DATA_FLAG);
 
-  if (dbFlagPresent && raw === undefined) {
+  const rawDb = valueOf(argv, DB_FLAG);
+  const dbFlagPresent = has(argv, DB_FLAG);
+  if (dbFlagPresent && rawDb === undefined) {
     throw new Error(`${DB_FLAG} requires a value — one of: ${DB_MODES.join(" | ")}.`);
   }
-  if (raw !== undefined && !DB_MODES.includes(raw as DbMode)) {
+  if (rawDb !== undefined && !DB_MODES.includes(rawDb as DbMode)) {
     throw new Error(
-      `${DB_FLAG} ${raw}: unknown data path.${didYouMean(raw, DB_MODES)} ` +
-        `Valid modes: ${DB_MODES.join(" | ")}.`,
+      `${DB_FLAG} ${rawDb}: unknown data path.${didYouMean(rawDb, DB_MODES)} Valid modes: ${DB_MODES.join(" | ")}.`,
     );
   }
 
-  if (false) {
-    if (raw !== undefined && raw !== "external") {
-      throw new Error(
-      );
-    }
-    warnings.push(
-        `one flag for all three data paths (${DB_MODES.join(" | ")}). Update your invocation.`,
+  if (dbFlagPresent)
+    warnings.push(`${DB_FLAG} is deprecated — use ${LOCAL_FLAG} (local), ${TWIN_FLAG} (twin), or omit it for the remote database.`);
+  if (has(argv, PG_DATA_FLAG)) warnings.push(`${PG_DATA_FLAG} is deprecated — use \`${LOCAL_FLAG} <path>\`.`);
+  if (has(argv, SMOKE_FLAG)) warnings.push(`${SMOKE_FLAG} is deprecated and no longer needed — ${TWIN_FLAG} and ${SEED_FLAG} say what to do.`);
+
+  const explicitTwin = wantsTwin || rawDb === "smoke-twin";
+  const explicitExternal = rawDb === "external";
+
+  if (wantsTwin && wantsLocal) {
+    throw new Error(`${TWIN_FLAG} and ${LOCAL_FLAG} are mutually exclusive — a twin IS a local database.`);
+  }
+  if (localPath !== undefined && (explicitTwin || explicitExternal)) {
+    throw new Error(
+      `a database path (\`${LOCAL_FLAG} <path>\`) only applies to a local database; ` +
+        `${explicitExternal ? "the remote server owns its own storage" : "a twin owns its own volume"}.`,
     );
   }
 
-  const mode: DbMode = (raw as DbMode | undefined) ?? (false ? "external" : "ephemeral");
-  const pgDataDir = valueOf(argv, PG_DATA_FLAG);
+  let mode: DbMode;
+  if (explicitTwin) mode = "smoke-twin";
+  else if (wantsLocal || localPath !== undefined || rawDb === "ephemeral") mode = "ephemeral";
+  else mode = "external"; // the default: the remote database in $HOME/.env
 
-  if (mode !== "ephemeral" && pgDataDir !== undefined) {
-    throw new Error(
-      `${PG_DATA_FLAG} and ${DB_FLAG} ${mode} are mutually exclusive. ${PG_DATA_FLAG} binds the ` +
-        `data directory of the ephemeral postgres container; ${DB_FLAG} ${mode} starts no such ` +
-        `container (${mode === "external" ? "the managed server owns its own storage" : "the smoke-twin owns its own volume"}).`,
-    );
+  const pgDataDir = mode === "ephemeral" ? localPath : undefined;
+
+  if (mode === "smoke-twin" && has(argv, SEED_FLAG)) {
+    throw new Error(`${SEED_FLAG} cannot be used with ${TWIN_FLAG} — a twin is restored full, so there is nothing to seed.`);
   }
 
-  if (mode !== "external" && has(argv, MIGRATE_FLAG)) {
-    throw new Error(
-      `${MIGRATE_FLAG} only applies to ${DB_FLAG} external — ephemeral and smoke-twin already migrate every boot.`,
-    );
-  }
-
-  if (mode !== "external" && has(argv, SEED_FLAG)) {
-    throw new Error(
-      `${SEED_FLAG} only applies to ${DB_FLAG} external — ephemeral and smoke-twin already seed every boot.`,
-    );
+  if (mode !== "smoke-twin" && valueOf(argv, BACKUP_DIR_FLAG) !== undefined) {
+    throw new Error(`${BACKUP_DIR_FLAG} only applies to ${TWIN_FLAG} — it names the dump a twin restores from.`);
   }
 
   if (mode === "smoke-twin") {
     // A restored smoke-twin is POPULATED by definition, and db-preflight.ts refuses a
-    // populated database under the `simulation` initializer because the smoke's
-    // fixtures overwrite by design (ON CONFLICT DO UPDATE). Rather than let that
-    // surface minutes later as a preflight abort, refuse the combination here.
-    // Not INFERRED into a smoke boot: inference is exactly what this flag family
-    // forbids — the operator states the scenario.
-    if (!has(argv, SMOKE_FLAG)) {
-      throw new Error(
-        `${DB_FLAG} smoke-twin requires ${SMOKE_FLAG}. A smoke-twin is a restored, POPULATED database, and the ` +
-          `smoke scenario's fixtures overwrite rows by design — db-preflight.ts refuses that pairing ` +
-          `(see scripts/lib/smoke-external-pg.ts's dbPreflightArgv). Run: bun smoke -- ${DB_FLAG} smoke-twin`,
-      );
-    }
+    // A twin implies its own scenario — it is a restored, POPULATED database, so
+    // the boot never runs the simulation seed against it (that is what the
+    // `--seed`-with-`--twin` refusal above enforces). `--twin` no longer needs a
+    // separate scenario flag to say so.
     return { dataPath: { kind: "smoke-twin", backupDir: valueOf(argv, BACKUP_DIR_FLAG) }, warnings };
   }
 
