@@ -130,9 +130,9 @@ test("a session one judge worked on: its block, its advice, its questions, named
 
   const block = judgeBlock(page);
   await expect(block).toHaveCount(1);
-  await expect(block.locator(":scope > .rr-k")).toHaveText("Judge Themis");
-  await expect(block.locator(".rr-k .rm-role")).toHaveText("Judge");
-  await expect(block.locator(".rr-k a")).toHaveAttribute("href", "/swarm/members/themis");
+  await expect(block.locator(".rr-judge__h")).toHaveText("Judge Themis");
+  await expect(block.locator(".rr-judge__h .rm-role")).toHaveText("Judge");
+  await expect(block.locator(".rr-judge__h a")).toHaveAttribute("href", "/swarm/members/themis");
   // The call and its first reason; the backend's own sentence for the count
   // is not listed again, and the other concern is.
   await expect(block.locator(".rr-advice-badge--hold")).toHaveText("Hold");
@@ -181,7 +181,7 @@ test("several public judgements: the session shows the one its recommendation ca
   });
   await page.goto(`/swarm/sessions/${S1}`);
   await expect(judgeBlock(page)).toHaveCount(1);
-  await expect(judgeBlock(page).locator(":scope > .rr-k")).toHaveText("Judge Themis");
+  await expect(judgeBlock(page).locator(".rr-judge__h")).toHaveText("Judge Themis");
   await expect(page.locator("#reasoning")).not.toContainText(HOUSE_PROSE);
   await expect(page.locator(".rr-meta__i", { hasText: "Judged by" }).locator("a")).toHaveText(["Themis"]);
   await noSafe(page);
@@ -195,10 +195,10 @@ test("a recommendation that names no judge shows the newest judgement, and its c
   });
   await page.goto(`/swarm/sessions/${S1}`);
   const block = judgeBlock(page);
-  await expect(block.locator(":scope > .rr-k")).toHaveText("Judge RM Protocol Labs");
+  await expect(block.locator(".rr-judge__h")).toHaveText("Judge RM Protocol Labs");
   // The house judge has no member page; its call clears the recommendation,
   // with no reason, and the data's word is not printed.
-  await expect(block.locator(".rr-k a")).toHaveCount(0);
+  await expect(block.locator(".rr-judge__h a")).toHaveCount(0);
   await expect(block.locator(".rr-advice-badge--update")).toHaveText("Update");
   await expect(block.locator(".rr-advice__l")).toHaveText("AdviceUpdate");
   await expect(block.locator(".rr-prose")).toContainText(HOUSE_PROSE);
@@ -230,7 +230,7 @@ test("the judgement routes answering 404: the judge the recommendation names sta
 
   const block = judgeBlock(page);
   await expect(block).toHaveCount(1);
-  await expect(block.locator(":scope > .rr-k")).toHaveText("Judge Themis");
+  await expect(block.locator(".rr-judge__h")).toHaveText("Judge Themis");
   await expect(block.locator(".rr-advice__l")).toHaveText("AdviceHold3 takes, below the minimum of 4");
   await expect(block.getByRole("button", { name: "Where views differ" })).toBeVisible();
   await expect(block.locator("a.rr-cta")).toHaveCount(0);
@@ -433,8 +433,8 @@ test("a judged session not yet published reads as aggregation under way, not as 
     "/api/swarm/members": ROSTER,
   });
   await page.goto(`/swarm/sessions/${S2}`);
-  await expect(page.locator(".rr-when .rm-sphase")).toHaveText("aggregating");
-  await expect(page.locator(".rr-when .rm-sphase")).toHaveClass(/rm-sphase--aggregating/);
+  await expect(page.locator(".rr-meta > .rm-sphase")).toHaveText("aggregating");
+  await expect(page.locator(".rr-meta > .rm-sphase")).toHaveClass(/rm-sphase--aggregating/);
   // While the window is being worked on, the takes count against the members
   // who file them: five, not the six seats on the roster.
   await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Takes" }).locator("b")).toHaveText("3 of 5");
