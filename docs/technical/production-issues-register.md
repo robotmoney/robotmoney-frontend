@@ -21,8 +21,9 @@ S3 (availability blip) · S4 (hygiene / latent risk).
 | P-01 | Stray simulation takes/memos written to prod by wrong-scenario driver | S2 | 🔴 |
 | P-02 | Judge not producing judgements (config `off` / no model) | S3 | 🔴 |
 | P-03 | No confirmed operator path to change judge config | S4 | 🔴 |
-| P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (spec'd) |
+| P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (accepted) |
 | P-05 | Correct roster driver not yet running on prod | S3 | 🔴 |
+| P-15 | No admin UX to control judge parameters (API-only today) | S4 | 🔴 |
 | P-06 | Wrong-scenario cutover (`smoke:stage` vs `smoke:archive`) | S2 | 🟡 |
 | P-07 | Parallel stack (`rm_inspect`) exhausted DB connections | S2 | 🟡 |
 | P-08 | Brief downtime on in-place stack recreate (port 48787) | S3 | 🟡 |
@@ -64,19 +65,25 @@ nothing** — so every session publishes **unjudged** (honest, but no judge bloc
 Operator reports being unsure any admin change to the judge is possible via API
 or UI. The admin surface (`isPrivileged`/`hasAutomationRole`) needs an
 `X-Admin-Token` (session/credential) or `ADMIN_TOKEN`/`AUTOMATION_TOKEN` env.
-- **Evidence:** `swarm-admin.ts:67`, `auth.ts`, `config.ts:736-737`.
-- **Next:** confirm whether `ADMIN_TOKEN`/`AUTOMATION_TOKEN` is set in
-  `rm_prod-api-1`. If neither, and insecure mode is off, there is **no**
-  authorized runtime path to flip the judge — by design — and one must be
-  provisioned before P-02 is actionable.
+- **Evidence:** `swarm-admin.ts:67`, `auth.ts`, `config.ts:736-737`. Note the
+  frontend **does** have an admin login gate (`ADMIN_TOKEN` password or a
+  passkey → `X-Admin-Token`, `admin/shared.js`), so the auth *mechanism* exists;
+  the unknown is whether a valid credential is provisioned for `rm_prod`, not
+  whether a login path exists.
+- **Next:** confirm whether `ADMIN_TOKEN`/`AUTOMATION_TOKEN` (or an
+  `admin_credential` row / passkey) is set for `rm_prod-api-1`. If none, and
+  insecure mode is off, there is **no** authorized path to flip the judge — by
+  design — and one must be provisioned before P-02 and the P-15 UI are usable.
 
 ### P-04 — `shadow` still a selectable judge mode (S4)
 `shadow` computes a real model opinion and withholds it — the same
 compute-and-hide half-measure `a42d6c5a` removed on the fallback side. Design
 intent is a binary `off | enforce` judge.
-- **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`.
-- **Next:** sign-off on the spec's open questions (reverses a 2026-09-21
-  decision; branch target; driver rewrite), then implement.
+- **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`
+  (status: **accepted** 2026-09-22 — the judge is binary `off | enforce`).
+- **Next:** logistics only — verify replay covers the soak (hard prerequisite),
+  loop David on the reversal, pick branch target, rewrite the driver's
+  per-session flip, then implement.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst** — should run under the
@@ -86,6 +93,58 @@ session-lifecycle loop is driving them.
 - **Next:** cut over with `SMOKE_PROJECT=rm_prod bun run smoke:archive --
   --no-tui` (confirm before running; one wrong cutover already occurred). This
   is independent of P-02/P-04.
+
+### P-15 — No admin UX to control judge parameters (S4)
+The judge is configurable **only** through a raw authenticated call to
+`POST /api/swarm/admin/judge` (mode, minTakes, model, thirdPartyEnabled). There
+is no operator-facing UI, so enabling/tuning the judge means hand-crafting an
+HTTP request with an admin token — which is also why P-03 (can an operator even
+authenticate?) surfaced. An admin who should be able to turn the judge on and
+pick its model currently cannot do so through any screen.
+- **Requirement — the panel surfaces the four controls the API already exposes:**
+  - **Mode** — `off` / `enforce`, **two-way — decided 2026-09-22**. No `shadow`
+    selector (P-04); the UI ships binary from the start.
+  - **Model** — a model id the OpenCode key serves, or clear (`null`). Make
+    "no model ⇒ the judge produces nothing (`model_unconfigured`)" legible.
+  - **Min takes** — integer ≥ 1 (thinly-supported threshold).
+  - **Third-party judging** — on/off; ships **off**, should stay off (postflight
+    asserts it). Present as an advanced switch, not a casual toggle.
+- **Read-back / "will it actually run?"** — the panel must show current live
+  config AND whether the judge can actually reach a model (is `OPENCODE_API_KEY`
+  present in `worker-swarm`?). Otherwise an operator sets `enforce` + a model and
+  silently gets `model_unconfigured`. This likely needs a small backend
+  health/readiness field, since the key is container env, not a DB row.
+- **Depends on / relates to:** P-02 (what the control is *for*), P-03 (the auth
+  path the UI needs), P-04 (whether Mode is two- or three-way). Optionally also
+  *displays* judgements/receipts (#1017's public judgement routes) — scope TBD:
+  config-only vs. config + view.
+- **Current frontend surface (mapped):** a full admin SPA already exists —
+  buildless **Alpine.js 3** under `frontend/public/`, with admin routes at
+  `/admin/*`, including `/admin/swarm` (an overview with Topics/Members/Sessions
+  tabs, `swarm-overview.js` + `views/admin/swarm.html`) and
+  `/admin/swarm/sessions/:id` (`swarm-session.js`). **Auth is already solved:** a
+  login gate takes the `ADMIN_TOKEN` (or a passkey) → stores `rm_admin_token` in
+  sessionStorage → sends it as `X-Admin-Token`; shared `adminAuthState()`
+  (`admin/shared.js`) gives every factory `_token()` / login / fail-closed 403
+  handling. So this is a **slot-in, not a from-scratch build**.
+- **The route is already declared but unused.**
+  `ROUTES.swarm.admin.judgeConfig = "/api/swarm/admin/judge"`
+  (`contract/routes.js:226`) exists and is referenced **only** in the contract —
+  no view or factory consumes it. Its comment covers only `mode | minTakes` and
+  must be extended for `model` / `thirdPartyEnabled` (the newer backend body).
+- **Panel home:** a new **"Judge" tab in `/admin/swarm`** (page-level config,
+  not session-specific). The per-session admin page (`swarm-session.js`) already
+  renders a "Consensus judge" panel reading
+  `/api/swarm/admin/sessions/:id/judgements` — the #767 read path — a natural
+  secondary display. **Note (P-04 link):** that per-session panel is documented
+  as the *shadow-soak read path*, so removing `shadow` also revisits what it
+  shows.
+- **Well-templated:** `api.adminGet(ROUTES.swarm.admin.judgeConfig, token)` →
+  a `{mode, minTakes, model, thirdPartyEnabled}` form; save via `api.adminPost`;
+  reuse the `adm-*` classes and the existing `validateXxx` / `showForm` /
+  `submitting` form pattern.
+- **Next:** short UX spec (states, validation, the "will it run?" read-back),
+  then implement the tab — small and precedented.
 
 ---
 

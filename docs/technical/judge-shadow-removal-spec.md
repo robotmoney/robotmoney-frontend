@@ -1,6 +1,10 @@
 # Spec: remove `shadow` as a go-forward judge mode
 
-**Status:** proposed — not implemented. Awaiting sign-off (see *Open questions*).
+**Status:** **accepted** (product decision to remove `shadow` confirmed
+2026-09-22) — not yet implemented. The design is settled: the judge is binary
+`off | enforce`. Remaining items are logistics/prerequisites, not the decision
+itself (see *Open questions*): the one hard prerequisite is that replay (§5)
+must cover the soak before code drops shadow.
 **Author:** engineering
 **Related:** `a42d6c5a` (fallback removal), `#1017` (a judgement is a public record), `#752`/`#767`/`#797`/`#845` (the shadow soak), D22 (single model-selection signal).
 
@@ -166,9 +170,13 @@ not something the driver forces per session. This also removes the
 ## 7. Open questions (need sign-off before implementation)
 
 1. **This reverses a decision "agreed with David on 2026-09-21"** (`#1017`
-   body) that names `shadow` the documented rollout mode. This spec is the
-   argument for the reversal; it needs that agreement re-opened and
-   confirmed before code lands.
+   body) that names `shadow` the documented rollout mode. The product owner has
+   made the call to remove shadow (2026-09-22); this remains here as the
+   coordination fact — David should be looped on the reversal before/around the
+   code landing — not as an open design question.
+1a. **Prerequisite (hard):** verify `swarm-judge-replay.ts` covers the
+   observe-before-enforce soak on real recorded inputs BEFORE the code removes
+   shadow, or the capability is lost with no verified replacement (§5).
 2. **Branch target.** `main` is ~77 commits ahead of the deployed
    `releases-0.5.x` and still defines `shadow` identically. Landing on
    `main` first (then backporting) avoids a guaranteed future conflict;
