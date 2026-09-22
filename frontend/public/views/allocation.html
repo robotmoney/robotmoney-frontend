@@ -20,7 +20,7 @@
      Sections: Allocation (the weights in force as the ring, each sleeve's
      actual share and gap beside its target, its recipe on selection, the
      router) · Vaults (Recommended, Applied and Actual per vault, and the
-     gaps) · What changed · How the weights are set.
+     gaps) · How the weights are set.
 
      A vault's asset-level holdings are on its own page, /vault/:slug, which
      each Vaults row and each sleeve's recipe links to, and the four vaults'
@@ -84,7 +84,7 @@
         <span>Latest session <b><a class="rr-lnk" :href="recHref(recHeldBy())" x-text="recDate(recHeldBy())"></a></b></span>
       </template>
       <template x-if="recHeldBy()">
-        <span>Recommendation <b>Target held since <span class="alp__nowrap" x-text="recDate(recSession)"></span></b></span>
+        <span>Recommendation <b>Held since <span class="alp__nowrap" x-text="recDate(recSession)"></span></b></span>
       </template>
     </div>
 
@@ -123,7 +123,9 @@
            and the Vaults table below sets each one against the other. -->
       <div class="rr-split rr-split--rule">
         <div>
-        <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+        <!-- The largest sleeve rests open, so its recipe shows without a hover. -->
+        <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()"
+             x-effect="if (rest === null && explorerRows().length) rest = (explorerRows().find((r) => r.pct > 0) || explorerRows()[0]).key">
           <div class="rr-mix">
             <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
               <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
@@ -157,8 +159,10 @@
               <template x-if="panelRow()">
                 <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} recipe`">
                   <div class="rr-x__head">
-                    <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><template x-if="vaultHref(panelRow().key)"><span>Vault <a class="rr-lnk alp__vtok" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a></span></template></p>
-                    <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
+                    <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template></p>
+                    <!-- Its vault on the right. No Close: the breakdown rests on
+                         the largest sleeve, and Escape or the row lets go. -->
+                    <template x-if="vaultHref(panelRow().key)"><span class="alp__vault">Vault <a class="rr-lnk alp__vtok" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a></span></template>
                   </div>
                   <table class="rr-table rr-x__assets">
                     <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
@@ -284,17 +288,19 @@
         <a class="rr-meta__lnk" :href="`${vaultSubjectHref}#holdings`">Combined holdings</a>
       </div>
 
-      <div class="rr-tablewrap" x-show="!vaultError()">
+      <div class="rr-tablewrap rr-tablewrap--tips" x-show="!vaultError()">
         <table class="rr-table rr-table--compact rr-vaults">
           <thead>
             <tr>
               <th scope="col">Vault</th>
-              <th scope="col" class="q">Recommended</th>
-              <template x-if="threeLayers()"><th scope="col" class="q">Target</th></template>
-              <th scope="col" class="q">Actual</th>
-              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Governance gap</th></template>
-              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Drift</th></template>
-              <template x-if="!threeLayers()"><th scope="col" class="q">Gap</th></template>
+              <!-- Each column says what it measures, and each gap how it is
+                   taken: the difference of the two columns it names. -->
+              <th scope="col" class="q">Recommended <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Recommended">i</button><span class="rm-tip__bub" role="tooltip">The weights the swarm's latest recommendation set.</span></span></th>
+              <template x-if="threeLayers()"><th scope="col" class="q">Target <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Target">i</button><span class="rm-tip__bub" role="tooltip">The weights in force: the published policy, until the vault router reports the weights it applied.</span></span></th></template>
+              <th scope="col" class="q">Actual <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Actual">i</button><span class="rm-tip__bub" role="tooltip">Each vault's share of the four vaults' combined value.</span></span></th>
+              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Governance gap <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Governance gap">i</button><span class="rm-tip__bub" role="tooltip">Target minus recommended: how far the weights in force are from the swarm's latest recommendation, the part of it not applied.</span></span></th></template>
+              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Drift <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Drift">i</button><span class="rm-tip__bub" role="tooltip">Actual minus target: how far what the vaults hold has moved from the weights in force.</span></span></th></template>
+              <template x-if="!threeLayers()"><th scope="col" class="q">Gap <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Gap">i</button><span class="rm-tip__bub" role="tooltip">Actual minus recommended: how far what the vaults hold is from the swarm's latest recommendation.</span></span></th></template>
             </tr>
           </thead>
           <tbody>
@@ -321,55 +327,6 @@
     </div>
   </section>
 
-  <!-- ── § WHAT CHANGED ───────────────────────────────────────────────────
-       Was, now, and the move between them. It absorbs the old "Latest
-       recommendation" section: the swarm's reading is the WHY of a change, and
-       reading it three sections away from the numbers it explains meant the
-       page stated the same "no session has moved these weights" fact twice
-       without ever putting it next to the weights. -->
-  <section class="alp__sec" id="what-changed">
-    <div class="alp__sec-head">
-      <h2 class="alp__h2">What changed</h2>
-      <a class="alp__nav" :href="historyHref">All sessions &rarr;</a>
-    </div>
-
-    <div class="rr-empty" x-show="!loading && !hasTargets()" x-cloak><p class="rr-empty__t">Target weights unavailable</p></div>
-
-    <div class="alp__sk alp__skled" x-show="loading" x-cloak aria-hidden="true">
-      <div class="alp__skline alp__skline--head"></div>
-      <div class="alp__skline"></div><div class="alp__skline"></div>
-      <div class="alp__skline"></div><div class="alp__skline"></div>
-    </div>
-    <div class="alp__tblwrap alp__fade" x-show="hasTargets()" x-cloak>
-      <table class="alp__tbl alp__tbl--led">
-        <thead>
-          <tr><th>Sleeve</th><th>Was</th><th>Now</th><th>Change</th></tr>
-        </thead>
-        <tbody>
-          <template x-for="r in changeRows()" :key="r.key">
-            <tr>
-              <td>
-                <i class="alp__dot" data-mark="series" :style="`background:${r.colour}`"></i><span x-text="r.name"></span>
-              </td>
-              <td class="q" x-text="fmtPctTrim(r.was)"></td>
-              <td x-text="fmtPctTrim(r.now)"></td>
-              <!-- Direction is the GLYPH first and the colour second, so the
-                   column still reads in greyscale, in forced-colors and to a
-                   colourblind reader. Beacon appears here as one arrow at type
-                   size, which is the point the covenant allows it. -->
-              <td>
-                <span class="alp__mv" :class="changeClass(r.delta)">
-                  <span x-text="changeLabel(r.delta)"></span>
-                </span>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-
-</section>
-
   <!-- ── § HOW THE WEIGHTS ARE SET ────────────────────────────────────────
        Closing context, and the page's only handoff. It opened the page for
        one commit, where it put a third page's subject between the headline
@@ -383,27 +340,26 @@
     <div class="alp__sec-head">
       <h2 class="alp__h2">How the weights are set</h2>
     </div>
-    <!-- An <ol> because it is a sequence and the order is the content. No
-         numerals: three steps reading across a row are already ordered, and a
-         counter would be decoration on a page that is carrying enough. -->
-    <ol class="alp__steps">
-      <li>
-        <b>Regime</b>
-        <span>A daily risk-on / risk-off composite over the macro and on-chain
-          panels. Every take starts from the same reading.</span>
-      </li>
-      <li>
-        <b>Takes</b>
-        <span>Analysts file a signed position with its reasoning, its sources
-          and a confidence.</span>
-      </li>
-      <li>
-        <b>Consensus</b>
-        <span>The window closes, the takes aggregate into one recommendation,
-          and it publishes with its quorum and mean confidence.</span>
-      </li>
-    </ol>
+    <!-- The swarm page's steps, in the same blocks: one mechanism, one look. -->
+    <div class="rr-steps">
+      <div>
+        <p class="rr-k">Step 1</p>
+        <p class="rr-steps__t">The regime is read</p>
+        <p class="rr-steps__d">A daily risk-on / risk-off composite over the macro and on-chain panels. Every take starts from the same reading.</p>
+      </div>
+      <div>
+        <p class="rr-k">Step 2</p>
+        <p class="rr-steps__t">Analysts file takes</p>
+        <p class="rr-steps__d">Each files a signed position with its reasoning, its sources and a confidence.</p>
+      </div>
+      <div>
+        <p class="rr-k">Step 3</p>
+        <p class="rr-steps__t">A recommendation is published</p>
+        <p class="rr-steps__d">The window closes, the takes aggregate into one recommendation, and it publishes with its quorum and mean confidence.</p>
+      </div>
+    </div>
     <p class="alp__how-links">
+      <a class="alp__nav" :href="historyHref">Recommendation history &rarr;</a>
       <a class="alp__nav" href="/regime">Regime &rarr;</a>
       <a class="alp__nav" href="/swarm">The swarm &rarr;</a>
     </p>
@@ -482,19 +438,6 @@
    the two rails, so the page has one grid and not three. */
 .alp__how { border-top: 1px solid var(--color-border); padding-top: 1.75rem; }
 /* Its own top margin: no section on this page carries a sub under its heading. */
-.alp__steps {
-  list-style: none; margin: 1.5rem 0 0; padding: 0;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  gap: 1.5rem 2rem;
-}
-.alp__steps b {
-  display: block; margin-bottom: 0.4rem; font-size: 0.875rem; font-weight: 700;
-  color: var(--color-text);
-}
-.alp__steps span {
-  display: block; max-width: 30rem;
-  color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.6;
-}
 .alp__how-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.75rem 0 0; }
 
 /* ── weights in force ──────────────────────────────────────────────────── */
@@ -631,10 +574,6 @@
 .alp__skrow i { width: 0.7rem; height: 0.7rem; margin-top: 0.36rem; }
 .alp__skrow b { width: 11rem; height: 0.95rem; margin: 0.1rem 0 0.5rem; }
 .alp__skrow span { width: 16rem; height: 0.72rem; margin-bottom: 0.35rem; }
-.alp__skled { border: 1px solid var(--color-border); }
-.alp__skline { height: 2.6rem; border-bottom: 1px solid var(--color-border); }
-.alp__skline:last-child { border-bottom: 0; }
-.alp__skline--head { height: 2.15rem; background: var(--color-surface); border-bottom-color: var(--color-border-light); }
 
 @media (prefers-reduced-motion: reduce) {
   .alp__fade { animation: none; }
@@ -643,4 +582,5 @@
 
 /* An ERC-4626 share symbol is case-carrying: rmUSDC is not RMUSDC. */
 .alp__vtok { letter-spacing: 0.02em; }
+.alp__vault { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 </style>

@@ -223,6 +223,9 @@ const vaultRows = (page: Page) => page.locator("#vaults tbody tr");
 const figures = (page: Page, i: number) => vaultRows(page).nth(i).locator("td > span:first-child");
 const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
 const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Drift"];
+// A heading's own label, whatever tip follows it: each gap column carries its
+// definition in an (i) tip, whose text is part of the cell.
+const heads = (labels: string[]) => labels.map((l) => new RegExp(`^\\s*${l}(\\s|$)`));
 // The overview has answered once the combined TVL has a value.
 async function vaultsLoaded(page: Page) {
   await expect(vaultRows(page)).toHaveCount(4);
@@ -250,7 +253,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
   }
   // With no recommendation, Recommended and the governance gap are missing,
   // not zero; the flow gap is actual against the policy's target.
-  await expect(page.locator("#vaults thead th")).toHaveText(VAULT_HEADS);
+  await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
   await expect(figures(page, 0)).toHaveText(["—", "95%", "100%", "—", "+5 pp"]);
   // rmUSDC's Actual is the golden's TVL; a missing figure has no dollars.
   await expect(rows.nth(0).locator("td").nth(2).locator("small")).toHaveText(usd2(vault.tvlUsd));
@@ -308,7 +311,7 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   await navigate(page, "/allocation");
 
   const rows = vaultRows(page);
-  await expect(page.locator("#vaults thead th")).toHaveText(VAULT_HEADS);
+  await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
   await expect(rows.locator("td:nth-of-type(1) > span")).toHaveText(["90%", "5%", "3%", "2%"]);
   await expect(rows.locator("td:nth-of-type(2) > span")).toHaveText(target.map((t) => `${t}%`));
   // The target 95/5/0/0 against 90/5/3/2, and actual 100/0/0/0 against the
@@ -352,7 +355,7 @@ test("a later session with no weights reads as the target held since the last re
   const latest = page.locator(".alp__rec");
   const rail = page.locator(".alp__meta");
   await expect(rail.locator("span", { hasText: "Latest session" })).toHaveText("Latest session Sep 8, 2026");
-  await expect(rail.locator("span", { hasText: "Recommendation" })).toHaveText("Recommendation Target held since Sep 1, 2026");
+  await expect(rail.locator("span", { hasText: "Recommendation" })).toHaveText("Recommendation Held since Sep 1, 2026");
   await expect(rail.locator("span", { hasText: "Latest session" }).locator("a")).toHaveAttribute("href", `/swarm/sessions/${held.id}`);
   await expect(latest.locator(".rr-meta")).toHaveCount(0);
   await expect(latest.locator(".rr-cta")).toHaveAttribute("href", `/swarm/sessions/${standing.id}`);
@@ -413,9 +416,9 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
 
   // The track underneath is the full ring, so a policy that does not add to
   // 100 shows the remainder rather than being rescaled to look complete; at
-  // rest the centre names what the ring is, or the remainder when there is one.
+  // rest the centre names the sleeve the breakdown rests on, the largest.
   await expect(ring.locator("circle:not([data-sleeve])")).toHaveCount(1);
-  await expect(ring.locator("figcaption")).toHaveText("In force");
+  await expect(ring.locator("figcaption")).toContainText(framework.strategy[0].label);
 
   // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
   // its hue: it holds nothing, which is not the same as having no identity.
@@ -498,38 +501,32 @@ test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   expect(swatches).toEqual(CATEGORICAL_RGB.slice(0, 4));
 });
 
-// The section that replaced the bullet bars. Every row reads flat today, and
-// that is the finding rather than a reason to hide the table: the baseline is
-// the row in force, because `allocation_framework` holds exactly one.
-test("the change ledger reports was, now and a flat move for every sleeve", async ({ page }) => {
+// The largest sleeve rests open: its recipe shows without a hover, the panel
+// head names its vault on the right, and no Close button repeats what Escape
+// and the row already do.
+test("the breakdown rests on the largest sleeve, with its vault in the head", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  const framework = goldenFramework();
-  await stubEnvironment(page, { framework });
+  await stubEnvironment(page);
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-
-  const rows = page.locator(".alp__tbl--led tbody tr");
-  await expect(rows).toHaveCount(framework.strategy.length);
-  for (const [i, sleeve] of framework.strategy.entries()) {
-    const row = rows.nth(i);
-    await expect(row).toContainText(sleeve.label);
-    // Was and now are the same row today, and the page says so in the copy
-    // rather than implying it read two versions.
-    const cells = await row.locator("td").allTextContents();
-    expect(cells[1].trim()).toBe(cells[2].trim());
-    await expect(row.locator(".alp__mv")).toHaveText("—");
-    await expect(row.locator(".alp__mv")).toHaveClass(/flat/);
-  }
-  // A flat move is muted, never coloured: green on a change that did not
-  // happen would be a claim.
-  const flatColour = await rows.first().locator(".alp__mv")
-    .evaluate((el) => getComputedStyle(el).color);
-  expect(flatColour).toBe("rgb(143, 154, 176)");
-
-  // Four columns and no fifth. The Note column carried vault status, which
-  // the Vaults table states.
-  await expect(page.locator("#what-changed thead th")).toHaveCount(4);
+  const panel = page.locator(".alp__ring .rr-x__panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".rr-x__head b")).toHaveText("Conservative DeFi Yield");
+  await expect(panel.locator(".rr-x__head > .alp__vault a")).toHaveText("rmUSDC");
+  await expect(page.locator(".rr-x__close")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
+});
+
+// Every Vaults column says what it measures, and each gap how it is taken.
+test("the Vaults table's columns carry their definitions", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await vaultsLoaded(page);
+  const tips = page.locator("#vaults thead .rm-tip__bub");
+  await expect(tips).toHaveCount(5);
+  await expect(page.locator("#vaults thead th", { hasText: "Drift" }).locator(".rm-tip__bub")).toContainText("Actual minus target");
+  await expect(page.locator("#vaults thead th", { hasText: "Governance gap" }).locator(".rm-tip__bub")).toContainText("Target minus recommended");
 });
 
 // The page reports the allocation. It does not explain the swarm that sets it
@@ -548,30 +545,24 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   // it; no second section repeats it.
   await expect(page.locator(".alp__latest")).toHaveCount(0);
   await expect(page.locator(".alp__rec")).toHaveCount(1);
-  // The one link out of the ledger: every session that has reviewed these
-  // weights. The allocation's own decision log is not built, so that is the
-  // swarm's page for the subject and not a page of this branch's own.
-  await expect(page.locator('#what-changed a[href="/swarm/subjects/robotmoney-allocation"]'))
-    .toBeVisible();
+  // No "What changed" ledger: the ring and the Vaults table already carry the
+  // weights and every move. Its link, every session that has reviewed these
+  // weights, sits with the mechanism.
+  await expect(page.locator("#what-changed")).toHaveCount(0);
 
   // The mechanism CLOSES the page. It led it for one commit, where it put a
   // third page's subject between the headline and the weights.
   const how = page.locator("#how-weights-are-set");
-  for (const step of ["Regime", "Takes", "Consensus"]) {
-    await expect(how).toContainText(step);
-  }
+  // The swarm page's steps, in its blocks.
+  await expect(how.locator(".rr-steps .rr-steps__t")).toHaveText(["The regime is read", "Analysts file takes", "A recommendation is published"]);
   // No role nobody holds: the mechanism describes the analysts that file.
-  await expect(how).not.toContainText("Validators");
+  await expect(how).not.toContainText(/Validators|Proposers/);
+  await expect(how.locator('a[href="/swarm/subjects/robotmoney-allocation"]')).toBeVisible();
   await expect(how.locator('a[href="/regime"]')).toBeVisible();
   await expect(how.locator('a[href="/swarm"]')).toBeVisible();
   // Last, and after the section it explains.
   const isLast = await how.evaluate((el) => el === el.parentElement?.lastElementChild);
   expect(isLast, "the mechanism must be the last section on the page").toBe(true);
-  const [changed, mech] = await Promise.all([
-    page.locator("#what-changed").boundingBox(),
-    how.boundingBox(),
-  ]);
-  expect(mech!.y).toBeGreaterThan(changed!.y);
   // Schema names, table names and route behaviour are not the reader's
   // business. The page says what is true about the allocation; how the backend
   // stores or types it is ours to know.
@@ -823,7 +814,7 @@ test("on a phone the ring keeps its size and nothing scrolls the page sideways",
   // sideways scroll: the two gaps give way (each vault's page carries them),
   // and every column left is on screen.
   await expect(vaultRows(page)).toHaveCount(4);
-  await expect(page.locator("#vaults thead th:visible")).toHaveText(["Vault", "Recommended", "Target", "Actual"]);
+  await expect(page.locator("#vaults thead th:visible")).toHaveText(heads(["Vault", "Recommended", "Target", "Actual"]));
   const wrap = await page.locator("#vaults .rr-tablewrap").evaluate((el) => [el.scrollWidth, el.clientWidth]);
   expect(wrap[0]).toBeLessThanOrEqual(wrap[1]);
   const overflow = await page.evaluate(() =>

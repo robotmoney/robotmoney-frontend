@@ -192,6 +192,9 @@ const vaultCol = (page: Page, n: number) => page.locator(`#vaults tbody tr td:nt
 const vaultUsd = (page: Page, n: number) => page.locator(`#vaults tbody tr td:nth-of-type(${n}) > small`);
 const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
 const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Drift"];
+// A heading's own label, whatever tip follows it: each gap column carries its
+// definition in an (i) tip, whose text is part of the cell.
+const heads = (labels: string[]) => labels.map((l) => new RegExp(`^\\s*${l}(\\s|$)`));
 
 // The section paints its four rows from the first frame with "—"; the
 // overview has answered once the Network fact has a value.
@@ -501,7 +504,7 @@ test("/allocation on the devnet: four vaults against the recommendation, labelle
   // The router's applied weights are the target. Each figure carries its
   // dollars at the combined TVL; Actual's are the vault's own TVL, and a
   // gap's the difference of the two beside it.
-  await expect(page.locator("#vaults thead th")).toHaveText(VAULT_HEADS);
+  await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
   await expect(rows.nth(0).locator("td > span:first-child")).toHaveText(["65%", "70%", "72%", "+5 pp", "+2 pp"]);
   await expect(rows.nth(0).locator("td > small")).toHaveText(["$65,000", "$70,000", "$72,000", "+$5,000", "+$2,000"]);
   await expect(rows.nth(0).locator(".alp__mv.up")).toHaveCount(2);
@@ -549,7 +552,7 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
   // No router on Base: the target is the published policy's, the shipped
   // manifest's on this local host (95/5/0/0), so three layers and the
   // governance and flow gaps between them.
-  await expect(page.locator("#vaults thead th")).toHaveText(VAULT_HEADS);
+  await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
   await expect(rows.nth(0).locator("td > span:first-child")).toHaveText(["95%", "95%", "100%", "0 pp", "+5 pp"]);
   const tvl = SAVED_BASE.tvlUsd;
   const usd = { recommended: usdAt(95, tvl), target: usdAt(95, tvl), actual: Math.round(tvl) };
@@ -1078,7 +1081,7 @@ for (const width of [1440, 390]) {
       // layers, on the devnet (the router's target) and on Base (the policy's)
       // alike. Nothing hides behind a sideways scroll.
       if (width === 390) {
-        await expect(page.locator("#vaults thead th:visible")).toHaveText(["Vault", "Recommended", "Target", "Actual"]);
+        await expect(page.locator("#vaults thead th:visible")).toHaveText(heads(["Vault", "Recommended", "Target", "Actual"]));
         const [sw, cw] = await page.locator("#vaults .rr-tablewrap").evaluate((el) => [el.scrollWidth, el.clientWidth]);
         expect(sw).toBeLessThanOrEqual(cw);
       }
