@@ -15,6 +15,7 @@
 // the taxonomy, CREATEROLE. On a DigitalOcean cluster that is `doadmin`;
 // override with `--role <login>` or MIGRATE_ROLE.
 import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "../../scripts/lib/env-role.ts";
+import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
 
 const NAME = "migrate";
 const err = (m: string) => console.error(`[${NAME}] ${m}`);
@@ -34,29 +35,48 @@ if (!env) {
   process.exit(1);
 }
 
+// The connection tokens (host/database) come from $HOME/.env; the migration
+// role's PASSWORD comes from its own line if present, otherwise a masked
+// terminal prompt — never required to sit in a file. This is the point of
+// dropping doadmin from .env: the password is typed for the one run, not stored.
+if (!env.host || !env.database) {
+  err(`$HOME/.env is missing the connection tokens (host, database) this needs.`);
+  process.exit(1);
+}
+if (!env[role]) {
+  if (!process.stdin.isTTY) {
+    err(`no '${role}' password line in $HOME/.env, and stdin is not a terminal.`);
+    err(`Add a '${role} = <password>' line, or run this interactively so it can prompt.`);
+    process.exit(1);
+  }
+  const pw = await hiddenPrompt(`${role} password (not echoed, not stored)`);
+  if (!pw) {
+    err("no password entered.");
+    process.exit(1);
+  }
+  env[role] = pw;
+}
+
 const url = urlForRole(env, role);
 if (!url) {
-  err(`$HOME/.env cannot assemble a '${role}' connection.`);
-  err(`It needs the discrete tokens (host, port, database, sslmode) plus a`);
-  err(`'${role} = <password>' line. Use --role <login> or MIGRATE_ROLE for a different login.`);
+  err(`$HOME/.env cannot assemble a '${role}' connection (host/port/database/sslmode).`);
   process.exit(1);
 }
 
 log(`${redactedTarget(url, role)} — migrations only, no seed`);
 process.env.MIGRATE_DATABASE_URL = url;
 
-// backend/src/config.ts is validated at import and REQUIRES a runtime
-// DATABASE_URL (and forbids doadmin there in prod). The migration itself
-// connects via MIGRATE_DATABASE_URL above, so give config the rm_app runtime
-// URL from the SAME .env — assembled, never a placeholder — before importing
-// the runner. This is why the imports below are dynamic: config runs at import.
-const appUrl = urlForRole(env, "rm_app");
-if (!appUrl) {
-  err(`$HOME/.env also needs an 'rm_app = <password>' line — the migration runner`);
-  err(`loads the app config, which requires the runtime role's URL.`);
-  process.exit(1);
-}
-process.env.DATABASE_URL = appUrl;
+// backend/src/config.ts is validated at IMPORT and requires a runtime
+// DATABASE_URL — and in prod forbids doadmin there. The migration connects via
+// MIGRATE_DATABASE_URL above; config never connects with DATABASE_URL, so hand
+// it the same target under a non-doadmin username purely to satisfy that
+// import-time check. This works even on a fresh cluster where rm_app does not
+// exist yet — the whole point of a tool that REPLACES the provisioning script.
+// (The imports below are dynamic so this runs before config loads.)
+const forConfig = new URL(url);
+forConfig.username = "rm_app";
+forConfig.password = "unused-config-only";
+process.env.DATABASE_URL = forConfig.toString();
 
 const { migrate } = await import("../src/db/migrate.ts");
 const { closeDb } = await import("../src/db/client.ts");
