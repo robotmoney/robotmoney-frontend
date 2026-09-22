@@ -286,16 +286,6 @@ export function registerAllocationView(Alpine) {
     // one row, so there is no prior version to diff against and the baseline
     // IS the row in force. The day a session writes a second row, `was` comes
     // from it and these arrows start moving with no change to the view.
-    changeRows() {
-      return this.sleeves().map((row, i) => ({
-        key: row.key,
-        name: row.name,
-        colour: sleeveColour(i),
-        was: row.target,
-        now: row.target,
-        delta: 0,
-      }));
-    },
     // Direction is the GLYPH first and the colour second, so the column
     // survives colourblindness, greyscale and forced-colors. Up takes Pool
     // green and down takes Beacon, which is what tokens.css already calls a
