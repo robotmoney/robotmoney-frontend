@@ -65,11 +65,15 @@ nothing** — so every session publishes **unjudged** (honest, but no judge bloc
 Operator reports being unsure any admin change to the judge is possible via API
 or UI. The admin surface (`isPrivileged`/`hasAutomationRole`) needs an
 `X-Admin-Token` (session/credential) or `ADMIN_TOKEN`/`AUTOMATION_TOKEN` env.
-- **Evidence:** `swarm-admin.ts:67`, `auth.ts`, `config.ts:736-737`.
-- **Next:** confirm whether `ADMIN_TOKEN`/`AUTOMATION_TOKEN` is set in
-  `rm_prod-api-1`. If neither, and insecure mode is off, there is **no**
-  authorized runtime path to flip the judge — by design — and one must be
-  provisioned before P-02 is actionable.
+- **Evidence:** `swarm-admin.ts:67`, `auth.ts`, `config.ts:736-737`. Note the
+  frontend **does** have an admin login gate (`ADMIN_TOKEN` password or a
+  passkey → `X-Admin-Token`, `admin/shared.js`), so the auth *mechanism* exists;
+  the unknown is whether a valid credential is provisioned for `rm_prod`, not
+  whether a login path exists.
+- **Next:** confirm whether `ADMIN_TOKEN`/`AUTOMATION_TOKEN` (or an
+  `admin_credential` row / passkey) is set for `rm_prod-api-1`. If none, and
+  insecure mode is off, there is **no** authorized path to flip the judge — by
+  design — and one must be provisioned before P-02 and the P-15 UI are usable.
 
 ### P-04 — `shadow` still a selectable judge mode (S4)
 `shadow` computes a real model opinion and withholds it — the same
@@ -112,10 +116,33 @@ pick its model currently cannot do so through any screen.
   path the UI needs), P-04 (whether Mode is two- or three-way). Optionally also
   *displays* judgements/receipts (#1017's public judgement routes) — scope TBD:
   config-only vs. config + view.
-- **Current frontend surface:** *under investigation* (admin-UI location, auth
-  pattern, existing swarm-admin controls) — this row will be refined with where
-  the panel slots in once that map is in. **Next:** short UX spec + slot-in plan,
-  then implement.
+- **Current frontend surface (mapped):** a full admin SPA already exists —
+  buildless **Alpine.js 3** under `frontend/public/`, with admin routes at
+  `/admin/*`, including `/admin/swarm` (an overview with Topics/Members/Sessions
+  tabs, `swarm-overview.js` + `views/admin/swarm.html`) and
+  `/admin/swarm/sessions/:id` (`swarm-session.js`). **Auth is already solved:** a
+  login gate takes the `ADMIN_TOKEN` (or a passkey) → stores `rm_admin_token` in
+  sessionStorage → sends it as `X-Admin-Token`; shared `adminAuthState()`
+  (`admin/shared.js`) gives every factory `_token()` / login / fail-closed 403
+  handling. So this is a **slot-in, not a from-scratch build**.
+- **The route is already declared but unused.**
+  `ROUTES.swarm.admin.judgeConfig = "/api/swarm/admin/judge"`
+  (`contract/routes.js:226`) exists and is referenced **only** in the contract —
+  no view or factory consumes it. Its comment covers only `mode | minTakes` and
+  must be extended for `model` / `thirdPartyEnabled` (the newer backend body).
+- **Panel home:** a new **"Judge" tab in `/admin/swarm`** (page-level config,
+  not session-specific). The per-session admin page (`swarm-session.js`) already
+  renders a "Consensus judge" panel reading
+  `/api/swarm/admin/sessions/:id/judgements` — the #767 read path — a natural
+  secondary display. **Note (P-04 link):** that per-session panel is documented
+  as the *shadow-soak read path*, so removing `shadow` also revisits what it
+  shows.
+- **Well-templated:** `api.adminGet(ROUTES.swarm.admin.judgeConfig, token)` →
+  a `{mode, minTakes, model, thirdPartyEnabled}` form; save via `api.adminPost`;
+  reuse the `adm-*` classes and the existing `validateXxx` / `showForm` /
+  `submitting` form pattern.
+- **Next:** short UX spec (states, validation, the "will it run?" read-back),
+  then implement the tab — small and precedented.
 
 ---
 
