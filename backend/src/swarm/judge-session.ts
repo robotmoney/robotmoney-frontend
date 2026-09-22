@@ -436,7 +436,7 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // SHADOW NEVER APPLIES. That is the whole point of the mode, and migration
     // 0041's CHECK refuses a shadow row that claims otherwise.
     const attempt = config.mode === "enforce"
-      ? await applyOpinion(tx, sessionId, outcome)
+      ? await applyOpinion(tx, sessionId, outcome, judgeMemberId)
       : { applied: false as const, reason: null };
     const applied = attempt.applied;
     const appliedSkippedReason = applied ? null : attempt.reason;
@@ -528,7 +528,14 @@ type ApplyOutcome = { applied: true; reason: null } | { applied: false; reason: 
 //
 // Takes a `tx` because the read and the write are a read-modify-write and must
 // be one transaction, under the caller's advisory lock.
-async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutcome): Promise<ApplyOutcome> {
+//
+// `judgeMemberId` NAMES THE JUDGE on the session, spelled exactly as the
+// judgement row's `judged_by`/`judged_by_member_id` are (the INSERT in
+// judgeSession). The fingerprint alone cannot: two judges given the same prompt
+// over the same take set share `prompt_hash` and `inputs_digest`.
+async function applyOpinion(
+  tx: DbHandle, sessionId: string, outcome: JudgeOutcome, judgeMemberId?: string,
+): Promise<ApplyOutcome> {
   const row = (await tx`
     SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
     | { state: string; swarm_recommendation: Record<string, unknown> | null }
@@ -546,6 +553,8 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
     prompt_hash: outcome.promptHash,
     inputs_digest: outcome.inputsDigest,
     ...(outcome.fallbackReason ? { fallback_reason: outcome.fallbackReason } : {}),
+    judged_by: judgeMemberId ?? "robotmoney-in-house",
+    ...(judgeMemberId ? { judged_by_member_id: judgeMemberId } : {}),
   };
   const upd = await tx`
     UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}

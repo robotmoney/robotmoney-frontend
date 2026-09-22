@@ -1,6 +1,7 @@
 import type {
   SwarmBrief,
   SwarmBriefResearchSignalRef,
+  SwarmJudgement,
   SwarmMember,
   SwarmSession,
   SwarmSessionListItem,
@@ -33,6 +34,9 @@ export function toMember(row: Row): SwarmMember {
     // that lack a value.
     handle: row.handle ?? row.id,
     status: row.status,
+    // Migration 0043: NOT NULL DEFAULT 'member', so the fallback is for rows
+    // read by a query that did not select the column, same as `handle` above.
+    role: row.role === "judge" ? "judge" : "member",
     name: row.name,
     tagline: row.tagline ?? null,
     lens: row.lens ?? null,
@@ -259,6 +263,34 @@ export function toSnapshot(row: Row): SubjectSnapshot {
     positions: row.positions ?? null,
     wallets: row.wallets ?? null,
     notable: row.notable ?? null,
+  };
+}
+
+/**
+ * One PUBLIC judgement (see swarm/judgements.ts for what makes a row public).
+ * Reads the stored opinion as it was recorded; nothing here is re-derived.
+ * `fallback_reason` and the admin-only facts (take/min-take counts, drop
+ * counters, `applied` bookkeeping) are deliberately not projected — `source`
+ * already says whether a model wrote the prose.
+ */
+export function toPublicJudgement(row: Row): SwarmJudgement {
+  const opinion = (row.opinion && typeof row.opinion === "object" ? row.opinion : {}) as Row;
+  return {
+    id: String(row.id),
+    sessionId: row.session_id,
+    subjectId: row.subject_id,
+    sessionDate: day(row.session_date),
+    judgedBy: row.judged_by,
+    judgedByMemberId: row.judged_by_member_id ?? null,
+    source: row.source === "model" ? "model" : "fallback",
+    model: row.model ?? null,
+    promptHash: row.prompt_hash,
+    inputsDigest: row.inputs_digest,
+    rationale: typeof opinion.rationale === "string" ? opinion.rationale : "",
+    disagreements: Array.isArray(opinion.disagreements) ? opinion.disagreements : [],
+    releaseSafety: opinion.release_safety ?? null,
+    recommendsWeights: row.recommends_weights === true,
+    createdAt: instant(row.created_at) ?? "",
   };
 }
 

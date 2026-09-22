@@ -3,6 +3,7 @@
 // calls these under the hood). Returns {status, body} for the Bun router to send.
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
+import * as judgements from "../../swarm/judgements.ts";
 import { projectBriefResearchSignals } from "../../swarm/projections.ts";
 import * as swarmAdmin from "../../swarm/admin.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
@@ -43,6 +44,7 @@ function templateRe(template: string, paramRe: Record<string, string> = {}): Reg
 const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/swarm/subjects/:id/snapshots
 const RE_SUBJECT = templateRe(C.subject); // /api/swarm/subjects/:id
 const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/swarm/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
+const RE_MEMBER_JUDGEMENTS = templateRe(C.memberJudgements); // /api/swarm/members/:id/judgements — same ordering reason as RE_MEMBER_TAKES
 const RE_MEMBER_PROFILE = templateRe(C.memberProfile); // /api/swarm/members/:id/profile — POST only, so no ordering conflict with the GET member-detail dispatcher below
 const RE_MEMBER_AVATAR = templateRe(C.memberAvatar); // /api/swarm/members/:id/avatar (GET) — same ordering reason as RE_MEMBER_TAKES
 // /api/swarm/sessions/:date/:subject — `:date` PINNED to a calendar date, not
@@ -58,6 +60,11 @@ const RE_SESSION = templateRe(C.session, { date: "\\d{4}-\\d{2}-\\d{2}" });
 // two-segment date/subject form above; the order of the two tests below is
 // therefore incidental rather than load-bearing.
 const RE_SESSION_BY_ID = templateRe(C.sessionById);
+// /api/swarm/sessions/:id/judgements — tested AFTER RE_SESSION below, so a
+// date-shaped first segment keeps meaning (date, subject) exactly as before;
+// the id is screened as a uuid in the domain layer.
+const RE_SESSION_JUDGEMENTS = templateRe(C.sessionJudgements);
+const RE_JUDGEMENT = templateRe(C.judgement); // /api/swarm/judgements/:id
 const RE_MEMO = templateRe(C.memo, { id: "\\d+" }); // /api/swarm/memos/:id (numeric only, as before)
 const ADMIN_PREFIX = C.admin.action.replace(":action", ""); // /api/swarm/admin/
 
@@ -101,6 +108,16 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     const limitRaw = url.searchParams.get("limit");
     try {
       return { status: 200, body: await ic.getMemberTakes(id, limitRaw ? Number(limitRaw) : undefined) };
+    } catch (e) {
+      return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
+    }
+  }
+  // Same placement, same reason: before the member-detail catch-all below.
+  if (m === "GET" && RE_MEMBER_JUDGEMENTS.test(p)) {
+    const id = decodeURIComponent(p.split("/")[4] ?? "");
+    const limitRaw = url.searchParams.get("limit");
+    try {
+      return { status: 200, body: await judgements.getMemberJudgements(id, limitRaw ? Number(limitRaw) : undefined) };
     } catch (e) {
       return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
     }
@@ -151,6 +168,16 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   if (m === "GET" && RE_SESSION.test(p)) {
     const [, , , , date, subject] = p.split("/");
     const r = await ic.getSession(decodeURIComponent(date), decodeURIComponent(subject));
+    return { status: r ? 200 : 404, body: r ?? { error: "not found" } };
+  }
+  // A judgement is a public record of its own (swarm/judgements.ts states the
+  // rule): the session's list, and one judgement by id.
+  if (m === "GET" && RE_SESSION_JUDGEMENTS.test(p)) {
+    const r = await judgements.getSessionJudgements(decodeURIComponent(p.split("/")[4] ?? ""));
+    return { status: r ? 200 : 404, body: r ?? { error: "not found" } };
+  }
+  if (m === "GET" && RE_JUDGEMENT.test(p)) {
+    const r = await judgements.getPublicJudgement(decodeURIComponent(p.split("/")[4] ?? ""));
     return { status: r ? 200 : 404, body: r ?? { error: "not found" } };
   }
   if (m === "GET" && p === C.brief) {

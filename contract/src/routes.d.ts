@@ -37,6 +37,7 @@ export const ROUTES: {
     waitlist: string;
     member: string;
     memberTakes: string;
+    memberJudgements: string;
     memberProfile: string;
     memberAvatar: string;
     subject: string;
@@ -45,8 +46,10 @@ export const ROUTES: {
     session: string;
     sessionById: string;
     sessionConsensusReceipt: string;
+    sessionJudgements: string;
     take: string;
     takePermalink: string;
+    judgement: string;
     openSession: string;
     brief: string;
     signingPayload: string;

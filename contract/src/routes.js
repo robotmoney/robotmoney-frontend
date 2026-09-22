@@ -100,6 +100,10 @@ export const ROUTES = {
     waitlist: "/api/swarm/waitlist", // POST — capture interest when roster is full
     member: "/api/swarm/members/:id", // GET
     memberTakes: "/api/swarm/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
+    // GET ?limit= — this judge's PUBLIC judgements across sessions, newest
+    // first. Same limit convention and cap as memberTakes. Public means the
+    // rule `sessionJudgements` below states; nothing else is ever served here.
+    memberJudgements: "/api/swarm/members/:id/judgements",
     // POST (member bearer) — issue #325: the apply payload is deliberately
     // minimal ({name, contact, lens?, publicKey}, D21), so this is the ONLY
     // path by which an admitted member ever acquires tagline/mandate/biases/
@@ -133,8 +137,15 @@ export const ROUTES = {
     // digest. The path is derived from the session id alone, so it survives
     // every redeploy and every rebuild of the frontend.
     sessionConsensusReceipt: "/api/swarm/sessions/:id/consensus-receipt", // GET — public, read-time-verified
+    // GET — the session's PUBLIC judgements: one per judging party (its newest
+    // opinion that reached the session in `enforce`), newest first, and only
+    // once the session is published. `shadow` opinions are never served here —
+    // the mode exists to keep them off public surfaces (docs/decisions.md D42).
+    // The privileged admin.sessionJudgements below is the full record.
+    sessionJudgements: "/api/swarm/sessions/:id/judgements",
     take: "/api/swarm/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/swarm/takes/:id", // rendered public verification receipt
+    judgement: "/api/swarm/judgements/:id", // GET — one public judgement; 404 unless sessionJudgements would serve it
     openSession: "/api/swarm/open-session", // GET → session currently collecting, if any
     // GET the brief a session published. `?session=<sessionId>` is the
     // unambiguous handle — since migration 0028 a brief is keyed on its session
