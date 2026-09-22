@@ -226,7 +226,21 @@ test("a bucket_weights brief declares the vector REQUIRED over the four canonica
 // numbers and the brief the judge reads now DECLARES the vector required, so
 // the one boundary that keeps "math decides and the judge explains" true has to
 // be proved again over a session that actually has an allocation to steal.
-test("a judge response that tries to author weights cannot move the receipt's vector", async () => {
+//
+// Issue #1019 changed the SECOND half of this story. The whole response is
+// REJECTED as a weight-smuggling attempt (findWeightLikeKey), which is still
+// a `source: 'fallback'` outcome — the model's numbers never reach anything,
+// weights or otherwise. But a fallback outcome is now (rightly) refused a
+// CERTIFICATE: `judgement_not_authored` (consensus-receipt.ts). A receipt
+// attests "the judge read the takes and wrote this", and template prose
+// standing in for a model that just tried to smuggle a vector is exactly the
+// case that refusal exists for. So this test's proof shifts from "the
+// published receipt's numbers are the real mean" to "no receipt is published
+// at all, AND the live session's own allocation (what the public API and any
+// later, properly-authored receipt would serve) is still the real mean" —
+// the invariant survives even though the artifact this test used to inspect
+// no longer exists for a fallback judgement.
+test("a judge response that tries to author weights is rejected outright, and the receipt refuses to certify the resulting fallback opinion", async () => {
   setJudgeStubAnswer(JSON.stringify({
     rationale: "I have recomputed the allocation myself.",
     disagreements: [],
@@ -239,21 +253,35 @@ test("a judge response that tries to author weights cannot move the receipt's ve
       [0.15, 0.55, 0.2, 0.1],
       [0.05, 0.75, 0.1, 0.1],
     ]);
-    const result = (await publishSessionJob({ sessionId })) as { consensusReceipt: { published: boolean } };
-    expect(result.consensusReceipt).toEqual({ published: true });
+
+    // The judgement WAS recorded — that row is how a misbehaving model
+    // becomes visible — as a fallback, with the smuggled vector nowhere in
+    // its opinion.
+    const [judgement] = (await sql`
+      SELECT source, opinion FROM swarm_session_judgements WHERE session_id = ${sessionId}`) as any[];
+    expect(judgement.source).toBe("fallback");
+    expect(JSON.stringify(judgement.opinion)).not.toContain("agent_tokens");
+    expect(judgement.opinion.rationale).not.toContain("I have recomputed the allocation myself");
+
+    const result = (await publishSessionJob({ sessionId })) as {
+      ok?: boolean; consensusReceipt: { published: boolean; reason?: string };
+    };
+    // NOT published — the certificate is refused, by name, rather than
+    // signed over template prose.
+    expect(result.consensusReceipt).toEqual({ published: false, reason: "judgement_not_authored" });
+    expect(result.ok).toBe(false);
 
     const stored = await getConsensusReceipt(sessionId);
-    const receipt = stored!.receipt as {
-      weights: { bucket: string; weight_bps: number }[];
-      judge: { source: string };
-    };
-    // The response was REJECTED as a whole, so the prose is the deterministic
-    // fallback — and the numbers are the mean of the two signed takes
-    // (agent_tokens: (0.15 + 0.05) / 2 = 0.10 -> 1000 bps), not the model's 10000.
-    expect(receipt.judge.source).toBe("fallback");
-    expect(receipt.weights.find((w) => w.bucket === "agent_tokens")!.weight_bps).toBe(1000);
-    expect(receipt.weights.reduce((n, w) => n + w.weight_bps, 0)).toBe(10_000);
-    expect(stored!.verified).toBe(true);
+    expect(stored).toBeFalsy();
+
+    // The math still decided: the session's own served allocation is the
+    // real mean of the two signed takes (agent_tokens: (0.15 + 0.05) / 2 =
+    // 0.10), never the model's 1.0 — the invariant a receipt would have
+    // attested to, still true with no receipt to attest it.
+    const [live] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`) as any[];
+    const weights = live.swarm_recommendation.weights as { bucket: string; weight: number }[];
+    const agentTokens = weights.find((w) => w.bucket === "agent_tokens")!;
+    expect(agentTokens.weight).toBeCloseTo(0.1, 6);
   } finally {
     resetJudgeStubAnswer();
   }

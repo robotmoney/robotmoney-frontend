@@ -984,10 +984,19 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     const jobIds: number[] = [];
     for (const kind of SESSION_JOB_KINDS) {
       const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
+      // RESCHEDULE RE-ARMS THE JOB, IT DOES NOT LEAVE IT BEHIND. This used to
+      // be `ON CONFLICT DO NOTHING`, which meant re-creating a still-scheduled
+      // session silently kept each job's STALE run_after and SPENT attempts —
+      // a session moved to a new date never actually ran on it. DO UPDATE
+      // moves run_after to the new instant and resets status/attempts/lock
+      // fields so a previously-succeeded or exhausted row runs again on the
+      // new timeline exactly like a fresh insert would.
       const r = await tx`
         INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
         VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+          run_after = EXCLUDED.run_after, status = 'pending', attempts = 0,
+          locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
         RETURNING id`;
       if (r[0]) jobIds.push(Number(r[0].id));
     }
