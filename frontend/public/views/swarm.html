@@ -216,12 +216,12 @@
                     </template>
                   </div>
                 </template>
-                <template x-if="stanceTally(allocShown()).length">
+                <template x-if="stanceTally(allocRecord()).length">
                   <p class="rr-counts">
-                    <template x-for="x in stanceTally(allocShown())" :key="x.stance">
+                    <template x-for="x in stanceTally(allocRecord())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[turnoutText(allocShown()), meanConfidenceText(allocShown())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[turnoutText(allocRecord()), meanConfidenceText(allocRecord())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(allocShown())">
@@ -244,7 +244,7 @@
              until one is published, and says so in its one row. -->
         <section class="rr-sec" id="portfolios" aria-labelledby="port-h">
           <div class="rr-sec__head">
-            <h2 class="rr-sec__h" id="port-h">Portfolios</h2>
+            <h2 class="rr-sec__h" id="port-h">Portfolio reviews</h2>
           </div>
           <div class="rr-tablewrap">
             <table class="rr-table rr-ports rr-stack rr-stack--full">
