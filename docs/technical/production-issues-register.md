@@ -24,6 +24,7 @@ S3 (availability blip) · S4 (hygiene / latent risk).
 | P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (accepted) |
 | P-05 | Correct roster driver not yet running on prod | S3 | 🔴 |
 | P-15 | No admin UX to control judge parameters (API-only today) | S4 | 🔴 |
+| P-16 | Parallel unmerged judge docs duplicate ours and keep `shadow` | S4 | 🔴 |
 | P-06 | Wrong-scenario cutover (`smoke:stage` vs `smoke:archive`) | S2 | 🟡 |
 | P-07 | Parallel stack (`rm_inspect`) exhausted DB connections | S2 | 🟡 |
 | P-08 | Brief downtime on in-place stack recreate (port 48787) | S3 | 🟡 |
@@ -81,9 +82,11 @@ compute-and-hide half-measure `a42d6c5a` removed on the fallback side. Design
 intent is a binary `off | enforce` judge.
 - **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`
   (status: **accepted** 2026-09-22 — the judge is binary `off | enforce`).
+- **Branch target: `releases-0.5.x`** (decided 2026-09-22) — the branch
+  production runs. No backport scope.
 - **Next:** logistics only — verify replay covers the soak (hard prerequisite),
-  loop David on the reversal, pick branch target, rewrite the driver's
-  per-session flip, then implement.
+  reconcile with the in-flight work in **P-16** (which builds *on* shadow), loop
+  David on the reversal, rewrite the driver's per-session flip, then implement.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst** — should run under the
@@ -145,6 +148,36 @@ pick its model currently cannot do so through any screen.
   `submitting` form pattern.
 - **Next:** short UX spec (states, validation, the "will it run?" read-back),
   then implement the tab — small and precedented.
+
+### P-16 — Parallel unmerged judge docs duplicate ours and keep `shadow` (S4)
+The branch `chore/reconcile-judge-swarm-releases-0-5-x` carries **7 commits,
+all documentation** (`docs(swarm): …`), covering the **same subject matter as
+our findings doc and shadow spec** — written by someone else, unmerged, and not
+visible from this branch.
+
+- **What's on it:**
+  - `54f49b56` judge divergence between `main` and `releases-0.5.x` — *the same
+    comparison we performed on 2026-09-22*
+  - `1cf69d06` correct the divergence analysis against verified revisions
+  - `31ddb6d9` state-machine specification for the session lifecycle and judge
+  - `80ad2c5b` a judge failure never stops a session
+  - `65b099b5` record the target judge design **as evaluator**
+  - `8da7e38e` an unreasonable memo is dropped from the vector
+  - `bd346b29` pin placeholder drop threshold, **ship the filter in shadow first**
+- **Despite its name it is NOT based on our line:** its merge-base with `main`
+  is `a9f2008b` (#1014), i.e. it branched off `main`, and it is 83 commits
+  behind `releases-0.5.x`.
+- **Two conflicts:**
+  1. **Duplicated effort.** Its divergence analysis and judge-design docs
+     overlap `consensus-judge-findings.md` and `judge-shadow-removal-spec.md`.
+     Two doc sets describing one judge is how they drift.
+  2. **Opposite stance on shadow.** Its tip ships a filter *"in shadow first"*,
+     while P-04 records shadow's removal as accepted. One of the two is wrong.
+  Also note `65b099b5` records a **target judge design ("as evaluator")** that
+  may supersede assumptions in our docs.
+- **Next:** read those 7 docs **before** writing more of ours; reconcile the
+  shadow stance with their author; decide which doc set is canonical rather than
+  maintaining both.
 
 ---
 
