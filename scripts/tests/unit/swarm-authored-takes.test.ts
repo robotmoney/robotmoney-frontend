@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertAuthoredTakes, type AbsenceReport } from "../../lib/swarm/session.ts";
+import { assertAuthoredTakes, settledAttendance, type AbsenceReport } from "../../lib/swarm/session.ts";
 
 const take = (memberId: string, body: string) => ({
   memberId,
@@ -75,5 +75,20 @@ describe("assertAuthoredTakes — live prose for the takes that landed, directio
     expect(() => assertAuthoredTakes("session", [
       take("athena", `${body("Athena")}\n- the spread, not the composite, is where the signal lives`),
     ], attendance([]), [], ["athena"])).toThrow("retired template fingerprint");
+  });
+});
+describe("settledAttendance — each settled result is its own member's", () => {
+  const present = [{ memberId: "athena" }, { memberId: "cygnus" }, { memberId: "boreas" }];
+  const ok = { status: "fulfilled", value: null } as const;
+  const no = { status: "rejected", reason: new Error("exited 1") } as const;
+
+  test("a failure past the first member is that member's, not the first's", () => {
+    // The e2e run that found this: boreas failed, and the driver reported athena.
+    expect(settledAttendance(present, [ok, ok, no])).toEqual({ failed: ["boreas"], fulfilled: ["athena", "cygnus"] });
+  });
+
+  test("every mix reads by position", () => {
+    expect(settledAttendance(present, [no, ok, no])).toEqual({ failed: ["athena", "boreas"], fulfilled: ["cygnus"] });
+    expect(settledAttendance(present, [ok, ok, ok])).toEqual({ failed: [], fulfilled: ["athena", "cygnus", "boreas"] });
   });
 });

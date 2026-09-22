@@ -25,6 +25,7 @@ scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts
 scripts/tests/unit/sparkline.test.ts
 scripts/tests/unit/swarm-apply-form-and-status.test.ts
+scripts/tests/unit/swarm-history-search.test.ts
 scripts/tests/unit/swarm-initials-fallback-pin.test.ts
 scripts/tests/unit/swarm-initials-lockstep.test.ts
 scripts/tests/unit/swarm-judgements.test.ts
