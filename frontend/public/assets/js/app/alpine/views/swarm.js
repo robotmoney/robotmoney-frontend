@@ -383,7 +383,7 @@ export function registerSwarmView(Alpine) {
       }
       if (this.rowActions(s).length) return { label: "Rebalance", quiet: false };
       if (this.rowHeld(s).length) return { label: "Hold", quiet: false };
-      return { label: "No position calls", quiet: true };
+      return { label: "No actions", quiet: true };
     },
     takesOf(s) {
       const n = this.takesCount(s);

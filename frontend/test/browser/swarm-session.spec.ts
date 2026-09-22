@@ -1019,7 +1019,10 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(context.locator(".sig__row.is-lead .sig__v")).toHaveText("83rd");
   // Live method: factor is context, drawn apart.
   await expect(context.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(context.locator(".rr-note")).toContainText("factor not in composite");
+  // Its row's tip says so, and each label opens its panel on the regime page.
+  await expect(context.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("Not in the composite");
+  await expect(context.locator(".sig__row").nth(3).locator("a.sig__l")).toHaveAttribute("href", "/regime#panel-factor");
+  await expect(context.locator(".sig__row.is-lead a.sig__l")).toHaveAttribute("href", "/regime#composite");
 
   // The vote: constructive leads, three of the five who took part.
   const vote = page.locator("#takes .rr-vote");
@@ -1046,7 +1049,9 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(page.locator("body")).not.toContainText("hardcoded");
   // No discussion: every line of it restates a figure the record draws.
   await expect(page.locator(".rr-sec__h")).toHaveText(["The recommendation", "Reasoning & disagreement", "Member takes", "Evidence & provenance"]);
-  await expect(page.locator("#reasoning")).toContainText("No written synthesis");
+  // The Synthesis title stays over its empty state.
+  await expect(page.locator("#reasoning .rr-subhead__h").first()).toHaveText("Synthesis");
+  await expect(page.locator("#reasoning")).toContainText("No synthesis written");
   await expect(page.locator("body")).not.toContainText("Stance split");
   await expect(page.locator("#members-agree")).toHaveCount(0);
   await expect(page.locator("#views-differ")).toHaveCount(0);
@@ -1142,7 +1147,7 @@ test("an archived allocation session measures its outcome against the targets it
 });
 
 // The session's own headline: the date this page is about, set under the
-// subject's name, and its phase beside it, apart from the facts row. Then the
+// subject's name, and its phase leading the facts row. Then the
 // recommendation, before the reasoning and the vote behind it.
 test("a session page opens on its date and phase, then leads with the recommendation", async ({ page }) => {
   await page.route("**/api/**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
@@ -1152,9 +1157,9 @@ test("a session page opens on its date and phase, then leads with the recommenda
   await expect(page.locator(".sv__error")).toBeHidden();
   await expect(page.locator(".rr-crumbs a").nth(1)).toHaveAttribute("href", "/swarm/subjects/woon");
   await expect(page.locator(".rr-when time")).toHaveText("June 25, 2026");
-  await expect(page.locator(".rr-when .rm-sphase")).toHaveText("published");
-  await expect(page.locator(".rr-meta .rm-sphase")).toHaveCount(0);
-  await expect(page.locator(".rr-meta")).not.toContainText(/state|published/i);
+  // The phase leads the facts row (David, 2026-09-22).
+  await expect(page.locator(".rr-meta > .rm-sphase:first-child")).toHaveText("published");
+  await expect(page.locator(".rr-when .rm-sphase")).toHaveCount(0);
 
   // The recommendation first, in document order. It draws the book itself, so
   // there is no separate holdings section.
@@ -1248,8 +1253,8 @@ test("a v0 session imported past the archive date draws factor as the input it w
   const signal = page.locator("#reasoning .rr-context");
   await expect(signal.locator(".sig__row")).toHaveCount(4);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).toHaveText("Three-year percentile");
-  await expect(signal.locator(".rr-note")).not.toContainText("factor not in composite");
+  await expect(signal.locator(".rr-note")).toHaveText("Each reading is a percentile of its own last three years, so the 50th is its median.");
+  await expect(signal.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("in the composite of this older reading");
 });
 
 // A sleeve published with no weight has none: it is not a move to zero.

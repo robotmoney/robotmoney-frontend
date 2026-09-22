@@ -36,13 +36,12 @@
           <p class="sv__eyebrow sv__eyebrow--quiet" x-text="`${subjectKindOf(subject)} · session`">portfolio · session</p>
           <h1 class="sv__detail-title session-title" x-text="subjectTitle()"></h1>
           <p class="rr-when">
-            <time :datetime="session.date" x-text="formatDate(session.date, 'long')"></time>
-            <template x-if="sessionTime()"><span class="rr-mono" x-text="sessionTime()"></span></template>
-            <span :class="phaseClass(session)" x-text="phaseLabel(session)"></span>
+            <time :datetime="session.date" x-text="[formatDate(session.date, 'long'), sessionTime()].filter(Boolean).join(' · ')"></time>
           </p>
         </header>
 
         <div class="rr-meta">
+          <span :class="phaseClass(session)" x-text="phaseLabel(session)"></span>
           <span class="rr-meta__i">Takes <b x-text="filedCount()"></b></span>
           <template x-if="windowLeft()">
             <span class="rr-meta__i">Window closes in <b :title="windowAt()" x-text="windowLeft()"></b></span>
@@ -252,20 +251,15 @@
         <!-- The same section when there is nothing to draw in it: before
              publication, or a published session that produced no
              recommendation, the ring's bare track with the fact inside. A
-             published portfolio session that moved nothing says so, as every
-             history row linking here does. -->
+             published portfolio session that proposed no action says so in
+             the same ring, as a weights session with no weights does. -->
         <template x-if="!hasRecommendationSection()">
           <section class="rr-sec" id="recommendation" aria-labelledby="rec-h">
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
-            <template x-if="phaseOf(session)?.key === 'published' && session.swarmRecommendation && !weightsSubject()">
-              <p class="rr-note" style="margin-top:0">No position calls published</p>
-            </template>
-            <template x-if="phaseOf(session)?.key !== 'published' || !session.swarmRecommendation || weightsSubject()">
-              <figure class="rr-ring rr-ring--empty">
-                <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-                <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key !== 'published' ? 'Not published yet' : session.swarmRecommendation && weightsSubject() ? 'No weights published' : 'No recommendation published'"></span></figcaption>
-              </figure>
-            </template>
+            <figure class="rr-ring rr-ring--empty">
+              <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+              <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key !== 'published' ? 'Not published yet' : !session.swarmRecommendation ? 'No recommendation published' : weightsSubject() ? 'No weights published' : 'No actions published'"></span></figcaption>
+            </figure>
           </section>
         </template>
 
@@ -326,7 +320,7 @@
               <div>
                 <template x-if="showSynthesis()">
                   <div class="rr-block" x-data="{ more: false }">
-                    <p class="rr-k rr-sub">Synthesis</p>
+                    <div class="rr-subhead"><h3 class="rr-subhead__h">Synthesis</h3></div>
                     <div class="rr-prose" :class="!more && isLong(session.synthesis, 400) ? 'is-clamped' : ''" style="--rr-lines:5"
                          x-html="linkified(session.synthesis)"></div>
                     <template x-if="isLong(session.synthesis, 400)">
@@ -344,7 +338,7 @@
                      judgement. A judge scores nothing and sets no weight. -->
                 <template x-if="judge()">
                   <div class="rr-block rr-judge" :id="`judge-${judge().key}`" x-data="{ more: false }">
-                    <p class="rr-k rr-sub" x-html="judge().label"></p>
+                    <div class="rr-subhead"><h3 class="rr-subhead__h rr-judge__h" x-html="judge().label"></h3></div>
                     <template x-if="judge().call || judge().reason">
                       <div class="rr-advice">
                         <p class="rr-advice__l"><span class="rr-advice__k">Advice</span><template x-if="judge().call"><span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${judge().call.key}`"><i aria-hidden="true"></i><span x-text="judge().call.label"></span></span></template><template x-if="judge().reason"><span x-text="judge().reason"></span></template></p>
@@ -400,7 +394,10 @@
                   </div>
                 </template>
                 <template x-if="!showSynthesis() && !judge() && !consensusItems().length && !disagreements().length">
-                  <p class="rr-note" style="margin-top:0">No written synthesis</p>
+                  <div class="rr-block">
+                    <div class="rr-subhead"><h3 class="rr-subhead__h">Synthesis</h3></div>
+                    <p class="rr-note" style="margin-top:0">No synthesis written</p>
+                  </div>
                 </template>
               </div>
               </template>
@@ -410,9 +407,9 @@
                        is in the facts row at the top; this is its evidence. -->
                   <div class="rr-context">
                     <div class="rr-context__head">
-                      <p class="rr-k">Market context</p>
+                      <h3 class="rr-subhead__h">Market context</h3>
                     </div>
-                    <div class="sig" role="img"
+                    <div class="sig" role="group"
                          :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
                       <div class="sig__scale" aria-hidden="true">
                         <span></span>
@@ -426,21 +423,23 @@
                       </div>
                       <template x-for="r in signalRows()" :key="r.key">
                         <div class="sig__row" :class="`is-${r.kind}`">
-                          <span class="sig__l" x-text="r.label"></span>
+                          <a class="sig__l rr-lnk" :href="r.href" x-text="r.label"></a>
                           <span class="sig__track">
                             <b class="sig__mid"></b>
                             <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
                             <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
                             <!-- What the dot is, on hover of its row: the percentile
                                  says where it sits, this says what it reads. -->
-                            <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`"
-                                  x-text="[r.label + (r.key === 'composite' && backdrop?.composite != null ? ' ' + fmtNum(backdrop.composite, 3) : ''), `${ordinal(r.pct)} percentile`, r.kind === 'context' ? 'not in the composite' : (r.regime ? regimeLabel(r.regime) : '')].filter(Boolean).join(' · ')"></span>
+                            <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
+                              <b x-text="[r.label + (r.key === 'composite' && backdrop?.composite != null ? ' ' + fmtNum(backdrop.composite, 3) : ''), `${ordinal(r.pct)} percentile`, r.kind === 'context' ? '' : (r.regime ? regimeLabel(r.regime) : '')].filter(Boolean).join(' · ')"></b>
+                              <span x-text="r.about"></span>
+                            </span>
                           </span>
                           <span class="sig__v" x-text="ordinal(r.pct)"></span>
                         </div>
                       </template>
                     </div>
-                    <p class="rr-note">Three-year percentile<template x-if="!backdropV0"><span> · factor not in composite</span></template></p>
+                    <p class="rr-note">Each reading is a percentile of its own last three years, so the 50th is its median.</p>
                   </div>
                 </div>
               </template>
@@ -454,7 +453,7 @@
                 <template x-if="consensusItems().length">
                   <div class="rr-disc rr-disc--lead" x-data="{ open: false }" :class="open ? 'is-open' : ''">
                     <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="members-agree" @click="open = !open">
-                      Where members agree <small x-text="`${consensusItems().length} ${consensusItems().length === 1 ? 'point' : 'points'}`"></small>
+                      Where members agree
                     </button>
                     <div class="rr-disc__anim" id="members-agree" role="region" aria-label="Where members agree" :inert="!open">
                       <div class="rr-disc__clip"><div class="rr-disc__body">
@@ -476,7 +475,6 @@
                           <div class="rr-disc rr-q" x-data="{ open: false }" :class="open ? 'is-open' : ''">
                             <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
                               <span><b x-text="d.topic"></b></span>
-                              <small x-text="`${(d.positions || []).length} views`"></small>
                             </button>
                             <div class="rr-disc__anim" role="region" :aria-label="d.topic" :inert="!open">
                               <div class="rr-disc__clip"><div class="rr-disc__body">
