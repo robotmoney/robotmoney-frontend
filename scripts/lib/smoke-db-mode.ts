@@ -70,6 +70,34 @@ const PG_DATA_FLAG = "--pg-data";
  */
 export const MIGRATE_FLAG = "--migrate";
 
+/**
+ * Opts an `--db external` boot into SEEDING (initializing) the database.
+ *
+ * "Seeding" here is the scenario initializer — the archive restore/adopt
+ * (`prod-bootstrap.ts`) for a `--smoke` boot, or the simulation fixture seed
+ * otherwise — plus the db-preflight classification that guards it
+ * (`scripts/lib/smoke-external-pg.ts`'s `dbPreflightArgv`). It is NOT the tiny
+ * `seed()` of job-schedule rows inside `migrate()`; that one rides with
+ * `--migrate`, because it only makes sense once the schema is current.
+ *
+ * Absent (the default), an external boot runs NEITHER the initializer nor its
+ * preflight: it just brings the services up against the database exactly as it
+ * is. That is what a restart is, and it is why a bare `--db external` boot no
+ * longer refuses a populated production database — there is nothing trying to
+ * write fixtures for the preflight to refuse.
+ *
+ * Present, the initializer and its preflight run as they always have. On an
+ * EMPTY external database both `--migrate` and `--seed` are needed (migrate
+ * creates the schema, seed fills it); on a populated one a restart needs
+ * neither. The two are independent flags because those are independent
+ * decisions — symmetric to `--migrate`, and for the same reason `up()` never
+ * writes to a database it does not own without being told to.
+ *
+ * `ephemeral` and `smoke-twin` own their data and always seed; the flag is
+ * refused on them (parseDataPath), exactly as `--migrate` is.
+ */
+export const SEED_FLAG = "--seed";
+
 // WHAT `--pg-data <host-dir>` MEANS, and why it rides on the ephemeral variant.
 //
 // It bind-mounts the postgres data directory to <host-dir> so a rebooted smoke
@@ -188,6 +216,7 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: PG_DATA_FLAG, arity: 1 as const }),
   Object.freeze({ flag: SMOKE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: MIGRATE_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: SEED_FLAG, arity: 0 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
   Object.freeze({ flag: "--no-tui", arity: 0 as const }),
@@ -323,6 +352,14 @@ export function requestsMigrate(argv: readonly string[]): boolean {
   return argv.slice(2).includes(MIGRATE_FLAG);
 }
 
+/** Does this argv opt an external boot into seeding (the scenario initializer
+ *  and its preflight)? A bare switch, like requestsMigrate(). Orthogonal to the
+ *  scenario: `--seed` runs whatever `--smoke` selected (archive) or did not
+ *  (the simulation/demo seed of a blank database). */
+export function requestsSeed(argv: readonly string[]): boolean {
+  return argv.slice(2).includes(SEED_FLAG);
+}
+
 export function parseDataPath(
   argv: readonly string[],
   opts: { envFilePath: string },
@@ -374,6 +411,12 @@ export function parseDataPath(
   if (mode !== "external" && has(argv, MIGRATE_FLAG)) {
     throw new Error(
       `${MIGRATE_FLAG} only applies to ${DB_FLAG} external — ephemeral and smoke-twin already migrate every boot.`,
+    );
+  }
+
+  if (mode !== "external" && has(argv, SEED_FLAG)) {
+    throw new Error(
+      `${SEED_FLAG} only applies to ${DB_FLAG} external — ephemeral and smoke-twin already seed every boot.`,
     );
   }
 

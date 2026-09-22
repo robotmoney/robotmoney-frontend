@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsSeed, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { refuseIfSchemaBehind, resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
@@ -147,7 +147,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const STATIC_PORT_FLAG = "--static-port";
 // `bun smoke` → `bun scripts/smoke.ts --smoke`. Every decision the flag implies
 // lives in scripts/lib/smoke-mode.ts (executed by
-// ); this file holds only the wiring.
+// ); this file holds only the wiring. The scenario is orthogonal to `--seed`/`--db`.
 const smokeMode = isSmokeMode(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
@@ -1130,16 +1130,16 @@ async function main(): Promise<void> {
     setStep(state, step, "done");
   }
 
-  // One shared bring-up: build/start, exactly one migration, Stack.up's single
-  // readiness check, and only THEN typed scenario initialization — the order
-  // the startup checklist above has always displayed (migrate → api /health →
-  // archive restore | simulation seed).
+  // Seeding is opt-in for external, symmetric to --migrate (SEED_FLAG); schema currency is checked regardless.
+  const seedExternal = dataPath.kind === "external" && requestsSeed(process.argv);
+  const seeds = dataPath.kind !== "external" || seedExternal;
+  if (dataPath.kind === "external" && !seedExternal) console.warn(`[smoke] --db external without --seed: no archive/simulation init. Schema currency is still checked.`);
+
   async function classifyDatabase(): Promise<void> {
     setStep(state, DB_PREFLIGHT_STEP, "running");
-    await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd });
-    setStep(state, DB_PREFLIGHT_STEP, "done");
-    log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
+    if (seeds) { await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
     if (dataPath.kind === "external" && !requestsMigrate(process.argv)) refuseIfSchemaBehind(stack.compose, log);
+    setStep(state, DB_PREFLIGHT_STEP, "done");
   }
 
   applyHostPorts(await stack.up({
@@ -1147,7 +1147,7 @@ async function main(): Promise<void> {
     migrateScriptArgs: [...scenario.migrateScriptArgs],
     migrate: dataPath.kind !== "external" || requestsMigrate(process.argv),
     preflight: composePostgres ? undefined : classifyDatabase,
-    initialize: initializeScenario, deferredServices: ["analytics-producer"],
+    initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
   }));
 
   if (process.env.CI && smokeMode) {
