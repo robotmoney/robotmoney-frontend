@@ -114,6 +114,10 @@ export type ConsensusReceiptRefusalReason =
   | "session_not_reaggregated"
   | "not_judged"
   | "judgement_not_adopted"
+  // The adopted judgement exists and the session took it, but no MODEL wrote
+  // it — `source='fallback'`, i.e. templateOpinion()'s prose. A receipt is a
+  // claim about authorship, so this is a refusal and not a warning.
+  | "judgement_not_authored"
   | "judgement_stale"
   | "no_takes"
   | "created_at_unparseable"
@@ -665,6 +669,20 @@ async function loadAssemblyInput(
       `session ${sessionId} has ${onFile.n} judgement(s) on file but none of them is the one the session adopted — no enforce-mode row matches the session's own judge prompt_hash/inputs_digest AND carries the rationale, disagreements and release_safety the session serves. ` +
         "The receipt embeds the session's judge block or it embeds nothing; re-judge the session in `enforce` mode.",
       [`session judge prompt_hash ${adopted.prompt_hash}`, `session judge inputs_digest ${adopted.inputs_digest}`],
+    );
+  }
+  // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
+  // row came from templateOpinion() — the aggregator's own sentences — and a
+  // certificate saying "the judge read the takes and concluded this" over them
+  // attests something that never happened. The refusal is separate from
+  // `judgement_not_adopted` because the fix is different: that one says judge in
+  // enforce, this one says give the judge a model it can actually reach.
+  if (judgement.source !== "model") {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_authored",
+      `session ${sessionId}'s adopted judgement has source='${judgement.source}' — its opinion is TEMPLATE PROSE, not a model's. ` +
+        "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
+        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
     );
   }
 
