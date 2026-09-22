@@ -24,7 +24,7 @@ import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
-  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
+  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf, camelTake } from "../static-views.js";
 import * as weightChange from "../../lib/weight-change.js";
 import { analystCount, isJudge, roleLabel } from "../../lib/judgements.js";
 
@@ -235,7 +235,19 @@ export function registerSwarmView(Alpine) {
       // source of the target its recommendation is measured against, and of
       // the asset names inside each sleeve.
       const s = this.allocShown();
-      if (s) this.allocBrief = await this.briefFor(s);
+      if (s) [this.allocBrief, this.allocTakeRows] = await Promise.all([this.briefFor(s), this.takeRowsFor(s)]);
+    },
+    // The shown session's takes, for the tally under its rationale. The
+    // sessions list carries none and its recommendation no stance counts, so
+    // this reads the detail route, as the subject page does for the same line.
+    // An archived row already has them; a failed read leaves the tally out.
+    async takeRowsFor(s) {
+      if (Array.isArray(s?.takeRows) && s.takeRows.length) return s.takeRows;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) return [];
+      try {
+        const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        return (d?.takes || []).map(camelTake);
+      } catch (_) { return []; }
     },
     async briefFor(s) {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) {
@@ -251,6 +263,7 @@ export function registerSwarmView(Alpine) {
     // portfolios and the recommendation history as tables.
     nextSessionAt: null,
     allocBrief: null,
+    allocTakeRows: [],
     facts() {
       const published = this.publishedSessions();
       const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
@@ -279,6 +292,11 @@ export function registerSwarmView(Alpine) {
     allocShown() {
       const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
       return this.publishedSessions().find((s) => s.subjectId === id && this.mixOf(s).length) || this.allocLatest();
+    },
+    // The shown session with its takes on it, the record the tally reads.
+    allocRecord() {
+      const s = this.allocShown();
+      return s && this.allocTakeRows.length ? { ...s, takeRows: this.allocTakeRows } : s;
     },
     allocHeldBy() {
       const latest = this.allocLatest();
