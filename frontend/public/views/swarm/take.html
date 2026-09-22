@@ -33,9 +33,7 @@
           <h1 class="sv__detail-title" x-text="signer?.name || take.memberName"></h1>
           <!-- A receipt with no filing time is not a receipt. -->
           <p class="rr-when" x-show="take.receivedAt">
-            <span>Filed <time :datetime="take.receivedAt" x-text="formatDate(take.receivedAt, 'short')"></time></span>
-            <span class="rr-mono" x-text="new Date(take.receivedAt).toISOString().slice(11,16) + ' UTC'"></span>
-            <template x-if="take.revision > 1"><span class="rr-mono" x-text="`revision ${take.revision}`"></span></template>
+            <span>Filed <time :datetime="take.receivedAt" x-text="[formatDate(take.receivedAt, 'short'), take.receivedAt ? new Date(take.receivedAt).toISOString().slice(11, 16) + ' UTC' : '', take.revision > 1 ? `revision ${take.revision}` : ''].filter(Boolean).join(' · ')"></time></span>
           </p>
         </header>
 
