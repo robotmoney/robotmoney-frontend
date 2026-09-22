@@ -10,6 +10,7 @@
 // object literal would hand both surfaces the same slot.
 import { api, ROUTES } from "./api.js";
 import { CATEGORICAL } from "./chart-theme.js";
+import { isLocalHost, vaultForBucket } from "./vault-data.js";
 
 export function allocationFramework() {
   return {
@@ -84,6 +85,11 @@ export function allocationFramework() {
 // The published targets from the shipped manifest, in the dashboard's shape,
 // for a checkout with no API. No provenance: the manifest does not say which
 // session set them, so the card reads "Target weights in force".
+//
+// `buckets` carries each sleeve's constituents the way the allocation DTO
+// does ({ key, label, items: [{ label, targetPct }] }), so /allocation can
+// draw the recipe on a local preview. A constituent's percentage is rounded to
+// the hundredth the DTO serves (0.1429 is 14.29, not 14.290000000000001).
 async function archivedFramework() {
   try {
     const res = await fetch("/data/swarm/manifests/allocation.json");
@@ -93,9 +99,27 @@ async function archivedFramework() {
       label: b.name || b.id || "",
       targetPct: Number.isFinite(Number(b.target_weight)) ? Number(b.target_weight) * 100 : null,
     }));
-    return strategy.length ? { asOf: raw.asof || raw.asOf || null, strategy, provenance: null } : null;
+    /** @param {unknown} w */
+    const itemPct = (w) => (w !== null && w !== "" && Number.isFinite(Number(w)) ? Math.round(Number(w) * 10000) / 100 : null);
+    const buckets = (raw.buckets || []).map((/** @type {any} */ b) => ({
+      key: vaultForBucket(b.id)?.key ?? b.id,
+      label: b.name || b.id || "",
+      items: (b.items || []).map((/** @type {any} */ it) => ({ label: it.name || it.id || "", targetPct: itemPct(it.target_weight) })),
+    }));
+    return strategy.length ? { asOf: raw.asof || raw.asOf || null, strategy, buckets, provenance: null } : null;
   } catch (_) {
     return null;
   }
+}
+
+// /allocation's read of the targets: the API, and the shipped manifest only on
+// a local host (vault-data.js isLocalHost). A production-like host with no API
+// gets null, which the page states as "Target weights unavailable" rather than
+// printing the manifest's June weights as if they were a live read.
+/** @param {string} hostname */
+export async function loadAllocationDto(hostname) {
+  const dto = await api.get(ROUTES.dashboards.allocation).catch(() => null);
+  if (dto) return dto;
+  return isLocalHost(hostname) ? archivedFramework() : null;
 }
 

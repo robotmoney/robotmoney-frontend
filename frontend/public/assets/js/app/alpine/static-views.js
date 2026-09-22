@@ -23,6 +23,11 @@ import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
+import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
+import { tvlChart } from "./tvl-chart.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -42,6 +47,9 @@ const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
+// The member-takes route's ceiling (it answers 400 above it) and it does not
+// page, so a member past it shows its latest takes and says so.
+const MEMBER_TAKES_MAX = 100;
 export const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
 
 async function fetchJson(url) {
@@ -247,13 +255,22 @@ export function camelMember(raw) {
 // endpoint has always returned that field, but nothing mapped it before the
 // public subject profile, so every consumer saw `undefined` and rendered
 // nothing.
+// The house moved to robotmoney.network, and robotmoney.net is a domain
+// someone else once ran: a subject row still carrying the old host links to
+// the new one until its data is corrected.
+/** @param {unknown} url */
+export function houseHomepage(url) {
+  if (typeof url !== "string") return url;
+  return url.replace(/^(https?:\/\/(?:www\.)?)robotmoney\.net(?=[\/?#]|$)/i, "$1robotmoney.network");
+}
+
 export function camelSubject(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
     name: raw.name,
     operator: raw.operator,
-    homepage: raw.homepage,
+    homepage: houseHomepage(raw.homepage),
     financesPage: raw.finances_page || raw.financesPage,
     xHandle: raw.x_handle || raw.xHandle,
     thesisBlurb: raw.thesis_blurb || raw.thesisBlurb,
@@ -628,6 +645,27 @@ export function registerStaticViews(Alpine) {
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
   Alpine.data("sleeveExplorer", sleeveExplorer);
+  // The same explorer over the vault stack's book (the Robot Money Vault
+  // subject's Holdings): one arc per vault at its actual weight, measured
+  // against the weights in force, and a vault's positions in its drawer.
+  // subjectProfile supplies vaultRingRows().
+  Alpine.data("vaultStackExplorer", () => ({
+    ...sleeveExplorer(),
+    explorerRows() { return this.vaultRingRows(); },
+    explorerSvg() {
+      return this.ringSvg(this.vaultRingRows().map((r) => ({ key: r.key, label: r.label, pct: r.pct, colour: r.hue })));
+    },
+    explorerCenter() { return { value: "", label: "Share" }; },
+    explorerLabel() {
+      return this.vaultRingRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    // The weights the vaults are measured against: the target in force, the
+    // router's applied weights once it applies them, else the framework's
+    // (RM-115). One word for both, since both are the target.
+    legendBasis() {
+      return this.vaultRingRows().some((x) => x.was != null) ? "Target" : "";
+    },
+  }));
   Alpine.data("takeCard", takeCard);
 
   Alpine.data("swarmTakeReceipt", () => ({
@@ -1011,7 +1049,7 @@ export function registerStaticViews(Alpine) {
     // courtesy on this page, never a reason to fail it.
     async loadRecord() {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=${MEMBER_TAKES_MAX}`);
         this.record = res.takes || [];
         this.recordLoaded = true;
       } catch { /* leave the strip hidden rather than render a wrong zero */ }
@@ -1116,6 +1154,8 @@ export function registerStaticViews(Alpine) {
     ...sessionTakes(),
     ...allocationFramework(),
     ...sessionBrief(),
+    // The vault stack's TVL over time (alpine/tvl-chart.js).
+    ...tvlChart(),
     loading: true,
     error: null,
     subject: null,
@@ -1171,6 +1211,34 @@ export function registerStaticViews(Alpine) {
     // is the donut list's own cap on the session page; the two must agree or the
     // same book reads as two different shapes across two pages.
     topN: 7,
+    // The Robot Money Vault's Holdings (isVaultStack): the book grouped by
+    // vault. On the devnet switch (lib/vault-source.js) its readings and
+    // wallets are the four-vault fixture's, kept apart from `snapshots` and
+    // `subject.wallets` so the latest recommendation and the history still
+    // measure real sessions against the real book. null reads those.
+    vaultSnapshots: null,
+    vaultWallets: null,
+    // The vault overview, for the router's applied weights: the Holdings
+    // target. Read after the page draws; until it settles no target shows,
+    // rather than one target and then another.
+    vaultStack: null,
+    vaultStackSettled: false,
+    // Every live vault's deposits and withdrawals, newest first, each naming
+    // its vault; null when no vault's source serves activity (the Base feed).
+    stackActivity: null,
+    // Each live vault's detail, by slug, as loadStackActivity read it.
+    stackDetails: {},
+    stackActivityPage: 0,
+    // The Positions table's order: grouped by vault until a column is picked,
+    // then one list across the vaults by that column.
+    // The Positions table: its order (largest value first until a header is
+    // picked), whether it reads by vault or as one list, and which vaults
+    // are folded.
+    posSortKey: "value",
+    posSortDir: "desc",
+    posView: "vault",
+    /** @type {Record<string, boolean>} */
+    posClosed: {},
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
       // The route this component was mounted on. The fetch below is not
@@ -1214,8 +1282,16 @@ export function registerStaticViews(Alpine) {
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
+        if (this.isVaultStack() && vaultMode().mode === "devnet") {
+          const fixture = await loadVaultSubjectFixture({ hostname: location.hostname });
+          if (fixture) {
+            this.vaultSnapshots = fixture.snapshots;
+            this.vaultWallets = fixture.wallets;
+          }
+        }
         await this.loadHistory(id);
         this.latestRow = this.sessions[0] || null;
+        this.heldRow = await this.loadHeld(id);
         // The brief the last session opened with. Guarded like the rest: the
         // page describes the handover with or without it, and only the
         // figures depend on having a real one.
@@ -1246,6 +1322,13 @@ export function registerStaticViews(Alpine) {
         this.error = this.subject ? "This subject could not be loaded." : "Subject not found.";
       } finally {
         this.loading = false;
+      }
+      // Not awaited: the Holdings target follows once the overview answers.
+      if (!this.error && this.isVaultStack()) {
+        loadVaultOverview({ hostname: location.hostname, recommendation: false })
+          .then((r) => { this.vaultStack = r; return this.loadStackActivity(r); })
+          .catch(() => { this.vaultStack = null; })
+          .finally(() => { this.vaultStackSettled = true; });
       }
     },
     async loadSnapshots(id) {
@@ -1287,7 +1370,7 @@ export function registerStaticViews(Alpine) {
     // "what does the swarm get" is a question about the current shape of the
     // handover, and the newest one is the best evidence of it.
     async loadBrief(id) {
-      const latest = this.sessions[0];
+      const latest = this.latest();
       const date = latest?.date;
       if (!date) return null;
       const qs = latest.id && latest.id !== `${date}-${id}`
@@ -1300,7 +1383,27 @@ export function registerStaticViews(Alpine) {
       return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
     },
     latestRow: null,
-    latest() { return this.latestRow; },
+    // A weights subject whose newest session set no weights held its target:
+    // the latest block shows the recommendation that stands, the newest that
+    // set weights, and names the newer session above it, as /swarm and
+    // /allocation do. Its brief, reading and vote are that session's.
+    heldRow: null,
+    latest() { return this.heldRow || this.latestRow; },
+    heldBy() { return this.heldRow ? this.latestRow : null; },
+    async loadHeld(id) {
+      const newest = this.latestRow;
+      const setsWeights = (r) => this.recommendation(r)?.kind === "weights";
+      if (!newest || setsWeights(newest) || !this.isWeightsSubject()) return null;
+      let row = this.sessions.find(setsWeights) || null;
+      let cursor = this.historyMode === "server" ? this.historyNext : null;
+      for (let page = 0; !row && cursor && page < 10; page += 1) {
+        const res = await this.requestHistory(id, cursor, "").catch(() => null);
+        if (!res) break;
+        row = res.rows.filter((s) => (s?.subjectId ?? s?.subject_id) === id).map(historyRowOf).find(setsWeights) || null;
+        cursor = res.next;
+      }
+      return row ? this.withDetail(row) : null;
+    },
     hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
     hasLatestReview() {
       const l = this.latest();
@@ -1468,7 +1571,7 @@ export function registerStaticViews(Alpine) {
         this.subjectNames = names;
       };
       try {
-        const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+        const all = await publishedSessionList();
         remember(all);
         const index = pick(all);
         if (index.length) return index;
@@ -1606,6 +1709,9 @@ export function registerStaticViews(Alpine) {
     /** @param {any} row */
     rowState(row) {
       if (row?.failed) return "Could not be loaded";
+      // A row of this weights table that carries no weights: a rollup with
+      // none, or one typed position_actions on a weights subject.
+      if (this.rowWeights(row).every((v) => v == null)) return row?.swarmRecommendation ? "No weights published" : "No recommendation published";
       if (!this.recommendation(row)) return "No recommendation published";
       return this.rowMoves(row) == null ? "No target recorded" : "";
     },
@@ -1674,6 +1780,20 @@ export function registerStaticViews(Alpine) {
     },
     hasBook() { return this.recommendation(this.latest())?.kind !== "weights" && !!this.latestBook() && this.latestActions().length > 0; },
     hasExplorer() { return this.recommendation(this.latest())?.kind === "weights" || this.hasBook(); },
+    // A weights subject's session recommends only when it publishes weights.
+    hasLatestRecommendation() {
+      const r = this.recommendation(this.latest());
+      return this.isWeightsSubject() ? r?.kind === "weights" : !!r;
+    },
+    // The latest session's own words: its rationale, or its synthesis when it
+    // is not a rollup's. A rollup's synthesis is a template over the tally
+    // printed under it ("3 of 7 members … Stance split: 3 constructive"), and
+    // the session page leaves it out for the same reason.
+    latestProse() {
+      const s = this.latest();
+      const rec = s?.swarmRecommendation;
+      return this.rationaleOf(s) || (rec && (rec.quorum || rec.stances) ? "" : s?.synthesis || "");
+    },
     explorerSource() { return this.latest(); },
     explorerSvg() {
       return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.latest());
@@ -1781,7 +1901,7 @@ export function registerStaticViews(Alpine) {
     // said 9 readings. Fall back to the old cut only if the dates are unusable,
     // and never return fewer than the two points a series needs.
     windowed() {
-      const all = this.snapshots;
+      const all = this.isVaultStack() ? this.stackSnapshots() : this.snapshots;
       if (all.length < 2) return all;
       const day = (s) => Date.parse(`${s?.date}T00:00:00Z`);
       const last = day(all[all.length - 1]);
@@ -1821,6 +1941,7 @@ export function registerStaticViews(Alpine) {
     // only the bottom band has a flat baseline — every band above it is sheared
     // by the ones below, so the position that matters most gets the honest edge.
     concentrationSeries() {
+      if (this.isVaultStack()) return this.vaultSeries();
       const rows = this.windowed();
       const tokens = this.chartTokens();
       if (rows.length < 2 || !tokens.length) return [];
@@ -1854,13 +1975,18 @@ export function registerStaticViews(Alpine) {
     concentrationLegend() {
       const series = this.concentrationSeries();
       if (!series.length) return [];
-      return series.map((b) => ({
+      const items = series.map((b) => ({
         token: b.token,
         // The residual band's key is lowercase; printed as-is it reads as one
         // more token among the symbols. Keys and focus stay on `token`.
-        label: b.token === OTHER_TOKEN ? "Other" : b.token,
+        label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token),
         color: b.color,
+        mark: b.mark,
       })); // largest first: the legend runs left to right under the chart
+      // The vault stack's target lines, when any reading has a target, named
+      // by what they are: the router's applied weights, or the framework's.
+      if (this.isVaultStack() && this.vaultTargetLines().length) items.push({ token: "target", label: this.stackTargetName(), target: true });
+      return items;
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
@@ -1896,11 +2022,7 @@ export function registerStaticViews(Alpine) {
       // session rather than one per day, so evenly-spaced points drew a
       // three-week gap the same width as a one-day one. Index spacing stays as
       // the fallback for snapshots whose dates will not parse.
-      const stamps = rows.map((r) => Date.parse(`${r?.date}T00:00:00Z`));
-      const dated = stamps.every((t) => Number.isFinite(t)) && stamps[stamps.length - 1] > stamps[0];
-      const span = dated ? stamps[stamps.length - 1] - stamps[0] : 0;
-      const xs = rows.map((_, i) => (dated ? 1000 * ((stamps[i] - stamps[0]) / span) : 1000 * (i / (rows.length - 1))));
-      return { rows, series, xs };
+      return { rows, series, xs: shareChartXs(rows.map((r) => r?.date)) };
     },
     // The bands, bottom-up over a running baseline, the largest position on the
     // bottom (only the bottom band has a flat, honest baseline). Each band is a
@@ -1909,50 +2031,41 @@ export function registerStaticViews(Alpine) {
     chartSvg() {
       const m = this.chartModel();
       if (!m) return "";
-      const y = (frac) => (100 - this.clampPct(frac * 100)).toFixed(2);
-      const base = m.rows.map(() => 0);
-      const fills = [];
-      const edges = [];
-      for (const b of m.series) {
-        const top = base.map((v, i) => v + b.shares[i]);
-        const upper = top.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`);
-        const lower = base.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`).reverse();
-        for (let i = 0; i < base.length; i++) base[i] = top[i];
-        const tok = this.escapeHtml(b.token);
-        fills.push(`<polygon data-token="${tok}" points="${upper.concat(lower).join(" ")}" fill="${b.color}" fill-opacity="0.62"`
-          + ` stroke="var(--color-void)" stroke-width="1" vector-effect="non-scaling-stroke"/>`);
-        edges.push(`<polyline data-token="${tok}" points="${upper.join(" ")}" fill="none" stroke="${b.color}"`
-          + ` stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
-      }
-      // Gridlines over the fills, faint: at 50% a single position becomes the
-      // majority of the book.
-      const grid = [25, 50, 75].map((t) => `<line x1="0" x2="1000" y1="${100 - t}" y2="${100 - t}"`
-        + ` stroke="rgba(237,239,241,${t === 50 ? 0.22 : 0.1})" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
-      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${fills.join("")}${edges.join("")}${grid}</svg>`;
+      // The vault stack's target over the bands: one dashed line per boundary
+      // between vaults, in one neutral colour, never a vault's hue.
+      const overlay = this.isVaultStack()
+        ? this.vaultTargetLines().map((points) => `<polyline data-token="target" points="${points}" fill="none" style="stroke:var(--color-text-soft)"`
+          + ` stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`).join("")
+        : "";
+      return shareChartSvg({ xs: m.xs, series: m.series, overlay });
     },
     chartLabel() {
       const m = this.chartModel();
       if (!m) return "";
-      const named = m.series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
-      return `Share of the book by position, stacked to 100%, ${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+      const named = m.series.map((b) => `${b.label ?? b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
+      const span = `${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}`;
+      if (this.isVaultStack()) {
+        const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
+        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
+        const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
+        return `Share of the book by vault, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
+      }
+      return `Share of the book by position, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
     },
     // A tick under every reading, month and day; the ones between the ends drop
     // out on a narrow screen. The last reading's year is the positions label's
     // above the chart, so the first tick carries its own year only when it
     // differs (windowed() can fall back to two readings a year or more apart).
+    // Past eight readings only every step-th is dated, or 69 dates print over
+    // one another (the vault subject on production); the rest show under the
+    // crosshair.
     chartXTicks() {
       const m = this.chartModel();
       if (!m) return [];
-      const last = m.rows.length - 1;
       const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
-      const lastYear = String(m.rows[last]?.date || "").slice(0, 4);
-      return m.rows.map((r, i) => ({
-        key: `${r.date}-${i}`,
-        left: m.xs[i] / 10,
-        label: i === 0 && String(r.date || "").slice(0, 4) !== lastYear ? this.formatDate(r.date, "short") : md(r.date),
-        i,
-        cls: i === 0 ? "is-first" : i === last ? "is-last" : "is-mid",
-      }));
+      const lastYear = String(m.rows[m.rows.length - 1]?.date || "").slice(0, 4);
+      return shareChartTicks(m.rows.map((r) => r.date), m.xs,
+        (d, first) => (first && String(d || "").slice(0, 4) !== lastYear ? this.formatDate(d, "short") : md(d)));
     },
     // One reading, for the crosshair and its tooltip: every band's share on
     // that date, top band first, as the stack reads.
@@ -1967,18 +2080,14 @@ export function registerStaticViews(Alpine) {
         total: Number.isFinite(total) && total > 0 ? this.fmtUsd(total) : "",
         // Positions the book did not hold on that date are left out.
         items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
-          .map((b) => ({ token: b.token, label: b.token === OTHER_TOKEN ? "Other" : b.token, color: b.color, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
+          .map((b) => ({ token: b.token, label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token), color: b.color, mark: b.mark, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
       };
     },
     // The crosshair snaps to the nearest reading under the pointer.
     chartMove(ev) {
       const m = this.chartModel();
       if (!m) return;
-      const rect = ev.currentTarget.getBoundingClientRect();
-      const at = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 1000;
-      let best = 0;
-      for (let i = 1; i < m.xs.length; i++) if (Math.abs(m.xs[i] - at) < Math.abs(m.xs[best] - at)) best = i;
-      this.chartAt = best;
+      this.chartAt = nearestReading(m.xs, ev);
     },
     chartKey(ev) {
       const m = this.chartModel();
@@ -1998,6 +2107,392 @@ export function registerStaticViews(Alpine) {
       for (const el of host.querySelectorAll("[data-token]")) {
         el.classList.toggle("is-muted", this.chartFocus !== null && el.getAttribute("data-token") !== this.chartFocus);
       }
+    },
+    // ── the vault stack (the Robot Money Vault subject) ──────────────────────
+    // A PortfolioRouter and four leg vaults, one per sleeve. Its Holdings is
+    // one book grouped by vault: the total is the four vaults' sum, the ring
+    // is each vault's actual weight against the weights in force, and the
+    // chart stacks the vaults in their sleeves' hues with that target drawn
+    // over them. Every read below goes through stackSnapshots() and
+    // stackWalletList(), which are the devnet fixture's when the switch is on
+    // and the subject's own book otherwise.
+    isVaultStack() { return this.subject?.id === VAULT_SUBJECT_ID; },
+    // The page's lede. The vault's thesis_blurb is agent-facing session
+    // context written for the single Base vault, with the weights in it; the
+    // page states the subject only, however many vaults are live.
+    subjectLede() {
+      if (this.isVaultStack()) return "Depositor capital in the Robot Money vaults, one per sleeve. Distinct from the treasury wallet, which holds protocol-owned capital.";
+      return this.subject?.thesisBlurb || "";
+    },
+    // The devnet fixture's book is on (lib/vault-source.js): Holdings is test
+    // data, while the latest recommendation still reads the real book.
+    stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
+    // Off the devnet switch, Holdings is the vault feed: the read /allocation
+    // and every /vault page make (lib/vault-source.js loadVaultOverview), one
+    // reading, now. Not the subject's own snapshots: on production those are
+    // the treasury's book scaled by 0.7234 (ROBOT and ETH in a USDC lending
+    // vault, $33.6k against a $250 vault) and stopped on Aug 6, so the page
+    // printed a book no vault holds. The sessions still show the book they
+    // reviewed; this is what the vaults hold today. Until the feed answers,
+    // nothing, rather than the snapshot and then the feed.
+    stackSnapshots() {
+      if (this.vaultSnapshots) return this.vaultSnapshots;
+      const live = this.liveStackSnapshot();
+      return live ? [live] : [];
+    },
+    stackSnapshot() {
+      if (!this.vaultSnapshots) return this.liveStackSnapshot();
+      const list = this.vaultSnapshots;
+      return list.length ? normalizeSnapshot(list[list.length - 1]) : null;
+    },
+    // The feed as one reading of the book: every live vault's holdings (a
+    // lending vault's adapters and idle USDC), else the vault at its TVL.
+    liveStackSnapshot() {
+      const ov = this.vaultStack?.overview;
+      if (!ov || !this.vaultStackSettled || ov.combined?.tvlUsd == null) return null;
+      const positions = [];
+      for (const v of ov.vaults || []) {
+        if (v.availability !== "live") continue;
+        const holdings = Array.isArray(v.holdings) ? v.holdings : [];
+        if (holdings.length) {
+          for (const h of holdings) {
+            positions.push({ token: h.symbol || h.label, name: h.label, chain: "base", vault: v.slug, value_usd: Number(h.valueUsd) || 0 });
+          }
+        } else if (v.tvlUsd != null) {
+          positions.push({ token: v.symbol, name: v.symbol, chain: "base", vault: v.slug, value_usd: v.tvlUsd });
+        }
+      }
+      const at = ov.freshness?.indexedAt || ov.asOf;
+      return { date: at ? String(at).slice(0, 10) : "", totalValueUsd: ov.combined.tvlUsd, positions, live: true };
+    },
+    stackWalletList() {
+      if (this.vaultWallets) return this.vaultWallets;
+      return (this.subject?.wallets?.length ? this.subject.wallets : this.snapshot?.wallets) || [];
+    },
+    // The fixture labels the devnet book; the subject's own book carries none.
+    vaultStackLabel() { return this.vaultSnapshots ? DEVNET_LABEL : null; },
+    // The vault a position sits in. A book read before positions named their
+    // vault is the single rmUSDC vault's; once any position names one, a
+    // position that does not is unassigned rather than guessed.
+    vaultOf(p, snap) {
+      const named = String(p?.vault ?? "").toLowerCase();
+      if (VAULT_SLUGS.includes(named)) return named;
+      const anyNamed = (snap?.positions || []).some((x) => x?.vault != null && x.vault !== "");
+      return anyNamed ? null : "rmusdc";
+    },
+    // Each vault's value on one reading, and the unassigned rest.
+    vaultValuesOf(snap) {
+      /** @type {Record<string, number>} */
+      const out = {};
+      let unassigned = 0;
+      for (const p of snap?.positions || []) {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const v = this.vaultOf(p, snap);
+        if (v) out[v] = (out[v] || 0) + value;
+        else unassigned += value;
+      }
+      return { byVault: out, unassigned };
+    },
+    // Read from: the router (it holds nothing, so no value) and each vault
+    // with its sleeve and its value on the latest reading. A wallet that
+    // predates `kind` is the rmUSDC vault when it is rmUSDC's Base address.
+    stackWallets() {
+      const snap = this.stackSnapshot();
+      const { byVault } = this.vaultValuesOf(snap);
+      const rank = (w) => (w.kind === "router" ? -1 : w.vault ? VAULT_SLUGS.indexOf(w.vault) : VAULT_SLUGS.length);
+      return this.stackWalletList().filter(Boolean).map((w) => {
+        let kind = w.kind === "router" || w.kind === "vault" ? w.kind : null;
+        let id = kind === "vault" ? vaultBySlug(w.vault) || vaultForBucket(w.sleeve) : null;
+        if (!kind && String(w.address || "").toLowerCase() === VAULTS[0].baseAddress) {
+          kind = "vault";
+          id = VAULTS[0];
+        }
+        const value = kind === "vault" && id && byVault[id.slug] != null ? byVault[id.slug] : null;
+        return {
+          kind,
+          // The router by its role, whatever the feed calls it (the class
+          // name, PortfolioRouter, is not a reader's word).
+          name: id ? id.symbol : kind === "router" ? "Router" : w.label || w.name || "",
+          vault: id ? id.slug : null,
+          sleeve: id ? (vaultForBucket(w.sleeve) || id).name : "",
+          color: id ? id.color : null,
+          chain: w.chain || "",
+          address: w.address || w.addr || "",
+          value,
+        };
+      }).sort((a, b) => rank(a) - rank(b));
+    },
+    // The chains the stack is read on: the wallets', else the positions'.
+    stackChains() {
+      const chains = this.stackWallets().map((w) => w.chain);
+      for (const p of this.stackSnapshot()?.positions || []) chains.push(p?.chain);
+      return [...new Set(chains.filter(Boolean).map((c) => String(c)))];
+    },
+    // A Chain column only when the stack spans more than one chain; with one,
+    // the total's line names it once.
+    stackMultiChain() { return this.stackChains().length > 1; },
+    // An Address column only when some row has an address to show.
+    stackHasAddress() { return this.stackWallets().some((w) => !!w.address); },
+    // The total's line: the chain it is read on and the reading's date, so a
+    // total that differs from a vault page's names its own date.
+    vaultStatSub() {
+      return [
+        this.stackChains().map((c) => this.chainLabel(c)).join(", "),
+        this.stackSnapshot()?.date ? this.formatDate(this.stackSnapshot().date, "short") : "",
+      ].filter(Boolean).join(" · ");
+    },
+    // The latest reading grouped by vault, in published order, each with its
+    // value, its share of the book and its positions (largest first, each a
+    // share of the book). Positions with no vault close the list as
+    // "Unassigned", so the groups always add up to the total.
+    vaultGroups() {
+      const snap = this.stackSnapshot();
+      const total = Number(snap?.totalValueUsd) || 0;
+      const rows = (snap?.positions || []).map((p) => {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const vaultSlug = this.vaultOf(p, snap);
+        // The name the vault's own page gives the position.
+        return { ...p, vaultSlug, label: positionName(p, vaultSlug), value, share: total > 0 ? value / total : 0 };
+      });
+      const group = (identity, positions) => {
+        const value = positions.reduce((n, p) => n + p.value, 0);
+        return { ...identity, value, share: total > 0 ? value / total : 0, positions: positions.slice().sort((a, b) => b.value - a.value) };
+      };
+      const groups = VAULTS
+        .map((v) => ({ v, positions: rows.filter((r) => r.vaultSlug === v.slug) }))
+        .filter((g) => g.positions.length)
+        .map((g) => group(g.v, g.positions));
+      const rest = rows.filter((r) => !r.vaultSlug);
+      if (rest.length) groups.push(group({ slug: "unassigned", symbol: "Unassigned", name: "", color: null }, rest));
+      return groups;
+    },
+    // The weights in force on `date`, in basis points by vault slug: the
+    // router's applied weights once they were applied, else the published
+    // framework target in force that day. null when neither is complete, and
+    // until the vault overview has answered.
+    stackTargetAt(date) {
+      return this.stackTargetOf(date)?.by ?? null;
+    },
+    // The same, with where it came from: "applied" (the router's weights) or
+    // "target" (the framework's).
+    stackTargetOf(date) {
+      if (!this.vaultStackSettled || !date) return null;
+      const day = String(date).slice(0, 10);
+      const ov = this.vaultStack?.overview;
+      if (ov) {
+        const applied = VAULTS.map((v) => ov.vaults.find((r) => r.slug === v.slug)?.appliedBps ?? null);
+        const at = String(ov.router?.appliedAt || "").slice(0, 10);
+        if (layerComplete(applied) && at && at <= day) {
+          return { basis: "applied", by: Object.fromEntries(VAULTS.map((v, i) => [v.slug, applied[i]])) };
+        }
+      }
+      const fw = targetsInForce(this.allocationFw, day);
+      if (!fw) return null;
+      /** @type {Record<string, number>} */
+      const out = {};
+      for (const [key, pct] of Object.entries(fw)) {
+        const v = vaultForBucket(key);
+        if (v) out[v.slug] = Math.round(Number(pct) * 100);
+      }
+      return layerComplete(VAULTS.map((v) => out[v.slug])) ? { basis: "target", by: out } : null;
+    },
+    // The chart legend's name for the line over the bands: "Applied" when
+    // every reading it is drawn on used the router's weights, else "Target".
+    // The router's applied weights and the framework's are both the target in
+    // force (RM-115), so the line is named once.
+    stackTargetName() { return "Target"; },
+    // The ring: all four vaults, each at its actual weight on the latest
+    // reading, its value, the target in force on that date, and the drift
+    // between them (actual minus target, as /allocation's Vaults table has it).
+    vaultRingRows() {
+      const snap = this.stackSnapshot();
+      const groups = this.vaultGroups();
+      const target = snap ? this.stackTargetOf(snap.date) : null;
+      return VAULTS.map((v) => {
+        const g = groups.find((x) => x.slug === v.slug);
+        const pct = g ? g.share * 100 : 0;
+        const was = target ? target.by[v.slug] / 100 : null;
+        return {
+          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
+          // Drift: this vault's share against the target, in points, as
+          // /allocation's Vaults table takes it.
+          was, d: was == null ? null : Math.round((pct - was) * 10) / 10,
+          basis: target?.basis ?? "target", action: "", rationale: "",
+          assets: (g?.positions || []).map((p) => ({
+            key: `${v.slug}-${p.token}-${p.chain}`,
+            label: positionName(p, v.slug),
+            colour: null,
+            ofSleeve: g && g.value > 0 ? (p.value / g.value) * 100 : null,
+            ofTotal: Number.isFinite(p.share) ? p.share * 100 : null,
+          })),
+        };
+      });
+    },
+    // The chart's bands: each vault's share of the book on every reading, in
+    // published order, a vault that holds nothing across the window left out.
+    // What no vault accounts for is the residual band.
+    vaultSeries() {
+      const rows = this.windowed();
+      if (rows.length < 2) return [];
+      const shares = rows.map((snap) => {
+        const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd ?? 0);
+        const { byVault } = this.vaultValuesOf(snap);
+        return (slug) => (total > 0 ? (byVault[slug] || 0) / total : 0);
+      });
+      const bands = VAULTS
+        .map((v) => ({ token: v.slug, label: v.name, color: v.color, mark: "series", shares: shares.map((at) => at(v.slug)) }))
+        .filter((b) => b.shares.some((s) => s > 0));
+      if (!bands.length) return [];
+      const other = rows.map((_, i) => Math.max(0, 1 - bands.reduce((sum, b) => sum + b.shares[i], 0)));
+      if (other.some((v) => v > 0.005)) bands.push({ token: OTHER_TOKEN, label: "Other", color: OTHER_COLOR, mark: undefined, shares: other });
+      return bands;
+    },
+    // The target over the bands, as the SVG points of each dashed line: one
+    // per boundary between neighbouring vaults, stepping at the reading where
+    // the target changes and broken where there is none. A boundary at 0 or
+    // 100% on every reading is the chart's own edge, and two boundaries that
+    // coincide (a vault targeted at 0%) are drawn once.
+    vaultTargetLines() {
+      const m = this.chartModel();
+      if (!m) return [];
+      const targets = m.rows.map((r) => this.stackTargetAt(r.date));
+      const seen = new Set();
+      const out = [];
+      for (let k = 1; k < VAULTS.length; k++) {
+        const cum = targets.map((t) => (t ? VAULTS.slice(0, k).reduce((n, v) => n + t[v.slug], 0) / 100 : null));
+        if (cum.every((c) => c == null || c <= 0 || c >= 100)) continue;
+        const segments = [];
+        let seg = null;
+        cum.forEach((c, i) => {
+          if (c == null) { seg = null; return; }
+          if (!seg) { seg = []; segments.push(seg); } else seg.push([m.xs[i], cum[i - 1]]);
+          seg.push([m.xs[i], c]);
+        });
+        const lines = segments.filter((s) => s.length > 1)
+          .map((s) => s.map(([x, c]) => `${x.toFixed(1)},${(100 - c).toFixed(2)}`).join(" "));
+        const sig = lines.join("|");
+        if (!sig || seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(...lines);
+      }
+      return out;
+    },
+    vaultUsd(v) { return fmtVaultUsd(v); },
+
+    // ── the vault stack's TVL over time ─────────────────────────────────────
+    // The combined value on every reading of the book: the devnet fixture's
+    // fifteen, one on Base (the feed reads one day). Neutral, not a vault's hue.
+    tvlPoints() {
+      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
+    },
+    tvlAsOf() { return this.vaultStack?.overview?.asOf; },
+    tvlColor() { return "var(--color-text-soft)"; },
+    tvlMark() { return ""; },
+    tvlName() { return "the Robot Money vaults"; },
+    // The router, by its address, under the total: it holds nothing, so it is
+    // a fact about the stack rather than a row among the vaults.
+    stackRouter() { return this.stackWallets().find((w) => w.kind === "router" && w.address) || null; },
+
+    // The vault stack's headline figures, first in the meta row: what it
+    // holds, what it has returned, and how many vaults take deposits. Return
+    // is each vault's share price against the 1.00 it opened at, weighted by
+    // what the vault holds; depositors show once a vault serves them.
+    stackFacts() {
+      const ov = this.vaultStack?.overview;
+      if (!ov) return [];
+      const live = (ov.vaults || []).filter((v) => v?.availability === "live");
+      const facts = [];
+      const tvl = Number(ov.combined?.tvlUsd ?? this.stackSnapshot()?.totalValueUsd);
+      if (Number.isFinite(tvl)) facts.push({ key: "tvl", label: "TVL", value: fmtVaultUsd(tvl) });
+      const priced = live.filter((v) => Number.isFinite(Number(v.sharePrice)) && Number(v.tvlUsd) > 0);
+      const held = priced.reduce((n, v) => n + Number(v.tvlUsd), 0);
+      if (held > 0) {
+        const r = priced.reduce((n, v) => n + (Number(v.sharePrice) - 1) * Number(v.tvlUsd), 0) / held;
+        const pct = Math.round(r * 10000) / 100;
+        facts.push({ key: "ret", label: "Return since launch", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
+          tip: "Each vault's share price against the 1.00 it opened at, weighted by what the vault holds." });
+      }
+      const details = live.map((v) => this.stackDetails[v.slug]).filter(Boolean);
+      const deps = details.filter((d) => Number.isFinite(Number(d.depositors)));
+      if (deps.some((d) => Number(d.depositors) > 0)) facts.push({ key: "dep", label: "Depositors", value: deps.reduce((n, d) => n + Number(d.depositors), 0).toLocaleString("en-US") });
+      if (ov.vaults?.length) facts.push({ key: "live", label: "Vaults live", value: `${live.length} of ${ov.vaults.length}` });
+      return facts;
+    },
+
+    // ── the vault stack's activity ──────────────────────────────────────────
+    async loadStackActivity(load) {
+      const ov = load?.overview;
+      if (!ov) return;
+      const rows = [];
+      let served = false;
+      for (const v of VAULTS) {
+        const row = ov.vaults?.find((r) => r.slug === v.slug);
+        if (row?.availability !== "live") continue;
+        const { detail } = await loadVaultDetail(v.slug, load).catch(() => ({ detail: null }));
+        if (detail) this.stackDetails = { ...this.stackDetails, [v.slug]: detail };
+        if (!Array.isArray(detail?.activity)) continue;
+        served = true;
+        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, color: v.color });
+      }
+      this.stackActivity = served ? rows.sort((a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0)) : null;
+    },
+    stackActivityRows() {
+      const all = this.stackActivity || [];
+      return all.slice(this.stackActivityPage * 10, this.stackActivityPage * 10 + 10);
+    },
+    stackActivityPaged() { return (this.stackActivity || []).length > 10; },
+    stackActivityRange() {
+      const n = (this.stackActivity || []).length;
+      const from = this.stackActivityPage * 10 + 1;
+      return `${from}–${Math.min(n, from + 9)} of ${n}`;
+    },
+    stackActivityHasTx() { return (this.stackActivity || []).some((a) => !!a?.tx); },
+    activityEvent(a) {
+      const k = String(a?.kind ?? "").toLowerCase();
+      return k === "withdraw" || k === "withdrawal" ? "Withdrawal" : k === "deposit" ? "Deposit" : (k ? k[0].toUpperCase() + k.slice(1) : "—");
+    },
+    // What moved in the vault's own token, and its value: the USDC that went
+    // in or out, at $1.
+    activityAmount(a) {
+      const n = Number(a?.shares);
+      return a?.shares == null || !Number.isFinite(n) ? "—" : `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${a.symbol}`;
+    },
+    activityValue(a) { return a?.assets == null ? "—" : fmtVaultUsd(a.assets); },
+
+    // ── the Positions table's order ─────────────────────────────────────────
+    sortPositions(key) {
+      if (this.posSortKey === key) this.posSortDir = this.posSortDir === "desc" ? "asc" : "desc";
+      else { this.posSortKey = key; this.posSortDir = "desc"; }
+    },
+    posSortState(key) { return this.posSortKey === key ? (this.posSortDir === "desc" ? "descending" : "ascending") : "none"; },
+    /** @param {any[]} rows */
+    posSorted(rows) {
+      const key = this.posSortKey;
+      const val = (p) => Number(key === "amount" ? p.balance : key === "price" ? p.price_usd : key === "share" ? p.share : p.value);
+      const sign = this.posSortDir === "desc" ? -1 : 1;
+      return rows.slice().sort((a, b) => {
+        const x = val(a); const y = val(b);
+        if (!Number.isFinite(x) && !Number.isFinite(y)) return 0;
+        if (!Number.isFinite(x)) return 1;
+        if (!Number.isFinite(y)) return -1;
+        return sign * (x - y);
+      });
+    },
+    // By vault: each vault keeps its place in the published order, and the
+    // picked order sorts what it holds, so a sort never moves a vault.
+    groupedPositions() {
+      return this.vaultGroups().map((g) => ({ ...g, positions: this.posSorted(g.positions) }));
+    },
+    // Every position across the vaults in the picked order, each with its vault.
+    sortedPositions() {
+      return this.posSorted(this.vaultGroups().flatMap((g) => g.positions.map((p) => ({ ...p, group: g }))));
+    },
+    /** @param {string} slug */
+    togglePosGroup(slug) { this.posClosed = { ...this.posClosed, [slug]: !this.posClosed[slug] }; },
+    // A position's token contract, where the reading names one.
+    positionHref(p) {
+      const addr = p?.address || p?.token_address || p?.tokenAddress;
+      return addr ? this.explorerHref(p.chain, addr) : null;
     },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the
@@ -2187,7 +2682,7 @@ export function registerStaticViews(Alpine) {
     // full history — and it cost 21 requests to get the wrong answer.
     async loadRows(memberId) {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=${MEMBER_TAKES_MAX}`);
         const rows = (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
           // camelTake, not the raw row: raw takes carry no `permalinkId`, only
@@ -2292,6 +2787,8 @@ export function registerStaticViews(Alpine) {
       return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
+    // At the route's ceiling there may be more: the counts are the latest ones.
+    takesCapped() { return this.allTakes().length >= MEMBER_TAKES_MAX; },
     // The record at a glance. Counts every take, published or still collecting,
     // so a just-submitted one registers immediately rather than reading as zero
     // while its window is open. Conviction is the mean confidence across them.
@@ -2977,6 +3474,14 @@ export function registerStaticViews(Alpine) {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
+    // A subject whose recommendation is a set of weights: the framework, or a
+    // subject declared bucket_weights. Its session that publishes none says "No
+    // weights published", whatever type the payload claims; production's
+    // weights subjects published position_actions rollups from August on.
+    weightsSubject() {
+      return this.isFramework() || this.session?.swarmRecommendation?.type === "bucket_weights"
+        || this.subject?.recommendationType === "bucket_weights";
+    },
     // The outcome's rows: the recommendation, and the move it implies.
     //
     // The gap is measured against ACTUAL where we know it, because that is the
@@ -3123,7 +3628,8 @@ export function registerStaticViews(Alpine) {
     },
     // The time of day matters once a subject convenes more than once a day.
     sessionTime() {
-      const at = this.session?.publishedAt || this.session?.generatedAt;
+      // When it convened, the moment the date beside it names (rowTime).
+      const at = this.session?.generatedAt || this.session?.publishedAt;
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
@@ -3219,13 +3725,43 @@ export function registerStaticViews(Alpine) {
             pos: this.votePos(y),
             anchor: this.takeAnchor(t),
             // Members sharing a stance put their names on opposite sides of
-            // their dots, so the labels never run into each other; the last
-            // column always labels to the left, away from the edge.
+            // their dots; the last column always labels to the left, away
+            // from the edge.
             flip: col === 4 || (list.length > 1 && j % 2 === 0),
           });
         });
       }
-      return out;
+      return this.placeVoteLabels(out);
+    },
+    // Sides alone do not keep three names apart: three members at 60 to 62%
+    // in one column wrote "Athena", "Robot Money" and "Noop Analyst" over one
+    // another on production. A label that would overlap one already placed,
+    // or run across another member's dot, tries the dot's other side, then
+    // sits centred above or below its own dot, a label's height at a time
+    // until it clears; the dot stays where the vote put it. Units are % of
+    // the plot.
+    placeVoteLabels(dots) {
+      const H = 9;
+      const placed = [];
+      const clear = (d, x0, x1, y) => y >= 0 && y <= 100
+        && !placed.some((p) => p.x0 < x1 && x0 < p.x1 && Math.abs(p.y - y) < H)
+        && !dots.some((o) => o !== d && o.x > x0 && o.x < x1 && Math.abs(o.pos - y) < H / 2);
+      for (const d of [...dots].sort((a, b) => a.x - b.x)) {
+        const w = (String(d.name || "").length + 5) * 0.6;
+        const tries = [
+          { flip: d.flip, dy: 0 }, { flip: !d.flip, dy: 0 },
+          // A stacked name clears its own dot as well as its neighbours'.
+          ...[1, -1, 2, -2, 3, -3].map((step) => ({ stack: true, dy: step * (H + 2) })),
+        ];
+        const at = tries.find((t) => {
+          const x0 = t.stack ? d.x - w / 2 : t.flip ? d.x - w : d.x;
+          return clear(d, x0, x0 + w, d.pos + t.dy);
+        }) || tries[0];
+        const x0 = at.stack ? d.x - w / 2 : at.flip ? d.x - w : d.x;
+        placed.push({ x0, x1: x0 + w, y: d.pos + at.dy });
+        Object.assign(d, { flip: !!at.flip, stack: !!at.stack, dy: at.dy });
+      }
+      return dots;
     },
     voteMean() {
       const vals = (this.takes || []).map((t) => Number(t.confidence)).filter((n) => Number.isFinite(n));
@@ -3456,9 +3992,28 @@ function historyRowOf(s) {
   };
 }
 
+// Every published session the list answers, walking `nextCursor` as /swarm's
+// loadAllSessions() does. The list pages at 20 by default, so its first page
+// alone held 5 of the allocation's 63 sessions on production, and the subject
+// page said "Sessions 5". Capped so a runaway cursor cannot loop.
+async function publishedSessionList() {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 40; page += 1) {
+    /** @type {Record<string, string>} */
+    const query = { state: "published", limit: "50" };
+    if (cursor) query.cursor = cursor;
+    const res = await api.get(ROUTES.swarm.sessions, query);
+    rows.push(...(res?.sessions || []));
+    cursor = res?.nextCursor || null;
+    if (!cursor) break;
+  }
+  return rows;
+}
+
 // A subject's published sessions, newest first, as { id, date, subjectId }.
-// The public list has no subject filter yet (#991), so the whole index is read
-// and filtered here, with the static archive behind it.
+// A backend without #1007's subject filter answers every subject's rows, so
+// the whole index is read and filtered here, with the static archive behind it.
 /** @param {string} subjectId */
 async function subjectSessionIndex(subjectId) {
   const pick = (/** @type {any[]} */ list) => list
@@ -3467,7 +4022,7 @@ async function subjectSessionIndex(subjectId) {
       || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
     .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
   try {
-    const list = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+    const list = pick(await publishedSessionList());
     if (list.length) return list;
   } catch (_) { /* fall through to the archive */ }
   return pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);

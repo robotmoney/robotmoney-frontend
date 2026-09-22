@@ -391,7 +391,7 @@
               Vault shares. The vault holds USDC deployed across Aave, Morpho and Compound. Withdraw at NAV anytime, minus a 0.25% exit fee that stays in the vault. The published allocation is four sleeves, with live weights at <a class="tok__inline-link" href="/allocation">/allocation</a>.
             </p>
           </div>
-          <a class="tok__btn tok__btn--solid tok__btn--block" href="/skills">OpenClaw Skill &rarr;</a>
+          <a class="tok__btn tok__btn--ghost tok__btn--block" href="/skills">OpenClaw Skill &rarr;</a>
         </div>
         <div class="tok__card">
           <div class="tok__part-head">
@@ -410,7 +410,7 @@
               Exposure to supply reduction from buybacks funded by swap fees. Governance is planned, not live: there is no vote to join today.
             </p>
           </div>
-          <a class="tok__btn tok__btn--solid tok__btn--block" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener &rarr;</a>
+          <a class="tok__btn tok__btn--ghost tok__btn--block" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener &rarr;</a>
         </div>
       </div>
     </div>
@@ -540,38 +540,35 @@
   letter-spacing: 0.2em;
   color: var(--color-text-muted);
 }
-/* Plain text, not accent, matching the install command on /skills: cyan is the
-   house colour and it is already carrying the nav and the DexScreener button in
-   this band. The underline on hover is what marks it as the link, rather than
-   spending the accent on the longest string in the card. */
+/* A link like every other on the site: lettered in the text colour over a
+   neutral rule that goes to full text colour on hover. The rule is there at
+   rest, because an address that only underlines on hover has nothing marking
+   it as a link until the pointer finds it. */
 .tok__contract-addr {
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: var(--color-text);
+  color: var(--color-link);
   text-decoration: none;
-  border-bottom: 1px solid transparent;
+  border-bottom: 1px solid var(--color-link-line);
   transition: border-color 0.2s;
   /* The address is already elided in the markup, so it never needs to break;
      break-all shattered it one character per line in the narrower column. */
   white-space: nowrap;
 }
-/* This hairline is the link affordance, per the note above, so it takes the
-   muted text tone rather than a border colour: --color-border-light is a
-   fainter line than the retired dim rung was, and an underline the
-   reader cannot see leaves the address with nothing marking it as a link. */
-.tok__contract-addr:hover { border-bottom-color: var(--color-text-muted); }
+.tok__contract-addr:hover { border-bottom-color: var(--color-link); }
 .tok__contract-addr:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+/* Secondary button. "Copied!" is the label swap, so the copied state holds
+   the hover frame rather than a colour of its own. */
 .tok__copy {
   flex-shrink: 0; margin-left: auto;
   padding: 0.5rem 1rem;
-  font-family: var(--font-mono); font-size: 0.65rem;
-  text-transform: uppercase; letter-spacing: 0.2em;
-  color: var(--color-text-muted);
-  background: transparent; border: 1px solid var(--color-border);
-  cursor: pointer; transition: color 0.2s, border-color 0.2s;
+  font-family: var(--font-mono); font-size: 0.65rem; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--color-text);
+  background: transparent; border: 1px solid var(--color-border-light);
+  cursor: pointer; transition: border-color 0.2s;
 }
-.tok__copy:hover { color: var(--color-accent); border-color: var(--color-accent); }
-.tok__copy.is-copied { color: var(--color-accent); border-color: var(--color-accent); }
+.tok__copy:hover, .tok__copy.is-copied { border-color: var(--color-text); }
 .tok__hero-links {
   display: flex;
   gap: 0.75rem;
@@ -582,25 +579,21 @@
   padding: 0.7rem 1.25rem;
   font-family: var(--font-mono);
   font-size: 0.7rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.1em;
   text-decoration: none;
   transition: all 0.3s var(--ease-out-expo);
   flex: 1;
 }
-.tok__btn--solid {
-  background: var(--color-accent);
-  color: var(--color-void);
-}
-.tok__btn--solid:hover { background: #fff; }
+/* Secondary: outlined, the frame goes to the text colour on hover. None of
+   these is filled: the two Participation paths are parallel, so neither is the
+   page's one call to action. */
 .tok__btn--ghost {
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
 }
-.tok__btn--ghost:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
+.tok__btn--ghost:hover { border-color: var(--color-text); }
 .tok__btn--block {
   display: block;
   margin-top: 1.25rem;
@@ -613,7 +606,6 @@
 }
 .tok__section--deep {
   background: var(--color-deep);
-  border-radius: 8px;
   padding: 2.5rem 1.5rem;
   margin: 1.5rem 0;
 }
@@ -658,7 +650,6 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   padding: 1.5rem;
-  border-radius: 6px;
 }
 .tok__card--link {
   text-decoration: none;
@@ -666,12 +657,11 @@
   display: block;
   transition: border-color 0.3s var(--ease-out-expo);
 }
-.tok__card--link:hover { border-color: var(--color-accent); }
+.tok__card--link:hover { border-color: var(--color-link); }
 .tok__card--glow { box-shadow: 0 0 24px rgba(16,185,129,0.06); }
 .tok__icon-dot {
   width: 14px;
   height: 14px;
-  border-radius: 3px;
   margin-bottom: 1rem;
 }
 .tok__icon { display:block; margin-bottom: 1rem; }
@@ -721,7 +711,6 @@
   font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--color-text);
-  border-radius: 4px;
 }
 .tok__gov-dot { width: 8px; height: 8px; border-radius: 50%; }
 
@@ -730,7 +719,6 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   padding: 1.5rem;
-  border-radius: 6px;
   margin-top: 1rem;
 }
 .tok__panel-title {
@@ -865,10 +853,13 @@
 .tok__inline-link {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: var(--color-accent);
-  text-decoration: none;
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
-.tok__inline-link:hover { text-decoration: underline; }
+.tok__inline-link:hover { text-decoration-color: var(--color-link); }
 
 /* Donut */
 .tok__donut-wrap {
@@ -904,7 +895,6 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   padding: 1.25rem;
-  border-radius: 6px;
 }
 .tok__fee-head {
   display: flex;
@@ -975,7 +965,6 @@
   background: var(--color-deep);
   border: 1px solid var(--color-border);
   padding: 1.5rem;
-  border-radius: 6px;
 }
 .tok__disclaimer p {
   font-size: 0.85rem;

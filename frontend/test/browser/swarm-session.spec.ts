@@ -677,7 +677,7 @@ test("a take's memo is linked from its card, and only when it is a web address",
 
   const memos = page.locator("#takes .rr-take a.sv__memo-link");
   await expect(memos).toHaveCount(1);
-  await expect(memos).toHaveText("Read memo ↗");
+  await expect(memos).toHaveText("Read memo");
   await expect(memos).toHaveAttribute("href", "https://example.org/athena-memo");
   await expect(memos).toHaveAttribute("rel", /noopener/);
   await expect(page.locator('#takes a[href^="javascript:"]')).toHaveCount(0);
@@ -942,6 +942,37 @@ const LIVE_ROSTER = {
   ],
 };
 
+// Three constructive members at 60 to 62% share a column: a name that has no
+// room beside its dot moves off it, and no name covers another or runs across
+// another member's dot.
+test("the vote chart keeps every member's name clear of the others' names and dots", async ({ page }) => {
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === `/api/swarm/sessions/${LIVE_ID}`) return route.fulfill(json({ session: LIVE_SESSION, takes: LIVE_TAKES }));
+    if (u.pathname === "/api/swarm/members") return route.fulfill(json(LIVE_ROSTER));
+    if (u.pathname.startsWith("/api/")) return route.fulfill(notFound);
+    return route.continue();
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/swarm/sessions/${LIVE_ID}`);
+  await expect(page.locator("#takes .rr-vote__dot")).toHaveCount(5);
+
+  const boxes = await page.locator("#takes .rr-vote__dot").evaluateAll((els) => els.map((el) => {
+    const dot = el.querySelector("i")!.getBoundingClientRect();
+    const lbl = el.querySelector(".rr-vote__lbl")!.getBoundingClientRect();
+    return { name: el.getAttribute("aria-label")!.split(",")[0], dot: { x: dot.x + dot.width / 2, y: dot.y + dot.height / 2 }, lbl: { l: lbl.left, r: lbl.right, t: lbl.top, b: lbl.bottom } };
+  }));
+  for (const a of boxes) {
+    for (const b of boxes) {
+      if (a === b) continue;
+      const overlap = a.lbl.l < b.lbl.r && b.lbl.l < a.lbl.r && a.lbl.t < b.lbl.b && b.lbl.t < a.lbl.b;
+      expect(overlap, `${a.name}'s name overlaps ${b.name}'s`).toBe(false);
+      const onDot = b.dot.x > a.lbl.l && b.dot.x < a.lbl.r && b.dot.y > a.lbl.t && b.dot.y < a.lbl.b;
+      expect(onDot, `${a.name}'s name covers ${b.name}'s dot`).toBe(false);
+    }
+  }
+});
+
 test("a live aggregate reached by id draws the record from its own brief and prints no templated discussion", async ({ page }) => {
   const briefQueries: string[] = [];
   await page.route("**/api/**", (route) => {
@@ -1008,10 +1039,11 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(absent.first()).toHaveAttribute("href", "/swarm/members/maximus");
 
   // No outcome: a live aggregate that recommended no weights recommended
-  // nothing, and the hardcoded USDC/rmUSDC pair is not the swarm's.
+  // nothing, and the hardcoded USDC/rmUSDC pair is not the swarm's. The
+  // allocation's recommendation is weights, so its empty ring says so.
   await expect(outcome(page).locator(".rr-x")).toHaveCount(0);
   await expect(outcome(page).locator(".sr__act, .rr-act")).toHaveCount(0);
-  await expect(outcome(page).locator(".rr-ring--empty .rr-empty__t")).toHaveText("No actions published");
+  await expect(outcome(page).locator(".rr-ring--empty figcaption")).toHaveText("No weights published");
   await expect(page.locator("body")).not.toContainText("hardcoded");
   // No discussion: every line of it restates a figure the record draws.
   await expect(page.locator(".rr-sec__h")).toHaveText(["The recommendation", "Reasoning & disagreement", "Member takes", "Evidence & provenance"]);

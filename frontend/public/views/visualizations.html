@@ -99,14 +99,12 @@
   padding: 1.75rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   text-decoration: none;
   color: inherit;
   transition: border-color 0.25s var(--ease-out-expo), transform 0.25s var(--ease-out-expo);
 }
-.stub__card:hover { border-color: var(--color-accent); transform: translateY(-2px); }
+.stub__card:hover { border-color: var(--color-link); transform: translateY(-2px); }
 .stub__card-title { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.6rem; }
-.stub__card:hover .stub__card-title { color: var(--color-accent); }
 .stub__card-desc {
   font-size: 0.9rem;
   line-height: 1.6;
@@ -114,26 +112,35 @@
   margin: 0 0 1rem;
 }
 .stub__card-cta {
+  display: inline-block;
+  padding: 0.625rem 1.25rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-accent);
+  letter-spacing: 0.1em;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  transition: border-color 0.25s var(--ease-out-expo);
 }
+.stub__card:hover .stub__card-cta { border-color: var(--color-text); }
 .stub__back { margin-top: 3rem; }
 .stub__back-link {
   display: inline-block;
   padding: 0.75rem 1.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  letter-spacing: 0.1em;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
   text-decoration: none;
-  transition: border-color 0.3s, color 0.3s;
+  transition: border-color 0.3s, background-color 0.3s;
 }
-.stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.stub__back-link:hover { border-color: var(--color-text); background: var(--color-surface); }
 @media (min-width: 700px) {
   .stub__grid { grid-template-columns: 1fr 1fr 1fr; }
 }

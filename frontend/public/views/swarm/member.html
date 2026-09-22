@@ -36,14 +36,14 @@
              figures, then who runs it. -->
         <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes">
           <template x-if="member.status === 'active'">
-            <span class="rr-meta__i"><i class="mp-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
+            <span class="rr-meta__i"><i class="rm-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
-          <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="recordStats().takes"></b></span></template>
+          <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
-          <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip">Signatures re-checked against this member&rsquo;s key.</span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
+          <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip" x-text="takesCapped() ? `Signatures re-checked against this member’s key, over the latest ${recordStats().takes} takes.` : 'Signatures re-checked against this member’s key.'"></span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
           <template x-if="recordStats().archival"><span class="rr-meta__i">Archived<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About archived takes">i</button><span class="rm-tip__bub" role="tooltip">Filed before members signed their takes.</span></span> <b x-text="recordStats().archival"></b></span></template>
-          <template x-if="recordStats().takes"><span class="rr-meta__i">Mean confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About mean confidence">i</button><span class="rm-tip__bub" role="tooltip">How boldly it argues.</span></span> <b x-text="recordStats().conviction"></b></span></template>
+          <template x-if="recordStats().takes"><span class="rr-meta__i">Mean confidence<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About mean confidence">i</button><span class="rm-tip__bub" role="tooltip" x-text="takesCapped() ? `How boldly it argues, over the latest ${recordStats().takes} takes.` : 'How boldly it argues.'"></span></span> <b x-text="recordStats().conviction"></b></span></template>
           <template x-if="member.operator">
             <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
           </template>
@@ -127,7 +127,7 @@
                         </button>
                       </template>
                       <template x-if="memoHref(row.take.memoUrl)">
-                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo</a>
                       </template>
                       <template x-if="takeHref(row.take)">
                         <a class="rr-lnk rr-take__act" :href="takeHref(row.take)" data-take-permalink>Verification receipt</a>
@@ -143,7 +143,7 @@
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
-            <span class="rr-sec__aside" x-show="recentTakes().length">Times UTC</span>
+            <span class="rr-sec__aside" x-show="recentTakes().length" x-text="takesCapped() ? `Latest ${allTakes().length} · Times UTC` : 'Times UTC'">Times UTC</span>
           </div>
           <!-- Filter narrows WHAT is listed, sort decides in what order: two
                questions, two groups on one line. mp-chip--sort carries no
@@ -231,7 +231,7 @@
                     </button>
                   </template>
                   <template x-if="memoHref(row.take.memoUrl)">
-                    <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                    <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(row.take.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo</a>
                   </template>
                   <template x-if="takeHref(row.take)">
                     <a class="rr-lnk rr-take__act" :href="takeHref(row.take)" data-take-permalink>Verification receipt</a>
@@ -319,14 +319,5 @@
     .mp-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
     .mp-sort__label { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.16em;
                       text-transform: uppercase; color: var(--color-text-muted); margin-right: 0.15rem; }
-    /* Active is a state, and states are square here. It pulses so it cannot be
-       read as the static verified mark. */
-    .mp-pulse { width: .4rem; height: .4rem; background: var(--color-green);
-                flex: 0 0 auto; animation: mp-beat 2.4s ease-in-out infinite; }
-    /* .rr-meta__i i (the regime marker's round 7px dot) outranks .mp-pulse, so
-       restate the square at the same specificity plus one. */
-    .rr-meta__i .mp-pulse { width: .4rem; height: .4rem; border-radius: 0; }
-    @keyframes mp-beat { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
-    @media (prefers-reduced-motion: reduce) { .mp-pulse { animation: none; } }
   </style>
 </section>

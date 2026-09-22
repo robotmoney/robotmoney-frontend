@@ -1,0 +1,36 @@
+{
+  "asOf": "2026-07-30T16:20:21.316Z",
+  "stale": false,
+  "source": "live",
+  "tvlUsd": 199.697519,
+  "sharePrice": 1.0119632313363411,
+  "totalShares": 197.336734,
+  "idleUsdc": 0,
+  "apy7d": null,
+  "adapters": [
+    {
+      "name": "Morpho",
+      "address": "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9",
+      "configured": true,
+      "balanceUsd": 66.57913,
+      "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+      "provenance": "live"
+    },
+    {
+      "name": "Aave",
+      "address": "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea",
+      "configured": true,
+      "balanceUsd": 66.557557,
+      "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+      "provenance": "live"
+    },
+    {
+      "name": "Compound",
+      "address": "0x8247da22a59fce074c102431048d0ce7294c2652",
+      "configured": true,
+      "balanceUsd": 66.560832,
+      "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+      "provenance": "live"
+    }
+  ]
+}

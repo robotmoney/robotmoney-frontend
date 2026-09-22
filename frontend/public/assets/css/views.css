@@ -138,14 +138,13 @@
    holding tooltips, and both kinds are absolutely positioned — the header
    .rm-tip bubbles open UPWARD over the card head, and the last row's .rv__tip
    opens downward past the card foot. Clipping is what made the bottom-row
-   tooltip a sliver. The radius the clip used to enforce is on the head.
+   tooltip a sliver.
    `min-width: 0` comes with it: `overflow: hidden` was also, silently, what
    kept the three grid columns even, because a scroll container contributes no
    min-content to its track. Dropping the clip without this let the widest
    panel table set its own column, and the 3-across grid grew past the 1280px
    page. The panel table is trimmed below to fit the track it is given. */
 .rv__panel-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: visible; min-width: 0; }
-.rv__panel-card > .rv__panel-card-head { border-radius: var(--radius) var(--radius) 0 0; }
 /* Buying back the ~20px the panel table needs to fit its track at three across:
    inner cells give up 1.6px a side (the 1rem card gutter on the outer edges is
    untouched), and the mono provenance line may break mid-token — "Blockchain.com"
@@ -175,33 +174,34 @@
    a tooltip instead of clicking through. The dotted rule moves to the inner
    label so it underlines the words and not the info glyph beside them. */
 .rv__ind-name { font-size: 0.85rem; color: var(--color-text); }
-a.rv__ind-name { text-decoration: none; }
+a.rv__ind-name { color: var(--color-link); text-decoration: none; }
 /* The last word of the name plus the glyph, travelling as one word. */
 .rv__ind-tail { white-space: nowrap; }
 .rv__ind-label {
   text-decoration: underline; text-decoration-style: dotted;
-  text-decoration-color: var(--color-text-muted); text-underline-offset: 4px;
+  text-decoration-color: var(--color-link-line); text-underline-offset: 4px;
 }
-a.rv__ind-name:hover { color: var(--color-accent); }
-a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-link); }
 a.rv__ind-name:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 /* name + info-icon + hover tooltip wrapper (source PanelTable "group") */
 .rv__ind-tipwrap { position: relative; display: inline; }
 .rv__ind-info { margin-left: 0.25rem; display: inline-block; color: var(--color-text-muted); vertical-align: baseline; transition: color 0.15s; }
-a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-info { color: var(--color-text); }
 .rv__ind-info svg { display: inline-block; vertical-align: baseline; }
+/* Anchoring only: the bubble's skin is the one in components.css (.rm-tip__bub
+   and friends). */
 .rv__tip {
   pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
-  margin-top: 0.5rem; width: 18rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.75rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
-  color: var(--color-text-muted);
+  margin-top: 0.5rem; width: 18rem;
   opacity: 0; transition: opacity 0.15s;
 }
 .rv__ind-tipwrap:hover .rv__tip { opacity: 1; }
 .rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); margin-top: 0.15rem; }
-.rv__ind-src a { color: var(--color-text-muted); text-decoration: none; }
-.rv__ind-src a:hover { color: var(--color-accent); }
+/* A nav-weight link: the provenance line's muted rung over the link rule, full
+   text on hover. */
+.rv__ind-src a { color: var(--color-text-muted); text-decoration: underline;
+  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.rv__ind-src a:hover { color: var(--color-text); text-decoration-color: var(--color-link); }
 .rv__spark { width: 78px; }
 .rv__spark-svg { display: block; }
 .rv__spark-empty { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
@@ -233,7 +233,9 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .rv__method-list li { margin-bottom: 0.25rem; }
 .rv__method-card p { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 0; }
 .rv__method-note { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 1rem 0 0; }
-.rv__link { color: var(--color-accent); text-decoration: underline; }
+.rv__link { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rv__link:hover { text-decoration-color: var(--color-link); }
 
 /* swarm — each .sv__* selector is declared in EXACTLY ONE block per media
    context (base props for several classes live in the port section below).
@@ -275,21 +277,21 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    conventions for the same data. Lives here rather than in either page's
    scoped <style> for exactly that reason. */
 .mp-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1rem; }
+/* The button family's mono caps at the chip rung of the type scale. */
 .mp-chip { display: inline-flex; align-items: center; gap: 0.42rem; min-height: 34px;
   padding: 0.3rem 0.62rem; background: transparent; color: var(--color-text-muted);
   border: 1px solid var(--color-border); border-radius: 0;
-  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer;
   transition: color .16s ease, border-color .16s ease, background .16s ease; }
 /* The hover lift is a border, not type, so it steps along the border tokens:
-   border to border-light, while the label goes to full text. The same pair
-   .sv__more:hover already uses further down this sheet. */
+   border to border-light, while the label goes to full text. */
 .mp-chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
-/* Selected: a filled plane edged in cyan. Cyan is the house interface line by
-   covenant, so it says "this control is active" without competing with the dot,
-   which says "which subject" — two jobs, two roles, no ambiguity. The × makes
-   it obvious the filter clears by clicking again. */
-.mp-chip.is-on { color: var(--color-text); border-color: var(--color-accent); background: var(--color-surface); }
-.mp-chip__x { color: var(--color-accent); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
+/* Selected: a raised plane edged in the text colour. No hue, so "this control
+   is active" never competes with a colour that means something else on the
+   page. The × makes it obvious the filter clears by clicking again. */
+.mp-chip.is-on { color: var(--color-text); border-color: var(--color-text); background: var(--color-surface); }
+.mp-chip__x { color: var(--color-text-muted); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
+.mp-chip:hover .mp-chip__x { color: var(--color-text); }
 .mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
@@ -307,8 +309,8 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    plus a plain-language line on hover or keyboard focus.
    The full sentence also rides on aria-label, so assistive tech gets the
    explanation without depending on a hover-only tooltip. */
-/* Neutral, not cyan. Cyan is interface state in this system, and on a take row
-   it sat beside a stance pill that IS carrying meaning in colour — so the mark
+/* Neutral, not cyan. Cyan is kept for the filled primary button and the focus
+   ring, and on a take row it sat beside a stance pill that IS carrying meaning in colour — so the mark
    competed with the one thing on the row that had earned a hue. That a take is
    signed and checkable is a fact, and facts read in the text colour. The
    failure and archive variants below keep their colour, because those ARE
@@ -418,29 +420,28 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
 .sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-/* The way back, as a control rather than a raw path with a rule under it. It
-   borrows the .sv__fact chip's shape, which is the vocabulary the page already
-   speaks two blocks further down, and drops the underline that made a
-   navigation affordance read as body copy with a link in it. The arrow is
-   drawn here rather than typed into five views, and steps left on hover. */
+/* The way back, as a control rather than a raw path with a rule under it: the
+   outlined secondary button, which drops the underline that made a navigation
+   affordance read as body copy with a link in it. The arrow is drawn here
+   rather than typed into five views, and steps left on hover. */
 .sv__back { display: inline-flex; align-items: center; gap: 0.45rem;
   margin-bottom: 2rem; padding: 0.34rem 0.65rem 0.34rem 0.55rem;
-  border: 1px solid var(--color-border); text-decoration: none;
-  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-light); text-decoration: none;
+  color: var(--color-text); font-weight: 500;
   transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo); }
 .sv__back::before { content: "\2190"; display: inline-block;
   transition: transform 150ms var(--ease-out-expo); }
-.sv__back:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.sv__back:hover { border-color: var(--color-text); }
 .sv__back:hover::before { transform: translateX(-2px); }
 .sv__back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .sv__back, .sv__back::before { transition: none; }
 }
-.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
+.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; }
 .sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
-   radius <= 2px. It used to carry a 1px Beam seam along the top edge. That was
+   square corners. It used to carry a 1px Beam seam along the top edge. That was
    covenant-legal (cyan as a line) and still wrong: the seam repeated down every
    row of an identical card grid, marking nothing, which is the accent rail the
    brand sheet argues against. The border is uniform now and the mark carries
@@ -468,15 +469,15 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__row-main { min-width: 0; flex: 1; }
 .sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
 .sv__row-title { color: var(--color-text); font-weight: 700; }
-/* A title that is a link. No rule at rest — a heading underlined all the time
-   is heavy — and the accent arrives underneath it on hover, which is the same
-   thing every other link on the site does. These were the last four still
-   turning cyan instead. */
+/* A title that is a link, in the link colour, never cyan. A take card's name
+   carries the whole link rule, --color-link-line at rest and --color-link on
+   hover, from .rr-take a.rr-take__name, which outranks the card's resets.
+   The selectors here add the rule on hover only. */
 .sv__row-title, .sv__member-link, a.sv__session-title, .sv__take-who { text-decoration: none; }
 .sv__row-title:hover, .sv__member-link:hover, a.sv__session-title:hover, .sv__take-who:hover,
 .sv__row-title:focus-visible, .sv__member-link:focus-visible,
 a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
-  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration: underline; text-decoration-color: var(--color-link);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 .sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; max-width: 78ch; }
@@ -731,7 +732,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__mtable tr:last-child td { border-bottom: 0; }
 .sv__mwho { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
 .sv__mwho a { color: var(--color-text); font-weight: 500; text-decoration: none; white-space: nowrap; }
-.sv__mwho a:hover { color: var(--color-accent); }
+.sv__mwho a:hover { text-decoration: underline; text-decoration-color: var(--color-link);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
 /* Lens is proposer flavour, not a fact about every seat, so it sits under the
    name rather than owning a column a validator could never fill. */
 .sv__mlens { display: block; font-style: normal; font-family: var(--font-mono); font-size: 0.7rem;
@@ -768,10 +770,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__qualifier::before { content: "·"; margin-right: 0.5rem; color: var(--color-text-muted); }
 
 .sv__more { display: block; width: 100%; margin-top: 0.75rem; padding: 0.75rem; cursor: pointer;
-  background: none; border: 1px solid var(--color-border); border-radius: var(--radius);
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); }
-.sv__more:hover { border-color: var(--color-border-light); color: var(--color-text-soft); }
+  background: none; border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text); }
+.sv__more:hover { border-color: var(--color-text); }
 .sv__more[disabled] { opacity: 0.5; cursor: default; }
 .sv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
 .sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
@@ -844,8 +846,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-size: 1.3rem; line-height: 1; color: var(--color-text); }
 .sr__meta { margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-family: var(--font-mono);
   font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-muted); }
-.sr__meta a { color: var(--color-text); text-decoration: none; border-bottom: 1px solid var(--color-border); }
-.sr__meta a:hover { border-bottom-color: var(--color-text-muted); }
+.sr__meta a { color: var(--color-link); text-decoration: none; border-bottom: 1px solid var(--color-link-line); }
+.sr__meta a:hover { border-bottom-color: var(--color-link); }
 .sr__cols { display: grid; grid-template-columns: 1fr; }
 .sr__col { min-width: 0; padding: 1.1rem 1.25rem 1.25rem; }
 .sr__col + .sr__col { border-top: 1px solid var(--color-border); }
@@ -1004,33 +1006,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
-/* Six and seven columns do not fit a phone. They scroll inside their own
-   container rather than the page, and the hint says so instead of leaving it
-   to be discovered. */
-.alp__tblwrap { overflow-x: auto; border: 1px solid var(--color-border); }
-table.alp__tbl {
-  width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.7rem;
-  min-width: 40rem; font-variant-numeric: tabular-nums;
-}
-table.alp__tbl th {
-  text-align: right; font-size: 0.6rem; font-weight: 500; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--color-border-light); background: var(--color-surface);
-}
-table.alp__tbl th:first-child, table.alp__tbl td:first-child { text-align: left; }
-table.alp__tbl td {
-  text-align: right; padding: 0.5rem 1rem; border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-soft);
-}
-table.alp__tbl tbody tr:last-child td { border-bottom: 0; }
-/* The change ledger and the vault table both live in .alp__tbl. `q` is the
-   quiet column a figure is measured against; `note` is prose and must be
-   allowed to wrap, which the mono default forbids. */
-table.alp__tbl td.q { color: var(--color-text-muted); }
-table.alp__tbl--led { min-width: 34rem; }
-/* Without a width on the first column the browser hands it every spare pixel
-   and the figures end up a screen away from the sleeve they describe. */
-table.alp__tbl--led th:first-child { width: 40%; }
 .alp__dot {
   display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.5rem;
   vertical-align: 0.05em;
@@ -1040,8 +1015,8 @@ table.alp__tbl--led th:first-child { width: 40%; }
    arrow at type size, which is the point size the covenant allows it. */
 .alp__mv { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
 .alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
-/* Up and down read the same way in both tables: the change ledger and the
-   vault's drift column. --color-warn is the red the palette already carries.
+/* Up and down read the same way wherever a move shows: the ring's legend and
+   the Vaults table's gaps. --color-warn is the red the palette already carries.
    Beacon no longer marks notes anywhere here: the only warm hues left are
    CATEGORICAL series colours, which mean a sleeve or a name and nothing else. */
 .alp__mv.up { color: var(--color-green); }
@@ -1163,14 +1138,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
 
 .sv__session-foot { display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; margin-top: 1rem; }
+/* The outlined secondary button. */
 .sv__takes-btn { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 34px;
   padding: 0 0.6rem 0 0.45rem; cursor: pointer; background: none;
-  border: 1px solid var(--color-border); border-radius: var(--radius);
-  font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); }
-/* Border, not type: the same border to border-light hover step as .mp-chip and
-   .sv__more. */
-.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-border-light); color: var(--color-text); }
+  border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text); }
+.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-text); }
 .sv__takes-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .sv__takes-btn[disabled] { opacity: 0.45; cursor: default; }
 .sv__takes-caret { display: inline-block; transition: transform 0.16s ease; font-size: 0.9rem; line-height: 1; }
@@ -1203,7 +1177,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .sv__take-absent-who { color: var(--color-text); font-weight: 500; font-size: 0.85rem;
   text-decoration: none; }
 .sv__take-absent-who:hover, .sv__take-absent-who:focus-visible {
-  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration: underline; text-decoration-color: var(--color-link);
   text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .sv__take-absent-who + .sv__take-absent-who::before { content: ", "; color: var(--color-text-muted);
   font-weight: 400; }
@@ -1218,8 +1192,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .sv__meta-grid dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
 /* The signer's name was falling through to the browser's default link colours
    — a purple :visited link on the receipt, off the palette entirely. */
-.sv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
-.sv__meta-grid dd a:hover { text-decoration: underline; }
+.sv__meta-grid dd a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.sv__meta-grid dd a:hover { text-decoration-color: var(--color-link); }
 .sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
 .sv__bullet-list li::before { content: "· "; color: var(--color-text-muted); }
@@ -1247,10 +1222,10 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
 .sv__dis-nostance { color: var(--color-text-muted); font-style: italic; }
 .sv__disagreement .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
-  color: var(--color-text); text-transform: none; text-decoration: underline;
-  text-decoration-color: var(--color-border-light); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+  color: var(--color-link); text-transform: none; text-decoration: underline;
+  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .sv__disagreement .sv__dis-read:hover, .sv__disagreement .sv__dis-read:focus-visible {
-  color: var(--color-text); text-decoration-color: var(--color-accent); }
+  color: var(--color-link); text-decoration-color: var(--color-link); }
 .sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
 .sv__disagreement h3 { margin: 0 0 0.7rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
 .sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
@@ -1267,9 +1242,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
    are unequal heights, and whitespace on its own stopped saying where one
    member's position ended and the next began. */
 .sv__disagreement li + li { border-top: 1px solid rgba(255,255,255,0.05); }
-.sv__disagreement a { color: var(--color-text); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem;
-  text-decoration: underline; text-decoration-color: var(--color-border-light); text-decoration-thickness: 1px; text-underline-offset: 4px; }
-.sv__disagreement a:hover, .sv__disagreement a:focus-visible { text-decoration-color: var(--color-accent); }
+.sv__disagreement a { color: var(--color-link); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem;
+  text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.sv__disagreement a:hover, .sv__disagreement a:focus-visible { text-decoration-color: var(--color-link); }
 /* "Settles when" is the resolution condition, not body copy — set it off from
    the positions above it so it reads as the disagreement's footer. */
 .sv__disagreement p { margin: 0.8rem 0 0; padding-top: 0.7rem;
@@ -1333,11 +1308,14 @@ table.alp__tbl--led th:first-child { width: 40%; }
 }
 .sv__input:focus { outline: none; border-color: var(--color-accent); }
 .sv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
+/* The primary button, as .btn-primary draws it. */
 .sv__submit {
-  align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+  align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: var(--radius);
-  color: var(--color-bg); background: var(--color-accent); border: none;
+  color: var(--color-void); background: var(--color-accent); border: none;
+  transition: background-color 0.3s;
 }
+.sv__submit:hover:not(:disabled) { background: #fff; }
 .sv__submit:disabled { opacity: 0.5; cursor: default; }
 .sv__applied { flex-direction: column; align-items: flex-start; }
 
@@ -1405,8 +1383,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .alloc-total { color: var(--color-green); font-weight: 700; }
 .alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
 .alloc-foot { margin-top: 2.5rem; }
-.alloc-foot a { color: var(--color-accent); text-decoration: none; }
-.alloc-foot a:hover { text-decoration: underline; }
+.alloc-foot a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.alloc-foot a:hover { text-decoration-color: var(--color-link); }
 @media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
 
 /* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
@@ -1507,7 +1486,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
   border: 1px solid var(--color-border); border-radius: var(--radius-pill);
 }
 .adm-nav__link:hover { color: var(--color-text); }
-.adm-nav__link--active { color: var(--color-deep); background: var(--color-accent); border-color: var(--color-accent); }
+.adm-nav__link--active { color: var(--color-text); background: var(--color-surface); border-color: var(--color-text); }
 
 .adm-alerts { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem; }
 .adm-alert {
@@ -1539,8 +1518,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .adm-artifacts { display: flex; flex-direction: column; gap: 0.75rem; }
 .adm-artifact__head { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: baseline; font-family: var(--font-mono); font-size: 0.75rem; }
 
-.adm-link { color: var(--color-accent); text-decoration: none; font-family: var(--font-mono); font-size: 0.78rem; }
-.adm-link:hover { text-decoration: underline; }
+.adm-link { color: var(--color-link); font-family: var(--font-mono); font-size: 0.78rem;
+  text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.adm-link:hover { text-decoration-color: var(--color-link); }
 
 .adm-form { display: flex; flex-direction: column; gap: 0.75rem; max-width: 34rem; margin: 0.5rem 0 1.5rem; padding: 1rem 1.25rem; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); }
 .adm-form__row { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -1566,7 +1546,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
   padding: 0.4rem 0.9rem; font-family: var(--font-mono); font-size: 0.78rem; cursor: pointer;
   color: var(--color-text-muted); background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius);
 }
-.adm-tab--active { color: var(--color-accent); border-color: rgba(0, 229, 255, 0.4); background: rgba(0, 229, 255, 0.08); }
+.adm-tab--active { color: var(--color-text); border-color: var(--color-text); background: var(--color-surface); }
 
 .adm-meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; font-size: 0.85rem; }
 .adm-meta-grid dt { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1588,20 +1568,19 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr a:not(.btn-primary) { color: inherit; text-decoration: none; }
 /* Two link treatments and no third, both monochrome (David, 2026-09-18: no
    cyan links). Inline: --color-link, lighter than the text it sits in, over
-   --color-link-line (ink in a table). Nav: mono, uppercase, text-soft over the
-   same line. Every selector is at least (0,2,1), so it matches the reset above
-   and, written after it, wins. */
+   --color-link-line. Nav: mono, uppercase, text-soft over the same line. Every
+   selector is at least (0,2,1), so it matches the reset above and, written
+   after it, wins. */
 .rr .rr-prose a, .rr .rr-dl a, .rr a.rr-lnk {
   color: var(--color-link); border-bottom: 1px solid var(--color-link-line);
   transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
-.rr .rr-table a.rr-lnk { color: var(--color-text); border-bottom-color: var(--color-border-light); }
 .rr .rr-crumbs, .rr .rr-recnav, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
   font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-soft); }
 .rr .rr-crumbs a, .rr .rr-recnav a, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
   border-bottom: 1px solid var(--color-link-line); padding-bottom: 0.25rem;
   transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
-.rr .rr-prose a:hover, .rr .rr-dl a:hover, .rr a.rr-lnk:hover, .rr .rr-table a.rr-lnk:hover,
-.rr .rr-prose a:focus-visible, .rr .rr-dl a:focus-visible, .rr a.rr-lnk:focus-visible, .rr .rr-table a.rr-lnk:focus-visible {
+.rr .rr-prose a:hover, .rr .rr-dl a:hover, .rr a.rr-lnk:hover,
+.rr .rr-prose a:focus-visible, .rr .rr-dl a:focus-visible, .rr a.rr-lnk:focus-visible {
   border-bottom-color: var(--color-link); }
 .rr .rr-crumbs a:hover, .rr .rr-recnav a:hover, .rr a.rr-meta__lnk:hover, .rr a.rr-sec__aside:hover,
 .rr .rr-crumbs a:focus-visible, .rr .rr-recnav a:focus-visible, .rr a.rr-meta__lnk:focus-visible, .rr a.rr-sec__aside:focus-visible {
@@ -1625,9 +1604,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
 /* Facts as label and figure on one hairline row, not as bordered chips. */
 .rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; padding: 0.75rem 0;
   border-block: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A row of facts that opens a section, above a figure: clear of it. */
+.rr-meta--lead { margin-bottom: 1.5rem; }
 .rr-meta__i { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
 .rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+/* The live mark stays square beside the round regime dot it would inherit. */
+.rr-meta__i .rm-pulse { width: 0.4rem; height: 0.4rem; border-radius: 0; }
 .rr-meta__lnk { position: relative; margin-left: auto; }
 /* A 13px (i) and a 21px link are too small to hit on a phone, and the tip is
    the only way to learn what a figure means: each gets an invisible tap area. */
@@ -1642,6 +1625,12 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-sec__h { margin: 0; font-family: var(--font-display); font-weight: 700;
   font-size: 1.6875rem; line-height: 1.15; letter-spacing: -0.015em; text-transform: uppercase; color: var(--color-text); }
 .rr-sec__aside { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A note the reader must not miss (a vault's risk): the live strip's surface
+   and hairline, a mono-caps label, and no hue, since colour would read as an
+   error state rather than a standing fact. */
+.rr-callout { margin: 0 0 1.5rem; padding: 1rem 1.15rem; border: 1px solid var(--color-border); background: var(--color-surface); }
+.rr-callout__k { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); }
+.rr-callout__b { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 /* A block's title inside a section (Wallets, Positions, the chart): the
    section heading's face a size down, so it reads as a subtitle and not as
    the mono label a figure carries. Its fact sits on the right, in the
@@ -1649,6 +1638,9 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-subhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin: 0 0 1rem; }
 .rr-subhead__h { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.0625rem; line-height: 1.2;
   letter-spacing: -0.005em; text-transform: uppercase; color: var(--color-text); }
+/* A part of a block (Positions' "Over time"): the block title's face a step
+   smaller and quieter, so it reads as inside the block, not beside it. */
+.rr-subhead__h--minor { font-size: 0.8125rem; color: var(--color-text-soft); }
 /* One sub-heading style inside every section: the mono label. The outcome of
    a recommendation, the synthesis, the market reading, a take's call and the
    state of its signatures all open the same way. */
@@ -1688,7 +1680,7 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-disc__clip { overflow: hidden; min-height: 0; }
 .rr-disc__body { padding: 1rem 0 1.5rem; }
 .rr-more { position: relative; display: inline-flex; align-items: baseline; gap: 0.75rem; margin: 0.75rem 0 0; padding: 0; background: none; border: 0;
-  border-bottom: 1px solid var(--color-border-light); color: var(--color-text); font: inherit; font-size: 0.875rem; cursor: pointer; }
+  border-bottom: 1px solid var(--color-link-line); color: var(--color-link); font: inherit; font-size: 0.875rem; cursor: pointer; }
 /* A 23px line of text, repeated down a member's page: an invisible tap area
    around it, as .rr-meta__lnk has. */
 .rr-more::before { content: ""; position: absolute; inset: -0.625rem -0.5rem; }
@@ -1729,10 +1721,14 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-legend li > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-legend .alp__mv { justify-content: flex-start; }
 
-/* The one prominent control on a subject page: the way into the latest session. */
+/* The one prominent control on a subject page: the way into the latest session.
+   A full-width secondary button, outlined, in the family's mono caps: filled
+   cyan at this width would be a bar of Beam as a mass. */
 .rr-cta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border-light); font-size: 0.875rem; color: var(--color-text); transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
-.rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text-muted); }
+  border: 1px solid var(--color-border-light); color: var(--color-text);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
+  transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
+.rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text); }
 
 /* Stance tallies, one dot and count per stance that has any. */
 .rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.75rem; }
@@ -1778,8 +1774,11 @@ table.alp__tbl--led th:first-child { width: 40%; }
    (warn when a signature failed, muted when archived). */
 a.sv__vfy { text-decoration: none; }
 .rr-take a:focus-visible, .rr-take button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
-.rr-take__name:hover, .rr-take__name:focus-visible { color: var(--color-text); text-decoration: underline;
-  text-decoration-color: var(--color-link); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+/* The same weight as the resets above and .rr a:not(.btn-primary), and later
+   in the sheet, so the name keeps its underline. */
+.rr-take a.rr-take__name { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rr-take a.rr-take__name:hover, .rr-take a.rr-take__name:focus-visible { text-decoration-color: var(--color-link); }
 .rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; min-width: 0; }
 .rr-take__call { margin: 0 0 0.5rem; }
 .rr-take__text > div > .sv__take-body, .rr-take__text > .sv__take-body { margin-top: 0; }
@@ -1831,6 +1830,13 @@ a.sv__vfy { text-decoration: none; }
 .rr-table th, .rr-table td { padding: 0.75rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
 .rr-table thead th { background: var(--color-surface); font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; color: var(--color-text-muted); vertical-align: bottom; }
 .rr-table thead th small { display: block; margin-top: 0.25rem; font-size: 0.625rem; }
+/* A column a reader can sort by: the heading is the button, in the heading's
+   own voice, with the direction after it once it is the order. */
+.rr-sort { padding: 0; background: none; border: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.rr-sort:hover, .rr-sort:focus-visible { color: var(--color-text); }
+.rr-table thead th[aria-sort="descending"] .rr-sort::after { content: " ↓"; }
+.rr-table thead th[aria-sort="ascending"] .rr-sort::after { content: " ↑"; }
+.rr-table thead th[aria-sort="descending"], .rr-table thead th[aria-sort="ascending"] { color: var(--color-text); }
 .rr-table thead th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
 .rr-table tbody th { font-weight: 500; font-size: 0.875rem; }
 /* Rules divide, they never close: a table's last row draws no line, because
@@ -1847,11 +1853,13 @@ a.sv__vfy { text-decoration: none; }
 .rr-table tbody tr:hover { background: var(--color-surface); }
 .rr-pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .rr-pager div { display: flex; gap: 0.5rem; }
-.rr-btn { min-height: 2.25rem; padding: 0.5rem 1rem; border: 1px solid var(--color-border-light); background: transparent; color: var(--color-text);
-  font: inherit; font-size: 0.75rem; cursor: pointer; transition: border-color 100ms var(--ease-out-expo); }
-.rr-btn:hover:not(:disabled) { border-color: var(--color-text-muted); }
+/* The secondary button: outlined, the family's mono caps. */
+.rr-btn { min-height: 2.25rem; padding: 0.5rem 1rem; border: 1px solid var(--color-border-light); border-radius: 0; background: transparent; color: var(--color-text);
+  font: inherit; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
+  cursor: pointer; transition: border-color 100ms var(--ease-out-expo); }
+.rr-btn:hover:not(:disabled) { border-color: var(--color-text); }
 .rr-btn:disabled { opacity: 0.4; cursor: default; }
-/* The history's search, beside its heading: the pager's hairline and type,
+/* The history's search, beside its heading: the pager's hairline and mono,
    square like every control on the record. appearance: none drops the
    rounded field Safari draws for type=search. */
 .rr-search { flex: 0 1 18rem; min-width: 12rem; }
@@ -1885,11 +1893,20 @@ a.sv__vfy { text-decoration: none; }
 /* A weights legend set against a basis reads as a table: Recommended, the
    Target (or Book) it is set against, and the Change in points, each in its
    own labelled column, so a reader never has to tell a move from a value. */
-.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 3.75rem; column-gap: 0.5rem; }
+.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 4.75rem; column-gap: 0.5rem; }
 .rr-legend__head { display: grid; padding: 0 0.5rem 0.5rem; border-bottom: 1px solid var(--color-border);
   font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
 .rr-legend__head > span:nth-child(n+3), .rr-legend--cols .rr-legend__row > b { text-align: right; }
-.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+/* A basis named by a long word (a vault set against its Recommended weight)
+   takes the width its head needs. */
+.rr-legend--long .rr-legend__head, .rr-legend--long.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 5.5rem 4.75rem; }
+/* A value before the share: Vault, Value, Share, Target (the vault subject's
+   By vault). The share stays the bright figure, the ring's own. */
+.rr-legend--value .rr-legend__head, .rr-legend--value.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem; }
+/* The vault stack's one Vaults table: value, share, target and drift. */
+.rr-legend--drift .rr-legend__head, .rr-legend--drift.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem 4.25rem; }
+/* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
+.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .rr-legend__was { color: var(--color-text-muted); }
 .rr-legend--cols .rr-legend__d .alp__mv { justify-content: flex-end; }
 .rr-legend__s { display: none; }
@@ -1933,8 +1950,6 @@ a.sv__vfy { text-decoration: none; }
 .rr-act[class*="is-add"], .rr-act[class*="is-buy"], .rr-act[class*="is-increase"], .rr-act[class*="is-accumulate"] { color: var(--color-green); }
 .rr-act[class*="is-trim"], .rr-act[class*="is-reduce"], .rr-act[class*="is-sell"], .rr-act[class*="is-exit"], .rr-act[class*="is-cut"] { color: var(--color-warn); }
 .rr-x__why { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
-.rr-x__close { padding: 0.25rem 0; background: none; border: 0; color: var(--color-text-muted); font: inherit; font-size: 0.75rem; cursor: pointer; }
-.rr-x__close:hover { color: var(--color-text); }
 .rr-x__assets { min-width: 0; }
 .rr-x__assets th, .rr-x__assets td { padding: 0.5625rem 0.5rem; font-size: 0.75rem; }
 .rr-x__assets tbody th { font-weight: 400; font-size: 0.75rem; }
@@ -1961,7 +1976,8 @@ a.sv__vfy { text-decoration: none; }
 .rr-area__x span { position: absolute; top: 0.5rem; transform: translateX(-50%); font-family: var(--font-mono); font-size: 0.625rem;
   color: var(--color-text-muted); white-space: nowrap; }
 .rr-area__x span::before { content: ""; position: absolute; left: 50%; top: -0.5rem; width: 1px; height: 0.3125rem; background: var(--color-border-light); }
-.rr-area__x .is-on { color: var(--color-text); }
+.rr-area__x .is-on { color: var(--color-text); z-index: 1; background: var(--color-void); }
+.rr-area__x .is-sparse:not(.is-on) { display: none; }
 .rr-area__x .is-first { transform: none; }
 .rr-area__x .is-first::before { left: 0; }
 .rr-area__x .is-last { transform: translateX(-100%); }
@@ -2019,12 +2035,20 @@ a.sv__vfy { text-decoration: none; }
 .rr-vote__mean span { position: absolute; right: 0; bottom: 0.25rem; font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
 .rr-vote__dot { position: absolute; display: inline-flex; align-items: center; gap: 0.5rem; transform: translate(-0.3125rem, -50%);
   font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; z-index: 1;
-  background: var(--color-void); /* a name on the mean line is not struck through by it */
   transition: opacity 160ms var(--ease-out-expo); }
 .rr-vote__dot i { width: 0.625rem; height: 0.625rem; border-radius: 50%; background: var(--c); flex: none;
   box-shadow: 0 0 0 3px var(--color-void); transition: transform 160ms var(--ease-out-expo); }
 .rr-vote__dot b { font-weight: 400; color: var(--color-text-muted); }
+/* The ground is on the words, not the whole mark, so a name on the mean line
+   is not struck through by it. */
+.rr-vote__lbl { display: inline-flex; gap: 0.5rem; background: var(--color-void); }
 .rr-vote__dot.is-flip { flex-direction: row-reverse; transform: translate(calc(-100% + 0.3125rem), -50%); }
+.rr-vote__dot.is-flip .rr-vote__lbl { flex-direction: row-reverse; }
+/* A name with no room on either side (placeVoteLabels) sits centred over or
+   under its own dot; the plot is 11rem tall, so --dy is its % offset of that
+   height. */
+.rr-vote__dot.is-stack .rr-vote__lbl { position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, calc(-50% + var(--dy, 0))); }
 .rr-vote__dot:hover i, .rr-vote__dot:focus-visible i { transform: scale(1.3); }
 .rr-vote__dot:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .rr-vote__dot.is-dim { opacity: 0.35; }
@@ -2039,8 +2063,8 @@ a.sv__vfy { text-decoration: none; }
   .rr-vote__x span em { display: none; }
   .rr-vote__x span em.is-short { display: inline; }
   /* No room for names beside the dots: they show on touch or hover. */
-  .rr-vote__dot span, .rr-vote__dot b { display: none; }
-  .rr-vote__dot:hover span, .rr-vote__dot:focus-visible span, .rr-vote__dot:hover b, .rr-vote__dot:focus-visible b { display: inline; }
+  .rr-vote__lbl { display: none; }
+  .rr-vote__dot:hover .rr-vote__lbl, .rr-vote__dot:focus-visible .rr-vote__lbl { display: inline-flex; }
   .rr-vote__dot:hover, .rr-vote__dot:focus-visible { z-index: 3; background: var(--color-void); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2069,13 +2093,86 @@ a.sv__vfy { text-decoration: none; }
 .rr-positions tbody th i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.625rem; }
 .rr-share { display: inline-grid; grid-template-columns: 5rem auto; align-items: center; gap: 0.75rem; }
 .rr-share i { display: block; height: 0.25rem; justify-self: end; opacity: 0.7; }
+
+/* A vault page (/vault/:slug). One square swatch in the vault's hue, the same
+   hue it has on /allocation and the swarm pages. */
+.rr-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.5rem; vertical-align: middle; }
+/* A token symbol keeps its case (rmUSDC, not RMUSDC) in an uppercase title or
+   breadcrumb; the title rule it overrides is itself !important. */
+.rr .rr-sym { text-transform: none !important; }
+/* Recommended, applied and actual for one vault, as bars on one 0 to 100%
+   scale, so the gaps between them read as lengths. */
+.rr-layers { display: grid; gap: 0.75rem; }
+.rr-layers__row { display: grid; grid-template-columns: 7rem minmax(0, 1fr) 4.5rem; align-items: center; gap: 1rem; }
+.rr-layers__row .rr-mono { text-align: right; font-size: 0.875rem; color: var(--color-text); }
+.rr-layers__bar { height: 0.375rem; background: var(--color-surface-light); }
+.rr-layers__bar i { display: block; height: 100%; }
+.rr-layers + .rr-meta { margin-top: 1.5rem; }
+/* A gap's glyph inside a fact: .rr-meta__i's swatch rule would shrink it to a
+   7px dot. */
+.rr-meta__i .alp__mv i { width: auto; height: auto; border-radius: 0; }
+/* A sparse series: one square point per reading, no line between them. */
+.rr-area__pt { position: absolute; width: 0.4375rem; height: 0.4375rem; transform: translate(-50%, -50%); pointer-events: none; }
+/* The reading under the crosshair, on the line: a touch larger, ringed in the
+   page ground so it stands off the fill. */
+.rr-area__pt.is-on { width: 0.5625rem; height: 0.5625rem; box-shadow: 0 0 0 2px var(--color-void); }
+/* /allocation's four vaults: up to seven columns, which scroll inside
+   .rr-tablewrap on a narrow screen rather than squeezing the gaps onto two
+   lines. A phone drops the .rr-vaults__wide columns instead (the two gaps),
+   which each vault's page carries. */
+.rr-vaults { min-width: 40rem; }
+/* Each weight's dollars at the combined TVL, under it. */
+.rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+/* A vault's activity with no transaction to link has no Transaction column. */
+.rr-activity:not(.has-tx) .rr-activity__tx { display: none; }
+/* The Robot Money Vault's positions, grouped by vault: the vault's row reads
+   as the group's head, and its positions sit indented under it. */
+.rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }
+.rr-positions .rr-in th { padding-left: 1.75rem; }
+/* The vault stack's positions: fixed columns, so a sort or a fold moves
+   nothing sideways; each vault's head row folds its positions under a
+   square chevron, and the head sits on the surface a step above the rows. */
+.rr-subhead__tools { display: flex; align-items: center; gap: 1rem; }
+.rr-postable { table-layout: fixed; }
+.rr-postable__name { width: 34%; }
+.rr-postable__chain { width: 10%; }
+.rr-postable__n { width: 14%; }
+.rr-postable__share { width: 24%; }
+.rr-postable td, .rr-postable th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-postable tbody + tbody .rr-group > * { border-top: 1px solid var(--color-border-light); }
+.rr-postable .rr-group > * { background: var(--color-surface); padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.rr-postable .rr-group th { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-body); font-size: 0.875rem; }
+.rr-group__id { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.rr-group__id .rr-dot { margin-right: 0; align-self: center; }
+.rr-group__id small { font-family: var(--font-body); font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; }
+.rr-postable .rr-in th { padding-left: 2.75rem; }
+.rr-postable .rr-in > * { color: var(--color-text-soft); }
+.rr-postable .rr-in:hover > * { color: var(--color-text); }
+.rr-fold { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; padding: 0; margin-left: -0.25rem;
+  background: none; border: 1px solid transparent; color: var(--color-text-muted); cursor: pointer; }
+.rr-fold:hover, .rr-fold:focus-visible { border-color: var(--color-border); color: var(--color-text); }
+.rr-fold span { width: 0.375rem; height: 0.375rem; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: translateY(-0.0625rem) rotate(45deg); transition: transform 160ms var(--ease-out-expo); }
+.rr-fold[aria-expanded="false"] span { transform: rotate(-45deg); }
+/* The target drawn over the vault chart: a dashed rule, not a swatch. */
+.rr-area__legend li i.is-target { background: none; height: 0; width: 0.875rem; border-top: 1px dashed var(--color-text-soft); }
 @media (max-width: 560px) {
   .rr-positions .rr-table { min-width: 0; }
+  .rr-postable { table-layout: auto; }
+  .rr-postable td, .rr-postable th { white-space: normal; }
   .rr-positions th:nth-child(2), .rr-positions td:nth-child(2),
   .rr-positions th:nth-child(4), .rr-positions td:nth-child(4) { display: none; }
   .rr-sources th:nth-child(3), .rr-sources td:nth-child(3) { display: none; }
   .rr-share { grid-template-columns: auto; }
   .rr-share i { display: none; }
+  .rr-holdings th:nth-child(2), .rr-holdings td:nth-child(2) { display: none; }
+  .rr-activity th, .rr-activity td { white-space: nowrap; }
+  .rr-layers__row { grid-template-columns: 6rem minmax(0, 1fr) 3.5rem; gap: 0.75rem; }
+  .rr-vaults { min-width: 0; }
+  .rr-vaults .rr-vaults__wide { display: none; }
+  /* The columns left on a phone are the plain ones; their tips cost the width
+     the table no longer has, and the gaps' definitions left with the gaps. */
+  .rr-vaults thead .rm-tip { display: none; }
 }
 
 /* A portfolio's recommendation history: the moves as the same action chips
@@ -2120,14 +2217,16 @@ a.sv__vfy { text-decoration: none; }
 .rr-apply b { color: var(--color-text); font-weight: 500; }
 .rr-apply__seats { color: var(--color-text-muted); }
 /* How it works: three steps, divided by hairlines, not boxed. */
-.rr-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
+/* One column per step, however many a page has (/swarm and /allocation share
+   these blocks with different counts). */
+.rr-steps { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border-top: 1px solid var(--color-border); }
 .rr-steps > div { padding: 1rem 1.5rem 0 0; }
 .rr-steps > div + div { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
 .rr-steps__t { margin: 0.5rem 0 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
 .rr-steps__d { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 .rr-steps__d b { font-weight: 500; color: var(--color-text); }
 @media (max-width: 760px) {
-  .rr-steps { grid-template-columns: minmax(0, 1fr); }
+  .rr-steps { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); }
   .rr-steps > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border); margin-top: 1rem; }
 }
 

@@ -1485,11 +1485,13 @@
 }
 
 .stub__inline {
-  color: var(--color-accent);
+  color: var(--color-link);
   text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
-.stub__inline:hover { color: var(--color-text); }
+.stub__inline:hover { text-decoration-color: var(--color-link); }
 
 .stub__back { margin-top: 3rem; }
 .stub__back-link {
@@ -1497,14 +1499,16 @@
   padding: 0.75rem 1.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  letter-spacing: 0.1em;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
   text-decoration: none;
-  transition: border-color 0.3s, color 0.3s;
+  transition: border-color 0.3s, background-color 0.3s;
 }
-.stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.stub__back-link:hover { border-color: var(--color-text); background: var(--color-surface); }
 
 .stub a:focus-visible,
 .stub__back-link:focus-visible {

@@ -39,8 +39,31 @@ const META = {
     description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
   },
   "/allocation": {
-    title: "Allocation — Target Sleeves & Vault | Robot Money",
-    description: "What a Robot Money deposit is allocated to: four target sleeves against what the ERC-4626 vault holds on Base, per-venue balances, drift, and what it pays.",
+    title: "Allocation: Target Sleeves and Vaults | Robot Money",
+    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
+  },
+  // The four vault pages (/vault/:slug). noindex until the production launch
+  // review: three of the four are not on Base yet, and none is in sitemap.xml.
+  // `follow`, because every link on them goes to a real page.
+  "/vault/rmusdc": {
+    title: "rmUSDC: Conservative DeFi Yield Vault | Robot Money",
+    description: "rmUSDC, the Robot Money vault for the Conservative DeFi Yield sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmagent": {
+    title: "rmAGENT: Agent Tokens Vault | Robot Money",
+    description: "rmAGENT, the Robot Money vault for the Agent Tokens sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmproto": {
+    title: "rmPROTO: Protocol Tokens Vault | Robot Money",
+    description: "rmPROTO, the Robot Money vault for the Protocol Tokens sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmrwa": {
+    title: "rmRWA: Real World Assets Vault | Robot Money",
+    description: "rmRWA, the Robot Money vault for the Real World Assets sleeve.",
+    robots: "noindex, follow",
   },
   "/performance": {
     title: "Wallet Performance & AUM History — Robot Money",
@@ -150,15 +173,6 @@ const META = {
   // site's soft 404s. `follow` (not `nofollow`, unlike the styleguide below)
   // because each stub's only links are /changelog and /, both real indexed
   // pages whose value should carry.
-  // /vault was live and in sitemap.xml between #774 and this rollback, so
-  // crawlers have the URL. It resolves to the not-found view now; noindex says
-  // so directly rather than leaving a soft 404 to be inferred. `follow` because
-  // the not-found view links only to real indexed pages.
-  "/vault": {
-    title: "Vault (not available) — Robot Money",
-    description: "The Robot Money vault factsheet is being rebuilt. Allocation and holdings are at /allocation; wallet performance history is at /performance.",
-    robots: "noindex, follow",
-  },
   "/flow-field": {
     title: "Flow Field (in progress) — Robot Money",
     description: "Placeholder for an experimental flow-field visualization of capital movement across the Robot Money vault's strategies. Not yet released.",
@@ -322,8 +336,10 @@ const LEGACY_ALIASES = [
   // /vault renders views/allocation.html (RM-115). Without an entry here both
   // addresses return 200 with the same page and neither names the other
   // canonical, and /vault, having no META entry of its own, would serve the
-  // product sheet under "Page Not Found" and `noindex, follow`.
-  ["/vault", "/allocation"],
+  // product sheet under "Page Not Found" and `noindex, follow`. "exact": the
+  // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
+  // /allocation.
+  ["/vault", "/allocation", "exact"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META
@@ -413,9 +429,9 @@ function normalize(pathname) {
  */
 function canonicalPath(pathname) {
   const p = normalize(pathname);
-  for (const [from, to] of LEGACY_ALIASES) {
+  for (const [from, to, mode] of LEGACY_ALIASES) {
     if (p === from) return to;
-    if (p.startsWith(from + "/")) return to + p.slice(from.length);
+    if (mode !== "exact" && p.startsWith(from + "/")) return to + p.slice(from.length);
   }
   return p;
 }

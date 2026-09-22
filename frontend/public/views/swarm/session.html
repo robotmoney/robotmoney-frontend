@@ -113,7 +113,6 @@
                           <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
                             <div class="rr-x__head">
                               <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><span x-text="panelRow().meta"></span></p>
-                              <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
@@ -250,7 +249,7 @@
             <div class="rr-sec__head"><h2 class="rr-sec__h" id="rec-h">The recommendation</h2></div>
             <figure class="rr-ring rr-ring--empty">
               <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
-              <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key !== 'published' ? 'Not published yet' : session.swarmRecommendation ? 'No actions published' : 'No recommendation published'"></span></figcaption>
+              <figcaption><span class="rr-empty__t" x-text="phaseOf(session)?.key !== 'published' ? 'Not published yet' : !session.swarmRecommendation ? 'No recommendation published' : weightsSubject() ? 'No weights published' : 'No actions published'"></span></figcaption>
             </figure>
           </section>
         </template>
@@ -488,11 +487,11 @@
                       <div class="rr-vote__mean" :style="`top:${100 - votePos(voteMean())}%`"><span x-text="`Mean ${voteMean()}%`"></span></div>
                     </template>
                     <template x-for="d in voteDots()" :key="d.key">
-                      <a class="rr-vote__dot" :class="{ 'is-flip': d.flip, 'is-dim': at && at !== d.key }" :href="`#${d.anchor}`"
-                         :style="`left:${d.x}%;top:${100 - d.pos}%;--c:${d.color}`"
+                      <a class="rr-vote__dot" :class="{ 'is-flip': d.flip, 'is-stack': d.stack, 'is-dim': at && at !== d.key }" :href="`#${d.anchor}`"
+                         :style="`left:${d.x}%;top:${100 - d.pos}%;--c:${d.color};--dy:${(-(d.dy || 0) * 0.11).toFixed(2)}rem`"
                          @pointerenter="at = d.key" @pointerleave="at = null" @focus="at = d.key" @blur="at = null"
                          :aria-label="`${d.name}, ${d.stance}, ${d.y}% confidence. Read their take.`">
-                        <i aria-hidden="true"></i><span x-text="d.name"></span><b x-text="`${d.y}%`"></b>
+                        <i aria-hidden="true"></i><span class="rr-vote__lbl"><span x-text="d.name"></span><b x-text="`${d.y}%`"></b></span>
                       </a>
                     </template>
                   </div>
@@ -563,7 +562,7 @@
                       <!-- A memo the member attached to the take. The shared card
                            dropped it; a live take can carry one. -->
                       <template x-if="memoHref(t.memoUrl)">
-                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo</a>
                       </template>
                       <!-- The take's verification receipt, by name: the seal links
                            there too, but an icon does not read as a way in. -->
@@ -591,9 +590,9 @@
               <!-- Weights sessions only: a portfolio's targets are in its brief,
                    and this row could only contradict them. -->
               <template x-if="isBucketWeights()"><div><dt>Target</dt><dd x-text="targetPolicyLabel()"></dd></div></template>
-              <div><dt>Session record</dt><dd><a :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON ↗</a></dd></div>
+              <div><dt>Session record</dt><dd><a :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON</a></dd></div>
               <template x-if="brief">
-                <div><dt>Session inputs</dt><dd><a :href="briefJsonHref()" target="_blank" rel="noopener">Brief JSON ↗</a></dd></div>
+                <div><dt>Session inputs</dt><dd><a :href="briefJsonHref()" target="_blank" rel="noopener">Brief JSON</a></dd></div>
               </template>
             </dl>
           </div>
@@ -684,8 +683,9 @@
   <style>
     /* Page-local: the handful of pieces only this page has. The record's
        components are shared in views.css (.rr-*). */
-    .sr__foot .sv__take-absent-who { font-size: inherit; font-weight: 400; color: var(--color-text-soft);
-      text-decoration: underline; text-decoration-color: var(--color-border-light); text-underline-offset: 3px; }
+    .sr__foot .sv__take-absent-who { font-size: inherit; font-weight: 400; color: var(--color-link);
+      text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
+    .sr__foot .sv__take-absent-who:hover, .sr__foot .sv__take-absent-who:focus-visible { text-decoration-color: var(--color-link); }
     .sr__foot .sv__take-absent-who + .sv__take-absent-who::before { content: ","; display: inline-block;
       margin-right: 0.35em; text-decoration: none; color: var(--color-text-muted); }
     .sv__vfy--inline { font-family: var(--font-mono); font-size: 0.6875rem; text-transform: none; letter-spacing: 0; }

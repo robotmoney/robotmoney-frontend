@@ -1,14 +1,11 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// There is still no VAULT_VIEW, and now there is no views/vault.html either.
-// It was kept UNREACHABLE in the tree while RM-104's information architecture
-// was reworked, on the note that "the page comes back through that work". This
-// is that work: RM-115 supersedes the /vault page shape, and the vault is now
-// the implementation SECTION of /allocation (`#vault`) rather than a page of
-// its own. Its content, the venue-rate reference dataset included, moved into
-// views/allocation.html and alpine/views/allocation.js; the deleted file is in
-// history and on branch david/vault-ia-polish.
+// One page per vault, /vault/:slug (rmusdc, rmagent, rmproto, rmrwa; a slug,
+// never an address, because staging addresses reset). Bare /vault is still
+// /allocation, whose Vaults section lists all four: router.js moves the
+// address to /allocation#vaults.
+export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
@@ -159,15 +156,14 @@ const ROUTES = {
   "/allocation": ALLOCATION_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
-  // /vault renders /allocation (RM-115's URL table). It was pinned to
-  // NOT_FOUND while views/vault.html sat unreachable in the tree, because the
-  // catch-all at the bottom of viewFor() maps any unknown path to
-  // `/views/<path>.html` and removing the entry alone would have gone on
-  // serving the retired page in full. The fragment is deleted now and its
-  // content is a section of /allocation, so the entry points there: an address
-  // people already hold is worth more resolving to the page that answers it
-  // than 404ing. seo.js's LEGACY_ALIASES names /allocation canonical for it,
-  // so the two addresses do not compete as duplicates.
+  // /vault renders /allocation (RM-115's URL table): an address people
+  // already hold is worth more resolving to the page that answers it than
+  // 404ing. router.js rewrites it to /allocation#vaults before rendering, and
+  // seo.js's LEGACY_ALIASES names /allocation canonical for the exact path
+  // only, so the two addresses do not compete as duplicates and /vault/:slug
+  // keeps its own. It stays an explicit entry: the catch-all at the bottom of
+  // viewFor() would otherwise look for views/vault.html, which is now the
+  // per-vault page.
   "/vault": ALLOCATION_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
@@ -208,6 +204,13 @@ export function viewFor(pathname) {
   if (pathname === "/docs/investment-committee" || pathname.startsWith("/docs/investment-committee/")) {
     return viewFor("/docs/investment-swarm" + pathname.slice("/docs/investment-committee".length));
   }
+  // The four vault pages. The slugs are spelled out, not read from
+  // lib/vault-data.js (a unit test holds the two lists equal), and any other
+  // /vault/... is not found rather than a catch-all fragment lookup. /vaults/:id
+  // (plural) is the gated analytics dossier below and does not match.
+  if (/^\/vault\/(rmusdc|rmagent|rmproto|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
+  if (pathname === "/vault/") return ALLOCATION_VIEW;
+  if (pathname.startsWith("/vault/")) return NOT_FOUND_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];
   // Dashboard routes (issue #380) checked next: DASH_ROUTES/DASH_PARAM_ROUTES
   // above are the single source of truth for both the fragment AND the

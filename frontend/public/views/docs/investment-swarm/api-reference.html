@@ -543,8 +543,8 @@ Content-Type: application/json
   color: var(--color-text-muted);
   margin-bottom: 1.75rem;
 }
-.docs-crumb a { color: var(--color-text-muted); text-decoration: none; }
-.docs-crumb a:hover { color: var(--color-text-muted); }
+.docs-crumb a { color: var(--color-text-muted); text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.docs-crumb a:hover { color: var(--color-text); text-decoration-color: var(--color-link); }
 .docs-crumb__sec { color: var(--color-text-muted); }
 .docs-crumb__cur { color: var(--color-text); }
 
@@ -598,21 +598,26 @@ Content-Type: application/json
 .docs-prose li { margin-bottom: 0.55rem; }
 .docs-prose strong { color: var(--color-text); font-weight: 600; }
 .docs-prose em { color: var(--color-text); font-style: italic; }
-.docs-prose a { color: var(--color-accent); text-decoration: none; }
-.docs-prose a:hover { text-decoration: underline; }
+.docs-prose a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s;
+}
+.docs-prose a:hover { text-decoration-color: var(--color-link); }
 .docs-prose code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   color: var(--color-accent-dim);
   background: rgba(0, 229, 255, 0.08);
   padding: 0.15rem 0.4rem;
-  border-radius: 3px;
 }
 
 .docs-codeblock {
   margin: 1.25rem 0;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
   background: var(--color-deep);
   overflow: hidden;
 }
@@ -643,7 +648,6 @@ Content-Type: application/json
 .docs-tablewrap {
   margin: 1.5rem 0;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
   overflow-x: auto;
 }
 .docs-table {
@@ -676,7 +680,6 @@ Content-Type: application/json
   color: var(--color-accent-dim);
   background: rgba(0, 229, 255, 0.08);
   padding: 0.1rem 0.35rem;
-  border-radius: 3px;
 }
 .docs-params__name {
   font-family: var(--font-mono);
@@ -701,7 +704,6 @@ Content-Type: application/json
   margin: 1.75rem 0;
   border-left: 2px solid var(--color-border-light);
   padding: 1rem 1.1rem 1rem 1.25rem;
-  border-radius: 0 4px 4px 0;
 }
 .docs-callout__label {
   font-family: var(--font-mono);
@@ -717,10 +719,7 @@ Content-Type: application/json
   color: var(--color-accent-dim);
   background: rgba(0, 229, 255, 0.08);
   padding: 0.1rem 0.35rem;
-  border-radius: 3px;
 }
-.docs-callout__body a { color: var(--color-accent); text-decoration: none; }
-.docs-callout__body a:hover { text-decoration: underline; }
 .docs-callout--info { border-color: var(--color-accent); background: rgba(0, 229, 255, 0.06); }
 .docs-callout--info .docs-callout__label { color: var(--color-accent); }
 .docs-callout--warn { border-color: var(--color-warn); background: rgba(255, 102, 68, 0.06); }
@@ -743,11 +742,11 @@ Content-Type: application/json
   display: block;
   padding: 1rem;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  color: var(--color-text);
   text-decoration: none;
   transition: border-color 0.2s;
 }
-.docs-foot__prev:hover, .docs-foot__next:hover { border-color: var(--color-accent); }
+.docs-foot__prev:hover, .docs-foot__next:hover { border-color: var(--color-text); }
 .docs-foot__next { text-align: right; }
 .docs-foot__kicker {
   font-family: var(--font-mono);
