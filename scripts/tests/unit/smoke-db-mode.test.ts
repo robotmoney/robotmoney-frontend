@@ -7,7 +7,7 @@
 // smoke consumes (same arrangement as smoke-env.test.ts and ).
 //
 // Contract under test:
-//   - THREE named modes, one flag. Default is ephemeral; no env var can change it.
+//   - THREE named modes. Default is remote (external); no env var can change it.
 //   - Every invalid combination is refused AT PARSE TIME, before any restore
 //     work — a smoke-twin that discovers its own invalidity after a multi-minute
 //     pg_restore has already wasted the window it exists to protect.
@@ -32,6 +32,7 @@ import {
   requestsMigrate,
   requestsSeed,
   SEED_FLAG,
+  shouldSeed,
   usesComposePostgres,
   validateArgv,
   type ResolvedDataPath,
@@ -271,6 +272,22 @@ describe("requestsSeed — a bare switch, argv-only", () => {
 
   test("false on a bare argv", () => {
     expect(requestsSeed(argv())).toBe(false);
+  });
+});
+
+describe("shouldSeed — explicit for every mode except twin", () => {
+  test("smoke-twin seeds automatically, --seed or not (the parser refuses the combination anyway)", () => {
+    expect(shouldSeed("smoke-twin", argv())).toBe(true);
+  });
+
+  test("ephemeral requires --seed", () => {
+    expect(shouldSeed("ephemeral", argv())).toBe(false);
+    expect(shouldSeed("ephemeral", argv(SEED_FLAG))).toBe(true);
+  });
+
+  test("external requires --seed", () => {
+    expect(shouldSeed("external", argv())).toBe(false);
+    expect(shouldSeed("external", argv(SEED_FLAG))).toBe(true);
   });
 });
 

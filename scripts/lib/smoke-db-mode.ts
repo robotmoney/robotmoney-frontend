@@ -395,6 +395,18 @@ export function requestsSeed(argv: readonly string[]): boolean {
   return argv.slice(2).includes(SEED_FLAG);
 }
 
+/**
+ * Does this boot run the scenario initializer (archive adopt or simulation
+ * seed) and the db-preflight that guards it? Explicit for every mode except
+ * smoke-twin — a twin is restored full and refuses SEED_FLAG at parse time
+ * (above), so it seeds automatically here rather than through the flag.
+ * Schema currency is a SEPARATE question (smoke-external-migrate.ts's
+ * refuseIfSchemaBehind()), asked regardless of this answer.
+ */
+export function shouldSeed(kind: DbMode, argv: readonly string[]): boolean {
+  return kind === "smoke-twin" || requestsSeed(argv);
+}
+
 export function parseDataPath(
   argv: readonly string[],
   opts: { envFilePath: string },

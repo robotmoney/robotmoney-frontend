@@ -36,6 +36,7 @@ export {
   requestsMigrate,
   requestsSeed,
   SEED_FLAG,
+  shouldSeed,
   usesComposePostgres,
   validateArgv,
   type DataPathRequest,

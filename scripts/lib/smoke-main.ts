@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsSeed, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { refuseIfSchemaBehind, resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
@@ -1131,10 +1131,8 @@ async function main(): Promise<void> {
     setStep(state, step, "done");
   }
 
-  // Seeding is opt-in for external, symmetric to --migrate (SEED_FLAG); schema currency is checked regardless.
-  const seedExternal = dataPath.kind === "external" && requestsSeed(process.argv);
-  const seeds = dataPath.kind !== "external" || seedExternal;
-  if (dataPath.kind === "external" && !seedExternal) console.warn(`[smoke] --db external without --seed: no archive/simulation init. Schema currency is still checked.`);
+  const seeds = shouldSeed(dataPath.kind, process.argv);
+  if (dataPath.kind !== "smoke-twin" && !seeds) console.warn(`[smoke] no --seed: no archive/simulation init. Schema currency is still checked.`);
 
   async function classifyDatabase(): Promise<void> {
     setStep(state, DB_PREFLIGHT_STEP, "running");
