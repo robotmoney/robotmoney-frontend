@@ -57,6 +57,19 @@ export const BACKUP_DIR_FLAG = "--backup-dir";
 const SMOKE_FLAG = "--smoke";
 const PG_DATA_FLAG = "--pg-data";
 
+/**
+ * Opts an `--db external` boot into running migrations this once.
+ *
+ * Absent (the default), `up()` skips migrate() outright for external: rm_app
+ * cannot `SET LOCAL ROLE rm_owner` (backend/src/db/migrate.ts), so an unopted
+ * boot against a production server with pending migrations would otherwise
+ * die mid-boot instead of just serving today's schema. Present, smoke-main.ts
+ * prompts for the doadmin password at the terminal — never an env var, never
+ * `.env` — and runs migrate() with it for this run only. See
+ * scripts/lib/smoke-external-migrate.ts for why it prompts rather than reads.
+ */
+export const MIGRATE_FLAG = "--migrate";
+
 // WHAT `--pg-data <host-dir>` MEANS, and why it rides on the ephemeral variant.
 //
 // It bind-mounts the postgres data directory to <host-dir> so a rebooted smoke
@@ -174,6 +187,7 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: BACKUP_DIR_FLAG, arity: 1 as const }),
   Object.freeze({ flag: PG_DATA_FLAG, arity: 1 as const }),
   Object.freeze({ flag: SMOKE_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: MIGRATE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
   Object.freeze({ flag: "--no-tui", arity: 0 as const }),
@@ -303,6 +317,12 @@ export function requestsTwin(argv: readonly string[]): boolean {
   return i >= 0 && argv[i + 1] === "smoke-twin";
 }
 
+/** Does this argv opt an external boot into running migrations? A bare switch,
+ *  so — unlike requestsTwin() — there is no value to look up. */
+export function requestsMigrate(argv: readonly string[]): boolean {
+  return argv.slice(2).includes(MIGRATE_FLAG);
+}
+
 export function parseDataPath(
   argv: readonly string[],
   opts: { envFilePath: string },
@@ -348,6 +368,12 @@ export function parseDataPath(
       `${PG_DATA_FLAG} and ${DB_FLAG} ${mode} are mutually exclusive. ${PG_DATA_FLAG} binds the ` +
         `data directory of the ephemeral postgres container; ${DB_FLAG} ${mode} starts no such ` +
         `container (${mode === "external" ? "the managed server owns its own storage" : "the smoke-twin owns its own volume"}).`,
+    );
+  }
+
+  if (mode !== "external" && has(argv, MIGRATE_FLAG)) {
+    throw new Error(
+      `${MIGRATE_FLAG} only applies to ${DB_FLAG} external — ephemeral and smoke-twin already migrate every boot.`,
     );
   }
 

@@ -5,7 +5,8 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
@@ -292,6 +293,7 @@ const databaseUrl = internalDatabaseUrl(database);
 
 // Sets MIGRATE_DATABASE_URL for a rehearsal boot only; see restore-container.ts.
 if (dataPath.kind === "smoke-twin") twinMigrationCredential(dataPath.url, (m) => console.log(`[smoke] ${m}`));
+if (dataPath.kind === "external") await resolveExternalMigrationOptIn(requestsMigrate(process.argv), homeEnvFilePath());
 // Base compose files (what smoke:down/smoke:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
@@ -1143,6 +1145,7 @@ async function main(): Promise<void> {
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
+    migrate: dataPath.kind !== "external" || requestsMigrate(process.argv),
     preflight: composePostgres ? undefined : classifyDatabase,
     initialize: initializeScenario, deferredServices: ["analytics-producer"],
   }));

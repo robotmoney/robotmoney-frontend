@@ -26,8 +26,10 @@ import {
   keptDataDescription,
   DB_MODES,
   dataPathOverlayYaml,
+  MIGRATE_FLAG,
   ownsData,
   parseDataPath,
+  requestsMigrate,
   usesComposePostgres,
   validateArgv,
   type ResolvedDataPath,
@@ -119,6 +121,20 @@ describe("loud refusals — every one before any restore work", () => {
     expect(() => parse(argv(DB_FLAG, "external"), NO_ENV)).toThrow(/no readable \$HOME\/\.env/);
   });
 
+  test("--migrate with the default (ephemeral) mode is refused", () => {
+    expect(() => parse(argv(MIGRATE_FLAG))).toThrow(/only applies to/);
+  });
+
+  test("--migrate with --db smoke-twin is refused", () => {
+    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", MIGRATE_FLAG))).toThrow(
+      /only applies to/,
+    );
+  });
+
+  test("--migrate with --db external parses cleanly", () => {
+    expect(parse(argv(DB_FLAG, "external", MIGRATE_FLAG)).dataPath.kind).toBe("external");
+  });
+
   test("no env var can select a data path", () => {
     const before = process.env.DB;
     process.env.DB = "smoke-twin";
@@ -145,6 +161,10 @@ describe("validateArgv — unknown flags are errors, not silence", () => {
 
   test("a clean invocation passes", () => {
     expect(validateArgv(argv("--smoke", DB_FLAG, "smoke-twin", "--no-tui"))).toEqual([]);
+  });
+
+  test("--migrate is a known bare switch, not an unknown flag", () => {
+    expect(validateArgv(argv(DB_FLAG, "external", MIGRATE_FLAG))).toEqual([]);
   });
 
   test("an arity-1 flag's value is consumed, not read as a positional", () => {
@@ -184,6 +204,20 @@ describe("ownsData vs usesComposePostgres — two questions, not one", () => {
 
   test("the smoke-twin is the case that proves they differ", () => {
     expect(ownsData({ kind: "smoke-twin" })).not.toBe(usesComposePostgres({ kind: "smoke-twin" }));
+  });
+});
+
+describe("requestsMigrate — a bare switch, argv-only", () => {
+  test("true when --migrate is present", () => {
+    expect(requestsMigrate(argv(DB_FLAG, "external", MIGRATE_FLAG))).toBe(true);
+  });
+
+  test("false when it is absent", () => {
+    expect(requestsMigrate(argv(DB_FLAG, "external"))).toBe(false);
+  });
+
+  test("false on a bare argv", () => {
+    expect(requestsMigrate(argv())).toBe(false);
   });
 });
 
