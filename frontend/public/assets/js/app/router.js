@@ -164,7 +164,9 @@ function anchorOffset() {
 }
 
 // Scroll to the element the fragment names; false when there is none.
-function scrollToFragment() {
+// Exported for a view whose sections draw only after its data lands (a vault
+// page's #holdings): it calls this once they exist.
+export function scrollToFragment() {
   let id = "";
   try { id = location.hash ? decodeURIComponent(location.hash.slice(1)) : ""; } catch (_) { return false; }
   const target = id ? document.getElementById(id) : null;

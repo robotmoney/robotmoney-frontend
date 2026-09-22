@@ -24,12 +24,17 @@
 //   flicker through them. A new sleeve is previewed only once the pointer
 //   rests on it (INTENT_MS), and leaving it first cancels the switch. The
 //   first preview is immediate.
+// - Moving between two sleeves while the breakdown is open fades the panel
+//   out, swaps it and fades it back in (SWAP_MS), rather than cutting to the
+//   next sleeve's figures. The fade is a data-swap attribute on the
+//   explorer's root, so every page's explorer gets it from views.css.
 // - The pointer leaving the explorer lets go after a short grace (LEAVE_MS),
 //   so a pointer skimming the edge does not collapse the panel under it.
 // - The breakdown stays mounted and animates its height (0fr to 1fr), and it
 //   keeps showing the last sleeve while it closes rather than emptying first.
-const INTENT_MS = 90;
-const LEAVE_MS = 160;
+const INTENT_MS = 140;
+const LEAVE_MS = 240;
+const SWAP_MS = 120;
 
 // An action as a chip reads it: the direction glyph first, so the column
 // survives greyscale, then the word. Shared with the recommendation history.
@@ -48,6 +53,10 @@ export function sleeveExplorer() {
   let intent;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let leaving;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let swap;
+  /** @param {any} root */
+  const endSwap = (root) => { clearTimeout(swap); root?.removeAttribute?.("data-swap"); };
   return {
     /** @type {string | null} */
     pinned: null,
@@ -80,8 +89,19 @@ export function sleeveExplorer() {
     panelRow() { return this.activeRow() || this.rowFor(this.shown); },
     /** @param {string | null} key */
     set(key) {
-      this.hovered = key;
-      if (key) this.shown = key;
+      const root = /** @type {any} */ (this).$root;
+      endSwap(root);
+      if (!key || !root || this.active() === null || key === this.shown) {
+        this.hovered = key;
+        if (key) this.shown = key;
+        return;
+      }
+      root.setAttribute("data-swap", "");
+      swap = setTimeout(() => {
+        this.hovered = key;
+        this.shown = key;
+        root.removeAttribute("data-swap");
+      }, SWAP_MS);
     },
     /** @param {string} key @param {PointerEvent} [ev] */
     preview(key, ev) {
@@ -98,6 +118,7 @@ export function sleeveExplorer() {
     leave() {
       clearTimeout(intent);
       clearTimeout(leaving);
+      endSwap(/** @type {any} */ (this).$root);
       if (this.pinned !== null) return;
       leaving = setTimeout(() => { if (this.pinned === null) this.hovered = null; }, LEAVE_MS);
     },
@@ -105,6 +126,7 @@ export function sleeveExplorer() {
     toggle(key) {
       clearTimeout(intent);
       clearTimeout(leaving);
+      endSwap(/** @type {any} */ (this).$root);
       this.pinned = this.pinned === key ? null : key;
       this.hovered = null;
       if (this.pinned) this.shown = this.pinned;

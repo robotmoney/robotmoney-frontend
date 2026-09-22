@@ -307,7 +307,7 @@ test("a history row's verdict: hold, no calls, nothing published", async ({ page
 
   await page.goto("/swarm");
   const verdicts = page.locator(".rr-hist tbody tr td.rr-verdict");
-  await expect(verdicts).toHaveText(["Hold", "Hold", "No position calls", "No recommendation published"]);
+  await expect(verdicts).toHaveText(["Hold", "Hold", "No actions", "No recommendation published"]);
   await expect(page.locator(".rr-hist")).not.toContainText("Majority stance");
 });
 
