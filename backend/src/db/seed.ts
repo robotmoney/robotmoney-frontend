@@ -413,9 +413,14 @@ export async function seed(): Promise<void> {
   }
 }
 
-// Run directly: `bun run src/db/seed.ts`
+// Run directly: `bun run src/db/seed.ts [--smoke-schedules]`. Seeding is its own
+// tool now (migrate() no longer seeds); `--smoke-schedules` additionally installs
+// the fast smoke job_schedules a simulation boot wants.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  seed()
+  (async () => {
+    await seed();
+    if (process.argv.includes("--smoke-schedules")) await seedSmokeJobSchedules();
+  })()
     .then(closeDb)
     .catch((err) => {
       console.error(err);

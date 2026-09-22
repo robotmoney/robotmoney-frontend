@@ -1108,6 +1108,17 @@ async function main(): Promise<void> {
   async function initializeScenario(): Promise<void> {
     const step = bootstrapStepNames(smokeMode)[0]!;
     setStep(state, step, "running");
+    // Seeding is separate from migrating now (migrate() no longer seeds), so the
+    // canonical job_schedules are seeded here, as the app role (the container's
+    // DATABASE_URL) — no migration credential. A simulation boot additionally
+    // installs the fast smoke schedules. On a twin the schedules are already in
+    // the restored dump, so this is idempotent.
+    await stack.composeAsync(
+      ["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/seed.ts",
+        ...(scenario.initializer === "simulation" ? ["--smoke-schedules"] : [])],
+      "seed job_schedules",
+      { stdout: outFd, stderr: errFd },
+    );
     if (scenario.initializer === "archive") {
       // Stack.up already migrated this database. The production initializer
       // restores the archive + EDGAR data without running migrate a second time.
