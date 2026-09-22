@@ -677,7 +677,7 @@ test("a take's memo is linked from its card, and only when it is a web address",
 
   const memos = page.locator("#takes .rr-take a.sv__memo-link");
   await expect(memos).toHaveCount(1);
-  await expect(memos).toHaveText("Read memo ↗");
+  await expect(memos).toHaveText("Read memo");
   await expect(memos).toHaveAttribute("href", "https://example.org/athena-memo");
   await expect(memos).toHaveAttribute("rel", /noopener/);
   await expect(page.locator('#takes a[href^="javascript:"]')).toHaveCount(0);

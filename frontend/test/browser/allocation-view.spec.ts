@@ -259,8 +259,8 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
   await expect(rows.nth(0).locator("td").nth(2).locator("small")).toHaveText(usd2(vault.tvlUsd));
   await expect(rows.nth(0).locator("td").nth(0).locator("small")).toHaveText("");
   for (const i of [1, 2, 3]) {
-    // "Not live": the Network fact above the table names Base.
-    await expect(rows.nth(i).locator("th small")).toContainText("Not live");
+    // "Coming soon", as the vault's page says: the Network fact names Base.
+    await expect(rows.nth(i).locator("th small")).toContainText("Coming soon");
     await expect(rows.nth(i).locator("th small")).not.toContainText("on Base");
   }
   await expect(figures(page, 1)).toHaveText(["—", "5%", "0%", "—", "−5 pp"]);
