@@ -1382,7 +1382,7 @@ export function registerStaticViews(Alpine) {
       /** @type {Record<string, string>} */
       const query = { subject: id, state: "published", limit: String(this.historySize) };
       if (cursor) query.cursor = cursor;
-      if (search) query.search = search;
+      if (search) query.search = historySearchTerm(search);
       const res = await api.get(ROUTES.swarm.sessions, query);
       return {
         rows: Array.isArray(res?.sessions) ? res.sessions : [],
@@ -3803,6 +3803,32 @@ export function targetsInForce(fw, date) {
 
 // The API's own limit on a history search (#1007): a literal phrase, short.
 const HISTORY_SEARCH_MAX = 200;
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// A history search as the API matches it. The page prints dates as "Aug 3,
+// 2026" and the API matches the stored "2026-08-03" literally, so a query
+// that reads as a date ("Aug 3", "3 August 2026", "Aug 2026", "August") is
+// sent in the stored form. Anything else goes as typed.
+/** @param {unknown} raw */
+export function historySearchTerm(raw) {
+  const q = String(raw ?? "").trim();
+  const toks = q.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  if (!toks.length || toks.length > 3) return q;
+  let month = 0, day = 0, year = 0;
+  for (const t of toks) {
+    const w = t.replace(/\.$/, "");
+    const m = w.length >= 3 ? MONTHS.findIndex((name) => name.startsWith(w)) + 1 : 0;
+    if (m && !month) { month = m; continue; }
+    const d = /^(\d{1,2})(st|nd|rd|th)?$/.exec(t);
+    if (d && !day && Number(d[1]) >= 1 && Number(d[1]) <= 31) { day = Number(d[1]); continue; }
+    if (/^\d{4}$/.test(t) && !year) { year = Number(t); continue; }
+    return q;
+  }
+  if (!month) return q;
+  const mm = String(month).padStart(2, "0"), dd = String(day).padStart(2, "0");
+  if (day) return year ? `${year}-${mm}-${dd}` : `${mm}-${dd}`;
+  return year ? `${year}-${mm}` : `-${mm}-`;
+}
 
 // Whether a session list answered a `subject=` request as #1007 does: every
 // row that subject's, and each carrying its take count. A backend before it

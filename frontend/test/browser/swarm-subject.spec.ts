@@ -87,7 +87,9 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   const positions = page.locator(".rr-positions tbody tr");
   await expect(positions).toHaveCount(6);
   await expect(positions.first()).toContainText("WOON");
-  await expect(page.locator(".rr-positions .rr-k")).toHaveText("Positions on Jun 25, 2026");
+  // The positions table's title, and how fresh its reading is on the right.
+  await expect(page.locator(".rr-positions .rr-subhead__h")).toHaveText("Positions");
+  await expect(page.locator(".rr-positions .rr-subhead .rr-sec__aside")).toHaveText("Last read on Jun 25, 2026");
 
   // Concentration chart draws once there are >= 2 snapshots in the window.
   const svg = page.locator(".rr-area__svg svg");
@@ -240,9 +242,9 @@ test("public subject profile lists no wallets for a subject serving an empty wal
   await expect(page.locator(".sv__detail-title")).toHaveText("Mav Treasury");
   // The book is drawn...
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$1,000");
-  // ...with no "Read from" table: no wallet and no NFT contract to list.
+  // ...with no Wallets table: no wallet and no NFT contract to list.
   await expect(page.locator(".rr-sources")).toHaveCount(0);
-  await expect(page.locator("#holdings")).not.toContainText("Read from");
+  await expect(page.locator("#holdings .rr-bookhead .rr-subhead__h")).toHaveCount(0);
   // And the body rendered the whole way down: the history's empty row sits
   // past every gated part.
   await expect(page.locator("#history .rr-table__empty")).toBeVisible();
