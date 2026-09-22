@@ -175,6 +175,42 @@ export const assetDot = (sym) => {
 // (robotmoney-vault, robotmoney-treasury, woon) still hash to three distinct
 // ones. Existing subjects do change colour once, which is the cost of the fix.
 /** @param {string} subjectId */
+// One colour per token WITHIN ONE FIGURE. assetDot() hashes any symbol it does
+// not name into CATEGORICAL, so two unnamed tokens in one book can land on the
+// same hue, or on a hue a named token owns (WOON hashes to cyan, which
+// ROBOTMONEY owns), and two rows keyed alike in one table read as one thing.
+// Named tokens claim their colour first; hashed ones take theirs if it is free
+// and the next free hue otherwise. Slate is withheld from that pool: the
+// covenant spends it on muted references, and a real holding drawn slate reads
+// as the leftovers bucket. `reserved` are hues already spoken for in the figure.
+// Shared by the subject page's chart and holdings and the session page's
+// holdings, so the same book is keyed the same way on both.
+/** @param {string[]} tokens @param {string[]} [reserved] @returns {Record<string, string>} */
+export const resolveTokenColors = (tokens, reserved = []) => {
+  /** @type {Record<string, string>} */
+  const out = {};
+  const used = new Set(reserved);
+  for (const token of tokens) {
+    const owned = /** @type {Record<string, string>} */ (ASSET_DOT)[token];
+    if (owned && !used.has(owned)) {
+      out[token] = owned;
+      used.add(owned);
+    }
+  }
+  const pool = CATEGORICAL.filter((hue) => hue !== SERIES.slate);
+  for (const token of tokens) {
+    if (out[token]) continue;
+    const hashed = assetDot(token);
+    const free = hashed !== SERIES.slate && !used.has(hashed);
+    const color = free
+      ? hashed
+      : (pool.find((hue) => !used.has(hue)) || CATEGORICAL.find((hue) => !used.has(hue)) || hashed);
+    out[token] = color;
+    used.add(color);
+  }
+  return out;
+};
+
 export const subjectDot = (subjectId) => {
   const hues = CATEGORICAL.filter((c) => c !== SERIES.beacon && c !== PALETTE.accent);
   let h = 0;

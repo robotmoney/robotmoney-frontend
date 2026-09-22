@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 
 // The badge (frontend/public/views/swarm/{session,member,take}.html) is a
 // drawn mark, a one-word label, and an explanatory line shown on hover/focus.
+// On the session and member views it sits in the shared take card (.rr-take)
+// as the signature seal, and the seal is itself the link to the take's
+// rendered receipt: it replaced the separate "Verification receipt" link, so
+// the permalink assertions below target the seal's href.
 //
 // Its text is therefore NOT a safe discriminator, and the original hazard this
 // file guards against got worse rather than better: the old pair was
@@ -63,17 +67,18 @@ test("public swarm take shows an exact verified badge on the session view, membe
 
   // 2. Public member view: the same take's badge and permalink must also render
   // the exact positive state (issue #207 Behaviour: "On the public session AND
-  // member views each take shows a verified badge").
+  // member views each take shows a verified badge"). The permalink is the seal.
   await page.goto(`/swarm/members/${encodeURIComponent(take.memberId)}`);
-  const memberBadge = page.locator(`[data-verified-badge][data-take-id="${take.id}"]`);
+  const memberBadge = page.locator(`.rr-take [data-verified-badge][data-take-id="${take.id}"]`);
   await expectPositiveBadge(memberBadge);
-  const memberPermalink = page.locator(`[data-take-permalink][href="/swarm/takes/${take.id}"]`);
-  await expect(memberPermalink).toBeVisible();
+  await expect(memberBadge).toBeVisible();
+  await expect(memberBadge).toHaveAttribute("href", `/swarm/takes/${take.id}`);
 
-  // 3. Per-take permalink: a real rendered page (not raw JSON), exact positive
-  // badge text, no negative class.
+  // 3. Per-take permalink: following the seal from the session view lands on a
+  // real rendered page (not raw JSON), exact positive badge text, no negative
+  // class.
   await page.goto(`/swarm/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`);
-  const permalink = page.locator(`[data-take-permalink][href="/swarm/takes/${take.id}"]`);
+  const permalink = page.locator(`.rr-take a[data-verified-badge][data-take-id="${take.id}"][href="/swarm/takes/${take.id}"]`);
   await expect(permalink).toBeVisible();
   await permalink.click();
   await expect(page).toHaveURL(new RegExp(`/swarm/takes/${take.id}$`));
@@ -123,4 +128,34 @@ test("public session view renders an unverified/tampered take as NOT verified", 
   await page.goto(`/swarm/${date}/${subjectId}`);
   const badge = page.locator(`[data-verified-badge][data-take-id="${tamperedTakeId}"]`);
   await expectNegativeBadge(badge);
+});
+
+// A take's proposed weights are drawn once, on its receipt, as the ring the
+// subject and session pages draw. The take card on a member or session page
+// leaves them out: the take's own text already states them.
+test("a take's receipt draws its proposed weights as a ring", async ({ page }) => {
+  const takeId = "0d4f3a8e-5b8f-4c1e-9d1a-6f2b3c4d5e6f";
+  const take = {
+    id: takeId, memberId: "athena", memberName: "Athena", stance: "cautious", confidence: 0.74, verified: true, revision: 1,
+    receivedAt: "2026-09-18T07:09:00Z",
+    body: "**ALLOCATION**\n- Proposed: Conservative DeFi Yield 91%, Agent Tokens 2%, Protocol Tokens 2%, Real World Assets 5%.",
+    weights: [
+      { bucket: "conservative_defi_yield", weight: 0.91 }, { bucket: "agent_tokens", weight: 0.02 },
+      { bucket: "protocol_tokens", weight: 0.02 }, { bucket: "real_world_assets", weight: 0.05 },
+    ],
+  };
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === `/api/swarm/takes/${takeId}`) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ take, signer: { id: "athena", name: "Athena" }, memo: null }) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto(`/swarm/takes/${takeId}`);
+  const section = page.locator("#take");
+  await expect(section.locator(".rr-ring svg [data-sleeve]")).toHaveCount(4);
+  await expect(section.locator(".rr-legend__row")).toHaveCount(4);
+  await section.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).hover();
+  await expect(section.locator(".rr-ring figcaption")).toHaveText(/2%\s*Agent Tokens/);
 });

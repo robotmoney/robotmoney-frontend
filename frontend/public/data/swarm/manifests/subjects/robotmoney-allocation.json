@@ -3,7 +3,7 @@
   "name": "Robot Money Allocation",
   "operator": "robotmoney",
   "homepage": "https://robotmoney.network/allocation",
-  "thesis_blurb": "The Robot Money vault's published allocation framework: four buckets (Conservative DeFi Yield 95% / Agent Tokens 5% / Protocol Tokens 0% / Real World Assets 0%) and the constituents inside each bucket. The swarm reviews the targets themselves — are the bucket weights right for the regime, and within each bucket are the right constituents weighted correctly? This subject is the framework, not the holdings. The vault subject reviews holdings; this one reviews targets.",
+  "thesis_blurb": "The four sleeve weights in force on the Robot Money vault, and the assets inside each one. The swarm reviews whether those targets still fit the regime.",
   "wallets": [],
   "source": { "type": "framework" },
   "recommendation_type": "bucket_weights",

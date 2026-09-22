@@ -51,10 +51,14 @@ async function fetchView(file, signal) {
 }
 
 let activeRender = null;
+// The path the mounted view was rendered for. A popstate that leaves it
+// unchanged moved only the fragment (see onPopState).
+let renderedPath = null;
 
 async function render(pathname) {
   const host = viewEl();
   if (!host) return;
+  renderedPath = pathname;
   activeRender?.abort();
   const controller = new AbortController();
   activeRender = controller;
@@ -147,18 +151,36 @@ const ANCHOR_OFFSET = 16;
 // getElementById on the decoded fragment, never querySelector: a fragment is
 // arbitrary text from the URL bar and must not be parsed as a selector.
 function scrollForRoute() {
-  const id = location.hash ? decodeURIComponent(location.hash.slice(1)) : "";
+  if (!scrollToFragment()) window.scrollTo(0, 0);
+}
+
+// The site header is fixed, so a target scrolled to the very top sits under
+// it. Clear the header's bottom edge, then the usual breathing room.
+function anchorOffset() {
+  const nav = document.querySelector(".nav");
+  const pos = nav ? getComputedStyle(nav).position : "";
+  const covered = nav && (pos === "fixed" || pos === "sticky") ? Math.max(0, nav.getBoundingClientRect().bottom) : 0;
+  return covered + ANCHOR_OFFSET;
+}
+
+// Scroll to the element the fragment names; false when there is none.
+// Exported for a view whose sections draw only after its data lands (a vault
+// page's #holdings): it calls this once they exist.
+export function scrollToFragment() {
+  let id = "";
+  try { id = location.hash ? decodeURIComponent(location.hash.slice(1)) : ""; } catch (_) { return false; }
   const target = id ? document.getElementById(id) : null;
-  if (!target) { window.scrollTo(0, 0); return; }
+  if (!target) return false;
   // A frame later: the view is in the DOM but not yet laid out, and Alpine has
   // not had its pass, so anything above the target can still change height.
   // A target that sets its own scroll-margin-top (the changelog's entries,
-  // which clear the fixed nav) keeps it; everything else gets the default.
-  const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || ANCHOR_OFFSET;
+  // a take card) keeps it; everything else clears the fixed header.
+  const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || anchorOffset();
   requestAnimationFrame(() => {
     const top = target.getBoundingClientRect().top + window.scrollY - offset;
     window.scrollTo(0, Math.max(0, Math.round(top)));
   });
+  return true;
 }
 
 // Intercept same-origin, plain left-clicks on anchors and route them in-app.
@@ -190,6 +212,15 @@ function onClick(e) {
 }
 
 function onPopState() {
+  // Browsers fire popstate when only the fragment changes: an in-page anchor
+  // (a take, a docs section) or Back across one. That is the same page, so it
+  // scrolls to the fragment and keeps the view. Rendering again here re-ran
+  // every fetch the view makes and scrolled to the top before the target
+  // existed, so every in-page link on the site landed the reader at the top.
+  if (location.pathname === renderedPath) {
+    scrollToFragment();
+    return;
+  }
   render(location.pathname);
 }
 
