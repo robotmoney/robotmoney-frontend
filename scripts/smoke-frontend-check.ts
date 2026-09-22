@@ -77,7 +77,7 @@ async function main() {
     "x-for=\"m in members\"",   // members table
     "portfolios()",             // what they review
     "publishedSessions()",      // browsable sessions list
-    "sv__session-card",         // per-session card
+    "rr-hist",                  // recommendation history table, one row per session
     "stanceColor(",             // per-take stance dots on each session
   ]);
   await checkView("/views/regime.html", [
@@ -123,7 +123,8 @@ async function main() {
     "profile-name",  // e2e hook (spa.spec.ts asserts member name)
   ]);
   // Session detail renders the members' signed takes + memo links and the
-  // e2e submissions table (spa.spec.ts asserts .session-submissions rows).
+  // vote chart, one dot per member (spa.spec.ts asserts #takes .rr-vote__dot;
+  // it replaced the submissions table in RM-121).
   // The reference-faithful member-opinion cards (issue #75) must survive: one
   // sv__take card per member with a role/lens line and a stance-confidence
   // badge — the surface spa.spec.ts asserts against for live smoke sessions.
@@ -134,7 +135,7 @@ async function main() {
     "sv__stance-badge",      // stance · confidence badge
     "sv__take-lens",         // member role/lens line
     "sv__memo-link",         // memoUrl rendering
-    "session-submissions",   // compact submissions table (e2e hook)
+    "rr-vote__dot",          // one vote dot per member (e2e hook)
   ]);
 
   // Router patterns and globally registered factories keep dynamic fragments

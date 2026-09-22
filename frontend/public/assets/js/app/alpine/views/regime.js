@@ -2,6 +2,7 @@
 // from the monolithic views.js (finding 025); its chart/data helper tables
 // live in ./shared.js.
 import { api, ROUTES } from "../../lib/api.js";
+import { scrollToFragment } from "../../router.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
 import { PALETTE, SERIES, MONO_FONT, rgba, monoAxis } from "../../lib/chart-theme.js";
 import {
@@ -48,7 +49,9 @@ export function registerRegimeView(Alpine) {
         this.history = data.history || [];
         this.staleness = data.staleness || null;
         this.loading = false;
-        this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); });
+        // #composite and #panel-<key> exist only now: a session page links
+        // its market context rows to them.
+        this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); scrollToFragment(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;

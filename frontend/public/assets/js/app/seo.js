@@ -276,6 +276,22 @@ const SECTIONS = [
   { prefix: "/media", suffix: "Robot Money Media" },
 ];
 
+// A post's own title, as its page's h1 reads (views/blog/<slug>.html). A
+// section page otherwise takes a title made from its slug, which turned
+// "Conservative vs aggressive: combining macro and on-chain regime signals"
+// into "Regime Conservative Aggressive" in the tab, in link unfurls, and
+// wherever a swarm text cites the post by its path (citeTitle below).
+/** @type {Record<string, string>} */
+const BLOG_TITLES = {
+  "ai-ate-the-bull-market": "AI ate the bull market",
+  "announcement": "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
+  "honest-backtesting-weights": "Backtesting honestly: what survives when you remove hindsight",
+  "peaq-partnership": "peaq Announces Partnership with Robot Money",
+  "regime-conservative-aggressive": "Conservative vs aggressive: combining macro and on-chain regime signals",
+  "regime-eq-vs-base": "Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel",
+  "treasury-allocation": "Treasury Allocation for On-Chain Businesses",
+};
+
 // Legacy path aliases, mirroring every content-serving rewrite `viewFor()`
 // performs in routes.js (issue #263 pass 2's /committee -> /swarm rename, plus
 // the two older one-off renames below). routes.js resolves an
@@ -428,7 +444,7 @@ export function metaFor(pathname) {
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
       const seg = p.split("/").filter(Boolean).pop();
-      const name = titleize(seg || "");
+      const name = (prefix === "/blog" && BLOG_TITLES[seg || ""]) || titleize(seg || "");
       return {
         title: name ? `${name} — ${suffix}` : suffix,
         description: (META[prefix] || META["/"]).description,
@@ -461,6 +477,32 @@ export function metaFor(pathname) {
     }
   }
   return NOT_FOUND_META;
+}
+
+/**
+ * A page's own name, for text that cites it by path: the title before its
+ * " — " qualifier ("Smart Contract Risks — How DeFi Vaults Get Exploited"
+ * cites as "Smart Contract Risks"), through the alias table, so
+ * /articles/treasury-allocation cites as the post it renders. "" for a path
+ * the site has no page for, which the caller then shows as written.
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function citeTitle(pathname) {
+  if (!isKnownPage(pathname)) return "";
+  return String(metaFor(pathname).title || "").split(" — ")[0].trim();
+}
+
+/**
+ * Whether the site renders a real page at this path, by the same table that
+ * names every page: anything metaFor() does not know falls to the not-found
+ * meta. Lets a surface link a data-supplied path only when it goes somewhere,
+ * rather than keeping a second list of pages that drifts from this one.
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+export function isKnownPage(pathname) {
+  return typeof pathname === "string" && pathname.startsWith("/") && metaFor(pathname) !== NOT_FOUND_META;
 }
 
 /**
