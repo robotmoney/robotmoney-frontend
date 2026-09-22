@@ -563,7 +563,7 @@
                       <!-- A memo the member attached to the take. The shared card
                            dropped it; a live take can carry one. -->
                       <template x-if="memoHref(t.memoUrl)">
-                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+                        <a class="rr-lnk sv__memo-link rr-take__act" :href="memoHref(t.memoUrl)" target="_blank" rel="noopener noreferrer">Read memo</a>
                       </template>
                       <!-- The take's verification receipt, by name: the seal links
                            there too, but an icon does not read as a way in. -->
@@ -591,9 +591,9 @@
               <!-- Weights sessions only: a portfolio's targets are in its brief,
                    and this row could only contradict them. -->
               <template x-if="isBucketWeights()"><div><dt>Target</dt><dd x-text="targetPolicyLabel()"></dd></div></template>
-              <div><dt>Session record</dt><dd><a :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON ↗</a></dd></div>
+              <div><dt>Session record</dt><dd><a :href="sessionJsonHref()" target="_blank" rel="noopener">Session JSON</a></dd></div>
               <template x-if="brief">
-                <div><dt>Session inputs</dt><dd><a :href="briefJsonHref()" target="_blank" rel="noopener">Brief JSON ↗</a></dd></div>
+                <div><dt>Session inputs</dt><dd><a :href="briefJsonHref()" target="_blank" rel="noopener">Brief JSON</a></dd></div>
               </template>
             </dl>
           </div>

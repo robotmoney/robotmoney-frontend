@@ -29,20 +29,17 @@
 // Asset-level holdings are on each vault's page (/vault/:slug). This page keeps
 // the recipe: each sleeve's target constituents.
 //
-// NOT live, and said so on the page:
-//   * A second version of the weights. `allocation_framework` has one writer,
-//     the database seed, so the change ledger's `was` is the row in force and
-//     every row reads flat until something can write another.
+// NOT live: a second version of the weights. `allocation_framework` has one
+// writer, the database seed, so there is no earlier row to show a change from;
+// the page carries no ledger until something can write another.
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { loadAllocationDto } from "../../lib/allocation-framework.js";
 import { loadLatestRecommendation, loadVaultOverview } from "../../lib/vault-source.js";
+import { latestRecommendation } from "../latest-recommendation.js";
 import { sessionTakes } from "../../lib/session-takes.js";
 
 // sessionTakes() is a mixin factory; the panel needs only its session address.
-const { sessionHref } = sessionTakes();
-import { stanceColor } from "../../lib/stance.js";
-import { helpers } from "../static-views.js";
 import {
   VAULTS,
   explorerLink,
@@ -90,12 +87,8 @@ export function registerAllocationView(Alpine) {
     allocationFw: null, // loadAllocationDto(): GET /api/dashboards/allocation
     vaults: null,       // loadVaultOverview(): { overview, source, label, error, ... }
     loading: true,      // the policy; the vaults fill their own rows as they land
-    // loadLatestRecommendation(): the newest allocation session that published
-    // weights, and the newest of all. The panel beside the ring reads them.
-    recSession: null,
-    recLatest: null,
-    recLoaded: false,
-    recError: false,
+    // The latest recommendation beside the ring (alpine/latest-recommendation.js).
+    ...latestRecommendation(),
 
     // The allocation's own decision log is not built yet, so the sessions
     // live where the swarm keeps them.
@@ -128,11 +121,7 @@ export function registerAllocationView(Alpine) {
         .finally(() => {
           this.loading = false;
         });
-      const rec = recRead.then((r) => {
-        this.recSession = r?.session ?? null;
-        this.recLatest = r?.latest ?? null;
-        this.recError = !!r?.error;
-      }).finally(() => { this.recLoaded = true; });
+      const rec = this.loadRecommendation(host, recRead);
       const vaults = loadVaultOverview({ hostname: host, recommendation: recRead, policy: policyRead })
         .then((r) => { this.vaults = r; }, () => { this.vaults = { overview: null, label: null }; });
       await Promise.allSettled([policy, rec, vaults]);
@@ -248,24 +237,6 @@ export function registerAllocationView(Alpine) {
     // vault page's lede).
     sleeveNote(key) { return sleeveNote(key); },
 
-    // ── the latest recommendation, beside the ring ──────────────────────────
-    // As /swarm sets it beside its ring: the newest allocation session that
-    // published weights, why, and the way to it. A newer session that
-    // published none held the target, and is named above the rest.
-    recHeldBy() {
-      const latest = this.recLatest;
-      return latest && this.recSession && latest.id !== this.recSession.id ? latest : null;
-    },
-    recDate(s) { return s?.date ? fmtDate(s.date) : ""; },
-    recHref(s) { return sessionHref(s); },
-    recRationale() { return sessionSummary.rationaleOf.call(sessionSummary, this.recSession); },
-    recTally() { return this.recSession ? sessionSummary.stanceTally.call(sessionSummary, this.recSession) : []; },
-    recTallyNote() {
-      const s = this.recSession;
-      return s ? [sessionSummary.turnoutText.call(sessionSummary, s), sessionSummary.meanConfidenceText.call(sessionSummary, s)].filter(Boolean).join(" · ") : "";
-    },
-    linkified(text) { return helpers.linkified(text); },
-    stanceColor(s) { return stanceColor(s); },
 
     // ── constituents (small multiples) ──────────────────────────────────────
     // Within-sleeve target weights: the recipe. What a vault actually holds is
@@ -276,22 +247,8 @@ export function registerAllocationView(Alpine) {
       return (bucket.items || []).map((item) => ({ label: item.label, target: Number(item.targetPct ?? 0) }));
     },
 
-    // ── the change ledger ───────────────────────────────────────────────────
-    // Was, now, and the move between them, one row per sleeve. Today every
-    // row is flat and the table says so in four "—"s rather than being hidden:
-    // "28 sessions looked at these weights and left them" is the finding, and
-    // a section that disappears when nothing changed cannot report it.
-    //
-    // `was` is not a second reading. `allocation_framework` has one writer and
-    // one row, so there is no prior version to diff against and the baseline
-    // IS the row in force. The day a session writes a second row, `was` comes
-    // from it and these arrows start moving with no change to the view.
-    // Direction is the GLYPH first and the colour second, so the column
-    // survives colourblindness, greyscale and forced-colors. Up takes Pool
-    // green and down takes Beacon, which is what tokens.css already calls a
-    // point for loss and attention: here it is one arrow at type size.
-    // One implementation with a session's outcome (lib/weight-change.js), so
-    // the same move cannot read two ways on two pages.
+    // A move in points, glyph first so it reads without colour: one implementation
+    // with a session's outcome (lib/weight-change.js).
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
 
@@ -307,12 +264,13 @@ export function registerAllocationView(Alpine) {
     // The overview's row for a vault identity, or null before it lands.
     vaultRecord(slug) { return this.overview()?.vaults?.find((r) => r.slug === slug) ?? null; },
     // A vault's status beside its name only when it is not simply active;
-    // "Not live", since the Network fact above the table names the network.
+    // "Coming soon", as its own page says, since the Network fact above the
+    // table names the network.
     vaultStatusOf(slug) {
       const o = this.overview();
       if (!o) return null;
       const r = this.vaultRecord(slug);
-      if (r?.availability === "not_on_network") return "Not live";
+      if (r?.availability === "not_on_network") return "Coming soon";
       const s = statusLabel(r, o.network?.label);
       return s === "Active" ? null : s;
     },

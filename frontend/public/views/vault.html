@@ -40,7 +40,13 @@
         <div class="rr-meta" x-show="!error">
           <span class="rr-meta__i">Network <b x-text="networkLabel()"></b></span>
           <template x-if="dataLabel()"><span class="rr-meta__i" data-vault-label x-text="dataLabel()"></span></template>
-          <span class="rr-meta__i">Status <b x-text="status()"></b></span>
+          <!-- Live pulses, as a member's Active does; a vault not deployed yet
+               wears the pill. -->
+          <span class="rr-meta__i">Status
+            <template x-if="status() === 'Live'"><b class="rm-live"><i class="rm-pulse" aria-hidden="true"></i>Live</b></template>
+            <template x-if="status() === 'Coming soon'"><span class="rm-pill">Coming soon</span></template>
+            <template x-if="status() !== 'Live' && status() !== 'Coming soon'"><b x-text="status()"></b></template>
+          </span>
           <span class="rr-meta__i">Deposit asset <b>USDC</b></span>
           <template x-if="isLive() && sharePrice()"><span class="rr-meta__i">Share price <b x-text="sharePrice()"></b></span></template>
           <span class="rr-meta__i">Read <b x-text="readLabel()"></b></span>
@@ -73,20 +79,24 @@
             <template x-if="isLive() && !detailError">
               <div>
               <div class="rr-block" style="margin-top:1.5rem">
-                <template x-if="holdingsDate()"><p class="rr-k rr-sub" x-text="`Positions on ${holdingsDate()}`"></p></template>
+                <div class="rr-subhead">
+                  <h3 class="rr-subhead__h">Positions</h3>
+                  <template x-if="holdingsDate()"><span class="rr-sec__aside" x-text="`Last read on ${holdingsDate()}`"></span></template>
+                </div>
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-holdings">
                   <thead>
-                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
                   </thead>
                   <tbody>
                     <template x-for="(h, i) in visibleHoldings()" :key="`${i}-${h.label}`">
                       <tr>
                         <th scope="row">
-                          <template x-if="holdingHref(h)"><a class="rr-lnk" :href="holdingHref(h)" target="_blank" rel="noopener noreferrer" x-text="`${h.label} ↗`"></a></template>
+                          <template x-if="holdingHref(h)"><a class="rr-lnk" :href="holdingHref(h)" target="_blank" rel="noopener noreferrer" x-text="h.label"></a></template>
                           <template x-if="!holdingHref(h)"><span x-text="h.label"></span></template>
                           <template x-if="h.note"><small x-text="h.note"></small></template>
                         </th>
                         <td x-text="holdingType(h)"></td>
+                        <td class="q" x-text="holdingAmount(h)"></td>
                         <td class="q" x-text="fmtUsd(h.valueUsd)"></td>
                         <td class="q">
                           <template x-if="holdingsBars()">
@@ -97,7 +107,7 @@
                       </tr>
                     </template>
                     <template x-if="!holdings().length">
-                      <tr><td class="rr-table__empty" colspan="4"><span class="rr-empty__t">No positions</span></td></tr>
+                      <tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t">No positions</span></td></tr>
                     </template>
                   </tbody>
                 </table></div>
@@ -162,7 +172,10 @@
                 </div>
               </template>
             </div>
-            <div>
+            <!-- On the devnet the recommendation is the fixture's, the one the
+                 gaps are measured against, and no session sits behind it: its
+                 date, as before. -->
+            <template x-if="load?.mode === 'devnet'">
               <dl class="rr-dl">
                 <div>
                   <dt>Recommendation</dt>
@@ -175,6 +188,43 @@
                 </div>
                 <template x-if="released()"><div><dt>Released on chain</dt><dd x-text="released()"></dd></div></template>
               </dl>
+            </template>
+            <!-- Anywhere else, the latest allocation recommendation as
+                 /allocation sets it beside its ring: why, how the room leaned,
+                 and its session. -->
+            <div class="alp__rec" x-data="{ more: false }" x-show="load?.mode !== 'devnet'">
+              <template x-if="recSession">
+                <div>
+                  <p class="rr-k rr-sub">Latest allocation recommendation</p>
+                  <template x-if="recRationale()">
+                    <div>
+                      <div class="rr-prose" :class="!more && String(recRationale()).length > 480 ? 'is-clamped' : ''" style="--rr-lines:8"
+                           x-html="linkified(recRationale())"></div>
+                      <template x-if="String(recRationale()).length > 480">
+                        <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
+                          <span x-text="more ? 'Show less' : 'Read full rationale'"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="recTally().length">
+                    <p class="rr-counts">
+                      <template x-for="x in recTally()" :key="x.stance">
+                        <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
+                      </template>
+                      <em x-text="recTallyNote()"></em>
+                    </p>
+                  </template>
+                  <template x-if="released()"><p class="rr-note" x-text="`Released on chain ${released()}`"></p></template>
+                  <a class="rr-cta" :href="recHref(recSession)">
+                    <span x-text="`Read the ${recDate(recSession)} session`"></span><span aria-hidden="true">→</span>
+                  </a>
+                </div>
+              </template>
+              <!-- None published is a fact; a read that failed is not "none". -->
+              <template x-if="recLoaded && !recSession">
+                <p class="rr-note" style="margin:0" x-text="recError ? 'Recommendation unavailable' : 'No recommendation published'"></p>
+              </template>
             </div>
           </div>
 
@@ -297,7 +347,7 @@
                       <td x-text="activityKind(a)"></td>
                       <td class="q" x-text="activityAmount(a)"></td>
                       <td class="q">
-                        <template x-if="txHref(a)"><a class="rr-lnk" :href="txHref(a)" target="_blank" rel="noopener noreferrer" x-text="`${shortHash(a.tx)} ↗`"></a></template>
+                        <template x-if="txHref(a)"><a class="rr-lnk" :href="txHref(a)" target="_blank" rel="noopener noreferrer" x-text="shortHash(a.tx)"></a></template>
                         <template x-if="!txHref(a)"><span>—</span></template>
                       </td>
                     </tr>
@@ -324,13 +374,23 @@
              With nothing stated (a vault not live yet), the risk alone, with
              no heading over one line. -->
         <template x-if="!mechanics().length && !contractLinks().length">
-          <div class="rr-sec" id="mechanics"><p class="rr-note" style="margin:0">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p></div>
+          <div class="rr-sec" id="mechanics">
+          <aside class="rr-callout" aria-label="Risk">
+            <p class="rr-callout__k">Risk</p>
+            <p class="rr-callout__b">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
+          </aside>
+          </div>
         </template>
         <template x-if="mechanics().length || contractLinks().length">
         <section class="rr-sec" id="mechanics" aria-labelledby="mech-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="mech-h">Mechanics and risk</h2>
           </div>
+          <!-- The risk first, where it is read, not a line under the facts. -->
+          <aside class="rr-callout" aria-label="Risk">
+            <p class="rr-callout__k">Risk</p>
+            <p class="rr-callout__b">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
+          </aside>
           <dl class="rr-dl">
             <template x-for="m in mechanics()" :key="m.k">
               <div><dt x-text="m.k"></dt><dd x-text="m.v"></dd></div>
@@ -346,7 +406,6 @@
               </div>
             </template>
           </dl>
-          <p class="rr-note">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
         </section>
         </template>
 

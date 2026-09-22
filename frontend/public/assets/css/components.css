@@ -18,9 +18,9 @@
    content is unaffected. */
 #view:empty { min-height: 100vh; }
 
-/* pulse (was Tailwind animate-pulse) */
+/* pulse (was Tailwind animate-pulse), for the skeleton blocks below */
 @keyframes rmPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-.rm-pulse { animation: rmPulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+
 
 .container { max-width: 80rem; margin-inline: auto; }
 
@@ -543,6 +543,21 @@
 .rm-sphase::before { content: ""; position: absolute; left: 0; top: 50%;
   width: 6px; height: 6px; margin-top: -3px; background: currentColor; }
 .rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
+
+/* A live state: a square beating slowly, so it cannot be read as the static
+   verified mark (a member's Active, a vault's Live). Hueless: green is a
+   constructive stance and rmUSDC's own hue, and a live mark in it read as the
+   vault's swatch (the covenant above). The beat carries the meaning. */
+.rm-pulse { display: inline-block; width: 0.4rem; height: 0.4rem; background: var(--color-text);
+  flex: 0 0 auto; vertical-align: middle; animation: rm-pulse-beat 2.4s ease-in-out infinite; }
+.rm-live { display: inline-flex; align-items: center; gap: 0.5rem; }
+@keyframes rm-pulse-beat { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .rm-pulse { animation: none; } }
+/* A plain fact worn as a pill (Coming soon): mono caps on a hairline, square,
+   no hue, the role pill's shape. */
+.rm-pill { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
 /* Published takes a green mark, the word staying muted (David, 2026-09-22):
    grey read as inert beside the facts it leads on the session page. */
 .rm-sphase--published::before { background: var(--color-green); }
@@ -598,6 +613,16 @@
    identity mark nobody can see says nothing at all. Hueless is the part that
    carries the meaning, and it stays hueless. */
 .rm-mark--identity { width: 0.42rem; height: 0.42rem; background: var(--color-text-muted); }
+
+/* A link that opens a new tab says so, site-wide: an arrow after its text.
+   Text links only: a link that is an image, an icon, a card or a button
+   carries none, and the dashboards keep their own link style. The arrow is
+   generated rather than typed, so a copied link text stays its words, and its
+   alternative text is empty: a screen reader announces the new tab itself. */
+a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not([data-dash-shell] *)::after {
+  content: "\2197"; content: "\2197" / "";
+  display: inline-block; margin-left: 0.25em; text-decoration: none;
+}
 
 .rm-visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;

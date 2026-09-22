@@ -37,11 +37,11 @@
           <template x-if="subject.homepage || subject.xHandle">
             <p class="rr-links sp-links">
               <template x-if="subject.homepage">
-                <a class="rr-lnk" :href="subject.homepage" rel="noopener noreferrer" target="_blank" x-text="hostOf(subject.homepage) + ' ↗'"></a>
+                <a class="rr-lnk" :href="subject.homepage" rel="noopener noreferrer" target="_blank" x-text="hostOf(subject.homepage)"></a>
               </template>
               <template x-if="subject.xHandle">
                 <a class="rr-lnk" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`" rel="noopener noreferrer" target="_blank"
-                   x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
+                   x-text="'@' + String(subject.xHandle).replace(/^@/, '')"></a>
               </template>
             </p>
           </template>
@@ -316,7 +316,7 @@
                             <td x-show="stackMultiChain()" x-text="chainLabel(w.chain)"></td>
                             <td class="q" x-show="stackHasAddress()">
                               <template x-if="explorerHref(w.chain, w.address)">
-                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="`${truncAddress(w.address)} ↗`"></a>
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(w.address)"></a>
                               </template>
                               <template x-if="!explorerHref(w.chain, w.address)"><span class="sp-addr" x-text="w.address || '—'"></span></template>
                             </td>
@@ -341,7 +341,7 @@
                             <td x-text="chainLabel(w.chain)"></td>
                             <td class="q">
                               <template x-if="explorerHref(w.chain, w.address)">
-                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="`${truncAddress(w.address)} ↗`"></a>
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(w.address)"></a>
                               </template>
                               <template x-if="!explorerHref(w.chain, w.address)"><span class="sp-addr" x-text="w.address || '—'"></span></template>
                             </td>

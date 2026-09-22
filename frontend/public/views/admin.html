@@ -240,7 +240,7 @@
                   source <span x-text="selectedResearchRun.run.sourceMode"></span> ·
                   tools <span x-text="(selectedResearchRun.run.tools || []).join(', ')"></span>
                 </p>
-                <a class="adm-link" target="_blank" rel="noopener" :href="publicReportHref(selectedResearchRun.run.tools)">Open public report ↗</a>
+                <a class="adm-link" target="_blank" rel="noopener" :href="publicReportHref(selectedResearchRun.run.tools)">Open public report</a>
                 <template x-if="selectedResearchRun.run.jobId">
                   <button type="button" class="adm-btn adm-btn--ghost" @click="goSection('queue'); openJob(selectedResearchRun.run.jobId)">View queue job</button>
                 </template>
@@ -270,7 +270,7 @@
                         <span x-text="art.artifactKey"></span>
                         <span class="adm-dim" x-show="art.rowCount != null" x-text="art.rowCount + ' rows'"></span>
                         <span class="adm-dim" x-show="art.firstDate" x-text="art.firstDate + ' → ' + art.lastDate"></span>
-                        <a class="adm-link" target="_blank" rel="noopener" :href="rawSeriesHref(art.artifactKey)" x-show="art.kind === 'raw-series'">Raw series ↗</a>
+                        <a class="adm-link" target="_blank" rel="noopener" :href="rawSeriesHref(art.artifactKey)" x-show="art.kind === 'raw-series'">Raw series</a>
                       </div>
                       <pre x-show="art.preview" class="adm-log" x-text="prettyJson(art.preview)"></pre>
                     </div>
