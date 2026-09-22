@@ -789,7 +789,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
   await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
   // On the published method factor is context, not an input, and is drawn so.
   await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).toContainText("factor not in composite");
+  await expect(signal.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("Not in the composite");
   // This reading carries no cuts, and none are hard-coded in their place.
   await expect(signal.locator(".sig__zone")).toHaveCount(0);
 

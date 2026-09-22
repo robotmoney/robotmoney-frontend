@@ -192,7 +192,7 @@
                   </figure>
                 </template>
                 <template x-if="!isWeightsSubject() && ((recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none')">
-                  <p class="rr-note" style="margin-top:0">No position calls</p>
+                  <p class="rr-note" style="margin-top:0">No actions published</p>
                 </template>
                 <template x-if="!isWeightsSubject() && !recommendation(latest())">
                   <p class="rr-note" style="margin-top:0">No recommendation published</p>
@@ -678,7 +678,7 @@
                           <span class="rm-tip rm-tip--label rm-tip--end rr-held"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="`All ${rowHeld(row).length} held`"></button><span class="rm-tip__bub" role="tooltip" x-text="`Held: ${rowHeld(row).join(', ')}`"></span></span>
                         </template>
                         <template x-if="recommendation(row)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(row).text"></span></template>
-                        <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span class="rr-note" style="margin:0">No position calls</span></template>
+                        <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span class="rr-note" style="margin:0">No actions</span></template>
                       </td>
                     </tr>
                   </template>

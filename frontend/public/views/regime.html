@@ -62,7 +62,7 @@
     <template x-if="latest">
       <div class="rv__dash">
         <!-- Live composite header -->
-        <div class="rv__dash-head">
+        <div class="rv__dash-head" id="composite">
           <div>
             <span class="rv__eyebrow rv__eyebrow--accent">Live Composite</span>
             <h2 class="rv__dash-title">Daily regime classification</h2>
@@ -138,7 +138,7 @@
              page can hold, so the panel count no longer has to be spelled out here. -->
         <div class="rv__panels">
           <template x-for="p in panelsList()" :key="p">
-            <div class="rv__panel-card">
+            <div class="rv__panel-card" :id="`panel-${p}`">
               <div class="rv__panel-card-head">
                 <h3 class="rv__panel-card-title" x-text="panelLabel(p) + ' panel'"></h3>
               </div>
