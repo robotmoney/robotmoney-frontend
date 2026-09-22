@@ -6,7 +6,8 @@
 //     "<persona + regime/subject brief>"
 //
 // parses the NDJSON transcript for the final assistant message text, and returns
-// REGIME / ALLOCATION / SUBJECT prose ending in a parseable
+// REGIME then ALLOCATION (an allocation session) or SUBJECT (any other) prose,
+// ending in a parseable
 // "STANCE: <...> | CONFIDENCE: <0-1>" control line (stripped from the stored body
 // by `parseStanceFromBody`). Mirrors the reference authoring path in
 // robotmoney-site scripts/swarm/generate-session.js.
@@ -106,6 +107,9 @@ export type InferenceTelemetrySink = (event: InferenceTelemetryEvent) => void;
 
 export interface AuthorTakeOptions {
   telemetry?: InferenceTelemetrySink;
+  // The sleeve targets in force, read off this session's brief. An allocation
+  // take is asked to argue against these, never against numbers written here.
+  targets?: readonly SleeveTarget[];
   diagnosticArtifactPath?: string;
   // How many times to sample the model for a take that satisfies the section
   // contract below. See authorTake().
@@ -118,20 +122,60 @@ export interface AuthorTakeOptions {
   requireWeights?: boolean;
 }
 
-// The three bold section headers `promptFor` demands, and the ONLY definition
-// of them. session.ts's post-session `assertAuthoredTakes` reads this same
-// tuple, so the prompt, the author-time check, and the harness assertion can
-// never drift into disagreeing about what a well-formed take looks like.
-export const TAKE_SECTION_LEAD_INS: readonly string[] = Object.freeze([
-  "**REGIME**",
-  "**ALLOCATION**",
-  "**SUBJECT**",
-]);
+// The bold section headers `promptFor` demands, and the ONLY definition of
+// them. session.ts's post-session `assertAuthoredTakes` reads the same sets, so
+// the prompt, the author-time check, and the harness assertion can never drift
+// into disagreeing about what a well-formed take looks like.
+//
+// THE SECTIONS FOLLOW THE SUBJECT. An allocation session (`bucket_weights`)
+// reviews the sleeve targets: REGIME, then ALLOCATION. Every other subject
+// reviews its own book: REGIME, then SUBJECT. Asking every take for all three
+// put an ALLOCATION section, about the vault's framework, into takes on
+// portfolios the framework does not describe.
+const ALLOCATION_TAKE_SECTIONS: readonly string[] = Object.freeze(["**REGIME**", "**ALLOCATION**"]);
+const SUBJECT_TAKE_SECTIONS: readonly string[] = Object.freeze(["**REGIME**", "**SUBJECT**"]);
+
+/** The section headers a take on this kind of subject must carry, in order. */
+export function takeSectionLeadIns(options: { requireWeights?: boolean } = {}): readonly string[] {
+  return options.requireWeights ? ALLOCATION_TAKE_SECTIONS : SUBJECT_TAKE_SECTIONS;
+}
 
 // Which required section headers a take body is missing ([] when well-formed).
 // Pure and exported so the unit suite can pin it without a spawn.
-export function missingSectionLeadIns(body: string): readonly string[] {
-  return TAKE_SECTION_LEAD_INS.filter((lead) => !body.includes(lead));
+export function missingSectionLeadIns(body: string, options: { requireWeights?: boolean } = {}): readonly string[] {
+  return takeSectionLeadIns(options).filter((lead) => !body.includes(lead));
+}
+
+// A sleeve target in force, as the session's own brief carried it
+// (`body.allocation.buckets`, weights as fractions of the whole).
+export interface SleeveTarget {
+  id: string;
+  name: string;
+  weight: number;
+  items?: string[];
+}
+
+// The targets a brief carried, in its order; [] when it carried none (a
+// portfolio's brief, or one published before the framework was read). Never
+// a default: a target the brief did not state is not handed to a member.
+export function sleeveTargetsFromBrief(body: unknown): SleeveTarget[] {
+  const buckets = (body as { allocation?: { buckets?: unknown } } | null | undefined)?.allocation?.buckets;
+  if (!Array.isArray(buckets)) return [];
+  return buckets
+    .map((b: any) => ({
+      id: String(b?.id ?? ""),
+      name: String(b?.name ?? b?.id ?? ""),
+      weight: Number(b?.target_weight),
+      items: Array.isArray(b?.items) ? b.items.map((i: any) => String(i?.name ?? i?.id ?? "")).filter(Boolean) : [],
+    }))
+    .filter((b) => b.id && Number.isFinite(b.weight) && b.weight >= 0);
+}
+
+// "Conservative DeFi Yield 95% (Aave, Morpho, Compound, Sky) / Agent Tokens 5% …"
+function targetsLine(targets: readonly SleeveTarget[]): string {
+  return targets
+    .map((t) => `${t.name} ${+(t.weight * 100).toFixed(1)}%${t.items?.length ? ` (${t.items.join(", ")})` : ""}`)
+    .join(" / ");
 }
 
 // ── THE ALLOCATION VECTOR (Project Fusion, AC-FMT-03/04) ────────────────────
@@ -396,9 +440,10 @@ export function promptFor(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
-  options: { requireWeights?: boolean } = {},
+  options: { requireWeights?: boolean; targets?: readonly SleeveTarget[] } = {},
 ): string {
   const comp = regime.composite;
+  const inForce = options.targets?.length ? targetsLine(options.targets) : "";
   // The allocation ask, and the ONLY place the WEIGHTS line's shape is written
   // for the model. A `position_actions` subject is asked for nothing numeric —
   // it was never asked for a bucket vector, and inventing one would put an
@@ -413,9 +458,25 @@ export function promptFor(
     ? [
         ``,
         `# Your allocation`,
-        `This session asks for a NUMBER as well as a view. State your own target split across ALL FOUR Robot Money vault buckets — ${TAKE_WEIGHT_BUCKETS.join(", ")} — as your ${TAKE_WEIGHTS_LEAD_IN} line below. Every bucket must appear exactly once, shares are non-negative, and they must not all be zero; write the split you would actually run, not the 95/5/0/0 target restated. Do not put these numbers anywhere else in the take.`,
+        `This session asks for a NUMBER as well as a view. State your own target split across ALL FOUR Robot Money vault buckets — ${TAKE_WEIGHT_BUCKETS.join(", ")} — as your ${TAKE_WEIGHTS_LEAD_IN} line below. Every bucket must appear exactly once, shares are non-negative, and they must not all be zero; write the split you would actually run, not the targets in force restated. Do not put these numbers anywhere else in the take.`,
       ]
     : [];
+  // The second section: the targets on an allocation session, the subject's
+  // own book on any other (see takeSectionLeadIns).
+  const secondSection = options.requireWeights
+    ? [
+        `**ALLOCATION**`,
+        `- What tilt the regime implies for the sleeve targets${inForce ? " in force" : ""}, and why`,
+        `- Which sleeve or constituent moves first, and the mechanism`,
+        `- The one flip trigger that would change the read`,
+      ]
+    : [
+        `**SUBJECT**`,
+        `- Where ${subjectId} is over- or under-exposed for this regime, against its own holdings and mandate`,
+        `- The specific concentration or mechanism risk you underwrite`,
+        `- The first move you would make, with a trigger`,
+      ];
+  const [first, second] = takeSectionLeadIns(options);
   return [
     `You are ${p.name}, an autonomous voice on the Robot Money Investment Swarm.`,
     `You read every session through a ${p.lens} lens — that lens, not the headline composite, sets your conviction.`,
@@ -428,25 +489,17 @@ export function promptFor(
     `  Macro panel:    ${pct(regime.macroPercentile, comp + 0.08)} percentile, bucket ${regime.macroRegime ?? "n/a"}`,
     `  On-chain panel: ${pct(regime.onchainPercentile, comp - 0.2)} percentile, bucket ${regime.onchainRegime ?? "n/a"}`,
     `  Equity factor:  ${pct(regime.factorPercentile, comp + 0.15)} percentile, bucket ${regime.factorRegime ?? "n/a"}`,
-    `Vault allocation targets are 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets; the Agent Tokens sleeve routes through rmUSDC vault receipts.`,
+    ...(options.requireWeights && inForce ? [`Sleeve targets in force: ${inForce}.`] : []),
     ``,
     `# Your task`,
-    `Write a structured take in exactly three bulleted sections, ~180-220 words total. Each section is a bold header line followed by 3 bullets, one claim per bullet. Reply with ONLY the take (no preamble, no tool calls). Format exactly:`,
+    `Write a structured take in exactly two bulleted sections, ${first} then ${second}, ~140-180 words total. Each section is a bold header line followed by 3 bullets, one claim per bullet. Reply with ONLY the take (no preamble, no tool calls). Format exactly:`,
     ``,
     `**REGIME**`,
     `- One concrete number from the brief and what it means through your lens`,
     `- The macro vs on-chain (or factor) divergence, if the panels disagree`,
     `- The trailing direction you read`,
     ``,
-    `**ALLOCATION**`,
-    `- What tilt the regime implies for the 95/5/0/0 targets, and why`,
-    `- Which sleeve or constituent moves first and the mechanism`,
-    `- The one flip trigger that would change the read`,
-    ``,
-    `**SUBJECT**`,
-    `- Where ${subjectId} is over- or under-exposed vs the regime-appropriate allocation`,
-    `- The specific concentration or mechanism risk you underwrite`,
-    `- The first move you would make, with a trigger`,
+    ...secondSection,
     ``,
     ...weightsBrief,
     ``,
@@ -856,7 +909,7 @@ export async function authorTake(
   options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
   const attempts = Math.max(1, options.structureAttempts ?? DEFAULT_STRUCTURE_ATTEMPTS);
-  const prompt = promptFor(p, regime, subjectId, { requireWeights: options.requireWeights });
+  const prompt = promptFor(p, regime, subjectId, { requireWeights: options.requireWeights, targets: options.targets });
   let shortfall = "";
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -885,7 +938,7 @@ export async function authorTake(
         continue;
       }
     }
-    const missing = missingSectionLeadIns(body);
+    const missing = missingSectionLeadIns(body, { requireWeights: options.requireWeights });
     if (missing.length === 0) {
       // A `requireWeights` take NEVER leaves here without its vector. The
       // branch above already re-samples a malformed WEIGHTS line, so this is

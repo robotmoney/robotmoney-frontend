@@ -63,7 +63,7 @@ import { classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract"
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { authorTake, type RegimeContext } from "../lib/swarm/inference.ts";
+import { authorTake, sleeveTargetsFromBrief, type RegimeContext } from "../lib/swarm/inference.ts";
 
 const HOME = process.env.HOME ?? "/home/agent";
 const CLIENT_DIR = join(HOME, ".rm-member");
@@ -385,6 +385,7 @@ async function participate(): Promise<void> {
       telemetry: (event) => out("RM_TELEMETRY", event),
       diagnosticArtifactPath: process.env.RM_DIAGNOSTIC_ARTIFACT,
       requireWeights,
+      targets: brief.status === 200 ? sleeveTargetsFromBrief(brief.body?.body) : [],
     },
   );
   const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";

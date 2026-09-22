@@ -121,6 +121,9 @@ export function assertAuthoredTakes(
   attendance: AbsenceReport,
   observedAbsent: readonly string[],
   fulfilledMemberIds: readonly string[],
+  // Which sections a take must carry follows the subject (inference.ts
+  // takeSectionLeadIns): an allocation session's, or any other subject's.
+  sections: { requireWeights?: boolean } = {},
 ) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
@@ -165,7 +168,7 @@ export function assertAuthoredTakes(
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
     }
-    for (const lead of missingSectionLeadIns(t.body)) {
+    for (const lead of missingSectionLeadIns(t.body, sections)) {
       throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
     }
     if (!VALID_STANCES.has(String(t.stance))) {
@@ -1623,7 +1626,12 @@ export async function runSession(
   const fulfilled = settled
     .filter((s) => s.status === "fulfilled")
     .map((_, i) => present[i].memberId);
-  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled);
+  // An allocation session is the one whose recommendation is a weight vector;
+  // its takes carry REGIME and ALLOCATION, every other subject's REGIME and
+  // SUBJECT.
+  const requireWeights = pub.session?.swarmRecommendation?.type === "bucket_weights"
+    || (pub.takes ?? []).some((t: any) => Array.isArray(t?.weights) && t.weights.length > 0);
+  assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled, { requireWeights });
 
   // Verify memos
   for (const r of results) {
