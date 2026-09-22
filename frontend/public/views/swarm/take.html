@@ -64,10 +64,8 @@
               <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified, take.archival)"></span>
             </span>
           </span>
-          <!-- The session it was filed in, when that session could be read. -->
-          <template x-if="session">
-            <span class="rr-meta__i">Session <a class="rr-lnk" :href="sessionHref()" x-text="formatDate(session.date, 'short')"></a></span>
-          </template>
+          <!-- The subject it was about. The filed line above already dates it,
+               and the links below open its session. -->
           <template x-if="session && subjectHref()">
             <span class="rr-meta__i">Subject <a class="rr-lnk" :href="subjectHref()" x-text="session.subjectName || session.subjectId"></a></span>
           </template>

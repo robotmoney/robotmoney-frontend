@@ -390,9 +390,9 @@ test("a take's receipt links its session, and says nothing of what a judge made 
   });
   await page.goto("/swarm/takes/take-athena");
 
-  const session = page.locator(".rr-meta .rr-meta__i", { hasText: "Session" }).locator("a");
-  await expect(session).toHaveText("Sep 17, 2026");
-  await expect(session).toHaveAttribute("href", `/swarm/sessions/${S1}`);
+  // The filed line dates it, so the facts row names no session date; the
+  // subject and the links row lead to the session.
+  await expect(page.locator(".rr-meta .rr-meta__i", { hasText: "Session" })).toHaveCount(0);
   await expect(page.locator(".rr-recnav a", { hasText: "The session" })).toHaveAttribute("href", `/swarm/sessions/${S1}`);
   // The page is this take's alone: the judge's questions are the session's
   // and the judgement's, and no judgement is asked for here.
