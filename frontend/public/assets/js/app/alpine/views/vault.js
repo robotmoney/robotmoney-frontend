@@ -20,7 +20,9 @@ import {
   loadLatestRecommendation,
   loadVaultDetail,
   loadVaultOverview,
+  loadVaultSubjectFixture,
 } from "../../lib/vault-source.js";
+import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../../lib/share-chart.js";
 import { latestRecommendation } from "../latest-recommendation.js";
 import {
   canDeposit,
@@ -112,7 +114,10 @@ export function registerVaultView(Alpine) {
     detailError: null,
     showAllHoldings: false,
     activityPage: 0,
-    chartAt: null,      // the history reading under the crosshair
+    chartAt: null,      // the TVL reading under the crosshair
+    posSnaps: null,     // the vault's positions over time, from the vault subject's book
+    posAt: null,        // the positions reading under the crosshair
+    posFocus: null,     // a position in focus from the legend
 
     fmtUsd,
     fmtDate,
@@ -152,6 +157,13 @@ export function registerVaultView(Alpine) {
           this.detailError = r.error;
         } catch (_) {
           this.detailError = DETAIL_UNAVAILABLE;
+        }
+        // Its positions over time are the vault subject's book, each position
+        // tagged with its vault: the devnet fixture's, and nothing on Base,
+        // whose feed reads one day and keeps no position history.
+        if (load.mode === "devnet") {
+          const fixture = await loadVaultSubjectFixture({ hostname: location.hostname }).catch(() => null);
+          this.posSnaps = fixture?.snapshots ?? null;
         }
       }
       this.loading = false;
@@ -490,9 +502,124 @@ export function registerVaultView(Alpine) {
     activityOlder() {
       return (this.activityPage + 1) * ACTIVITY_PAGE < this.activity().length;
     },
+    // What moved, in the vault's own token, and its value: a deposit or a
+    // withdrawal is the USDC that went in or out, at $1.
     activityAmount(a) {
+      const n = numberOrNull(a?.shares);
+      return n === null ? "—" : `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${this.id?.symbol || ""}`.trim();
+    },
+    activityValue(a) {
       const n = numberOrNull(a?.assets);
-      return n === null ? "—" : `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`;
+      return n === null ? "—" : fmtUsd(n);
+    },
+
+    // ── positions over time ──────────────────────────────────────────────────
+    // Each position's share of the vault, stacked to 100%, the chart the
+    // subject pages draw (lib/share-chart.js). Bands are tints of the vault's
+    // own hue: its other hues are the other vaults', in the ring below.
+    posRows() {
+      const snaps = Array.isArray(this.posSnaps) ? this.posSnaps : [];
+      return snaps.map((sn) => {
+        const positions = (sn?.positions || []).filter((p) => p?.vault === this.slug);
+        const total = positions.reduce((s, p) => s + (Number(p?.value_usd) || 0), 0);
+        return { date: String(sn?.date || "").slice(0, 10), total, positions };
+      }).filter((r) => r.date && r.total > 0);
+    },
+    posSeries() {
+      const rows = this.posRows();
+      if (rows.length < 2) return [];
+      const share = (/** @type {any} */ r, /** @type {string} */ tok) => {
+        const hit = r.positions.find((/** @type {any} */ p) => p.token === tok);
+        return hit ? (Number(hit.value_usd) || 0) / r.total : 0;
+      };
+      const last = rows[rows.length - 1];
+      const names = new Map();
+      for (const r of rows) for (const p of r.positions) if (!names.has(p.token)) names.set(p.token, p.name || p.token);
+      // Largest in the latest reading first, and only what reaches 1% at some
+      // point: a sliver no reader can see still spends a tint and a legend row.
+      const tokens = [...names.keys()]
+        .filter((t) => rows.some((r) => share(r, t) >= 0.01))
+        .sort((a, b) => share(last, b) - share(last, a));
+      const TINTS = [92, 62, 40, 24, 14, 8];
+      const hue = this.id?.color || "var(--color-text-muted)";
+      const bands = tokens.slice(0, TINTS.length).map((t, i) => ({
+        token: t,
+        label: names.get(t),
+        color: `color-mix(in srgb, ${hue} ${TINTS[i]}%, var(--color-void))`,
+        shares: rows.map((r) => share(r, t)),
+      }));
+      const other = rows.map((_, i) => Math.max(0, 1 - bands.reduce((s, b) => s + b.shares[i], 0)));
+      if (other.some((v) => v > 0.005)) bands.push({ token: "other", label: "Other", color: "var(--color-border-light)", shares: other });
+      return bands;
+    },
+    posModel() {
+      const rows = this.posRows();
+      const series = this.posSeries();
+      if (rows.length < 2 || !series.length) return null;
+      return { rows, series, xs: shareChartXs(rows.map((r) => r.date)) };
+    },
+    posSvg() {
+      const m = this.posModel();
+      return m ? shareChartSvg({ xs: m.xs, series: m.series }) : "";
+    },
+    posSpan() {
+      const n = this.posRows().length;
+      return n > 1 ? `${n} readings` : "";
+    },
+    posEmptyLabel() { return this.posRows().length === 1 ? "One reading so far" : "No position history yet"; },
+    posTicks() {
+      const m = this.posModel();
+      if (!m) return [];
+      const md = (/** @type {unknown} */ d) => {
+        try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return String(d); }
+      };
+      return shareChartTicks(m.rows.map((r) => r.date), m.xs, (d) => md(d));
+    },
+    posLegend() {
+      return this.posSeries().map((b) => ({ token: b.token, label: b.label, color: b.color }));
+    },
+    posLabel() {
+      const m = this.posModel();
+      if (!m) return "";
+      const named = m.series.map((b) => `${b.label} ${weightChange.fmtPctTrim((b.shares[b.shares.length - 1] || 0) * 100)}`).join(", ");
+      return `Each position's share of ${this.id?.symbol || "the vault"}, stacked to 100%, ${fmtDate(m.rows[0].date)} to ${fmtDate(m.rows[m.rows.length - 1].date)}. Latest reading: ${named}. Use the arrow keys to step through the readings.`;
+    },
+    /** @param {number | null} i */
+    posPoint(i) {
+      const m = this.posModel();
+      if (!m || i == null || !m.rows[i]) return null;
+      return {
+        left: m.xs[i] / 10,
+        date: fmtDate(m.rows[i].date),
+        total: fmtUsd(m.rows[i].total),
+        items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
+          .map((b) => ({ token: b.token, label: b.label, color: b.color, pct: weightChange.fmtPctTrim((b.shares[i] || 0) * 100) })).reverse(),
+      };
+    },
+    /** @param {PointerEvent} ev */
+    posMove(ev) {
+      const m = this.posModel();
+      if (m) this.posAt = nearestReading(m.xs, /** @type {any} */ (ev));
+    },
+    /** @param {KeyboardEvent} ev */
+    posKey(ev) {
+      const m = this.posModel();
+      if (!m) return;
+      const last = m.rows.length - 1;
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const from = this.posAt ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+        this.posAt = Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+      } else if (ev.key === "Home") { ev.preventDefault(); this.posAt = 0; }
+      else if (ev.key === "End") { ev.preventDefault(); this.posAt = last; }
+      else if (ev.key === "Escape") { this.posAt = null; }
+    },
+    // A band in focus from the legend: the others recede.
+    /** @param {Element} host */
+    posSync(host) {
+      for (const el of host.querySelectorAll("[data-token]")) {
+        el.classList.toggle("is-muted", this.posFocus !== null && el.getAttribute("data-token") !== this.posFocus);
+      }
     },
     txHref(a) {
       return explorerLink(this.network(), a?.tx, "tx");

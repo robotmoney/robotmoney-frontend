@@ -24,6 +24,7 @@ import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadLatestRecommendation, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 
@@ -1987,11 +1988,7 @@ export function registerStaticViews(Alpine) {
       // session rather than one per day, so evenly-spaced points drew a
       // three-week gap the same width as a one-day one. Index spacing stays as
       // the fallback for snapshots whose dates will not parse.
-      const stamps = rows.map((r) => Date.parse(`${r?.date}T00:00:00Z`));
-      const dated = stamps.every((t) => Number.isFinite(t)) && stamps[stamps.length - 1] > stamps[0];
-      const span = dated ? stamps[stamps.length - 1] - stamps[0] : 0;
-      const xs = rows.map((_, i) => (dated ? 1000 * ((stamps[i] - stamps[0]) / span) : 1000 * (i / (rows.length - 1))));
-      return { rows, series, xs };
+      return { rows, series, xs: shareChartXs(rows.map((r) => r?.date)) };
     },
     // The bands, bottom-up over a running baseline, the largest position on the
     // bottom (only the bottom band has a flat, honest baseline). Each band is a
@@ -2000,33 +1997,13 @@ export function registerStaticViews(Alpine) {
     chartSvg() {
       const m = this.chartModel();
       if (!m) return "";
-      const y = (frac) => (100 - this.clampPct(frac * 100)).toFixed(2);
-      const base = m.rows.map(() => 0);
-      const fills = [];
-      const edges = [];
-      for (const b of m.series) {
-        const top = base.map((v, i) => v + b.shares[i]);
-        const upper = top.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`);
-        const lower = base.map((v, i) => `${m.xs[i].toFixed(1)},${y(v)}`).reverse();
-        for (let i = 0; i < base.length; i++) base[i] = top[i];
-        const tok = this.escapeHtml(b.token);
-        const mark = b.mark ? ` data-mark="${this.escapeHtml(b.mark)}"` : "";
-        fills.push(`<polygon data-token="${tok}"${mark} points="${upper.concat(lower).join(" ")}" fill="${b.color}" fill-opacity="0.62"`
-          + ` stroke="var(--color-void)" stroke-width="1" vector-effect="non-scaling-stroke"/>`);
-        edges.push(`<polyline data-token="${tok}"${mark} points="${upper.join(" ")}" fill="none" stroke="${b.color}"`
-          + ` stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
-      }
-      // Gridlines over the fills, faint: at 50% a single position becomes the
-      // majority of the book.
-      const grid = [25, 50, 75].map((t) => `<line x1="0" x2="1000" y1="${100 - t}" y2="${100 - t}"`
-        + ` stroke="rgba(237,239,241,${t === 50 ? 0.22 : 0.1})" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
       // The vault stack's target over the bands: one dashed line per boundary
       // between vaults, in one neutral colour, never a vault's hue.
-      const target = this.isVaultStack()
+      const overlay = this.isVaultStack()
         ? this.vaultTargetLines().map((points) => `<polyline data-token="target" points="${points}" fill="none" style="stroke:var(--color-text-soft)"`
           + ` stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`).join("")
         : "";
-      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">${fills.join("")}${edges.join("")}${grid}${target}</svg>`;
+      return shareChartSvg({ xs: m.xs, series: m.series, overlay });
     },
     chartLabel() {
       const m = this.chartModel();
@@ -2051,18 +2028,10 @@ export function registerStaticViews(Alpine) {
     chartXTicks() {
       const m = this.chartModel();
       if (!m) return [];
-      const last = m.rows.length - 1;
-      const step = Math.max(1, Math.ceil(m.rows.length / 8));
-      const dated = (i) => i % step === 0 && last - i >= step / 2;
       const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
-      const lastYear = String(m.rows[last]?.date || "").slice(0, 4);
-      return m.rows.map((r, i) => ({
-        key: `${r.date}-${i}`,
-        left: m.xs[i] / 10,
-        label: i === 0 && String(r.date || "").slice(0, 4) !== lastYear ? this.formatDate(r.date, "short") : md(r.date),
-        i,
-        cls: i === 0 ? "is-first" : i === last ? "is-last" : dated(i) ? "is-mid" : "is-mid is-sparse",
-      }));
+      const lastYear = String(m.rows[m.rows.length - 1]?.date || "").slice(0, 4);
+      return shareChartTicks(m.rows.map((r) => r.date), m.xs,
+        (d, first) => (first && String(d || "").slice(0, 4) !== lastYear ? this.formatDate(d, "short") : md(d)));
     },
     // One reading, for the crosshair and its tooltip: every band's share on
     // that date, top band first, as the stack reads.
@@ -2084,11 +2053,7 @@ export function registerStaticViews(Alpine) {
     chartMove(ev) {
       const m = this.chartModel();
       if (!m) return;
-      const rect = ev.currentTarget.getBoundingClientRect();
-      const at = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * 1000;
-      let best = 0;
-      for (let i = 1; i < m.xs.length; i++) if (Math.abs(m.xs[i] - at) < Math.abs(m.xs[best] - at)) best = i;
-      this.chartAt = best;
+      this.chartAt = nearestReading(m.xs, ev);
     },
     chartKey(ev) {
       const m = this.chartModel();

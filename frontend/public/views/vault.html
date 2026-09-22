@@ -116,6 +116,98 @@
                           x-text="showAllHoldings ? 'Show fewer' : `Show all ${holdings().length}`"></button>
                 </template>
               </div>
+              <!-- Each position's share of the vault over time, the chart the
+                   subject pages draw; tints of the vault's own hue. -->
+              <template x-if="!posModel()">
+                <figure class="rr-area" style="margin-top:2.25rem">
+                  <figcaption class="rr-area__head"><h3 class="rr-subhead__h">Positions over time</h3></figcaption>
+                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="posRows().length === 1 ? 'Not enough data yet' : 'No data yet'"></p><p class="rr-empty__t" x-text="posEmptyLabel()"></p></div>
+                </figure>
+              </template>
+              <template x-if="posModel()">
+                <figure class="rr-area" style="margin-top:2.25rem">
+                  <figcaption class="rr-area__head">
+                    <h3 class="rr-subhead__h">Positions over time</h3>
+                    <span class="rr-sec__aside" x-text="posSpan()"></span>
+                  </figcaption>
+                  <div class="rr-area__frame">
+                    <div class="rr-area__y" aria-hidden="true">
+                      <template x-for="t in [100, 75, 50, 25, 0]" :key="t"><span :style="`top:${100 - t}%`" x-text="`${t}%`"></span></template>
+                    </div>
+                    <div class="rr-area__plot" tabindex="0" role="img" :aria-label="posLabel()"
+                         @pointermove="posMove($event)" @pointerdown="posMove($event)" @pointerleave="posAt = null" @keydown="posKey($event)" @blur="posAt = null">
+                      <div class="rr-area__svg" x-html="posSvg()" x-effect="posFocus; $nextTick(() => posSync($el))"></div>
+                      <template x-if="posPoint(posAt)">
+                        <div class="rr-area__cross" :style="`left:${posPoint(posAt).left}%`"></div>
+                      </template>
+                      <template x-if="posPoint(posAt)">
+                        <div class="rr-area__tip" :class="posPoint(posAt).left > 62 ? 'is-left' : ''" :style="`left:${posPoint(posAt).left}%`">
+                          <p class="rr-area__tip-h"><b x-text="posPoint(posAt).date"></b><span x-text="posPoint(posAt).total"></span></p>
+                          <ul>
+                            <template x-for="it in posPoint(posAt).items" :key="it.token">
+                              <li :class="posFocus && posFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.color}`"></i><span x-text="it.label"></span><b x-text="it.pct"></b></li>
+                            </template>
+                          </ul>
+                        </div>
+                      </template>
+                    </div>
+                    <div class="rr-area__x" aria-hidden="true">
+                      <template x-for="t in posTicks()" :key="t.key"><span :class="[t.cls, t.i === posAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                    </div>
+                  </div>
+                  <ul class="rr-area__legend">
+                    <template x-for="l in posLegend()" :key="l.token">
+                      <li :class="posFocus && posFocus !== l.token ? 'is-muted' : ''" @pointerenter="posFocus = l.token" @pointerleave="posFocus = null">
+                        <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.label"></span>
+                      </li>
+                    </template>
+                  </ul>
+                </figure>
+              </template>
+              <!-- TVL over time, where the source serves it (the Base feed does
+                   not). Seven readings or more draw a line, broken wherever
+                   readings are more than three days apart; fewer draw as points. -->
+              <template x-if="hasHistory()">
+              <div id="tvl">
+              <template x-if="!hist().points.length">
+                <figure class="rr-area" style="margin-top:2.25rem">
+                  <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL over time</h3></figcaption>
+                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data yet</p></div>
+                </figure>
+              </template>
+              <template x-if="hist().points.length">
+                <figure class="rr-area" style="margin-top:2.25rem">
+                  <figcaption class="rr-area__head">
+                    <h3 class="rr-subhead__h">TVL over time</h3>
+                    <span class="rr-sec__aside" x-text="histCount()"></span>
+                  </figcaption>
+                  <div class="rr-area__frame">
+                    <div class="rr-area__y" aria-hidden="true">
+                      <template x-for="t in histYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                    </div>
+                    <div class="rr-area__plot" tabindex="0" role="img" :aria-label="histLabel()"
+                         @pointermove="histMove($event)" @pointerdown="histMove($event)" @pointerleave="chartAt = null" @keydown="histKey($event)" @blur="chartAt = null">
+                      <div class="rr-area__svg" x-html="histSvg()"></div>
+                      <template x-for="p in histDots()" :key="p.key">
+                        <i class="rr-area__pt" data-mark="series" :style="`left:${p.left}%;top:${p.top}%;background:${id.color}`" aria-hidden="true"></i>
+                      </template>
+                      <template x-if="histPoint(chartAt)">
+                        <div class="rr-area__cross" :style="`left:${histPoint(chartAt).left}%`"></div>
+                      </template>
+                      <template x-if="histPoint(chartAt)">
+                        <div class="rr-area__tip" :class="histPoint(chartAt).left > 62 ? 'is-left' : ''" :style="`left:${histPoint(chartAt).left}%`">
+                          <p class="rr-area__tip-h" style="margin:0"><b x-text="histPoint(chartAt).date"></b><span x-text="histPoint(chartAt).value"></span></p>
+                        </div>
+                      </template>
+                    </div>
+                    <div class="rr-area__x" aria-hidden="true">
+                      <template x-for="t in histXTicks()" :key="t.key"><span :class="[t.cls, t.i === chartAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                    </div>
+                  </div>
+                </figure>
+              </template>
+              </div>
+              </template>
               </div>
             </template>
           </section>
@@ -279,55 +371,6 @@
           </template>
         </section>
 
-        <!-- HISTORY: the vault's TVL over time, where the source serves it
-             (the Base feed does not). Seven readings or more draw a line,
-             broken wherever readings are more than three days apart; fewer
-             draw as points. -->
-        <template x-if="isLive() && !detailError && hasHistory()">
-          <section class="rr-sec" id="history" aria-labelledby="vhist-h">
-            <div class="rr-sec__head">
-              <h2 class="rr-sec__h" id="vhist-h">History</h2>
-            </div>
-            <template x-if="!hist().points.length">
-              <figure class="rr-area">
-                <figcaption class="rr-area__head"><p class="rr-k">TVL</p></figcaption>
-                <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data yet</p></div>
-              </figure>
-            </template>
-            <template x-if="hist().points.length">
-              <figure class="rr-area">
-                <figcaption class="rr-area__head">
-                  <p class="rr-k">TVL</p>
-                  <span class="rr-k" x-text="histCount()"></span>
-                </figcaption>
-                <div class="rr-area__frame">
-                  <div class="rr-area__y" aria-hidden="true">
-                    <template x-for="t in histYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
-                  </div>
-                  <div class="rr-area__plot" tabindex="0" role="img" :aria-label="histLabel()"
-                       @pointermove="histMove($event)" @pointerdown="histMove($event)" @pointerleave="chartAt = null" @keydown="histKey($event)" @blur="chartAt = null">
-                    <div class="rr-area__svg" x-html="histSvg()"></div>
-                    <template x-for="p in histDots()" :key="p.key">
-                      <i class="rr-area__pt" data-mark="series" :style="`left:${p.left}%;top:${p.top}%;background:${id.color}`" aria-hidden="true"></i>
-                    </template>
-                    <template x-if="histPoint(chartAt)">
-                      <div class="rr-area__cross" :style="`left:${histPoint(chartAt).left}%`"></div>
-                    </template>
-                    <template x-if="histPoint(chartAt)">
-                      <div class="rr-area__tip" :class="histPoint(chartAt).left > 62 ? 'is-left' : ''" :style="`left:${histPoint(chartAt).left}%`">
-                        <p class="rr-area__tip-h" style="margin:0"><b x-text="histPoint(chartAt).date"></b><span x-text="histPoint(chartAt).value"></span></p>
-                      </div>
-                    </template>
-                  </div>
-                  <div class="rr-area__x" aria-hidden="true">
-                    <template x-for="t in histXTicks()" :key="t.key"><span :class="[t.cls, t.i === chartAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
-                  </div>
-                </div>
-              </figure>
-            </template>
-          </section>
-        </template>
-
         <!-- ACTIVITY: deposits and withdrawals, newest first, ten to a page,
              where the source serves them (the Base feed does not). -->
         <template x-if="isLive() && !detailError && hasActivity()">
@@ -338,7 +381,7 @@
             <div>
               <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="activityHasTx() ? 'has-tx' : ''">
                 <thead>
-                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Transaction</th></tr>
+                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q">Transaction</th></tr>
                 </thead>
                 <tbody>
                   <template x-for="(a, i) in activityRows()" :key="`${activityPage}-${i}-${a.t}`">
@@ -346,6 +389,7 @@
                       <th scope="row" x-text="fmtDate(a.t)"></th>
                       <td x-text="activityKind(a)"></td>
                       <td class="q" x-text="activityAmount(a)"></td>
+                      <td class="q" x-text="activityValue(a)"></td>
                       <td class="q">
                         <template x-if="txHref(a)"><a class="rr-lnk" :href="txHref(a)" target="_blank" rel="noopener noreferrer" x-text="shortHash(a.tx)"></a></template>
                         <template x-if="!txHref(a)"><span>—</span></template>
@@ -353,7 +397,7 @@
                     </tr>
                   </template>
                   <template x-if="!activity().length">
-                    <tr><td class="rr-table__empty" colspan="4"><span class="rr-empty__t">No activity yet</span></td></tr>
+                    <tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t">No activity yet</span></td></tr>
                   </template>
                 </tbody>
               </table></div>
