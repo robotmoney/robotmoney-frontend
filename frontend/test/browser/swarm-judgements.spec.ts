@@ -294,6 +294,8 @@ test("a judgement's own page: who, which session, its advice, its questions, and
   await expect(prompt).toHaveText("3f9a1c0e5b7d…7f9a0b2c");
   await expect(prompt).toHaveAttribute("title", THEMIS_J.promptHash);
   await expect(page.locator("#provenance a")).toHaveAttribute("href", "/api/swarm/judgements/41");
+  // One arrow: the new-tab style draws it, so the text carries none.
+  await expect(page.locator("#provenance a")).toHaveText("Judgement JSON");
   await noSafe(page);
   expect(await page.locator(".cv--detail article").innerText(), "no em dash in the record").not.toContain("—");
 });
