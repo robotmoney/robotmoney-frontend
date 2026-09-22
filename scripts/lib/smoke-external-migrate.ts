@@ -21,10 +21,43 @@
 //     before failing.
 // Every one of these throws; none of them falls back to rm_app or lets the boot
 // proceed as if --migrate had not been passed.
+//
+// THE ABSENT-FLAG SIDE OF THE SAME DECISION. Skipping migrate() is only safe
+// when the schema is already current — refuseIfSchemaBehind() runs
+// backend/scripts/schema-current.ts (read-only, as rm_app, no elevated
+// privilege) and refuses the boot outright if it is not, rather than warning
+// and serving a stale schema anyway.
 import { loadEnvFile } from "./env-role.ts";
 
 const DOADMIN_ROLE = "doadmin";
 const MIGRATE_FLAG_LABEL = "--migrate";
+
+/** The one-shot container that answers "is the schema current?", read-only. */
+export const SCHEMA_CURRENT_ARGV: readonly string[] = Object.freeze([
+  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/schema-current.ts",
+]);
+
+/**
+ * Refuse an `--db external` boot that is about to skip migrate() (no
+ * `--migrate` passed) if the schema is not current. Called only in that
+ * absent-flag case — when `--migrate` is passed, migrate() brings the schema
+ * current itself, and this check would just be redundant.
+ */
+export function refuseIfSchemaBehind(
+  compose: (argv: string[], io?: { stdout?: "pipe"; stderr?: "pipe" }) => { exitCode: number; stdout: string; stderr: string },
+  log: (m: string) => void,
+): void {
+  const r = compose([...SCHEMA_CURRENT_ARGV], { stdout: "pipe", stderr: "pipe" });
+  const output = (r.stdout + r.stderr).trim();
+  if (output) log(output);
+  if (r.exitCode === 0) return;
+  throw new Error(
+    `${MIGRATE_FLAG_LABEL} was not passed and the schema is not current (schema-current exit ${r.exitCode}). ` +
+      `Serving this boot would run against a stale schema instead of refusing to. Pass ${MIGRATE_FLAG_LABEL} ` +
+      `to catch it up — you will be asked for the doadmin password — or confirm the migration(s) named above ` +
+      `are expected to stay pending before retrying.`,
+  );
+}
 
 /**
  * Read one line from the terminal with the input masked. smoke-main.ts owns no
@@ -123,8 +156,9 @@ export async function resolveExternalMigrationOptIn(
 ): Promise<void> {
   if (!migrateRequested) {
     console.warn(
-      `[smoke] --db external without ${MIGRATE_FLAG_LABEL}: this boot will NOT run migrations and runs on ` +
-        `rm_app only. Pass ${MIGRATE_FLAG_LABEL} to catch the schema up (you will be asked for the doadmin password).`,
+      `[smoke] --db external without ${MIGRATE_FLAG_LABEL}: this boot will not run migrations. It proceeds on ` +
+        `rm_app only if the schema is already current — refuseIfSchemaBehind() checks that during preflight and ` +
+        `refuses the boot otherwise. Pass ${MIGRATE_FLAG_LABEL} to catch it up (you will be asked for the doadmin password).`,
     );
     return;
   }

@@ -1342,13 +1342,20 @@ deployment.md §2.1, "FIRST: find the project name".
 > - **This release ships no migrations** — omit `--migrate`. The boot proceeds
 >   on `rm_app` only, exactly as every other step here already does.
 >
-> Omitting `--migrate` when migrations WERE needed does not fail loudly: the
-> boot succeeds and serves traffic against the OLD schema. There is no
-> automated pending-migration check yet (that is
-> `docs/plans/deploy-separation-engineering-plan.md` Phase 2's
-> `schema-current.ts`, not built) — this is a manual cross-check against the
-> per-release runbook's migration list, not something §9's postflight catches
-> for you in advance.
+> **Omitting `--migrate` when migrations WERE needed does fail loudly, not
+> silently, as of the schema-current check landed alongside `3b7d20a0`.** The
+> preflight step runs `backend/scripts/schema-current.ts` — read-only, as
+> `rm_app`, no elevated privilege needed to ask the question — and refuses the
+> boot outright if any migration file is unrecorded, or if `schema_migrations`
+> does not exist at all. Cross-checking the per-release runbook's migration
+> list yourself is still worth doing (it tells you WHETHER to pass `--migrate`
+> in the first place), but a wrong guess no longer serves a stale schema: it
+> refuses instead. This is a narrower, scoped-down stand-in for
+> `docs/plans/deploy-separation-engineering-plan.md` Phase 2.1's fuller
+> `schema-current.ts` design (`--emit-receipt`, a `P7.schema-current` manifest
+> step, a `skipped`-with-evidence verdict) — that fuller version still lands on
+> the release line after v0.5.1, per the sequencing rule at the top of that
+> plan.
 
 > ⏱ **Downtime budget for the scheduler.** Every job in `job_schedules` that
 > is enabled records the last moment it was supposed to fire in `next_run_at`.
@@ -1413,7 +1420,7 @@ not.
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
-| `--migrate` | State it when this release ships migrations you need applied now (`scripts/lib/smoke-db-mode.ts`'s `MIGRATE_FLAG`). Only valid with `--db external`. Prompts for the `doadmin` password at the terminal, verifies it authenticates, runs `migrate()` once, then clears the credential from the process (`scripts/lib/smoke-external-migrate.ts`). | `migrate()` is skipped entirely — the box above this table explains why that is the default, not a bug. The boot serves traffic against whatever schema the database already had. |
+| `--migrate` | State it when this release ships migrations you need applied now (`scripts/lib/smoke-db-mode.ts`'s `MIGRATE_FLAG`). Only valid with `--db external`. Prompts for the `doadmin` password at the terminal, verifies it authenticates, runs `migrate()` once, then clears the credential from the process (`scripts/lib/smoke-external-migrate.ts`). | `migrate()` is skipped entirely — the box above this table explains why that is the default, not a bug. If the schema is already current this is harmless; if it is not, `schema-current.ts` refuses the boot rather than serving it. |
 | `SMOKE_PROJECT=rm_prod` | **MANDATORY.** Pins the compose project name (`scripts/lib/smoke-main.ts:261`). Without it the name is `rm_smoke_stack_<random>` per boot (`scripts/stack/naming.ts:138`). | Every restart leaves an orphaned project. `docker compose -p …` commands in deployment.md address the wrong stack. Note: `--db external` does **not** by itself stabilise the project name — only `SMOKE_PROJECT` does. |
 | `--no-tui` | On a TTY a **failed boot renders a pane and never exits non-zero**; Ctrl-C then exits `0` (`scripts/lib/smoke-main.ts:1911-1918`, which returns without `process.exit`). `--no-tui` gives a real `exit 1` (`:1920-1928`). | You cannot tell success from failure by exit code. **Always pass it.** Needing the per-boot `ADMIN_TOKEN` — the expected unclaimed case (§2) — is *not* a reason to omit it: read the token out of the container instead (§7.4). |
 | **`CI` must be UNSET** | ⛔ With any truthy `CI` the boot runs a bounded scenario and then **tears the whole stack down**. Under smoke the branch taken is `CI && smokeMode` (`scripts/lib/smoke-main.ts:1175`): it runs one live swarm session against production and then `scripts/smoke-e2e-assert.ts` (`:1206`). The swarm-session *driver* at `:1212` is the **other** branch, `CI && !smokeMode`, and never runs here. Either way control reaches `if (process.env.CI)` at `:1390`, which calls `cleanup()` — a full `compose down` (`:697`, `:711-715`) — then `cleanCiVolume()` (`:1393`) and `process.exit(0)` (`:1394`). `cleanCiVolume()` also runs on the failure path (`:1893`), issuing `docker volume rm <project>_pgdata` (`scripts/lib/smoke-volumes.ts:105`). | The volume removal is harmless under `--db external` (no volume exists), but the teardown is not. Success exits `0` (`:1394`) and failure exits `1` (`:1894`) — the exit code still works — yet **either way the stack is torn down**, so the site does not stay up and there is nothing left to inspect or verify in §8. Check with `echo "CI=[$CI]"` before you start. It must print `CI=[]`. |

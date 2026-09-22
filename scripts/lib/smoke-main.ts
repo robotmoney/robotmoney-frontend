@@ -6,7 +6,7 @@ import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
+import { refuseIfSchemaBehind, resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
@@ -1134,12 +1134,12 @@ async function main(): Promise<void> {
   // readiness check, and only THEN typed scenario initialization — the order
   // the startup checklist above has always displayed (migrate → api /health →
   // archive restore | simulation seed).
-  // Wiring only; dbPreflightArgv carries what this is and why.
   async function classifyDatabase(): Promise<void> {
     setStep(state, DB_PREFLIGHT_STEP, "running");
     await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd });
     setStep(state, DB_PREFLIGHT_STEP, "done");
     log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
+    if (dataPath.kind === "external" && !requestsMigrate(process.argv)) refuseIfSchemaBehind(stack.compose, log);
   }
 
   applyHostPorts(await stack.up({

@@ -68,6 +68,11 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/preflight-0-3-0-append-only-safety.test.ts":
     "fixture SQL asserted to FAIL preflight's destructive-statement scan; never executed",
 
+  // DDL, not the DML this guard's triggers intercept (0032's own header says
+  // so): drops the table outright, in this file's own useCleanDatabase()
+  // clone, to exercise checkSchemaCurrent()'s "never migrated at all" branch.
+  "backend/tests/schema-current.test.ts": "DROP TABLE in an isolated clone, to test the never-migrated branch",
+
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
 
