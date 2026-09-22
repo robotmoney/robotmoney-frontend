@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsSeed, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, externalSeedImpliesArchive, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsSeed, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
@@ -148,7 +148,12 @@ const STATIC_PORT_FLAG = "--static-port";
 // `bun smoke` → `bun scripts/smoke.ts --smoke`. Every decision the flag implies
 // lives in scripts/lib/smoke-mode.ts (executed by
 // ); this file holds only the wiring.
-const smokeMode = isSmokeMode(process.argv);
+//
+// `--db external --seed` selects the archive scenario without `--smoke`: an
+// external boot's only valid seed IS the archive (a simulation seed is refused
+// against a populated server), so the two ways of asking for it agree — see
+// externalSeedImpliesArchive() in smoke-db-mode.ts.
+const smokeMode = isSmokeMode(process.argv) || externalSeedImpliesArchive(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 
