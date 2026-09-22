@@ -24,6 +24,7 @@ import {
 } from "../../lib/vault-source.js";
 import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../../lib/share-chart.js";
 import { latestRecommendation } from "../latest-recommendation.js";
+import { tvlChart } from "../tvl-chart.js";
 import {
   canDeposit,
   explorerLink,
@@ -33,7 +34,6 @@ import {
   freshnessLabel,
   gapParts,
   hasTargetLayer,
-  historyModel,
   holdingsComplete,
   numberOrNull,
   receiptApplied,
@@ -84,16 +84,8 @@ const fmtBpsExact = (v) => {
   return n === null ? "—" : `${(n / 100).toFixed(2).replace(/\.?0+$/, "")}%`;
 };
 
-const compactUsd = (v) => {
-  const n = numberOrNull(v);
-  if (n === null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 0 }).format(n);
-};
-
 const newestFirst = (a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0);
 
-// "Sep 3" beside a last tick in the same year, "Sep 3, 2025" otherwise.
-const tickDate = (t, sameYear) => (sameYear ? fmtDate(t).replace(/, \d{4}$/, "") : fmtDate(t));
 
 export function registerVaultView(Alpine) {
   // The ring's hover and focus (lib/sleeve-explorer.js) with one vault in
@@ -114,7 +106,6 @@ export function registerVaultView(Alpine) {
     detailError: null,
     showAllHoldings: false,
     activityPage: 0,
-    chartAt: null,      // the TVL reading under the crosshair
     posSnaps: null,     // the vault's positions over time, from the vault subject's book
     posAt: null,        // the positions reading under the crosshair
     posFocus: null,     // a position in focus from the legend
@@ -125,6 +116,7 @@ export function registerVaultView(Alpine) {
     // The latest allocation recommendation, the panel /allocation sets beside
     // its ring (alpine/latest-recommendation.js).
     ...latestRecommendation(),
+    ...tvlChart(),
 
     async init() {
       this.slug = String(location.pathname.split("/").filter(Boolean)[1] || "").toLowerCase();
@@ -390,90 +382,11 @@ export function registerVaultView(Alpine) {
     hasHistory() {
       return Array.isArray(this.record()?.history?.tvl);
     },
-    hist() {
-      return historyModel(this.record()?.history?.tvl ?? [], this.overview()?.asOf);
-    },
-    histCount() {
-      const n = this.hist().points.length;
-      return n === 1 ? "1 reading" : `${n} readings`;
-    },
-    // One polyline per unbroken run; a line never bridges a gap of more than
-    // three days (historyModel's segments).
-    histSvg() {
-      const m = this.hist();
-      if (m.sparse) return "";
-      const color = this.id?.color ?? "";
-      const lines = m.segments.filter((s) => s.length > 1).map((seg) => {
-        const pts = seg.map((p) => `${(p.x * 1000).toFixed(1)},${(100 - p.y * 100).toFixed(2)}`).join(" ");
-        return `<polyline data-mark="series" points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"`
-          + ` stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
-      });
-      const grid = `<line x1="0" x2="1000" y1="50" y2="50" stroke="rgba(237,239,241,0.1)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
-      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="overflow:visible" aria-hidden="true" focusable="false">${grid}${lines.join("")}</svg>`;
-    },
-    // Points instead of a line: every reading of a sparse series, and a
-    // reading that stands alone between two gaps.
-    histDots() {
-      const m = this.hist();
-      const pts = m.sparse ? m.points : m.segments.filter((s) => s.length === 1).flat();
-      return pts.map((p) => ({ key: p.t, left: p.x * 100, top: (1 - p.y) * 100 }));
-    },
-    histYTicks() {
-      const m = this.hist();
-      if (m.max === null || m.min === null) return [];
-      const lo = Math.min(0, m.min);
-      return [1, 0.5, 0].map((f) => ({ key: f, top: (1 - f) * 100, label: compactUsd(lo + (m.max - lo) * f) }));
-    },
-    // The axis's two ends: the first reading, and the later of the last
-    // reading and the overview's asOf, so readings that stopped early show as
-    // the empty stretch they are.
-    histXTicks() {
-      const m = this.hist();
-      if (!m.points.length || m.start === null || m.end === null) return [];
-      const last = m.points.length - 1;
-      const first = m.points[0];
-      if (m.end === m.start) return [{ key: first.t, left: first.x * 100, cls: "", label: fmtDate(first.t), i: 0 }];
-      const endT = new Date(m.end).toISOString();
-      const sameYear = fmtDate(first.t).slice(-4) === fmtDate(endT).slice(-4);
-      return [
-        { key: `a-${first.t}`, left: 0, cls: "is-first", label: tickDate(first.t, sameYear), i: 0 },
-        { key: `b-${endT}`, left: 100, cls: "is-last", label: tickDate(endT, true), i: m.points[last].ms === m.end ? last : -1 },
-      ];
-    },
-    histLabel() {
-      const pts = this.hist().points;
-      if (!pts.length) return "";
-      const a = pts[0];
-      const b = pts[pts.length - 1];
-      return `TVL of ${this.id?.symbol ?? "the vault"}, ${fmtDate(a.t)} to ${fmtDate(b.t)}: ${fmtUsd(a.value)} to ${fmtUsd(b.value)}. Use the arrow keys to step through the readings.`;
-    },
-    histPoint(i) {
-      const pts = this.hist().points;
-      if (i == null || !pts[i]) return null;
-      const p = pts[i];
-      return { left: p.x * 100, date: fmtDate(p.t), value: fmtUsd(p.value) };
-    },
-    histMove(ev) {
-      const pts = this.hist().points;
-      if (!pts.length) return;
-      const rect = ev.currentTarget.getBoundingClientRect();
-      const at = (ev.clientX - rect.left) / Math.max(1, rect.width);
-      let best = 0;
-      for (let i = 1; i < pts.length; i++) if (Math.abs(pts[i].x - at) < Math.abs(pts[best].x - at)) best = i;
-      this.chartAt = best;
-    },
-    histKey(ev) {
-      const n = this.hist().points.length;
-      if (!n) return;
-      const last = n - 1;
-      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-        ev.preventDefault();
-        const from = this.chartAt ?? (ev.key === "ArrowRight" ? -1 : last + 1);
-        this.chartAt = Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
-      } else if (ev.key === "Home") { ev.preventDefault(); this.chartAt = 0; }
-      else if (ev.key === "End") { ev.preventDefault(); this.chartAt = last; }
-      else if (ev.key === "Escape") { this.chartAt = null; }
-    },
+    // The TVL chart (alpine/tvl-chart.js) reads the vault's own series.
+    tvlPoints() { return this.record()?.history?.tvl ?? []; },
+    tvlAsOf() { return this.overview()?.asOf; },
+    tvlColor() { return this.id?.color ?? ""; },
+    tvlName() { return this.id?.symbol ?? "the vault"; },
 
     // ── activity ─────────────────────────────────────────────────────────────
     // As hasHistory(): the Base feed serves no activity.

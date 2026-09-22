@@ -169,39 +169,39 @@
                    readings are more than three days apart; fewer draw as points. -->
               <template x-if="hasHistory()">
               <div id="tvl">
-              <template x-if="!hist().points.length">
+              <template x-if="!tvl().points.length">
                 <figure class="rr-area" style="margin-top:2.25rem">
                   <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL over time</h3></figcaption>
                   <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data yet</p></div>
                 </figure>
               </template>
-              <template x-if="hist().points.length">
+              <template x-if="tvl().points.length">
                 <figure class="rr-area" style="margin-top:2.25rem">
                   <figcaption class="rr-area__head">
                     <h3 class="rr-subhead__h">TVL over time</h3>
-                    <span class="rr-sec__aside" x-text="histCount()"></span>
+                    <span class="rr-sec__aside" x-text="tvlCount()"></span>
                   </figcaption>
                   <div class="rr-area__frame">
                     <div class="rr-area__y" aria-hidden="true">
-                      <template x-for="t in histYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                      <template x-for="t in tvlYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
                     </div>
-                    <div class="rr-area__plot" tabindex="0" role="img" :aria-label="histLabel()"
-                         @pointermove="histMove($event)" @pointerdown="histMove($event)" @pointerleave="chartAt = null" @keydown="histKey($event)" @blur="chartAt = null">
-                      <div class="rr-area__svg" x-html="histSvg()"></div>
-                      <template x-for="p in histDots()" :key="p.key">
+                    <div class="rr-area__plot" tabindex="0" role="img" :aria-label="tvlLabel()"
+                         @pointermove="tvlMove($event)" @pointerdown="tvlMove($event)" @pointerleave="tvlAt = null" @keydown="tvlKey($event)" @blur="tvlAt = null">
+                      <div class="rr-area__svg" x-html="tvlSvg()"></div>
+                      <template x-for="p in tvlDots()" :key="p.key">
                         <i class="rr-area__pt" data-mark="series" :style="`left:${p.left}%;top:${p.top}%;background:${id.color}`" aria-hidden="true"></i>
                       </template>
-                      <template x-if="histPoint(chartAt)">
-                        <div class="rr-area__cross" :style="`left:${histPoint(chartAt).left}%`"></div>
+                      <template x-if="tvlPoint(tvlAt)">
+                        <div class="rr-area__cross" :style="`left:${tvlPoint(tvlAt).left}%`"></div>
                       </template>
-                      <template x-if="histPoint(chartAt)">
-                        <div class="rr-area__tip" :class="histPoint(chartAt).left > 62 ? 'is-left' : ''" :style="`left:${histPoint(chartAt).left}%`">
-                          <p class="rr-area__tip-h" style="margin:0"><b x-text="histPoint(chartAt).date"></b><span x-text="histPoint(chartAt).value"></span></p>
+                      <template x-if="tvlPoint(tvlAt)">
+                        <div class="rr-area__tip" :class="tvlPoint(tvlAt).left > 62 ? 'is-left' : ''" :style="`left:${tvlPoint(tvlAt).left}%`">
+                          <p class="rr-area__tip-h" style="margin:0"><b x-text="tvlPoint(tvlAt).date"></b><span x-text="tvlPoint(tvlAt).value"></span></p>
                         </div>
                       </template>
                     </div>
                     <div class="rr-area__x" aria-hidden="true">
-                      <template x-for="t in histXTicks()" :key="t.key"><span :class="[t.cls, t.i === chartAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                      <template x-for="t in tvlXTicks()" :key="t.key"><span :class="[t.cls, t.i === tvlAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
                     </div>
                   </div>
                 </figure>
@@ -381,7 +381,7 @@
             <div>
               <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="activityHasTx() ? 'has-tx' : ''">
                 <thead>
-                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q">Transaction</th></tr>
+                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
                 </thead>
                 <tbody>
                   <template x-for="(a, i) in activityRows()" :key="`${activityPage}-${i}-${a.t}`">
@@ -390,7 +390,7 @@
                       <td x-text="activityKind(a)"></td>
                       <td class="q" x-text="activityAmount(a)"></td>
                       <td class="q" x-text="activityValue(a)"></td>
-                      <td class="q">
+                      <td class="q rr-activity__tx">
                         <template x-if="txHref(a)"><a class="rr-lnk" :href="txHref(a)" target="_blank" rel="noopener noreferrer" x-text="shortHash(a.tx)"></a></template>
                         <template x-if="!txHref(a)"><span>—</span></template>
                       </td>
