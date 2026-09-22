@@ -205,7 +205,7 @@ async function openAllocation(page: Page) {
   await vaultsLoaded(page);
 }
 
-// The Robot Money Vault subject's By vault legend. Each row: the vault's
+// The Robot Money Vault subject's Vaults legend. Each row: the vault's
 // value, its share of the book (the row's bright figure), and the weight in
 // force.
 const byVault = (page: Page) => page.locator("#holdings .rr-legend__row");
@@ -848,7 +848,7 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expect(hold.locator("tr.rr-in th").filter({ hasText: /^USDC$/ })).toHaveCount(0);
 
   // The chart stacks the four vaults with the target drawn over them.
-  await expect(hold.locator(".rr-area__head .rr-k").first()).toHaveText("Share of the book by vault");
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText("Vaults over time");
   await expect(hold.locator(".rr-area__legend li")).toHaveText([...SYMBOLS, "Applied"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(3);
@@ -912,7 +912,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
   // A line needs two readings: the chart's frame says there is one.
-  await expect(hold.locator(".rr-area__head .rr-k")).toHaveText("Share of the book by vault");
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText("Vaults over time");
   await expect(hold.locator(".rr-area .rr-empty__t")).toHaveText("One reading so far");
   await expect(hold.locator(".rr-area__legend")).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);

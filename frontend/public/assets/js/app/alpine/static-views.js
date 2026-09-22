@@ -23,9 +23,9 @@ import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
-import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
-import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
+import { DEVNET_LABEL, loadLatestRecommendation, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import {
   adviceOf, adviceCall, setsWeights, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
@@ -1449,6 +1449,7 @@ export function registerStaticViews(Alpine) {
         // book subject never asks: the framework does not describe it, and
         // asking would put the vault's targets on somebody else's treasury.
         if (this.isWeightsSubject()) await this.loadAllocationFw();
+        this.heldSince = await this.loadHeldSince();
         // A weights subject that holds a book also reads the framework's
         // token lists, which sum that book into sleeves: its latest
         // recommendation is measured against the book, as its session page
@@ -1530,6 +1531,17 @@ export function registerStaticViews(Alpine) {
     },
     latestRow: null,
     latest() { return this.latestRow; },
+    // The allocation's newest session that set weights, when its latest set
+    // none: the target then stood from that session on, and the page says
+    // since when and links it, as /swarm does.
+    heldSince: null,
+    async loadHeldSince() {
+      const l = this.latest();
+      if (this.subject?.id !== ALLOCATION_SUBJECT_ID || !l || this.recommendation(l)?.kind === "weights") return null;
+      const r = await loadLatestRecommendation({ hostname: location.hostname }).catch(() => null);
+      const s = r?.session;
+      return s?.date && s.id !== l.id && String(s.date) <= String(l.date) ? s : null;
+    },
     hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
     hasLatestReview() {
       const l = this.latest();
@@ -1558,7 +1570,7 @@ export function registerStaticViews(Alpine) {
       /** @type {Record<string, string>} */
       const query = { subject: id, state: "published", limit: String(this.historySize) };
       if (cursor) query.cursor = cursor;
-      if (search) query.search = search;
+      if (search) query.search = historySearchTerm(search);
       const res = await api.get(ROUTES.swarm.sessions, query);
       return {
         rows: Array.isArray(res?.sessions) ? res.sessions : [],
@@ -4121,6 +4133,32 @@ export function targetsInForce(fw, date) {
 
 // The API's own limit on a history search (#1007): a literal phrase, short.
 const HISTORY_SEARCH_MAX = 200;
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// A history search as the API matches it. The page prints dates as "Aug 3,
+// 2026" and the API matches the stored "2026-08-03" literally, so a query
+// that reads as a date ("Aug 3", "3 August 2026", "Aug 2026", "August") is
+// sent in the stored form. Anything else goes as typed.
+/** @param {unknown} raw */
+export function historySearchTerm(raw) {
+  const q = String(raw ?? "").trim();
+  const toks = q.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  if (!toks.length || toks.length > 3) return q;
+  let month = 0, day = 0, year = 0;
+  for (const t of toks) {
+    const w = t.replace(/\.$/, "");
+    const m = w.length >= 3 ? MONTHS.findIndex((name) => name.startsWith(w)) + 1 : 0;
+    if (m && !month) { month = m; continue; }
+    const d = /^(\d{1,2})(st|nd|rd|th)?$/.exec(t);
+    if (d && !day && Number(d[1]) >= 1 && Number(d[1]) <= 31) { day = Number(d[1]); continue; }
+    if (/^\d{4}$/.test(t) && !year) { year = Number(t); continue; }
+    return q;
+  }
+  if (!month) return q;
+  const mm = String(month).padStart(2, "0"), dd = String(day).padStart(2, "0");
+  if (day) return year ? `${year}-${mm}-${dd}` : `${mm}-${dd}`;
+  return year ? `${year}-${mm}` : `-${mm}-`;
+}
 
 // Whether a session list answered a `subject=` request as #1007 does: every
 // row that subject's, and each carrying its take count. A backend before it

@@ -85,6 +85,14 @@
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="latest-h" x-text="hasLatestRecommendation() ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
             </div>
+            <!-- The latest session set no weights, so the target stood: since
+                 when, and the session that last set it. -->
+            <template x-if="heldSince">
+              <div class="rr-meta rr-meta--lead">
+                <span class="rr-meta__i">Recommendation <b>Target held</b></span>
+                <span class="rr-meta__i">Since <b><a class="rr-lnk" :href="sessionHref(heldSince)" x-text="formatDate(heldSince.date, 'short')"></a></b></span>
+              </div>
+            </template>
             <div class="rr-split rr-split--rule">
               <div>
                 <template x-if="hasExplorer()">
@@ -288,14 +296,14 @@
                   <template x-if="vaultStatSub()"><p class="rr-stat__sub" x-text="vaultStatSub()"></p></template>
                 </div>
               </template>
-              <!-- The vault stack's Read from: the router (it holds nothing,
+              <!-- The vault stack's sources: the router (it holds nothing,
                    so no value) and each vault with its sleeve and value.
                    Chain and Address render only when they vary or exist; the
                    total's line names a single chain. Chain stays the third
                    column, the one .rr-sources drops on a phone. -->
               <template x-if="isVaultStack() && stackWallets().length">
                 <div>
-                  <p class="rr-k rr-sub">Read from</p>
+                  <div class="rr-subhead"><h3 class="rr-subhead__h">Router and vaults</h3></div>
                   <div class="rr-tablewrap">
                     <table class="rr-table rr-table--compact rr-sources">
                       <thead><tr><th scope="col">Name</th><th scope="col" class="q">Value</th><th scope="col" x-show="stackMultiChain()">Chain</th><th scope="col" class="q" x-show="stackHasAddress()">Address</th></tr></thead>
@@ -325,7 +333,7 @@
               </template>
               <template x-if="!isVaultStack() && bookSources().length">
                 <div>
-                  <p class="rr-k rr-sub">Read from</p>
+                  <div class="rr-subhead"><h3 class="rr-subhead__h" x-text="bookSources().some((w) => w.kind !== 'Wallet') ? 'Wallets and contracts' : 'Wallets'">Wallets</h3></div>
                   <div class="rr-tablewrap">
                     <table class="rr-table rr-table--compact rr-sources">
                       <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Chain</th><th scope="col" class="q">Address</th></tr></thead>
@@ -356,14 +364,14 @@
                  band in focus. -->
             <!-- What the book holds today, exactly: every position, largest
                  first, in the colour its band takes in the chart below. It
-                 opens with a label like the Read from table beside the figure,
+                 opens with a title like the Wallets table beside the figure,
                  which is why .rr-positions wraps the scroller rather than
                  being it. -->
             <!-- The vault stack: each vault's weight of the book against the
                  weights in force; a vault opens onto its positions. -->
             <template x-if="isVaultStack() && vaultGroups().length">
               <div class="rr-block" style="margin-top:2.25rem">
-                <p class="rr-k rr-sub">By vault</p>
+                <div class="rr-subhead"><h3 class="rr-subhead__h">Vaults</h3></div>
                 <div class="rr-x" x-data="vaultStackExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
                   <div class="rr-mix">
                     <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
@@ -437,7 +445,10 @@
                  the one .rr-positions drops on a phone. -->
             <template x-if="isVaultStack() && vaultGroups().length">
               <div class="rr-positions">
-                <p class="rr-k rr-sub">Positions</p>
+                <div class="rr-subhead">
+                  <h3 class="rr-subhead__h">Positions</h3>
+                  <template x-if="snapshot?.date"><span class="rr-sec__aside" x-text="`Last read on ${formatDate(snapshot.date, 'short')}`"></span></template>
+                </div>
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
                   <thead>
                     <tr><th scope="col">Position</th><th scope="col" x-show="stackMultiChain()">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
@@ -487,7 +498,10 @@
                  positions table, empty when there is no reading. -->
             <template x-if="!isVaultStack() || !vaultGroups().length">
               <div class="rr-positions">
-                <p class="rr-k rr-sub" x-text="snapshot ? `Positions on ${formatDate(snapshot?.date, 'short')}` : 'Positions'"></p>
+                <div class="rr-subhead">
+                  <h3 class="rr-subhead__h">Positions</h3>
+                  <template x-if="snapshot?.date"><span class="rr-sec__aside" x-text="`Last read on ${formatDate(snapshot.date, 'short')}`"></span></template>
+                </div>
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
                   <thead>
                     <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
@@ -515,15 +529,15 @@
                  With none, the positions table above already has. -->
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
-                <figcaption class="rr-area__head"><p class="rr-k" x-text="isVaultStack() ? 'Share of the book by vault' : 'Share of the book by position'">Share of the book by position</p></figcaption>
+                <figcaption class="rr-area__head"><h3 class="rr-subhead__h" x-text="isVaultStack() ? 'Vaults over time' : 'Positions over time'">Positions over time</h3></figcaption>
                 <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
               </figure>
             </template>
             <template x-if="chartModel()">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head">
-                  <p class="rr-k" x-text="isVaultStack() ? 'Share of the book by vault' : 'Share of the book by position'">Share of the book by position</p>
-                  <span class="rr-k" x-text="chartSpan()"></span>
+                  <h3 class="rr-subhead__h" x-text="isVaultStack() ? 'Vaults over time' : 'Positions over time'">Positions over time</h3>
+                  <span class="rr-sec__aside" x-text="chartSpan()"></span>
                 </figcaption>
                 <div class="rr-area__frame">
                   <div class="rr-area__y" aria-hidden="true">
@@ -564,7 +578,7 @@
                  weights and name internal files. -->
             <template x-if="!isVaultStack() && (snapshot?.notable || []).length">
               <div class="rr-block rr-area__notes">
-                <p class="rr-k rr-sub">Notable</p>
+                <div class="rr-subhead"><h3 class="rr-subhead__h">Highlights</h3></div>
                 <ul class="rr-list">
                   <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
                 </ul>
@@ -582,7 +596,6 @@
         <section class="rr-sec sp-sessions" id="history" aria-labelledby="hist-h" :aria-busy="historyBusy ? 'true' : 'false'">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="hist-h">Recommendation history</h2>
-            <template x-if="isWeightsSubject() && sessions.length"><span class="rr-sec__aside">Change vs session target</span></template>
             <!-- Only where the API searches this subject's sessions before
                  it pages them (#1007). The browser-side index and the archive
                  have no search to offer, so they show no box. -->
