@@ -58,7 +58,11 @@ cleanup() {
 trap cleanup EXIT
 
 set -o pipefail
-bun run scripts/smoke.ts 2>&1 | tee "$LOG"
+# --local --seed: the smoke flag surface defaults to the REMOTE ($HOME/.env)
+# database as of 5e4a26ec — this script already requires that same file for
+# OPENCODE_API_KEY, so a bare invocation would boot against whatever real
+# server its connection tokens name instead of a fresh local stack.
+bun run scripts/smoke.ts --local --seed 2>&1 | tee "$LOG"
 STATUS=$?
 
 echo "combined runtime+test log: $LOG"

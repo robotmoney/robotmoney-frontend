@@ -359,10 +359,13 @@ jobs:
       - name: Full-stack smoke (smoke readiness gate)
         # Keep the complete transcript locally until the next step. `pipefail`
         # preserves smoke's exit status through tee, so capturing evidence can
-        # never turn a failed readiness gate green.
+        # never turn a failed readiness gate green. --local --seed: the smoke
+        # flag surface defaults to the REMOTE ($HOME/.env) database as of
+        # 5e4a26ec — this runner has no such file, and this job needs its own
+        # fresh local stack with demo data, not production.
         run: |
           set -o pipefail
-          bun run scripts/smoke.ts 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          bun run scripts/smoke.ts --local --seed 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
         env:
           CI: "true"
           # Pin a deterministic, per-run compose project name (issue: smoke
