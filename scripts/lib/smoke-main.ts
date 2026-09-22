@@ -5,7 +5,7 @@ import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsSeed, requestsTwin, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
@@ -1142,12 +1142,29 @@ async function main(): Promise<void> {
     log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
   }
 
+  // Seeding is opt-in for external, symmetric to --migrate. Absent --seed, an
+  // external boot runs NEITHER the scenario initializer NOR the db-preflight
+  // that guards it — it brings the services up against the database as it is.
+  // That is a restart, and it is why a bare `--db external` boot no longer
+  // refuses a populated production database. ephemeral/smoke-twin own their
+  // data and always seed. See scripts/lib/smoke-db-mode.ts's SEED_FLAG.
+  const seedExternal = dataPath.kind === "external" && requestsSeed(process.argv);
+  const seeds = dataPath.kind !== "external" || seedExternal;
+  if (dataPath.kind === "external" && !seedExternal) {
+    console.warn(
+      `[smoke] --db external without --seed: this boot will NOT initialize the database (no ` +
+        `archive restore, no simulation seed, no db-preflight) and serves the data exactly as it is. ` +
+        `Pass --seed to run the initializer.`,
+    );
+  }
+
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
     migrate: dataPath.kind !== "external" || requestsMigrate(process.argv),
-    preflight: composePostgres ? undefined : classifyDatabase,
-    initialize: initializeScenario, deferredServices: ["analytics-producer"],
+    preflight: composePostgres || !seeds ? undefined : classifyDatabase,
+    initialize: seeds ? initializeScenario : undefined,
+    deferredServices: ["analytics-producer"],
   }));
 
   if (process.env.CI && smokeMode) {

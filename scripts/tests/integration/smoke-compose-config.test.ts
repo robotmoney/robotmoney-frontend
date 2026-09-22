@@ -530,7 +530,7 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     expect(smokeMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);
     expect(smokeMain).toContain("migrateEnv: scenario.migrateEnv");
     expect(smokeMain).toContain("migrateScriptArgs: [...scenario.migrateScriptArgs]");
-    expect(smokeMain).toContain("initialize: initializeScenario");
+    expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
     expect(smokeMain).toContain('"--already-migrated"');
     expect(smokeMain).toContain('"src/producer/index.ts", "seed"');
     expect(smokeMain).not.toContain("v0-seed-bootstrap");

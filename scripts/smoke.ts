@@ -34,6 +34,8 @@ export {
   ownsData,
   parseDataPath,
   requestsMigrate,
+  requestsSeed,
+  SEED_FLAG,
   usesComposePostgres,
   validateArgv,
   type DataPathRequest,

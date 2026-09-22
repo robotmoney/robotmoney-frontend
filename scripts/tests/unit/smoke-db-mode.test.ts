@@ -30,6 +30,8 @@ import {
   ownsData,
   parseDataPath,
   requestsMigrate,
+  requestsSeed,
+  SEED_FLAG,
   usesComposePostgres,
   validateArgv,
   type ResolvedDataPath,
@@ -135,6 +137,28 @@ describe("loud refusals — every one before any restore work", () => {
     expect(parse(argv(DB_FLAG, "external", MIGRATE_FLAG)).dataPath.kind).toBe("external");
   });
 
+  test("--seed with the default (ephemeral) mode is refused", () => {
+    expect(() => parse(argv(SEED_FLAG))).toThrow(/only applies to/);
+  });
+
+  test("--seed with --db smoke-twin is refused", () => {
+    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", SEED_FLAG))).toThrow(
+      /only applies to/,
+    );
+  });
+
+  test("--seed with --db external parses cleanly", () => {
+    expect(parse(argv(DB_FLAG, "external", SEED_FLAG)).dataPath.kind).toBe("external");
+  });
+
+  test("--migrate and --seed are independent, and combine on --db external", () => {
+    // A fresh external database needs both; a restart of a populated one needs
+    // neither. The flags do not imply each other.
+    expect(parse(argv(DB_FLAG, "external", MIGRATE_FLAG, SEED_FLAG)).dataPath.kind).toBe("external");
+    expect(requestsMigrate(argv(DB_FLAG, "external", SEED_FLAG))).toBe(false);
+    expect(requestsSeed(argv(DB_FLAG, "external", MIGRATE_FLAG))).toBe(false);
+  });
+
   test("no env var can select a data path", () => {
     const before = process.env.DB;
     process.env.DB = "smoke-twin";
@@ -218,6 +242,20 @@ describe("requestsMigrate — a bare switch, argv-only", () => {
 
   test("false on a bare argv", () => {
     expect(requestsMigrate(argv())).toBe(false);
+  });
+});
+
+describe("requestsSeed — a bare switch, argv-only", () => {
+  test("true when --seed is present", () => {
+    expect(requestsSeed(argv(DB_FLAG, "external", SEED_FLAG))).toBe(true);
+  });
+
+  test("false when it is absent", () => {
+    expect(requestsSeed(argv(DB_FLAG, "external"))).toBe(false);
+  });
+
+  test("false on a bare argv", () => {
+    expect(requestsSeed(argv())).toBe(false);
   });
 });
 

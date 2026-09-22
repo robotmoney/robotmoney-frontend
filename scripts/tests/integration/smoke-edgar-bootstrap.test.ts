@@ -169,6 +169,8 @@ test("scripts/lib/smoke-main.ts runs the isolated producer seed command AFTER AP
   // What remains here is the one thing this file can honestly check about
   // smoke-main: that the seed is HANDED to the shared lifecycle rather than run
   // beside it. That is a wiring fact, and wiring is what source text records.
-  expect(src).toContain("initialize: initializeScenario");
+  // Handed to the lifecycle (conditionally, since --seed makes it opt-in for
+  // an external boot) rather than run beside it — the wiring fact, unchanged.
+  expect(src).toContain("initialize: seeds ? initializeScenario : undefined");
   expect(src).toContain('deferredServices: ["analytics-producer"]');
 });
