@@ -226,7 +226,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
   let bootProc: Bun.Subprocess | null = null;
 
   try {
-    const args = ["bun", "scripts/smoke.ts", "--smoke", "--db", "smoke-twin", "--no-tui"];
+    const args = ["bun", "scripts/smoke.ts", "--twin", "--no-tui"];
     if (opts.backupDir) args.push("--backup-dir", opts.backupDir);
     log(`booting: ${args.slice(1).join(" ")}  (project=${project}, this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);

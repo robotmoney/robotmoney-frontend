@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { detectEnvPostgres } from "./lib/smoke-external-pg.ts";
 import { homeEnvFilePath } from "./lib/env-role.ts";
-import { DB_FLAG } from "./lib/smoke-db-mode.ts";
+import { DB_FLAG, LOCAL_FLAG, TWIN_FLAG } from "./lib/smoke-db-mode.ts";
 
 export const STATIC_PORT_FLAG = "--static-port";
 
@@ -46,11 +46,21 @@ export interface StagePlan {
 export function planStageArgs(envFilePath: string, passthrough: string[] = []): StagePlan {
   const detected = detectEnvPostgres(envFilePath);
   // Never emit a data-path flag twice: an operator who stated one themselves
-  // (either spelling) keeps theirs, and passing --static-port explicitly is a
+  // (any spelling) keeps theirs, and passing --static-port explicitly is a
   // no-op rather than a duplicate.
-  const statesDataPath = passthrough.some((a) => a === DB_FLAG || a.startsWith(`${DB_FLAG}=`) || a === "--external-pg");
+  const statesDataPath = passthrough.some(
+    (a) =>
+      a === LOCAL_FLAG ||
+      a.startsWith(`${LOCAL_FLAG}=`) ||
+      a === TWIN_FLAG ||
+      a === DB_FLAG ||
+      a.startsWith(`${DB_FLAG}=`) ||
+      a === "--external-pg",
+  );
   const args = [STATIC_PORT_FLAG];
-  if (detected.enabled && !statesDataPath) args.push(DB_FLAG, "external");
+  // Remote is the default, so a usable .env needs no data-path flag. Without a
+  // usable Postgres in .env, fall back to a local container.
+  if (!detected.enabled && !statesDataPath) args.push(LOCAL_FLAG);
   args.push(...passthrough.filter((a) => a !== STATIC_PORT_FLAG));
   return detected.enabled
     ? { args, dataPath: "external", target: detected.redactedUrl }

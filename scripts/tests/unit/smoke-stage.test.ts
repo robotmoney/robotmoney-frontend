@@ -32,11 +32,12 @@ describe("planStageArgs — the port pin is unconditional", () => {
 });
 
 describe("planStageArgs — the data path follows .env", () => {
-  test("an rm_app role line in $HOME/.env selects the external database", () => {
+  test("an rm_app role line in $HOME/.env selects the remote database (the default, no flag)", () => {
     const plan = planStageArgs(envFile(DB_URL));
     expect(plan.dataPath).toBe("external");
-    expect(plan.args).toContain("--db");
-    expect(plan.args).toContain("external");
+    // Remote is the default, so no data-path flag is emitted.
+    expect(plan.args).not.toContain("--local");
+    expect(plan.args).not.toContain("--db");
     expect(plan.target).toContain("db.example.com");
     expect(plan.target).not.toContain("***:p@"); // redacted, never the password
   });
@@ -79,7 +80,8 @@ describe("planStageArgs — the data path follows .env", () => {
 describe("planStageArgs — operator passthrough", () => {
   test("extra flags are forwarded in order, after the decided ones", () => {
     const plan = planStageArgs(envFile(DB_URL), ["--no-tui"]);
-    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--db", "external", "--no-tui"]);
+    // Remote default → only the static-port flag is added ahead of the passthrough.
+    expect(plan.args).toEqual([STATIC_PORT_FLAG, "--no-tui"]);
   });
 
   test("an operator's own --db external is not doubled up", () => {
