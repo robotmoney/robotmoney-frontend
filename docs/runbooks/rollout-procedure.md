@@ -1387,12 +1387,12 @@ echo "boot exit=$BOOT_STATUS" # MUST be 0
 > overwrite by design, and `backend/scripts/db-preflight.ts` correctly refuses
 > to run it against a populated database. `bun run smoke:archive` is
 > `package.json`'s name for the production-shaped **archive** boot: it wires
-> `--static-port --db external --seed` for you (see the flag table below), so
-> the only things left to state on the command line are `SMOKE_PROJECT` and
-> `--no-tui`. Add `--migrate` on the command line when the release also changes
-> the schema — `smoke:archive` adopts data but does not migrate (see
-> `scripts/lib/smoke.README.md` for the composable model; migrate and seed
-> are separate tools that `--migrate`/`--seed` run inline). `--static-port` is new for v0.4.0 — the per-release runbook's §4
+> `--smoke --static-port --db external --seed` for you (see the flag table
+> below), so the only things left to state on the command line are
+> `SMOKE_PROJECT` and `--no-tui`. Add `--migrate` on the command line when the
+> release also changes the schema — `smoke:archive` adopts data but does not
+> migrate (see `scripts/lib/smoke.README.md` for the composable model; migrate
+> and seed are separate tools that `--migrate`/`--seed` run inline). `--static-port` is new for v0.4.0 — the per-release runbook's §4
 > config table says why (`SWARM_SCHEDULES_ENABLED=0` for a static-port
 > production boot). A v0.3.0-shaped invocation that only remembered `--db
 > external --no-tui` silently ran the wrong boot: that is exactly the failure
@@ -1408,8 +1408,9 @@ not.
 
 | Flag / var | Why it is here | What happens without it |
 |---|---|---|
-| `--seed` | **MANDATORY for a cutover.** Runs the scenario initializer and its `db-preflight`; on `--db external` it also selects the production-shaped (archive) scenario, so `--smoke` is not needed (`scripts/lib/smoke-db-mode.ts`'s `externalSeedImpliesArchive`). An external boot's only valid seed IS the archive — a simulation seed overwrites and `db-preflight` refuses it against a populated server. | The boot runs the initializer for nothing — it is skipped, so no archive is adopted. `smoke:archive` wires this in; a bare `--db external` with neither `--seed` nor `--migrate` is a restart that serves the data already there. |
-| `--static-port` | **MANDATORY for v0.4.0.** Pins the api's host port instead of letting Docker assign one — required because the production host driver, not backend crons, orders the judge step between aggregate and publish (`SWARM_SCHEDULES_ENABLED=0`, per-release runbook §2/§4). | A randomly assigned port each boot, which the static-port production driver assumption does not hold for. |
+| `--smoke` | **MANDATORY for a production cutover.** Selects the production-shaped (archive) *scenario* — adopt the committed production/committee archive data — over the default simulation fixtures (`scripts/lib/smoke-mode.ts`'s `SMOKE_FLAG`). The scenario is orthogonal to the data path: it says WHAT data to load, not WHERE the database lives. `backend/scripts/db-preflight.ts` classifies the boot as `--initializer=archive` only when this is set, and treats a missing flag as simulation (fail-closed). | The boot runs as a simulation. Against an empty database this looks fine; against populated production data `db-preflight` correctly refuses it. |
+| `--seed` | **MANDATORY for a cutover.** Runs the scenario initializer and its `db-preflight` — it is the switch that actually populates the database (adopting the archive under `--smoke`, or the simulation/demo fixtures without it). | The initializer is skipped, so no data is adopted. A bare `--db external` with neither `--seed` nor `--migrate` is a restart that serves the data already there. |
+| `--static-port` | **MANDATORY.** Pins the api's host port instead of letting Docker assign one — required because the production host driver, not backend crons, orders the judge step between aggregate and publish (`SWARM_SCHEDULES_ENABLED=0`, per-release runbook §2/§4). | A randomly assigned port each boot, which the static-port production driver assumption does not hold for. |
 | `--db external` | **MANDATORY.** Starts no postgres container and points the stack at the managed server via the `rm_app` writer URL assembled from `$HOME/.env` (`scripts/lib/env-role.ts`). One enum flag names the data path — `ephemeral \| external \| smoke-twin` — and `external` is the only one that means "a server this boot did not create and cannot reclaim". The older `--external-pg` spelling still works and prints a deprecation notice; runbooks written before the enum use it throughout. | The stack boots its own empty postgres in a fresh volume. **Your production data is not touched and not served** — you get an empty site and think it worked. This is failure mode #2 in §2. Since the enum landed an unknown flag is also a hard error rather than a silent default, so a typo'd data path stops the boot instead of quietly picking `ephemeral`. |
 
 **Flags you still state yourself:**

@@ -26,7 +26,6 @@ import {
   keptDataDescription,
   DB_MODES,
   dataPathOverlayYaml,
-  externalSeedImpliesArchive,
   MIGRATE_FLAG,
   ownsData,
   parseDataPath,
@@ -257,27 +256,6 @@ describe("requestsSeed — a bare switch, argv-only", () => {
 
   test("false on a bare argv", () => {
     expect(requestsSeed(argv())).toBe(false);
-  });
-});
-
-describe("externalSeedImpliesArchive — --db external --seed selects archive without --smoke", () => {
-  test("true for --db external --seed", () => {
-    expect(externalSeedImpliesArchive(argv(DB_FLAG, "external", SEED_FLAG))).toBe(true);
-  });
-
-  test("false for --db external without --seed (a restart, not an archive adopt)", () => {
-    expect(externalSeedImpliesArchive(argv(DB_FLAG, "external"))).toBe(false);
-  });
-
-  test("false when the mode is not external", () => {
-    // --seed is refused on ephemeral/twin at parse time; the predicate itself
-    // still keys on the mode, so it never claims archive for a non-external db.
-    expect(externalSeedImpliesArchive(argv(DB_FLAG, "ephemeral"))).toBe(false);
-    expect(externalSeedImpliesArchive(argv(DB_FLAG, "smoke-twin", "--smoke"))).toBe(false);
-  });
-
-  test("false on a bare argv", () => {
-    expect(externalSeedImpliesArchive(argv())).toBe(false);
   });
 });
 

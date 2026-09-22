@@ -353,21 +353,11 @@ export function requestsMigrate(argv: readonly string[]): boolean {
 }
 
 /** Does this argv opt an external boot into seeding (the scenario initializer
- *  and its preflight)? A bare switch, like requestsMigrate(). */
+ *  and its preflight)? A bare switch, like requestsMigrate(). Orthogonal to the
+ *  scenario: `--seed` runs whatever `--smoke` selected (archive) or did not
+ *  (the simulation/demo seed of a blank database). */
 export function requestsSeed(argv: readonly string[]): boolean {
   return argv.slice(2).includes(SEED_FLAG);
-}
-
-/**
- * `--db external --seed` uses the ARCHIVE scenario, so `--smoke` is not needed
- * there. An external boot's only valid seed is the production archive: a
- * simulation seed overwrites by design and is refused against a populated
- * server (`backend/scripts/db-preflight.ts`), so "seed an external database"
- * can only mean "adopt the archive". This lets `--db external --seed` select
- * the archive scenario the way `--smoke` does, without stating both.
- */
-export function externalSeedImpliesArchive(argv: readonly string[]): boolean {
-  return requestsSeed(argv) && valueOf(argv, DB_FLAG) === "external";
 }
 
 export function parseDataPath(

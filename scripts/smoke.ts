@@ -30,7 +30,6 @@ export {
   dataPathOverlayYaml,
   isPrePopulated,
   keptDataDescription,
-  externalSeedImpliesArchive,
   MIGRATE_FLAG,
   ownsData,
   parseDataPath,
