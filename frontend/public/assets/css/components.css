@@ -511,6 +511,9 @@
 .rm-sphase::before { content: ""; position: absolute; left: 0; top: 50%;
   width: 6px; height: 6px; margin-top: -3px; background: currentColor; }
 .rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
+/* Published takes a green mark, the word staying muted (David, 2026-09-22):
+   grey read as inert beside the facts it leads on the session page. */
+.rm-sphase--published::before { background: var(--color-green); }
 
 /* COLLECTING is the only phase a visitor can still act on, and a static square
    said exactly what `closed` said. The ring carries it: a square pulse leaving

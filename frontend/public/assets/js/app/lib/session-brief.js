@@ -83,13 +83,22 @@ export function sessionBrief() {
       const at = (/** @type {number} */ p) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`;
       const rows = [];
       if (b.compositePercentile !== null) {
-        rows.push({ key: "composite", label: "Composite", pct: b.compositePercentile, regime: b.regime, kind: "lead", at: at(b.compositePercentile) });
+        rows.push({ key: "composite", label: "Composite", pct: b.compositePercentile, regime: b.regime, kind: "lead", at: at(b.compositePercentile),
+          href: "/regime#composite", about: "Macro and on-chain averaged. Its cuts set the regime." });
       }
+      /** @type {Record<string, string>} */
+      const about = {
+        macro: "Eight macro indicators: rates, credit spreads, the dollar, volatility.",
+        onchain: "Ten on-chain indicators: DeFi TVL, stablecoins, activity, new DEX pools.",
+        factor: this.backdropV0
+          ? "Eight equity factor signals, in the composite of this older reading."
+          : "Eight equity factor signals, shown for context. Not in the composite.",
+      };
       for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Factor"]]) {
         const pct = b[key];
         if (pct === null) continue;
         const kind = key === "factor" && !this.backdropV0 ? "context" : "input";
-        rows.push({ key, label, pct, regime: b[`${key}Regime`], kind, at: at(pct) });
+        rows.push({ key, label, pct, regime: b[`${key}Regime`], kind, at: at(pct), href: `/regime#panel-${key}`, about: about[key] });
       }
       return rows;
     },
