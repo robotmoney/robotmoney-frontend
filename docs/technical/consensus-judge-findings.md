@@ -121,6 +121,37 @@ No restart. The only open dependency is **admin access** (§4).
 
 ---
 
+## 7. Delta vs `main` (compared 2026-09-22)
+
+Everything above describes **`releases-0.5.x`, the branch production runs** — it
+is accurate for prod. `main` has since moved, and the differences change the
+plan rather than the findings.
+
+**Branch geometry (corrected):** `releases-0.5.x` is **83 commits ahead of
+`main`**; `main` has only **9** we lack. (An earlier draft stated the reverse.)
+So this release line is the more advanced branch, except in the judge area.
+
+| `main`-only change | Effect on our findings |
+|---|---|
+| **`#1014` — the judge runs in its own short-lived container**, launched by a new **`agent-launcher`** service (new `judge-launcher.ts`, `scripts/agent/judge-{agent,runner}.ts`, its own Dockerfile, compose service) | **Supersedes §2's "three levers" on `main`.** The judge no longer calls the model inline from `worker-swarm`; enabling it also requires the launcher service — which needs the **Docker socket (root on the host)** — and adds a new failure reason **`launcher_unavailable`** beside `model_unconfigured`. Our §2 table stays correct for prod today. |
+| **`#1017`** — public judgement records/routes | Bears on P-15 scope (config-only vs. config + view): the public read routes already exist on `main`. |
+| **`#1021`** — receipts refuse an unauthored judgement | Extends the same no-fallback integrity line as `a42d6c5a`. |
+| **`e3ca6cc0`** — `judgeSessionAdmin` dropped `judgeUnavailableReason` on refusal | A refusal-reporting bug fix not in our branch. |
+| **`#1010`** — swarm pages read as research records | Frontend changes in the same area a judge panel would land. |
+
+**Claims that HOLD on `main` (re-verified, not assumed):**
+- `judgeConfig` is still declared in `contract/routes.js` and **consumed by no
+  view** — so P-15 ("no admin UI for the judge") is true on both branches.
+- `shadow` is still defined identically (`off | shadow | enforce`) on `main`, so
+  the removal decision applies there too — and `main` is *actively building on*
+  shadow, which is the coordination risk flagged in the removal spec.
+
+**Implication:** the judge architecture is diverging. Any judge work (enabling
+it, the admin panel, removing shadow) should be reconciled against `#1014`'s
+container model before it is written twice.
+
+---
+
 ## Standing constraints
 
 No agent-executed write/admin SQL on the prod primary (hand commands to the

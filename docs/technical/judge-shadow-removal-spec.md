@@ -177,10 +177,14 @@ not something the driver forces per session. This also removes the
 1a. **Prerequisite (hard):** verify `swarm-judge-replay.ts` covers the
    observe-before-enforce soak on real recorded inputs BEFORE the code removes
    shadow, or the capability is lost with no verified replacement (§5).
-2. **Branch target.** `main` is ~77 commits ahead of the deployed
-   `releases-0.5.x` and still defines `shadow` identically. Landing on
-   `main` first (then backporting) avoids a guaranteed future conflict;
-   landing on `releases-0.5.x` only is faster but diverges. Undecided.
+2. **Branch target.** Verified 2026-09-22: **`releases-0.5.x` is 83 commits
+   AHEAD of `main`; `main` has only 9 commits we lack** (an earlier draft of
+   this spec had the direction backwards). Both branches still define `shadow`
+   identically, so the removal applies to each. Note `main` is *actively
+   building on* shadow (`#1014`-era judge work; the branch
+   `chore/reconcile-judge-swarm-releases-0-5-x` ships a filter "in shadow
+   first"), so the removal must be coordinated with that work rather than
+   landed underneath it. Undecided.
 3. **Driver §6:** confirm "driver reads config, never flips" is the
    intended behavior, and that replay (§5) covers the soak inputs before
    the live mode is removed.
