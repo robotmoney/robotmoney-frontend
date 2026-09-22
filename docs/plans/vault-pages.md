@@ -75,7 +75,7 @@ detail = the overview row plus:
     weightBps, targetBps|null, priceSource|null, note|null}],
   history:{tvl:[{t, tvlUsd}], sharePrice:[{t, value}], weights:[{t, appliedBps, kind}],
     receipts:[{sessionId, t, recommendedBps, applied}]},
-  activity:[{t, kind, assets, shares, tx}]
+  activity:[{t, kind, assets, shares, tx}]   (assets: the USDC moved, the Value column at $1; shares: the vault token, the Amount column)
 ```
 
 Additive fields beyond the 2026-09-17 draft (no migrations):

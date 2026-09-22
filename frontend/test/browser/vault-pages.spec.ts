@@ -261,15 +261,22 @@ for (const [i, v] of SLUGS.entries()) {
     expect(Math.abs(values.reduce((s, x) => s + dollars(x), 0) - row.tvlUsd)).toBeLessThanOrEqual(values.length * 0.5);
 
     // Fifteen daily readings draw one line, in the vault's hue.
-    await expect(page.locator("#history polyline")).toHaveCount(1);
-    await expect(page.locator("#history .rr-area__pt")).toHaveCount(0);
-    expect(await page.locator("#history polyline").evaluate((el) => getComputedStyle(el).stroke)).toBe(CATEGORICAL_RGB[i]);
+    await expect(page.locator("#tvl polyline")).toHaveCount(1);
+    await expect(page.locator("#tvl .rr-area__pt")).toHaveCount(0);
+    expect(await page.locator("#tvl polyline").evaluate((el) => getComputedStyle(el).stroke)).toBe(CATEGORICAL_RGB[i]);
 
     // More than ten events, ten to a page. No event has a transaction, so
     // there is no Transaction column.
     expect(detail.activity.length).toBeGreaterThan(10);
     await expect(page.locator("#activity tbody tr")).toHaveCount(10);
-    await expect(page.locator("#activity thead th:visible")).toHaveText(["Date", "Event", "Amount"]);
+    await expect(page.locator("#activity thead th:visible")).toHaveText(["Date", "Event", "Amount", "Value"]);
+    // What moved in the vault's own token, and its value in dollars.
+    await expect(page.locator("#activity tbody tr").first().locator("td").nth(1)).toContainText(detail.symbol);
+    await expect(page.locator("#activity tbody tr").first().locator("td").nth(2)).toHaveText(/^\$[0-9,]+$/);
+
+    // Each position's share of the vault over time, in tints of its hue.
+    await expect(page.locator("#holdings .rr-area__head", { hasText: "Positions over time" })).toHaveCount(1);
+    await expect(page.locator("#holdings .rr-area__svg polygon[data-token]").first()).toBeAttached();
     await page.locator("#activity .rr-btn", { hasText: "Older" }).click();
     await expect(page.locator("#activity tbody tr")).toHaveCount(detail.activity.length - 10);
 
@@ -762,8 +769,8 @@ test("32 holdings show 8 until asked; 3 readings draw as square points", async (
   await expect(page.locator(".rr-holdings tbody tr")).toHaveCount(8);
   await page.locator("#holdings .rr-more", { hasText: "Show all 32" }).click();
   await expect(page.locator(".rr-holdings tbody tr")).toHaveCount(32);
-  await expect(page.locator("#history polyline")).toHaveCount(0);
-  const points = page.locator("#history .rr-area__pt");
+  await expect(page.locator("#tvl polyline")).toHaveCount(0);
+  const points = page.locator("#tvl .rr-area__pt");
   await expect(points).toHaveCount(3);
   expect(await points.evaluateAll((els) => els.map((el) => [
     getComputedStyle(el).backgroundColor, getComputedStyle(el).borderRadius, el.getAttribute("data-mark"),
@@ -779,7 +786,7 @@ test("the detail failing leaves the overview's figures and names the gap where t
   // Named once, in the Holdings frame: History and Activity are the same
   // read, so they are not drawn to repeat it.
   await expect(page.locator("#holdings .rr-empty__t")).toHaveText("Vault detail unavailable");
-  await expect(page.locator("#history, #activity")).toHaveCount(0);
+  await expect(page.locator("#tvl, #activity")).toHaveCount(0);
   await expect(layerRow(page, "Actual")).toHaveText("72%");
 });
 
@@ -987,7 +994,7 @@ for (const mode of ["devnet", "base"] as const) {
     expect(await paintOf(page, ".cv--detail .rr-head .rr-dot", "backgroundColor")).toEqual([CATEGORICAL_RGB[i]]);
     expect(new Set(await paintOf(page, "#allocation .rr-legend__row.is-active > i, .rr-holdings .rr-share i", "backgroundColor")))
       .toEqual(new Set([CATEGORICAL_RGB[i]]));
-    if (mode === "devnet") expect(await paintOf(page, "#history polyline", "stroke")).toEqual([CATEGORICAL_RGB[i]]);
+    if (mode === "devnet") expect(await paintOf(page, "#tvl polyline", "stroke")).toEqual([CATEGORICAL_RGB[i]]);
     expect(await covenantFindings(page, ".cv--detail")).toEqual([]);
 
     await navigate(page, "/swarm/subjects/robotmoney-vault");
