@@ -178,84 +178,84 @@
       "t": "2026-09-16T16:04:00Z",
       "kind": "Withdrawal",
       "assets": 1946.04,
-      "shares": null,
+      "shares": 1828.98,
       "tx": null
     },
     {
       "t": "2026-09-15T12:25:00Z",
       "kind": "Withdrawal",
       "assets": 2820.19,
-      "shares": null,
+      "shares": 2650.55,
       "tx": null
     },
     {
       "t": "2026-09-15T03:14:00Z",
       "kind": "Deposit",
       "assets": 1577.86,
-      "shares": null,
+      "shares": 1482.95,
       "tx": null
     },
     {
       "t": "2026-09-14T09:20:00Z",
       "kind": "Deposit",
       "assets": 2582.76,
-      "shares": null,
+      "shares": 2427.41,
       "tx": null
     },
     {
       "t": "2026-09-14T00:13:00Z",
       "kind": "Deposit",
       "assets": 2926.08,
-      "shares": null,
+      "shares": 2750.08,
       "tx": null
     },
     {
       "t": "2026-09-13T09:01:00Z",
       "kind": "Deposit",
       "assets": 1255.33,
-      "shares": null,
+      "shares": 1179.82,
       "tx": null
     },
     {
       "t": "2026-09-13T07:52:00Z",
       "kind": "Deposit",
       "assets": 1608.81,
-      "shares": null,
+      "shares": 1512.04,
       "tx": null
     },
     {
       "t": "2026-09-12T09:54:00Z",
       "kind": "Deposit",
       "assets": 2154.59,
-      "shares": null,
+      "shares": 2024.99,
       "tx": null
     },
     {
       "t": "2026-09-12T07:35:00Z",
       "kind": "Withdrawal",
       "assets": 2737.09,
-      "shares": null,
+      "shares": 2572.45,
       "tx": null
     },
     {
       "t": "2026-09-11T02:17:00Z",
       "kind": "Deposit",
       "assets": 2607.64,
-      "shares": null,
+      "shares": 2450.79,
       "tx": null
     },
     {
       "t": "2026-09-09T21:52:00Z",
       "kind": "Deposit",
       "assets": 1423.1,
-      "shares": null,
+      "shares": 1337.5,
       "tx": null
     },
     {
       "t": "2026-09-04T01:46:00Z",
       "kind": "Deposit",
       "assets": 1209.66,
-      "shares": null,
+      "shares": 1136.9,
       "tx": null
     }
   ]

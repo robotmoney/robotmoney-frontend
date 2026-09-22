@@ -2134,7 +2134,7 @@ a.sv__vfy { text-decoration: none; }
 /* Each weight's dollars at the combined TVL, under it. */
 .rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 /* A vault's activity with no transaction to link has no Transaction column. */
-.rr-activity:not(.has-tx) th:nth-child(4), .rr-activity:not(.has-tx) td:nth-child(4) { display: none; }
+.rr-activity:not(.has-tx) th:nth-child(5), .rr-activity:not(.has-tx) td:nth-child(5) { display: none; }
 /* The Robot Money Vault's positions, grouped by vault: the vault's row reads
    as the group's head, and its positions sit indented under it. */
 .rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }
