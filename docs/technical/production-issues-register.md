@@ -21,7 +21,7 @@ S3 (availability blip) · S4 (hygiene / latent risk).
 | P-01 | Stray simulation takes/memos written to prod by wrong-scenario driver | S2 | 🔴 |
 | P-02 | Judge not producing judgements (config `off` / no model) | S3 | 🔴 |
 | P-03 | No confirmed operator path to change judge config | S4 | 🔴 |
-| P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (spec'd) |
+| P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (accepted) |
 | P-05 | Correct roster driver not yet running on prod | S3 | 🔴 |
 | P-15 | No admin UX to control judge parameters (API-only today) | S4 | 🔴 |
 | P-06 | Wrong-scenario cutover (`smoke:stage` vs `smoke:archive`) | S2 | 🟡 |
@@ -79,9 +79,11 @@ or UI. The admin surface (`isPrivileged`/`hasAutomationRole`) needs an
 `shadow` computes a real model opinion and withholds it — the same
 compute-and-hide half-measure `a42d6c5a` removed on the fallback side. Design
 intent is a binary `off | enforce` judge.
-- **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`.
-- **Next:** sign-off on the spec's open questions (reverses a 2026-09-21
-  decision; branch target; driver rewrite), then implement.
+- **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`
+  (status: **accepted** 2026-09-22 — the judge is binary `off | enforce`).
+- **Next:** logistics only — verify replay covers the soak (hard prerequisite),
+  loop David on the reversal, pick branch target, rewrite the driver's
+  per-session flip, then implement.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst** — should run under the
@@ -100,8 +102,8 @@ HTTP request with an admin token — which is also why P-03 (can an operator eve
 authenticate?) surfaced. An admin who should be able to turn the judge on and
 pick its model currently cannot do so through any screen.
 - **Requirement — the panel surfaces the four controls the API already exposes:**
-  - **Mode** — `off` / `enforce` (build two-way per the P-04 shadow-removal
-    spec; do **not** ship a three-way `shadow` selector we then remove).
+  - **Mode** — `off` / `enforce`, **two-way — decided 2026-09-22**. No `shadow`
+    selector (P-04); the UI ships binary from the start.
   - **Model** — a model id the OpenCode key serves, or clear (`null`). Make
     "no model ⇒ the judge produces nothing (`model_unconfigured`)" legible.
   - **Min takes** — integer ≥ 1 (thinly-supported threshold).
