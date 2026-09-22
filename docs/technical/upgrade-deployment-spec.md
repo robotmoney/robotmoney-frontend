@@ -1,14 +1,33 @@
 # Upgrade deployment — the tool-separation specification
 
-> **Status: proposed, pending [D46](../decisions.md#d46).** This document is the
+> **Status: partially shipped, [D46](../decisions.md#d46).** This document is the
 > mechanism contract between the tools and the runbooks. It does not change the
 > release **policy** — every gate in
 > [`release-runbooks.md`](./release-runbooks.md) §4 stands — and it does not
 > change the **topology** — [`deployment.md`](../runbooks/deployment.md) remains
-> the standing reference for what exists. What it changes is *which tool does
-> which job*, and the credential each job holds while doing it. The engineering
+> the standing reference for what exists. What it changes is *which job does
+> what*, and the credential each job holds while doing it. The engineering
 > plan that implements it is
 > [`../plans/deploy-separation-engineering-plan.md`](../plans/deploy-separation-engineering-plan.md).
+>
+> **What has shipped, and what is still proposed.** The first increment is in
+> production code on `releases-0.5.x`: no runtime service carries a migration
+> credential (`de5efffa`), and standing an environment up is decoupled from
+> writing to it. Migration and seeding stay **separate tools**; `--migrate` and
+> `--seed` are the inline conveniences that run them during an `external` boot
+> (`3b7d20a0`, `37ccea6a`), so a restart runs neither, touches no schema, and
+> needs no `doadmin`. **Still proposed** (`deploy-separation-engineering-plan.md`,
+> phases 1–5): the dedicated `rm_migrator` login (§2), turning the "skip
+> migration" default into a fail-closed *assert-schema-current* refusal (§3), the
+> receipted `P7.*` cutover steps (§4), and untangling production from the smoke
+> composition (§6). Sections below flag which half each claim is.
+>
+> **Naming.** `scripts/stack/` in this repository is the internal orchestrator
+> library the smoke tool boots through. It is unrelated to
+> [bozemanpass/stack](https://github.com/bozemanpass/stack), the Kubernetes
+> tool evaluated in
+> [`stack-runbook-reconciliation.md`](./stack-runbook-reconciliation.md). This
+> document never means the latter.
 >
 > **Naming.** `scripts/stack/` in this repository is the internal orchestrator
 > library the smoke tool boots through. It is unrelated to
