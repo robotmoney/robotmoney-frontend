@@ -1827,6 +1827,13 @@ a.sv__vfy { text-decoration: none; }
 .rr-table th, .rr-table td { padding: 0.75rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
 .rr-table thead th { background: var(--color-surface); font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; color: var(--color-text-muted); vertical-align: bottom; }
 .rr-table thead th small { display: block; margin-top: 0.25rem; font-size: 0.625rem; }
+/* A column a reader can sort by: the heading is the button, in the heading's
+   own voice, with the direction after it once it is the order. */
+.rr-sort { padding: 0; background: none; border: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.rr-sort:hover, .rr-sort:focus-visible { color: var(--color-text); }
+.rr-table thead th[aria-sort="descending"] .rr-sort::after { content: " ↓"; }
+.rr-table thead th[aria-sort="ascending"] .rr-sort::after { content: " ↑"; }
+.rr-table thead th[aria-sort="descending"], .rr-table thead th[aria-sort="ascending"] { color: var(--color-text); }
 .rr-table thead th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
 .rr-table tbody th { font-weight: 500; font-size: 0.875rem; }
 /* Rules divide, they never close: a table's last row draws no line, because
@@ -1893,6 +1900,8 @@ a.sv__vfy { text-decoration: none; }
 /* A value before the share: Vault, Value, Share, Target (the vault subject's
    By vault). The share stays the bright figure, the ring's own. */
 .rr-legend--value .rr-legend__head, .rr-legend--value.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem; }
+/* The vault stack's one Vaults table: value, share, target and drift. */
+.rr-legend--drift .rr-legend__head, .rr-legend--drift.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem 4.25rem; }
 /* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
 .rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .rr-legend__was { color: var(--color-text-muted); }
@@ -2114,7 +2123,7 @@ a.sv__vfy { text-decoration: none; }
 /* Each weight's dollars at the combined TVL, under it. */
 .rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 /* A vault's activity with no transaction to link has no Transaction column. */
-.rr-activity:not(.has-tx) th:nth-child(5), .rr-activity:not(.has-tx) td:nth-child(5) { display: none; }
+.rr-activity:not(.has-tx) .rr-activity__tx { display: none; }
 /* The Robot Money Vault's positions, grouped by vault: the vault's row reads
    as the group's head, and its positions sit indented under it. */
 .rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }

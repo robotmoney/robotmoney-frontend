@@ -190,13 +190,11 @@ test("public subject profile lists no NFT contract for an archived subject with 
   await page.goto("/swarm/subjects/robotmoney-vault");
 
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
-  const sources = page.locator(".rr-sources tbody tr");
-  await expect(sources).toHaveCount(1);
   // The vault subject's one wallet is the rmUSDC vault (decision 4 of
-  // docs/plans/vault-pages.md): its Read from names it and links its page.
-  await expect(sources.locator("th a")).toHaveText("rmUSDC");
-  await expect(sources.locator("th a")).toHaveAttribute("href", "/vault/rmusdc");
-  await expect(page.locator(".rr-sources")).not.toContainText("NFT contract");
+  // docs/plans/vault-pages.md): the Vaults table names it, and there is no
+  // separate Read from table, so no NFT contract row.
+  await expect(page.locator(".rr-sources")).toHaveCount(0);
+  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("rmUSDC");
   // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
