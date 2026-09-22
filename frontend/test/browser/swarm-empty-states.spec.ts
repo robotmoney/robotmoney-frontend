@@ -75,7 +75,8 @@ test("a book read once draws the chart's frame, saying a line needs another read
 
   await expect(page.locator("#holdings .rr-positions tbody tr")).toHaveCount(1);
   await expect(page.locator("#holdings .rr-area .rm-nodata__h")).toHaveText("Not enough data yet");
-  await expect(page.locator("#holdings .rr-area .rr-empty__t")).toHaveText("One reading so far");
+  // The title alone: one reading needs no fact under it.
+  await expect(page.locator("#holdings .rr-area .rr-empty__t")).toHaveCount(0);
   await expect(page.locator("#holdings .rr-area .rr-area__head")).toContainText("Over time");
 });
 

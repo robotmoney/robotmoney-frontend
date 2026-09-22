@@ -306,7 +306,7 @@
                 <template x-if="tvl().points.length < 2">
                   <figure class="rr-area" style="margin-top:1.5rem">
                     <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL</h3></figcaption>
-                    <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="tvl().points.length ? 'Not enough data yet' : 'No data yet'"></p><p class="rr-empty__t" x-show="tvl().points.length" x-text="'One reading so far'"></p></div>
+                    <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="tvl().points.length ? 'Not enough data yet' : 'No data yet'"></p></div>
                   </figure>
                 </template>
                 <template x-if="tvl().points.length > 1">
@@ -496,7 +496,7 @@
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head"><h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Sleeves over time' : 'Over time'">Over time</h3></figcaption>
-                <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
+                <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><template x-if="chartEmptyLabel()"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></template></div>
               </figure>
             </template>
             <template x-if="chartModel()">

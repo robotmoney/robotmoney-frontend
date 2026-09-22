@@ -64,33 +64,27 @@
         <template x-if="!error">
         <div>
 
-        <!-- HOLDINGS: the vault's value, then every position in it. A vault
-             whose read failed keeps the section's frame and says so here,
-             once: History and Activity come from the same read. -->
-        <template x-if="isLive() || isUnreadable()">
+        <!-- HOLDINGS: the vault's value, its TVL, its positions and their
+             history. Every vault keeps these frames, as the vault subject
+             does: a vault not deployed here holds nothing yet, and a failed
+             read or a source that keeps no series (the Base feed) leaves each
+             chart's empty state saying so. A failed read is named once, in the
+             Positions row. The value is the overview's, so it stands when only
+             the detail read failed. -->
           <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
             </div>
-            <!-- The value is the overview's, so it stands when only the detail
-                 read failed. -->
-            <template x-if="isLive()">
-              <div class="rr-stat"><p class="rr-stat__v" x-text="fmtUsd(record().tvlUsd)"></p></div>
-            </template>
-            <template x-if="isUnreadable() || detailError">
-              <div class="rr-empty" style="margin-top:1.5rem"><p class="rr-empty__t" x-text="detailError || 'Holdings unavailable'"></p></div>
-            </template>
-            <template x-if="isLive() && !detailError">
+            <div class="rr-stat"><p class="rr-stat__v" x-text="holdingsValue()"></p></div>
               <div>
-              <!-- TVL, first in Holdings: the figure the team tracks first. Where
-                   the source serves a series (the Base feed does not), an area
-                   (alpine/tvl-chart.js); fewer than seven readings draw as points. -->
-              <template x-if="hasHistory()">
+              <!-- TVL, first in Holdings: the figure the team tracks first, an
+                   area (alpine/tvl-chart.js); fewer than seven readings draw as
+                   points. -->
               <div id="tvl">
               <template x-if="!tvl().points.length">
                 <figure class="rr-area" style="margin-top:1.5rem">
                   <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL</h3></figcaption>
-                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h">No data yet</p></div>
+                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="historyEmptyTitle()"></p></div>
                 </figure>
               </template>
               <template x-if="tvl().points.length">
@@ -128,7 +122,6 @@
                 </figure>
               </template>
               </div>
-              </template>
               <div class="rr-block" style="margin-top:2.25rem">
                 <div class="rr-subhead">
                   <h3 class="rr-subhead__h">Positions</h3>
@@ -159,7 +152,7 @@
                       </tr>
                     </template>
                     <template x-if="!holdings().length">
-                      <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t">No positions</span></td></tr>
+                      <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="positionsEmptyText()"></span></td></tr>
                     </template>
                   </tbody>
                 </table></div>
@@ -173,7 +166,7 @@
               <template x-if="!posModel()">
                 <figure class="rr-area" style="margin-top:1.5rem">
                   <figcaption class="rr-area__head"><h4 class="rr-subhead__h rr-subhead__h--minor">Over time</h4></figcaption>
-                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="posRows().length === 1 ? 'Not enough data yet' : 'No data yet'"></p><p class="rr-empty__t" x-text="posEmptyLabel()"></p></div>
+                  <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="posEmptyTitle()"></p></div>
                 </figure>
               </template>
               <template x-if="posModel()">
@@ -216,9 +209,7 @@
                 </figure>
               </template>
               </div>
-            </template>
           </section>
-        </template>
 
         <!-- ALLOCATION: the ring every allocation view draws, each vault at
              its share of the four vaults' combined TVL, set against the weight
@@ -364,9 +355,9 @@
           </template>
         </section>
 
-        <!-- ACTIVITY: deposits and withdrawals, newest first, ten to a page,
-             where the source serves them (the Base feed does not). -->
-        <template x-if="isLive() && !detailError && hasActivity()">
+        <!-- ACTIVITY: deposits and withdrawals, newest first, ten to a page.
+             Every vault keeps the table: where the source serves no activity
+             (the Base feed) or the read failed, its one row says so. -->
           <section class="rr-sec" id="activity" aria-labelledby="act-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="act-h">Activity</h2>
@@ -390,7 +381,7 @@
                     </tr>
                   </template>
                   <template x-if="!activity().length">
-                    <tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t">No activity yet</span></td></tr>
+                    <tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t" x-text="activityEmptyText()"></span></td></tr>
                   </template>
                 </tbody>
               </table></div>
@@ -405,7 +396,6 @@
               </template>
             </div>
           </section>
-        </template>
 
         <!-- MECHANICS AND RISK: only what the source states, then the risk.
              With nothing stated (a vault not live yet), the risk alone, with

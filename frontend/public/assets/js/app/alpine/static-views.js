@@ -2193,7 +2193,9 @@ export function registerStaticViews(Alpine) {
     // The chart's empty state (.rm-nodata): the state, then the fact. Readings
     // that hold nothing are no data; one reading is not enough for a line.
     chartEmptyTitle() { return this.windowed().length > 1 ? "No data yet" : "Not enough data yet"; },
-    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions held" : "One reading so far"; },
+    // The fact under the title, when there is one: readings with no position
+    // in them. One reading needs none beyond "Not enough data yet".
+    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions held" : ""; },
     chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();
