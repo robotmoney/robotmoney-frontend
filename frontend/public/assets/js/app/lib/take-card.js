@@ -30,10 +30,11 @@ export function takeCall(body, subjectName) {
     const hit = sections.find((x) => parts(x.head).includes(want));
     if (!hit) continue;
     const label = want === "ALLOCATION" ? "Allocation" : `On ${subjectName || "this portfolio"}`;
-    // The first three points. A line clamp would drop the list markers; the
-    // full take opens the rest.
+    // The first three points, under the section's own heading as the full
+    // take prints it, so the excerpt says which part of the take it is. A
+    // line clamp would drop the list markers; the full take opens the rest.
     const lines = hit.text.split("\n").filter((l) => l.trim());
-    return { label, text: lines.slice(0, 3).join("\n") };
+    return { label, head: hit.head, text: [`**${hit.head}**`, ...lines.slice(0, 3)].join("\n") };
   }
   return null;
 }
