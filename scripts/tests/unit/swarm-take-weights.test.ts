@@ -13,10 +13,12 @@
 import { describe, expect, test } from "bun:test";
 import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import {
+  missingSectionLeadIns,
   parseStanceFromBody,
   parseWeightsFromBody,
   promptFor,
-  TAKE_SECTION_LEAD_INS,
+  sleeveTargetsFromBrief,
+  takeSectionLeadIns,
   TAKE_WEIGHT_BUCKETS,
   TAKE_WEIGHTS_LEAD_IN,
 } from "../../lib/swarm/inference.ts";
@@ -57,9 +59,9 @@ describe("parseWeightsFromBody — the vector, or a loud refusal", () => {
     // copies verbatim into the judge's prose and nobody can recompute.
     expect(withWeights.body).toBe(PROSE);
     expect(withWeights.body).not.toContain(TAKE_WEIGHTS_LEAD_IN);
-    // And the three prose sections survive intact, so the section contract is
-    // still checked against the body the member actually stores.
-    for (const lead of TAKE_SECTION_LEAD_INS) expect(withWeights.body).toContain(lead);
+    // And the prose sections survive intact, so the section contract is still
+    // checked against the body the member actually stores.
+    for (const lead of takeSectionLeadIns({ requireWeights: true })) expect(withWeights.body).toContain(lead);
   });
 
   test("emits canonical bucket order whatever order the model wrote", () => {
@@ -160,7 +162,59 @@ describe("promptFor — the ask matches what the session wants", () => {
     expect(prompt).not.toContain(TAKE_WEIGHTS_LEAD_IN);
     // Unchanged from the shipped prompt: one trailing control line.
     expect(prompt.trimEnd().split("\n").slice(-1)[0].startsWith("STANCE:")).toBe(true);
-    // The three prose sections are demanded in both shapes.
-    for (const lead of TAKE_SECTION_LEAD_INS) expect(prompt).toContain(lead);
+  });
+});
+
+describe("the sections follow the subject", () => {
+  const BRIEF = {
+    allocation: {
+      asof: "2026-06-02",
+      buckets: [
+        { id: "conservative_defi_yield", name: "Conservative DeFi Yield", target_weight: 0.95, items: [{ id: "aave", name: "Aave" }] },
+        { id: "agent_tokens", name: "Agent Tokens", target_weight: 0.05 },
+        { id: "protocol_tokens", name: "Protocol Tokens", target_weight: 0 },
+        { id: "real_world_assets", name: "Real World Assets", target_weight: 0 },
+      ],
+    },
+  };
+
+  test("an allocation session asks for REGIME and ALLOCATION, and no SUBJECT", () => {
+    const prompt = promptFor(PERSONA, REGIME, "robotmoney-allocation", { requireWeights: true });
+    expect(takeSectionLeadIns({ requireWeights: true })).toEqual(["**REGIME**", "**ALLOCATION**"]);
+    expect(prompt).toContain("**REGIME**");
+    expect(prompt).toContain("**ALLOCATION**");
+    expect(prompt).not.toContain("**SUBJECT**");
+  });
+
+  test("any other subject asks for REGIME and SUBJECT, and nothing about the vault's targets", () => {
+    const prompt = promptFor(PERSONA, REGIME, "woon", { targets: sleeveTargetsFromBrief(BRIEF) });
+    expect(takeSectionLeadIns()).toEqual(["**REGIME**", "**SUBJECT**"]);
+    expect(prompt).toContain("**SUBJECT**");
+    expect(prompt).not.toContain("**ALLOCATION**");
+    expect(prompt).not.toContain("Sleeve targets in force");
+    expect(prompt).not.toContain("95/5/0/0");
+  });
+
+  test("the targets an allocation take argues against are the brief's, never written in", () => {
+    const withBrief = promptFor(PERSONA, REGIME, "robotmoney-allocation", { requireWeights: true, targets: sleeveTargetsFromBrief(BRIEF) });
+    expect(withBrief).toContain("Sleeve targets in force: Conservative DeFi Yield 95% (Aave) / Agent Tokens 5% / Protocol Tokens 0% / Real World Assets 0%.");
+    const without = promptFor(PERSONA, REGIME, "robotmoney-allocation", { requireWeights: true });
+    expect(without).not.toContain("Sleeve targets in force");
+    for (const prompt of [withBrief, without]) expect(prompt).not.toContain("95/5/0/0");
+  });
+
+  test("a brief with no allocation block hands over no targets", () => {
+    expect(sleeveTargetsFromBrief({})).toEqual([]);
+    expect(sleeveTargetsFromBrief(null)).toEqual([]);
+    expect(sleeveTargetsFromBrief({ allocation: { buckets: [{ id: "x", target_weight: "n/a" }] } })).toEqual([]);
+  });
+
+  test("the section check reads the same sets", () => {
+    const allocationTake = "**REGIME**\n- a\n**ALLOCATION**\n- b";
+    const subjectTake = "**REGIME**\n- a\n**SUBJECT**\n- b";
+    expect(missingSectionLeadIns(allocationTake, { requireWeights: true })).toEqual([]);
+    expect(missingSectionLeadIns(subjectTake)).toEqual([]);
+    expect(missingSectionLeadIns(subjectTake, { requireWeights: true })).toEqual(["**ALLOCATION**"]);
+    expect(missingSectionLeadIns(allocationTake)).toEqual(["**SUBJECT**"]);
   });
 });
