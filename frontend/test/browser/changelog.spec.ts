@@ -84,10 +84,10 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(27);
+  await expect(frame.locator(".cl__entry")).toHaveCount(29);
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
-  await expect(frame.locator(".cl__now-list li")).toHaveCount(4);
+  await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
   await expect(frame.locator(".nav__ctas .btn-primary")).toHaveText("Changelog");
 
   const title = await page.evaluate(() => {
@@ -149,7 +149,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
   const frame = await openChangelog(page);
 
   const swarm = frame.getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("27 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("29 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -162,11 +162,124 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
     }).length;
   });
   expect(visible).toBeGreaterThan(0);
-  expect(visible).toBeLessThan(27);
+  expect(visible).toBeLessThan(29);
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("27 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("29 releases");
+});
+
+// Merged work that is not in production yet sits in one block on top of the
+// log and reads "Next release" where the date goes, until
+// scripts/changelog-stamp.ts dates it. Whatever the block holds, the label has
+// to read as a date does (same face, size, case, tracking and colour), or
+// stamping it would visibly move the meta.
+test("pending entries read Next release, styled as a date", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const frame = await openChangelog(page);
+
+  const pending = frame.locator('.cl__entry[data-release="pending"]');
+  const n = await pending.count();
+  // Once the release is stamped there is nothing pending: then nothing on the
+  // page may still carry the mark or the label.
+  if (n === 0) {
+    await expect(frame.locator('[data-release="pending"], .cl__pending')).toHaveCount(0);
+    await expectNoBrowserErrors(errors);
+    return;
+  }
+  // The heading and the Also block are marked too, and the heading comes first.
+  await expect(frame.locator('.cl__month-h[data-release="pending"]')).toHaveText("Next release");
+  await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
+  await expect(frame.locator('.cl__also[data-release="pending"] .cl__also-h')).toHaveText("Also in the next release");
+  await expect(frame.locator('.cl__updated .cl__pending[data-release="pending"]')).toHaveText("with the next release");
+
+  const read = await page.evaluate(() => {
+    const iframe = document.querySelector("#frame") as HTMLIFrameElement;
+    const win = iframe.contentWindow!;
+    const doc = iframe.contentDocument!;
+    const pick = (el: Element) => {
+      const cs = win.getComputedStyle(el);
+      return {
+        fontFamily: cs.fontFamily,
+        fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight,
+        color: cs.color,
+        textTransform: cs.textTransform,
+        letterSpacing: cs.letterSpacing,
+      };
+    };
+    const dated = doc.querySelector(".cl__entry:not([data-release]) .cl__meta time");
+    if (!dated) throw new Error("no dated entry to compare with");
+    const entries = [...doc.querySelectorAll('.cl__entry[data-release="pending"]')];
+    // Pending entries lead the log: none of them comes after a dated one.
+    const all = [...doc.querySelectorAll(".cl__entry")];
+    const lastPending = Math.max(...entries.map((e) => all.indexOf(e)));
+    const firstDated = all.findIndex((e) => !e.hasAttribute("data-release"));
+    return {
+      date: pick(dated),
+      labels: entries.map((e) => {
+        const label = e.querySelector(".cl__meta > :first-child");
+        return {
+          id: e.id,
+          href: e.querySelector(".cl__title a")?.getAttribute("href") ?? "",
+          tag: label?.tagName ?? "",
+          text: label?.textContent ?? "",
+          marked: label?.getAttribute("data-release") ?? "",
+          hasTime: !!e.querySelector("time"),
+          style: label ? pick(label) : null,
+        };
+      }),
+      leads: lastPending < firstDated,
+    };
+  });
+
+  expect(read.leads).toBe(true);
+  expect(read.labels).toHaveLength(n);
+  for (const l of read.labels) {
+    expect(l.id).toMatch(/^next-[a-z0-9-]+$/);
+    expect(l.href).toBe(`#${l.id}`);
+    expect(l.tag).toBe("SPAN");
+    expect(l.text).toBe("Next release");
+    expect(l.marked).toBe("pending");
+    expect(l.hasTime).toBe(false);
+    expect(l.style).toEqual(read.date);
+  }
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("the tag filter counts pending entries with the rest", async ({ page }) => {
+  const frame = await openChangelog(page);
+
+  for (const name of ["Allocation", "Swarm"]) {
+    const button = frame.getByRole("button", { name, exact: true });
+    await button.click();
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    const tag = name.toLowerCase();
+    const seen = await page.evaluate((t) => {
+      const iframe = document.querySelector("#frame") as HTMLIFrameElement;
+      const win = iframe.contentWindow!;
+      const shown = (el: Element) => win.getComputedStyle(el as HTMLElement).display !== "none";
+      const entries = [...iframe.contentDocument!.querySelectorAll(".cl__entry")];
+      const tagged = entries.filter((e) => (e.getAttribute("data-tags") ?? "").split(" ").includes(t));
+      const pendingTagged = tagged.filter((e) => e.getAttribute("data-release") === "pending");
+      return {
+        tagged: tagged.length,
+        visible: entries.filter(shown).length,
+        taggedVisible: tagged.every(shown),
+        pendingTagged: pendingTagged.length,
+        pendingVisible: pendingTagged.every(shown),
+        headings: [...iframe.contentDocument!.querySelectorAll(".cl__month-h, .cl__also")].filter(shown).length,
+      };
+    }, tag);
+    expect(seen.pendingVisible).toBe(true);
+    expect(seen.taggedVisible).toBe(true);
+    expect(seen.visible).toBe(seen.tagged);
+    expect(seen.headings).toBe(0);
+    await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
+    await button.click();
+    await expect(frame.locator(".cl__count")).toHaveText("29 releases");
+  }
 });
 
 test("captures load as real images, and permalinks are the titles", async ({ page }) => {
@@ -174,7 +287,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
 
   const imgs = frame.locator(".cl__win img");
   const n = await imgs.count();
-  expect(n).toBe(6);
+  expect(n).toBe(8);
   for (let i = 0; i < n; i++) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await expect.poll(async () =>
@@ -188,8 +301,8 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
     ).not.toBe("");
   }
 
-  const permalink = frame.locator('[id="2026-09-07-a-new-allocation-page"] .cl__title a');
-  await expect(permalink).toHaveAttribute("href", "#2026-09-07-a-new-allocation-page");
+  const permalink = frame.locator('[id="2026-09-21-a-new-allocation-page"] .cl__title a');
+  await expect(permalink).toHaveAttribute("href", "#2026-09-21-a-new-allocation-page");
   await permalink.click();
   await expect
     .poll(async () =>
@@ -198,7 +311,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
         return iframe.contentWindow?.location.hash ?? "";
       }),
     )
-    .toBe("#2026-09-07-a-new-allocation-page");
+    .toBe("#2026-09-21-a-new-allocation-page");
 });
 
 test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ page }) => {
@@ -236,16 +349,24 @@ test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ p
     const wide = doc.querySelector(".cl__dg--wide") as HTMLElement;
     const narrow = doc.querySelector(".cl__dg--narrow") as HTMLElement;
     const h1 = doc.querySelector("h1.cl__h1") as HTMLElement;
+    // No entry runs past the screen: a capture's address bar is nowrap, and a
+    // long one once widened its entry's grid track past a phone's width.
+    const rights = [...doc.querySelectorAll(".cl__entry > *")].map((e) => e.getBoundingClientRect().right);
     return {
       wideDisplay: win.getComputedStyle(wide).display,
       narrowDisplay: win.getComputedStyle(narrow).display,
       h1Overflow: win.getComputedStyle(h1).overflow,
       h1Visible: h1.getBoundingClientRect().height > 0,
+      clientW: doc.documentElement.clientWidth,
+      scrollW: doc.documentElement.scrollWidth,
+      widestEntryRight: Math.max(...rights),
     };
   });
   expect(mobile.wideDisplay).toBe("none");
   expect(mobile.narrowDisplay).not.toBe("none");
   expect(mobile.h1Visible).toBe(true);
+  expect(mobile.widestEntryRight).toBeLessThanOrEqual(mobile.clientW);
+  expect(mobile.scrollW).toBeLessThanOrEqual(mobile.clientW);
 });
 
 test("the home CTA and the FAQ no longer advertise a roadmap", async ({ page }) => {
