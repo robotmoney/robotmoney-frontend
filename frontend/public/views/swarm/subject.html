@@ -85,6 +85,14 @@
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="latest-h" x-text="hasLatestRecommendation() ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
             </div>
+            <!-- The latest session set no weights, so the target stood: since
+                 when, and the session that last set it. -->
+            <template x-if="heldSince">
+              <div class="rr-meta rr-meta--lead">
+                <span class="rr-meta__i">Recommendation <b>Target held</b></span>
+                <span class="rr-meta__i">Since <b><a class="rr-lnk" :href="sessionHref(heldSince)" x-text="formatDate(heldSince.date, 'short')"></a></b></span>
+              </div>
+            </template>
             <div class="rr-split rr-split--rule">
               <div>
                 <template x-if="hasExplorer()">

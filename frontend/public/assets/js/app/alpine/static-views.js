@@ -23,9 +23,9 @@ import { sessionBrief } from "../lib/session-brief.js";
 import { sleeveExplorer } from "../lib/sleeve-explorer.js";
 import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
-import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { ALLOCATION_SUBJECT_ID, VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
-import { DEVNET_LABEL, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
+import { DEVNET_LABEL, loadLatestRecommendation, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -1273,6 +1273,7 @@ export function registerStaticViews(Alpine) {
         // book subject never asks: the framework does not describe it, and
         // asking would put the vault's targets on somebody else's treasury.
         if (this.isWeightsSubject()) await this.loadAllocationFw();
+        this.heldSince = await this.loadHeldSince();
         // A weights subject that holds a book also reads the framework's
         // token lists, which sum that book into sleeves: its latest
         // recommendation is measured against the book, as its session page
@@ -1354,6 +1355,17 @@ export function registerStaticViews(Alpine) {
     },
     latestRow: null,
     latest() { return this.latestRow; },
+    // The allocation's newest session that set weights, when its latest set
+    // none: the target then stood from that session on, and the page says
+    // since when and links it, as /swarm does.
+    heldSince: null,
+    async loadHeldSince() {
+      const l = this.latest();
+      if (this.subject?.id !== ALLOCATION_SUBJECT_ID || !l || this.recommendation(l)?.kind === "weights") return null;
+      const r = await loadLatestRecommendation({ hostname: location.hostname }).catch(() => null);
+      const s = r?.session;
+      return s?.date && s.id !== l.id && String(s.date) <= String(l.date) ? s : null;
+    },
     hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
     hasLatestReview() {
       const l = this.latest();
