@@ -255,13 +255,22 @@ export function camelMember(raw) {
 // endpoint has always returned that field, but nothing mapped it before the
 // public subject profile, so every consumer saw `undefined` and rendered
 // nothing.
+// The house moved to robotmoney.network, and robotmoney.net is a domain
+// someone else once ran: a subject row still carrying the old host links to
+// the new one until its data is corrected.
+/** @param {unknown} url */
+export function houseHomepage(url) {
+  if (typeof url !== "string") return url;
+  return url.replace(/^(https?:\/\/(?:www\.)?)robotmoney\.net(?=[\/?#]|$)/i, "$1robotmoney.network");
+}
+
 export function camelSubject(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
     name: raw.name,
     operator: raw.operator,
-    homepage: raw.homepage,
+    homepage: houseHomepage(raw.homepage),
     financesPage: raw.finances_page || raw.financesPage,
     xHandle: raw.x_handle || raw.xHandle,
     thesisBlurb: raw.thesis_blurb || raw.thesisBlurb,
@@ -1217,11 +1226,19 @@ export function registerStaticViews(Alpine) {
     // Every live vault's deposits and withdrawals, newest first, each naming
     // its vault; null when no vault's source serves activity (the Base feed).
     stackActivity: null,
+    // Each live vault's detail, by slug, as loadStackActivity read it.
+    stackDetails: {},
     stackActivityPage: 0,
     // The Positions table's order: grouped by vault until a column is picked,
     // then one list across the vaults by that column.
-    posSortKey: null,
+    // The Positions table: its order (largest value first until a header is
+    // picked), whether it reads by vault or as one list, and which vaults
+    // are folded.
+    posSortKey: "value",
     posSortDir: "desc",
+    posView: "vault",
+    /** @type {Record<string, boolean>} */
+    posClosed: {},
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
       // The route this component was mounted on. The fetch below is not
@@ -2323,7 +2340,7 @@ export function registerStaticViews(Alpine) {
         return (slug) => (total > 0 ? (byVault[slug] || 0) / total : 0);
       });
       const bands = VAULTS
-        .map((v) => ({ token: v.slug, label: v.symbol, color: v.color, mark: "series", shares: shares.map((at) => at(v.slug)) }))
+        .map((v) => ({ token: v.slug, label: v.name, color: v.color, mark: "series", shares: shares.map((at) => at(v.slug)) }))
         .filter((b) => b.shares.some((s) => s > 0));
       if (!bands.length) return [];
       const other = rows.map((_, i) => Math.max(0, 1 - bands.reduce((sum, b) => sum + b.shares[i], 0)));
@@ -2376,6 +2393,32 @@ export function registerStaticViews(Alpine) {
     // a fact about the stack rather than a row among the vaults.
     stackRouter() { return this.stackWallets().find((w) => w.kind === "router" && w.address) || null; },
 
+    // The vault stack's headline figures, first in the meta row: what it
+    // holds, what it has returned, and how many vaults take deposits. Return
+    // is each vault's share price against the 1.00 it opened at, weighted by
+    // what the vault holds; depositors show once a vault serves them.
+    stackFacts() {
+      const ov = this.vaultStack?.overview;
+      if (!ov) return [];
+      const live = (ov.vaults || []).filter((v) => v?.availability === "live");
+      const facts = [];
+      const tvl = Number(ov.combined?.tvlUsd ?? this.stackSnapshot()?.totalValueUsd);
+      if (Number.isFinite(tvl)) facts.push({ key: "tvl", label: "TVL", value: fmtVaultUsd(tvl) });
+      const priced = live.filter((v) => Number.isFinite(Number(v.sharePrice)) && Number(v.tvlUsd) > 0);
+      const held = priced.reduce((n, v) => n + Number(v.tvlUsd), 0);
+      if (held > 0) {
+        const r = priced.reduce((n, v) => n + (Number(v.sharePrice) - 1) * Number(v.tvlUsd), 0) / held;
+        const pct = Math.round(r * 10000) / 100;
+        facts.push({ key: "ret", label: "Return since launch", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
+          tip: "Each vault's share price against the 1.00 it opened at, weighted by what the vault holds." });
+      }
+      const details = live.map((v) => this.stackDetails[v.slug]).filter(Boolean);
+      const deps = details.filter((d) => Number.isFinite(Number(d.depositors)));
+      if (deps.some((d) => Number(d.depositors) > 0)) facts.push({ key: "dep", label: "Depositors", value: deps.reduce((n, d) => n + Number(d.depositors), 0).toLocaleString("en-US") });
+      if (ov.vaults?.length) facts.push({ key: "live", label: "Vaults live", value: `${live.length} of ${ov.vaults.length}` });
+      return facts;
+    },
+
     // ── the vault stack's activity ──────────────────────────────────────────
     async loadStackActivity(load) {
       const ov = load?.overview;
@@ -2386,6 +2429,7 @@ export function registerStaticViews(Alpine) {
         const row = ov.vaults?.find((r) => r.slug === v.slug);
         if (row?.availability !== "live") continue;
         const { detail } = await loadVaultDetail(v.slug, load).catch(() => ({ detail: null }));
+        if (detail) this.stackDetails = { ...this.stackDetails, [v.slug]: detail };
         if (!Array.isArray(detail?.activity)) continue;
         served = true;
         for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, color: v.color });
@@ -2420,22 +2464,35 @@ export function registerStaticViews(Alpine) {
       if (this.posSortKey === key) this.posSortDir = this.posSortDir === "desc" ? "asc" : "desc";
       else { this.posSortKey = key; this.posSortDir = "desc"; }
     },
-    // Back to the book grouped by vault.
-    unsortPositions() { this.posSortKey = null; this.posSortDir = "desc"; },
     posSortState(key) { return this.posSortKey === key ? (this.posSortDir === "desc" ? "descending" : "ascending") : "none"; },
-    // Every position across the vaults in the picked order, each with its vault.
-    sortedPositions() {
+    /** @param {any[]} rows */
+    posSorted(rows) {
       const key = this.posSortKey;
       const val = (p) => Number(key === "amount" ? p.balance : key === "price" ? p.price_usd : key === "share" ? p.share : p.value);
-      const rows = this.vaultGroups().flatMap((g) => g.positions.map((p) => ({ ...p, group: g })));
       const sign = this.posSortDir === "desc" ? -1 : 1;
-      return rows.sort((a, b) => {
+      return rows.slice().sort((a, b) => {
         const x = val(a); const y = val(b);
         if (!Number.isFinite(x) && !Number.isFinite(y)) return 0;
         if (!Number.isFinite(x)) return 1;
         if (!Number.isFinite(y)) return -1;
         return sign * (x - y);
       });
+    },
+    // By vault: each vault keeps its place in the published order, and the
+    // picked order sorts what it holds, so a sort never moves a vault.
+    groupedPositions() {
+      return this.vaultGroups().map((g) => ({ ...g, positions: this.posSorted(g.positions) }));
+    },
+    // Every position across the vaults in the picked order, each with its vault.
+    sortedPositions() {
+      return this.posSorted(this.vaultGroups().flatMap((g) => g.positions.map((p) => ({ ...p, group: g }))));
+    },
+    /** @param {string} slug */
+    togglePosGroup(slug) { this.posClosed = { ...this.posClosed, [slug]: !this.posClosed[slug] }; },
+    // A position's token contract, where the reading names one.
+    positionHref(p) {
+      const addr = p?.address || p?.token_address || p?.tokenAddress;
+      return addr ? this.explorerHref(p.chain, addr) : null;
     },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the

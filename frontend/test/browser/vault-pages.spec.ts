@@ -808,9 +808,21 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await subjectLoaded(page);
   const hold = page.locator("#holdings");
 
+  // The meta row leads with the vaults' own figures: what they hold, their
+  // return (share price against 1.00, weighted by TVL) and how many are live.
+  const meta = page.locator(".rr-meta").first();
+  await expect(meta.locator(".rr-meta__i").nth(0)).toHaveText(/TVL\s*\$100,000/);
+  await expect(meta.locator(".rr-meta__i").nth(1)).toContainText("Return since launch");
+  await expect(meta.locator(".rr-meta__i").nth(1).locator("b")).toHaveText(/^[+−]\d+\.\d{2}%$/);
+  await expect(meta.locator(".rr-meta__i").nth(2)).toHaveText(/Vaults live\s*4 of 4/);
+
+  // Both explorers rest on Conservative DeFi Yield, and neither has a Close.
+  await expect(page.locator("#latest .rr-x__drawer.is-open")).toHaveCount(1);
+  await expect(page.locator(".rr-x__close")).toHaveCount(0);
+
   // No separate Read from: the four vaults are the Vaults table below, and
   // the router, holding nothing, is not a row. The total's line names the
-  // chain once, with the reading's date; TVL over time sits beside it.
+  // chain once, with the reading's date; TVL runs page wide under it.
   await expect(hold.locator(".rr-sources")).toHaveCount(0);
   await expect(hold.locator(".rr-stat__v")).toHaveText("$100,000");
   await expect(hold.locator(".rr-stat__sub").first()).toHaveText("Staging devnet · Sep 17, 2026");
@@ -829,7 +841,8 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expect(byVaultTarget(page)).toHaveText(["Target 70%", "Target 10%", "Target 15%", "Target 5%"]);
   await expect(ring.nth(0).locator(".rr-legend__d .alp__mv")).toHaveText("+2 pp");
   await expect(ring.nth(0).locator("b")).toHaveText("Share 72%");
-  await expect(hold.locator(".rr-ring figcaption")).toHaveText("Share");
+  // At rest it opens on Conservative DeFi Yield, the first vault.
+  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/72%\s*rmUSDC/);
 
   // A vault opens onto its positions, each a share of the vault, by the
   // names its vault page gives them.
@@ -850,22 +863,34 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   expect(values.reduce((s, x) => s + dollars(x), 0)).toBe(100000);
   await expect(hold.locator("tr.rr-in")).not.toHaveCount(0);
   await expect(hold.locator(".rr-positions thead th:visible")).toHaveText(["Position", "Amount", "Price", "Value", "Share"]);
-  // Sorted by a column, the positions are one list across the vaults, each
-  // naming its vault; Group by vault puts the book back.
-  await hold.locator(".rr-positions thead .rr-sort", { hasText: "Value" }).click();
-  await expect(hold.locator("tr.rr-group")).toHaveCount(0);
-  const sorted = await hold.locator(".rr-positions tbody tr td:nth-child(4)").allTextContents();
-  expect(sorted.map(dollars)).toEqual([...sorted.map(dollars)].sort((a, b) => b - a));
+  // Largest value first; a header sorts within each vault, never moving a
+  // vault, and a vault folds its positions away.
   await expect(hold.locator('.rr-positions thead th[aria-sort="descending"]')).toHaveText(/Value/);
-  await hold.locator(".rr-positions .rr-more", { hasText: "Group by vault" }).click();
+  await hold.locator(".rr-positions thead .rr-sort", { hasText: "Value" }).click();
+  await expect(hold.locator('.rr-positions thead th[aria-sort="ascending"]')).toHaveText(/Value/);
+  await expect(groups.locator("th a")).toHaveText(SYMBOLS);
+  const firstVault = await hold.locator(".rr-postable tbody").first().locator("tr.rr-in td:nth-child(5)").allTextContents();
+  expect(firstVault.map(dollars)).toEqual([...firstVault.map(dollars)].sort((a, b) => a - b));
+  const inBefore = await hold.locator("tr.rr-in:visible").count();
+  await groups.first().locator(".rr-fold").click();
+  await expect(groups.first().locator(".rr-fold")).toHaveAttribute("aria-expanded", "false");
+  await expect(hold.locator("tr.rr-in:visible")).toHaveCount(inBefore - firstVault.length);
+  await groups.first().locator(".rr-fold").click();
+  // All: one list across the vaults, each naming its vault.
+  await hold.locator(".rr-positions .rm-chip", { hasText: "All" }).click();
+  await expect(hold.locator("tr.rr-group")).toHaveCount(0);
+  const flat = await hold.locator(".rr-positions tbody tr td:nth-child(5)").allTextContents();
+  expect(flat.map(dollars)).toEqual([...flat.map(dollars)].sort((a, b) => a - b));
+  await hold.locator(".rr-positions .rm-chip", { hasText: "By vault" }).click();
+  await hold.locator(".rr-positions thead .rr-sort", { hasText: "Value" }).click();
   await expect(hold.locator("tr.rr-group")).toHaveCount(4);
   const usdc = readJson("data/vaults/devnet/rmusdc.json");
   await expect(hold.locator("tr.rr-in").filter({ hasText: "Gauntlet" }).locator("th")).toHaveText(usdc.holdings[0].label);
   await expect(hold.locator("tr.rr-in th").filter({ hasText: /^USDC$/ })).toHaveCount(0);
 
   // The chart stacks the four vaults with the target drawn over them.
-  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Vaults over time"]);
-  await expect(hold.locator(".rr-area__legend li")).toHaveText([...SYMBOLS, "Target"]);
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
+  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets", "Target"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(3);
 
@@ -921,7 +946,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
   await expect(ring.nth(0).locator("b")).toHaveText("Share 100%");
   await expect(byVaultTarget(page)).toHaveText(["Target 95%", "Target 5%", "Target 0%", "Target 0%"]);
   await expect(ring.locator(".rr-legend__d .alp__mv")).toHaveText(["+5 pp", "−5 pp"]);
-  await expect(hold.locator(".rr-ring figcaption")).toHaveText("Share");
+  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/100%\s*rmUSDC/);
   const first = page.locator("#latest .rr-legend__row").first();
   await expect(first.locator(".rr-legend__was")).toHaveText("Book 100%");
   await expect(first.locator(".rr-legend__d")).toContainText("−5 pp");
@@ -933,7 +958,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
   // A line needs two readings: both charts' frames say there is one.
-  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Vaults over time"]);
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
   await expect(hold.locator(".rr-area .rr-empty__t")).toHaveText(["One reading so far", "One reading so far"]);
   await expect(hold.locator(".rr-area__legend")).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);

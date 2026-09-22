@@ -1950,11 +1950,6 @@ a.sv__vfy { text-decoration: none; }
 .rr-act[class*="is-add"], .rr-act[class*="is-buy"], .rr-act[class*="is-increase"], .rr-act[class*="is-accumulate"] { color: var(--color-green); }
 .rr-act[class*="is-trim"], .rr-act[class*="is-reduce"], .rr-act[class*="is-sell"], .rr-act[class*="is-exit"], .rr-act[class*="is-cut"] { color: var(--color-warn); }
 .rr-x__why { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
-/* A text action, so a nav-weight link rather than a button: muted over the
-   link line, both going to full text on hover. */
-.rr-x__close { padding: 0 0 0.125rem; background: none; border: 0; border-bottom: 1px solid var(--color-link-line);
-  color: var(--color-text-muted); font: inherit; font-size: 0.75rem; cursor: pointer; }
-.rr-x__close:hover { color: var(--color-text); border-bottom-color: var(--color-link); }
 .rr-x__assets { min-width: 0; }
 .rr-x__assets th, .rr-x__assets td { padding: 0.5625rem 0.5rem; font-size: 0.75rem; }
 .rr-x__assets tbody th { font-weight: 400; font-size: 0.75rem; }
@@ -2134,10 +2129,37 @@ a.sv__vfy { text-decoration: none; }
    as the group's head, and its positions sit indented under it. */
 .rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }
 .rr-positions .rr-in th { padding-left: 1.75rem; }
+/* The vault stack's positions: fixed columns, so a sort or a fold moves
+   nothing sideways; each vault's head row folds its positions under a
+   square chevron, and the head sits on the surface a step above the rows. */
+.rr-subhead__tools { display: flex; align-items: center; gap: 1rem; }
+.rr-postable { table-layout: fixed; }
+.rr-postable__name { width: 34%; }
+.rr-postable__chain { width: 10%; }
+.rr-postable__n { width: 14%; }
+.rr-postable__share { width: 24%; }
+.rr-postable td, .rr-postable th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-postable tbody + tbody .rr-group > * { border-top: 1px solid var(--color-border-light); }
+.rr-postable .rr-group > * { background: var(--color-surface); padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.rr-postable .rr-group th { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-body); font-size: 0.875rem; }
+.rr-group__id { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.rr-group__id .rr-dot { margin-right: 0; align-self: center; }
+.rr-group__id small { font-family: var(--font-body); font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; }
+.rr-postable .rr-in th { padding-left: 2.75rem; }
+.rr-postable .rr-in > * { color: var(--color-text-soft); }
+.rr-postable .rr-in:hover > * { color: var(--color-text); }
+.rr-fold { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; padding: 0; margin-left: -0.25rem;
+  background: none; border: 1px solid transparent; color: var(--color-text-muted); cursor: pointer; }
+.rr-fold:hover, .rr-fold:focus-visible { border-color: var(--color-border); color: var(--color-text); }
+.rr-fold span { width: 0.375rem; height: 0.375rem; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: translateY(-0.0625rem) rotate(45deg); transition: transform 160ms var(--ease-out-expo); }
+.rr-fold[aria-expanded="false"] span { transform: rotate(-45deg); }
 /* The target drawn over the vault chart: a dashed rule, not a swatch. */
 .rr-area__legend li i.is-target { background: none; height: 0; width: 0.875rem; border-top: 1px dashed var(--color-text-soft); }
 @media (max-width: 560px) {
   .rr-positions .rr-table { min-width: 0; }
+  .rr-postable { table-layout: auto; }
+  .rr-postable td, .rr-postable th { white-space: normal; }
   .rr-positions th:nth-child(2), .rr-positions td:nth-child(2),
   .rr-positions th:nth-child(4), .rr-positions td:nth-child(4) { display: none; }
   .rr-sources th:nth-child(3), .rr-sources td:nth-child(3) { display: none; }

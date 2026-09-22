@@ -113,7 +113,6 @@
                           <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
                             <div class="rr-x__head">
                               <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><span x-text="panelRow().meta"></span></p>
-                              <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                             </div>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
