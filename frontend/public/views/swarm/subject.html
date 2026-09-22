@@ -306,15 +306,15 @@
                 <div id="tvl">
                   <template x-if="tvl().points.length < 2">
                     <figure class="rr-area">
-                      <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL over time</h3></figcaption>
+                      <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL</h3></figcaption>
                       <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="tvl().points.length ? 'One reading so far' : 'No readings yet'"></p></div>
                     </figure>
                   </template>
                   <template x-if="tvl().points.length > 1">
                     <figure class="rr-area">
                       <figcaption class="rr-area__head">
-                        <h3 class="rr-subhead__h">TVL over time</h3>
-                        <span class="rr-sec__aside" x-text="tvlCount()"></span>
+                        <h3 class="rr-subhead__h">TVL</h3>
+                        <span class="rr-sec__aside" x-text="tvlChange()"></span>
                       </figcaption>
                       <div class="rr-area__frame">
                         <div class="rr-area__y" aria-hidden="true">
@@ -328,6 +328,9 @@
                           </template>
                           <template x-if="tvlPoint(tvlAt)">
                             <div class="rr-area__cross" :style="`left:${tvlPoint(tvlAt).left}%`"></div>
+                          </template>
+                          <template x-if="tvlPoint(tvlAt)">
+                            <i class="rr-area__pt is-on" :style="`left:${tvlPoint(tvlAt).left}%;top:${tvlPoint(tvlAt).top}%;background:var(--color-text-soft)`" aria-hidden="true"></i>
                           </template>
                           <template x-if="tvlPoint(tvlAt)">
                             <div class="rr-area__tip" :class="tvlPoint(tvlAt).left > 62 ? 'is-left' : ''" :style="`left:${tvlPoint(tvlAt).left}%`">
@@ -571,15 +574,14 @@
                  With none, the positions table above already has. -->
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
-                <figcaption class="rr-area__head"><h3 class="rr-subhead__h" x-text="isVaultStack() ? 'Vaults over time' : 'Positions over time'">Positions over time</h3></figcaption>
+                <figcaption class="rr-area__head"><h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Vaults over time' : 'Over time'">Over time</h3></figcaption>
                 <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
               </figure>
             </template>
             <template x-if="chartModel()">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head">
-                  <h3 class="rr-subhead__h" x-text="isVaultStack() ? 'Vaults over time' : 'Positions over time'">Positions over time</h3>
-                  <span class="rr-sec__aside" x-text="chartSpan()"></span>
+                  <h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Vaults over time' : 'Over time'">Over time</h3>
                 </figcaption>
                 <div class="rr-area__frame">
                   <div class="rr-area__y" aria-hidden="true">

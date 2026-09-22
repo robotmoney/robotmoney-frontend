@@ -238,7 +238,8 @@ for (const [i, v] of SLUGS.entries()) {
 
     await expect(page.locator("h1")).toHaveText(v.symbol);
     await expect(page.locator(".rr-head .sv__eyebrow")).toContainText(v.name);
-    expect(await page.locator(".rr-head .rr-dot").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(CATEGORICAL_RGB[i]);
+    // The eyebrow names the sleeve and carries no swatch.
+    await expect(page.locator(".rr-head .rr-dot")).toHaveCount(0);
     expect(await page.locator('meta[name="robots"]').getAttribute("content")).toBe("noindex, follow");
     expect(await page.locator('link[rel="canonical"]').getAttribute("href")).toBe(`https://robotmoney.network/vault/${v.slug}`);
 
@@ -256,7 +257,7 @@ for (const [i, v] of SLUGS.entries()) {
     // The holdings reconcile to the vault's TVL, in whole dollars as the
     // swarm pages state a book: each figure rounds by at most half a dollar.
     await expect(page.locator("#holdings .rr-stat__v")).toHaveText(`$${row.tvlUsd.toLocaleString("en-US", { maximumFractionDigits: 0 })}`);
-    const values = await page.locator(".rr-holdings tbody td:nth-child(4)").allTextContents();
+    const values = await page.locator(".rr-holdings tbody td:nth-child(5)").allTextContents();
     expect(values.length).toBeGreaterThan(0);
     expect(Math.abs(values.reduce((s, x) => s + dollars(x), 0) - row.tvlUsd)).toBeLessThanOrEqual(values.length * 0.5);
 
@@ -275,7 +276,12 @@ for (const [i, v] of SLUGS.entries()) {
     await expect(page.locator("#activity tbody tr").first().locator("td").nth(2)).toHaveText(/^\$[0-9,]+$/);
 
     // Each position's share of the vault over time, in tints of its hue.
-    await expect(page.locator("#holdings .rr-area__head", { hasText: "Positions over time" })).toHaveCount(1);
+    // A part of Positions, titled as one, and no count of readings anywhere.
+    await expect(page.locator("#holdings .rr-area__head .rr-subhead__h--minor")).toHaveText("Over time");
+    expect((await page.locator("#holdings .rr-area__head").allTextContents()).join(" ")).not.toContain("readings");
+    // TVL, first in Holdings, with its change across the window.
+    await expect(page.locator("#tvl .rr-subhead__h")).toHaveText("TVL");
+    await expect(page.locator("#tvl .rr-sec__aside")).toHaveText(/^[+−]\$[0-9,]+ · [+−][0-9.]+% since /);
     await expect(page.locator("#holdings .rr-area__svg polygon[data-token]").first()).toBeAttached();
     await page.locator("#activity .rr-btn", { hasText: "Older" }).click();
     await expect(page.locator("#activity tbody tr")).toHaveCount(detail.activity.length - 10);
@@ -307,11 +313,11 @@ test("rmUSDC's devnet gaps and recommendation read as the overview states them",
   await expect(gaps.locator(".rr-meta__i", { hasText: "Governance gap" })).toContainText("+5 pp");
   await expect(gapOf(page)).toHaveText("Drift +2 pp");
   await expect(page.locator("#allocation .rr-meta .alp__mv.up, #allocation .rr-legend__row.is-active .alp__mv.up")).toHaveCount(2);
-  // A synthetic recommendation has no session to open: a date, not a link.
-  const dl = page.locator("#allocation .rr-dl");
-  await expect(dl).toContainText("Sep 16, 2026");
-  await expect(dl.locator("a")).toHaveCount(0);
-  await expect(dl).toContainText("Released on chain");
+  // The latest allocation recommendation beside the ring, as /allocation
+  // sets it, its session linked; the fixture's release on chain beside it.
+  const rec = page.locator("#allocation .alp__rec");
+  await expect(rec.locator(".rr-cta")).toHaveAttribute("href", /^\/swarm\//);
+  await expect(rec).toContainText("Released on chain");
 });
 
 test("rmPROTO's zero governance gap reads as a reading, not as missing", async ({ page }) => {
@@ -348,7 +354,7 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   // No router on Base: the target is the published policy's, 95% for rmUSDC,
   // and the gap is actual against it. Recommended and the governance gap,
   // which the legend does not carry, are the facts under the ring.
-  await expect(page.locator("#allocation .rr-legend__head")).toHaveText("VaultActualTargetDrift");
+  await expect(page.locator("#allocation .rr-legend__head")).toHaveText("SleeveActualTargetDrift");
   await expect(layerRow(page, "Target")).toHaveText("95%");
   await expect(layerRow(page, "Actual")).toHaveText("100%");
   await expect(gapOf(page)).toHaveText("Drift +5 pp");
@@ -717,7 +723,6 @@ test("devnet-no-recommendation: Recommended and the governance gap are missing, 
   await expect(thisVault(page).locator(".rr-legend__was")).toHaveText("Target 5%");
   await expect(layerRow(page, "Actual")).toHaveText("5%");
   await expect(gapOf(page).locator(".alp__mv")).toHaveCount(0);
-  await expect(page.locator("#allocation .rr-dl")).toContainText("No recommendation published");
 });
 
 test("devnet-no-recommendation on /allocation: Recommended and the governance gap are missing, the flow gap is not", async ({ page }) => {
@@ -809,7 +814,7 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expect(hold.locator(".rr-sources")).toHaveCount(0);
   await expect(hold.locator(".rr-stat__v")).toHaveText("$100,000");
   await expect(hold.locator(".rr-stat__sub").first()).toHaveText("Staging devnet · Sep 17, 2026");
-  await expect(hold.locator("#tvl .rr-subhead__h")).toHaveText("TVL over time");
+  await expect(hold.locator("#tvl .rr-subhead__h")).toHaveText("TVL");
   await expect(hold.locator("#tvl polyline")).toHaveCount(1);
   await expect(hold).not.toContainText("PortfolioRouter");
 
@@ -859,7 +864,7 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expect(hold.locator("tr.rr-in th").filter({ hasText: /^USDC$/ })).toHaveCount(0);
 
   // The chart stacks the four vaults with the target drawn over them.
-  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL over time", "Vaults over time"]);
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Vaults over time"]);
   await expect(hold.locator(".rr-area__legend li")).toHaveText([...SYMBOLS, "Target"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(3);
@@ -928,7 +933,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
   // A line needs two readings: both charts' frames say there is one.
-  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL over time", "Vaults over time"]);
+  await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Vaults over time"]);
   await expect(hold.locator(".rr-area .rr-empty__t")).toHaveText(["One reading so far", "One reading so far"]);
   await expect(hold.locator(".rr-area__legend")).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
@@ -997,7 +1002,6 @@ for (const mode of ["devnet", "base"] as const) {
     await navigate(page, `/vault/${slug}`);
     await expect(page.locator("h1")).toHaveText(SYMBOLS[i]);
     await expect(page.locator("#holdings .rr-stat__v")).not.toHaveText("—");
-    expect(await paintOf(page, ".cv--detail .rr-head .rr-dot", "backgroundColor")).toEqual([CATEGORICAL_RGB[i]]);
     expect(new Set(await paintOf(page, "#allocation .rr-legend__row.is-active > i, .rr-holdings .rr-share i", "backgroundColor")))
       .toEqual(new Set([CATEGORICAL_RGB[i]]));
     if (mode === "devnet") expect(await paintOf(page, "#tvl polyline", "stroke")).toEqual([CATEGORICAL_RGB[i]]);
@@ -1103,9 +1107,10 @@ for (const width of [1440, 390]) {
       await expect(page.locator("#holdings .rr-stat__v")).toHaveText(mode === "devnet" ? "$72,000" : usd2(SAVED_BASE.tvlUsd));
       await expect(page.locator(".rr-holdings")).toBeVisible();
       expect(await sideways(page)).toBe(0);
-      // On a phone the vault's Holdings keeps Amount and Share and drops Type.
+      // On a phone the vault's Holdings keeps Amount, Price, Value and Share
+      // and drops Type.
       expect(await page.locator(".rr-holdings thead th").evaluateAll((els) => els.map((e) => getComputedStyle(e).display)))
-        .toEqual(width === 390 ? ["table-cell", "none", "table-cell", "table-cell", "table-cell"] : Array(5).fill("table-cell"));
+        .toEqual(width === 390 ? ["table-cell", "none", "table-cell", "table-cell", "table-cell", "table-cell"] : Array(6).fill("table-cell"));
 
       await navigate(page, "/swarm/subjects/robotmoney-vault");
       await subjectLoaded(page);

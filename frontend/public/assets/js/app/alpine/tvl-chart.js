@@ -1,8 +1,9 @@
-// TVL over time: a vault's value, or the vault stack's combined value, as one
-// line (RM-121). A vault's page and the Robot Money Vault subject draw it the
-// same way. Seven readings or more draw a line, broken wherever readings are
-// more than three days apart (lib/vault-data.js historyModel); fewer draw as
-// points.
+// TVL: a vault's value, or the vault stack's combined value, over time
+// (RM-121), the figure the team tracks first. A vault's page and the Robot
+// Money Vault subject draw it the same way: an AREA, the value as mass on the
+// axis, with a crisp line along its top and a flat, faint fill (no gradient).
+// Seven readings or more draw it, broken wherever readings are more than
+// three days apart (lib/vault-data.js historyModel); fewer draw as points.
 //
 // A mixin. The host supplies `tvlPoints()` ([{t, tvlUsd}]), `tvlAsOf()` (the
 // read's time, so readings that stopped early show as the gap they are),
@@ -30,24 +31,35 @@ export function tvlChart() {
       const host = /** @type {any} */ (this);
       return historyModel(host.tvlPoints() ?? [], host.tvlAsOf());
     },
-    tvlCount() {
-      const n = this.tvl().points.length;
-      return n === 1 ? "1 reading" : `${n} readings`;
+    // How it moved across the window, beside the title: the change in dollars
+    // and in percent since the first reading. Empty with fewer than two.
+    tvlChange() {
+      const pts = this.tvl().points;
+      if (pts.length < 2) return "";
+      const a = pts[0].value;
+      const b = pts[pts.length - 1].value;
+      const d = b - a;
+      const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+      const pct = a > 0 ? ` · ${sign}${Math.abs((d / a) * 100).toFixed(1)}%` : "";
+      return `${sign}${fmtUsd(Math.abs(d))}${pct} since ${tickDate(pts[0].t, fmtDate(pts[0].t).slice(-4) === fmtDate(pts[pts.length - 1].t).slice(-4))}`;
     },
-    // One polyline per unbroken run; a line never bridges a gap.
+    // One area and one edge per unbroken run; neither bridges a gap.
     tvlSvg() {
       const m = this.tvl();
       if (m.sparse) return "";
       const host = /** @type {any} */ (this);
       const color = host.tvlColor() ?? "";
       const mark = typeof host.tvlMark === "function" ? host.tvlMark() : "series";
-      const lines = m.segments.filter((s) => s.length > 1).map((seg) => {
-        const pts = seg.map((p) => `${(p.x * 1000).toFixed(1)},${(100 - p.y * 100).toFixed(2)}`).join(" ");
-        return `<polyline${mark ? ` data-mark="${mark}"` : ""} points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"`
-          + ` stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+      const attr = mark ? ` data-mark="${mark}"` : "";
+      const runs = m.segments.filter((s) => s.length > 1).map((seg) => {
+        const xy = seg.map((p) => `${(p.x * 1000).toFixed(1)},${(100 - p.y * 100).toFixed(2)}`);
+        const floor = `${(seg[seg.length - 1].x * 1000).toFixed(1)},100 ${(seg[0].x * 1000).toFixed(1)},100`;
+        return `<polygon${attr} points="${xy.join(" ")} ${floor}" fill="${color}" fill-opacity="0.14" stroke="none"/>`
+          + `<polyline${attr} points="${xy.join(" ")}" fill="none" stroke="${color}" stroke-width="1.75"`
+          + ` stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
       });
-      const grid = `<line x1="0" x2="1000" y1="50" y2="50" stroke="rgba(237,239,241,0.1)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
-      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="overflow:visible" aria-hidden="true" focusable="false">${grid}${lines.join("")}</svg>`;
+      const grid = [50].map((y) => `<line x1="0" x2="1000" y1="${y}" y2="${y}" stroke="rgba(237,239,241,0.08)" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
+      return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="overflow:visible" aria-hidden="true" focusable="false">${grid}${runs.join("")}</svg>`;
     },
     // Points instead of a line: every reading of a sparse series, and a
     // reading that stands alone between two gaps.
@@ -90,7 +102,7 @@ export function tvlChart() {
       const pts = this.tvl().points;
       if (i == null || !pts[i]) return null;
       const p = pts[i];
-      return { left: p.x * 100, date: fmtDate(p.t), value: fmtUsd(p.value) };
+      return { left: p.x * 100, top: (1 - p.y) * 100, date: fmtDate(p.t), value: fmtUsd(p.value) };
     },
     /** @param {PointerEvent} ev */
     tvlMove(ev) {

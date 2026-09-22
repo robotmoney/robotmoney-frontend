@@ -1638,6 +1638,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-subhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin: 0 0 1rem; }
 .rr-subhead__h { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.0625rem; line-height: 1.2;
   letter-spacing: -0.005em; text-transform: uppercase; color: var(--color-text); }
+/* A part of a block (Positions' "Over time"): the block title's face a step
+   smaller and quieter, so it reads as inside the block, not beside it. */
+.rr-subhead__h--minor { font-size: 0.8125rem; color: var(--color-text-soft); }
 /* One sub-heading style inside every section: the mono label. The outcome of
    a recommendation, the synthesis, the market reading, a take's call and the
    state of its signatures all open the same way. */
@@ -2115,6 +2118,9 @@ a.sv__vfy { text-decoration: none; }
 .rr-meta__i .alp__mv i { width: auto; height: auto; border-radius: 0; }
 /* A sparse series: one square point per reading, no line between them. */
 .rr-area__pt { position: absolute; width: 0.4375rem; height: 0.4375rem; transform: translate(-50%, -50%); pointer-events: none; }
+/* The reading under the crosshair, on the line: a touch larger, ringed in the
+   page ground so it stands off the fill. */
+.rr-area__pt.is-on { width: 0.5625rem; height: 0.5625rem; box-shadow: 0 0 0 2px var(--color-void); }
 /* /allocation's four vaults: up to seven columns, which scroll inside
    .rr-tablewrap on a narrow screen rather than squeezing the gaps onto two
    lines. A phone drops the .rr-vaults__wide columns instead (the two gaps),
