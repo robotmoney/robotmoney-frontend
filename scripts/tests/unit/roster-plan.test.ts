@@ -251,7 +251,11 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // satisfied by a seed that hardcoded slugs. The ids above are this test's
     // own fixtures — planAdoptions itself matches on NAME and never reads the
     // allowlist's key.
-    expect([...SMOKE_MEMBERS].map((m) => m.handle).sort()).toEqual(["athena", "noop-analyst", "robot-money"]);
+    // The allowlist itself names FOUR agents (themis, the judge, is the
+    // fourth) — this fixture only seats three because themis carries no
+    // committed dev key (scripts/lib/swarm/fixtures/persona-keys.json), so
+    // personaIdentity() rejects it here regardless of the allowlist.
+    expect([...SMOKE_MEMBERS].map((m) => m.handle).sort()).toEqual(["athena", "noop-analyst", "robot-money", "themis"]);
     expect([...SMOKE_MEMBERS].some((m) => "id" in m)).toBe(false);
   });
 

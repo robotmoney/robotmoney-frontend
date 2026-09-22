@@ -29,6 +29,16 @@ Add any of these to a boot:
   all of its keys so it is safe to work with. A twin is itself a local database,
   so it is used on its own, not with `--local`. You can `--migrate` a twin; you
   cannot `--seed` it, because it is already full.
+- **`--agents <name,...>`** — start these committee agents. The only names it
+  accepts are `athena`, `noop-analyst`, `robot-money` and `themis` (the
+  judge) — the four the operator runs, not an independently onboarded
+  person's. Every other real member runs their own agent elsewhere; smoke
+  never starts one on their behalf. On a remote boot there is no default —
+  state exactly who you want running, and a name whose real key is missing
+  from `$HOME/.env` refuses the boot rather than starting without it. On
+  `--twin` it defaults to all four, each signing with a fresh key generated
+  for that boot alone (see Credentials) — narrow it with the same flag if a
+  rehearsal needs fewer.
 
 ## Examples
 
@@ -36,9 +46,11 @@ Add any of these to a boot:
 |---|---|
 | Local dev from an empty database | `bun run smoke --local --seed` |
 | Restart a local database from a saved volume | `bun run smoke --local <path>` |
-| Work against a copy of the real data | `bun run smoke --twin` |
+| Work against a copy of the real data, full committee | `bun run smoke --twin` |
+| Rehearse with just the judge | `bun run smoke --twin --agents themis` |
 | Restart production, changing nothing | `SMOKE_PROJECT=rm_prod bun run smoke --no-tui` |
 | Apply new migrations to production | `SMOKE_PROJECT=rm_prod bun run smoke --migrate --no-tui` |
+| Run the in-house committee on production | `SMOKE_PROJECT=rm_prod bun run smoke --agents athena,noop-analyst,robot-money,themis --no-tui` |
 
 A production run pins the stack name with `SMOKE_PROJECT=rm_prod`, so it restarts
 the existing stack instead of starting a new one, and passes `--no-tui` so the
@@ -55,6 +67,12 @@ throwaway container credentials.
 that one run and never writes it to a file or an environment variable. Nothing
 else a boot does needs a privileged credential, so a plain restart needs only
 the ordinary application roles.
+
+`--agents` needs each named agent's real signing key, one `$HOME/.env` line
+per name (`.env.example`'s "In-house agent identities"), never the smoke
+fixture's committed dev keys. `--twin` needs none of this: it never reads
+those lines, and mints a fresh key locally for every agent it runs — a twin
+never signs with a real key, however many agents it starts.
 
 ## Supporting commands
 

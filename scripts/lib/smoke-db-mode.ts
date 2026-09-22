@@ -98,6 +98,19 @@ export const MIGRATE_FLAG = "--migrate";
  */
 export const SEED_FLAG = "--seed";
 
+/** The only committee agents smoke may start by name — the four in-house
+ *  seats (`athena`, `robot-money`, `themis` the judge — the current
+ *  `LIVE_ROSTER`, backend/src/swarm/roster-seed.ts — plus `noop-analyst`,
+ *  the v0 archive's `woon`, a real permanent production member since that
+ *  import, not a fixture). Every other real member runs their own agent
+ *  independently; smoke never starts or seats one on their behalf. See
+ *  scripts/lib/smoke-mode.ts's SMOKE_MEMBERS for the fuller history. */
+export const KNOWN_AGENT_HANDLES = ["athena", "robot-money", "noop-analyst", "themis"] as const;
+export type AgentHandle = (typeof KNOWN_AGENT_HANDLES)[number];
+
+/** `--agents <name,...>` — comma-separated, no spaces. */
+export const AGENTS_FLAG = "--agents";
+
 /**
  * Use a LOCAL database container instead of the remote database in `$HOME/.env`.
  *
@@ -238,6 +251,7 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: TWIN_FLAG, arity: 0 as const }),
   Object.freeze({ flag: MIGRATE_FLAG, arity: 0 as const }),
   Object.freeze({ flag: SEED_FLAG, arity: 0 as const }),
+  Object.freeze({ flag: AGENTS_FLAG, arity: 1 as const }),
   Object.freeze({ flag: BACKUP_DIR_FLAG, arity: 1 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
@@ -387,12 +401,35 @@ export function requestsMigrate(argv: readonly string[]): boolean {
   return argv.slice(2).includes(MIGRATE_FLAG);
 }
 
-/** Does this argv opt an external boot into seeding (the scenario initializer
- *  and its preflight)? A bare switch, like requestsMigrate(). Orthogonal to the
- *  scenario: `--seed` runs whatever `--smoke` selected (archive) or did not
- *  (the simulation/demo seed of a blank database). */
+/** Does this argv opt a boot into seeding (the simulation initializer and its
+ *  preflight)? A bare switch, like requestsMigrate(). Refused on `--twin`
+ *  (above) — a twin is already full, and adopts it through `shouldSeed()`
+ *  below rather than through this flag. */
 export function requestsSeed(argv: readonly string[]): boolean {
   return argv.slice(2).includes(SEED_FLAG);
+}
+
+/**
+ * Which agents this argv asks to run, or undefined when the flag is absent.
+ *
+ * THROWS on an unknown name rather than silently starting nothing or
+ * ignoring the typo — the same fail-loud rule every other flag here follows.
+ * Deliberately does not decide a DEFAULT: a remote boot has none (the
+ * operator states the list every time — see smoke.README.md), and a twin's
+ * default-to-all-four is a fact about twin, decided at the call site, not
+ * about argv parsing.
+ */
+export function requestsAgents(argv: readonly string[]): AgentHandle[] | undefined {
+  const raw = valueOf(argv, AGENTS_FLAG);
+  if (raw === undefined) return undefined;
+  const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = names.filter((n) => !(KNOWN_AGENT_HANDLES as readonly string[]).includes(n));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${AGENTS_FLAG}: unknown agent(s) ${unknown.join(", ")}. Known agents: ${KNOWN_AGENT_HANDLES.join(", ")}.`,
+    );
+  }
+  return names as AgentHandle[];
 }
 
 /**

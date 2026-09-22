@@ -53,16 +53,12 @@ export interface ScenarioMember {
   bias: number;
   present: boolean;
 }
-export type ScenarioInitializer = "simulation" | "archive";
-export type ScenarioAssertion = "smoke" | "archive-continuity";
 export interface ScenarioPlan {
   kind: "smoke" | "smoke";
-  initializer: ScenarioInitializer;
   migrateEnv: Readonly<Record<string, string>>;
   migrateScriptArgs: readonly string[];
   subjects: readonly ScenarioSubject[];
   members: readonly ScenarioMember[];
-  assertion: ScenarioAssertion;
   runsNewcomerOnboarding: boolean;
 }
 
@@ -84,10 +80,10 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
 
-/** The boot-step names the TUI/step list carries, per mode. Smoke runs ONE
- *  bootstrap step (the production orchestrator); the smoke runs its two. */
+/** The boot-step names the TUI/step list carries, per mode: a twin (`smoke`)
+ *  starts its requested agents; everything else runs the simulation seed. */
 export function bootstrapStepNames(smoke: boolean): readonly string[] {
-  return smoke ? ["archive restore"] : ["simulation seed"];
+  return smoke ? ["start agents"] : ["simulation seed"];
 }
 
 /**
@@ -104,52 +100,56 @@ export const SMOKE_SUBJECTS: readonly { id: string; name: string }[] = Object.fr
 ]);
 
 /**
- * The three personas the archive restores, by public HANDLE and display name —
- * the ONLY members a smoke session may seat.
+ * The four in-house committee agents — the ONLY members a twin session may
+ * seat by name, and the only names `--agents` accepts (see
+ * scripts/lib/smoke-db-mode.ts's AGENTS_FLAG). Every other real committee
+ * member runs their own agent independently; smoke never seats or starts one
+ * on their behalf.
  *
- * This is an allowlist, not a cap: a persistent database can carry members from
- * an earlier smoke boot or from a real onboarding, and a smoke boot must seat
- * NONE of them. Their names are the archive's own (the archive's `woon` is
- * displayed as "Noop analyst" after import), so the list is a fact about the
- * archive rather than a preference.
+ * Three of the four (`athena`, `robot-money`, `themis`) are
+ * `backend/src/swarm/roster-seed.ts`'s `LIVE_ROSTER`, every one `operator:
+ * "robotmoney"`. `noop-analyst` is NOT a smoke-only fixture or an archive
+ * leftover to retire: it is `woon`, one of the four subjects/personas the
+ * (now-retired) v0 archive import wrote into REAL production as a permanent
+ * row, and it has been a real, currently-active in-house committee member
+ * ever since — production runs it same as the other three.
  *
- * HANDLE, NOT ID (issue #685). These used to be the ids `athena`, `robotmoney`
- * and `woon` — the archive's own slugs, which the importer wrote straight into
- * the primary key. Member ids are generated per deployment now
- * (`crypto.randomUUID()`), so a smoke boot has no way to know one in advance
- * and a hardcoded slug matches nothing: the allowlist has to name members by
- * the one key that IS stable across deployments. The handles are derived from
- * the display names by the single `slugifyMemberName` algorithm, which is why
- * "Robot Money" is `robot-money` and not `robotmoney`, and why the archive's
- * `woon` is `noop-analyst` — leaving the bare `woon` handle for the member
- * actually named Woon.
+ * This is an allowlist, not a cap: a persistent database can carry members
+ * from an earlier boot or from a real onboarding, and a twin session must
+ * seat NONE of them by this name — only the four named here.
+ *
+ * HANDLE, NOT ID (issue #685). Member ids are generated per deployment
+ * (`crypto.randomUUID()`), so a boot has no way to know one in advance and a
+ * hardcoded id matches nothing: the allowlist has to name members by the one
+ * key that IS stable across deployments. Handles are derived from display
+ * names by the single `slugifyMemberName` algorithm, which is why "Robot
+ * Money" is `robot-money` and not `robotmoney`, and why the archive's `woon`
+ * is `noop-analyst` — leaving the bare `woon` handle for the member actually
+ * named Woon.
  */
 export const SMOKE_MEMBERS: readonly { handle: string; name: string }[] = Object.freeze([
   Object.freeze({ handle: "athena", name: "Athena" }),
   Object.freeze({ handle: "robot-money", name: "Robot Money" }),
   Object.freeze({ handle: "noop-analyst", name: "Noop analyst" }),
+  Object.freeze({ handle: "themis", name: "Themis" }),
 ]);
 
 export function scenarioPlan(smoke: boolean): ScenarioPlan {
   return smoke
     ? {
         kind: "smoke",
-        initializer: "archive",
         migrateEnv: SMOKE_MIGRATE_ENV,
         migrateScriptArgs: SMOKE_MIGRATE_SCRIPT_ARGS,
         subjects: SMOKE_SUBJECTS,
         members: [],
-        assertion: "archive-continuity",
         runsNewcomerOnboarding: false,
       }
     : {
         kind: "smoke",
-        initializer: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
         migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
         subjects: DEMO_SUBJECTS,
         members: DEMO_MEMBERS,
-        assertion: "smoke",
         runsNewcomerOnboarding: true,
       };
 }
@@ -278,14 +278,19 @@ export function adoptRestoredRoster(
   return [...seated.map((m) => ({ ...m })), ...adopted];
 }
 
-// ── Judge role live-stack coverage on a `--smoke` boot (issue #845) ─────────
-// `--db smoke-twin` requires `--smoke`, so smoke-main.ts's `process.env.CI &&
-// smokeMode` branch — not scripts/lib/swarm/session.ts's `main()` — is what a
-// twin boot actually runs. `noop-analyst` is one of the three restored
-// personas (SMOKE_MEMBERS), selected by its stable HANDLE (never by roster
-// position, which the DB query does not promise).
+// ── Judge role live-stack coverage on a `--twin` boot (issue #845) ──────────
+// `--twin` implies its own scenario, so smoke-main.ts's `process.env.CI &&
+// dataPath.kind === "smoke-twin"` branch — not scripts/lib/swarm/session.ts's
+// `main()` — is what a twin boot actually runs. `noop-analyst` is granted the
+// role for this coverage exercise specifically — it is NOT production's real
+// standing judge (that is `themis`, SMOKE_MEMBERS) — chosen because it is
+// guaranteed present and is not otherwise scheduled to hold the role, so
+// exercising grant/flip/assert/restore here never collides with `themis`'s
+// real assignment. Selected by its stable HANDLE (never by roster position,
+// which the DB query does not promise).
 
-/** The persona granted the judge role for issue #845's smoke-twin coverage. */
+/** The persona granted the judge role for issue #845's smoke-twin coverage —
+ *  a coverage-exercise choice, not production's real standing judge. */
 export const JUDGE_COVERAGE_HANDLE = "noop-analyst";
 
 /** The restored persona to grant the judge role to; throws on a stale/mismatched restore rather than silently skipping. */

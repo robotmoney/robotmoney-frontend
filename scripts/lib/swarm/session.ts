@@ -16,7 +16,6 @@ import { resolveAgentModel } from "../model-registry.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
 import { resolveSmokeCadence, swarmWindowMinutes } from "../smoke-schedule.ts";
 import type { SmokeCadence } from "../smoke-schedule.ts";
-import type { ScenarioInitializer } from "../smoke-mode.ts";
 import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
 // The one builder for a compose prefix — argv topology AND the `--env-file`
@@ -1494,7 +1493,7 @@ export async function runSession(
     // wrote simulation fixtures over the restored subjects: exactly what the
     // block above says a continuity boot must never do. Stating it is now a
     // compile-time obligation.
-    initializer: ScenarioInitializer;
+    initializer: "simulation" | "adopt";
     // The CADENCE PROFILE this invocation resolved (scripts/lib/smoke-schedule.ts).
     // REQUIRED, for the same reason `initializer` is: the submission window is a
     // cadence timing, and a default would make the six-hour production value the

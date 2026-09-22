@@ -9,18 +9,17 @@
 //
 //   EMPTY     — a genuinely fresh database (no BASE TABLEs in `public`, checked
 //               before the migrate step that would create them). The boot
-//               bootstraps it: migrate, seed, archive restore.
+//               bootstraps it: migrate, then seed.
 //   POPULATED — a working production database. It got that way either through
 //               a manual restore (pg_restore of a .dump) or because a local
-//               postgres container kept its prior volume. An ARCHIVE
-//               (production-shaped) boot ADOPTS it: the same migrate + seed
-//               path runs, and every writer on that path is idempotent and
-//               deduplicated — it fills in what is missing (new migrations,
-//               missing schedule rows, absent archive rows) and never
-//               overwrites rows that already exist. Where an existing row
-//               differs from what the seed would have written, the existing
-//               row WINS and the difference is reported as drift, not an
-//               error (see v0-seed-bootstrap.ts).
+//               postgres container kept its prior volume. An ADOPT boot (a
+//               production-shaped `--db external` or `--db smoke-twin`) treats
+//               this as expected: the same migrate + seed path runs, and every
+//               writer on that path is idempotent and deduplicated — it fills
+//               in what is missing and never overwrites rows that already
+//               exist. Where an existing row differs from what the seed would
+//               have written, the existing row WINS and the difference is
+//               reported as drift, not an error (see v0-seed-bootstrap.ts).
 //
 // This used to refuse the POPULATED case outright, on the assumption that a
 // populated remote could only mean a mistakenly-targeted production server.
@@ -30,11 +29,11 @@
 // writers themselves (ON CONFLICT DO NOTHING, insert-or-report-drift), where it
 // also protects the resumed-volume case the old refusal never covered.
 //
-// THE REFUSAL THAT REMAINS. A SIMULATION boot (plain `bun smoke`) against a
-// populated database is still refused: its smoke fixtures overwrite by design
-// (ON CONFLICT DO UPDATE is how corrected smoke copy reaches a smoke stack), so
+// THE REFUSAL THAT REMAINS. A SIMULATION boot (`--seed`, no `--twin`) against a
+// populated database is still refused: its demo fixtures overwrite by design
+// (ON CONFLICT DO UPDATE is how corrected demo copy reaches a demo stack), so
 // "idempotent and deduplicated" does not hold on that path. The initializer
-// arrives as --initializer=archive|simulation; when the flag is missing we
+// arrives as --initializer=adopt|simulation; when the flag is missing we
 // assume simulation, so the strict branch is the one a forgotten parameter
 // lands in — the same fail-closed shape session.ts uses for the same reason.
 //
@@ -114,7 +113,7 @@ export interface TableCensus {
   rows: number;
 }
 
-export type BootInitializer = "archive" | "simulation";
+export type BootInitializer = "adopt" | "simulation";
 
 export interface PreflightResult {
   mode: "bootstrap" | "adopt" | "refuse";
@@ -145,10 +144,10 @@ export interface PreflightResult {
 }
 
 /** Parse --initializer=… out of argv. Missing or unrecognised ⇒ simulation —
- *  fail-closed, so only an explicit archive boot can adopt a populated DB. */
+ *  fail-closed, so only an explicit adopt boot can adopt a populated DB. */
 export function parseInitializer(argv: readonly string[]): BootInitializer {
   for (const a of argv) {
-    if (a === "--initializer=archive") return "archive";
+    if (a === "--initializer=adopt") return "adopt";
   }
   return "simulation";
 }
@@ -185,7 +184,7 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
     };
   }
   return {
-    mode: initializer === "archive" ? "adopt" : "refuse",
+    mode: initializer === "adopt" ? "adopt" : "refuse",
     tables: count,
     census: await censusSample(db),
     handleNamespaceConflicts: await handleNamespaceConflicts(db),
@@ -201,7 +200,7 @@ export async function classifyDatabase(initializer: BootInitializer, db: Preflig
  */
 export function reportLines(target: string, r: PreflightResult): string[] {
   if (r.mode === "bootstrap") {
-    return [`[db-preflight] ${target}: empty (no tables in public) — bootstrapping (migrate + seed + archive restore)`];
+    return [`[db-preflight] ${target}: empty (no tables in public) — bootstrapping (migrate + seed)`];
   }
   const lines =
     r.mode === "adopt"
@@ -213,8 +212,8 @@ export function reportLines(target: string, r: PreflightResult): string[] {
         ]
       : [
           `[db-preflight] REFUSING a simulation boot: ${target} already has ${r.tables} table(s) in public.`,
-          `[db-preflight] Demo/simulation fixtures overwrite by design, so a populated database`,
-          `[db-preflight] can only be adopted by a production-shaped (archive) boot: bun run smoke:archive.`,
+          `[db-preflight] Demo/simulation fixtures overwrite by design and only ever want an empty`,
+          `[db-preflight] database — use --twin, which adopts a populated database automatically.`,
           `[db-preflight] Nothing has been written.`,
         ];
   const populated = r.census.filter((s) => s.rows > 0);

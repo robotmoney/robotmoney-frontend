@@ -84,17 +84,18 @@ export const DB_PREFLIGHT_ARGV: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The full preflight argv for a boot with a known scenario initializer.
+ * The full preflight argv for a boot with a known initializer.
  *
  * The initializer travels with the question because the answer depends on it:
- * a populated database may be ADOPTED by an "archive" (production-shaped) boot,
- * whose whole seed path is idempotent and non-clobbering — but never by a
- * "simulation" boot, whose smoke fixtures overwrite by design (their ON CONFLICT
- * DO UPDATE is how corrected smoke copy reaches a smoke stack). db-preflight.ts
- * refuses that combination, and treats a missing flag as simulation so the
- * strict branch is the one you get by forgetting the parameter.
+ * a populated database may be ADOPTED by an "adopt" (`--twin`, or an explicit
+ * production restore) boot, whose whole seed path is idempotent and
+ * non-clobbering — but never by a "simulation" (`--seed`) boot, whose demo
+ * fixtures overwrite by design (their ON CONFLICT DO UPDATE is how corrected
+ * demo copy reaches a demo stack). db-preflight.ts refuses that combination,
+ * and treats a missing flag as simulation so the strict branch is the one you
+ * get by forgetting the parameter.
  */
-export function dbPreflightArgv(initializer: "archive" | "simulation"): string[] {
+export function dbPreflightArgv(initializer: "adopt" | "simulation"): string[] {
   return [...DB_PREFLIGHT_ARGV, `--initializer=${initializer}`];
 }
 

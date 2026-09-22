@@ -1108,15 +1108,12 @@ async function main(): Promise<void> {
   async function initializeScenario(): Promise<void> {
     const step = bootstrapStepNames(smokeMode)[0]!;
     setStep(state, step, "running");
-    if (scenario.initializer === "archive") {
-      // Stack.up already migrated this database. The production initializer
-      // restores the archive + EDGAR data without running migrate a second time.
-      await stack.composeAsync(
-        ["run", "--rm", "--no-deps", "-e", "ANALYTICS_API_URL=http://api:8787", "api", "bun", "run", "scripts/prod-bootstrap.ts", "--already-migrated"],
-        "archive initializer (already migrated)",
-        { stdout: outFd, stderr: errFd },
-      );
-      log("archive and restored IC rows initialized");
+    if (dataPath.kind === "smoke-twin") {
+      // A twin is restored full — there is nothing for an initializer to
+      // create. The production bootstrap script's archive-adopt pipeline
+      // that used to run here is retired from smoke entirely; the requested
+      // agents are started by the live-session block below, not here.
+      log("twin already has real, full data — no initializer to run");
     } else {
       // Simulation data only. Projects/schedules were selected on the single
       // migrate call above; this producer-owned seed intentionally does not
@@ -1136,7 +1133,7 @@ async function main(): Promise<void> {
 
   async function classifyDatabase(): Promise<void> {
     setStep(state, DB_PREFLIGHT_STEP, "running");
-    if (seeds) { await stack.composeAsync(dbPreflightArgv(scenario.initializer), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
+    if (seeds) { await stack.composeAsync(dbPreflightArgv(dataPath.kind === "smoke-twin" ? "adopt" : "simulation"), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
     if (dataPath.kind === "external" && !requestsMigrate(process.argv)) refuseIfSchemaBehind(stack.compose, log);
     setStep(state, DB_PREFLIGHT_STEP, "done");
   }
@@ -1149,23 +1146,22 @@ async function main(): Promise<void> {
     initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
   }));
 
-  if (process.env.CI && smokeMode) {
-    // ── CI SMOKE: the bounded end-to-end verdict (issue #537) ──────────────
-    // A production-shaped boot's checks are NOT the smoke's checks. The smoke's
-    // CI block below drives two sessions with the smoke's invented characters,
-    // exercises the starter agent, and asserts the smoke's LIVE steady state —
-    // none of which a smoke stack has. What a smoke boot must prove is exactly
-    // three things, and it proves them against the real HTTP API:
-    //   1. the production bootstrap restored the archive;
+  if (process.env.CI && dataPath.kind === "smoke-twin") {
+    // ── CI TWIN: the bounded end-to-end verdict (issue #537) ───────────────
+    // A production-shaped boot's checks are NOT the demo's checks. This block
+    // drives one live session with the restored committee, exercises the
+    // judge role, and asserts the twin's LIVE steady state — none of which a
+    // demo stack has. What a twin boot must prove, against the real HTTP API:
+    //   1. the restore brought over real, queryable committee data;
     //   2. one NEW live swarm session completes with the restored personas;
     //   3. the imported history is still served with #498's archival semantics.
-    // Session execution is the same runSession() used by smoke and standing mode;
+    // Session execution is the same runSession() used by twin and standing mode;
     // only its typed subjects/members input differs.
-    console.log("\n[smoke] smoke: running one live swarm session with the restored personas…");
+    console.log("\n[smoke] twin: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, automationToken);
-    if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
+    if (roster === null) throw new Error("twin restored no readable IC roster");
     const members = adoptRestoredRoster(scenario, roster);
     const rail = {
       repoRoot,
@@ -1178,25 +1174,25 @@ async function main(): Promise<void> {
       automationToken,
     };
 
-    // Judge role + judge mode live-stack coverage (issue #845): this CI SMOKE
-    // block is the ONLY thing `--db smoke-twin` runs (it REQUIRES `--smoke`),
-    // a different path from `!smokeMode` below, so session.ts `main()`'s own
+    // Judge role + judge mode live-stack coverage (issue #845): this CI TWIN
+    // block is the ONLY thing `--db smoke-twin` runs, a different path from
+    // `dataPath.kind !== "smoke-twin"` below, so session.ts `main()`'s own
     // coverage never reaches it — see smoke-mode.ts's judgeCoverageCandidate/
     // withMemberAbsent for why and how the candidate is chosen.
     const judgeCandidate = judgeCoverageCandidate(roster);
     await session.runJudgeRoleCoverage(judgeCandidate.id, automationToken, () =>
       session.runSession(scenario.subjects[0]!, 1, {
-        rail, members: withMemberAbsent(members, judgeCandidate.id), initializer: scenario.initializer, cadence,
+        rail, members: withMemberAbsent(members, judgeCandidate.id), initializer: "adopt", cadence,
       }));
 
-    console.log("[smoke] smoke: asserting restored subjects, personas, live take and archival history…");
+    console.log("[smoke] twin: asserting restored subjects, personas, live take and archival history…");
     await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "smoke e2e assertions");
 
-    console.log("\n[smoke] CI smoke — scenario assertions passed");
+    console.log("\n[smoke] CI twin — scenario assertions passed");
   }
 
-  if (process.env.CI && !smokeMode) {
+  if (process.env.CI && dataPath.kind !== "smoke-twin") {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
     console.log("\n[smoke] running swarm session…");
     // RM_ALLOW_INSECURE=1: docker-compose.smoke.yml runs the api container with
@@ -1266,15 +1262,16 @@ async function main(): Promise<void> {
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
 
     // PRODUCT invariants, via the same driver a cutover runs (scripts/verify-live.ts).
-    // tier=full ONLY for a smoke-twin boot: the twin-roster and judge legs
-    // assert what a TWIN owes (every restored member seated, an ENFORCE
-    // judgement with a receipt). The CI e2e is NOT a twin — its simulation
-    // roster carries deliberate no-shows (draco, themis) and fixtures
-    // (cross-role-test, starter-rest) that never file takes, and its judge
-    // coverage is shadow-only (issue #845), so those legs FAIL there by
-    // construction. A demo boot runs tier=readonly — the swarm pipeline legs
-    // (published sessions, lifecycle completeness, D42 recompute) still assert.
-    const verifyTier = dataPath.kind === "smoke-twin" ? "full" : "readonly";
+    // tier=full is ONLY ever for a smoke-twin boot (the twin-roster and judge
+    // legs assert what a TWIN owes: every restored member seated, an ENFORCE
+    // judgement with a receipt) — and this branch is never reached by one
+    // (twin always takes the CI-twin block above). This demo boot's
+    // simulation roster carries deliberate no-shows (draco, themis) and
+    // fixtures (cross-role-test, starter-rest) that never file takes, and its
+    // judge coverage is shadow-only (issue #845), so those legs FAIL here by
+    // construction — tier=readonly still asserts the swarm pipeline legs
+    // (published sessions, lifecycle completeness, D42 recompute).
+    const verifyTier = "readonly";
     console.log(`[smoke] verifying product invariants (verify-live, tier=${verifyTier})…`);
     await run(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", verifyTier], repoRoot,
       { ...process.env } as Record<string, string>, "live product verification");
@@ -1623,8 +1620,12 @@ async function main(): Promise<void> {
           members: sessionMembers, cadence, twin: twinRoster,
           // The STANDING loop needs this as much as the first session does.
           // Omitting it made runSession fall back to "simulation" and write
-          // smoke fixtures over archive-restored subjects — see session.ts.
-          initializer: scenario.initializer,
+          // demo fixtures over adopted, restored subjects — see session.ts.
+          // Keyed on ephemeral-ness, not twin-ness: external (a real,
+          // persistent production database) and twin (a real restored copy)
+          // both hold real subjects that must never be overwritten with
+          // fiction — only a local demo database is fictional to begin with.
+          initializer: dataPath.kind === "ephemeral" ? "simulation" : "adopt",
           onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;

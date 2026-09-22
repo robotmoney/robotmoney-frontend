@@ -2,15 +2,15 @@
 // mode, so the validator/judge flow had unit and DB-integration coverage
 // only, never a booted live stack.
 //
-// THE TWO CALLERS. `--db smoke-twin` REQUIRES `--smoke` (smoke-db-mode.ts),
-// so it runs a MATERIALLY DIFFERENT branch than plain `bun smoke` /
-// `bun smoke -- --db external`: the `process.env.CI && smokeMode` block in
+// THE TWO CALLERS. `--twin` implies its own scenario (smoke-db-mode.ts), so
+// it runs a MATERIALLY DIFFERENT branch than a plain remote or `--local`
+// boot: the `process.env.CI && dataPath.kind === "smoke-twin"` block in
 // scripts/lib/smoke-main.ts drives ONE session straight through `runSession`
-// with the restored archive personas, never calling `scripts/lib/swarm/
-// session.ts`'s `main()` at all — so the coverage has to be wired at BOTH
-// call sites, not just inside `main()`. Both share the grant/flip/assert/
-// restore sequence itself (`runJudgeRoleCoverage`, exported from session.ts)
-// so there is exactly one implementation of that sequence to get right.
+// with the restored personas, never calling `scripts/lib/swarm/session.ts`'s
+// `main()` at all — so the coverage has to be wired at BOTH call sites, not
+// just inside `main()`. Both share the grant/flip/assert/restore sequence
+// itself (`runJudgeRoleCoverage`, exported from session.ts) so there is
+// exactly one implementation of that sequence to get right.
 //
 // runSession and runJudgeRoleCoverage's effects drive docker, the job queue
 // and live inference, so they cannot be executed here (that's what the
@@ -134,13 +134,14 @@ describe("session.ts main() wires session 2 through runJudgeRoleCoverage, target
 });
 
 describe("smoke-main.ts's `--smoke` (twin-capable) CI branch wires the SAME coverage (issue #845)", () => {
-  // `--db smoke-twin` requires `--smoke`; `if (process.env.CI && smokeMode)`
-  // is therefore the ONLY branch that path's `bun run scripts/smoke.ts`
-  // invocation reaches — `main()`'s coverage (pinned above) never runs for
-  // it. This block exists so removing the twin-side wiring alone still fails
-  // a fast hermetic test, not just a live rehearsal nobody runs in CI.
+  // `--twin` implies its own scenario; `if (process.env.CI && dataPath.kind
+  // === "smoke-twin")` is therefore the ONLY branch that path's `bun run
+  // scripts/smoke.ts` invocation reaches — `main()`'s coverage (pinned above)
+  // never runs for it. This block exists so removing the twin-side wiring
+  // alone still fails a fast hermetic test, not just a live rehearsal nobody
+  // runs in CI.
   const smokeModeSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-mode.ts"), "utf8");
-  const CI_SMOKE_BRANCH = "if (process.env.CI && smokeMode) {";
+  const CI_SMOKE_BRANCH = 'if (process.env.CI && dataPath.kind === "smoke-twin") {';
   const CANDIDATE_CALL = "judgeCoverageCandidate(roster)";
   const ABSENT_CALL = "withMemberAbsent(members, judgeCandidate.id)";
   const COVERAGE_CALL = "session.runJudgeRoleCoverage(judgeCandidate.id";
@@ -149,7 +150,7 @@ describe("smoke-main.ts's `--smoke` (twin-capable) CI branch wires the SAME cove
   function sliceOfBranch(src: string): string {
     const start = src.indexOf(CI_SMOKE_BRANCH);
     expect(start).toBeGreaterThan(-1);
-    const nextBranch = src.indexOf("if (process.env.CI && !smokeMode)", start);
+    const nextBranch = src.indexOf('if (process.env.CI && dataPath.kind !== "smoke-twin")', start);
     expect(nextBranch).toBeGreaterThan(start);
     return src.slice(start, nextBranch);
   }

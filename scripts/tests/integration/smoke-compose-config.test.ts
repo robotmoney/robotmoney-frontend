@@ -519,10 +519,8 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     const smoke = scenarioPlan(false);
     const twin = scenarioPlan(true);
 
-    expect(smoke.initializer).toBe("simulation");
     expect(smoke.migrateEnv).toEqual({ SMOKE_SEED_PROJECTS: "1" });
     expect(smoke.migrateScriptArgs).toEqual(["--seed-smoke-schedules"]);
-    expect(twin.initializer).toBe("archive");
     expect(twin.migrateEnv).toEqual({});
     expect(twin.migrateScriptArgs).toEqual([]);
 
@@ -531,7 +529,11 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     expect(smokeMain).toContain("migrateEnv: scenario.migrateEnv");
     expect(smokeMain).toContain("migrateScriptArgs: [...scenario.migrateScriptArgs]");
     expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
-    expect(smokeMain).toContain('"--already-migrated"');
+    // Retired: smoke no longer calls prod-bootstrap.ts's archive-adopt pipeline
+    // for any boot, twin included — a twin is already fully populated by its
+    // restore and has nothing for an initializer to create.
+    expect(smokeMain).not.toContain("prod-bootstrap.ts");
+    expect(smokeMain).not.toContain("--already-migrated");
     expect(smokeMain).toContain('"src/producer/index.ts", "seed"');
     expect(smokeMain).not.toContain("v0-seed-bootstrap");
     expect(smokeMain).toContain("{ stage: staticPortMode }");
