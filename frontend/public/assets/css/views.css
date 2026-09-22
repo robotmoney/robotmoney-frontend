@@ -1732,6 +1732,15 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
   transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
 .rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text); }
+/* A record that is not there, or could not be read: the page's own frame
+   (breadcrumb, title, one line) and the ways on, as outlined buttons in a
+   row. It holds the body's height so the disclaimer and footer do not ride
+   up under one line. */
+.rr-missing { min-height: 50vh; }
+.rr-missing .rr-head { padding-bottom: 0; }
+.rr-missing__acts { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2.25rem; }
+.rr-missing__acts .rr-cta { display: inline-flex; min-width: 15rem; margin-top: 0; background: none; line-height: 1.5; cursor: pointer; text-decoration: none; }
+@media (max-width: 560px) { .rr-missing__acts .rr-cta { flex: 1 1 100%; min-width: 0; } }
 
 /* Stance tallies, one dot and count per stance that has any. */
 .rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.75rem; }

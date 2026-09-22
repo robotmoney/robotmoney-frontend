@@ -811,6 +811,7 @@ export function registerStaticViews(Alpine) {
         }
       } catch (_) {
         this.error = "This judgement could not be loaded.";
+        if (location.pathname === routeAtEntry) document.title = "Judgement unavailable: Robot Money Investment Swarm";
       } finally {
         this.loading = false;
       }

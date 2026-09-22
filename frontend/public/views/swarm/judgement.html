@@ -15,8 +15,23 @@
       </div>
       <div class="sv__skel-card"></div>
     </div>
+    <!-- No judgement here, or none could be read: the page keeps its frame,
+         the breadcrumb and a real title, says which in one line, and offers
+         the ways on. A failed read offers another try; a missing one does
+         not, since trying again finds nothing. -->
     <template x-if="error && !loading">
-      <div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/swarm">Swarm</a></p></div>
+      <article class="rr-missing">
+        <nav class="rr-crumbs" aria-label="Breadcrumb"><a href="/swarm">Swarm</a><span aria-hidden="true">/</span><span aria-current="page">Judgement</span></nav>
+        <header class="rr-head">
+          <h1 class="sv__detail-title" x-text="notFound ? 'Judgement not found' : 'Judgement unavailable'"></h1>
+          <p class="sv__lede sv__lede--compact" x-text="notFound ? 'No judgement is recorded at this address.' : 'This judgement could not be loaded. Try again in a moment.'"></p>
+        </header>
+        <div class="rr-missing__acts">
+          <template x-if="!notFound"><button type="button" class="rr-cta" @click="location.reload()"><span>Try again</span><span aria-hidden="true">↻</span></button></template>
+          <a class="rr-cta" href="/swarm"><span>The swarm</span><span aria-hidden="true">→</span></a>
+          <a class="rr-cta" href="/docs/investment-swarm/how-it-works#the-judge"><span>How the judge works</span><span aria-hidden="true">→</span></a>
+        </div>
+      </article>
     </template>
 
     <template x-if="!loading && judgement">

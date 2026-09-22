@@ -301,11 +301,22 @@ test("a judgement's own page: who, which session, its advice, its questions, and
 test("a judgement that does not exist says so; one that cannot be read says that", async ({ page }) => {
   await stub(page, { "/api/swarm/judgements/77": 500 });
   await page.goto("/swarm/judgements/99");
-  await expect(page.locator(".sv__error")).toHaveText("Judgement not found");
+  // The page's own frame, not a bare error line: breadcrumb, title, one line,
+  // and the ways on. Nothing in the warning colour.
+  const missing = page.locator(".rr-missing");
+  await expect(missing.locator(".rr-crumbs")).toHaveText(/Swarm\s*\/\s*Judgement/);
+  await expect(missing.locator("h1")).toHaveText("Judgement not found");
+  await expect(missing.locator(".sv__lede")).toHaveText("No judgement is recorded at this address.");
+  await expect(missing.locator(".rr-missing__acts .rr-cta")).toHaveText([/The swarm/, /How the judge works/]);
+  await expect(missing.locator(".rr-missing__acts a").first()).toHaveAttribute("href", "/swarm");
+  await expect(page.locator(".sv__error")).toHaveCount(0);
   await expect(page).toHaveTitle("Judgement not found: Robot Money Investment Swarm");
 
   await page.goto("/swarm/judgements/77");
-  await expect(page.locator(".sv__error")).toHaveText("This judgement could not be loaded.");
+  await expect(missing.locator("h1")).toHaveText("Judgement unavailable");
+  await expect(missing.locator(".sv__lede")).toHaveText("This judgement could not be loaded. Try again in a moment.");
+  await expect(missing.locator(".rr-missing__acts .rr-cta")).toHaveText([/Try again/, /The swarm/, /How the judge works/]);
+  await expect(page).toHaveTitle("Judgement unavailable: Robot Money Investment Swarm");
 });
 
 test("a judge's page: the role, the sessions it judged instead of takes, and its advice", async ({ page }) => {
