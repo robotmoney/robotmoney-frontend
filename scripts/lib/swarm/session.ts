@@ -115,6 +115,21 @@ const VALID_STANCES = new Set<string>(STANCES);
 // cross-role test fixture) carry no driver ground truth: the backend may
 // legitimately count them absent for not submitting, and the gate says nothing
 // about them.
+// Which of the members this driver ran failed and which filed. `settled` is in
+// `present`'s order (mapSettledWithConcurrency), so each result is read at its
+// OWN index. Filtering first and then indexing the filtered list pinned a
+// mid-list failure on the first member (boreas failed, athena was reported),
+// which failed the attendance gate on the very runs it exists to tolerate.
+export function settledAttendance(
+  present: readonly { memberId: string }[],
+  settled: readonly PromiseSettledResult<unknown>[],
+): { failed: string[]; fulfilled: string[] } {
+  const failed: string[] = [];
+  const fulfilled: string[] = [];
+  settled.forEach((s, i) => (s.status === "fulfilled" ? fulfilled : failed).push(present[i].memberId));
+  return { failed, fulfilled };
+}
+
 export function assertAuthoredTakes(
   tag: string,
   takes: any[],
@@ -1616,13 +1631,8 @@ export async function runSession(
   // container must have its take land in the published payload and never be
   // listed absent. Members the driver did not run (e.g. the mid-run
   // cross-role test identity) carry no ground truth and are not asserted on.
-  const observedAbsent = [
-    ...absent.map((m) => m.memberId),
-    ...settled.filter((s) => s.status === "rejected").map((_, i) => present[i].memberId),
-  ];
-  const fulfilled = settled
-    .filter((s) => s.status === "fulfilled")
-    .map((_, i) => present[i].memberId);
+  const { failed, fulfilled } = settledAttendance(present, settled);
+  const observedAbsent = [...absent.map((m) => m.memberId), ...failed];
   assertAuthoredTakes(tag, pub.takes, attendance, observedAbsent, fulfilled);
 
   // Verify memos

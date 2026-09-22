@@ -210,14 +210,20 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
   // Concretely: this is what a run with the constant pointed at a known-404
   // path observes, and therefore why such a run fails this job rather than
   // passing vacuously.
+  //
+  // THE DEAD PATH KEEPS THE SKILL'S `.md` EXTENSION. The site server
+  // (website-server/nginx.conf, #954) answers a path ending in a file
+  // extension with the file or a plain 404, and every other path with the
+  // SPA shell at 200. `SKILL.md.this-path-cannot-exist` ends in no extension
+  // (the hyphens fall outside it), so it drew the shell's 200 and this control
+  // went red on a healthy site. A missing SKILL.md meets the `.md` rule, so a
+  // sibling `.md` that cannot exist is the failure this control stands for.
   test(
     "red control: a known-404 path on the same host is observed as non-200, with none of the skill's markers",
     async () => {
-      const dead = `${SWARM_ONBOARDING_SKILL_URL}.this-path-cannot-exist`;
+      const dead = SWARM_ONBOARDING_SKILL_URL.replace(/SKILL\.md$/, "this-path-cannot-exist.md");
+      expect(dead).not.toBe(SWARM_ONBOARDING_SKILL_URL);
       const res = await fetch(dead, { redirect: "follow" });
-
-      expect(res.status).not.toBe(200);
-      expect(res.status).toBe(404);
 
       const body = await res.text();
       expect(body).not.toContain(`name: ${SKILL_SLUG}`);
