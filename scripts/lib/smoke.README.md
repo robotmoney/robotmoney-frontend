@@ -1,84 +1,135 @@
 # Smoke
 
-Smoke stands the application up against a database and checks that it serves.
+> **Status: target design, not yet shipped.** This document describes the
+> smoke tool as it will work once `docs/technical/smoke-production-spec.md`
+> lands. It replaces the `--smoke`/`--db`/`--agents`/`--twin` model and the
+> `smoke:archive`/`smoke:stage` scripts described in older runbooks. Until the
+> engineering that implements it lands, treat this file as the design to build
+> toward, and check `package.json`'s actual `smoke:*` scripts for what runs
+> today.
 
-Two choices decide what it runs against: **which database**, and **which
-helpers**.
+Smoke stands the application up against a database, checks that it serves,
+and exits. The stack keeps running under Docker; smoke itself does not stay
+up to supervise it.
+
+```
+bun smoke --static-port
+```
+
+is the whole production invocation. `--static-port` is the one option
+production passes. `bun smoke:status` and `bun smoke:tui` observe a running
+stack from another terminal — `bun smoke` never draws a TUI. `bun
+smoke:down` is the only way to stop a stack it started.
 
 ## Which database
 
-By default, smoke connects to the **remote** database named in `$HOME/.env`.
+By default smoke connects to the **remote** database named in `$HOME/.env`
+(host/port/dbname plus one `role = password` line per role).
 
-Pass `--local` to use a local container instead:
+Pass `--local <mode>` to use a local container smoke owns instead:
 
-- **`--local`** — a fresh local database.
-- **`--local <path>`** — a local database that reuses a saved docker volume at
-  `<path>`, so you can restart one that an earlier local run left behind.
+- **`--local blank`** — an empty database, bootstrapped from the schema
+  snapshot. Seeding is a separate step (`--seed`).
+- **`--local dump[=<path>]`** — restored from a production `pg_dump`. This is
+  the **twin** use case: a production-shaped database safe to experiment on.
+  `bun smoke:capture` takes a fresh dump (read-only, off a replica).
+- **`--local volume[=<name>]`** — reattaches a Docker volume from a previous
+  local run, so you can restart where you left off.
+
+A twin is not a fourth mode — it is what `--local dump` (usually) gives you.
+It can also be a remote connection to a database that was itself restored;
+remote-vs-local never decides whether something is a twin.
 
 ## Helpers
 
-Add any of these to a boot:
+- **`--seed`** — fill an empty database with demo data. Refuses a populated
+  database. Only valid on a rehearsal target (see Environment below).
+- **`--migrate`** — apply pending migrations before boot. A convenience for
+  stage/test/CI, where standing the database up and migrating it happen in
+  one step. Refused in production: a production upgrade is always its own
+  operator step (`bun run migrate`), never part of a boot.
+- **`--spoof-keys [names]`** — generate fresh signing keys for the named
+  in-house committee members (default: all of them) and rebind them in the
+  database. For twins only: it lets a production-shaped database be driven
+  without anyone's real key.
 
-- **`--seed`** — fill an empty database with demo starting data. Fails if the
-  database already has data.
-- **`--migrate`** — apply any un-run migrations to the database smoke is
-  connected to. A remote boot without `--migrate` **refuses to start** when the
-  database has un-run migrations, rather than serving an out-of-date schema; run
-  it with `--migrate` to catch the schema up.
-- **`--twin`** — copy the latest real database into a fresh local one and rotate
-  all of its keys so it is safe to work with. A twin is itself a local database,
-  so it is used on its own, not with `--local`. You can `--migrate` a twin; you
-  cannot `--seed` it, because it is already full.
-- **`--agents <name,...>`** — start these committee agents. The only names it
-  accepts are `athena`, `noop-analyst`, `robot-money` and `themis` (the
-  judge) — the four the operator runs, not an independently onboarded
-  person's. Every other real member runs their own agent elsewhere; smoke
-  never starts one on their behalf. On a remote boot there is no default —
-  state exactly who you want running, and a name whose real key is missing
-  from `$HOME/.env` refuses the boot rather than starting without it. On
-  `--twin` it defaults to all four, each signing with a fresh key generated
-  for that boot alone (see Credentials) — narrow it with the same flag if a
-  rehearsal needs fewer.
+## Participants: the credential file is the roster
 
-## Examples
+There are no `--agents`/`--judges` flags. The committee this host runs is
+whatever `credential.json` names:
 
-| Goal | Command |
-|---|---|
-| Local dev from an empty database | `bun run smoke --local --seed` |
-| Restart a local database from a saved volume | `bun run smoke --local <path>` |
-| Work against a copy of the real data, full committee | `bun run smoke --twin` |
-| Rehearse with just the judge | `bun run smoke --twin --agents themis` |
-| Restart production, changing nothing | `SMOKE_PROJECT=rm_prod bun run smoke --no-tui` |
-| Apply new migrations to production | `SMOKE_PROJECT=rm_prod bun run smoke --migrate --no-tui` |
-| Run the in-house committee on production | `SMOKE_PROJECT=rm_prod bun run smoke --agents athena,noop-analyst,robot-money,themis --no-tui` |
+```json
+{ "agents": { "athena": {...}, "noop-analyst": {...}, "robot-money": {...} },
+  "judges": { "themis": {...} } }
+```
 
-A production run pins the stack name with `SMOKE_PROJECT=rm_prod`, so it restarts
-the existing stack instead of starting a new one, and passes `--no-tui` so the
-command returns a real exit code. Neither is a database option; they are how a
-boot is run.
+Path: `RM_CREDENTIALS=<path>` in `$HOME/.env`, or `--credentials <path>`
+(the flag wins). Agents and judges are separate namespaces with separate
+keys — several judges are allowed, and zero agents with judges running is a
+valid shape. A run makes the running participants match the file: naming
+fewer than are currently running stops the rest. An explicit empty file
+(`{"agents":{},"judges":{}}`) is how you remove everyone; a missing or
+unreadable configured file refuses the boot rather than silently emptying
+the roster.
+
+Sessions run on their normal schedule whether or not this host runs any
+participant — third parties may run every one of them. `--agents`/`--seed`
+are about which containers smoke starts, never about whether a session
+happens.
+
+## Environment
+
+`RM_ENV` stays `prod` or `stage` (stage covers today's test/CI too — they run
+identically). Alongside it, every database carries a `deployment_identity`
+row (`production` or `rehearsal`) written once when the database is stood
+up. `--migrate`, `--seed`, and `--spoof-keys` all require a `rehearsal`
+target in addition to `RM_ENV=stage`, so a stage label pointed at a database
+someone marked `production` still refuses.
 
 ## Credentials
 
-A remote database is reached with the roles in `$HOME/.env` (the connection
-tokens plus one `role = password` line per role). A local database uses
-throwaway container credentials.
+A remote database is reached with the roles in `$HOME/.env`: `rm_app`,
+`rm_worker`, `rm_readonly`. `rm_owner` — the schema owner and the only
+migration login — is never in that file; its password is typed at the
+terminal for the one run that needs it. A local database uses passwords
+smoke generates itself, so no prompt is needed there.
 
-`--migrate` needs the schema-owner password. It asks for it at the terminal for
-that one run and never writes it to a file or an environment variable. Nothing
-else a boot does needs a privileged credential, so a plain restart needs only
-the ordinary application roles.
+`$HOME/.env` on a production host must never contain `rm_owner`, `doadmin`,
+or any superuser credential — the boot's preflight check refuses if it finds
+one.
 
-`--agents` needs each named agent's real signing key, one `$HOME/.env` line
-per name (`.env.example`'s "In-house agent identities"), never the smoke
-fixture's committed dev keys. `--twin` needs none of this: it never reads
-those lines, and mints a fresh key locally for every agent it runs — a twin
-never signs with a real key, however many agents it starts.
+## Preflight
+
+Every boot runs a read-only check before anything starts, and refuses on any
+failure: every credential authenticates; every role has exactly the
+privileges its programs need and none it shouldn't (no superuser,
+`CREATEROLE`, membership in `rm_owner`, or delete on an append-only table);
+the live schema matches what's on record for the version installed, and the
+code being booted is compatible with it; `$HOME/.env` carries no dangerous
+credential. The same check runs inside `api`/`worker`/`worker-swarm` at their
+own startup, against their own credential.
 
 ## Supporting commands
 
 | Command | What it does |
 |---|---|
-| `bun run smoke:status` | Show the running stack. |
-| `bun run smoke:down` | Stop the stack, keep its data. |
-| `bun run smoke:clean` | Delete local database volumes. Never touches a remote database. |
-| `bun run smoke:reap` | Sweep orphaned containers and networks. |
+| `bun smoke:status` | Show the running stack. |
+| `bun smoke:down` | Stop the stack, keep its data. |
+| `bun smoke:clean` | Delete local database volumes. Never touches a remote database. |
+| `bun smoke:reap` | Sweep orphaned containers and networks. |
+| `bun smoke:capture` | Take a fresh production dump, read-only, off a replica. |
+| `bun run migrate` | The production upgrade tool. Prompts for `rm_owner`. Never run as part of a boot. |
+
+## Examples
+
+| Goal | Command |
+|---|---|
+| Local dev from an empty database | `bun smoke --local blank --seed` |
+| Restart a local database from a saved volume | `bun smoke --local volume` |
+| Rehearse against a copy of real data, full committee | `bun smoke --local dump --credentials rehearsal-creds.json --spoof-keys` |
+| Bring up production | `bun smoke --static-port` |
+| Upgrade production's schema | `bun run migrate` (its own step, before any `bun smoke`) |
+
+For the full design — the plan/lock/journal model, the schema snapshot,
+target enrollment, and every acceptance case — see
+`docs/technical/smoke-production-spec.md`.

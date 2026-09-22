@@ -4,6 +4,20 @@
 > under [D46](../decisions.md#d46).** Section references below marked `spec §n`
 > are that document's; `policy §n` is
 > [`release-runbooks.md`](../technical/release-runbooks.md).
+>
+> **⚠ Phase 1 is superseded.** [`smoke-production-spec.md`](../technical/smoke-production-spec.md)
+> (adopted 2026-09-22) abandons `rm_migrator` in favor of `rm_owner` becoming
+> `LOGIN` and serving as the migration credential directly (its §3, §9.1).
+> None of Phase 1's items below should be built; the transition they were
+> for is now that spec's §9.1 steps 1–2. **Phase 5 is superseded and
+> resolved**, not just scoped: the new spec's §4 (environment/target),
+> §1 (plan/lock/journal), and §9.3 (transition from the current host) are
+> the decision this phase asked for. Phases 2–4 and 6 still describe real,
+> undecided work, but should be re-read against the new spec's plan/lock/
+> journal model (§§1–2) and schema/manifest model (§8) before being
+> implemented as written — several of their files and tests (`schema-current.ts`,
+> the `P7.*` step names, `ownsData()`) are affected by mechanisms the new
+> spec adds on top of them.
 
 ## Sequencing rule
 

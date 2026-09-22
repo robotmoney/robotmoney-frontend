@@ -1294,17 +1294,19 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ### 8.2 The invocation
 
-> ⚠ **This mechanic is superseded by D46, and is documented here because it is
-> what the in-flight release line still runs.** Under
-> `docs/technical/upgrade-deployment-spec.md` §4 the cutover is four receipted
-> steps — `P7.schema-current`, `P7.migrate` (as `rm_migrator`, skipped with a
-> receipt when nothing is pending), `P7.deploy` (a restart needing only the
-> runtime roles) and `P7.initialize` — and the smoke tool **never migrates an
-> external database**. The single command below does all four at once, as the
-> next paragraph says, which is the coupling D46 removes. A per-release runbook
-> must state which mechanic it is written against; the plan
-> (`docs/plans/deploy-separation-engineering-plan.md`) lands the new one on the
-> release line after v0.5.1.
+> ⚠ **This mechanic is superseded by [`docs/technical/smoke-production-spec.md`](../technical/smoke-production-spec.md)
+> (adopted 2026-09-22), and is documented here because it is what the
+> in-flight release line still runs.** Under the new spec: production is
+> `bun smoke --static-port`, full stop — no `--smoke`, `--db external`,
+> `SMOKE_PROJECT`, or `--no-tui`, and `smoke:archive` does not exist. A
+> production upgrade is always its own separate step, `bun run migrate`
+> against `rm_owner` (never a boot flag), and the roster in-house containers
+> run is read from a `credential.json`, not an `--agents` flag. None of that
+> is what the command below does — it is the older, still-running mechanic,
+> narrower than either the D46 tool-separation design or the new spec. A
+> per-release runbook must state which mechanic it is written against; the
+> engineering plan (`docs/plans/deploy-separation-engineering-plan.md`) has
+> not yet scheduled the new spec's implementation.
 
 > **Manifest step `P7.cutover`.** The machine-readable block for this step —
 > its id, artifacts, TTL and `verify:` command — lives in the **per-release**

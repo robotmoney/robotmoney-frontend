@@ -89,13 +89,24 @@ intent is a binary `off | enforce` judge.
   David on the reversal, rewrite the driver's per-session flip, then implement.
 
 ### P-05 — Correct roster driver not running on prod (S3)
-Target roster — **Athena, Noop, Robot Money Analyst** — should run under the
-archive-scenario driver (`smoke:archive`). After P-06 the wrong driver was
-killed and no correct driver was started; the three agents are seated but no
-session-lifecycle loop is driving them.
-- **Next:** cut over with `SMOKE_PROJECT=rm_prod bun run smoke:archive --
-  --no-tui` (confirm before running; one wrong cutover already occurred). This
-  is independent of P-02/P-04.
+Target roster — **Athena, Noop, Robot Money Analyst**, plus the judge Themis —
+should be the in-house committee this host runs. After P-06 the wrong driver
+was killed and no correct driver was started; the three agents are seated but
+no session-lifecycle loop is driving them.
+- **`smoke:archive` is not the answer.** `docs/technical/smoke-production-spec.md`
+  (adopted 2026-09-22) retires the `--smoke`/`--seed` archive-scenario driver
+  entirely; under it, running anything that seeds/adopts against a populated
+  production database is refused by construction, not by operator care.
+- **Next (blocked on the engineering, not yet built):** the target invocation
+  is `bun smoke --static-port` with `RM_CREDENTIALS` on the host naming the
+  three agents and the judge (spec §6, §9.2) — participants become standing
+  containers smoke reconciles to, not a scenario driver's session loop. The
+  three currently-seated members hold the committed fixture key
+  (`persona-keys.json`); cutover is a key rotation by member id, which the
+  spec's `--spoof-keys`/roster mechanism does not itself perform for real
+  keys — provisioning `credential.json` with real keys and re-running smoke
+  is what rebinds them (spec §9.3). This is independent of P-02/P-04, and it
+  is gated on W1/W3 landing (spec §10), not runnable today.
 
 ### P-15 — No admin UX to control judge parameters (S4)
 The judge is configurable **only** through a raw authenticated call to
@@ -192,8 +203,16 @@ Driver was killed once identified.
 - **Root cause:** scenario selection — `smoke:archive` = `--smoke --static-port
   --db external --seed`; `smoke:stage` omits `--smoke` (simulation). Easy to
   confuse.
-- **Residue:** P-01. **Follow-up:** guardrail so a prod cutover can't select the
-  simulation scenario by omission.
+- **Residue:** P-01.
+- **Follow-up — delivered by design, not yet shipped.** The requested guardrail
+  ("can't select the simulation scenario by omission") is exactly what
+  `docs/technical/smoke-production-spec.md` builds in: there is no scenario
+  flag to omit, `--seed` always refuses a populated database regardless of
+  `RM_ENV`, and every privileged action additionally requires
+  `deployment_identity = rehearsal` (spec §4.2–§4.3) — a database enrolled as
+  `production` cannot be seeded or adopted-into by construction. This closes
+  the follow-up once implemented; it does not retroactively fix anything
+  today.
 
 ### P-07 — Parallel stack connection exhaustion (S2)
 A parallel inspection stack (`rm_inspect`) against the shared DO Postgres hit

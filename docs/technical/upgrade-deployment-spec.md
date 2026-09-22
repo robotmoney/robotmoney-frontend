@@ -1,5 +1,22 @@
 # Upgrade deployment — the tool-separation specification
 
+> **⚠ Superseded on the credential model: see [`smoke-production-spec.md`](./smoke-production-spec.md).**
+> Adopted 2026-09-22, that document abandons the `rm_migrator` role this
+> specification's §2 designs. The replacement: `rm_owner` — already the
+> schema owner, currently `NOLOGIN` and unreachable — becomes `LOGIN` and is
+> itself the migration credential, typed at the terminal per run, never
+> stored anywhere. There is no dedicated migration role. Every claim below
+> that names `rm_migrator` (§2, §4's `P7.migrate`, §6's refusal table) names a
+> role that will not be built; read `rm_owner` in its place and see the new
+> spec §3 and §9.1 for the actual transition (`ALTER ROLE rm_owner LOGIN`,
+> a one-time step through `doadmin`). The tool-separation *principle* this
+> document argues for — a tool holds only the credential its job needs, a
+> runbook sequences tools rather than one tool reaching around another — is
+> unchanged and still the reason the new spec exists. Its §1 tool table, §4
+> `P7.*` step model, and §5 rehearsal-log design are not superseded and may
+> still guide implementation, reconciled against the new spec's plan/lock/
+> journal model (§§1–2) rather than layered on top of it separately.
+>
 > **Status: partially shipped, [D46](../decisions.md#d46).** This document is the
 > mechanism contract between the tools and the runbooks. It does not change the
 > release **policy** — every gate in
