@@ -23,6 +23,7 @@ S3 (availability blip) · S4 (hygiene / latent risk).
 | P-03 | No confirmed operator path to change judge config | S4 | 🔴 |
 | P-04 | `shadow` still selectable as a judge mode | S4 | 🔴 (spec'd) |
 | P-05 | Correct roster driver not yet running on prod | S3 | 🔴 |
+| P-15 | No admin UX to control judge parameters (API-only today) | S4 | 🔴 |
 | P-06 | Wrong-scenario cutover (`smoke:stage` vs `smoke:archive`) | S2 | 🟡 |
 | P-07 | Parallel stack (`rm_inspect`) exhausted DB connections | S2 | 🟡 |
 | P-08 | Brief downtime on in-place stack recreate (port 48787) | S3 | 🟡 |
@@ -86,6 +87,35 @@ session-lifecycle loop is driving them.
 - **Next:** cut over with `SMOKE_PROJECT=rm_prod bun run smoke:archive --
   --no-tui` (confirm before running; one wrong cutover already occurred). This
   is independent of P-02/P-04.
+
+### P-15 — No admin UX to control judge parameters (S4)
+The judge is configurable **only** through a raw authenticated call to
+`POST /api/swarm/admin/judge` (mode, minTakes, model, thirdPartyEnabled). There
+is no operator-facing UI, so enabling/tuning the judge means hand-crafting an
+HTTP request with an admin token — which is also why P-03 (can an operator even
+authenticate?) surfaced. An admin who should be able to turn the judge on and
+pick its model currently cannot do so through any screen.
+- **Requirement — the panel surfaces the four controls the API already exposes:**
+  - **Mode** — `off` / `enforce` (build two-way per the P-04 shadow-removal
+    spec; do **not** ship a three-way `shadow` selector we then remove).
+  - **Model** — a model id the OpenCode key serves, or clear (`null`). Make
+    "no model ⇒ the judge produces nothing (`model_unconfigured`)" legible.
+  - **Min takes** — integer ≥ 1 (thinly-supported threshold).
+  - **Third-party judging** — on/off; ships **off**, should stay off (postflight
+    asserts it). Present as an advanced switch, not a casual toggle.
+- **Read-back / "will it actually run?"** — the panel must show current live
+  config AND whether the judge can actually reach a model (is `OPENCODE_API_KEY`
+  present in `worker-swarm`?). Otherwise an operator sets `enforce` + a model and
+  silently gets `model_unconfigured`. This likely needs a small backend
+  health/readiness field, since the key is container env, not a DB row.
+- **Depends on / relates to:** P-02 (what the control is *for*), P-03 (the auth
+  path the UI needs), P-04 (whether Mode is two- or three-way). Optionally also
+  *displays* judgements/receipts (#1017's public judgement routes) — scope TBD:
+  config-only vs. config + view.
+- **Current frontend surface:** *under investigation* (admin-UI location, auth
+  pattern, existing swarm-admin controls) — this row will be refined with where
+  the panel slots in once that map is in. **Next:** short UX spec + slot-in plan,
+  then implement.
 
 ---
 
