@@ -76,7 +76,7 @@ test("a book read once draws the chart's frame, saying a line needs another read
   await expect(page.locator("#holdings .rr-positions tbody tr")).toHaveCount(1);
   await expect(page.locator("#holdings .rr-area .rm-nodata__h")).toHaveText("Not enough data yet");
   await expect(page.locator("#holdings .rr-area .rr-empty__t")).toHaveText("One reading so far");
-  await expect(page.locator("#holdings .rr-area .rr-area__head")).toContainText("Share of the book by position");
+  await expect(page.locator("#holdings .rr-area .rr-area__head")).toContainText("Positions over time");
 });
 
 test("a session whose window just opened keeps the recommendation ring and the takes' frame", async ({ page }) => {
