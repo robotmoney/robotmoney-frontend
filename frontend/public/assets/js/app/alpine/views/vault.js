@@ -17,9 +17,11 @@
 import {
   DETAIL_UNAVAILABLE,
   VAULT_UNAVAILABLE,
+  loadLatestRecommendation,
   loadVaultDetail,
   loadVaultOverview,
 } from "../../lib/vault-source.js";
+import { latestRecommendation } from "../latest-recommendation.js";
 import {
   canDeposit,
   explorerLink,
@@ -51,6 +53,8 @@ const fmtPctOrDash = (v) => (v == null ? "—" : weightChange.fmtPctTrim(v));
 const HOLDINGS_SHOWN = 8;
 const ACTIVITY_PAGE = 10;
 const KIND_LABEL = { adapter: "Lending venue", token: "Token", idle: "Idle" };
+// What a lending venue and idle cash are held in: every vault takes USDC.
+const DEPOSIT_ASSET = "USDC";
 // An activity event as the feed names it, in the page's words. A kind this
 // map does not know is printed in sentence case rather than as a raw enum.
 const ACTIVITY_LABEL = {
@@ -113,6 +117,9 @@ export function registerVaultView(Alpine) {
     fmtUsd,
     fmtDate,
     fmtBps,
+    // The latest allocation recommendation, the panel /allocation sets beside
+    // its ring (alpine/latest-recommendation.js).
+    ...latestRecommendation(),
 
     async init() {
       this.slug = String(location.pathname.split("/").filter(Boolean)[1] || "").toLowerCase();
@@ -123,8 +130,11 @@ export function registerVaultView(Alpine) {
         return;
       }
       let load = null;
+      // One read of the session list, for the panel and the overview alike.
+      const recRead = loadLatestRecommendation({ hostname: location.hostname }).catch(() => ({ rec: null, error: true }));
+      this.loadRecommendation(location.hostname, recRead);
       try {
-        load = await loadVaultOverview({ hostname: location.hostname });
+        load = await loadVaultOverview({ hostname: location.hostname, recommendation: recRead });
       } catch (_) {
         load = null;
       }
@@ -184,10 +194,14 @@ export function registerVaultView(Alpine) {
     networkLabel() {
       return this.network()?.label || "—";
     },
-    // "Not live", not "Not live on Base": the Network fact sits beside it.
+    // A vault taking deposits is Live, and one not deployed on this network is
+    // Coming soon (the Network fact beside it names the network). Every other
+    // state is its own word: Paused, Deposits paused, Data unavailable.
     status() {
       const r = this.record();
-      return r?.availability === "not_on_network" ? "Not live" : statusLabel(r, this.network()?.label);
+      if (r?.availability === "not_on_network") return "Coming soon";
+      const s = statusLabel(r, this.network()?.label);
+      return s === "Active" ? "Live" : s;
     },
     sharePrice() {
       const n = numberOrNull(this.record()?.sharePrice);
@@ -200,7 +214,7 @@ export function registerVaultView(Alpine) {
       return explorerLink(this.network(), this.record()?.address);
     },
     contractLabel() {
-      return `${shortAddress(this.record()?.address)} ↗`;
+      return shortAddress(this.record()?.address);
     },
 
     // ── holdings ─────────────────────────────────────────────────────────────
@@ -227,6 +241,16 @@ export function registerVaultView(Alpine) {
     },
     holdingType(h) {
       return h?.venueType || KIND_LABEL[h?.kind] || "—";
+    },
+    // A position's size in its own unit: a lending venue and idle cash hold
+    // the deposit asset, a token position its token. "—" when the source
+    // reports a value and no amount.
+    holdingAmount(h) {
+      const n = numberOrNull(h?.balance);
+      if (n === null) return "—";
+      const unit = h?.kind === "adapter" || h?.kind === "idle" ? DEPOSIT_ASSET : String(h?.symbol || "");
+      const digits = Math.abs(n) >= 1000 ? 0 : Math.abs(n) >= 1 ? 2 : 6;
+      return `${n.toLocaleString("en-US", { maximumFractionDigits: digits })}${unit ? ` ${unit}` : ""}`;
     },
     shareWidth(v) {
       const n = numberOrNull(v);
@@ -505,7 +529,7 @@ export function registerVaultView(Alpine) {
     contractLinks() {
       const c = this.record()?.contracts || {};
       return [["Router", c.router], ["Registry", c.registry]]
-        .map(([label, a]) => ({ label, address: a, href: explorerLink(this.network(), a), text: `${label} ${shortAddress(a)} ↗` }))
+        .map(([label, a]) => ({ label, address: a, href: explorerLink(this.network(), a), text: `${label} ${shortAddress(a)}` }))
         .filter((x) => x.href);
     },
 

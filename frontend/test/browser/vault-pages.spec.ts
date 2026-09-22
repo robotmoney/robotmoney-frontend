@@ -243,7 +243,7 @@ for (const [i, v] of SLUGS.entries()) {
     expect(await page.locator('link[rel="canonical"]').getAttribute("href")).toBe(`https://robotmoney.network/vault/${v.slug}`);
 
     await expect(fact(page, "Network")).toContainText("Staging devnet");
-    await expect(fact(page, "Status")).toContainText("Active");
+    await expect(fact(page, "Status")).toContainText("Live");
 
     await expect(layerRow(page, "Recommended")).toHaveText(pct(row.recommendedBps));
     // The devnet router reports its weights: they are the target.
@@ -256,7 +256,7 @@ for (const [i, v] of SLUGS.entries()) {
     // The holdings reconcile to the vault's TVL, in whole dollars as the
     // swarm pages state a book: each figure rounds by at most half a dollar.
     await expect(page.locator("#holdings .rr-stat__v")).toHaveText(`$${row.tvlUsd.toLocaleString("en-US", { maximumFractionDigits: 0 })}`);
-    const values = await page.locator(".rr-holdings tbody td:nth-child(3)").allTextContents();
+    const values = await page.locator(".rr-holdings tbody td:nth-child(4)").allTextContents();
     expect(values.length).toBeGreaterThan(0);
     expect(Math.abs(values.reduce((s, x) => s + dollars(x), 0) - row.tvlUsd)).toBeLessThanOrEqual(values.length * 0.5);
 
@@ -283,7 +283,7 @@ for (const [i, v] of SLUGS.entries()) {
     await expect(fact(page, "Devnet test data")).toHaveCount(1);
 
     // No deposit path on test data; the devnet router is live.
-    await expect(page.locator(".rr-cta")).toHaveCount(0);
+    await expect(page.locator("#deposit .rr-cta")).toHaveCount(0);
     await expect(page.locator("#deposit")).toHaveCount(0);
     await expect(page.locator("#mechanics .rr-dl")).toContainText("Routes new deposits by the applied weights.");
     await expectNoBrowserErrors(errors);
@@ -324,7 +324,7 @@ test("rmPROTO's zero governance gap reads as a reading, not as missing", async (
 async function expectRmusdcOnBase(page: Page, economics: any) {
   await expect(page.locator("h1")).toHaveText("rmUSDC");
   await expect(fact(page, "Network")).toContainText("Base");
-  await expect(fact(page, "Status")).toContainText("Active");
+  await expect(fact(page, "Status")).toContainText("Live");
   await expect(fact(page, "Share price")).toContainText(`$${economics.sharePrice.toFixed(4)}`);
   await expect(fact(page, "Contract").locator("a")).toHaveAttribute("href", "https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd");
 
@@ -380,7 +380,7 @@ test("rmUSDC on Base from the saved snapshot: the adapters, the contract, the de
   // target too, so its governance gap is a zero reading.
   await expect(layerRow(page, "Recommended")).toHaveText("95%");
   await expect(pipelineFact(page, "Governance gap")).toContainText("0 pp");
-  await expect(page.locator("#allocation .rr-dl a")).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");
+  await expect(page.locator("#allocation .alp__rec .rr-cta")).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");
   await expectNoBrowserErrors(errors);
 });
 
@@ -396,8 +396,8 @@ test("rmUSDC on Base from the live feed: the same vault, and no data label", asy
   // against the policy's 95%.
   await expect(layerRow(page, "Recommended")).toHaveText("90%");
   await expect(pipelineFact(page, "Governance gap")).toContainText("+5 pp");
-  await expect(page.locator("#allocation .rr-dl a")).toHaveAttribute("href", `/swarm/sessions/${LIVE_SESSION.id}`);
-  await expect(page.locator("#allocation .rr-dl a")).toHaveText("Sep 1, 2026");
+  await expect(page.locator("#allocation .alp__rec .rr-cta")).toHaveAttribute("href", `/swarm/sessions/${LIVE_SESSION.id}`);
+  await expect(page.locator("#allocation .alp__rec .rr-cta")).toContainText("Read the Sep 1, 2026 session");
   await expectNoBrowserErrors(errors);
 });
 
@@ -435,15 +435,15 @@ test("rmAGENT on Base is not live: its allocation and mechanics, nothing to hold
   await setMode(page, "base");
   await page.goto("/index.html");
   await navigate(page, "/vault/rmagent");
-  // "Not live", beside the Network fact that names Base.
-  await expect(fact(page, "Status").locator("b")).toHaveText("Not live");
+  // "Coming soon", in the pill, beside the Network fact that names Base.
+  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
   await expect(fact(page, "Network").locator("b")).toHaveText("Base");
   await expect(fact(page, "Share price")).toHaveCount(0);
   // Nothing to hold, so no Holdings. Nothing stated about its mechanics, so
   // its risk line stands alone, with no heading over one line.
   expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["allocation"]);
   await expect(page.locator("#mechanics h2")).toHaveCount(0);
-  await expect(page.locator("#mechanics .rr-note")).toContainText("Capital and returns are not guaranteed.");
+  await expect(page.locator("#mechanics .rr-callout__b")).toContainText("Capital and returns are not guaranteed.");
   // The archive's 3% against the policy's 5%, and nothing held against the
   // 5%.
   await expect(layerRow(page, "Recommended")).toHaveText("3%");
@@ -452,7 +452,7 @@ test("rmAGENT on Base is not live: its allocation and mechanics, nothing to hold
   await expect(layerRow(page, "Actual")).toHaveText("0%");
   await expect(gapOf(page)).toContainText("−5 pp");
   await expect(page.locator(".rr-disc")).toHaveCount(0);
-  await expect(page.locator(".rr-cta")).toHaveCount(0);
+  await expect(page.locator("#deposit .rr-cta")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
 });
 
@@ -561,7 +561,7 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
     signedUsd(usd.target - usd.recommended), signedUsd(usd.actual - usd.target),
   ]);
   for (const i of [1, 2, 3]) {
-    await expect(rows.nth(i).locator("th small")).toContainText("Not live");
+    await expect(rows.nth(i).locator("th small")).toContainText("Coming soon");
     await expect(rows.nth(i).locator("td").nth(2).locator("> span")).toHaveText("0%");
     await expect(rows.nth(i).locator("td").nth(2).locator("small")).toHaveText("$0");
   }
@@ -569,7 +569,7 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
   await expect(vaultCol(page, 2)).toHaveText(["95%", "5%", "0%", "0%"]);
   await expect(vaultCol(page, 4)).toHaveText(["0 pp", "+2 pp", "0 pp", "−2 pp"]);
   await expect(vaultCol(page, 5)).toHaveText(["+5 pp", "−5 pp", "0 pp", "0 pp"]);
-  await expect(vaultRows(page).filter({ hasText: "Not live" })).toHaveCount(3);
+  await expect(vaultRows(page).filter({ hasText: "Coming soon" })).toHaveCount(3);
   const rec = vaultFact(page, "Recommendation").locator("a");
   await expect(rec).toHaveText("Jun 24, 2026");
   await expect(rec).toHaveAttribute("href", "/swarm/2026-06-24/robotmoney-allocation");
@@ -649,7 +649,7 @@ test("the switch carries from /allocation to a vault by its link, survives a rel
     await expect(page.locator("#view")).not.toContainText(devnetOnly);
   }
   await navigate(page, "/vault/rmagent");
-  await expect(fact(page, "Status").locator("b")).toHaveText("Not live");
+  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
   await expect(page.locator("#holdings")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
 });
@@ -1051,12 +1051,12 @@ test("the vault copy states facts: no em dash, no guarantee, no narration", asyn
     for (const slug of ["rmusdc", "rmagent"]) {
       await navigate(page, `/vault/${slug}`);
       await expect(page.locator(".cv--detail h1")).toBeVisible();
-      await expect(page.locator("#mechanics .rr-note")).toBeVisible();
+      await expect(page.locator("#mechanics .rr-callout__b")).toBeVisible();
       expect(await copyFindings(page, ".cv--detail")).toEqual([]);
     }
   }
   // The risk note says what is not promised, once.
-  await expect(page.locator("#mechanics .rr-note")).toHaveText(
+  await expect(page.locator("#mechanics .rr-callout__b")).toHaveText(
     "Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.");
   await navigate(page, "/swarm/subjects/robotmoney-vault");
   await subjectLoaded(page);
@@ -1090,9 +1090,9 @@ for (const width of [1440, 390]) {
       await expect(page.locator("#holdings .rr-stat__v")).toHaveText(mode === "devnet" ? "$72,000" : usd2(SAVED_BASE.tvlUsd));
       await expect(page.locator(".rr-holdings")).toBeVisible();
       expect(await sideways(page)).toBe(0);
-      // On a phone the vault's Holdings keeps Share and drops Type.
+      // On a phone the vault's Holdings keeps Amount and Share and drops Type.
       expect(await page.locator(".rr-holdings thead th").evaluateAll((els) => els.map((e) => getComputedStyle(e).display)))
-        .toEqual(width === 390 ? ["table-cell", "none", "table-cell", "table-cell"] : Array(4).fill("table-cell"));
+        .toEqual(width === 390 ? ["table-cell", "none", "table-cell", "table-cell", "table-cell"] : Array(5).fill("table-cell"));
 
       await navigate(page, "/swarm/subjects/robotmoney-vault");
       await subjectLoaded(page);
@@ -1114,3 +1114,15 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+// A link that opens a new tab says so with an arrow the stylesheet draws, not
+// one typed into its text, and a link that is a button carries none.
+test("a new-tab link carries the arrow after its text, and its text is only its words", async ({ page }) => {
+  await stubLive(page);
+  await openVault(page, "rmusdc");
+  const contract = page.locator('.rr-meta__i a[target="_blank"]').first();
+  await expect(contract).toBeVisible();
+  expect(await contract.textContent()).not.toContain("↗");
+  const after = await contract.evaluate((el) => getComputedStyle(el, "::after").content);
+  expect(after).toContain("↗");
+});

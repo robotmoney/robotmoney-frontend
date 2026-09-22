@@ -420,10 +420,10 @@ test("admin view: research run list, stage timeline, artifact preview, and links
 
   // Bounded artifact preview + raw-series and public-report links.
   await expect(page.getByText("ism-pmi")).toBeVisible();
-  const rawSeriesLink = page.getByRole("link", { name: "Raw series ↗" });
+  const rawSeriesLink = page.getByRole("link", { name: "Raw series" });
   await expect(rawSeriesLink).toHaveAttribute("href", "/research/ism-pmi");
   await expect(rawSeriesLink).toHaveAttribute("target", "_blank");
-  const reportLink = page.getByRole("link", { name: "Open public report ↗" });
+  const reportLink = page.getByRole("link", { name: "Open public report" });
   await expect(reportLink).toHaveAttribute("href", "/regime");
   await expect(reportLink).toHaveAttribute("target", "_blank");
 });

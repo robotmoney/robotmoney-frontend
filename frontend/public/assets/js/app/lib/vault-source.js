@@ -342,6 +342,8 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
       .sort((/** @type {any} */ a, /** @type {any} */ b) => String(b?.publishedAt ?? b?.date ?? "").localeCompare(String(a?.publishedAt ?? a?.date ?? "")));
     for (const s of published) {
       let full = s;
+      /** @type {any[] | null} */
+      let takes = null;
       latest ??= s;
       // Light index rows carry no recommendation: read the newest few in full.
       if (!sessionRecommendationOf(s) && s?.id && fullReads < 3) {
@@ -349,17 +351,35 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
         try {
           const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
           full = d?.session ?? d;
+          takes = Array.isArray(d?.takes) ? d.takes : null;
         } catch {
           failed = true;
         }
       }
       const rec = recommendationFromSession(full);
-      if (rec) return { rec, error: false, session: full, latest };
+      if (rec) return { rec, error: false, session: await withTakeRows(full, takes), latest };
     }
     cursor = res?.nextCursor || null;
     if (!cursor) break;
   }
   return { rec: null, error: failed };
+}
+
+// The session with its takes on it as `takeRows`, the record the tally beside a
+// recommendation counts: the sessions list carries none. One read when the
+// detail was not already fetched; a failed read leaves the tally out, never
+// the recommendation.
+/** @param {any} s @param {any[] | null} takes */
+async function withTakeRows(s, takes) {
+  if (Array.isArray(s?.takeRows) && s.takeRows.length) return s;
+  if (takes) return { ...s, takeRows: takes };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) return s;
+  try {
+    const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+    return Array.isArray(d?.takes) ? { ...s, takeRows: d.takes } : s;
+  } catch {
+    return s;
+  }
 }
 
 // ── the overview ─────────────────────────────────────────────────────────────
