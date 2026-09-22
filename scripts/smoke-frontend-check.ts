@@ -105,7 +105,7 @@ async function main() {
   ]);
   await checkView("/views/allocation.html", [
     "x-data=\"allocationView()\"",
-    "alp__tbl",                    // the change ledger (was, now, move per sleeve)
+    "x-data=\"sleeveExplorer()\"", // the target ring, each sleeve opening onto its recipe
     "alp__meta",                   // the rail: in force since, provenance, router
     "id=\"vaults\"",               // the Vaults section, where bare /vault lands
     "vaultRows()",                 // its four rows: recommended, applied, actual, gaps
