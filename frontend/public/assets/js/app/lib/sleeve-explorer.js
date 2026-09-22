@@ -65,9 +65,14 @@ export function sleeveExplorer() {
     // The sleeve the panel last showed, kept through the closing animation.
     /** @type {string | null} */
     shown: null,
+    // The sleeve the explorer rests on when nothing is hovered or pinned. Null
+    // closes the breakdown, as every page but /allocation has it; there the
+    // largest sleeve stays open, a hover previews another and leaving returns.
+    /** @type {string | null} */
+    rest: null,
     status: "",
     /** @returns {string | null} */
-    active() { return this.pinned ?? this.hovered; },
+    active() { return this.pinned ?? this.hovered ?? this.rest; },
     /** @param {string | null} key */
     rowFor(key) {
       if (!key) return null;
@@ -91,15 +96,17 @@ export function sleeveExplorer() {
     set(key) {
       const root = /** @type {any} */ (this).$root;
       endSwap(root);
-      if (!key || !root || this.active() === null || key === this.shown) {
+      // What the panel will show: the hovered sleeve, or the rest one.
+      const next = key ?? this.rest;
+      if (!next || !root || this.active() === null || next === this.shown) {
         this.hovered = key;
-        if (key) this.shown = key;
+        if (next) this.shown = next;
         return;
       }
       root.setAttribute("data-swap", "");
       swap = setTimeout(() => {
         this.hovered = key;
-        this.shown = key;
+        this.shown = next;
         root.removeAttribute("data-swap");
       }, SWAP_MS);
     },
@@ -120,7 +127,7 @@ export function sleeveExplorer() {
       clearTimeout(leaving);
       endSwap(/** @type {any} */ (this).$root);
       if (this.pinned !== null) return;
-      leaving = setTimeout(() => { if (this.pinned === null) this.hovered = null; }, LEAVE_MS);
+      leaving = setTimeout(() => { if (this.pinned === null) this.set(null); }, LEAVE_MS);
     },
     /** @param {string} key */
     toggle(key) {
@@ -136,8 +143,8 @@ export function sleeveExplorer() {
     close() {
       clearTimeout(intent);
       clearTimeout(leaving);
-      if (this.active() === null) return;
-      const key = this.active();
+      if (this.pinned === null && this.hovered === null) return;
+      const key = this.pinned ?? this.hovered;
       this.pinned = null;
       this.hovered = null;
       this.status = "Breakdown closed";
