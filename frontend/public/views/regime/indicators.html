@@ -856,11 +856,13 @@
   font-size: 1.0625rem;
 }
 .ri__inline {
-  color: var(--color-accent);
+  color: var(--color-link);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
-.ri__inline:hover { color: var(--color-text); }
+.ri__inline:hover { text-decoration-color: var(--color-link); }
 
 /* Index */
 .ri__index {
@@ -898,7 +900,7 @@
 }
 .ri__index-link:hover {
   color: var(--color-text);
-  border-bottom-color: var(--color-accent);
+  border-bottom-color: var(--color-link);
 }
 
 /* Panels */
@@ -946,7 +948,7 @@
   border: 1px solid var(--color-border);
   scroll-margin-top: 6rem;
 }
-.ri__ind:target { border-color: var(--color-accent); }
+.ri__ind:target { border-color: var(--color-text); }
 .ri__ind-head {
   display: flex;
   align-items: baseline;
@@ -997,12 +999,13 @@
   overflow-wrap: anywhere;
 }
 .ri__src {
-  color: var(--color-text-muted);
+  color: var(--color-link);
   text-decoration: underline;
-  text-decoration-style: dotted;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
-.ri__src:hover { color: var(--color-accent); }
+.ri__src:hover { text-decoration-color: var(--color-link); }
 .ri__code {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -1055,19 +1058,22 @@
 }
 
 .ri__back { margin-top: 2rem; }
+/* Secondary button: outlined, and the frame goes to the text colour on hover. */
 .ri__back-link {
   display: inline-block;
   padding: 0.75rem 1.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  letter-spacing: 0.1em;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  background: transparent;
   text-decoration: none;
-  transition: border-color 0.3s, color 0.3s;
+  transition: border-color 0.3s;
 }
-.ri__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.ri__back-link:hover { border-color: var(--color-text); }
 
 .ri a:focus-visible {
   outline: 2px solid var(--color-accent);

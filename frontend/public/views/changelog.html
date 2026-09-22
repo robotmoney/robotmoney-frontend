@@ -522,16 +522,17 @@
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   color: var(--color-text-soft);
   background: none;
   border: 1px solid var(--color-border-light);
+  border-radius: 0;
   padding: 0.42rem 0.72rem;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
-.cl__tag:hover { color: var(--color-text); border-color: var(--color-accent-line); }
-.cl__tag[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.cl__tag:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.cl__tag[aria-pressed="true"] { color: var(--color-text); border-color: var(--color-text); }
 .cl__tag:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
 /* ── Log. A flat flex column, so an entry the filter hides leaves no gap. */
@@ -643,7 +644,7 @@
 }
 /* The title is the release's permalink, so it can be shared and cited. */
 .cl__title a { color: inherit; text-decoration: none; }
-.cl__title a:hover { text-decoration: underline; text-decoration-color: var(--color-accent-line); text-decoration-thickness: 1px; text-underline-offset: 0.12em; }
+.cl__title a:hover { text-decoration: underline; text-decoration-color: var(--color-link); text-decoration-thickness: 1px; text-underline-offset: 0.12em; }
 .cl__title a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .cl__entry p { margin: 0; font-size: 1.0625rem; line-height: 1.6; color: var(--color-text-soft); }
 .cl__entry p + p { margin-top: 0.7rem; }
@@ -657,11 +658,11 @@
   letter-spacing: 0.14em;
   color: var(--color-text-soft);
   text-decoration: none;
-  border-bottom: 1px solid var(--color-accent-line);
+  border-bottom: 1px solid var(--color-link-line);
   padding-bottom: 2px;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
-.cl__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.cl__lnk:hover { color: var(--color-text); border-bottom-color: var(--color-text); }
 
 /* ── Also in <month>: the month's smaller changes, deliberately not nested
    under a headline so they never read as part of the entry above them. */

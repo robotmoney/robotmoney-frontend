@@ -1,0 +1,262 @@
+{
+  "slug": "rmproto",
+  "symbol": "rmPROTO",
+  "name": "Protocol Tokens",
+  "bucket": "protocol_tokens",
+  "availability": "live",
+  "status": "active",
+  "address": null,
+  "tvlUsd": 14000,
+  "sharePrice": 1.064,
+  "exitFeeBps": null,
+  "recommendedBps": 1500,
+  "appliedBps": 1500,
+  "actualBps": 1400,
+  "gaps": {
+    "governance": 0,
+    "flow": -100,
+    "total": -100
+  },
+  "network": {
+    "chainId": 918453,
+    "label": "Staging devnet",
+    "testData": true
+  },
+  "holdingsAsOf": "2026-09-17T10:00:00Z",
+  "flags": {
+    "depositsPaused": false,
+    "withdrawalsPaused": false,
+    "shutdown": false
+  },
+  "caps": null,
+  "apy": null,
+  "depositors": null,
+  "guards": null,
+  "auditStatus": null,
+  "contracts": {
+    "vault": null,
+    "router": null,
+    "registry": null
+  },
+  "mechanics": {
+    "redeemOnly": true,
+    "maxSlippageBps": null,
+    "venues": []
+  },
+  "holdings": [
+    {
+      "kind": "token",
+      "label": "BTC",
+      "symbol": "WBTC",
+      "address": null,
+      "balance": null,
+      "valueUsd": 6000,
+      "weightBps": 4285.71,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "ETH",
+      "symbol": "WETH",
+      "address": null,
+      "balance": null,
+      "valueUsd": 5000,
+      "weightBps": 3571.43,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "HYPE",
+      "symbol": "HYPE",
+      "address": null,
+      "balance": null,
+      "valueUsd": 2600,
+      "weightBps": 1857.14,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "idle",
+      "label": "Idle USDC",
+      "symbol": "USDC",
+      "address": null,
+      "balance": 400,
+      "valueUsd": 400,
+      "weightBps": 285.71,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    }
+  ],
+  "history": {
+    "tvl": [
+      {
+        "t": "2026-09-03T10:00:00Z",
+        "tvlUsd": 9000
+      },
+      {
+        "t": "2026-09-04T10:00:00Z",
+        "tvlUsd": 9357.14
+      },
+      {
+        "t": "2026-09-05T10:00:00Z",
+        "tvlUsd": 9714.29
+      },
+      {
+        "t": "2026-09-06T10:00:00Z",
+        "tvlUsd": 10071.43
+      },
+      {
+        "t": "2026-09-07T10:00:00Z",
+        "tvlUsd": 10428.57
+      },
+      {
+        "t": "2026-09-08T10:00:00Z",
+        "tvlUsd": 10785.71
+      },
+      {
+        "t": "2026-09-09T10:00:00Z",
+        "tvlUsd": 11142.86
+      },
+      {
+        "t": "2026-09-10T10:00:00Z",
+        "tvlUsd": 11500
+      },
+      {
+        "t": "2026-09-11T10:00:00Z",
+        "tvlUsd": 11857.14
+      },
+      {
+        "t": "2026-09-12T10:00:00Z",
+        "tvlUsd": 12214.29
+      },
+      {
+        "t": "2026-09-13T10:00:00Z",
+        "tvlUsd": 12571.43
+      },
+      {
+        "t": "2026-09-14T10:00:00Z",
+        "tvlUsd": 12928.57
+      },
+      {
+        "t": "2026-09-15T10:00:00Z",
+        "tvlUsd": 13285.71
+      },
+      {
+        "t": "2026-09-16T10:00:00Z",
+        "tvlUsd": 13642.86
+      },
+      {
+        "t": "2026-09-17T10:00:00Z",
+        "tvlUsd": 14000
+      }
+    ],
+    "sharePrice": [],
+    "weights": [
+      {
+        "t": "2026-09-01T10:00:00Z",
+        "appliedBps": 1500,
+        "kind": "Effective weight"
+      }
+    ],
+    "receipts": [
+      {
+        "sessionId": null,
+        "t": "2026-09-16T10:00:00Z",
+        "recommendedBps": 1500,
+        "applied": false
+      }
+    ]
+  },
+  "activity": [
+    {
+      "t": "2026-09-16T16:04:00Z",
+      "kind": "Withdrawal",
+      "assets": 1946.04,
+      "shares": 1828.98,
+      "tx": null
+    },
+    {
+      "t": "2026-09-15T12:25:00Z",
+      "kind": "Withdrawal",
+      "assets": 2820.19,
+      "shares": 2650.55,
+      "tx": null
+    },
+    {
+      "t": "2026-09-15T03:14:00Z",
+      "kind": "Deposit",
+      "assets": 1577.86,
+      "shares": 1482.95,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T09:20:00Z",
+      "kind": "Deposit",
+      "assets": 2582.76,
+      "shares": 2427.41,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T00:13:00Z",
+      "kind": "Deposit",
+      "assets": 2926.08,
+      "shares": 2750.08,
+      "tx": null
+    },
+    {
+      "t": "2026-09-13T09:01:00Z",
+      "kind": "Deposit",
+      "assets": 1255.33,
+      "shares": 1179.82,
+      "tx": null
+    },
+    {
+      "t": "2026-09-13T07:52:00Z",
+      "kind": "Deposit",
+      "assets": 1608.81,
+      "shares": 1512.04,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T09:54:00Z",
+      "kind": "Deposit",
+      "assets": 2154.59,
+      "shares": 2024.99,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T07:35:00Z",
+      "kind": "Withdrawal",
+      "assets": 2737.09,
+      "shares": 2572.45,
+      "tx": null
+    },
+    {
+      "t": "2026-09-11T02:17:00Z",
+      "kind": "Deposit",
+      "assets": 2607.64,
+      "shares": 2450.79,
+      "tx": null
+    },
+    {
+      "t": "2026-09-09T21:52:00Z",
+      "kind": "Deposit",
+      "assets": 1423.1,
+      "shares": 1337.5,
+      "tx": null
+    },
+    {
+      "t": "2026-09-04T01:46:00Z",
+      "kind": "Deposit",
+      "assets": 1209.66,
+      "shares": 1136.9,
+      "tx": null
+    }
+  ]
+}

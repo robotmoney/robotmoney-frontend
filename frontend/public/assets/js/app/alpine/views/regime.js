@@ -250,12 +250,6 @@ export function registerRegimeView(Alpine) {
     hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
     toggle(key) { this.visible[key] = !this.visible[key]; this.drawHistory(); },
-    // Overlay-chip inline style: active → series colour border/text + `${color}1a` bg.
-    chipStyle(active, color) {
-      return active
-        ? `border-color:${color};color:${color};background:${color}1a`
-        : "border-color:var(--color-border);color:var(--color-text-muted);background:transparent";
-    },
     _setChart(key, chart) { this._charts[key]?.destroy(); this._charts[key] = chart; },
     // Panel index on a history row: prefer the DTO camelCase, fall back to the
     // raw snapshot key so the chart works against either shape.

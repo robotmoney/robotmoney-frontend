@@ -190,10 +190,11 @@ test("public subject profile lists no NFT contract for an archived subject with 
   await page.goto("/swarm/subjects/robotmoney-vault");
 
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Vault");
-  const sources = page.locator(".rr-sources tbody tr");
-  await expect(sources).toHaveCount(1);
-  await expect(sources.locator("td").first()).toHaveText("Wallet");
-  await expect(page.locator(".rr-sources")).not.toContainText("NFT contract");
+  // The vault subject's one wallet is the rmUSDC vault (decision 4 of
+  // docs/plans/vault-pages.md): the Vaults table names it, and there is no
+  // separate Read from table, so no NFT contract row.
+  await expect(page.locator(".rr-sources")).toHaveCount(0);
+  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("rmUSDC");
   // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
@@ -1038,9 +1039,10 @@ test("the history pages and searches on the server, with no brief fetched per ro
   const first = rows.first();
   await expect(first.locator(".sv__session-title")).toHaveText("Sep 18, 2026");
   await expect(first.locator(".sv__session-title")).toHaveAttribute("href", `/swarm/sessions/${spId(0)}`);
-  await expect(first.locator("th small")).toHaveText("14:05 UTC · 3 takes");
+  // Convened at 13:00, published at 14:05: the row prints when it convened.
+  await expect(first.locator("th small")).toHaveText("13:00 UTC · 3 takes");
   await expect(first.locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
-  await expect(rows.nth(1).locator("th small")).toHaveText("14:05 UTC · 4 takes");
+  await expect(rows.nth(1).locator("th small")).toHaveText("13:00 UTC · 4 takes");
   // Where the server stops is not known yet, so no total is printed.
   await expect(pager.locator('[role="status"]')).toHaveText("1–12");
   await expect(page.locator(".rr-meta__i", { hasText: "Sessions" })).toHaveCount(0);

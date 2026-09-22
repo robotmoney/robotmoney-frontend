@@ -203,6 +203,14 @@ test("dash gate matches its visual baseline", async ({ page }) => {
 });
 
 test("dash shell (sidebar + topbar) matches its visual baseline", async ({ page }) => {
+  // The shell is the subject, not the list inside it. Every dashboards read is
+  // answered here, the list's with an empty one, so the capture is the same
+  // on a static server and on the full stack, whose seeded rows made the page
+  // two and a half times as tall. Later routes take precedence.
+  const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/dashboards/**", (route) => route.fulfill({ status: 503, body: "down" }));
+  await page.route("**/api/dashboards/overview", (route) => route.fulfill(json({})));
+  await page.route("**/api/dashboards/entities", (route) => route.fulfill(json({ entities: [] })));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await login(page);

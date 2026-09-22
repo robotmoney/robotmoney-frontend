@@ -56,6 +56,13 @@ let activeRender = null;
 let renderedPath = null;
 
 async function render(pathname) {
+  // Bare /vault is the four vaults on /allocation. The address moves there,
+  // query kept (the vault data switch rides on it), so the page, its canonical
+  // and its #vaults section all agree on where the reader is.
+  if (pathname === "/vault" || pathname === "/vault/") {
+    history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
+    pathname = "/allocation";
+  }
   const host = viewEl();
   if (!host) return;
   renderedPath = pathname;

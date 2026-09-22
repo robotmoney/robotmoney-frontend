@@ -21,6 +21,8 @@
 import { stanceColor, stanceStyle } from "./stance.js";
 import { CATEGORICAL } from "./chart-theme.js";
 import { actionLabel } from "./sleeve-explorer.js";
+import { vaultBySlug } from "./vault-data.js";
+import { BUCKET_NOTES } from "./sleeve-notes.js";
 
 // Fixed reading direction, so a spread bar means the same thing on every
 // surface. A stance this build does not know keeps its count and sorts last
@@ -49,7 +51,7 @@ const BUCKET_LABELS = {
 // A chain id as its proper name. The id stays the key everywhere else (the
 // explorer link reads it raw); "peaq" is lowercase by its own spelling.
 /** @type {Record<string, string>} */
-const CHAIN_LABELS = { base: "Base", peaq: "peaq", ethereum: "Ethereum" };
+const CHAIN_LABELS = { base: "Base", peaq: "peaq", ethereum: "Ethereum", devnet: "Staging devnet" };
 
 /** @param {unknown} v */
 const normKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -100,17 +102,9 @@ export function bucketLabel(idOrName) {
   return String(idOrName || "").replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// What each sleeve holds, in one line: the note /allocation's sleeve cards
-// print, and the (i) tip wherever a swarm page names a sleeve (the explorer's
-// panel, the history's column heads). One source, so a sleeve is described
-// the same way everywhere it appears.
-/** @type {Record<string, string>} */
-const BUCKET_NOTES = {
-  conservative_defi_yield: "Lending USDC on Base. The lowest-volatility sleeve, aimed at capital preservation.",
-  agent_tokens: "Tokens of the agents that hold $ROBOTMONEY.",
-  protocol_tokens: "Large-cap crypto and DeFi assets.",
-  real_world_assets: "Tokenised traditional instruments: equity index and commodities.",
-};
+// What each sleeve holds, in one line (lib/sleeve-notes.js): the (i) tip
+// wherever a swarm page names a sleeve, /allocation's sleeve cards and each
+// vault page's lede.
 // A sleeve's short name, for a narrow column on a phone.
 /** @type {Record<string, string>} */
 const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
@@ -138,6 +132,11 @@ export function bucketNote(idOrName) {
 // Empty, meaning no book to measure against, unless the framework's token
 // lists and a valued snapshot are both in hand and the snapshot was read on
 // or before `date`: a book read after the session is not what it acted on.
+//
+// A position that names its vault (the four-vault stack: `vault` is a slug)
+// counts toward that vault's sleeve, whatever its token: idle USDC inside
+// rmAGENT is Agent Tokens money. A book whose every position names its vault
+// needs no token lists, and is summed over the four published sleeves.
 /**
  * @param {{ buckets?: Array<{ id: string, tokens: string[] }> } | null | undefined} framework
  * @param {{ date?: unknown, totalValueUsd?: unknown, total_value_usd?: unknown, positions?: any[] } | null | undefined} snapshot
@@ -150,15 +149,22 @@ export function bookSleeveShares(framework, snapshot, date) {
   const buckets = framework?.buckets || [];
   const positions = snapshot?.positions || [];
   const total = Number(snapshot?.totalValueUsd ?? snapshot?.total_value_usd ?? 0);
-  if (!buckets.length || !positions.length || !(total > 0)) return out;
+  const vaultOf = (/** @type {any} */ p) => vaultBySlug(p?.vault);
+  const ids = buckets.length
+    ? buckets.map((b) => b.id)
+    : positions.length && positions.every((p) => vaultOf(p)) ? BUCKET_ORDER : [];
+  if (!ids.length || !positions.length || !(total > 0)) return out;
   const readOn = String(snapshot?.date || "").slice(0, 10);
   if (date && readOn && readOn > String(date).slice(0, 10)) return out;
-  for (const b of buckets) {
-    const tokens = b.tokens || [];
+  for (const id of ids) {
+    const tokens = buckets.find((b) => b.id === id)?.tokens || [];
     const held = positions
-      .filter((p) => tokens.includes(String(p?.token || "").toUpperCase()))
+      .filter((p) => {
+        const v = vaultOf(p);
+        return v ? normKey(v.bucket) === normKey(id) : tokens.includes(String(p?.token || "").toUpperCase());
+      })
       .reduce((sum, p) => sum + (Number(p?.value_usd ?? p?.valueUsd) || 0), 0);
-    out.set(b.id, held / total);
+    out.set(id, held / total);
   }
   return out;
 }
@@ -522,12 +528,14 @@ export const sessionSummary = {
   // An unknown chain prints as its id rather than a guessed capitalisation.
   /** @param {unknown} c */
   chainLabel(c) { return CHAIN_LABELS[String(c || "").toLowerCase()] || c; },
-  // The publish time, when the record has one: a subject can convene twice in
-  // a day, and the date alone prints both rows identically. Archive rows carry
-  // a bare date, so they print nothing here.
+  // The time the session convened, beside the date it convened on: a subject
+  // can convene twice in a day, and the date alone prints both rows
+  // identically. Not the publish time, which lands the next day when a window
+  // runs past midnight, so "Sep 20 · 01:20" read as a time on the 20th that was
+  // the 21st. Archive rows carry a bare date, so they print nothing here.
   /** @param {any} row */
   rowTime(row) {
-    const at = row?.publishedAt || row?.generatedAt;
+    const at = row?.generatedAt || row?.publishedAt;
     if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
     return `${new Date(at).toISOString().slice(11, 16)} UTC`;
   },

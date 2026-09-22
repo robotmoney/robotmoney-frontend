@@ -87,3 +87,30 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
       .toEqual({ from, robots: "index, follow" });
   }
 });
+
+test("/vault is an exact alias: the bare path is /allocation, each vault page is its own", () => {
+  // Bare /vault renders the allocation view and names /allocation canonical.
+  expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/allocation");
+  expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/allocation");
+  expect(metaFor("/vault")).toEqual(metaFor("/allocation"));
+
+  // The four vault pages are NOT rewritten under /allocation: each keeps its
+  // own address, stays out of the index until the launch review, and titles
+  // itself by its symbol.
+  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmagent: "rmAGENT", rmproto: "rmPROTO", rmrwa: "rmRWA" };
+  for (const [slug, symbol] of Object.entries(symbols)) {
+    const path = `/vault/${slug}`;
+    expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });
+    expect({ path, canonical: canonicalUrlFor(`${path}/`) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });
+    const m = metaFor(path);
+    expect({ path, robots: m.robots }).toEqual({ path, robots: "noindex, follow" });
+    expect(m.title).toContain(symbol);
+    expect(m.title).not.toContain("—");
+    expect(m.description).not.toContain("—");
+  }
+
+  // Anything else under /vault/ is not found, not a vault page.
+  expect(metaFor("/vault/nope").title).toBe("Page Not Found — Robot Money");
+  expect(metaFor("/vault/nope").robots).toBe("noindex, follow");
+  expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
+});

@@ -33,15 +33,15 @@
                running Woon Treasury is the fact the slot exists for. -->
           <p class="sv__eyebrow sv__eyebrow--quiet"><span x-text="subjectKind()">portfolio</span><template x-if="operatorLabel()"><span> · operator <span x-text="operatorLabel()"></span></span></template></p>
           <h1 class="sv__detail-title" x-text="subject.name"></h1>
-          <template x-if="subject.thesisBlurb"><p class="sv__lede sv__lede--compact" x-text="subject.thesisBlurb"></p></template>
+          <template x-if="subjectLede()"><p class="sv__lede sv__lede--compact" x-text="subjectLede()"></p></template>
           <template x-if="subject.homepage || subject.xHandle">
             <p class="rr-links sp-links">
               <template x-if="subject.homepage">
-                <a class="rr-lnk" :href="subject.homepage" rel="noopener noreferrer" target="_blank" x-text="hostOf(subject.homepage) + ' ↗'"></a>
+                <a class="rr-lnk" :href="subject.homepage" rel="noopener noreferrer" target="_blank" x-text="hostOf(subject.homepage)"></a>
               </template>
               <template x-if="subject.xHandle">
                 <a class="rr-lnk" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`" rel="noopener noreferrer" target="_blank"
-                   x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
+                   x-text="'@' + String(subject.xHandle).replace(/^@/, '')"></a>
               </template>
             </p>
           </template>
@@ -51,7 +51,11 @@
              way into it, below; the book's total is the Holdings figure; and
              with no session the history says so where the list would be. The
              row itself goes when none of its items would draw. -->
-        <div class="rr-meta" x-show="sessionCount() || (backdrop && backdrop.composite !== null) || backdrop?.regime || isFramework()">
+        <div class="rr-meta" x-show="stackFacts().length || sessionCount() || (backdrop && backdrop.composite !== null) || backdrop?.regime || isFramework()">
+          <template x-for="f in stackFacts()" :key="f.key">
+            <span class="rr-meta__i"><span x-text="f.label"></span><template x-if="f.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></template>
+              <b :class="f.cls ? `alp__mv ${f.cls}` : ''" x-text="f.value"></b></span>
+          </template>
           <template x-if="sessionCount()"><span class="rr-meta__i">Sessions <b x-text="sessionCount()"></b></span></template>
           <template x-if="backdrop && backdrop.composite !== null">
             <span class="rr-meta__i">Composite <b x-text="fmtNum(backdrop?.composite, 3)"></b></span>
@@ -83,13 +87,23 @@
         <template x-if="latest()">
           <section class="rr-sec" id="latest" aria-labelledby="latest-h">
             <div class="rr-sec__head">
-              <h2 class="rr-sec__h" id="latest-h" x-text="recommendation(latest()) ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
+              <h2 class="rr-sec__h" id="latest-h" x-text="hasLatestRecommendation() ? 'Latest recommendation' : 'Latest session'">Latest recommendation</h2>
             </div>
+            <!-- Its newest session set no weights, so the target stood: the
+                 recommendation below is the one in force, and this names the
+                 newer session and since when, as /swarm and /allocation do. -->
+            <template x-if="heldBy()">
+              <div class="rr-meta rr-meta--lead">
+                <span class="rr-meta__i">Latest session <b><a class="rr-lnk" :href="sessionHref(heldBy())" x-text="formatDate(heldBy().date, 'short')"></a></b></span>
+                <span class="rr-meta__i">Recommendation <b>Held since <span x-text="formatDate(latest().date, 'short')"></span></b></span>
+              </div>
+            </template>
             <div class="rr-split rr-split--rule">
               <div>
                 <template x-if="hasExplorer()">
                   <div>
-                    <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+                    <!-- Conservative DeFi Yield, first in the published order, rests open. -->
+                    <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()" x-effect="if (isVaultStack() && rest === null && explorerRows().length) rest = explorerRows()[0].key">
                       <div class="rr-mix">
                         <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
                           <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()"
@@ -115,9 +129,11 @@
                               <template x-if="hasBook()"><em class="rr-act" :class="`is-${r.action || 'none'}`" x-text="actionLabel(r.action)"></em></template>
                               <template x-if="hasBook() && r.worth"><small class="rr-worth" x-text="r.worth"></small></template>
                               <!-- Against the basis, in its own columns: the weight it is set against,
-                                   and the move in percentage points (empty when it did not move). -->
-                              <template x-if="legendBasis()"><span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis()} `"></span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span></template>
-                              <template x-if="legendBasis()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Change </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
+                                   and the move in percentage points (empty when it did not move).
+                                   Not while the vault stack's Holdings shows the devnet fixture:
+                                   this measures the real book, and the book below is a different one. -->
+                              <template x-if="legendBasis()"><span class="rr-legend__was"><span class="rr-sr" x-text="`${legendBasis()} `"></span><span x-text="r.was == null || stackOnDevnet() ? '—' : fmtPctTrim(r.was)"></span></span></template>
+                              <template x-if="legendBasis()"><span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Change </span><template x-if="r.d && !stackOnDevnet()"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span></template>
                             </button>
                           </template>
                         </div>
@@ -128,7 +144,6 @@
                             <div class="rr-x__panel" :id="`sleeve-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
                               <div class="rr-x__head">
                                 <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b x-text="panelRow().label"></b><template x-if="bucketNote(panelRow().key)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${panelRow().label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="bucketNote(panelRow().key)"></span></span></template><span x-text="panelRow().meta"></span></p>
-                                <template x-if="pinned"><button type="button" class="rr-x__close" @click="close()">Close ×</button></template>
                               </div>
                               <template x-if="panelRow().assets.length">
                                 <table class="rr-table rr-x__assets">
@@ -173,10 +188,18 @@
                     </template>
                   </dl>
                 </template>
-                <template x-if="(recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none'">
+                <!-- A weights subject's session with no weights reads as /swarm
+                     reads it: the ring's bare track. -->
+                <template x-if="isWeightsSubject() && recommendation(latest())?.kind !== 'weights'">
+                  <figure class="rr-ring rr-ring--empty">
+                    <svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--color-border)" stroke-width="4"></circle></svg>
+                    <figcaption><span class="rr-empty__t" x-text="latest()?.swarmRecommendation ? 'No weights published' : 'No recommendation published'"></span></figcaption>
+                  </figure>
+                </template>
+                <template x-if="!isWeightsSubject() && ((recommendation(latest())?.kind === 'actions' && !authoredActionsOf(latest()).length) || recommendation(latest())?.kind === 'none')">
                   <p class="rr-note" style="margin-top:0">No actions published</p>
                 </template>
-                <template x-if="!recommendation(latest())">
+                <template x-if="!isWeightsSubject() && !recommendation(latest())">
                   <p class="rr-note" style="margin-top:0">No recommendation published</p>
                 </template>
 
@@ -216,11 +239,11 @@
                 <template x-if="recommendation(latest())?.kind === 'weights' && !(latestMoves() || []).length && latestOutcome()">
                   <p class="rr-k rr-sub" x-text="latestOutcome()"></p>
                 </template>
-                <template x-if="rationaleOf(latest()) || latest().synthesis">
+                <template x-if="latestProse()">
                   <div>
-                    <div class="rr-prose" :class="!more && isLong(rationaleOf(latest()) || latest().synthesis, 480) ? 'is-clamped' : ''" style="--rr-lines:8"
-                         x-html="linkified(rationaleOf(latest()) || latest().synthesis)"></div>
-                    <template x-if="isLong(rationaleOf(latest()) || latest().synthesis, 480)">
+                    <div class="rr-prose" :class="!more && isLong(latestProse(), 480) ? 'is-clamped' : ''" style="--rr-lines:8"
+                         x-html="linkified(latestProse())"></div>
+                    <template x-if="isLong(latestProse(), 480)">
                       <button type="button" class="rr-more" @click="more = !more" :aria-expanded="more ? 'true' : 'false'">
                         <span x-text="more ? 'Show less' : (rationaleOf(latest()) ? 'Read full rationale' : 'Read full synthesis')"></span>
                       </button>
@@ -245,24 +268,90 @@
 
         <!-- THE BOOK, when the subject has one: its value and the wallets it is
              read from, then its concentration over time and what is notable
-             in it. Today's positions are the latest recommendation's ring. -->
-        <template x-if="snapshot || chartModel() || trackedWallets().length || nftContracts().length">
+             in it. Today's positions are the latest recommendation's ring.
+             The Robot Money Vault (isVaultStack) reads as one book grouped by
+             vault: the router and the four vaults it is read from, each
+             vault's weight against the weights in force, the positions under
+             their vault, and the vaults over time with the target drawn over
+             them. -->
+        <template x-if="snapshot || chartModel() || trackedWallets().length || nftContracts().length || (isVaultStack() && (stackSnapshot() || stackWallets().length))">
           <section class="rr-sec" id="holdings" aria-labelledby="hold-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="hold-h">Holdings</h2>
+              <template x-if="isVaultStack() && vaultStackLabel()"><span class="rr-sec__aside" data-vault-label x-text="vaultStackLabel()"></span></template>
             </div>
 
+            <template x-if="isVaultStack() && stackSnapshot()">
+              <div class="rr-stat">
+                <p class="rr-stat__v" x-text="vaultUsd(stackSnapshot()?.totalValueUsd)"></p>
+                <template x-if="vaultStatSub()"><p class="rr-stat__sub" x-text="vaultStatSub()"></p></template>
+                <template x-if="stackRouter()">
+                  <p class="rr-stat__sub">Router
+                    <template x-if="explorerHref(stackRouter().chain, stackRouter().address)"><a class="rr-lnk" :href="explorerHref(stackRouter().chain, stackRouter().address)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(stackRouter().address)"></a></template>
+                    <template x-if="!explorerHref(stackRouter().chain, stackRouter().address)"><span class="sp-addr" x-text="truncAddress(stackRouter().address)"></span></template>
+                  </p>
+                </template>
+              </div>
+            </template>
+            <!-- The vault stack's TVL over time, page wide under the total as a
+                 vault's own page draws it: the figure the team tracks first.
+                 The vaults' own rows are the Vaults table below, and the
+                 router is the fact under the total. -->
+            <template x-if="isVaultStack()">
+              <div id="tvl">
+                <template x-if="tvl().points.length < 2">
+                  <figure class="rr-area" style="margin-top:1.5rem">
+                    <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL</h3></figcaption>
+                    <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="tvl().points.length ? 'One reading so far' : 'No readings yet'"></p></div>
+                  </figure>
+                </template>
+                <template x-if="tvl().points.length > 1">
+                  <figure class="rr-area" style="margin-top:1.5rem">
+                    <figcaption class="rr-area__head">
+                      <h3 class="rr-subhead__h">TVL</h3>
+                      <span class="rr-sec__aside" x-text="tvlChange()"></span>
+                    </figcaption>
+                    <div class="rr-area__frame">
+                      <div class="rr-area__y" aria-hidden="true">
+                        <template x-for="t in tvlYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                      </div>
+                      <div class="rr-area__plot" tabindex="0" role="img" :aria-label="tvlLabel()"
+                           @pointermove="tvlMove($event)" @pointerdown="tvlMove($event)" @pointerleave="tvlAt = null" @keydown="tvlKey($event)" @blur="tvlAt = null">
+                        <div class="rr-area__svg" x-html="tvlSvg()"></div>
+                        <template x-for="p in tvlDots()" :key="p.key">
+                          <i class="rr-area__pt" :style="`left:${p.left}%;top:${p.top}%;background:var(--color-text-soft)`" aria-hidden="true"></i>
+                        </template>
+                        <template x-if="tvlPoint(tvlAt)">
+                          <div class="rr-area__cross" :style="`left:${tvlPoint(tvlAt).left}%`"></div>
+                        </template>
+                        <template x-if="tvlPoint(tvlAt)">
+                          <i class="rr-area__pt is-on" :style="`left:${tvlPoint(tvlAt).left}%;top:${tvlPoint(tvlAt).top}%;background:var(--color-text-soft)`" aria-hidden="true"></i>
+                        </template>
+                        <template x-if="tvlPoint(tvlAt)">
+                          <div class="rr-area__tip" :class="tvlPoint(tvlAt).left > 62 ? 'is-left' : ''" :style="`left:${tvlPoint(tvlAt).left}%`">
+                            <p class="rr-area__tip-h" style="margin:0"><b x-text="tvlPoint(tvlAt).date"></b><span x-text="tvlPoint(tvlAt).value"></span></p>
+                          </div>
+                        </template>
+                      </div>
+                      <div class="rr-area__x" aria-hidden="true">
+                        <template x-for="t in tvlXTicks()" :key="t.key"><span :class="[t.cls, t.i === tvlAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                      </div>
+                    </div>
+                  </figure>
+                </template>
+              </div>
+            </template>
             <!-- The book's value beside exactly what it is read from: every
                  tracked wallet and declared contract in one table, so a reader
                  knows what "the book" is before reading about it. -->
-            <div class="rr-split rr-bookhead">
-              <template x-if="snapshot">
+            <div class="rr-split rr-bookhead" x-show="!isVaultStack()">
+              <template x-if="!isVaultStack() && snapshot">
                 <div class="rr-stat">
                   <p class="rr-stat__v" x-text="fmtUsd(snapshot?.totalValueUsd)"></p>
                   <template x-if="bookStatSub()"><p class="rr-stat__sub" x-text="bookStatSub()"></p></template>
                 </div>
               </template>
-              <template x-if="bookSources().length">
+              <template x-if="!isVaultStack() && bookSources().length">
                 <div>
                   <div class="rr-subhead"><h3 class="rr-subhead__h" x-text="bookSources().some((w) => w.kind !== 'Wallet') ? 'Wallets and contracts' : 'Wallets'">Wallets</h3></div>
                   <div class="rr-tablewrap">
@@ -276,9 +365,9 @@
                             <td x-text="chainLabel(w.chain)"></td>
                             <td class="q">
                               <template x-if="explorerHref(w.chain, w.address)">
-                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" :title="w.address" x-text="`${truncAddress(w.address)} ↗`"></a>
+                                <a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(w.address)"></a>
                               </template>
-                              <template x-if="!explorerHref(w.chain, w.address)"><span :title="w.address" x-text="truncAddress(w.address) || '—'"></span></template>
+                              <template x-if="!explorerHref(w.chain, w.address)"><span class="sp-addr" x-text="w.address || '—'"></span></template>
                             </td>
                           </tr>
                         </template>
@@ -298,46 +387,118 @@
                  opens with a title like the Wallets table beside the figure,
                  which is why .rr-positions wraps the scroller rather than
                  being it. -->
-            <div class="rr-positions">
-              <div class="rr-subhead">
-                <h3 class="rr-subhead__h">Positions</h3>
-                <template x-if="snapshot?.date"><span class="rr-sec__aside" x-text="`Last read on ${formatDate(snapshot.date, 'short')}`"></span></template>
+            <!-- The vault stack: each vault's weight of the book against the
+                 weights in force; a vault opens onto its positions. -->
+            <template x-if="isVaultStack() && vaultGroups().length">
+              <div class="rr-block" style="margin-top:2.25rem">
+                <div class="rr-subhead"><h3 class="rr-subhead__h">Vaults</h3></div>
+                <div class="rr-x" x-data="vaultStackExplorer()" @keydown.escape.window="close()" @pointerleave="leave()" x-effect="if (rest === null && explorerRows().length) rest = explorerRows()[0].key">
+                  <div class="rr-mix">
+                    <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                      <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()"
+                            x-html="explorerSvg()"
+                            x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                      <figcaption>
+                        <b x-show="activeRow() || explorerCenter().value" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                        <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
+                      </figcaption>
+                    </figure>
+                    <!-- One table for the vaults: each vault's value, its share
+                         of the book, the target in force and the drift between
+                         them, as /allocation's Vaults table reads them. -->
+                    <div class="rr-legend rr-legend--cols rr-legend--value rr-legend--drift">
+                      <div class="rr-legend__head" aria-hidden="true"><span></span><span>Vault</span><span>Value</span><span>Share</span><span>Target</span><span>Drift</span></div>
+                      <template x-for="r in explorerRows()" :key="r.key">
+                        <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                                :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                                :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`vault-${r.key}`"
+                                @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                          <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                          <span><span class="rr-legend__l" x-text="r.label"></span></span>
+                          <span class="rr-legend__was rr-legend__v"><span class="rr-sr">Value </span><span x-text="vaultUsd(r.value)"></span></span>
+                          <b><span class="rr-sr">Share </span><span x-text="fmtPctTrim(r.pct)"></span></b>
+                          <span class="rr-legend__was rr-legend__t"><span class="rr-sr">Target </span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span>
+                          <span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Drift </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
+                    <div class="rr-x__clip">
+                      <template x-if="panelRow()">
+                        <div class="rr-x__panel" :id="`vault-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
+                          <div class="rr-x__head">
+                            <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b><a class="rr-lnk" :href="`/vault/${panelRow().key}`" x-text="panelRow().label"></a></b></p>
+                          </div>
+                          <template x-if="panelRow().assets.length">
+                            <table class="rr-table rr-x__assets">
+                              <thead><tr><th scope="col">Position</th><th scope="col" class="q">% of vault</th><th scope="col" class="q">% of total</th></tr></thead>
+                              <tbody>
+                                <template x-for="a in panelRow().assets" :key="a.key">
+                                  <tr>
+                                    <th scope="row"><span x-text="a.label"></span></th>
+                                    <td class="q" x-text="a.ofSleeve == null ? '—' : fmtPctTrim(a.ofSleeve)"></td>
+                                    <td class="q" x-text="a.ofTotal == null ? '—' : fmtPctTrim(a.ofTotal)"></td>
+                                  </tr>
+                                </template>
+                              </tbody>
+                            </table>
+                          </template>
+                          <template x-if="!panelRow().assets.length">
+                            <p class="rr-note" style="margin:0">No holdings reported</p>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                  <span class="rr-sr" role="status" x-text="status"></span>
+                </div>
               </div>
-              <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
-                <thead>
-                  <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
-                </thead>
-                <tbody>
-                  <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
-                    <tr>
-                      <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
-                      <td x-text="chainLabel(p.chain)"></td>
-                      <td class="q" :title="p.balance != null ? String(p.balance) : ''" x-text="fmtAmount(p.balance)"></td>
-                      <td class="q" x-text="fmtPrice(p.price_usd)"></td>
-                      <td class="q" x-text="fmtUsd(p.value_usd)"></td>
-                      <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
-                    </tr>
-                  </template>
-                  <template x-if="!positionRows().length">
-                    <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="snapshot ? 'No positions' : 'No holdings read yet'"></span></td></tr>
-                  </template>
-                </tbody>
-              </table></div>
-            </div>
+            </template>
+
+            <!-- Any other book, or a vault stack with no vault in it: the plain
+                 positions table, empty when there is no reading. -->
+            <template x-if="!isVaultStack() || !vaultGroups().length">
+              <div class="rr-positions">
+                <div class="rr-subhead">
+                  <h3 class="rr-subhead__h">Positions</h3>
+                  <template x-if="snapshot?.date"><span class="rr-sec__aside" x-text="`Last read on ${formatDate(snapshot.date, 'short')}`"></span></template>
+                </div>
+                <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
+                  <thead>
+                    <tr><th scope="col">Token</th><th scope="col">Chain</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in positionRows()" :key="`${p.token}-${p.chain}`">
+                      <tr>
+                        <th scope="row"><i data-mark="series" :style="`background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></th>
+                        <td x-text="chainLabel(p.chain)"></td>
+                        <td class="q" x-text="fmtAmount(p.balance)"></td>
+                        <td class="q" x-text="fmtPrice(p.price_usd)"></td>
+                        <td class="q" x-text="fmtUsd(p.value_usd)"></td>
+                        <td class="q"><span class="rr-share"><i :style="`width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${positionColor(p.token)}`" aria-hidden="true"></i><span x-text="fmtPct1(p.share)"></span></span></td>
+                      </tr>
+                    </template>
+                    <template x-if="!positionRows().length">
+                      <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="snapshot ? 'No positions' : 'No holdings read yet'"></span></td></tr>
+                    </template>
+                  </tbody>
+                </table></div>
+              </div>
+            </template>
 
             <!-- A line needs two readings: with one, the chart's frame says so.
                  With none, the positions table above already has. -->
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
-                <figcaption class="rr-area__head"><h3 class="rr-subhead__h">Positions over time</h3></figcaption>
+                <figcaption class="rr-area__head"><h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Sleeves over time' : 'Over time'">Over time</h3></figcaption>
                 <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
               </figure>
             </template>
             <template x-if="chartModel()">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head">
-                  <h3 class="rr-subhead__h">Positions over time</h3>
-                  <span class="rr-sec__aside" x-text="chartSpan()"></span>
+                  <h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Sleeves over time' : 'Over time'">Over time</h3>
                 </figcaption>
                 <div class="rr-area__frame">
                   <div class="rr-area__y" aria-hidden="true">
@@ -354,7 +515,7 @@
                         <p class="rr-area__tip-h"><b x-text="chartPoint(chartAt).date"></b><span x-text="chartPoint(chartAt).total"></span></p>
                         <ul>
                           <template x-for="it in chartPoint(chartAt).items" :key="it.token">
-                            <li :class="chartFocus && chartFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.color}`"></i><span x-text="it.label"></span><b x-text="it.pct"></b></li>
+                            <li :class="chartFocus && chartFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.color}`" :data-mark="it.mark"></i><span x-text="it.label"></span><b x-text="it.pct"></b></li>
                           </template>
                         </ul>
                       </div>
@@ -366,21 +527,166 @@
                 </div>
                 <ul class="rr-area__legend">
                   <template x-for="l in concentrationLegend()" :key="l.token">
-                    <li :class="chartFocus && chartFocus !== l.token ? 'is-muted' : ''" @pointerenter="chartFocus = l.token" @pointerleave="chartFocus = null">
-                      <i :style="`background:${l.color}`" aria-hidden="true"></i><span x-text="l.label"></span>
+                    <li :class="chartFocus && chartFocus !== l.token ? 'is-muted' : ''" @pointerenter="chartFocus = l.target ? null : l.token" @pointerleave="chartFocus = null">
+                      <i :class="l.target ? 'is-target' : ''" :style="l.target ? '' : `background:${l.color}`" :data-mark="l.mark" aria-hidden="true"></i><span x-text="l.label"></span>
                     </li>
                   </template>
                 </ul>
               </figure>
             </template>
 
-            <template x-if="(snapshot?.notable || []).length">
+            <!-- The vault stack's positions, by vault or as one list. By
+                 vault, each vault heads its group in the published order and
+                 folds; a header sorts what each vault holds, never the vaults,
+                 so a sort moves no row out of its group. Every share is a
+                 share of the whole book. Fixed columns, so neither a sort nor
+                 a fold moves a column. Chain renders only when positions span
+                 chains; it stays the second column, the one .rr-positions
+                 drops on a phone. -->
+            <template x-if="isVaultStack() && vaultGroups().length">
+              <div class="rr-positions rr-positions--stack">
+                <div class="rr-subhead">
+                  <h3 class="rr-subhead__h">Positions</h3>
+                  <div class="rr-subhead__tools">
+                    <template x-if="stackSnapshot()?.date"><span class="rr-sec__aside" x-text="`Last read on ${formatDate(stackSnapshot().date, 'short')}`"></span></template>
+                    <div class="rm-chips" role="group" aria-label="Positions view">
+                      <button type="button" class="rm-chip" :aria-pressed="posView === 'vault' ? 'true' : 'false'" @click="posView = 'vault'">By vault</button>
+                      <button type="button" class="rm-chip" :aria-pressed="posView === 'all' ? 'true' : 'false'" @click="posView = 'all'">All</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-postable">
+                  <colgroup><col class="rr-postable__name"><col x-show="stackMultiChain()" class="rr-postable__chain"><col class="rr-postable__n"><col class="rr-postable__n"><col class="rr-postable__n"><col class="rr-postable__share"></colgroup>
+                  <thead>
+                    <tr><th scope="col">Position</th><th scope="col" x-show="stackMultiChain()">Chain</th>
+                      <template x-for="c in [['amount', 'Amount'], ['price', 'Price'], ['value', 'Value'], ['share', 'Share']]" :key="c[0]">
+                        <th scope="col" class="q" :aria-sort="posSortState(c[0])"><button type="button" class="rr-sort" @click="sortPositions(c[0])" x-text="c[1]"></button></th>
+                      </template>
+                    </tr>
+                  </thead>
+                  <template x-if="posView === 'vault'">
+                    <template x-for="g in groupedPositions()" :key="g.slug">
+                      <tbody :class="posClosed[g.slug] ? 'is-closed' : ''">
+                        <tr class="rr-group">
+                          <th scope="rowgroup">
+                            <button type="button" class="rr-fold" :aria-expanded="posClosed[g.slug] ? 'false' : 'true'" :aria-label="`${posClosed[g.slug] ? 'Show' : 'Hide'} ${g.symbol} positions`" @click="togglePosGroup(g.slug)"><span aria-hidden="true"></span></button>
+                            <template x-if="g.color">
+                              <span class="rr-group__id"><i class="rr-dot" data-mark="series" :style="`background:${g.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="`/vault/${g.slug}`" x-text="g.symbol"></a><small x-text="g.name"></small></span>
+                            </template>
+                            <template x-if="!g.color"><span class="rr-group__id" x-text="g.symbol"></span></template>
+                          </th>
+                          <td x-show="stackMultiChain()"></td>
+                          <td class="q"></td>
+                          <td class="q"></td>
+                          <td class="q" x-text="vaultUsd(g.value)"></td>
+                          <td class="q">
+                            <span class="rr-share">
+                              <i :data-mark="g.color ? 'series' : null" :style="g.color ? `width:${Math.max(0, Math.min(100, g.share * 100))}%;background:${g.color}` : ''" aria-hidden="true"></i>
+                              <span x-text="fmtPct1(g.share)"></span>
+                            </span>
+                          </td>
+                        </tr>
+                        <template x-for="p in g.positions" :key="`${g.slug}-${p.token}-${p.chain}`">
+                          <tr class="rr-in" x-show="!posClosed[g.slug]">
+                            <th scope="row">
+                              <template x-if="positionHref(p)"><a class="rr-lnk" :href="positionHref(p)" target="_blank" rel="noopener noreferrer" x-text="p.label"></a></template>
+                              <template x-if="!positionHref(p)"><span x-text="p.label"></span></template>
+                            </th>
+                            <td x-show="stackMultiChain()" x-text="chainLabel(p.chain)"></td>
+                            <td class="q" x-text="fmtAmount(p.balance)"></td>
+                            <td class="q" x-text="fmtPrice(p.price_usd)"></td>
+                            <td class="q" x-text="vaultUsd(p.value)"></td>
+                            <td class="q">
+                              <span class="rr-share">
+                                <i :data-mark="g.color ? 'series' : null" :style="g.color ? `width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${g.color}` : ''" aria-hidden="true"></i>
+                                <span x-text="fmtPct1(p.share)"></span>
+                              </span>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </template>
+                  </template>
+                  <template x-if="posView === 'all'">
+                    <tbody>
+                      <template x-for="p in sortedPositions()" :key="`${p.group.slug}-${p.token}-${p.chain}`">
+                        <tr>
+                          <th scope="row">
+                            <span class="rr-group__id"><i class="rr-dot" :data-mark="p.group.color ? 'series' : null" :style="p.group.color ? `background:${p.group.color}` : ''" aria-hidden="true"></i>
+                              <template x-if="positionHref(p)"><a class="rr-lnk" :href="positionHref(p)" target="_blank" rel="noopener noreferrer" x-text="p.label"></a></template>
+                              <template x-if="!positionHref(p)"><span x-text="p.label"></span></template>
+                              <small x-text="p.group.symbol"></small></span>
+                          </th>
+                          <td x-show="stackMultiChain()" x-text="chainLabel(p.chain)"></td>
+                          <td class="q" x-text="fmtAmount(p.balance)"></td>
+                          <td class="q" x-text="fmtPrice(p.price_usd)"></td>
+                          <td class="q" x-text="vaultUsd(p.value)"></td>
+                          <td class="q">
+                            <span class="rr-share">
+                              <i :data-mark="p.group.color ? 'series' : null" :style="p.group.color ? `width:${Math.max(0, Math.min(100, p.share * 100))}%;background:${p.group.color}` : ''" aria-hidden="true"></i>
+                              <span x-text="fmtPct1(p.share)"></span>
+                            </span>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </template>
+                </table></div>
+              </div>
+            </template>
+
+            <!-- Not for the vault stack: its archived notes restate the target
+                 weights and name internal files. -->
+            <template x-if="!isVaultStack() && (snapshot?.notable || []).length">
               <div class="rr-block rr-area__notes">
                 <div class="rr-subhead"><h3 class="rr-subhead__h">Highlights</h3></div>
                 <ul class="rr-list">
                   <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
                 </ul>
               </div>
+            </template>
+          </section>
+        </template>
+
+        <!-- ACTIVITY: every vault's deposits and withdrawals, newest first,
+             ten to a page, as a vault's own page lists its own. Only where a
+             source serves activity (the Base feed does not). -->
+        <template x-if="isVaultStack() && stackActivity">
+          <section class="rr-sec" id="activity" aria-labelledby="sact-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="sact-h">Activity</h2>
+            </div>
+            <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="stackActivityHasTx() ? 'has-tx' : ''">
+              <thead>
+                <tr><th scope="col">Date</th><th scope="col">Vault</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
+              </thead>
+              <tbody>
+                <template x-for="(a, i) in stackActivityRows()" :key="`${stackActivityPage}-${i}-${a.vault}-${a.t}`">
+                  <tr>
+                    <th scope="row" x-text="formatDate(a.t, 'short')"></th>
+                    <td><i class="rr-dot" data-mark="series" :style="`background:${a.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="`/vault/${a.vault}`" x-text="a.symbol"></a></td>
+                    <td x-text="activityEvent(a)"></td>
+                    <td class="q" x-text="activityAmount(a)"></td>
+                    <td class="q" x-text="activityValue(a)"></td>
+                    <td class="q rr-activity__tx">
+                      <template x-if="a.tx && explorerHref('base', a.tx)"><a class="rr-lnk" :href="explorerHref('base', a.tx)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(a.tx)"></a></template>
+                      <template x-if="!a.tx"><span>—</span></template>
+                    </td>
+                  </tr>
+                </template>
+                <template x-if="!stackActivity.length">
+                  <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t">No activity yet</span></td></tr>
+                </template>
+              </tbody>
+            </table></div>
+            <template x-if="stackActivityPaged()">
+              <nav class="rr-pager" aria-label="Activity pages">
+                <span role="status" x-text="stackActivityRange()"></span>
+                <div>
+                  <button type="button" class="rr-btn" :disabled="stackActivityPage === 0" @click="stackActivityPage -= 1">Newer</button>
+                  <button type="button" class="rr-btn" :disabled="(stackActivityPage + 1) * 10 >= stackActivity.length" @click="stackActivityPage += 1">Older</button>
+                </div>
+              </nav>
             </template>
           </section>
         </template>
@@ -432,8 +738,7 @@
                         <td class="q" :class="v === 0 ? 'is-zero' : ''">
                           <span x-text="v == null ? '—' : pctLabel(v)"></span>
                           <template x-if="moveAt(row, i)">
-                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, i).d)" x-text="changeLabel(moveAt(row, i).d)"
-                                  :title="`${changeLabel(moveAt(row, i).d)} vs target ${pctLabel(moveAt(row, i).was)}`"></span>
+                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, i).d)" x-text="changeLabel(moveAt(row, i).d)"></span>
                           </template>
                         </td>
                       </template>
@@ -475,10 +780,10 @@
                           <span><em class="rr-act" :class="`is-${a.action}`" x-text="a.label"></em><span x-text="a.token"></span></span>
                         </template>
                         <template x-if="rowHeld(row).length && rowActions(row).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`${rowHeld(row).length} held`"></span>
+                          <span class="rm-tip rm-tip--label rm-tip--end rr-held"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="`${rowHeld(row).length} held`"></button><span class="rm-tip__bub" role="tooltip" x-text="`Held: ${rowHeld(row).join(', ')}`"></span></span>
                         </template>
                         <template x-if="rowHeld(row).length && !rowActions(row).length">
-                          <span class="rr-held" :title="`Held: ${rowHeld(row).join(', ')}`" x-text="`All ${rowHeld(row).length} held`"></span>
+                          <span class="rm-tip rm-tip--label rm-tip--end rr-held"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="`All ${rowHeld(row).length} held`"></button><span class="rm-tip__bub" role="tooltip" x-text="`Held: ${rowHeld(row).join(', ')}`"></span></span>
                         </template>
                         <template x-if="recommendation(row)?.kind === 'text'"><span class="rr-rowtext" x-text="recommendation(row).text"></span></template>
                         <template x-if="recommendation(row) && recommendation(row).kind !== 'text' && !rowActions(row).length && !rowHeld(row).length"><span class="rr-note" style="margin:0">No actions</span></template>
@@ -514,6 +819,8 @@
   </div>
 
   <style>
+    /* An address with no explorer to link: whole, wrapping anywhere. */
+    .sp-addr { overflow-wrap: anywhere; }
     /* Page-local: the book's chart and wallet list. The record's components
        are shared in views.css (.rr-*). */
     .sp-wallets li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }

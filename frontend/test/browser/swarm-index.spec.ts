@@ -256,7 +256,9 @@ test("a published session's history row states its recommendation, its lean and 
   // The subject is a way to its own page, as the session date is to its.
   await expect(alloc.locator(".rr-hist__subj a")).toHaveAttribute("href", "/swarm/subjects/robotmoney-allocation");
   await expect(alloc.locator("th a")).toHaveText("Jul 15, 2026");
-  await expect(alloc.locator("th small")).toHaveText("12:00 UTC · 4 takes");
+  // The time a row prints is when the session convened, as its page's is,
+  // not when it published.
+  await expect(alloc.locator("th small")).toHaveText("11:00 UTC · 4 takes");
   await expect(alloc.locator(".sv__stance-badge")).toHaveText("cautious");
   await expect(alloc.locator("td.rr-verdict")).toHaveText("Rebalance");
   await expect(alloc.locator("td.rr-verdict .rr-mixline, td.rr-verdict .alp__mv")).toHaveCount(0);
@@ -532,4 +534,38 @@ test("the latest allocation and the history state each fact once", async ({ page
   await history.getByRole("button", { name: "Show more" }).click();
   await expect(history.locator(".rr-hist tbody tr")).toHaveCount(32);
   await expect(history.locator(".rr-pager")).toHaveCount(0);
+});
+
+// Production on Sep 21: every allocation session since Aug 3 published no
+// weights. The flagship draws the weights that stand, Aug 3's, and names the
+// newest session as the one that held the target, rather than an empty ring.
+test("the flagship draws the newest weights and names a newer session that held the target", async ({ page }) => {
+  const session = (id: string, date: string, rec: unknown) => ({
+    id, date, subjectId: "robotmoney-allocation", subjectName: "Robot Money Allocation", state: "published",
+    windowClosesAt: `${date}T12:00:00Z`, publishedAt: `${date}T12:00:00Z`, generatedAt: `${date}T11:00:00Z`,
+    regimeSummary: null, swarmRecommendation: rec, socialDraftId: null,
+  });
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      sessions: [
+        session("sess-held", "2026-09-21", { type: "bucket_weights", weights: null, rationale: "Majority stance is constructive." }),
+        session("sess-weights", "2026-08-03", WEIGHTS_REC),
+      ],
+      nextCursor: null,
+    })));
+
+  await page.goto("/swarm");
+
+  const alloc = page.locator("#allocation");
+  await expect(alloc.locator(".rr-ring--empty")).toHaveCount(0);
+  await expect(alloc.locator(".rr-legend__row")).toHaveCount(4);
+  const held = alloc.locator(".rr-meta");
+  await expect(held.locator(".rr-meta__i").first()).toHaveText("Latest session Sep 21, 2026");
+  await expect(held.locator("a")).toHaveAttribute("href", "/swarm/sessions/sess-held");
+  await expect(held.locator(".rr-meta__i").nth(1)).toHaveText("Recommendation Target held");
+  // Since the session the ring draws, the one the link beside it opens.
+  await expect(held.locator(".rr-meta__i").nth(2)).toHaveText("Since Aug 3, 2026");
+  await expect(alloc.locator(".rr-cta")).toContainText("Read the Aug 3, 2026 session");
 });

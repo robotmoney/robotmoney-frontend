@@ -394,13 +394,11 @@
   max-width: 72ch;
   line-height: 1.6;
 }
-.pj-provenance a { color: var(--color-accent); }
 
 /* ── Table (a2 look) ─────────────────────────────────────────────────────── */
 .a2-table__scroll {
   overflow-x: auto;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 .pj-scroll { max-height: calc(100vh - 220px); }
 .a2-table {
@@ -463,17 +461,21 @@
   letter-spacing: 0.04em;
 }
 .pj-sort:hover { color: var(--color-text); }
-.pj-sort--active { color: var(--color-accent); }
+.pj-sort--active { color: var(--color-text); }
 .pj-sort__i { opacity: 0.55; font-size: 0.7em; }
 .pj-sort--active .pj-sort__i { opacity: 1; }
 
-/* Project name cell — link wraps the logo + name (§5.4 item 5). */
-.pj-name__link { display: block; color: inherit; text-decoration: none; }
-.pj-name__link:hover .pj-name__text { text-decoration: underline; }
+/* Project name cell — link wraps the logo + name (§5.4 item 5). The name is
+   the link text, so it carries the link's underline and the logo does not. */
+.pj-name__link { display: block; color: var(--color-link); text-decoration: none; }
+.pj-name__link .pj-name__text {
+  text-decoration-line: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px;
+}
+.pj-name__link:hover .pj-name__text { text-decoration-color: var(--color-link); }
 .pj-name__inner { display: flex; align-items: center; gap: 0.55rem; }
 .pj-logo {
   width: 26px; height: 26px;
-  border-radius: 5px;
   border: 1px solid var(--color-border);
   flex-shrink: 0;
   object-fit: cover;
@@ -494,8 +496,15 @@
 .pj-desc { max-width: 22rem; color: var(--color-text-muted); line-height: 1.5; }
 .pj-desc span { display: block; white-space: normal; word-break: break-word; }
 
-.pj-link { color: var(--color-accent); text-decoration: none; }
-.pj-link:hover { text-decoration: underline; }
+/* Text links are monochrome, as everywhere on the site: --color-link over a
+   --color-link-line underline that goes to --color-link on hover. The
+   provenance notice has no link today; its pointer returns with analytics. */
+.pj-link, .pj-provenance a {
+  color: var(--color-link);
+  text-decoration-line: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px;
+}
+.pj-link:hover, .pj-provenance a:hover { text-decoration-color: var(--color-link); }
 
 .a2-table td.a2-r i {
   display: block;
@@ -505,20 +514,23 @@
   margin-top: 1px;
 }
 
-/* Facet pills */
+/* Facet pills: the site's chip, mono caps at the chip rung. A facet the
+   project covers is edged in the text colour, as a selected chip is; one it
+   lacks stays muted. No hue either way. */
 .pj-facets { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 .pj-pill {
   padding: 0.1rem 0.35rem;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
   border: 1px solid;
-  border-radius: 3px;
 }
 .pj-pill--on {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-text);
+  border-color: var(--color-text);
+  background: transparent;
 }
 .pj-pill--off {
   color: var(--color-text-muted);
@@ -532,20 +544,24 @@
 
 /* ── Definitions dialog (§5.4 item 1) ───────────────────────────────────── */
 .pj-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+/* The site's secondary button: a neutral outline that goes to the text
+   colour on hover, never cyan. */
 .pj-defs-trigger {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  background: none;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
   padding: 0.35rem 0.7rem;
   font-family: var(--font-mono);
   font-size: 0.7rem;
-  color: var(--color-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text);
   cursor: pointer;
 }
-.pj-defs-trigger:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.pj-defs-trigger:hover { border-color: var(--color-text); background: var(--color-surface); }
 .pj-defs-trigger span { opacity: 0.7; }
 .pj-dialog-overlay {
   position: fixed;
@@ -560,7 +576,6 @@
 .pj-dialog {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   max-width: 40rem;
   width: 100%;
   max-height: min(80vh, 640px);
@@ -619,7 +634,6 @@
   height: 14px;
   border: 1px solid var(--color-border);
   border-bottom: none;
-  border-radius: 8px 8px 0 0;
 }
 .pj-scroll-mirror > div { height: 1px; }
 /* Hides the browser scrollbar chrome while keeping the element scrollable —
@@ -628,7 +642,7 @@
    "main container hides its x-scrollbar via .hide-x-scrollbar"). */
 .hide-x-scrollbar-visual { scrollbar-width: thin; }
 .hide-x-scrollbar-visual::-webkit-scrollbar { height: 6px; }
-.a2-table__scroll.pj-scroll { border-top: none; border-radius: 0 0 8px 8px; }
+.a2-table__scroll.pj-scroll { border-top: none; }
 
 /* ── Column resizing (§5.4 item 3) ──────────────────────────────────────── */
 .pj-resizable { position: relative; }

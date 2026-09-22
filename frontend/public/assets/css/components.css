@@ -18,9 +18,9 @@
    content is unaffected. */
 #view:empty { min-height: 100vh; }
 
-/* pulse (was Tailwind animate-pulse) */
+/* pulse (was Tailwind animate-pulse), for the skeleton blocks below */
 @keyframes rmPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-.rm-pulse { animation: rmPulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+
 
 .container { max-width: 80rem; margin-inline: auto; }
 
@@ -78,12 +78,15 @@
   text-decoration: none;
   transition: color 0.3s;
 }
-.nav__link:hover { color: var(--color-accent); }
+/* The nav treatment, monochrome like every link on the site: muted and bare at
+   rest, since a row of underlines is noise where every entry is a link, and on
+   hover the words go to full text colour as the rule draws in under them. */
+.nav__link:hover { color: var(--color-text); }
 .nav__underline {
   position: absolute;
   bottom: 0; left: 1rem; right: 1rem;
   height: 1px;
-  background: var(--color-accent);
+  background: var(--color-link);
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 0.3s;
@@ -105,9 +108,10 @@
 .nav__mlink {
   font-family: var(--font-sans); font-size: 0.875rem;
   text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--color-text-muted); text-decoration: none; transition: color 0.2s;
+  color: var(--color-text-muted); text-decoration: none; text-decoration-thickness: 1px;
+  text-underline-offset: 4px; transition: color 0.2s;
 }
-.nav__mlink:hover { color: var(--color-accent); }
+.nav__mlink:hover { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-link); }
 .nav__mobile-cta { margin-top: 1rem; justify-content: center; }
 
 @media (min-width: 1024px) {
@@ -169,7 +173,7 @@
 
 .hero__terminal { width: 100%; }
 .terminal-wrap { position: relative; }
-.terminal { background: var(--color-deep); border: 1px solid var(--color-border); border-radius: 2px; overflow: hidden; }
+.terminal { background: var(--color-deep); border: 1px solid var(--color-border); border-radius: 0; overflow: hidden; }
 .terminal__bar {
   display: flex; align-items: center; gap: 0.5rem;
   padding: 0.75rem 1rem;
@@ -240,8 +244,10 @@
 .disclaimer { background: #1a1408; border-block: 1px solid rgba(245, 166, 35, 0.3); }
 .disclaimer__inner { max-width: 56rem; margin-inline: auto; padding: 1.5rem; text-align: center; }
 .disclaimer__text { font-size: 0.875rem; font-family: var(--font-sans); color: #f5a623; margin: 0; }
-.disclaimer__text a { text-decoration: underline; color: inherit; }
-.disclaimer__text a:hover { color: var(--color-accent); }
+.disclaimer__text a { color: var(--color-link); text-decoration: underline;
+  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px;
+  text-underline-offset: 3px; }
+.disclaimer__text a:hover { text-decoration-color: var(--color-link); }
 .disclaimer__sub { font-size: 0.75rem; font-family: var(--font-sans); color: rgba(245, 166, 35, 0.5); margin: 0.5rem 0 0; }
 @media (min-width: 768px) { .disclaimer__text { font-size: 1rem; } }
 
@@ -341,13 +347,19 @@
 .rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
 .rm-chart, .rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
 
-/* toggle chips */
+/* toggle chips: the button family's mono caps at the label size, square. A
+   selected chip is edged and lettered in --color-text, never cyan. */
 .rm-chips, .rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .rm-chip, .rv__chip {
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em;
   padding: 0.25rem 0.5rem; border-radius: var(--radius); border: 1px solid var(--color-border);
   color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
+.rm-chip[aria-pressed="true"], .rv__chip[aria-pressed="true"] { border-color: var(--color-text); color: var(--color-text); }
+/* A chart overlay's chip carries its series' colour as a dot, not as its own
+   border or label; off, the dot recedes with the label. */
+.rv__chip-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.5rem; vertical-align: 0.05em; }
+.rv__chip[aria-pressed="false"] .rv__chip-dot { opacity: 0.4; }
 
 /* Announced to screen readers, never painted. The clip-path pair is the
    modern-safe form: `display:none` and `visibility:hidden` remove the node from
@@ -374,9 +386,9 @@
    hover-only tooltip gets wrong on a phone.
 
      icon    13px ring, muted, sized to sit on the line it annotates
-     bubble  surface + 1px border, radius 2. No shadow and no arrow: the
-             covenant is flat planes, and an arrow is a rounded flourish this
-             system does not have anywhere else.
+     bubble  surface + 1px border, square corners. No shadow and no arrow:
+             the covenant is flat planes, and an arrow is a rounded flourish
+             this system does not have anywhere else.
      motion  140ms opacity plus a 3px rise.
 
    Below 700px a bubble centred on a 13px icon cannot fit — an icon near the
@@ -386,13 +398,15 @@
 
    ONE BUBBLE (David, 2026-09-19: "We should have a single tooltip that we
    could use across the site"). The skin below is the only one: the (i) tips,
-   the seal's state (.sv__vfy-tip), a take's filed time (.mp-when__tip) and a
-   market-context reading (.sig__tip) all wear it. Each keeps only its own
+   the seal's state (.sv__vfy-tip), a take's filed time (.mp-when__tip), a
+   market-context reading (.sig__tip), a /regime indicator's definition
+   (.rv__tip) and the dashboards' hover bubble (.a3-tooltip-bubble, appended
+   to <body>, so it reads the root tokens) all wear it. Each keeps only its own
    anchoring and trigger; none restyles the bubble. A chart's crosshair readout
    is a figure panel, not a tooltip, and is not in this list. */
-.rm-tip__bub, .sv__vfy-tip, .mp-when__tip, .sig__tip {
+.rm-tip__bub, .sv__vfy-tip, .mp-when__tip, .sig__tip, .rv__tip, .a3-tooltip-bubble {
   padding: 0.65rem 0.75rem;
-  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: 0;
   font-family: var(--font-sans); font-size: 0.78rem; line-height: 1.55; color: var(--color-text-soft);
   text-transform: none; letter-spacing: 0; text-align: left; font-weight: 400; overflow-wrap: break-word; }
 .rm-tip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.3rem; }
@@ -497,6 +511,21 @@
 .rm-sphase::before { content: ""; position: absolute; left: 0; top: 50%;
   width: 6px; height: 6px; margin-top: -3px; background: currentColor; }
 .rm-sphase--open, .rm-sphase--aggregating { color: var(--color-warm); }
+
+/* A live state: a square beating slowly, so it cannot be read as the static
+   verified mark (a member's Active, a vault's Live). Hueless: green is a
+   constructive stance and rmUSDC's own hue, and a live mark in it read as the
+   vault's swatch (the covenant above). The beat carries the meaning. */
+.rm-pulse { display: inline-block; width: 0.4rem; height: 0.4rem; background: var(--color-text);
+  flex: 0 0 auto; vertical-align: middle; animation: rm-pulse-beat 2.4s ease-in-out infinite; }
+.rm-live { display: inline-flex; align-items: center; gap: 0.5rem; }
+@keyframes rm-pulse-beat { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .rm-pulse { animation: none; } }
+/* A plain fact worn as a pill (Coming soon): mono caps on a hairline, square,
+   no hue, the role pill's shape. */
+.rm-pill { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
 /* Published takes a green mark, the word staying muted (David, 2026-09-22):
    grey read as inert beside the facts it leads on the session page. */
 .rm-sphase--published::before { background: var(--color-green); }
@@ -532,8 +561,10 @@
                would only repeat the label while colliding with stance.
                `.rm-mark--identity`, square, always neutral.
 
-     ACCENT    (--color-accent) is interface state only: selected, focused,
-               hovered, link. Never a data value.
+     ACCENT    (--color-accent) is never a data value, and never a link, a
+               button outline or a selected state, which are monochrome. A
+               filled primary button and the focus ring are its interactive
+               uses.
 
    The round/square split already existed and was correct (swarm/subject.html:
    "a round dot is a reading, a square one is an identity"). It was carrying
@@ -550,6 +581,16 @@
    identity mark nobody can see says nothing at all. Hueless is the part that
    carries the meaning, and it stays hueless. */
 .rm-mark--identity { width: 0.42rem; height: 0.42rem; background: var(--color-text-muted); }
+
+/* A link that opens a new tab says so, site-wide: an arrow after its text.
+   Text links only: a link that is an image, an icon, a card or a button
+   carries none, and the dashboards keep their own link style. The arrow is
+   generated rather than typed, so a copied link text stays its words, and its
+   alternative text is empty: a screen reader announces the new tab itself. */
+a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not([data-dash-shell] *)::after {
+  content: "\2197"; content: "\2197" / "";
+  display: inline-block; margin-left: 0.25em; text-decoration: none;
+}
 
 .rm-visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -615,10 +656,9 @@
    count is a figure and green is reserved for money as a mass.
    NO CYAN SEAM. It used to draw one across the top, argued as "a line, never a
    fill" — but a fixed accent rail on a fixed block is a decoration that reports
-   nothing, and it is the one device the brand sheet names outright. Cyan is
-   interface STATE here: it earns a place when something is focused, current or
-   hovered, and a strip of counts is none of those. The 1px grid already
-   separates the cells. */
+   nothing, and it is the one device the brand sheet names outright. A strip of
+   counts is not a control, and a rail on it is decoration. The 1px grid
+   already separates the cells. */
 .rm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
             margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
             border-top: 1px solid var(--color-border); }
@@ -646,11 +686,10 @@
    never quiet a single frame. On the apply page the same job was done by four
    links glued into a prose sentence with middots.
 
-   The hierarchy here is carried by HOW MUCH BEAM LINE a control gets, which is
-   the one thing the covenant already says cyan is for: the action is enclosed
-   by a rule on four sides, a destination is underscored by a rule on one, and
-   prose links get none. That leaves the LABELS free to be plain text, which is
-   what pulls cyan back out of the type: on the status page cyan was 26% of all
+   The hierarchy here is carried by HOW MUCH RULE a control gets: the action is
+   enclosed by a rule on four sides, a destination is underscored by a rule on
+   one. Every rule is neutral and every LABEL is plain text, which is what
+   pulled cyan back out of the type: on the status page cyan was 26% of all
    rendered characters, against 2% on the apply page, and every one of those
    characters was a control that could have been white.
 
@@ -666,44 +705,50 @@
               font-family: var(--font-mono); font-size: 0.72rem;
               text-transform: uppercase; letter-spacing: 0.12em; }
 
-/* The action. Outlined, never filled: cyan behind a label is cyan as mass. */
+/* The action. Outlined, never filled: it is the button family's outlined
+   secondary (a --color-border-light outline, mono caps at 0.1em and weight
+   500, the border going to --color-text on hover), and keeps its 44px touch
+   height. */
 .rm-actions .rm-actions__do {
   display: inline-flex; align-items: center; gap: .5rem; min-height: 44px;
   padding: 0 1rem; color: var(--color-text); text-decoration: none;
-  border: 1px solid var(--color-accent); border-radius: var(--radius);
+  border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-size: 0.75rem; font-weight: 500; letter-spacing: 0.1em;
+  transition: border-color 0.3s, background-color 0.3s;
 }
-.rm-actions .rm-actions__do:hover { background: var(--color-accent-glow); color: var(--color-text); }
+.rm-actions .rm-actions__do:hover { border-color: var(--color-text); background: var(--color-surface); color: var(--color-text); }
 
 /* ── Links: one convention ────────────────────────────────────────────────
    Five treatments had grown for the same job, and two links a paragraph apart
    could look like different kinds of thing:
 
-     .sv__panel-link / .sv__back / .sv__memo-link   cyan words, no rule
+     .sv__panel-link / .sv__memo-link               cyan words, no rule
      .sv__take-body a / .sv__synthesis a            cyan words, no rule
      .sv__cov-lnk                                   cyan words over a cyan rule
      .rm-actions__link                              soft words under a cyan rule
      .sv__live-lnk                                  muted words over a grey rule
 
-   THE RULE IS THE LINK; THE ACCENT IS THE INTERACTION. A link keeps the colour
-   of the text around it and carries a 1px rule underneath. The rule is neutral
-   at rest and takes the accent on hover and on keyboard focus — which is what
-   --color-accent is defined for on this site: interface STATE, never a value
-   and never a decoration. Cyan at rest spent the accent on the mere presence
-   of a link, so a page of links was a page of coloured words and touching one
-   changed nothing.
+   THE RULE IS THE LINK, AND NO LINK IS CYAN (David, 2026-09-18). A link is set
+   in --color-link, a step lighter than the prose around it, over a 1px neutral
+   rule (--color-link-line) that goes to the link's own colour on hover and on
+   keyboard focus. Cyan at rest spent the accent on the mere presence of a
+   link, so a page of links was a page of coloured words; cyan on hover went
+   with it: a link is monochrome at rest and on hover.
 
    Type, size, tracking and layout stay with each caller: these are the same
    KIND of thing, not the same size of thing, and a mono uppercase meta link
-   should not become body prose to get an underline. */
+   should not become body prose to get an underline. A caller may rest a meta
+   link at a quieter grey, the nav treatment; the rule and the hover stay.
+   The back link (.sv__back, views.css) is a secondary button, not one of these. */
 .rm-link,
 .rm-actions .rm-actions__link,
 .sv__live-lnk, .sv__cov-lnk,
-.sv__panel-link, .sv__back, .sv__memo-link,
+.sv__panel-link, .sv__memo-link,
 .sv__how-d a, .sv__take-body a, .sv__synthesis a {
-  color: inherit;
+  color: var(--color-link);
   border-bottom: 0;
   text-decoration: underline;
-  text-decoration-color: var(--color-border-light);
+  text-decoration-color: var(--color-link-line);
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
 }
@@ -712,13 +757,12 @@
 .sv__live-lnk:hover, .sv__live-lnk:focus-visible,
 .sv__cov-lnk:hover, .sv__cov-lnk:focus-visible,
 .sv__panel-link:hover, .sv__panel-link:focus-visible,
-.sv__back:hover, .sv__back:focus-visible,
 .sv__memo-link:hover, .sv__memo-link:focus-visible,
 .sv__how-d a:hover, .sv__how-d a:focus-visible,
 .sv__take-body a:hover, .sv__take-body a:focus-visible,
 .sv__synthesis a:hover, .sv__synthesis a:focus-visible {
-  color: var(--color-text);
-  text-decoration-color: var(--color-accent);
+  color: var(--color-link);
+  text-decoration-color: var(--color-link);
 }
 
 /* ── Swarm disclaimer ───────────────────────────────────────────────────
@@ -738,7 +782,7 @@
 /* legend (colored swatches) */
 .rm-legend, .rv__legend { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 10px; text-transform: none; letter-spacing: normal; color: var(--color-text-muted); }
 .rm-legend-item, .rv__legend-item { display: inline-flex; align-items: center; gap: 0.25rem; }
-.rm-legend-swatch, .rv__legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.rm-legend-swatch, .rv__legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 0; }
 
 /* data table */
 .rm-table-scroll, .rv__table-scroll { overflow-x: auto; }

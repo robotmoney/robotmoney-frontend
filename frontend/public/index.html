@@ -92,28 +92,28 @@
 
     <!-- Shared design system — load order matters: tokens, then design-system,
          then components. No @import; each file linked individually. -->
-    <link rel="stylesheet" href="/assets/css/tokens.css?v=0b9b7fc6" />
-    <link rel="stylesheet" href="/assets/css/design-system.css?v=4885f7b6" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=ea54c73f" />
+    <link rel="stylesheet" href="/assets/css/tokens.css?v=c84768eb" />
+    <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=14397896" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
     <link rel="stylesheet" href="/assets/css/sections/problem.css?v=9f1e7c76" />
-    <link rel="stylesheet" href="/assets/css/sections/architecture.css?v=6bf563b7" />
+    <link rel="stylesheet" href="/assets/css/sections/architecture.css?v=7a428bfa" />
     <link rel="stylesheet" href="/assets/css/sections/token.css?v=96bbd723" />
-    <link rel="stylesheet" href="/assets/css/sections/contract.css?v=f7947c4e" />
+    <link rel="stylesheet" href="/assets/css/sections/contract.css?v=0aeb4cb5" />
     <link rel="stylesheet" href="/assets/css/sections/governance.css?v=21436cd7" />
-    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=d0847033" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=ebae5e12" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css?v=83bea8cf" />
-    <link rel="stylesheet" href="/assets/css/docs-shell.css?v=85e2fbc7" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=4477e4ff" />
+    <link rel="stylesheet" href="/assets/css/docs-shell.css?v=3b5cd222" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
          dash.css is scoped under `.a3`, so it never affects marketing pages
          (which never carry that class). See docs/bot-analytics-ui-port-plan.md
          §2 for why this is a dedicated file rather than reusing tokens.css. -->
-    <link rel="stylesheet" href="/assets/css/dash.css?v=ef32ed4c" />
+    <link rel="stylesheet" href="/assets/css/dash.css?v=2eb5bb35" />
 
     <!-- Per-environment public config (API origin). No secrets. -->
     <script src="/config.js"></script>
@@ -230,11 +230,11 @@
               </div>
               <p class="footer__about">
                 An Autonomous Treasury for the Agent Economy. Built on Base by
-                <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__link-accent">@JunoAgent</a>.
+                <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__about-link">@JunoAgent</a>.
                 A
-                <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer" class="footer__link-accent">Generative Ventures</a>
+                <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer" class="footer__about-link">Generative Ventures</a>
                 x
-                <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__link-accent">Institute for Zero-Human Companies</a>
+                <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__about-link">Institute for Zero-Human Companies</a>
                 collaboration.
               </p>
             </div>

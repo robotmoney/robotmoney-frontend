@@ -24,7 +24,7 @@ import { allocationFramework } from "../../lib/allocation-framework.js";
 import { memberLogo } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
-  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf } from "../static-views.js";
+  referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf, camelTake } from "../static-views.js";
 import * as weightChange from "../../lib/weight-change.js";
 
 // What the shared take card (lib/take-card.js) reads off its host: the
@@ -201,7 +201,7 @@ export function registerSwarmView(Alpine) {
       // Two subjects can convene on one date; the later one leads, as each row
       // prints its time.
       return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
-        || String(b.publishedAt || b.generatedAt || "").localeCompare(String(a.publishedAt || a.generatedAt || "")));
+        || String(b.generatedAt || b.publishedAt || "").localeCompare(String(a.generatedAt || a.publishedAt || "")));
     },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
@@ -237,8 +237,20 @@ export function registerSwarmView(Alpine) {
       // The brief the latest allocation session opened with: the only honest
       // source of the target its recommendation is measured against, and of
       // the asset names inside each sleeve.
-      const s = this.allocLatest();
-      if (s) this.allocBrief = await this.briefFor(s);
+      const s = this.allocShown();
+      if (s) [this.allocBrief, this.allocTakeRows] = await Promise.all([this.briefFor(s), this.takeRowsFor(s)]);
+    },
+    // The shown session's takes, for the tally under its rationale. The
+    // sessions list carries none and its recommendation no stance counts, so
+    // this reads the detail route, as the subject page does for the same line.
+    // An archived row already has them; a failed read leaves the tally out.
+    async takeRowsFor(s) {
+      if (Array.isArray(s?.takeRows) && s.takeRows.length) return s.takeRows;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) return [];
+      try {
+        const d = await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        return (d?.takes || []).map(camelTake);
+      } catch (_) { return []; }
     },
     async briefFor(s) {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(String(s?.id || ""))) {
@@ -254,6 +266,7 @@ export function registerSwarmView(Alpine) {
     // portfolios and the recommendation history as tables.
     nextSessionAt: null,
     allocBrief: null,
+    allocTakeRows: [],
     facts() {
       const published = this.publishedSessions();
       const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
@@ -275,19 +288,35 @@ export function registerSwarmView(Alpine) {
       const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
       return this.publishedSessions().filter((s) => s.subjectId === id)[0] || null;
     },
+    // The session the flagship draws: the newest that published weights. A
+    // newer one that published none left the target where it was, so the
+    // ring keeps the weights that stand; allocHeldBy() names the newer one.
+    allocShown() {
+      const id = this.allocationSubject()?.id || ALLOCATION_SUBJECT_ID;
+      return this.publishedSessions().find((s) => s.subjectId === id && this.mixOf(s).length) || this.allocLatest();
+    },
+    // The shown session with its takes on it, the record the tally reads.
+    allocRecord() {
+      const s = this.allocShown();
+      return s && this.allocTakeRows.length ? { ...s, takeRows: this.allocTakeRows } : s;
+    },
+    allocHeldBy() {
+      const latest = this.allocLatest();
+      return latest && latest !== this.allocShown() ? latest : null;
+    },
     // The target the latest allocation session is measured against: the one
     // its brief handed over, else the published target when it was already in
     // force that day, as the session page reads it.
     allocReference() {
-      const s = this.allocLatest();
+      const s = this.allocShown();
       return referenceWeights(this.allocBrief) || (s?.referenceAllocation ? referenceWeights({ allocation: s.referenceAllocation }) : null)
         || targetsInForce(this.allocationFw, s?.date);
     },
     // The explorer (lib/sleeve-explorer.js) reads these, as it does on the
     // subject and session pages.
     hasBook() { return false; },
-    explorerSource() { return this.allocLatest(); },
-    explorerSvg() { return this.weightDonutSvg(this.allocLatest()); },
+    explorerSource() { return this.allocShown(); },
+    explorerSvg() { return this.weightDonutSvg(this.allocShown()); },
     // At rest the centre names the ring and nothing more: a recommended mix
     // is the whole allocation by definition, so "100%" says nothing.
     explorerCenter() { return { value: "", label: "Recommended" }; },
@@ -295,7 +324,7 @@ export function registerSwarmView(Alpine) {
       return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
     },
     explorerRows() {
-      const s = this.allocLatest();
+      const s = this.allocShown();
       const rows = this.sessionWeights(s) || [];
       const ref = this.allocReference();
       const sleeveWeight = new Map(rows.map((r) => [normKeyOf(r.key), r.pct / 100]));
