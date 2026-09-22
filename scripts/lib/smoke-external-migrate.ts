@@ -65,7 +65,7 @@ export function refuseIfSchemaBehind(
  * needs, so it drives process.stdin directly rather than pulling one in.
  * Mirrors scripts/gitops-credentials.ts's `hidden()`.
  */
-async function hiddenPrompt(question: string): Promise<string> {
+export async function hiddenPrompt(question: string): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error(
       `${MIGRATE_FLAG_LABEL}: stdin is not a terminal. An operator must type the ${DOADMIN_ROLE} password ` +

@@ -142,8 +142,13 @@ if (up.exitCode !== 0) {
 process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", name]); } catch { /* ignore */ } });
 
 // migrate() retries a real SELECT 1 until the server accepts connections.
+// Seeding is separate from migrating (migrate() no longer seeds), so the
+// template is built by migrating and THEN seeding explicitly — the same
+// migrated-and-seeded database tests cloned before.
 const { migrate } = await import("../src/db/migrate.ts");
+const { seed } = await import("../src/db/seed.ts");
 await migrate();
+await seed();
 
 // Snapshot the migrated schema as a TEMPLATE database, so any test file can
 // clone a clean one for itself in tens of milliseconds instead of re-running

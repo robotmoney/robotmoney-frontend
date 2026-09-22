@@ -1108,16 +1108,20 @@ async function main(): Promise<void> {
   async function initializeScenario(): Promise<void> {
     const step = bootstrapStepNames(smokeMode)[0]!;
     setStep(state, step, "running");
+    // migrate() no longer seeds job_schedules; this non-twin branch only runs
+    // via explicit --seed, so "not twin" here IS simulation (idempotent on twin).
+    await stack.composeAsync(
+      ["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/seed.ts",
+        ...(dataPath.kind !== "smoke-twin" ? ["--smoke-schedules"] : [])],
+      "seed job_schedules",
+      { stdout: outFd, stderr: errFd },
+    );
     if (dataPath.kind === "smoke-twin") {
-      // A twin is restored full — there is nothing for an initializer to
-      // create. The production bootstrap script's archive-adopt pipeline
-      // that used to run here is retired from smoke entirely; the requested
-      // agents are started by the live-session block below, not here.
-      log("twin already has real, full data — no initializer to run");
+      // Restored full already; retired archive-adopt pipeline is gone —
+      // requested agents start in the live-session block below, not here.
+      log("twin already has real, full data — no further initializer to run");
     } else {
-      // Simulation data only. Projects/schedules were selected on the single
-      // migrate call above; this producer-owned seed intentionally does not
-      // restore the v0 archive.
+      // Simulation data only — does not restore the retired v0 archive.
       await stack.composeAsync(
         ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
         "simulation analytics seed",
@@ -1148,15 +1152,12 @@ async function main(): Promise<void> {
 
   if (process.env.CI && dataPath.kind === "smoke-twin") {
     // ── CI TWIN: the bounded end-to-end verdict (issue #537) ───────────────
-    // A production-shaped boot's checks are NOT the demo's checks. This block
-    // drives one live session with the restored committee, exercises the
-    // judge role, and asserts the twin's LIVE steady state — none of which a
-    // demo stack has. What a twin boot must prove, against the real HTTP API:
-    //   1. the restore brought over real, queryable committee data;
-    //   2. one NEW live swarm session completes with the restored personas;
-    //   3. the imported history is still served with #498's archival semantics.
-    // Session execution is the same runSession() used by twin and standing mode;
-    // only its typed subjects/members input differs.
+    // A production-shaped boot's checks are NOT the demo's checks. Proves,
+    // against the real HTTP API: (1) the restore brought over real, queryable
+    // committee data, (2) one NEW live session completes with the restored
+    // personas, (3) imported history still serves under #498's archival
+    // semantics. Same runSession() as twin and standing mode; only the
+    // typed subjects/members input differs.
     console.log("\n[smoke] twin: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
@@ -1174,11 +1175,9 @@ async function main(): Promise<void> {
       automationToken,
     };
 
-    // Judge role + judge mode live-stack coverage (issue #845): this CI TWIN
-    // block is the ONLY thing `--db smoke-twin` runs, a different path from
-    // `dataPath.kind !== "smoke-twin"` below, so session.ts `main()`'s own
-    // coverage never reaches it — see smoke-mode.ts's judgeCoverageCandidate/
-    // withMemberAbsent for why and how the candidate is chosen.
+    // Judge role coverage (issue #845): the ONLY thing `--db smoke-twin` runs,
+    // so session.ts `main()`'s own coverage never reaches it — see
+    // smoke-mode.ts's judgeCoverageCandidate/withMemberAbsent for the choice.
     const judgeCandidate = judgeCoverageCandidate(roster);
     await session.runJudgeRoleCoverage(judgeCandidate.id, automationToken, () =>
       session.runSession(scenario.subjects[0]!, 1, {
