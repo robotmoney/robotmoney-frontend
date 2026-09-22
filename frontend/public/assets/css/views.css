@@ -1640,6 +1640,13 @@ table.alp__tbl--led th:first-child { width: 40%; }
 .rr-sec__h { margin: 0; font-family: var(--font-display); font-weight: 700;
   font-size: 1.6875rem; line-height: 1.15; letter-spacing: -0.015em; text-transform: uppercase; color: var(--color-text); }
 .rr-sec__aside { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A block's title inside a section (Wallets, Positions, the chart): the
+   section heading's face a size down, so it reads as a subtitle and not as
+   the mono label a figure carries. Its fact sits on the right, in the
+   section aside's voice. */
+.rr-subhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin: 0 0 1rem; }
+.rr-subhead__h { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.0625rem; line-height: 1.2;
+  letter-spacing: -0.005em; text-transform: uppercase; color: var(--color-text); }
 /* One sub-heading style inside every section: the mono label. The outcome of
    a recommendation, the synthesis, the market reading, a take's call and the
    state of its signatures all open the same way. */
