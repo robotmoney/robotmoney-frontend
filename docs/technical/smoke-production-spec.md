@@ -90,6 +90,12 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **Participant keys** live in `credential.json` (§6.1), never in `~/.env`.
 
+**Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime tokens are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
+
+**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `worker-swarm` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that poll over HTTP (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
+
+**What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
+
 ## 4. Environment and target
 
 ### 4.1 `RM_ENV` (policy)
@@ -159,7 +165,7 @@ Path: `RM_CREDENTIALS=<path>` in `~/.env` or `--credentials <path>`; arg overrid
 
 ### 6.2 Standing participant containers
 
-Each roster entry is one long-lived container (`restart: unless-stopped`) that behaves like a third-party deployment: it polls the API over HTTP for sessions that need it, runs each take as a one-shot process in a fresh per-take workspace with a timeout and process-group cleanup, reports, and sleeps. No participant container holds a database credential or a Docker socket.
+Each roster entry is one long-lived container (`restart: unless-stopped`) that behaves like a third-party deployment: it polls the API over HTTP for sessions that need it, runs each take as a one-shot process in a fresh per-take workspace with a timeout and process-group cleanup, reports, and sleeps. No participant container holds a database credential, and no container in the stack — participant or service — holds a Docker socket (§3).
 
 **Idempotent submission.** Take identity is `(session, member)`, unique server-side. A resubmission on an existing key returns the existing record and the participant treats it as success, so a crash after submit or an old/new container overlap during a roster change produces at most a redundant request, never a second take. One take in flight per participant.
 

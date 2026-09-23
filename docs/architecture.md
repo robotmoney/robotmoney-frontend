@@ -1213,12 +1213,19 @@ The accepted go-forward mode is `off | enforce` ([D48](./decisions.md#d48)).
 Existing code may still expose `shadow` until that accepted change ships;
 D48 records the replay prerequisite for removing it.
 
-For deployment, the judge is a roster participant like an agent: it uses its
-own container and credential, communicates through the API, and no worker judges
-inline or receives a Docker socket. The participant roster and lifecycle are
-defined only by [smoke-production-spec §6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
-The admin API remains the sole writer of `swarm_judge_config`; configuration
-and secrets must follow the adopted credential design.
+For deployment, the judge is a roster participant like an agent. It runs in
+its own standing container, receives only its own signing key from
+`credential.json`, and talks to the stack over HTTP. No worker judges inline,
+and no container in the stack — participant or service — holds a Docker
+socket: `bun smoke` starts every container from the host and exits, so
+nothing spawns a container at runtime and nothing needs the means to. This
+reverses `#1014`, which had one socket-holding `agent-launcher` service inject
+the judge's `OPENCODE_API_KEY` into a container it spawned for each judging;
+that launcher, its socket mount and its injection are gone. Roster, lifecycle
+and credential delivery are defined only by
+[smoke-production-spec §3](./technical/smoke-production-spec.md#3-roles-and-credentials)
+and [§6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
+The admin API remains the sole writer of `swarm_judge_config`.
 
 Session creation and the five `swarm.*` schedules are independent of whether
 this host runs an in-house judge. Production initialization explicitly enables
