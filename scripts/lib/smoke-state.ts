@@ -64,7 +64,57 @@
 // after restart", "Second `bun smoke` against a locked instance refuses",
 // "Receipt read by `smoke:status`".
 
+import { randomBytes } from "node:crypto";
+import {
+  accessSync,
+  chmodSync,
+  constants as fsConstants,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 import type { StackEnvironment } from "../stack/naming.ts";
+
+/** A legal compose project name, which is also the instance's directory name. */
+const INSTANCE_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+
+/** The pointer file, at the state root, that carries precedence rule 4's name. */
+const LOCAL_POINTER = "local-instance";
+
+/** The override that lets one process point at more than one simulated host. */
+const STATE_ROOT_ENV = "RM_SMOKE_STATE_ROOT";
+
+function assertInstanceName(name: string): void {
+  if (!INSTANCE_NAME.test(name)) {
+    throw new Error(`Refusing: \`${name}\` is not a legal instance name (${INSTANCE_NAME.source}).`);
+  }
+}
+
+function assertUsableStateRoot(root: string): void {
+  if (existsSync(root) && !statSync(root).isDirectory()) {
+    throw new Error(`Refusing: state root ${root} exists but is not a directory.`);
+  }
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  try {
+    accessSync(root, fsConstants.W_OK);
+  } catch {
+    throw new Error(`Refusing: state root ${root} is not writable, so the instance name cannot be persisted.`);
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 /**
  * The fixed production instance name (spec §1.1). A constant rather than a
@@ -160,8 +210,49 @@ export interface InstanceResolutionInput {
  * instances with prior state present."
  */
 export function resolveInstance(input: InstanceResolutionInput): ResolvedInstance {
-  void input;
-  throw new Error("NOT IMPLEMENTED: deployment instance precedence — spec §1.1, issue #1026 W1.4");
+  if (input.flag !== undefined) {
+    assertInstanceName(input.flag);
+    if (input.rmEnv === "prod" && input.flag !== PRODUCTION_INSTANCE) {
+      throw new Error(`Refusing: RM_ENV=prod acts on ${PRODUCTION_INSTANCE}, not \`${input.flag}\`.`);
+    }
+    if (input.rmEnv !== "prod" && input.flag === PRODUCTION_INSTANCE) {
+      throw new Error(
+        `Refusing: naming ${PRODUCTION_INSTANCE} under a stage policy would contend for production's lock and journal.`,
+      );
+    }
+  }
+  assertUsableStateRoot(input.stateRoot);
+
+  const settle = (name: string, source: InstanceSource, persistedDuringResolution: boolean): ResolvedInstance => ({
+    name,
+    source,
+    stateDir: instancePaths(input.stateRoot, name, { create: true }).dir,
+    persistedDuringResolution,
+  });
+
+  if (input.flag !== undefined) return settle(input.flag, "flag", false);
+  if (input.rmEnv === "prod") return settle(PRODUCTION_INSTANCE, "production", false);
+
+  if (input.environment.class === "ci") {
+    const hash = input.environment.hash.trim().toLowerCase();
+    if (hash === "") {
+      throw new Error("Refusing: CI class with an empty identity hash — the run's identity vars were absent.");
+    }
+    return settle(`rm_ci_${hash}`, "ci-identity", false);
+  }
+
+  const pointer = join(input.stateRoot, LOCAL_POINTER);
+  if (existsSync(pointer)) {
+    const persisted = readFileSync(pointer, "utf8").trim();
+    assertInstanceName(persisted);
+    return settle(persisted, "persisted", false);
+  }
+
+  const minted = `rm_local_${randomBytes(5).toString("hex")}`;
+  const paths = instancePaths(input.stateRoot, minted, { create: true });
+  writeFileSync(paths.nameFile, `${minted}\n`, { mode: 0o600 });
+  writeFileSync(pointer, `${minted}\n`, { mode: 0o600 });
+  return { name: minted, source: "fresh", stateDir: paths.dir, persistedDuringResolution: true };
 }
 
 /**
@@ -182,8 +273,21 @@ export function resolveInstance(input: InstanceResolutionInput): ResolvedInstanc
  * unresolvable `HOME` with no override.
  */
 export function stateRoot(env: Record<string, string | undefined>): string {
-  void env;
-  throw new Error("NOT IMPLEMENTED: instance state root — spec §1.1, issue #1026 W1.4");
+  const override = env[STATE_ROOT_ENV];
+  if (override !== undefined && override !== "") {
+    if (!isAbsolute(override)) {
+      throw new Error(`Refusing: ${STATE_ROOT_ENV}=${override} is relative; an absolute path is required.`);
+    }
+    return override;
+  }
+  const home = env.HOME;
+  if (home === undefined || home === "") {
+    throw new Error(`Refusing: HOME is unset and no ${STATE_ROOT_ENV} override was given.`);
+  }
+  if (!isAbsolute(home)) {
+    throw new Error(`Refusing: HOME=${home} is relative; an absolute path is required.`);
+  }
+  return join(home, ".local", "state", "robotmoney-smoke");
 }
 
 /**
@@ -238,10 +342,24 @@ export interface InstancePaths {
  * account the database.
  */
 export function instancePaths(root: string, instance: string, options?: { readonly create?: boolean }): InstancePaths {
-  void root;
-  void instance;
-  void options;
-  throw new Error("NOT IMPLEMENTED: per-instance state directory layout — spec §1.1, issue #1026 W1.4");
+  assertInstanceName(instance);
+  const dir = join(root, instance);
+  if (existsSync(dir) && !statSync(dir).isDirectory()) {
+    throw new Error(`Refusing: ${dir} exists but is not a directory.`);
+  }
+  if (options?.create === true) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+  }
+  return {
+    dir,
+    nameFile: join(dir, "instance-name"),
+    rolePasswordsFile: join(dir, "role-passwords.json"),
+    journalFile: join(dir, "journal.jsonl"),
+    receiptFile: join(dir, "receipt.json"),
+    lockFile: join(dir, "deployment.lock"),
+    spoofGenerationFile: join(dir, "spoof-generation"),
+  };
 }
 
 /**
@@ -280,8 +398,21 @@ export interface GeneratedRolePasswords {
  * Serves spec §10 W1: "`volume` reuse after restart."
  */
 export function generateRolePasswords(paths: InstancePaths): GeneratedRolePasswords {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: generate + persist the four role passwords — spec §5, issue #1026 W1.4");
+  if (existsSync(paths.rolePasswordsFile)) {
+    throw new Error(
+      `Refusing: ${paths.rolePasswordsFile} already exists; regenerating would orphan the credentials the volume's roles hold.`,
+    );
+  }
+  const secret = (): string => randomBytes(24).toString("base64url");
+  const generated: GeneratedRolePasswords = {
+    rm_owner: secret(),
+    rm_app: secret(),
+    rm_worker: secret(),
+    rm_readonly: secret(),
+  };
+  writeFileSync(paths.rolePasswordsFile, `${JSON.stringify(generated, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(paths.rolePasswordsFile, 0o600);
+  return generated;
 }
 
 /**
@@ -300,8 +431,36 @@ export function generateRolePasswords(paths: InstancePaths): GeneratedRolePasswo
  *  - the file is readable by anyone but its owner.
  */
 export function readRolePasswords(paths: InstancePaths): GeneratedRolePasswords {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: read persisted role passwords for volume reuse — spec §5, issue #1026 W1.4");
+  if (!existsSync(paths.rolePasswordsFile)) {
+    throw new Error(
+      `Refusing: no saved role passwords at ${paths.rolePasswordsFile}. Use the volume from a fresh instance with \`--local dump\`.`,
+    );
+  }
+  if ((statSync(paths.rolePasswordsFile).mode & 0o077) !== 0) {
+    throw new Error(`Refusing: ${paths.rolePasswordsFile} is readable beyond its owner; its mode must be 0600.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(paths.rolePasswordsFile, "utf8"));
+  } catch {
+    throw new Error(`Refusing: ${paths.rolePasswordsFile} is malformed and cannot be parsed.`);
+  }
+  const roles = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
+  const record = parsed as Record<string, unknown>;
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error(`Refusing: ${paths.rolePasswordsFile} is malformed.`);
+  }
+  for (const role of roles) {
+    if (typeof record[role] !== "string" || record[role] === "") {
+      throw new Error(`Refusing: ${paths.rolePasswordsFile} is missing the ${role} password.`);
+    }
+  }
+  return {
+    rm_owner: record.rm_owner as string,
+    rm_app: record.rm_app as string,
+    rm_worker: record.rm_worker as string,
+    rm_readonly: record.rm_readonly as string,
+  };
 }
 
 /**
@@ -343,8 +502,51 @@ export interface DeploymentLock {
  * Serves spec §10 W1: "Second `bun smoke` against a locked instance refuses."
  */
 export function acquireDeploymentLock(paths: InstancePaths): DeploymentLock {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: instance deployment lock — spec §1.2, issue #1026 W1.6");
+  const instance = basename(paths.dir);
+  const acquiredAt = new Date().toISOString();
+
+  if (existsSync(paths.lockFile)) {
+    let holderPid = 0;
+    let heldSince = "";
+    try {
+      const held = JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: number; acquiredAt?: string };
+      holderPid = typeof held.holderPid === "number" ? held.holderPid : 0;
+      heldSince = typeof held.acquiredAt === "string" ? held.acquiredAt : "";
+    } catch {
+      /* an unreadable lock is treated as stale below */
+    }
+    if (holderPid > 0 && processIsAlive(holderPid)) {
+      const heldFor = heldSince === "" ? "unknown" : `${Math.round((Date.now() - Date.parse(heldSince)) / 1000)}s`;
+      throw new Error(
+        `Refusing: instance ${instance} is locked by pid ${holderPid}, held for ${heldFor}. Run \`bun smoke:status\` to see what it is doing.`,
+      );
+    }
+    console.warn(
+      `Taking over the stale deployment lock on ${instance}: its holder (pid ${holderPid}) is gone since ${heldSince || "unknown"}.`,
+    );
+    rmSync(paths.lockFile, { force: true });
+  }
+
+  writeFileSync(paths.lockFile, `${JSON.stringify({ instance, holderPid: process.pid, acquiredAt })}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+
+  let released = false;
+  return {
+    instance,
+    holderPid: process.pid,
+    acquiredAt,
+    release(): void {
+      if (released) return;
+      released = true;
+      try {
+        rmSync(paths.lockFile, { force: true });
+      } catch {
+        /* release must be safe from a signal handler */
+      }
+    },
+  };
 }
 
 /**
@@ -370,6 +572,30 @@ export function listInstances(root: string): readonly {
   readonly hasJournal: boolean;
   readonly hasReceipt: boolean;
 }[] {
-  void root;
-  throw new Error("NOT IMPLEMENTED: enumerate instances on this host — spec §1.1, issue #1026 W1.4");
+  let entries: string[];
+  try {
+    if (!statSync(root).isDirectory()) {
+      throw new Error(`Refusing: state root ${root} is not a directory.`);
+    }
+    entries = readdirSync(root);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Refusing:")) throw error;
+    throw new Error(`Refusing: state root ${root} could not be read.`);
+  }
+
+  return entries
+    .filter((name) => INSTANCE_NAME.test(name) && statSync(join(root, name)).isDirectory())
+    .map((name) => {
+      const paths = instancePaths(root, name);
+      return {
+        name,
+        paths,
+        locked: existsSync(paths.lockFile),
+        hasJournal: existsSync(paths.journalFile),
+        hasReceipt: existsSync(paths.receiptFile),
+        mtime: statSync(paths.dir).mtimeMs,
+      };
+    })
+    .sort((a, b) => b.mtime - a.mtime)
+    .map(({ mtime: _mtime, ...entry }) => entry);
 }
