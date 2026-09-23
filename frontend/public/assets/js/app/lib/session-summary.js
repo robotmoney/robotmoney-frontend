@@ -39,14 +39,20 @@ const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 // four sleeves every time.
 export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
-// Named, not humanised from the key: "real world assets" is the transform a
-// slug gives you and "Real World Assets" is what the framework publishes.
+// Named, not humanised from the key. The names are RM-97's (2026-09-15):
+// the API and the archive still send the framework's first names, which match
+// through LEGACY_LABELS and never print.
 /** @type {Record<string, string>} */
 const BUCKET_LABELS = {
-  conservative_defi_yield: "Conservative DeFi Yield",
-  agent_tokens: "Agent Tokens",
+  conservative_defi_yield: "Fixed Income",
+  agent_tokens: "Small Cap Tokens",
   protocol_tokens: "Protocol Tokens",
   real_world_assets: "Real World Assets",
+};
+/** @type {Record<string, string>} */
+const LEGACY_LABELS = {
+  conservative_defi_yield: "Conservative DeFi Yield",
+  agent_tokens: "Agent Tokens",
 };
 
 // A chain id as its proper name. The id stays the key everywhere else (the
@@ -79,7 +85,7 @@ export function weightEntries(weights) {
 /** @param {unknown} idOrName */
 const bucketIndex = (idOrName) => {
   const n = normKey(idOrName);
-  return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n);
+  return BUCKET_ORDER.findIndex((k) => normKey(k) === n || normKey(BUCKET_LABELS[k]) === n || normKey(LEGACY_LABELS[k]) === n);
 };
 // A sleeve's place in the published order, unknown sleeves last. Payloads do
 // not keep it: Postgres jsonb stores object keys shortest first, so a weights
@@ -108,7 +114,7 @@ export function bucketLabel(idOrName) {
 // vault page's lede.
 // A sleeve's short name, for a narrow column on a phone.
 /** @type {Record<string, string>} */
-const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Agent tokens", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+const BUCKET_SHORT = { conservative_defi_yield: "Fixed income", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
 /** @param {unknown} idOrName */
 export function bucketShort(idOrName) {
   const i = bucketIndex(idOrName);
@@ -175,8 +181,8 @@ export function bookSleeveShares(framework, snapshot, date) {
 // recommendation and history rows all word it here.
 /** @param {number} moved @param {"book" | "target"} basis */
 export function weightsOutcomeLine(moved, basis) {
-  if (!moved) return basis === "book" ? "Holds the book as it stands" : "Target weights retained";
-  return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${basis === "book" ? "the book" : "target"}`;
+  if (!moved) return basis === "book" ? "Holdings kept as they are" : "Target weights retained";
+  return `${moved} ${moved === 1 ? "sleeve moves" : "sleeves move"} from ${basis === "book" ? "the holdings" : "target"}`;
 }
 
 export const sessionSummary = {

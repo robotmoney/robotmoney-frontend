@@ -8,7 +8,7 @@
 // most recent session's.
 //
 // A factory, because the reading is state.
-import { bucketHue } from "./session-summary.js";
+import { bucketHue, bucketLabel } from "./session-summary.js";
 import { citeTitle, isKnownPage } from "../seo.js";
 
 // `helpers` belongs to the SURFACE, not to this module: regimeColor and
@@ -154,7 +154,7 @@ export function sessionBrief() {
         const bars = buckets.map((/** @type {any} */ x, /** @type {number} */ i) => {
           const w = Number(x?.target_weight ?? x?.targetWeight);
           if (!x?.name || !Number.isFinite(w)) return null;
-          return { key: `targets-${i}`, label: x.name, pct: Math.round(w * 100), hue: bucketHue(x.id || x.name, i) };
+          return { key: `targets-${i}`, label: bucketLabel(x.name || x.id), pct: Math.round(w * 100), hue: bucketHue(x.id || x.name, i) };
         }).filter(Boolean);
         // "Allocation targets", not "Targets": every v0 brief carried the
         // allocation framework's weights, and on Woon's or the treasury's page a

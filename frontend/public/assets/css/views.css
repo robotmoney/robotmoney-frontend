@@ -1924,11 +1924,18 @@ a.sv__vfy { text-decoration: none; }
 .rr-legend__was { color: var(--color-text-muted); }
 .rr-legend--cols .rr-legend__d .alp__mv { justify-content: flex-end; }
 .rr-legend__s { display: none; }
+/* A sleeve's vault token beside its name, quieter: the name is the row's identity, the
+   token is what a depositor holds. */
+.rr-legend__tk { margin-left: 0.5rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 @media (max-width: 560px) {
   /* A phone names a sleeve by its short name; the full one stays for screen
      readers. General sibling: x-if leaves its <template> between the two. */
   .rr-legend--cols .rr-legend__l:has(~ .rr-legend__s) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .rr-legend--cols .rr-legend__s { display: inline; }
+  /* The vault stack's table on a phone: short names, no token, and no Target
+     column, which Drift already measures against; the name gets the room. */
+  .rr-legend--drift .rr-legend__head, .rr-legend--drift.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5rem 3rem 4rem; }
+  .rr-legend--drift .rr-legend__head > span:nth-child(5), .rr-legend--drift .rr-legend__t, .rr-legend--drift .rr-legend__tk { display: none; }
 }
 .rr-legend__row.is-zero { color: var(--color-text-muted); }
 .rr-legend__row.is-muted { opacity: 0.55; }

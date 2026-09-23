@@ -248,8 +248,8 @@
        robotmoney-allocation recommendation; Target the weights in force, the
        router's once it reports them and the published policy's until then
        (Base today), the same targets the ring above draws; Actual each
-       vault's share of the four vaults' TVL. The governance gap is target
-       minus recommended (a recommendation not applied), drift (RM-97) actual
+       vault's share of the four vaults' TVL. Pending is recommended minus
+       target (a recommendation not applied; RM-97), drift actual
        minus target (RM-115): on Base the ring's gap, both measured against
        the policy. On the devnet the router's weights are the target, and the
        fixture's policy is not what its router applied. With no target to read there is
@@ -283,7 +283,7 @@
           <template x-if="recState() === 'unknown'"><b>—</b></template>
         </span>
         <template x-if="released()"><span class="rr-meta__i">Released on chain <b x-text="released()"></b></span></template>
-        <span class="rr-meta__i">Read <b x-text="freshness()">—</b></span>
+        <span class="rr-meta__i">As of <b x-text="freshness()">—</b></span>
         <span class="rr-meta__i">Network <b x-text="networkLabel()">—</b></span>
         <a class="rr-meta__lnk" :href="`${vaultSubjectHref}#holdings`">Combined holdings</a>
       </div>
@@ -292,13 +292,13 @@
         <table class="rr-table rr-table--compact rr-vaults">
           <thead>
             <tr>
-              <th scope="col">Vault</th>
+              <th scope="col">Sleeve</th>
               <!-- Each column says what it measures, and each gap how it is
                    taken: the difference of the two columns it names. -->
               <th scope="col" class="q">Recommended <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Recommended">i</button><span class="rm-tip__bub" role="tooltip">The weights the swarm's latest recommendation set.</span></span></th>
               <template x-if="threeLayers()"><th scope="col" class="q">Target <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Target">i</button><span class="rm-tip__bub" role="tooltip">The weights in force: the published policy, until the vault router reports the weights it applied.</span></span></th></template>
               <th scope="col" class="q">Actual <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Actual">i</button><span class="rm-tip__bub" role="tooltip">Each vault's share of the four vaults' combined value.</span></span></th>
-              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Governance gap <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Governance gap">i</button><span class="rm-tip__bub" role="tooltip">Target minus recommended: how far the weights in force are from the swarm's latest recommendation, the part of it not applied.</span></span></th></template>
+              <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Pending <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Pending">i</button><span class="rm-tip__bub" role="tooltip">Recommended minus target: the change the swarm's latest recommendation would make if it were applied.</span></span></th></template>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Drift <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Drift">i</button><span class="rm-tip__bub" role="tooltip">Actual minus target: how far what the vaults hold has moved from the weights in force.</span></span></th></template>
               <template x-if="!threeLayers()"><th scope="col" class="q">Gap <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Gap">i</button><span class="rm-tip__bub" role="tooltip">Actual minus recommended: how far what the vaults hold is from the swarm's latest recommendation.</span></span></th></template>
             </tr>
@@ -307,7 +307,7 @@
             <template x-for="v in vaultRows()" :key="v.slug">
               <tr>
                 <th scope="row">
-                  <i class="rr-dot" data-mark="series" :style="`background:${v.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="v.href" x-text="v.symbol"></a>
+                  <i class="rr-dot" data-mark="series" :style="`background:${v.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="v.href" x-text="v.name"></a>
                   <small x-text="v.sub"></small>
                 </th>
                 <td class="q"><span x-text="v.recommended"></span><small x-text="v.recommendedUsd"></small></td>
@@ -316,7 +316,7 @@
                 <!-- In percentage points with the sign, as every move on the
                      site (lib/weight-change.js through gapParts): a zero gap is
                      a reading, "0 pp"; a missing one is "—". -->
-                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.governance.cls"><span x-text="v.governance.label"></span></span><small x-text="v.governanceUsd"></small></td></template>
+                <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.pending.cls"><span x-text="v.pending.label"></span></span><small x-text="v.pendingUsd"></small></td></template>
                 <template x-if="threeLayers()"><td class="q rr-vaults__wide"><span class="alp__mv" :class="v.flow.cls"><span x-text="v.flow.label"></span></span><small x-text="v.flowUsd"></small></td></template>
                 <template x-if="!threeLayers()"><td class="q"><span class="alp__mv" :class="v.gap.cls"><span x-text="v.gap.label"></span></span><small x-text="v.gapUsd"></small></td></template>
               </tr>

@@ -15,7 +15,7 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, BUCKET_ORDER } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
@@ -25,7 +25,7 @@ import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
-import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, portfolioTwr, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import { tvlChart } from "./tvl-chart.js";
 import {
@@ -2231,9 +2231,9 @@ export function registerStaticViews(Alpine) {
         const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
         const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
         const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
-        return `Share of the book by vault, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
+        return `Each sleeve's weight, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
       }
-      return `Share of the book by position, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+      return `Each token's weight, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
     },
     // A tick under every reading, month and day; the ones between the ends drop
     // out on a narrow screen. The last reading's year is the positions label's
@@ -2497,7 +2497,7 @@ export function registerStaticViews(Alpine) {
         const pct = g ? g.share * 100 : 0;
         const was = target ? target.by[v.slug] / 100 : null;
         return {
-          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
+          key: v.slug, label: v.name, short: bucketShort(v.bucket), symbol: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
           // Drift: this vault's share against the target, in points, as
           // /allocation's Vaults table takes it.
           was, d: was == null ? null : Math.round((pct - was) * 10) / 10,
@@ -2604,8 +2604,9 @@ export function registerStaticViews(Alpine) {
 
     // The vault stack's headline figures, first in the meta row: what it
     // holds, what it has returned, and how many vaults take deposits. Return
-    // is each vault's share price against the 1.00 it opened at, weighted by
-    // what the vault holds; depositors show once a vault serves them.
+    // is time-weighted since inception (vault-data.js portfolioTwr), from each
+    // vault's daily history where the source serves it; absent when it cannot
+    // be computed honestly. Depositors show once a vault serves them.
     stackFacts() {
       const ov = this.vaultStack?.overview;
       if (!ov) return [];
@@ -2613,13 +2614,11 @@ export function registerStaticViews(Alpine) {
       const facts = [];
       const tvl = Number(ov.combined?.tvlUsd ?? this.stackSnapshot()?.totalValueUsd);
       if (Number.isFinite(tvl)) facts.push({ key: "tvl", label: "TVL", value: fmtVaultUsd(tvl) });
-      const priced = live.filter((v) => Number.isFinite(Number(v.sharePrice)) && Number(v.tvlUsd) > 0);
-      const held = priced.reduce((n, v) => n + Number(v.tvlUsd), 0);
-      if (held > 0) {
-        const r = priced.reduce((n, v) => n + (Number(v.sharePrice) - 1) * Number(v.tvlUsd), 0) / held;
+      const r = portfolioTwr(live.map((v) => ({ ...v, history: this.stackDetails[v.slug]?.history ?? v.history })));
+      if (r !== null && Number.isFinite(r)) {
         const pct = Math.round(r * 10000) / 100;
-        facts.push({ key: "ret", label: "Return since launch", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
-          tip: "Each vault's share price against the 1.00 it opened at, weighted by what the vault holds." });
+        facts.push({ key: "ret", label: "Return since inception", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
+          tip: "Time-weighted from the 1.00 each vault opened at: each day's return is the vaults' share-price change, weighted by what each held the day before. Deposits and withdrawals do not move it." });
       }
       const details = live.map((v) => this.stackDetails[v.slug]).filter(Boolean);
       const deps = details.filter((d) => Number.isFinite(Number(d.depositors)));
@@ -2641,7 +2640,7 @@ export function registerStaticViews(Alpine) {
         if (detail) this.stackDetails = { ...this.stackDetails, [v.slug]: detail };
         if (!Array.isArray(detail?.activity)) continue;
         served = true;
-        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, color: v.color });
+        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, name: v.name, color: v.color });
       }
       this.stackActivity = served ? rows.sort((a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0)) : null;
     },
@@ -3580,7 +3579,7 @@ export function registerStaticViews(Alpine) {
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
         return ranked(rec.buckets.map((b, i) => ({
           id: b.id || "",
-          name: b.name || bucketLabel(b.id),
+          name: bucketLabel(b.name || b.id),
           hue: bucketHue(b.id || b.name, i),
           target: num(b.target ?? b.target_weight),
           actual: num(b.actual ?? b.actual_weight),
@@ -3608,7 +3607,7 @@ export function registerStaticViews(Alpine) {
           // Prefer the framework's own spelling of the bucket name when it is
           // known; humanize() of an id cannot recover "DeFi".
           id,
-          name: framework?.label || bucket?.name || brief?.label || bucketLabel(id),
+          name: bucketLabel(framework?.label || bucket?.name || brief?.label || id),
           hue: bucketHue(id, i),
           // A brief that named any target names them all, so a sleeve it left
           // out has no target rather than borrowing the framework's.

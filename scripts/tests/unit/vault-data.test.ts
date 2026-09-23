@@ -47,6 +47,8 @@ import {
   vaultBySlug,
   vaultForBucket,
   withRecommendation,
+  portfolioTwr,
+  isVaultBookReading,
 } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 import {
   _resetVaultProbe,
@@ -348,7 +350,7 @@ describe("formatters", () => {
     expect(fmtDate("not a date")).toBe("—");
     const o = normalizeOverview(DEVNET);
     expect(freshnessLabel(o)).toBe("Sep 17, 2026 10:00 UTC");
-    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026 10:00 UTC · stale");
+    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026 10:00 UTC · delayed");
     expect(freshnessLabel(null)).toBe("—");
   });
 
@@ -1084,5 +1086,41 @@ describe("one name and one layout per vault reading", () => {
     expect(hasAppliedLayer(normalizeOverview(DEVNET))).toBe(true);
     expect(hasAppliedLayer(normalizeOverview(legacyRaw(GOLDEN_ECONOMICS)))).toBe(false);
     expect(hasAppliedLayer(null)).toBe(false);
+  });
+});
+
+describe("the vaults' time-weighted return", () => {
+  const day = (d: number) => `2026-08-${String(d).padStart(2, "0")}`;
+  test("one vault with no history is its share price against 1.00", () => {
+    expect(portfolioTwr([{ sharePrice: 1.0183, tvlUsd: 253 }])).toBeCloseTo(0.0183, 10);
+  });
+  test("several vaults without history give no figure rather than a wrong one", () => {
+    expect(portfolioTwr([{ sharePrice: 1.02, tvlUsd: 100 }, { sharePrice: 0.9, tvlUsd: 100 }])).toBeNull();
+  });
+  test("one vault with history compounds to the same since-inception return", () => {
+    const history = { sharePrice: [{ t: day(1), value: 1.01 }, { t: day(2), value: 1.0120 }, { t: day(3), value: 1.0150 }],
+      tvl: [{ t: day(1), tvlUsd: 100 }, { t: day(2), tvlUsd: 300 }, { t: day(3), tvlUsd: 900 }] };
+    // Deposits tripled the TVL each day; the return is still the share price's.
+    expect(portfolioTwr([{ sharePrice: 1.02, tvlUsd: 900, history }])).toBeCloseTo(0.02, 10);
+  });
+  test("two vaults weight each day's return by what each held the day before", () => {
+    const a = { sharePrice: 1.10, tvlUsd: 300, history: {
+      sharePrice: [{ t: day(1), value: 1.0 }, { t: day(2), value: 1.10 }], tvl: [{ t: day(1), tvlUsd: 300 }, { t: day(2), tvlUsd: 330 }] } };
+    const b = { sharePrice: 1.0, tvlUsd: 100, history: {
+      sharePrice: [{ t: day(1), value: 1.0 }, { t: day(2), value: 1.0 }], tvl: [{ t: day(1), tvlUsd: 100 }, { t: day(2), tvlUsd: 100 }] } };
+    // Day 2: 75% of the book earned 10%, 25% earned 0 → 7.5%.
+    expect(portfolioTwr([a, b])).toBeCloseTo(0.075, 10);
+  });
+  test("a live vault without history among ones with it gives no figure", () => {
+    const withHistory = { sharePrice: 1.01, tvlUsd: 100, history: { sharePrice: [{ t: day(1), value: 1.0 }], tvl: [{ t: day(1), tvlUsd: 100 }] } };
+    expect(portfolioTwr([withHistory, { sharePrice: 1.0, tvlUsd: 50 }])).toBeNull();
+  });
+});
+
+describe("a reading of rmUSDC's own book", () => {
+  test("its lending venues and idle USDC count; the smoke fixture's basket does not", () => {
+    expect(isVaultBookReading({ positions: [{ token: "MORPHO" }, { token: "AAVE" }, { token: "COMPOUND" }, { token: "USDC" }] })).toBe(true);
+    expect(isVaultBookReading({ positions: [{ token: "ROBOT" }, { token: "ETH" }, { token: "USDC" }, { token: "rmUSDC" }, { token: "ROBOTMONEY" }] })).toBe(false);
+    expect(isVaultBookReading({ positions: [] })).toBe(false);
   });
 });

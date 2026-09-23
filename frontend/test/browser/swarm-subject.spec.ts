@@ -88,8 +88,8 @@ test("public subject profile renders holdings, wallets, NFT contracts and its se
   await expect(positions).toHaveCount(6);
   await expect(positions.first()).toContainText("WOON");
   // The positions table's title, and how fresh its reading is on the right.
-  await expect(page.locator(".rr-positions .rr-subhead__h")).toHaveText("Positions");
-  await expect(page.locator(".rr-positions .rr-subhead .rr-sec__aside")).toHaveText("Last read on Jun 25, 2026");
+  await expect(page.locator(".rr-positions .rr-subhead__h")).toHaveText("By token");
+  await expect(page.locator(".rr-positions .rr-subhead .rr-sec__aside")).toHaveText("As of Jun 25, 2026");
 
   // Concentration chart draws once there are >= 2 snapshots in the window.
   const svg = page.locator(".rr-area__svg svg");
@@ -194,7 +194,7 @@ test("public subject profile lists no NFT contract for an archived subject with 
   // docs/plans/vault-pages.md): the Vaults table names it, and there is no
   // separate Read from table, so no NFT contract row.
   await expect(page.locator(".rr-sources")).toHaveCount(0);
-  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("rmUSDC");
+  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("Fixed Income");
   // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
@@ -382,9 +382,9 @@ test("a subject's latest session carries the consensus and the decision, as /swa
   // numbers back onto four names they were holding in their head.
   const keys = latest.locator(".rr-legend__row");
   await expect(keys).toHaveCount(4);
-  await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
+  await expect(keys.nth(0)).toContainText("Fixed Income");
   await expect(keys.nth(0)).toContainText("95%");
-  await expect(keys.nth(1)).toContainText("Agent Tokens");
+  await expect(keys.nth(1)).toContainText("Small Cap Tokens");
   await expect(keys.nth(1)).toContainText("5%");
   // A sleeve at zero keeps its row, marked as held there on purpose...
   await expect(keys.nth(2)).toContainText("Protocol Tokens");
@@ -404,7 +404,7 @@ test("a subject's latest session carries the consensus and the decision, as /swa
   // sleeve wears on /allocation's donut and a weight change never repaints the
   // sleeves that did not move.
   await expect(arcs.first()).toHaveAttribute("stroke", "#10b981"); // CATEGORICAL[0]
-  await expect(latest.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
+  await expect(latest.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Fixed Income 95%/);
   // The way through to the session itself.
   await expect(latest.locator(".rr-cta")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
   await expect(latest.locator(".rr-cta")).toContainText("Read the Sep 1, 2026 session");
@@ -497,7 +497,7 @@ test("a session with no consensus to report prints no consensus line", async ({ 
   await expect(latest).toBeVisible();
 
   // The session is here, and it does carry the decision...
-  await expect(latest.locator(".rr-legend__row").first()).toContainText("Conservative DeFi Yield");
+  await expect(latest.locator(".rr-legend__row").first()).toContainText("Fixed Income");
   await expect(latest.locator(".rr-legend__row").first()).toContainText("95%");
   await expect(page.locator("#history .sv__session-card").first().locator("td.q").first()).toHaveText("95%");
   // ...but nothing to say about the consensus, so the line is absent rather
@@ -624,7 +624,7 @@ test("the allocation subject carries the weights in force, and no other subject 
 
   const rows = card.locator(".sv__sleeve");
   await expect(rows).toHaveCount(4);
-  await expect(rows.first()).toContainText("Conservative DeFi Yield");
+  await expect(rows.first()).toContainText("Fixed Income");
   await expect(rows.first()).toContainText("95%");
 
   // A published zero draws an empty TRACK rather than no track: an absent
@@ -760,7 +760,8 @@ test("the latest recommendation carries its session's reading and vote, and its 
   // The reading the latest session was given, in the facts row: the
   // session's own regime summary, not the brief's copy of it.
   const meta = page.locator(".rr-meta");
-  await expect(meta.locator(".rr-meta__i", { hasText: "Composite" }).locator("b")).toHaveText("0.598");
+  // The regime by name; its composite is a market signal, read on the session.
+  await expect(meta.locator(".rr-meta__i", { hasText: "Composite" })).toHaveCount(0);
   await expect(meta.locator(".rr-meta__i", { hasText: "Regime" }).locator("b")).toHaveText("risk-on");
   await expect(meta.locator('a[href="/allocation"]')).toBeVisible();
 
@@ -846,7 +847,7 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   const hand = page.locator("#session-handover");
   // Figures, not bars: each sleeve and its target, in the hue it wears on the page.
   const targets = hand.locator('[data-part="targets"] .hand__targets li');
-  await expect(targets.locator("span")).toHaveText(["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"]);
+  await expect(targets.locator("span")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"]);
   await expect(targets.locator("b")).toHaveText(["95%", "5%", "0%", "0%"]);
   await expect(hand.locator('[data-part="targets"] .sv__sleeve-track')).toHaveCount(0);
   await expect(targets.first().locator("i")).toHaveAttribute("style", cardHue || "missing");
@@ -910,15 +911,15 @@ test("a subject with a book reads its latest recommendation against the book, as
   // The archived 2026-06-22 session: 95/5/0/0 recommended, the book entirely
   // in Conservative DeFi Yield (Aave, Compound, Morpho).
   await page.goto("/swarm/2026-06-22/robotmoney-vault");
-  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Book 100%");
+  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Fixed Income" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
   await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveCount(0);
   const onSession = await moves("#recommendation");
   expect(onSession).toHaveLength(2);
 
   await page.goto("/swarm/subjects/robotmoney-vault");
   const latest = page.locator("#latest");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Book 100%");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).locator(".rr-legend__was")).toHaveText("Book 0%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Fixed Income" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Small Cap Tokens" }).locator(".rr-legend__was")).toHaveText("Actual 0%");
   expect(await moves("#latest")).toEqual(onSession);
   await expect(latest.locator(".rr-legend__head")).not.toContainText("Target");
   await expect(latest).not.toContainText("Target weights retained");
@@ -939,15 +940,15 @@ test("a subject with a book reads its latest recommendation against the book, as
     return route.fulfill({ response: res, json: raw });
   });
   await page.goto("/swarm/2026-06-22/robotmoney-vault");
-  await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
+  await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveText("Holdings kept as they are");
   await page.goto("/swarm/subjects/robotmoney-vault");
-  await expect(latest.locator("p.rr-k.rr-sub")).toHaveText("Holds the book as it stands");
+  await expect(latest.locator("p.rr-k.rr-sub")).toHaveText("Holdings kept as they are");
     await expect(row.locator(".sp-move")).toHaveText(["+5 pp", "−5 pp"]);
 
   // The allocation subject holds nothing: its latest recommendation reads
   // against its target.
   await page.goto("/swarm/subjects/robotmoney-allocation");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Agent Tokens" }).locator(".rr-legend__was")).toHaveText("Target 5%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Small Cap Tokens" }).locator(".rr-legend__was")).toHaveText("Target 5%");
   await expect(latest.locator(".rr-legend__head")).not.toContainText("Book");
 
   await expectNoBrowserErrors(errors);

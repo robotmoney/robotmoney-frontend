@@ -49,7 +49,7 @@
           </span>
           <span class="rr-meta__i">Deposit asset <b><a class="rr-lnk" :href="depositAssetHref()" target="_blank" rel="noopener noreferrer">USDC</a></b></span>
           <template x-if="isLive() && sharePrice()"><span class="rr-meta__i">Share price <b x-text="sharePrice()"></b></span></template>
-          <span class="rr-meta__i">Read <b x-text="readLabel()"></b></span>
+          <span class="rr-meta__i">As of <b x-text="readLabel()"></b></span>
           <!-- The vault's own contract: linked where the network has an
                explorer, the address where it has none, and said when the vault
                is not deployed. -->
@@ -124,12 +124,12 @@
               </div>
               <div class="rr-block" style="margin-top:2.25rem">
                 <div class="rr-subhead">
-                  <h3 class="rr-subhead__h">Positions</h3>
-                  <template x-if="holdingsDate()"><span class="rr-sec__aside" x-text="`Last read on ${holdingsDate()}`"></span></template>
+                  <h3 class="rr-subhead__h">Constituents</h3>
+                  <template x-if="holdingsDate()"><span class="rr-sec__aside" x-text="`As of ${holdingsDate()}`"></span></template>
                 </div>
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-holdings">
                   <thead>
-                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                    <tr><th scope="col">Constituent</th><th scope="col">Type</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Weight</th></tr>
                   </thead>
                   <tbody>
                     <template x-for="(h, i) in visibleHoldings()" :key="`${i}-${h.label}`">
@@ -365,7 +365,7 @@
             <div>
               <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="activityHasTx() ? 'has-tx' : ''">
                 <thead>
-                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
+                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Shares</th><th scope="col" class="q">Assets</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
                 </thead>
                 <tbody>
                   <template x-for="(a, i) in activityRows()" :key="`${activityPage}-${i}-${a.t}`">

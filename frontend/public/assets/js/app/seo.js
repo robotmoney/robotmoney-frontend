@@ -46,13 +46,13 @@ const META = {
   // review: three of the four are not on Base yet, and none is in sitemap.xml.
   // `follow`, because every link on them goes to a real page.
   "/vault/rmusdc": {
-    title: "rmUSDC: Conservative DeFi Yield Vault | Robot Money",
-    description: "rmUSDC, the Robot Money vault for the Conservative DeFi Yield sleeve.",
+    title: "rmUSDC: Fixed Income Vault | Robot Money",
+    description: "rmUSDC, the Robot Money vault for the Fixed Income sleeve.",
     robots: "noindex, follow",
   },
   "/vault/rmagent": {
-    title: "rmAGENT: Agent Tokens Vault | Robot Money",
-    description: "rmAGENT, the Robot Money vault for the Agent Tokens sleeve.",
+    title: "rmAGENT: Small Cap Tokens Vault | Robot Money",
+    description: "rmAGENT, the Robot Money vault for the Small Cap Tokens sleeve.",
     robots: "noindex, follow",
   },
   "/vault/rmproto": {

@@ -520,11 +520,11 @@ test("the latest allocation and the history state each fact once", async ({ page
 
   const alloc = page.locator("#allocation");
   const row = (name: string) => alloc.locator(".rr-legend__row").filter({ hasText: name });
-  await expect(row("Agent Tokens").locator(".rr-legend__was")).toHaveText("Target 5%");
-  await expect(row("Agent Tokens").locator(".alp__mv")).toHaveText("−2 pp");
+  await expect(row("Small Cap Tokens").locator(".rr-legend__was")).toHaveText("Target 5%");
+  await expect(row("Small Cap Tokens").locator(".alp__mv")).toHaveText("−2 pp");
   await expect(row("Real World Assets").locator(".alp__mv")).toHaveText("+2 pp");
-  await expect(row("Conservative DeFi Yield").locator("b")).toHaveText("95%");
-  await expect(row("Conservative DeFi Yield").locator(".rr-legend__d .alp__mv")).toHaveCount(0);
+  await expect(row("Fixed Income").locator("b")).toHaveText("95%");
+  await expect(row("Fixed Income").locator(".rr-legend__d .alp__mv")).toHaveCount(0);
   await expect(alloc.locator("p.rr-k.rr-sub")).toHaveCount(0);
   await expect(alloc).not.toContainText(/sleeves? moves?/i);
 

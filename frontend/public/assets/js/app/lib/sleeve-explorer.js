@@ -87,7 +87,8 @@ export function sleeveExplorer() {
       const host = /** @type {any} */ (this);
       if (host.hasBook && host.hasBook()) return "";
       const r = host.explorerRows().find((/** @type {any} */ x) => x.was != null);
-      return r ? (r.basis === "book" ? "Book" : "Target") : "";
+      // RM-97: what is held now is Actual, as /allocation's Vaults table names it.
+      return r ? (r.basis === "book" ? "Actual" : "Target") : "";
     },
     // What the breakdown panel draws: the active sleeve, or the one it is
     // closing on.

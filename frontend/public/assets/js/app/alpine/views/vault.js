@@ -33,6 +33,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
+  pendingBps,
   hasTargetLayer,
   holdingsComplete,
   numberOrNull,
@@ -358,13 +359,13 @@ export function registerVaultView(Alpine) {
     changeClass(d) { return weightChange.changeClass(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     // What the legend does not carry, once there is a target: this vault's
-    // recommended weight and the governance gap between it and the target.
+    // recommended weight and what is pending, recommended minus target.
     pipelineFacts() {
       if (!this.threeLayers()) return [];
       const r = this.row();
       return [
         { key: "recommended", name: "Recommended", value: fmtBps(r?.recommendedBps) },
-        { key: "governance", name: "Governance gap", part: gapParts(r?.gaps?.governance) },
+        { key: "pending", name: "Pending", part: gapParts(pendingBps(r?.gaps?.governance)) },
       ];
     },
     recommendation() {
