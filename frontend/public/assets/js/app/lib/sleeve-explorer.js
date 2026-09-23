@@ -32,9 +32,9 @@
 //   so a pointer skimming the edge does not collapse the panel under it.
 // - The breakdown stays mounted and animates its height (0fr to 1fr), and it
 //   keeps showing the last sleeve while it closes rather than emptying first.
-const INTENT_MS = 140;
-const LEAVE_MS = 240;
-const SWAP_MS = 120;
+const INTENT_MS = 60;
+const LEAVE_MS = 180;
+const SWAP_MS = 80;
 
 // An action as a chip reads it: the direction glyph first, so the column
 // survives greyscale, then the word. Shared with the recommendation history.
@@ -87,7 +87,8 @@ export function sleeveExplorer() {
       const host = /** @type {any} */ (this);
       if (host.hasBook && host.hasBook()) return "";
       const r = host.explorerRows().find((/** @type {any} */ x) => x.was != null);
-      return r ? (r.basis === "book" ? "Book" : "Target") : "";
+      // RM-97: what is held now is Actual, as /allocation's Vaults table names it.
+      return r ? (r.basis === "book" ? "Actual" : "Target") : "";
     },
     // What the breakdown panel draws: the active sleeve, or the one it is
     // closing on.

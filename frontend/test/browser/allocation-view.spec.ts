@@ -222,7 +222,7 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
 const vaultRows = (page: Page) => page.locator("#vaults tbody tr");
 const figures = (page: Page, i: number) => vaultRows(page).nth(i).locator("td > span:first-child");
 const vaultFact = (page: Page, label: string) => page.locator("#vaults .rr-meta .rr-meta__i").filter({ hasText: label });
-const VAULT_HEADS = ["Vault", "Recommended", "Target", "Actual", "Governance gap", "Drift"];
+const VAULT_HEADS = ["Sleeve", "Recommended", "Target", "Actual", "Pending", "Drift"];
 // A heading's own label, whatever tip follows it: each gap column carries its
 // definition in an (i) tip, whose text is part of the cell.
 const heads = (labels: string[]) => labels.map((l) => new RegExp(`^\\s*${l}(\\s|$)`));
@@ -247,7 +247,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
 
   const rows = vaultRows(page);
   await expect(rows).toHaveCount(4);
-  await expect(rows.locator("th a")).toHaveText(["rmUSDC", "rmAGENT", "rmPROTO", "rmRWA"]);
+  await expect(rows.locator("th a")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"]);
   for (const [i, slug] of ["rmusdc", "rmagent", "rmproto", "rmrwa"].entries()) {
     await expect(rows.nth(i).locator("th a")).toHaveAttribute("href", `/vault/${slug}`);
   }
@@ -266,7 +266,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
   await expect(figures(page, 1)).toHaveText(["—", "5%", "0%", "—", "−5 pp"]);
   await expect(figures(page, 2)).toHaveText(["—", "0%", "0%", "—", "0 pp"]);
   await expect(figures(page, 3)).toHaveText(["—", "0%", "0%", "—", "0 pp"]);
-  await expect(rows.nth(0).locator("th small")).toHaveText("Conservative DeFi Yield");
+  await expect(rows.nth(0).locator("th small")).toHaveText("rmUSDC");
 
   await expect(vaultFact(page, "Combined TVL")).toContainText(usd2(vault.tvlUsd));
   // No "Vaults live" count: each row already says which vault is not live.
@@ -314,9 +314,9 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
   await expect(rows.locator("td:nth-of-type(1) > span")).toHaveText(["90%", "5%", "3%", "2%"]);
   await expect(rows.locator("td:nth-of-type(2) > span")).toHaveText(target.map((t) => `${t}%`));
-  // The target 95/5/0/0 against 90/5/3/2, and actual 100/0/0/0 against the
-  // target.
-  await expect(rows.locator("td:nth-of-type(4) .alp__mv")).toHaveText(["+5 pp", "0 pp", "−3 pp", "−2 pp"]);
+  // Pending, 90/5/3/2 recommended against the 95/5/0/0 target, and actual
+  // 100/0/0/0 against the target.
+  await expect(rows.locator("td:nth-of-type(4) .alp__mv")).toHaveText(["−5 pp", "0 pp", "+3 pp", "+2 pp"]);
   await expect(rows.locator("td:nth-of-type(5) .alp__mv")).toHaveText(["+5 pp", "−5 pp", "0 pp", "0 pp"]);
   // (5 + 5 + 0 + 0) / 2.
   await expect(vaultFact(page, "Tracking error").locator("b")).toHaveText("5%");
@@ -325,7 +325,7 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   const usd = { recommended: usdAt(90, tvl), target: usdAt(target[0], tvl), actual: Math.round(tvl) };
   await expect(rows.nth(0).locator("td > small")).toHaveText([
     usd2(usd.recommended), usd2(usd.target), usd2(usd.actual),
-    signedUsd(usd.target - usd.recommended), signedUsd(usd.actual - usd.target),
+    signedUsd(usd.recommended - usd.target), signedUsd(usd.actual - usd.target),
   ]);
 
   const rec = vaultFact(page, "Recommendation").locator("a");
@@ -418,13 +418,14 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   // 100 shows the remainder rather than being rescaled to look complete; at
   // rest the centre names the sleeve the breakdown rests on, the largest.
   await expect(ring.locator("circle:not([data-sleeve])")).toHaveCount(1);
-  await expect(ring.locator("figcaption")).toContainText(framework.strategy[0].label);
+  // The served label is the framework's first name; the ring prints the sleeve's name.
+  await expect(ring.locator("figcaption")).toContainText("Fixed Income");
 
   // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
   // its hue: it holds nothing, which is not the same as having no identity.
   const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend).toHaveCount(framework.strategy.length);
-  await expect(legend.first()).toContainText(framework.strategy[0].label);
+  await expect(legend.first()).toContainText("Fixed Income");
   // A row carries its figures and nothing under them: what a sleeve holds is
   // its recipe, opened from the row.
   await expect(legend.locator("small")).toHaveCount(0);
@@ -433,7 +434,8 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
 
   // Hovering a sleeve names it in the centre, as on /swarm.
   await legend.first().hover();
-  await expect(ring.locator("figcaption")).toContainText(framework.strategy[0].label);
+  // The served label is the framework's first name; the ring prints the sleeve's name.
+  await expect(ring.locator("figcaption")).toContainText("Fixed Income");
 });
 
 // Where the money is, beside the target: each sleeve's vault's share of the
@@ -511,7 +513,7 @@ test("the breakdown rests on the largest sleeve, with its vault in the head", as
   await navigate(page, "/allocation");
   const panel = page.locator(".alp__ring .rr-x__panel");
   await expect(panel).toBeVisible();
-  await expect(panel.locator(".rr-x__head b")).toHaveText("Conservative DeFi Yield");
+  await expect(panel.locator(".rr-x__head b")).toHaveText("Fixed Income");
   await expect(panel.locator(".rr-x__head > .alp__vault a")).toHaveText("rmUSDC");
   await expect(page.locator(".rr-x__close")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
@@ -526,7 +528,7 @@ test("the Vaults table's columns carry their definitions", async ({ page }) => {
   const tips = page.locator("#vaults thead .rm-tip__bub");
   await expect(tips).toHaveCount(5);
   await expect(page.locator("#vaults thead th", { hasText: "Drift" }).locator(".rm-tip__bub")).toContainText("Actual minus target");
-  await expect(page.locator("#vaults thead th", { hasText: "Governance gap" }).locator(".rm-tip__bub")).toContainText("Target minus recommended");
+  await expect(page.locator("#vaults thead th", { hasText: "Pending" }).locator(".rm-tip__bub")).toContainText("Recommended minus target");
 });
 
 // The page reports the allocation. It does not explain the swarm that sets it
@@ -588,11 +590,11 @@ test("a stub vault feed is labelled on the Vaults section, not presented as a ch
   await expectNoBrowserErrors(errors);
 });
 
-test("a stale vault feed says so beside the time it was read", async ({ page }) => {
+test("a stale vault feed states the time it was read, and no label beside it", async ({ page }) => {
   await stubEnvironment(page, { vault: { ...goldenVault(), stale: true } });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(vaultFact(page, "Read")).toContainText("Jul 30, 2026 16:20 UTC · stale");
+  await expect(vaultFact(page, "As of").locator("b")).toHaveText("Jul 30, 2026 16:20 UTC");
 });
 
 // This spec's host is a local one, so a Base feed that is down falls back to
@@ -814,7 +816,7 @@ test("on a phone the ring keeps its size and nothing scrolls the page sideways",
   // sideways scroll: the two gaps give way (each vault's page carries them),
   // and every column left is on screen.
   await expect(vaultRows(page)).toHaveCount(4);
-  await expect(page.locator("#vaults thead th:visible")).toHaveText(heads(["Vault", "Recommended", "Target", "Actual"]));
+  await expect(page.locator("#vaults thead th:visible")).toHaveText(heads(["Sleeve", "Recommended", "Target", "Actual"]));
   const wrap = await page.locator("#vaults .rr-tablewrap").evaluate((el) => [el.scrollWidth, el.clientWidth]);
   expect(wrap[0]).toBeLessThanOrEqual(wrap[1]);
   const overflow = await page.evaluate(() =>

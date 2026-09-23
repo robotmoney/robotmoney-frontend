@@ -49,7 +49,7 @@
           </span>
           <span class="rr-meta__i">Deposit asset <b><a class="rr-lnk" :href="depositAssetHref()" target="_blank" rel="noopener noreferrer">USDC</a></b></span>
           <template x-if="isLive() && sharePrice()"><span class="rr-meta__i">Share price <b x-text="sharePrice()"></b></span></template>
-          <span class="rr-meta__i">Read <b x-text="readLabel()"></b></span>
+          <span class="rr-meta__i">As of <b x-text="readLabel()"></b></span>
           <!-- The vault's own contract: linked where the network has an
                explorer, the address where it has none, and said when the vault
                is not deployed. -->
@@ -125,11 +125,11 @@
               <div class="rr-block" style="margin-top:2.25rem">
                 <div class="rr-subhead">
                   <h3 class="rr-subhead__h">Positions</h3>
-                  <template x-if="holdingsDate()"><span class="rr-sec__aside" x-text="`Last read on ${holdingsDate()}`"></span></template>
+                  <template x-if="holdingsDate()"><span class="rr-sec__aside" x-text="`As of ${holdingsDate()}`"></span></template>
                 </div>
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-holdings">
                   <thead>
-                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Share</th></tr>
+                    <tr><th scope="col">Position</th><th scope="col">Type</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Price</th><th scope="col" class="q">Value</th><th scope="col" class="q">Weight</th></tr>
                   </thead>
                   <tbody>
                     <template x-for="(h, i) in visibleHoldings()" :key="`${i}-${h.label}`">
@@ -307,31 +307,8 @@
           <!-- The router's weights over time, and the recommendations before
                the latest, where the source serves them: nothing on Base
                applies weights yet, and one recommendation is the row above. -->
-          <template x-if="showRouterWeights() || showReceipts()">
+          <template x-if="showReceipts()">
             <div style="margin-top:1.5rem">
-              <template x-if="showRouterWeights()">
-                <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                  <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-router-weights" @click="open = !open">
-                    <span>Router weights</span><template x-if="routerWeights()"><small x-text="routerWeights().length"></small></template>
-                  </button>
-                  <div class="rr-disc__anim" id="vault-router-weights" role="region" aria-label="Router weights" :inert="!open">
-                    <div class="rr-disc__clip"><div class="rr-disc__body">
-                      <template x-if="detailError"><p class="rr-note" style="margin:0" x-text="detailError"></p></template>
-                      <template x-if="!detailError && !routerWeights()?.length"><p class="rr-note" style="margin:0">No router weights reported</p></template>
-                      <template x-if="!detailError && routerWeights()?.length">
-                        <div class="rr-tablewrap"><table class="rr-table rr-table--compact">
-                          <thead><tr><th scope="col">Date</th><th scope="col" class="q">Applied</th></tr></thead>
-                          <tbody>
-                            <template x-for="(w, i) in routerWeights()" :key="`${i}-${w.t}`">
-                              <tr><th scope="row" x-text="fmtDate(w.t)"></th><td class="q" x-text="fmtBps(w.appliedBps)"></td></tr>
-                            </template>
-                          </tbody>
-                        </table></div>
-                      </template>
-                    </div></div>
-                  </div>
-                </div>
-              </template>
               <template x-if="showReceipts()">
                 <div class="rr-disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
                   <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-receipts" @click="open = !open">
@@ -363,15 +340,19 @@
               <h2 class="rr-sec__h" id="act-h">Activity</h2>
             </div>
             <div>
-              <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="activityHasTx() ? 'has-tx' : ''">
+              <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="{ 'has-tx': activityHasTx(), 'has-account': activityHasAccount() }">
                 <thead>
-                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="q">Amount</th><th scope="col" class="q">Value</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
+                  <tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col" class="rr-activity__acct">Account</th><th scope="col" class="q">Shares</th><th scope="col" class="q">Assets</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
                 </thead>
                 <tbody>
                   <template x-for="(a, i) in activityRows()" :key="`${activityPage}-${i}-${a.t}`">
                     <tr>
                       <th scope="row" x-text="fmtDate(a.t)"></th>
                       <td x-text="activityKind(a)"></td>
+                      <td class="rr-activity__acct">
+                        <template x-if="accountHref(a)"><a class="rr-lnk" :href="accountHref(a)" target="_blank" rel="noopener noreferrer" x-text="shortHash(a.account)"></a></template>
+                        <template x-if="!accountHref(a)"><span class="sp-addr" x-text="a.account ? shortHash(a.account) : '—'"></span></template>
+                      </td>
                       <td class="q" x-text="activityAmount(a)"></td>
                       <td class="q" x-text="activityValue(a)"></td>
                       <td class="q rr-activity__tx">
@@ -381,7 +362,7 @@
                     </tr>
                   </template>
                   <template x-if="!activity().length">
-                    <tr><td class="rr-table__empty" colspan="5"><span class="rr-empty__t" x-text="activityEmptyText()"></span></td></tr>
+                    <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t" x-text="activityEmptyText()"></span></td></tr>
                   </template>
                 </tbody>
               </table></div>
@@ -397,28 +378,15 @@
             </div>
           </section>
 
-        <!-- MECHANICS AND RISK: only what the source states, then the risk.
-             With nothing stated (a vault not live yet), the risk alone, with
-             no heading over one line. -->
-        <template x-if="!mechanics().length && !contractLinks().length">
-          <div class="rr-sec" id="mechanics">
-          <aside class="rr-callout" aria-label="Risk">
-            <p class="rr-callout__k">Risk</p>
-            <p class="rr-callout__b">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
-          </aside>
-          </div>
-        </template>
-        <template x-if="mechanics().length || contractLinks().length">
+        <!-- MECHANICS AND RISK: the risk first, as the section's first fact,
+             then only what the source states. Every vault has the section:
+             one not live yet has the risk row alone. -->
         <section class="rr-sec" id="mechanics" aria-labelledby="mech-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="mech-h">Mechanics and risk</h2>
           </div>
-          <!-- The risk first, where it is read, not a line under the facts. -->
-          <aside class="rr-callout" aria-label="Risk">
-            <p class="rr-callout__k">Risk</p>
-            <p class="rr-callout__b">Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</p>
-          </aside>
           <dl class="rr-dl">
+            <div class="rr-dl__risk"><dt>Risk</dt><dd>Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</dd></div>
             <template x-for="m in mechanics()" :key="m.k">
               <div><dt x-text="m.k"></dt><dd x-text="m.v"></dd></div>
             </template>
@@ -434,7 +402,6 @@
             </template>
           </dl>
         </section>
-        </template>
 
         <!-- DEPOSIT: rmUSDC on Base only, when it accepts deposits. Anywhere
              else the Status fact already says why there is no way in. -->
