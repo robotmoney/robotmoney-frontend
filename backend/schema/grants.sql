@@ -35,8 +35,32 @@ DECLARE
     'swarm_member_keys', 'swarm_applications', 'audit_log', 'agent_activity_log',
     'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events'
   ];
+  -- Tables a later migration narrowed on purpose; the sweep below must not hand them
+  -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;
+  -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
+  -- makes "writable only by rm_owner".
+  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity'];
   rel record;
+  usurped text;
 BEGIN
+  -- Ownership first, because a relation owned by a RUNTIME role is check 2's
+  -- `object_ownership` denylist rule (§7 check 2) and reconciliation must not
+  -- quietly succeed around it: the grants it would then reconcile are not the
+  -- privileges that relation is actually governed by, since its owner can
+  -- re-grant at will. Relations owned by the cluster's provisioning login are a
+  -- different thing -- that is the pre-0053 state 0053's own sweep moves, not a
+  -- runtime role holding authority it should never have -- so they are left to
+  -- that migration rather than failed on here.
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO usurped
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public'
+    AND c.relkind IN ('r', 'p', 'S')
+    AND c.relowner IN ('rm_app'::regrole, 'rm_worker'::regrole, 'rm_readonly'::regrole);
+  IF usurped IS NOT NULL THEN
+    RAISE EXCEPTION 'grant reconciliation refuses: % is owned by a runtime role, not rm_owner', usurped;
+  END IF;
+
   FOR rel IN
     SELECT c.oid::regclass AS ident, c.relname AS name
     FROM pg_class c
@@ -44,11 +68,26 @@ BEGIN
     LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
     WHERE n.nspname = 'public'
       AND c.relkind IN ('r', 'p')
+      AND c.relowner = 'rm_owner'::regrole  -- §8.1: "for objects `rm_owner` owns"
       AND d.objid IS NULL  -- provider-managed: extension-owned relations are not ours
     ORDER BY c.relname
   LOOP
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
-    EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    IF rel.name = ANY(read_only_for_runtime) THEN
+      -- A later migration deliberately narrowed these to SELECT (0063 on
+      -- `deployment_identity`) or to nothing at all for the writing roles (0056 on
+      -- `analytics_overwrite_events`). Reconciliation must RE-ASSERT that narrowing,
+      -- not undo it: a sweep that hands every table back to rm_app would quietly
+      -- widen the two tables whose whole point is that the application cannot write
+      -- them, and it would do so on every run.
+      EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
+      IF rel.name = 'deployment_identity' THEN
+        EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
+      END IF;
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    ELSE
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    END IF;
     IF rel.name = ANY(append_only) THEN
       EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM rm_app, rm_worker', rel.ident);
     END IF;
@@ -63,6 +102,7 @@ BEGIN
     JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
     WHERE n.nspname = 'public' AND c.relkind = 'S' AND d.objid IS NULL
+      AND c.relowner = 'rm_owner'::regrole
     ORDER BY c.relname
   LOOP
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO rm_app', rel.ident);

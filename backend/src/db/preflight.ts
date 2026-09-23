@@ -57,9 +57,31 @@
 // that gives any of these checks value: "CI end-to-end runs use the production
 // roles and the production preflight." A separate CI-shaped check proves
 // nothing about production.
+import { readFileSync } from "node:fs";
+import parser from "cron-parser";
+import postgres from "postgres";
 import type postgresTypes from "postgres";
+import { config } from "../config.ts";
+import {
+  APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_TABLES,
+  APPEND_ONLY_TABLE_MIGRATION,
+  LEDGER_IMMUTABLE_FAMILIES,
+  ledgerTriggerNames,
+  triggerNames,
+} from "./append-only-guard.ts";
+import { registeredSites, requiredPrivileges } from "./registry.ts";
 import type { RmRole, TablePrivilege } from "./registry.ts";
+import { MANIFEST_TABLE, detectManifestState, readManifest } from "./schema-manifest.ts";
 import type { SchemaManifest } from "./schema-manifest.ts";
+import { checkCompatibility } from "./schema-compat.ts";
+// The five `swarm.*` rows, from the command that writes them. Imported rather
+// than copied: check 6 asserts the same set `bun run schedules:enable` (§6.3,
+// §9.1) establishes, and two copies of "the five" is how a sixth row becomes
+// invisible to one of them. backend/scripts/ ships in the api/worker image
+// (backend/Dockerfile `COPY backend/ /app/`), and that module is import-safe —
+// its entry point is behind `import.meta.main`.
+import { SWARM_SCHEDULE_KINDS } from "../../scripts/schedules-enable.ts";
 
 export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
@@ -154,13 +176,53 @@ export interface PreflightReport {
  * `--local blank --migrate --seed`" — both require that the runtime roles
  * actually work before anything starts.
  */
-export function checkRoleTokens(
+export async function checkRoleTokens(
   context: PreflightContext,
   tokens: ReadonlyMap<RmRole, string>,
 ): Promise<PreflightCheckResult> {
-  void context;
-  void tokens;
-  throw new Error("NOT IMPLEMENTED: verify every role token authenticates — spec §7 check 1, issue #1026 W2.4");
+  const findings: PreflightFinding[] = [];
+
+  for (const role of context.roles) {
+    const token = tokens.get(role);
+    // An absent token is not "nothing to test": it is how a container ends up
+    // falling back to whatever credential the connection string carries.
+    if (token === undefined || token === "") {
+      findings.push({
+        check: "roles_authenticate",
+        severity: "refuse",
+        message: `no token supplied for ${role}: a container started without its own credential falls back to another one`,
+      });
+      continue;
+    }
+
+    // The one place preflight connects as anything but its own credential.
+    // Authentication is the single property no catalog query can answer about a
+    // password the CALLER holds, so it is tested by using it — and by nothing
+    // else: the connection issues `SELECT 1` and is closed.
+    const probe = postgres(config.databaseUrl, {
+      max: 1,
+      user: role,
+      username: role,
+      password: token,
+      connect_timeout: 10,
+      onnotice: () => {},
+    });
+    try {
+      await probe`SELECT 1`;
+    } catch (error) {
+      // The role's name, never the token, and never the driver's echo of the
+      // connection string.
+      findings.push({
+        check: "roles_authenticate",
+        severity: "refuse",
+        message: `${role} could not authenticate against the target: ${(error as { code?: string }).code ?? "authentication failed"}`,
+      });
+    } finally {
+      await probe.end({ timeout: 5 }).catch(() => undefined);
+    }
+  }
+
+  return { check: "roles_authenticate", findings };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,10 +315,84 @@ export interface DenylistViolation {
  * Serves spec §10 W2 "Denylist: runtime role with `rm_owner` membership, object
  * ownership, or DELETE on an append-only table fails preflight."
  */
-export function checkPrivileges(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
-  void db;
-  void context;
-  throw new Error("NOT IMPLEMENTED: verify required privileges and the denylist — spec §7 check 2, issue #1026 W2.4");
+export async function checkPrivileges(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
+  const findings: PreflightFinding[] = [];
+  const required = requiredPrivileges();
+  const sites = registeredSites();
+
+  // REQUIRED — what the registry says this role's programs need.
+  for (const role of context.roles) {
+    const byObject = required.get(role);
+    if (!byObject) continue;
+    for (const [object, privileges] of byObject) {
+      let missing: readonly TablePrivilege[];
+      try {
+        missing = await missingPrivileges(db, role, object, [...privileges]);
+      } catch (error) {
+        // A declaration naming a relation that does not exist is a registry
+        // bug, and reporting it as "privilege missing" sends the reader to the
+        // wrong file.
+        findings.push({
+          check: "privileges",
+          severity: "refuse",
+          message: `${declarantsFor(sites, role, object)}: ${(error as Error).message}`,
+        });
+        continue;
+      }
+      if (missing.length === 0) continue;
+      findings.push({
+        check: "privileges",
+        severity: "refuse",
+        message:
+          `${role} is missing ${missing.join(", ")} on ${object}, required by ${declarantsFor(sites, role, object)}`,
+      });
+    }
+  }
+
+  // DENYLIST — fixed, and refused at `refuse` severity in every environment. A
+  // denylist that only arms in production is first exercised in production.
+  for (const violation of await findDenylistViolations(db, context.roles)) {
+    findings.push({
+      check: "privileges",
+      severity: "refuse",
+      message: denylistMessage(violation),
+    });
+  }
+
+  return { check: "privileges", findings };
+}
+
+/** The call sites that asked for a privilege, so a check-2 failure is
+ *  actionable: `<module>:<function>`, never "something is missing somewhere". */
+function declarantsFor(
+  sites: readonly { role: RmRole; object: string; site: string }[],
+  role: RmRole,
+  object: string,
+): string {
+  const named = sites.filter((site) => site.role === role && site.object === object).map((site) => site.site);
+  return named.length > 0 ? named.join(", ") : `${role}:${object}`;
+}
+
+/** One denylist hit as an operator sentence. The role and the object are both
+ *  named because a rule without its object is not actionable. */
+function denylistMessage(violation: DenylistViolation): string {
+  switch (violation.rule) {
+    case "superuser":
+      return `${violation.role} is a SUPERUSER: a runtime role may hold none of the denylist (§7 check 2)`;
+    case "createrole":
+      return `${violation.role} holds CREATEROLE: 0053 pins NOCREATEROLE on all four roles`;
+    case "rm_owner_membership":
+      return `${violation.role} holds membership in ${violation.object}: every other guard becomes decorative`;
+    case "object_ownership":
+      return `${violation.role} owns the application object ${violation.object}: ownership belongs to rm_owner`;
+    case "ddl":
+      return `${violation.role} holds CREATE on schema ${violation.object}: DDL is not a runtime privilege`;
+    case "append_only_write":
+      return (
+        `${violation.role} holds DELETE/TRUNCATE on the append-only table ${violation.object}: ` +
+        "spec §9.1 step 2's grant transition has not landed on this database"
+      );
+  }
 }
 
 /**
@@ -271,13 +407,86 @@ export function checkPrivileges(db: PreflightDb, context: PreflightContext): Pro
  *
  * Serves the same §10 W2 denylist gate.
  */
-export function findDenylistViolations(
+export async function findDenylistViolations(
   db: PreflightDb,
   roles: readonly RmRole[],
 ): Promise<readonly DenylistViolation[]> {
-  void db;
-  void roles;
-  throw new Error("NOT IMPLEMENTED: resolve denylist violations from the catalog — spec §7 check 2, issue #1026 W2.4");
+  const violations: DenylistViolation[] = [];
+  if (roles.length === 0) return violations;
+
+  const names = [...roles];
+
+  // Role ATTRIBUTES and role MEMBERSHIP — pg_roles and pg_has_role, never an
+  // attempted `SET ROLE`.
+  const attributes = (await db`
+    SELECT rolname                                        AS role,
+           rolsuper                                       AS superuser,
+           rolcreaterole                                  AS createrole,
+           pg_has_role(rolname, 'rm_owner', 'MEMBER')     AS owner_member,
+           has_schema_privilege(rolname, 'public', 'CREATE') AS ddl
+    FROM pg_roles
+    WHERE rolname = ANY(${names})`) as unknown as {
+    role: RmRole;
+    superuser: boolean;
+    createrole: boolean;
+    owner_member: boolean;
+    ddl: boolean;
+  }[];
+  const byRole = new Map(attributes.map((row) => [row.role, row]));
+
+  // OWNERSHIP of application objects. 0053's two sweeps moved every relation in
+  // `public` to rm_owner precisely so a grantee "cannot alter/drop tables or
+  // triggers"; a relation that has moved back is the denylist's `object_ownership`.
+  const owned = (await db`
+    SELECT r.rolname AS role, c.relname AS object
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_roles r ON r.oid = c.relowner
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+      AND r.rolname = ANY(${names})
+    ORDER BY r.rolname, c.relname`) as unknown as { role: RmRole; object: string }[];
+
+  // APPEND-ONLY WRITE. The protected set is APPEND_ONLY_TABLES — migration
+  // 0032's set, which is also what the triggers cover — resolved through
+  // `to_regclass` so a table this database has not reached yet is skipped
+  // rather than raising.
+  const appendOnly = (await db`
+    SELECT r.rolname AS role,
+           t.name    AS object,
+           has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'DELETE')   AS may_delete,
+           has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'TRUNCATE') AS may_truncate
+    FROM unnest(${names}::text[]) AS r(rolname)
+    CROSS JOIN unnest(${[...APPEND_ONLY_TABLES]}::text[]) AS t(name)
+    WHERE to_regclass('public.' || t.name) IS NOT NULL
+    ORDER BY r.rolname, t.name`) as unknown as {
+    role: RmRole;
+    object: string;
+    may_delete: boolean;
+    may_truncate: boolean;
+  }[];
+
+  // Reported per role, every rule, every hit — not the first.
+  for (const role of roles) {
+    const row = byRole.get(role);
+    if (row?.superuser) violations.push({ rule: "superuser", role, object: null });
+    if (row?.createrole) violations.push({ rule: "createrole", role, object: null });
+    if (row?.owner_member) violations.push({ rule: "rm_owner_membership", role, object: "rm_owner" });
+    for (const entry of owned.filter((o) => o.role === role)) {
+      violations.push({ rule: "object_ownership", role, object: entry.object });
+    }
+    if (row?.ddl) violations.push({ rule: "ddl", role, object: "public" });
+    for (const entry of appendOnly.filter((a) => a.role === role)) {
+      // ONE violation per table, whichever of the two privileges is held:
+      // absent privilege is one protection, and a table is either protected or
+      // it is not.
+      if (entry.may_delete || entry.may_truncate) {
+        violations.push({ rule: "append_only_write", role, object: entry.object });
+      }
+    }
+  }
+
+  return violations;
 }
 
 /**
@@ -295,17 +504,34 @@ export function findDenylistViolations(
  * Serves spec §10 W2 "Registry structurally enforced; execution under each role
  * on a disposable database" — the catalog side of it.
  */
-export function missingPrivileges(
+export async function missingPrivileges(
   db: PreflightDb,
   role: RmRole,
   object: string,
   privileges: readonly TablePrivilege[],
 ): Promise<readonly TablePrivilege[]> {
-  void db;
-  void role;
-  void object;
-  void privileges;
-  throw new Error("NOT IMPLEMENTED: test required privileges via has_table_privilege — spec §7 check 2, issue #1026 W2.4");
+  const [resolved] = (await db`SELECT to_regclass(${`public.${object}`}) IS NOT NULL AS present`) as unknown as {
+    present: boolean;
+  }[];
+  if (!resolved?.present) {
+    throw new Error(
+      `${object} does not resolve to a relation in public: a registry declaration names a relation that does not ` +
+        "exist, which is a registry bug and not a missing grant",
+    );
+  }
+
+  if (privileges.length === 0) return [];
+
+  // One `has_table_privilege` call per privilege, and never the statement the
+  // privilege would permit: a check that proves rm_app cannot DELETE by
+  // attempting a DELETE is a check that deletes when it is wrong.
+  const held = (await db`
+    SELECT p.name AS privilege,
+           has_table_privilege(${role}, to_regclass(${`public.${object}`}), p.name) AS granted
+    FROM unnest(${[...privileges]}::text[]) WITH ORDINALITY AS p(name, ord)
+    ORDER BY p.ord`) as unknown as { privilege: TablePrivilege; granted: boolean }[];
+
+  return held.filter((row) => !row.granted).map((row) => row.privilege);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,10 +571,162 @@ export function missingPrivileges(
  * Serves spec §10 W2 "Old code boots after an additive change to an existing
  * table while genuine drift on the same database still fails" — the drift half.
  */
-export function checkSchemaIntegrity(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
-  void db;
+export async function checkSchemaIntegrity(
+  db: PreflightDb,
+  context: PreflightContext,
+): Promise<PreflightCheckResult> {
+  // `context` is deliberately unread. 3a asks a question about the DATABASE and
+  // must answer it identically "whatever code is booting" (§7 check 3a), so
+  // reading `codeFilenames` here would make an ordinary version difference look
+  // like drift — which is 3b's question, and a different one.
   void context;
-  throw new Error("NOT IMPLEMENTED: compare live definitions against the installed manifest — spec §7 check 3a, issue #1026 W2.7");
+  const findings: PreflightFinding[] = [];
+  const refuse = (message: string): void => {
+    findings.push({ check: "schema_integrity", severity: "refuse", message });
+  };
+
+  // ── The comparison TARGET: the manifest stored in this database (§8.3).
+  let manifest: SchemaManifest | null = null;
+  try {
+    manifest = await readManifest(db);
+  } catch (error) {
+    refuse((error as Error).message);
+  }
+
+  if (manifest === null && findings.length === 0) {
+    refuse(
+      `no ${MANIFEST_TABLE} row: this database declares no schema to be verified against, and "nothing to compare" ` +
+        "is not a reason to serve it",
+    );
+  }
+
+  if (manifest !== null) {
+    const state = await detectManifestState(db);
+    if (state.kind === "unknown_format") {
+      refuse(`${MANIFEST_TABLE} format version ${state.formatVersion} is unknown to this code (§8.3)`);
+    }
+    if (state.kind === "inconsistent") {
+      refuse(`${MANIFEST_TABLE} disagrees with the ledger: ${state.reasons.join("; ")}`);
+    }
+
+    // LEDGER AHEAD OF MANIFEST is §8.3's *in progress*, and an application boot
+    // refuses it: the schema is mid-change and nothing has verified where it
+    // got to. Computed here rather than taken from the classifier's verdict,
+    // because a manifest can be BOTH in progress and internally inconsistent
+    // and the operator needs to be told both.
+    const ahead = await ledgerAhead(db, manifest.filenames);
+    if (ahead.length > 0) {
+      refuse(
+        `the database is in progress — the ledger records ${ahead.length} migration(s) the manifest does not ` +
+          `embody (${ahead.join(", ")}); nothing has verified where the schema got to`,
+      );
+    }
+
+    // The manifest's declaration is authored SQL, so the comparison is over the
+    // OBJECTS it names, never its bytes: a live catalog does not re-serialize
+    // to the text a human wrote.
+    for (const problem of await declaredObjectsMissing(db, manifest)) refuse(problem);
+  }
+
+  // ── The live half, which does not depend on a manifest existing.
+  //
+  // A trigger is the object class a partial `pg_restore` silently omits (it
+  // lives in the post-data section) while the ledger keeps claiming the
+  // migration that installs it ran — the exact shape of issue #602. Genuine
+  // drift has to fail here whatever the manifest says, including when there is
+  // no manifest at all.
+  for (const problem of await missingGuardTriggers(db)) refuse(problem);
+
+  return { check: "schema_integrity", findings };
+}
+
+/** Ledger rows the manifest does not embody, in apply order. */
+async function ledgerAhead(db: PreflightDb, embodied: readonly string[]): Promise<string[]> {
+  const rows = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
+  const known = new Set(embodied);
+  return rows.map((row) => row.name).filter((name) => !known.has(name));
+}
+
+/** Every relation the manifest's declaration names that the live catalog does
+ *  not have. Named objects, not bytes — see `checkSchemaIntegrity`. */
+async function declaredObjectsMissing(db: PreflightDb, manifest: SchemaManifest): Promise<string[]> {
+  const declared = new Set<string>();
+  const pattern = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?/gi;
+  for (const match of manifest.declaration.text.matchAll(pattern)) {
+    if (match[1]) declared.add(match[1]);
+  }
+  if (declared.size === 0) return [];
+
+  const rows = (await db`
+    SELECT c.relname AS name
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`) as unknown as { name: string }[];
+  const live = new Set(rows.map((row) => row.name));
+
+  return [...declared]
+    .filter((name) => !live.has(name))
+    .sort()
+    .map((name) => `${name} is declared by the installed manifest but absent from the live catalog`);
+}
+
+/** The append-only and ledger-immutable triggers each guard migration installs,
+ *  checked against the catalog. A table the database has not reached yet is
+ *  skipped: its absence is a version difference, not drift. */
+async function missingGuardTriggers(db: PreflightDb): Promise<string[]> {
+  const applied = new Set(
+    ((await db`SELECT name FROM schema_migrations`) as unknown as { name: string }[]).map((row) => row.name),
+  );
+  const tables = new Set(
+    (
+      (await db`
+        SELECT c.relname AS name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'`) as unknown as { name: string }[]
+    ).map((row) => row.name),
+  );
+  const installed = new Set(
+    (
+      (await db`
+        SELECT c.relname AS table_name, t.tgname AS trigger_name
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal`) as unknown as {
+        table_name: string;
+        trigger_name: string;
+      }[]
+    ).map((row) => `${row.table_name}.${row.trigger_name}`),
+  );
+
+  const problems: string[] = [];
+  const require = (table: string, trigger: string, migration: string): void => {
+    if (!tables.has(table)) return;
+    if (installed.has(`${table}.${trigger}`)) return;
+    problems.push(
+      `${table} is missing the trigger ${trigger} that ${migration} installs: the ledger records that migration, ` +
+        "so this is drift, not a version difference",
+    );
+  };
+
+  for (const migration of APPEND_ONLY_MIGRATIONS) {
+    if (!applied.has(migration)) continue;
+    for (const table of APPEND_ONLY_TABLES) {
+      if (APPEND_ONLY_TABLE_MIGRATION[table] !== migration) continue;
+      const names = triggerNames(table);
+      require(table, names.statement, migration);
+      require(table, names.row, migration);
+    }
+  }
+  for (const family of LEDGER_IMMUTABLE_FAMILIES) {
+    if (!applied.has(family.migration)) continue;
+    for (const table of family.tables) {
+      const names = ledgerTriggerNames(family, table);
+      require(table, names.statement, family.migration);
+      require(table, names.row, family.migration);
+    }
+  }
+
+  return problems;
 }
 
 /**
@@ -377,10 +755,61 @@ export function checkSchemaIntegrity(db: PreflightDb, context: PreflightContext)
  * Serves spec §10 W2 "Old release reads compat metadata written by a newer one
  * and refuses unknown `metadata_version`."
  */
-export function checkSchemaCompatibility(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
-  void db;
-  void context;
-  throw new Error("NOT IMPLEMENTED: apply the compatibility rule to surplus ledger rows — spec §7 check 3b, issue #1026 W2.7");
+export async function checkSchemaCompatibility(
+  db: PreflightDb,
+  context: PreflightContext,
+): Promise<PreflightCheckResult> {
+  const findings: PreflightFinding[] = [];
+  const ledger = (
+    (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]
+  ).map((row) => row.name);
+
+  const recorded = new Set(ledger);
+  const shipped = new Set(context.codeFilenames);
+  const ahead = context.codeFilenames.filter((name) => !recorded.has(name));
+  const surplus = ledger.filter((name) => !shipped.has(name));
+
+  // The code is AHEAD of the database. Not a compatibility question — a pending
+  // migration — but still a refusal, and it is reported here rather than
+  // allowed to escape as an exception, because an operator gets every failure
+  // in one pass or none of them.
+  if (ahead.length > 0) {
+    findings.push({
+      check: "schema_compatibility",
+      severity: "refuse",
+      message:
+        `this image ships migrations the ledger does not record (${ahead.join(", ")}): the database is BEHIND the ` +
+        "code, which is a pending migration, not a compatibility question",
+    });
+  }
+
+  if (surplus.length === 0) return { check: "schema_compatibility", findings };
+
+  let verdict;
+  try {
+    verdict = await checkCompatibility(db, [...shipped].filter((name) => recorded.has(name)), ledger);
+  } catch (error) {
+    // The surplus is named HERE. A database that predates §8.2's columns
+    // refuses through `readLedgerCompat`, whose message is about the column —
+    // true, and not enough: the operator also has to be told which migrations
+    // could not be evaluated.
+    findings.push({
+      check: "schema_compatibility",
+      severity: "refuse",
+      message:
+        `the ledger records ${surplus.length} migration(s) this image does not ship (${surplus.join(", ")}) and ` +
+        `their compatibility cannot be read: ${(error as Error).message}`,
+    });
+    return { check: "schema_compatibility", findings };
+  }
+
+  if (verdict.kind === "refused") {
+    for (const reason of verdict.reasons) {
+      findings.push({ check: "schema_compatibility", severity: "refuse", message: reason });
+    }
+  }
+
+  return { check: "schema_compatibility", findings };
 }
 
 /** What check 3 resolved about the installed version, carried into the receipt
@@ -424,9 +853,65 @@ export interface SchemaIdentity {
  * Serves spec §10 W2 (plan row W2.4's "`.env` dangerous-credential refusal on
  * `prod`").
  */
-export function checkEnvCredentials(context: PreflightContext): Promise<PreflightCheckResult> {
-  void context;
-  throw new Error("NOT IMPLEMENTED: refuse a dangerous credential in ~/.env — spec §7 check 4, issue #1026 W2.4");
+export async function checkEnvCredentials(context: PreflightContext): Promise<PreflightCheckResult> {
+  const findings: PreflightFinding[] = [];
+
+  let text: string;
+  try {
+    text = readFileSync(context.envFilePath, "utf8");
+  } catch {
+    // An unreadable env file is check 4's silence, not its refusal: it holds no
+    // dangerous credential because it holds nothing. Whether the file is
+    // REQUIRED is configuration validation's question, earlier in the boot order.
+    return { check: "env_credentials", findings };
+  }
+
+  // `stage` legitimately holds an owner credential for `--migrate` (§8.5); prod
+  // never does. With RM_ENV unset, §4.3's unset row decides: refuse against a
+  // remote, warn under `--local`.
+  const severity: PreflightFinding["severity"] =
+    context.env === "prod" ? "refuse" : context.env === "stage" ? "warn" : context.connection === "remote" ? "refuse" : "warn";
+
+  for (const key of envKeys(text)) {
+    const reason = dangerousKeyReason(key);
+    if (!reason) continue;
+    // The KEY and nothing else. The value is never read, logged, hashed or
+    // compared — §3: rm_owner's password is "typed at the terminal for the one
+    // run that needs it and never stored".
+    findings.push({
+      check: "env_credentials",
+      severity,
+      message: `${context.envFilePath} holds ${key}, ${reason} — §3 allows only the connection and the three runtime tokens`,
+    });
+  }
+
+  return { check: "env_credentials", findings };
+}
+
+/** The KEY names of an env file, in file order. Values are not returned, so
+ *  nothing downstream can print one by accident. */
+function envKeys(text: string): string[] {
+  const keys: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const match = /^([A-Za-z0-9_.-]+)\s*[=:]/.exec(trimmed);
+    if (match?.[1]) keys.push(match[1]);
+  }
+  return keys;
+}
+
+/** Why a key is dangerous, or null. Spec §7 check 4 names three: `rm_owner`,
+ *  `doadmin`, and any superuser token. */
+function dangerousKeyReason(key: string): string | null {
+  const name = key.toLowerCase();
+  if (name === "rm_owner") return "the migration credential (§3: typed for one run, never stored)";
+  if (name === "doadmin") return "the cluster provisioning credential (§3: doadmin is provisioning only)";
+  if (name.includes("superuser")) return "a superuser credential";
+  if (name === "postgres" || /(^|_)postgres_(user|password|url|superuser)/.test(name)) {
+    return "a cluster superuser credential";
+  }
+  return null;
 }
 
 /**
@@ -459,10 +944,88 @@ export function checkEnvCredentials(context: PreflightContext): Promise<Prefligh
  * `deployment_identity = production` refuses; plain stage boot incl.
  * `--allow-insecure` against production identity refuses."
  */
-export function checkEnvIdentity(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
-  void db;
-  void context;
-  throw new Error("NOT IMPLEMENTED: resolve the RM_ENV x deployment_identity matrix — spec §7 check 5, issue #1026 W2.4");
+export async function checkEnvIdentity(
+  db: PreflightDb,
+  context: PreflightContext,
+): Promise<PreflightCheckResult> {
+  const findings: PreflightFinding[] = [];
+  const refuse = (message: string): PreflightCheckResult => {
+    findings.push({ check: "env_identity", severity: "refuse", message });
+    return { check: "env_identity", findings };
+  };
+
+  // The row first: every matrix cell reads it, and "absence of evidence is not
+  // evidence of rehearsal".
+  const [present] = (await db`SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`) as unknown as {
+    present: boolean;
+  }[];
+  if (!present?.present) {
+    return refuse("no deployment_identity table: this target is not enrolled (§4.2), and an unenrolled target is not a rehearsal one");
+  }
+  // The enrollment column is `kind` (§4.2, migration 0063_deployment_identity).
+  // Resolved from the catalog rather than assumed, because this check also runs
+  // against databases restored or hand-built before that migration, and a
+  // column error there would read as "the check is broken" rather than "this
+  // target is not enrolled".
+  const [column] = (await db`
+    SELECT column_name AS name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'deployment_identity'
+      AND column_name IN ('kind', 'identity')
+    ORDER BY CASE column_name WHEN 'kind' THEN 0 ELSE 1 END
+    LIMIT 1`) as unknown as { name: string }[];
+  if (!column?.name) {
+    return refuse(
+      "deployment_identity carries no enrollment column (§4.2 expects `kind`): this target is not enrolled",
+    );
+  }
+  const rows = (await db.unsafe(
+    `SELECT ${column.name} AS identity FROM deployment_identity`,
+  )) as unknown as { identity: string }[];
+  if (rows.length === 0) {
+    return refuse("no deployment_identity row: absence of evidence is not evidence of rehearsal (§4.2)");
+  }
+  if (rows.length > 1) {
+    return refuse(
+      `deployment_identity holds ${rows.length} rows: it is a one-row table (§4.2) and no choice between them is defensible`,
+    );
+  }
+  const identity = rows[0]?.identity ?? "";
+
+  // §4.3's matrix, row by row, ONE finding each: an operator fixing a boot
+  // needs the cell they are in, not every cell they are not in.
+  if (context.env === null) {
+    if (context.connection === "remote") {
+      return refuse("RM_ENV is not set and the target is a remote connection: §4.3 refuses rather than guessing a policy");
+    }
+    findings.push({
+      check: "env_identity",
+      severity: "warn",
+      message: "RM_ENV not set, running as stage",
+    });
+    return { check: "env_identity", findings };
+  }
+
+  if (context.env === "prod") {
+    if (context.connection === "local") {
+      return refuse("RM_ENV=prod with a --local mode: §4.3 refuses every prod + --local combination");
+    }
+    if (identity !== "production") {
+      return refuse(
+        `RM_ENV=prod against deployment_identity = ${identity}: production guards may only arm on a target enrolled as production`,
+      );
+    }
+    return { check: "env_identity", findings };
+  }
+
+  // stage — remote and local alike. "A reattached volume gets no weaker policy
+  // than a remote", and stage policy never touches production data.
+  if (identity !== "rehearsal") {
+    return refuse(
+      `RM_ENV=stage against deployment_identity = ${identity}: stage policy, --allow-insecure included, never touches production data`,
+    );
+  }
+  return { check: "env_identity", findings };
 }
 
 /**
@@ -493,10 +1056,55 @@ export function checkEnvIdentity(db: PreflightDb, context: PreflightContext): Pr
  * Serves the §9.1 production-initialization sequence; its failure is what tells
  * an operator step 4 has not been done.
  */
-export function checkProdSchedules(db: PreflightDb, context: PreflightContext): Promise<PreflightCheckResult> {
-  void db;
-  void context;
-  throw new Error("NOT IMPLEMENTED: verify the five prod swarm schedules — spec §7 check 6, issue #1026 W2.4");
+export async function checkProdSchedules(
+  db: PreflightDb,
+  context: PreflightContext,
+): Promise<PreflightCheckResult> {
+  const findings: PreflightFinding[] = [];
+  // On stage the rows are legitimately off (`--schedules-off`, §4.4), so there
+  // is nothing to report — not a warning, not a pass line.
+  if (context.env !== "prod") return { check: "prod_schedules", findings };
+
+  const rows = (await db`
+    SELECT kind, cron, enabled FROM job_schedules WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`) as unknown as {
+    kind: string;
+    cron: string;
+    enabled: boolean;
+  }[];
+  const byKind = new Map(rows.map((row) => [row.kind, row]));
+
+  for (const kind of SWARM_SCHEDULE_KINDS) {
+    const row = byKind.get(kind);
+    if (!row) {
+      findings.push({
+        check: "prod_schedules",
+        severity: "refuse",
+        message: `${kind} has no job_schedules row: run \`bun run schedules:enable\` (§9.1 step 4)`,
+      });
+      continue;
+    }
+    if (!row.enabled) {
+      findings.push({
+        check: "prod_schedules",
+        severity: "refuse",
+        message: `${kind} is disabled: enablement is an operator action (\`bun run schedules:enable\`, §6.3), never a boot side-effect`,
+      });
+    }
+    try {
+      parser.parseExpression(row.cron);
+    } catch {
+      findings.push({
+        check: "prod_schedules",
+        severity: "refuse",
+        message: `${kind} carries a cron string that does not parse: ${row.cron}`,
+      });
+    }
+  }
+
+  // Deliberately NOT checked: `next_run_at`. §6.3 — NULL and overdue rows are
+  // the scheduler's to initialize or drain per `catchup_policy`, and refusing
+  // on one would refuse exactly the boot that repairs it (#614's wedge).
+  return { check: "prod_schedules", findings };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -534,17 +1142,35 @@ export type PreflightScope =
  * Serves every spec §10 W2 gate — it is the single entry point each of them
  * exercises.
  */
-export function runPreflight(
+export async function runPreflight(
   db: PreflightDb,
   context: PreflightContext,
   scope: PreflightScope,
   tokens: ReadonlyMap<RmRole, string>,
 ): Promise<PreflightReport> {
-  void db;
-  void context;
-  void scope;
-  void tokens;
-  throw new Error("NOT IMPLEMENTED: run the preflight checks for a scope — spec §7, issue #1026 W2.4");
+  // "Unreachable" is never reported as "check failed". The probe runs first and
+  // its error propagates, so a database nobody can query throws here instead of
+  // being rendered as six refusals an operator would try to fix.
+  await db`SELECT 1`;
+
+  const results: PreflightCheckResult[] = [
+    await checkRoleTokens(context, tokens),
+    await checkPrivileges(db, context),
+    await checkSchemaIntegrity(db, context),
+    await checkSchemaCompatibility(db, context),
+  ];
+
+  // Checks 4-6 are the operator's environment, which a container is not
+  // positioned to judge (§7.2). Every check runs before anything is decided:
+  // a database failing 2, 3 and 5 says so in one boot.
+  if (scope === "full") {
+    results.push(await checkEnvCredentials(context));
+    results.push(await checkEnvIdentity(db, context));
+    results.push(await checkProdSchedules(db, context));
+  }
+
+  const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));
+  return { results, passed };
 }
 
 /**
@@ -560,6 +1186,11 @@ export function runPreflight(
  * refusal is only assertable if its wording is.
  */
 export function preflightReportLines(report: PreflightReport): string[] {
-  void report;
-  throw new Error("NOT IMPLEMENTED: render preflight findings as operator lines — spec §7, issue #1026 W2.4");
+  const lines: string[] = [];
+  for (const result of report.results) {
+    for (const finding of result.findings) {
+      lines.push(`[preflight] ${finding.severity.toUpperCase()} ${finding.check}: ${finding.message}`);
+    }
+  }
+  return lines;
 }
