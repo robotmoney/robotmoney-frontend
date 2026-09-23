@@ -1,5 +1,13 @@
 # Credential Doctor
 
+> **Scope: existing credential utility, not the adopted deployment credential model.**
+> [Smoke production spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)
+> governs the adopted role and secret-handling design. GitHub Environment inventory
+> and vault behavior below describe this utility; they do not authorize storing
+> `rm_owner`, adding `rm_migrator`, or routing participant keys through the old flow.
+> Verify utility behavior at the release SHA. This reference does not establish that
+> the new deployment design has shipped.
+
 Audits, configures, and revokes credentials for the Robot Money GitOps deployment
 across **staging** and **production** environments. Implements the credential
 inventory defined in [deployment.md](./deployment.md).

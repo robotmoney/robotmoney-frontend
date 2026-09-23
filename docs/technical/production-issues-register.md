@@ -1,5 +1,13 @@
 # Production issues register
 
+> **Deployment authority, 2026-09-23:** [Smoke production spec](./smoke-production-spec.md)
+> is the sole adopted design, approved for implementation but not yet shipped.
+> This register owns incident evidence and follow-up, not deployment mechanisms.
+> References to `smoke:archive`, inline judging and old credentials describe incidents
+> or legacy code; they do not prescribe the replacement. Design adoption does not
+> close an incident or prove a production fix. Standing [release policy](./release-runbooks.md)
+> and the spec’s W1/W2/W3 gates still apply.
+
 **Purpose:** a living record of issues observed against **production (`rm_prod`,
 DO managed Postgres)** during the 0.5.x cutover work. One row per issue, with
 severity, current status, the evidence it rests on, and the next action.
@@ -86,7 +94,8 @@ intent is a binary `off | enforce` judge.
   production runs. No backport scope.
 - **Next:** logistics only — verify replay covers the soak (hard prerequisite),
   reconcile with the in-flight work in **P-16** (which builds *on* shadow), loop
-  David on the reversal, rewrite the driver's per-session flip, then implement.
+  David on the reversal, remove any surviving per-session mode flip, then implement.
+  The adopted smoke design retires the host driver; this is not a plan to extend it.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst**, plus the judge Themis —
@@ -106,7 +115,7 @@ no session-lifecycle loop is driving them.
   spec's `--spoof-keys`/roster mechanism does not itself perform for real
   keys — provisioning `credential.json` with real keys and re-running smoke
   is what rebinds them (spec §9.3). This is independent of P-02/P-04, and it
-  is gated on W1/W3 landing (spec §10), not runnable today.
+  requires all W1/W2/W3 cutover gates (spec §10), not runnable today.
 
 ### P-15 — No admin UX to control judge parameters (S4)
 The judge is configurable **only** through a raw authenticated call to

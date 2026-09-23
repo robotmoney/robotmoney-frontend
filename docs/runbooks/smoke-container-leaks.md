@@ -1,5 +1,12 @@
 # Runbook — leaked smoke/CI containers on the shared host
 
+> **Scope: cleanup of containers created by the legacy smoke implementation.**
+> This is not a lifecycle specification for the adopted
+> [smoke production design](../technical/smoke-production-spec.md).
+> Overlay paths, labels and cleanup commands below apply only where the deployed
+> implementation still uses them. Preserve target scoping; do not apply legacy
+> cleanup selectors to new instances without checking their actual ownership.
+
 The host that serves `stage.robotmoney-labs.dev` is also the self-hosted GitHub
 Actions runner and the box operators run local evals on. Four families spawn
 containers on it (`scripts/stack/naming.ts`): the smoke **stack**, the onboarding

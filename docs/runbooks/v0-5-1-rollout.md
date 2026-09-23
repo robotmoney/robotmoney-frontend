@@ -1,5 +1,14 @@
 # v0.5.1 production rollout
 
+> **RELEASE-SCOPED LEGACY PROCEDURE — not current deployment-design authority.**
+> Retained for this release’s provenance and recorded tooling; status statements
+> below belong to that record, not a fresh production verification. Do not reuse
+> its command blocks as a new-release template or as instructions for a moving branch.
+> [Smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> replacement design (not yet shipped); [release policy](../technical/release-runbooks.md)
+> still governs all gates. An operation on legacy tooling requires validation against
+> the exact release SHA; adoption alone does not make new commands available.
+
 > Operator procedure for upgrading production from **v0.5.0** to **v0.5.1**.
 > **No RC is cut yet on this branch.** The candidate is whatever `v0.5.1-rc.*`
 > tag is next cut on `releases-0.5.x`; record its tag and SHA here when it
@@ -470,16 +479,13 @@ the backup artifacts as `stage-rehearsal-report-<STAMP>.md`. It must record:
 
 ## 6. Production cutover
 
-> **This release cuts over on the pre-D46 mechanic:** one command
-> (`rollout-procedure.md` §8.2) that migrates, seeds and boots, with the
-> operator capturing `BOOT_STATUS` by hand. D46
-> (`docs/technical/upgrade-deployment-spec.md`) replaces it with receipted
-> `P7.*` steps and retires `doadmin` as the migration login; per policy §4.6 that
-> lands on the release line after this one, not here. Two things it changes are
-> already true for this cutover and worth knowing: no runtime service declares
-> `MIGRATE_DATABASE_URL` any more (`de5efffa`), and the provisioning script
-> verifies the taxonomy end-state and passes the credential to `psql` without
-> putting it in `argv` (`2948e63f`, `30688688`).
+> **Legacy cutover record, not the adopted replacement mechanism.** The
+> commands below belong to this release's recorded tooling and must be revalidated
+> at its exact SHA before any operation. The former D46 `rm_migrator`/`P7.*`
+> implementation plan is deprecated; it does not schedule a successor release.
+> [Smoke production spec](../technical/smoke-production-spec.md) now owns the
+> replacement design and W1/W2/W3 gates. Adoption does not change this release's
+> code or make those new commands available here.
 
 Mechanics are release-independent — `rollout-procedure.md` §7 (config), §8
 (stop/start), §9 (verification). v0.5.1 adds nothing to them and removes

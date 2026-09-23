@@ -1,5 +1,12 @@
 # Release cycle & topology compatibility
 
+> **Authority notice, 2026-09-23:** historical material only. Claims below about
+> current commands, chosen infrastructure or future work belong to the original
+> record and are not standing instructions. The sole adopted deployment design is
+> [Smoke production spec](../technical/smoke-production-spec.md); the standing gates
+> are [release policy](../technical/release-runbooks.md). External `stack`/Kubernetes
+> remains unadopted and is not the current deployment mechanism.
+
 > **ARCHIVED 2026-08-21 — future-infrastructure proposal, never ratified.**
 > This document was always a draft: no accepted decision in `decisions.md` ever
 > stood behind it. Its §5 compatibility contract **was** live policy and has been

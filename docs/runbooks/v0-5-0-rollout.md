@@ -1,5 +1,14 @@
 # v0.5.0 production rollout
 
+> **RELEASE-SCOPED LEGACY PROCEDURE — not current deployment-design authority.**
+> Retained for this release’s provenance and recorded tooling; status statements
+> below belong to that record, not a fresh production verification. Do not reuse
+> its command blocks as a new-release template or as instructions for a moving branch.
+> [Smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> replacement design (not yet shipped); [release policy](../technical/release-runbooks.md)
+> still governs all gates. An operation on legacy tooling requires validation against
+> the exact release SHA; adoption alone does not make new commands available.
+
 > Operator procedure for upgrading production from **v0.4.0** to **v0.5.0**.
 > **No RC is cut yet on this branch.** The candidate is whatever `v0.5.0-rc.*`
 > tag is next cut on `releases-0.5.x`; record its tag and SHA here when it

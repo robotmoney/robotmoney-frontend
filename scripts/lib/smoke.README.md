@@ -1,12 +1,12 @@
 # Smoke
 
-> **Status: target design, not yet shipped.** This document describes the
-> smoke tool as it will work once `docs/technical/smoke-production-spec.md`
-> lands. It replaces the `--smoke`/`--db`/`--agents`/`--twin` model and the
-> `smoke:archive`/`smoke:stage` scripts described in older runbooks. Until the
-> engineering that implements it lands, treat this file as the design to build
-> toward, and check `package.json`'s actual `smoke:*` scripts for what runs
-> today.
+> **Status: summary of the adopted design, not yet shipped.**
+> [Smoke production spec](../../docs/technical/smoke-production-spec.md) is the sole
+> authority; this summary adds no requirements. It replaces the legacy
+> `--smoke`/`--db`/`--agents`/`--twin` model and `smoke:archive`/`smoke:stage`.
+> Check the exact release code and `package.json` for available commands until
+> implementation lands. [Release policy](../../docs/technical/release-runbooks.md)
+> still governs cutover gates.
 
 Smoke stands the application up against a database, checks that it serves,
 and exits. The stack keeps running under Docker; smoke itself does not stay
@@ -36,7 +36,7 @@ Pass `--local <mode>` to use a local container smoke owns instead:
 - **`--local volume[=<name>]`** — reattaches a Docker volume from a previous
   local run, so you can restart where you left off.
 
-A twin is not a fourth mode — it is what `--local dump` (usually) gives you.
+A twin is a use case — it is what `--local dump` usually gives you.
 It can also be a remote connection to a database that was itself restored;
 remote-vs-local never decides whether something is a twin.
 
@@ -73,9 +73,9 @@ unreadable configured file refuses the boot rather than silently emptying
 the roster.
 
 Sessions run on their normal schedule whether or not this host runs any
-participant — third parties may run every one of them. `--agents`/`--seed`
-are about which containers smoke starts, never about whether a session
-happens.
+participant — third parties may run every one of them. The credential file
+selects in-house participant containers; `--seed` adds demo data only to an
+eligible blank rehearsal database. Neither controls session cadence.
 
 ## Environment
 
@@ -83,8 +83,10 @@ happens.
 identically). Alongside it, every database carries a `deployment_identity`
 row (`production` or `rehearsal`) written once when the database is stood
 up. `--migrate`, `--seed`, and `--spoof-keys` all require a `rehearsal`
-target in addition to `RM_ENV=stage`, so a stage label pointed at a database
-someone marked `production` still refuses.
+target in addition to `RM_ENV=stage`. The policy/identity matrix applies even
+to an ordinary boot: stage against production identity refuses, production
+against rehearsal identity refuses, and production with `--local` refuses.
+Unset `RM_ENV` refuses on a remote target and defaults to stage only for local modes.
 
 ## Credentials
 
@@ -100,13 +102,14 @@ one.
 
 ## Preflight
 
-Every boot runs a read-only check before anything starts, and refuses on any
-failure: every credential authenticates; every role has exactly the
-privileges its programs need and none it shouldn't (no superuser,
-`CREATEROLE`, membership in `rm_owner`, or delete on an append-only table);
-the live schema matches what's on record for the version installed, and the
-code being booted is compatible with it; `$HOME/.env` carries no dangerous
-credential. The same check runs inside `api`/`worker`/`worker-swarm` at their
+After local database creation/restore and explicitly authorized preparation,
+every boot runs a read-only preflight before application services start. It
+refuses on failure: each runtime credential authenticates; required privileges
+are present and denied privileges absent (no superuser, `CREATEROLE`, membership
+in `rm_owner`, application-object ownership, DDL, or delete/truncate on an
+append-only table). An unregistered grant is not forbidden merely by omission.
+Preflight also checks the live schema against the installed version's manifest,
+code compatibility, and the environment's credential restrictions. The same check runs inside `api`/`worker`/`worker-swarm` at their
 own startup, against their own credential.
 
 ## Supporting commands
@@ -131,5 +134,5 @@ own startup, against their own credential.
 | Upgrade production's schema | `bun run migrate` (its own step, before any `bun smoke`) |
 
 For the full design — the plan/lock/journal model, the schema snapshot,
-target enrollment, and every acceptance case — see
-`docs/technical/smoke-production-spec.md`.
+target enrollment, and every acceptance case — see the
+[smoke production spec](../../docs/technical/smoke-production-spec.md).

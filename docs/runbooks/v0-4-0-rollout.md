@@ -1,12 +1,21 @@
 # v0.4.0 production rollout
 
+> **RELEASE-SCOPED LEGACY PROCEDURE — not current deployment-design authority.**
+> Retained for this release’s provenance and recorded tooling; status statements
+> below belong to that record, not a fresh production verification. Do not reuse
+> its command blocks as a new-release template or as instructions for a moving branch.
+> [Smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> replacement design (not yet shipped); [release policy](../technical/release-runbooks.md)
+> still governs all gates. An operation on legacy tooling requires validation against
+> the exact release SHA; adoption alone does not make new commands available.
+
 > Operator procedure for upgrading production from **v0.3.0** to **v0.4.0**.
 > Executed against the **`v0.4.0-rc.1`** candidate on the `releases-0.4.x`
 > branch (the SHA and command output were re-resolved at that RC's cut per
 > §3); this document is not authority for a moving branch.
 
 **Scope:** This runbook contains release-*specific* steps for the v0.4.0 upgrade.
-The foundational release-runbook policy is in [`release-runbooks.md`](../../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
+The foundational release-runbook policy is in [`release-runbooks.md`](../technical/release-runbooks.md). This document references that policy for generic gates (§4.1–4.9) and only describes what is special about v0.3.0→v0.4.0.
 
 > **Frontend scope corrected 2026-09-02.** An earlier draft of this document
 > described `/vault` as replacing the depositor-facing allocation page. That was

@@ -1,5 +1,14 @@
 # v0.3.0 production rollout
 
+> **RELEASE-SCOPED LEGACY PROCEDURE — not current deployment-design authority.**
+> Retained for this release’s provenance and recorded tooling; status statements
+> below belong to that record, not a fresh production verification. Do not reuse
+> its command blocks as a new-release template or as instructions for a moving branch.
+> [Smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> replacement design (not yet shipped); [release policy](../technical/release-runbooks.md)
+> still governs all gates. An operation on legacy tooling requires validation against
+> the exact release SHA; adoption alone does not make new commands available.
+
 Operator runbook for taking production from **v0.2.2** to **v0.3.0**. Written to
 be executed top to bottom at 3am. Every command is copy-pasteable. Destructive
 and irreversible steps are marked **DESTRUCTIVE** / **IRREVERSIBLE**.

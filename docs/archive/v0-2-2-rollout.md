@@ -1,5 +1,12 @@
 # v0.2.2 production rollout
 
+> **Authority notice, 2026-09-23:** historical material only. Claims below about
+> current commands, chosen infrastructure or future work belong to the original
+> record and are not standing instructions. The sole adopted deployment design is
+> [Smoke production spec](../technical/smoke-production-spec.md); the standing gates
+> are [release policy](../technical/release-runbooks.md). External `stack`/Kubernetes
+> remains unadopted and is not the current deployment mechanism.
+
 > **ARCHIVED 2026-08-21 — historical record, not procedure.**
 > v0.2.2 shipped on 2026-08-20 (tag `v0.2.2` = `bf63dc6`). This document is kept
 > whole because it is the *executed* record of that rollout, corrected across

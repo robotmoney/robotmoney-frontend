@@ -1,18 +1,36 @@
 # Smoke production spec
 
-> **Status: approved for implementation, not yet shipped.** Adopted 2026-09-22
-> after multiple rounds of adversarial review. This supersedes the
-> `rm_migrator` design in [`upgrade-deployment-spec.md`](./upgrade-deployment-spec.md),
-> [`deploy-separation-engineering-plan.md`](../plans/deploy-separation-engineering-plan.md)'s
-> Phase 1, and [`rollout-procedure.md`](../runbooks/rollout-procedure.md) §8.2's
-> `smoke:archive` invocation. `scripts/lib/smoke.README.md` is the day-to-day
-> summary of this document; this is the authoritative design.
+> **Status: adopted design, approved for implementation, not yet shipped.**
+> Adopted 2026-09-22 after adversarial review; recorded in
+> [D47](../decisions.md#d47). This is the **sole deployment-design authority**.
+> The former upgrade-deployment specification and its engineering plan are
+> deprecated in full as implementation authority. External `bozemanpass/stack`
+> and Kubernetes proposals were not adopted and are not current deployment tooling.
 >
 > Three workstreams, each landable alone, each with its own gates (§10): **W1
 > deployment lifecycle** (§§1, 2, 4, 5, 9), **W2 schema and privilege
 > verification** (§§3, 7, 8), **W3 participants** (§6). The production
-> sequence (§9) requires all three. None of the engineering is scheduled by
-> this document — see the register and the engineering plan for sequencing.
+> sequence (§9) requires all three. Adoption does not establish implementation
+> status or schedule the work; do not use the retired engineering plan as a backlog.
+
+## Document authority
+
+| Document | Authority and limits |
+|---|---|
+| **This specification** | Adopted deployment mechanism, credentials, lifecycle, participants and acceptance gates. |
+| [Release-runbook policy](./release-runbooks.md) | Standing release gates, phases, evidence and approval; it does not select a competing deployment mechanism. |
+| [Smoke summary](../../scripts/lib/smoke.README.md) | Non-authoritative summary of this adopted design, not a claim that it has shipped. |
+| [Deployment reference](../runbooks/deployment.md), [rollout procedure](../runbooks/rollout-procedure.md), per-release runbooks | Legacy or release-specific topology and commands. Validate operations against an exact commit; these are not new-design templates. |
+| [Production issues register](./production-issues-register.md) | Incident evidence and follow-up, not an alternative deployment design or proof of implementation. |
+| [Judge shadow-removal spec](./judge-shadow-removal-spec.md) | Separate accepted product behavior and replay requirements; deployment lifecycle follows this spec. |
+| [Old upgrade design](./upgrade-deployment-spec.md), [old engineering plan](../plans/deploy-separation-engineering-plan.md) | Deprecated pointers to archived history. No remaining phase is approved for implementation by those documents. |
+| [Stack reconciliation](./stack-runbook-reconciliation.md), [Kubernetes staging plan](../plans/stack-k8s-staging-deployment.md), [stack field guide](./stack-orchestrator.md) | Archived, unadopted external-tool proposals/research; not current tooling or a scheduled next step. |
+
+Where an older document conflicts on deployment design, this specification wins.
+The implemented behavior still comes from the exact code being run; no legacy
+command is made safe, and no proposed command becomes executable, by this
+precedence rule. The release policy's gates remain mandatory. `scripts/stack/`
+is the repository's existing Compose library, not the external `stack` tool.
 
 ---
 

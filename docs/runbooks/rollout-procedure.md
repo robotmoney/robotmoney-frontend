@@ -1,5 +1,14 @@
 # Rollout procedure — the release-independent half
 
+> **LEGACY MECHANICS — deprecated as a design and reusable cutover template, 2026-09-23.**
+> [Smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> deployment design; [release policy](../technical/release-runbooks.md) remains in force.
+> The commands below preserve mechanics from earlier release commits. They are not
+> an alternative design or authorization to execute `smoke:archive`, `--db`, or the
+> old credential flow. Revalidate any legacy operation against its exact release SHA.
+> The adopted design is not yet shipped; a new cutover procedure must name which
+> implementation it actually exercises and pass the standing release gates.
+
 Everything a production rollout does that is **the same every release**: how to
 find your position, how the backup is taken and proven, how the stage rehearsal
 and digital smoke-twin work, how environment actually reaches the api container, how
@@ -15,9 +24,10 @@ governs both.
 | Document | Owns |
 |---|---|
 | `technical/release-runbooks.md` | **Policy.** Gates, rc numbering, branch rules, tracking issue |
-| **this document** | **Procedure.** The mechanics that do not change between releases |
+| **this document** | **Legacy procedure reference.** Dated mechanics, not new-design authority |
 | `runbooks/vX-Y-Z-rollout.md` | **This release.** Identity, delta, migrations, config decisions, acceptance criteria, known-broken |
-| `runbooks/deployment.md` | **The environment.** Credential inventory, compose topologies |
+| `runbooks/deployment.md` | **Legacy environment reference.** Dated inventory and topologies |
+| `technical/smoke-production-spec.md` | **Adopted design.** Replacement mechanism and transition gates; not yet shipped |
 
 ## Where this came from, and what that means for trusting it
 
@@ -1168,10 +1178,10 @@ cat "$HOME/.env"      # must contain, at minimum, the discrete tokens plus the w
 (`urlForRole`, `scripts/lib/env-role.ts`), not from `process.env`. A missing
 file or a missing `rm_app` line is a fatal exit 1 before anything starts.
 
-> **Pending D46** (`docs/technical/upgrade-deployment-spec.md` §2): the
-> migration login is `rm_migrator`, and its line belongs in this same file on
-> the cutover host — read by the migrate tool only, never by a boot. `doadmin`
-> never appears in this file except transiently for the provisioning pre-step.
+> **The D46 credential proposal is retired.** Do not add `rm_migrator` to this
+> file. The adopted [smoke production spec](../technical/smoke-production-spec.md)
+> requires prompted `rm_owner` for production migration and runtime tokens only
+> in the host's `~/.env`. The surrounding passthrough discussion is legacy behavior.
 
 Optional, and genuinely honoured because they are in `DEMO_COMPOSE_PASSTHROUGH`.
 **`scripts/lib/smoke-main.ts:427-444` is the authoritative list** — read it there,
@@ -1294,19 +1304,13 @@ deployment.md §2.1, "FIRST: find the project name".
 
 ### 8.2 The invocation
 
-> ⚠ **This mechanic is superseded by [`docs/technical/smoke-production-spec.md`](../technical/smoke-production-spec.md)
-> (adopted 2026-09-22), and is documented here because it is what the
-> in-flight release line still runs.** Under the new spec: production is
-> `bun smoke --static-port`, full stop — no `--smoke`, `--db external`,
-> `SMOKE_PROJECT`, or `--no-tui`, and `smoke:archive` does not exist. A
-> production upgrade is always its own separate step, `bun run migrate`
-> against `rm_owner` (never a boot flag), and the roster in-house containers
-> run is read from a `credential.json`, not an `--agents` flag. None of that
-> is what the command below does — it is the older, still-running mechanic,
-> narrower than either the D46 tool-separation design or the new spec. A
-> per-release runbook must state which mechanic it is written against; the
-> engineering plan (`docs/plans/deploy-separation-engineering-plan.md`) has
-> not yet scheduled the new spec's implementation.
+> **DEPRECATED INVOCATION — historical implementation context only.**
+> The sole adopted replacement is [smoke production spec](../technical/smoke-production-spec.md).
+> It separates production migration from boot and derives the participant roster
+> from `credential.json`. Its commands are not yet shipped. The command blocks
+> below must not be copied into a new-design runbook or executed without checking
+> the exact legacy release implementation. The entire former engineering plan is
+> retired; it does not schedule any remaining phases.
 
 > **Manifest step `P7.cutover`.** The machine-readable block for this step —
 > its id, artifacts, TTL and `verify:` command — lives in the **per-release**
@@ -1315,7 +1319,7 @@ deployment.md §2.1, "FIRST: find the project name".
 > it. See `backend/scripts/upgrades/<FROM>-to-<TO>/steps.ts`. (No release has
 > yet carried a `P7.*` entry: v0.5.0's and v0.5.1's manifests go P6 → P8, and
 > the cutover's only evidence is the `BOOT_STATUS` the operator captures by
-> hand below. D46 makes it steps.)
+> hand below. The adopted smoke spec owns replacement receipts and journals.)
 
 > 🔴 **IRREVERSIBLE.** This command is not a dry run and there is no "boot and
 > look first" mode. It can write to production up to three times before you
@@ -1358,12 +1362,10 @@ deployment.md §2.1, "FIRST: find the project name".
 > does not exist at all. Cross-checking the per-release runbook's migration
 > list yourself is still worth doing (it tells you WHETHER to pass `--migrate`
 > in the first place), but a wrong guess no longer serves a stale schema: it
-> refuses instead. This is a narrower, scoped-down stand-in for
-> `docs/plans/deploy-separation-engineering-plan.md` Phase 2.1's fuller
-> `schema-current.ts` design (`--emit-receipt`, a `P7.schema-current` manifest
-> step, a `skipped`-with-evidence verdict) — that fuller version still lands on
-> the release line after v0.5.1, per the sequencing rule at the top of that
-> plan.
+> refuses instead. This describes the existing filename-ledger check, not the
+> adopted schema-integrity and compatibility checks. Their requirements live in
+> [smoke production spec §§7–8](../technical/smoke-production-spec.md); the retired
+> engineering plan's Phase 2.1 is not an outstanding implementation instruction.
 
 > ⏱ **Downtime budget for the scheduler.** Every job in `job_schedules` that
 > is enabled records the last moment it was supposed to fire in `next_run_at`.

@@ -29,6 +29,14 @@ production.
 
 ## 1. Scope and authority
 
+**Deployment mechanism:** [Smoke production spec](./smoke-production-spec.md)
+is the sole adopted design (D47; approved for implementation, not yet shipped).
+This document owns release policy: gates, phases, evidence and approval. The
+retired D46 mechanism and external `stack`/Kubernetes proposals are not alternate
+ways to implement that design. Release-specific commands must identify the
+implementation and exact commit they exercise. The mechanism updates below do
+not waive any release gate.
+
 Every production rollout of a numbered release must be planned, rehearsed, and
 executed from a per-release runbook that conforms to this policy. The
 per-release runbook is the **definitive, agent-executable procedure** for that
@@ -210,7 +218,8 @@ on the smoke-twin, including:
 - postflight verification,
 - **capture of every service's logs for the whole rehearsal window**, and the
   standard assertion that no privilege or authentication failure appeared in
-  any of them (`upgrade-deployment-spec.md` §5, G9 — pending D46). A rehearsal
+  any of them. This evidence requirement remains standing policy even though
+  the old D46 mechanism is deprecated. A rehearsal
   whose checks read only the database cannot see the failure shape that
   dead-lettered 1,968 production jobs behind green healthchecks on
   2026-09-21; the logs could.
@@ -219,16 +228,16 @@ The smoke-twin must use the same release candidate that is planned for productio
 Any failure, warning, or unexpected state change discovered on the smoke-twin is a
 blocking issue.
 
-**The rehearsal must seat the whole restored roster** (added 2026-09-18, after
-this went wrong too). A twin boot adopts every ACTIVE member the dump restored;
-members with no committed signing key sign with a per-boot key the harness
-registers against their restored id, and the boot names those seats. Rehearsing
-a subset is not a smaller rehearsal, it is a misleading one — the stage twin ran
-3-of-7 sessions unnoticed, because a missing member and a silent member render
-identically. Enforced at boot (`unseatedActiveCharacters()`) and over HTTP by
-`verify-live --tier full` (`twin-roster:every-active-member-seated`); see
-`docs/runbooks/rollout-procedure.md` §6 and architecture.md's `--db` section for
-why it is sound on a twin and permitted nowhere else.
+**The rehearsal must account for the whole restored active roster.** A missing
+participant and a silent participant must not be mistaken for one another, and a
+subset cannot be reported as full-roster coverage. The release report must name
+which members participated and identify gaps as blocking or explicitly excepted
+under §1. Under the adopted design, smoke runs only the in-house credential-file
+roster and third parties may supply other participants; it does not implicitly
+mint keys or adopt every restored member. Follow
+[smoke production spec §6](./smoke-production-spec.md#6-participants-agents-and-judges)
+for participant lifecycle and explicit rehearsal-only spoofing. Legacy seat checks
+remain evidence about their original harness, not a replacement deployment model.
 
 **The rehearsal must migrate under production's privilege model, not as the
 container's superuser** (added 2026-09-18, after this went wrong). A smoke-twin
@@ -248,39 +257,25 @@ every one failed immediately under a real bootstrap login. The live preflight
 could not have caught them either: it audits role *state* read-only and never
 executes migration SQL.
 
-So a release that touches roles, ownership, or grants must rehearse with
-`RM_TWIN_PRODUCTION_PRIVILEGES=1`, which reshapes the restored twin so a
-non-superuser bootstrap login owns `public` and points `MIGRATE_DATABASE_URL`
-at it. **Under D46 the reshaped twin mirrors production's post-taxonomy shape
-— `rm_owner` owning `public`, `rm_migrator` holding the membership — and the
-rehearsal migrates as `rm_migrator`, the login production will actually use
-(`upgrade-deployment-spec.md` §5, G10). Rehearsing as a `doadmin`-shaped role
-rehearses a credential that is being retired.** State the general rule plainly, because it outlives this mechanism: **a
-gate that runs with more privilege than production proves less than it appears
-to.** When a check cannot be run at production's privilege level, say so in the
-release runbook rather than letting a green result imply coverage it does not
-have.
+A release that touches roles, ownership, or grants must rehearse using the
+privileges the actual production migration step will hold. Under the adopted
+[smoke production spec](./smoke-production-spec.md), that is `rm_owner LOGIN`,
+not `rm_migrator` and not the container superuser. A release still using legacy
+code must identify and reproduce that release's actual privileges, separately
+from testing the new design. **A gate that runs with more privilege than
+production proves less than it appears to.** Disclose missing coverage in the
+release runbook rather than implying it from a green result.
 
-The smoke-twin is a named data path, not an assembly:
+The adopted local rehearsal path is `--local dump`, with explicit preparation
+and participant credentials under the smoke spec. Historical `--db smoke-twin`
+and `smoke:twin:*` entry points describe legacy tooling only. No target-design
+command may be substituted into a release whose code does not implement it.
+The local restored-database rehearsal requirement above remains a release gate;
+the design's support for remote rehearsals does not itself waive that gate.
 
-```bash
-bun smoke -- --db smoke-twin      # restore the backup, boot the real stack against it
-bun run smoke:twin:once       # the same boot, unattended, plus the frontend checks
-bun run smoke:twin                # capture + restore + boot on the pinned tunnel port, and stay up
-```
-
-`bun run smoke:twin` is for a smoke-twin that stays up for people to look at. It publishes
-production data on the public tunnel, so treat the unclaimed admin credential as
-a live exposure and claim it immediately; the gate itself does not need it.
-
-"not a remote database" is now enforced rather than trusted: `--db smoke-twin`
-restores into a local container and points the stack at it, and the mode enum
-makes "smoke-twin" and "external" separate, non-substitutable choices.
-
-**Which command satisfies the gate.** `smoke:twin:once` grades restore + boot +
-serve, and nothing release-specific — use it to check the smoke-twin machinery itself.
-The gate is satisfied by the release's own entry point, which runs the same
-driver and adds this release's checks plus the receipts:
+**Which command satisfies the gate.** A generic smoke boot does not replace
+release-specific checks. The gate is satisfied by the release's own verified
+entry point, which adds its checks and receipts. The existing entry-point shape is:
 
 ```bash
 bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
@@ -343,26 +338,25 @@ on a production machine. Follow the per-release runbook step by step. Every
 destructive or irreversible step must be explicitly marked in the runbook and
 authorized by the operator before execution.
 
-**The cutover is a sequence of receipted steps, each performed by one tool
-holding only the credential that step needs** (`upgrade-deployment-spec.md`
-§4, pending D46): assert the schema is current; apply pending migrations as
-`rm_migrator` — the only step that names a migration credential, and skipped
-with a receipt when nothing is pending; deploy, which is a restart and needs
-only the runtime roles; initialize; grade. The tool that stands the stack up
-never migrates a database it did not create, and refuses to start against a
-schema that is behind. Until D46's plan lands, the mechanism is the one
-`rollout-procedure.md` §8.2 documents — one command that migrates, seeds and
-boots — and the per-release runbook must say which of the two it is written
-against.
+**The cutover is a sequence of receipted steps with credentials limited to the
+step's job.** The adopted [smoke production spec](./smoke-production-spec.md)
+separates production migration and initialization from boot, then requires
+preflight, readiness and durable evidence. Production migration prompts for
+`rm_owner`; boot receives runtime credentials only. The old `rm_migrator`,
+`migrate:external`, ownership-based auto-migration and `smoke:archive` plans are
+deprecated and must not guide new implementation. A legacy release procedure must
+state its exact code identity and limitations; it is not a second target design.
 
 Preflight must be re-run or re-confirmed on production before the cutover
 begins, even if the smoke-twin rehearsal passed, to ensure the production
 environment matches the smoke-twin assumptions.
 
-The entire upgrade — preflight, cutover, and postflight — is **agent-executed
-end to end**. No human runs commands against the production server directly;
-a human's role is authorizing the release and reading the tracking issue's
-checklists, not typing commands into a production shell.
+The upgrade is agent-executed through the verified runbook, with operator
+release authorization and receipt review. The adopted design explicitly requires
+an operator to enter the privileged credential and confirm production migration
+or initialization. That interaction is part of the named tool step, not permission
+to bypass gates or substitute undocumented production-shell work. Do not store the
+owner credential to make the previous noninteractive D46 mechanism work.
 
 ### 4.7.1. Product verification (separate from postflight, and from the deploy)
 
@@ -378,9 +372,9 @@ unexamined. That is what v0.5.0's postflight was until 2026-09-18 — eight
 checks, four of which restated what the migration runner already reported.
 
 **Verification runs as a SEPARATE PROCESS against an already-live stack**, not
-inside the deploy. `bun smoke` restores, migrates, builds, boots and declares
-itself live; deciding whether the result is correct is a different job, and
-coupling the two means a standing boot or a cutover silently runs neither.
+inside the deploy. Under the adopted design, `bun smoke` boots and checks
+readiness; production migration is separate. Product verification is still its
+own job and must not be silently omitted by either a standing boot or a cutover.
 `scripts/verify-live.ts` attaches over HTTP after liveness and reports in the
 standard check format, emitting the same receipt JSON the rollout probe reads.
 
@@ -436,15 +430,14 @@ runbook must:
 - be written so it can be executed top to bottom, every command
   copy-pasteable, every claim verified against a specific commit SHA rather
   than described from memory,
-- **name data paths by `--db <mode>`; never describe how to construct one.**
-  There are three — `ephemeral` (the smoke's own container), `external` (a managed
-  server from `.env`), `smoke-twin` (a local restored copy of production) — and the
-  tooling that builds each is shared and version-agnostic. A runbook that
-  re-derives a smoke-twin out of lower-level flags is how the last one ended up
-  pinned to a single release,
+- **use the adopted spec's database interface for new tooling**, rather than
+  reconstructing a rehearsal with ad hoc lower-level commands. Remote connection
+  is the default; `--local blank|dump|volume` selects local state. A twin is a use
+  case, not a `--db` mode. Legacy release commands remain tied to their exact code
+  version and must not be copied forward as design requirements,
 - **sequence tools; never let one tool stand in for another.** A runbook names
   which tool performs each step and which role it holds
-  (`upgrade-deployment-spec.md` §1). A step the runbook cannot name a tool for —
+  ([smoke production spec](./smoke-production-spec.md)). A step the runbook cannot name a tool for —
   "watch the logs", "confirm it migrated" — is a tool that is missing, and the
   runbook says so rather than asking an operator to do it by eye.
 

@@ -1,5 +1,14 @@
 # Deployment & credentials (GitOps)
 
+> **Scope corrected 2026-09-23 — legacy topology/credential reference, not deployment-design authority.**
+> The [smoke production spec](../technical/smoke-production-spec.md) is the sole adopted
+> design; [release policy](../technical/release-runbooks.md) governs gates and approval.
+> Existing vendor inventory and dated topology observations below are retained for
+> reference, not reverified here. Older CI-only deployment, credential storage and
+> bootstrap procedures are superseded wherever they differ from that spec.
+> The adopted design is not yet shipped: do not infer live infrastructure or runnable
+> commands from adoption, and do not execute this document as a current cutover plan.
+
 How changes ship to **staging** and **production**, and the exact credentials to
 generate from **Cloudflare** and **DigitalOcean** so CI can deploy. Companion to
 [architecture.md](../architecture.md) (the map — decision D13) and ARCHITECTURE §8 (what
@@ -50,7 +59,7 @@ on vendor repo-watching:
 | Cloudflare — DNS + observability | Cloudflare API token (DNS + Health Checks, §3.1) |
 | Static — marketing → DO Spaces CDN | DO Spaces keys + DO API token (CDN + custom-domain cert), §4.1–4.2 |
 | API — droplets | SSH key **or** container registry + app secrets + Cloudflare **Origin CA cert** + DO Cloud Firewall, §4.4 / §3.4 |
-| Data — Managed Postgres HA | `DATABASE_URL` (§4.3); schema changes by the migrate step as `rm_migrator`, never by a boot (D46) |
+| Data — Managed Postgres HA | `DATABASE_URL` (§4.3); adopted schema-change mechanism: prompted `rm_owner`, separate from boot ([spec](../technical/smoke-production-spec.md)) |
 
 ---
 
@@ -498,19 +507,17 @@ password, `sslmode=require`, and the **CA certificate** (download). Assemble int
 client needs the file. Set `WORKER_DATABASE_URL` to `rm_worker`. For the HA
 cluster, prefer the **connection-pool** URI (PgBouncer) if enabled.
 
-**The migration login is `rm_migrator`, not `doadmin`** (D46;
-`docs/technical/upgrade-deployment-spec.md` §2). `rm_migrator` is `LOGIN
-NOINHERIT NOCREATEROLE NOCREATEDB` and holds `rm_owner` membership and nothing
-else — it can change this database's schema and cannot touch a role, a
-database, or a sibling database on the cluster. Its line lives in the cutover
-host's `$HOME/.env` and is read by exactly one command, the migrate step
-(`P7.migrate`); no boot, container or service ever receives it. `doadmin` is
-the provider's cluster admin: it runs the provisioning pre-step
-(§4.3.1) and provider-level break-glass, lives in the DO dashboard or an
-operator vault, and never belongs on a persistent host or in any `.env` line
-except transiently for that pre-step. Until the plan lands, `0053` grants
-`rm_owner` to whichever login runs the provisioning script, which on DO is
-`doadmin` — that is the defect D46 corrects, not the design.
+**Adopted credential model:** [smoke production spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)
+uses `rm_owner LOGIN` for the migration step, with the password entered for that
+run and absent from the remote host's `~/.env`. Runtime role tokens remain
+`rm_app`, `rm_worker`, and `rm_readonly`; participant keys belong in
+`credential.json`. There is no `rm_migrator` role or migration-token line to add.
+`doadmin` is limited to provisioning and the existing-cluster transition described
+in spec §9.1. This is adopted design, not a claim that the transition has run.
+
+The provisioning procedure below is retained as legacy implementation context.
+It must not be used to infer the adopted login shape or bypass the explicit
+transition and release gates in the spec.
 
 ### 4.3.1 Role-taxonomy cutover (human-run)
 

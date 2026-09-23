@@ -3584,7 +3584,16 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
 
+<a id="d46"></a>
+
 ## D46 — Smoke stands environments up and never migrates data it does not own; migrations are a runbook-sequenced step run as `rm_migrator`; `doadmin` is bootstrap-only (Lucas, 2026-09-21)
+
+> **SUPERSEDED for deployment design by [D47](#d47), adopted 2026-09-22.**
+> This entry preserves the 2026-09-21 decision and its rationale, not current
+> instructions. Do not create `rm_migrator`, implement the old phase plan, or
+> infer shipped behavior from its original present-tense wording. The sole
+> adopted mechanism is [Smoke production spec](technical/smoke-production-spec.md).
+
 
 **Decision.** Three rules, adopted together because each is what makes the
 others enforceable. The mechanism contract is
@@ -3644,3 +3653,45 @@ that actor runs, not a side effect of starting a container". Does not adopt
 `stack-runbook-reconciliation.md`; every step here maps onto that document's
 gate table if it is adopted later. Sequenced per policy §4.6: phases 1–4 land
 on `main` for the release line after v0.5.1.
+
+
+<a id="d47"></a>
+
+## D47 — Smoke production spec is the sole adopted deployment design; supersedes D46's mechanism (Lucas, 2026-09-22)
+
+**Status.** Adopted 2026-09-22; recorded 2026-09-23 during documentation
+consolidation. Approved for implementation, not yet shipped. This records the
+accepted design and does not authorize a production cutover.
+
+**Decision.** [Smoke production spec](technical/smoke-production-spec.md) is the
+single source of deployment-design requirements. It replaces D46's credential
+model and tool mechanics, the former upgrade-deployment specification, and its
+engineering plan in full as implementation authority. Their historical rationale
+is retained in the archive; no residual phase remains an active implementation
+instruction merely because it was not individually marked superseded.
+
+The adopted design uses `rm_owner LOGIN` for prompted migration access, never a
+new `rm_migrator` role. Production migration and initialization are separate from
+boot. Smoke reconciles a named instance, checks target enrollment and schema
+compatibility, writes a journal and receipt, and exits after readiness. The
+credential file defines standing HTTP participant containers; the host session
+driver, inline judge and Docker-socket participant launcher are not the target.
+The specification owns the exact interfaces, transition and W1/W2/W3 gates.
+
+**Authority.** [Release-runbook policy](technical/release-runbooks.md) remains in
+force for gates, phases, evidence and approval. Standing and per-release runbooks
+retain dated operational evidence but must not override the adopted mechanism or
+be reused as new-design templates. Judge-mode narrowing remains a separate
+accepted product decision; the production issues register remains an evidence
+and follow-up record.
+
+**Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
+and associated reconciliation/field guide are archived proposals, not current
+deployment tooling or a scheduled successor. They are distinct from this repo's
+`scripts/stack/` Compose library.
+
+**Implementation boundary.** Existing code can still implement the old flags and
+credential paths. Adoption does not mean the replacement has shipped. Any
+operation on legacy code must be checked at the exact release SHA. Implementation
+and production cutover must satisfy the adopted specification and standing
+release gates; the deprecated engineering plan does not schedule that work.

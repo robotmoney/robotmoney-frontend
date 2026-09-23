@@ -1,5 +1,11 @@
 # robotmoney-frontend
 
+**Deployment documentation:** [Smoke production spec](docs/technical/smoke-production-spec.md)
+is the sole adopted design (approved for implementation, not yet shipped).
+[Release policy](docs/technical/release-runbooks.md) remains in force. Older
+runbooks describe their recorded release/commit only; archived designs and the
+external `stack`/Kubernetes proposal are not current deployment instructions.
+
 Robot Money site + analytics backend. Buildless frontend (HTML + Alpine + CSS),
 a Bun server, and a Postgres-backed task queue.
 
@@ -100,6 +106,13 @@ bun run sync-contract
 ```
 
 ## Demo — run the full stack
+
+> **Legacy smoke command reference, not the adopted refactor design.**
+> This section and its flag examples describe older implementation. For new work,
+> follow [Smoke production spec](docs/technical/smoke-production-spec.md) and its
+> [summary](scripts/lib/smoke.README.md), both explicitly marked not yet shipped.
+> Do not copy the legacy modes or long-lived driver into the replacement tooling;
+> verify any operational command against the exact code being run.
 
 Use the smoke when you need the real backend, Postgres, worker, and Investment
 Swarm cycle. Make sure Bun and Docker are installed first.
@@ -348,6 +361,10 @@ Set `SMOKE_PROJECT` to override the compose project name if you want re-runs to
 reuse / tear down the same containers.
 
 ## Useful commands
+
+The smoke commands in this list are legacy examples, not the adopted interface.
+Verify them against the release code; use the [smoke spec](docs/technical/smoke-production-spec.md)
+for the replacement design.
 
 ```bash
 bun run migrate              # apply migrations

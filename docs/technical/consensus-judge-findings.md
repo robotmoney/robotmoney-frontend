@@ -1,13 +1,21 @@
 # Findings: consensus judge & 0.5.x production cutover
 
+> **Dated incident findings, not deployment-design authority.** Observations below
+> describe the 2026-09-22 investigation, not a fresh reading of production.
+> [Smoke production spec](./smoke-production-spec.md) governs the adopted participant
+> lifecycle and credentials. Historical inline judging, archive-driver commands and
+> the `#1014` Docker-socket launcher are not alternative target designs.
+> [Shadow removal](./judge-shadow-removal-spec.md) remains a separate product decision;
+> the [issues register](./production-issues-register.md) tracks follow-up and evidence.
+
 **Date:** 2026-09-22 · **Scope:** `rm_prod` (DO managed Postgres), `releases-0.5.x`.
 **Backing detail:** [`production-issues-register.md`](./production-issues-register.md)
 (every issue, P-nn) · [`judge-shadow-removal-spec.md`](./judge-shadow-removal-spec.md)
 (the shadow change).
 
-This is the single consolidated read of what we found and decided. It
-summarizes; the two documents above carry the row-level detail and the
-implementation spec.
+This consolidates the dated investigation. The register carries issue-level
+evidence and the shadow-removal spec carries that product change; neither
+replaces the adopted smoke deployment design.
 
 ---
 
@@ -112,7 +120,7 @@ No restart. The only open dependency is **admin access** (§4).
 
 | # | Action | Blocked on |
 |---|--------|-----------|
-| P-05 | Cut over prod to the correct roster driver (`smoke:archive`) | operator confirm (one wrong cutover already occurred) |
+| P-05 | Implement and cut over to the adopted credential-roster participants; do not redeploy `smoke:archive` | Smoke spec W1/W2/W3 gates and release authorization |
 | P-01 | Clean up stray simulation takes 720–722 | a prod read to enumerate; app code path |
 | P-03 | Confirm an admin credential is provisioned for `rm_prod` | operator |
 | P-02 | Enable the judge (`enforce` + model) | P-03 |
@@ -146,9 +154,12 @@ So this release line is the more advanced branch, except in the judge area.
   the removal decision applies there too — and `main` is *actively building on*
   shadow, which is the coordination risk flagged in the removal spec.
 
-**Implication:** the judge architecture is diverging. Any judge work (enabling
-it, the admin panel, removing shadow) should be reconciled against `#1014`'s
-container model before it is written twice.
+**Adopted resolution, 2026-09-23:** the branch comparison above is historical.
+[Smoke production spec §6](./smoke-production-spec.md#6-participants-agents-and-judges)
+selects standing HTTP participants with no Docker socket and no inline judge.
+`#1014` is prior implementation context, not an alternate deployment target.
+Product work on the admin panel or shadow removal must use that lifecycle;
+this note does not claim it is already running in production.
 
 ---
 

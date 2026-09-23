@@ -1,5 +1,12 @@
 # Spec: remove `shadow` as a go-forward judge mode
 
+> **Scope: accepted judge-mode product decision, not a deployment design.**
+> The binary `off | enforce` decision and replay prerequisite remain in force.
+> [Smoke production spec §6](./smoke-production-spec.md#6-participants-agents-and-judges)
+> governs deployment: standing HTTP participants, no Docker socket, and retirement of
+> the in-process session driver. Older worker/driver references below are implementation
+> context for the dated branch, not authorization for a competing lifecycle.
+
 **Status:** **accepted** (product decision to remove `shadow` confirmed
 2026-09-22) — not yet implemented. The design is settled: the judge is binary
 `off | enforce`. Remaining items are logistics/prerequisites, not the decision
@@ -140,32 +147,22 @@ flip `off → enforce` once satisfied. The spec's implementation step
 should confirm replay covers the inputs an operator wants to soak; if it
 has a gap, closing that gap is a prerequisite, not a follow-up.
 
-## 6. Interaction with the archive/roster driver (blocking for cutover)
+## 6. Interaction with the adopted participant lifecycle
 
-`scripts/lib/swarm/session.ts:1423` flips the judge `off → shadow` for
-each session it runs (issue #845), then reads back the rows shadow
-recorded. **This is the driver `smoke:archive` uses**, i.e. the one that
-seats Athena / Noop / Robot Money Analyst on a live stack. Removing
-`shadow` requires deciding what that flip becomes:
+The dated implementation in `scripts/lib/swarm/session.ts` flips the judge into
+`shadow` per session. That is a compatibility concern while removing the mode,
+not an approved reason to redeploy or extend `smoke:archive`.
 
-- **`enforce`** — the driver runs the judge for real and its opinions
-  reach the sessions. Only valid when a model + `OPENCODE_API_KEY` are
-  configured; otherwise every session throws `model_unconfigured`.
-- **`off`** — the driver stops touching the judge; the roster runs
-  unjudged (today's honest default when no model is set).
+[Smoke production spec §6](./smoke-production-spec.md#6-participants-agents-and-judges)
+settles the target: retire the in-process session driver, run agents and judges
+as standing HTTP participants, and allow only the admin route to write
+`swarm_judge_config`. There is no interim inline-judge cutover in that design.
+Any code surviving the transition must stop forcing a judge mode. Replay (§5)
+still has to cover the soak before shadow is removed.
 
-**Recommendation:** the driver reads `swarm_judge_config` as shipped and
-leaves it alone — no per-session flip at all. Whether the judge runs
-becomes purely the operator's `off`/`enforce` decision on the config row,
-not something the driver forces per session. This also removes the
-`#845` save/restore dance (`session.ts:1420-1424`).
-
-> **Consequence for the live goal:** getting Athena / Noop / Robot Money
-> onto prod does **not** require this spec. Today, `smoke:archive` works
-> because `shadow` exists. Under this spec the driver is rewritten per
-> above. So either cut the roster over first on the current driver and do
-> this refactor after, or land this first and cut over on the rewritten
-> driver — this is the sequencing question the spec does not decide.
+The shadow-removal product change does not itself authorize a production roster
+cutover. That requires the smoke spec's W1/W2/W3 implementation and release gates;
+there is no outstanding choice here to cut over on the archive driver first.
 
 ## 7. Open questions (need sign-off before implementation)
 
@@ -185,11 +182,11 @@ not something the driver forces per session. This also removes the
    `chore/reconcile-judge-swarm-releases-0-5-x` ships a filter "in shadow
    first"), so the removal must be coordinated with that work rather than
    landed underneath it. Undecided.
-3. **Driver §6:** confirm "driver reads config, never flips" is the
-   intended behavior, and that replay (§5) covers the soak inputs before
-   the live mode is removed.
-4. **Sequencing vs the roster cutover** (§6 consequence): cut over first
-   on the current driver, or land this first.
+3. **Driver §6 is decided by the smoke spec:** retire the host driver and
+   permit only the admin route to change judge mode. Verify replay (§5) covers
+   the soak inputs before removing the live mode.
+4. **Roster cutover prerequisite:** the adopted smoke deployment requires all
+   W1/W2/W3 gates. The former archive-driver-first option is deprecated.
 
 ## 8. Out of scope
 

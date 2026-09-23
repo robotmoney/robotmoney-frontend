@@ -1,5 +1,11 @@
 # Architecture
 
+> **Deployment authority:** [Smoke production spec](technical/smoke-production-spec.md)
+> is the sole adopted deployment design (2026-09-22; not yet shipped).
+> Deployment/tooling passages here describe legacy implementation or dated topology
+> unless explicitly linked to that spec. They do not define a competing target.
+> [Release policy](technical/release-runbooks.md) continues to govern release gates.
+
 Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
@@ -3063,6 +3069,13 @@ flowchart TB
 ---
 
 ## 0. Standing smoke mode (`bun run smoke`, local)
+
+> **LEGACY IMPLEMENTATION DESCRIPTION — superseded as a target design.**
+> The long-lived driver, TUI, `--db` modes, automatic twin seating and overlay
+> described in this section belong to older smoke code. They must not guide the
+> refactor. [Smoke production spec](technical/smoke-production-spec.md) owns the
+> adopted instance, database, participant and shutdown behavior. Verify any
+> operational use of the old mechanics against its exact release commit.
 
 Locally, `bun run smoke` is a **long-lived standing smoke**, not a one-shot. It runs in
 three phases and stays up until you stop it (Ctrl-C / SIGTERM):
