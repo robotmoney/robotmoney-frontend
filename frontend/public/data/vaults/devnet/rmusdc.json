@@ -1,0 +1,283 @@
+{
+  "slug": "rmusdc",
+  "symbol": "rmUSDC",
+  "name": "Conservative DeFi Yield",
+  "bucket": "conservative_defi_yield",
+  "availability": "live",
+  "status": "active",
+  "address": null,
+  "tvlUsd": 72000,
+  "sharePrice": 1.025,
+  "exitFeeBps": null,
+  "recommendedBps": 6500,
+  "appliedBps": 7000,
+  "actualBps": 7200,
+  "gaps": {
+    "governance": 500,
+    "flow": 200,
+    "total": 700
+  },
+  "network": {
+    "chainId": 918453,
+    "label": "Staging devnet",
+    "testData": true
+  },
+  "holdingsAsOf": "2026-09-17T10:00:00Z",
+  "flags": {
+    "depositsPaused": false,
+    "withdrawalsPaused": false,
+    "shutdown": false
+  },
+  "caps": null,
+  "apy": null,
+  "depositors": null,
+  "guards": null,
+  "auditStatus": null,
+  "contracts": {
+    "vault": null,
+    "router": null,
+    "registry": null
+  },
+  "mechanics": {
+    "redeemOnly": false,
+    "maxSlippageBps": null,
+    "venues": [
+      "Morpho",
+      "Aave",
+      "Compound"
+    ]
+  },
+  "holdings": [
+    {
+      "kind": "adapter",
+      "label": "Gauntlet USDC Prime",
+      "symbol": "MORPHO",
+      "address": null,
+      "balance": 28000,
+      "valueUsd": 28000,
+      "weightBps": 3888.89,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null,
+      "venueType": "Curated vault"
+    },
+    {
+      "kind": "adapter",
+      "label": "Aave V3 USDC",
+      "symbol": "AAVE",
+      "address": null,
+      "balance": 26000,
+      "valueUsd": 26000,
+      "weightBps": 3611.11,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null,
+      "venueType": "Pooled market"
+    },
+    {
+      "kind": "adapter",
+      "label": "Compound III USDC",
+      "symbol": "COMPOUND",
+      "address": null,
+      "balance": 15000,
+      "valueUsd": 15000,
+      "weightBps": 2083.33,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null,
+      "venueType": "Pooled market"
+    },
+    {
+      "kind": "idle",
+      "label": "Idle USDC",
+      "symbol": "USDC",
+      "address": null,
+      "balance": 3000,
+      "valueUsd": 3000,
+      "weightBps": 416.67,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    }
+  ],
+  "history": {
+    "tvl": [
+      {
+        "t": "2026-09-03T10:00:00Z",
+        "tvlUsd": 60000
+      },
+      {
+        "t": "2026-09-04T10:00:00Z",
+        "tvlUsd": 60857.14
+      },
+      {
+        "t": "2026-09-05T10:00:00Z",
+        "tvlUsd": 61714.29
+      },
+      {
+        "t": "2026-09-06T10:00:00Z",
+        "tvlUsd": 62571.43
+      },
+      {
+        "t": "2026-09-07T10:00:00Z",
+        "tvlUsd": 63428.57
+      },
+      {
+        "t": "2026-09-08T10:00:00Z",
+        "tvlUsd": 64285.71
+      },
+      {
+        "t": "2026-09-09T10:00:00Z",
+        "tvlUsd": 65142.86
+      },
+      {
+        "t": "2026-09-10T10:00:00Z",
+        "tvlUsd": 66000
+      },
+      {
+        "t": "2026-09-11T10:00:00Z",
+        "tvlUsd": 66857.14
+      },
+      {
+        "t": "2026-09-12T10:00:00Z",
+        "tvlUsd": 67714.29
+      },
+      {
+        "t": "2026-09-13T10:00:00Z",
+        "tvlUsd": 68571.43
+      },
+      {
+        "t": "2026-09-14T10:00:00Z",
+        "tvlUsd": 69428.57
+      },
+      {
+        "t": "2026-09-15T10:00:00Z",
+        "tvlUsd": 70285.71
+      },
+      {
+        "t": "2026-09-16T10:00:00Z",
+        "tvlUsd": 71142.86
+      },
+      {
+        "t": "2026-09-17T10:00:00Z",
+        "tvlUsd": 72000
+      }
+    ],
+    "sharePrice": [],
+    "weights": [
+      {
+        "t": "2026-09-01T10:00:00Z",
+        "appliedBps": 7000,
+        "kind": "Effective weight"
+      }
+    ],
+    "receipts": [
+      {
+        "sessionId": null,
+        "t": "2026-09-16T10:00:00Z",
+        "recommendedBps": 6500,
+        "applied": false
+      }
+    ]
+  },
+  "activity": [
+    {
+      "t": "2026-09-14T17:09:00Z",
+      "kind": "Deposit",
+      "assets": 5410.89,
+      "shares": 5278.92,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T14:46:00Z",
+      "kind": "Withdrawal",
+      "assets": 8713.74,
+      "shares": 8501.21,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T12:00:00Z",
+      "kind": "Deposit",
+      "assets": 2280.85,
+      "shares": 2225.22,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T11:04:00Z",
+      "kind": "Deposit",
+      "assets": 9387.71,
+      "shares": 9158.74,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T22:05:00Z",
+      "kind": "Deposit",
+      "assets": 5459.37,
+      "shares": 5326.21,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T04:44:00Z",
+      "kind": "Deposit",
+      "assets": 2884.9,
+      "shares": 2814.54,
+      "tx": null
+    },
+    {
+      "t": "2026-09-10T13:50:00Z",
+      "kind": "Withdrawal",
+      "assets": 6435.79,
+      "shares": 6278.82,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T10:18:00Z",
+      "kind": "Deposit",
+      "assets": 11255.95,
+      "shares": 10981.41,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T06:52:00Z",
+      "kind": "Withdrawal",
+      "assets": 9435.43,
+      "shares": 9205.3,
+      "tx": null
+    },
+    {
+      "t": "2026-09-07T23:32:00Z",
+      "kind": "Deposit",
+      "assets": 11675.31,
+      "shares": 11390.55,
+      "tx": null
+    },
+    {
+      "t": "2026-09-07T03:21:00Z",
+      "kind": "Deposit",
+      "assets": 5149.21,
+      "shares": 5023.62,
+      "tx": null
+    },
+    {
+      "t": "2026-09-06T19:38:00Z",
+      "kind": "Deposit",
+      "assets": 10411.17,
+      "shares": 10157.24,
+      "tx": null
+    },
+    {
+      "t": "2026-09-04T01:33:00Z",
+      "kind": "Withdrawal",
+      "assets": 9466.34,
+      "shares": 9235.45,
+      "tx": null
+    },
+    {
+      "t": "2026-09-03T20:04:00Z",
+      "kind": "Deposit",
+      "assets": 8010.7,
+      "shares": 7815.32,
+      "tx": null
+    }
+  ]
+}

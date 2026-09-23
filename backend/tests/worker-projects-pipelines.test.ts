@@ -350,8 +350,19 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
     expect(retryRun.status).toBe("degraded");
     expect(retryRun.status).not.toBe("succeeded");
 
-    // Attempts exhausted (max_attempts=1): must NOT go 'dead' — settle
-    // 'succeeded' so the schedule survives, while still recording 'degraded'.
+    // Attempts exhausted (max_attempts=1): must NOT go 'dead' — the
+    // last-persisted rows are intact and the schedule must keep firing, so an
+    // operator requeue and the next cron slot both stay available.
+    //
+    // IT SETTLES 'failed', NOT 'succeeded' (R16). This assertion used to read
+    // 'succeeded', on the reasoning that the next cron slot re-enqueues a fresh
+    // attempt — which is true, and is unaffected by the status, because the
+    // scheduler enqueues NEW rows. What the old status did was make the row lie:
+    // staging job 83 read `succeeded, attempts 5, last_error judge_unavailable`
+    // for a judging that never happened, and the admin overview, the queue
+    // counts and swarm/receipt-gap.ts all had to work around a green row for
+    // work that was never done. The RUN keeps 'degraded', which is where the
+    // "kept last-persisted rows" distinction actually belongs.
     const [{ id: termId }] = await sql<{ id: number }[]>`
       INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 1) RETURNING id`;
     jobIds.push(termId);
@@ -359,7 +370,7 @@ test("the loop records a degraded handler result as a non-'succeeded' job_runs s
 
     const [termJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${termId}`;
     expect(termJob.status).not.toBe("dead"); // never escalate degrade to dead
-    expect(termJob.status).toBe("succeeded"); // last-persisted intact; next cron re-enqueues
+    expect(termJob.status).toBe("failed"); // honest terminal; next cron re-enqueues a fresh row
 
     const [termRun] = await sql<{ status: string }[]>`
       SELECT status FROM job_runs WHERE job_id = ${termId} ORDER BY id DESC LIMIT 1`;

@@ -1,0 +1,98 @@
+{
+  "$comment": "VENDORED FROM robotmoney-core. Do not hand-edit a sha256 in this file. Regenerate with `bun scripts/fusion/check-cross-repo-fixture-drift.ts --regenerate --core <robotmoney-core checkout> --core-ref <tag or commit SHA>` and commit the result together with the coordinated fixture change.",
+  "why_this_file_exists": "AC-FMT-01 / §9A R4, frontend half. contract/tests/unit/consensus-receipt-fixture.test.ts re-derives the goldens from the fixtures sitting next to them, so editing a fixture and its golden in one commit is green here by construction — which is how robotmoney-core sat at v0.4.0-rc.3 with eight of the nine shared fixtures drifted from this repo while both CIs stayed green. This manifest is generated from the OTHER repo's bytes at a pinned commit, so a one-sided edit in THIS repo cannot be green either. Core runs the mirror of this check against shared-fixtures/vendored/robotmoney-frontend.manifest.json.",
+  "core_repo": "robotmoney-core",
+  "core_fixture_dir": "tests/fixtures",
+  "core_ref": "833ddcf241f5e6eea4ecd853c9b562a4e60b0b3d",
+  "core_commit": "833ddcf241f5e6eea4ecd853c9b562a4e60b0b3d",
+  "frontend_fixture_dir": "contract/src/__fixtures__",
+  "frontend_only_not_shared": [
+    "consensus-receipt.assembler-input.json",
+    "consensus-receipt.bps-conversion.conformance.json",
+    "consensus-receipt.refused-variants.json"
+  ],
+  "core_only_not_shared": [
+    "consensus-receipt.anchor-digest.json",
+    "consensus-receipt.legacy-weights.json",
+    "consensus-receipt.live-envelope.json"
+  ],
+  "core_only_not_shared_note": "A consensus-receipt.* fixture that lives in robotmoney-core's tests/fixtures but is deliberately NOT part of the shared cross-repo set. Anything in core_shared_inventory that is in neither files[] nor this list is an OMITTED failure: core grew a shared fixture this repo never copied.",
+  "core_shared_inventory": [
+    "consensus-receipt.anchor-digest.json",
+    "consensus-receipt.bucket-vault-map.json",
+    "consensus-receipt.canonicalization.json",
+    "consensus-receipt.envelope.json",
+    "consensus-receipt.escaping.canonical.txt",
+    "consensus-receipt.escaping.json",
+    "consensus-receipt.invalid.json",
+    "consensus-receipt.legacy-weights.json",
+    "consensus-receipt.live-envelope.json",
+    "consensus-receipt.schema.json",
+    "consensus-receipt.unknown-fields-refused.json",
+    "consensus-receipt.valid-no-weights.json",
+    "consensus-receipt.valid.canonical.txt",
+    "consensus-receipt.valid.json"
+  ],
+  "core_shared_inventory_note": "The full consensus-receipt.* enumeration of core's tests/fixtures at core_commit, written by --regenerate from git ls-tree. Do not hand-edit.",
+  "pending_core_adoption_note": "A row flagged pending_core_adoption was authored in THIS repo and has no counterpart in robotmoney-core at the pinned commit yet. Until core lands its byte-identical copy and this manifest is re-vendored, the check prints it as PENDING-CORE rather than claiming a cross-repo comparison it did not make.",
+  "shared_set_note": "ELEVEN shared files as of run 20260914T-run2 (core's fixture dir holds 14 consensus-receipt.* files at the pinned commit; the other three are core_only_not_shared): the nine original shared fixtures plus consensus-receipt.envelope.json (T24, the read-time envelope shape) and consensus-receipt.unknown-fields-refused.json (R27/D11, unknown fields must be REFUSED, not dropped). Both were authored in robotmoney-core and copied here byte-identically.",
+  "files": [
+    {
+      "file": "consensus-receipt.schema.json",
+      "byte_length": 19005,
+      "sha256": "0xbf9fa2f0e9ea19dfd245fd837e6f7f87a0a155a13732248528b040560cd17d38"
+    },
+    {
+      "file": "consensus-receipt.canonicalization.json",
+      "byte_length": 35475,
+      "sha256": "0x38e07170eeaaacf5fb321cf2a5d00fcbc88ec1f6cef178a29e293e9fa0bbad0c"
+    },
+    {
+      "file": "consensus-receipt.bucket-vault-map.json",
+      "byte_length": 1193,
+      "sha256": "0xd9bdf399f5ff1879c230914aa001b7b04ebd6d593c006eb9c2fb1def03ece323"
+    },
+    {
+      "file": "consensus-receipt.valid.json",
+      "byte_length": 3380,
+      "sha256": "0x5ef2cc46bdbb06cad96e2c15cf359cfe008e152954248479f1d12ca4698bde85"
+    },
+    {
+      "file": "consensus-receipt.valid-no-weights.json",
+      "byte_length": 1768,
+      "sha256": "0x66296ddcd4def06f1cd2cd7ef5b69ee1844ef1cbabb61babab3199b7b3153935"
+    },
+    {
+      "file": "consensus-receipt.invalid.json",
+      "byte_length": 1022,
+      "sha256": "0xa396756f40a676b01527ba79d1fa315333b34ff5fe98311e5df54fdbe73b912c"
+    },
+    {
+      "file": "consensus-receipt.escaping.json",
+      "byte_length": 3538,
+      "sha256": "0x8f49186fe803037f9dd8a44bab2ffeb920cc923c40585579e4084af662e84ae3"
+    },
+    {
+      "file": "consensus-receipt.valid.canonical.txt",
+      "byte_length": 2861,
+      "sha256": "0x04033d6a56cad116c725434cff4e0c3d13db898568a0b954aaf1d0bcdcafed0c"
+    },
+    {
+      "file": "consensus-receipt.escaping.canonical.txt",
+      "byte_length": 3105,
+      "sha256": "0xc292b8faaa26c5b11b18ac456e11a1a7409f36f1ebddeea0cb7517d0d3127a98"
+    },
+    {
+      "file": "consensus-receipt.envelope.json",
+      "byte_length": 7212,
+      "sha256": "0x6f1706f450d18d027ab33d430e2fc43d0ac8aeeecd30c097f8f2ac107846fe11"
+    },
+    {
+      "file": "consensus-receipt.unknown-fields-refused.json",
+      "byte_length": 3455,
+      "sha256": "0x2c69763e77b9b047d5a65aaef2d75befbf3ceb580c0b50f3fdd7023e348bc14a"
+    }
+  ],
+  "core_tag": null,
+  "core_ref_note": "core_ref is always the resolved COMMIT SHA, never a branch: a branch ref moves or is deleted and the \"pinned commit\" prose stops being true. core_tag records the tag at that commit when one exists (null otherwise) and is for human legibility only — nothing compares against it."
+}

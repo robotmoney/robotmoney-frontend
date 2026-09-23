@@ -26,7 +26,12 @@ test.beforeEach(async ({ page }) => {
 function failOnBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+    if (message.type() !== "error") return;
+    // "Failed to load resource" carries no URL in its text; Chromium puts the
+    // failing resource in the message's location. Without it a full-stack
+    // failure named a 404 and nothing else.
+    const where = message.location()?.url;
+    errors.push(`console: ${message.text()}${where ? ` (${where})` : ""}`);
   });
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.stack || error.message}`));
   return errors;
@@ -45,18 +50,23 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
 // 00:00 UTC, when the seed's `today` and this test's `today` disagree and
 // the page 404s with no session to render. Read the date the API actually
 // stored instead of recomputing it.
-async function resolveSeededSessionDate(page: Page, subjectId: string): Promise<string> {
-  const date = await page.evaluate(async (id) => {
+//
+// The take count is read the same way. The seed drives three members, and a
+// member whose model refuses or times out is recorded absent, as the session
+// is built to tolerate; the page is right to show the takes that landed.
+async function resolveSeededSession(page: Page, subjectId: string): Promise<{ date: string; takes: number }> {
+  const match = await page.evaluate(async (id) => {
     const res = await fetch(`/api/swarm/sessions?limit=50`);
     const body = await res.json();
-    const match = (body.sessions as Array<{ subjectId: string; date: string }>).find((s) => s.subjectId === id);
-    return match ? match.date : null;
+    const row = (body.sessions as Array<{ subjectId: string; date: string; takeCount?: number }>).find((s) => s.subjectId === id);
+    return row ? { date: row.date, takes: Number(row.takeCount) } : null;
   }, subjectId);
   // Fail loudly rather than falling back to a computed date: a null here
   // means the seed did not run (or ran for a different subject), which is a
   // real defect this test must still catch — not paper over.
-  if (!date) throw new Error(`no swarm session found for subject "${subjectId}" — did the seed run?`);
-  return date;
+  if (!match) throw new Error(`no swarm session found for subject "${subjectId}" — did the seed run?`);
+  if (!(match.takes > 0)) throw new Error(`the seeded ${subjectId} session carries no takes — no member filed`);
+  return match;
 }
 
 test("renders allocation and dynamic swarm routes through Alpine", async ({ page }) => {
@@ -67,25 +77,31 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   // The allocationView factory draws the allocation donut and the yield
   // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
-  await expect(page.locator(".alp__donut svg path").first()).toBeVisible();
+  await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
 
-  // RM-115: the page reads the VAULT and the allocation framework, and the
-  // house book is gone from it entirely. Vault TVL is derived from the same
-  // endpoint the page reads so this stays correct as the in-CI Base RPC stub's
-  // fixtures evolve (issue #48; zero live Base mainnet calls).
+  // RM-115: the page reads the VAULTS and the allocation framework, and the
+  // house book is gone from it entirely. Until the four-vault route is served,
+  // the Vaults section reads rmUSDC from vault-economics (lib/vault-source.js),
+  // so its TVL is derived from that same endpoint and stays correct as the
+  // in-CI Base RPC stub's fixtures evolve (issue #48; zero live Base mainnet
+  // calls).
   const expected = await page.evaluate(async () => {
     const v = await fetch("/api/dashboards/vault-economics").then((r) => r.json());
-    // Mirrors allocationView.fmtUsd2 INCLUDING its null branch. A documented
-    // #120 degrade (a null tvlUsd, say) has to surface here as a text diff
-    // against the rendered "—", not as an opaque TypeError inside evaluate().
-    const usd2 = (n: number | null) =>
-      n == null ? "—" : "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return { vault: usd2(v.tvlUsd) };
+    // Mirrors allocationView.actualUsd through fmtUsd, whole dollars,
+    // INCLUDING its null branch. A documented #120 degrade (a null tvlUsd, say)
+    // has to surface here as a text diff against the rendered "", not as an
+    // opaque TypeError inside evaluate().
+    const usd0 = (n: number | null) =>
+      typeof n !== "number" ? "" : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+    return { vault: usd0(v.tvlUsd) };
   });
-  // The four-tile stat rail became a one-line meta rail: two of those tiles
-  // read "not yet published" in display type, which is not what the top of a
-  // page about money is for.
-  await expect(page.locator(".alp__meta")).toContainText(`Deployed ${expected.vault}`);
+  // The vault's TVL is rmUSDC's Actual in dollars, in the Vaults table; the
+  // meta rail above the weights carries the router, which holds nothing.
+  const vaultRows = page.locator("#vaults tbody tr");
+  const rmusdcTvl = vaultRows.first().locator("td[data-col=actual] small");
+  await expect(vaultRows).toHaveCount(4);
+  await expect(rmusdcTvl).toHaveText(expected.vault);
+  await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
 
   // THE CONSTRAINT A REVIEWER CHECKS FIRST (RM-115): depositor capital and the
   // protocol's own wallets are different money, and this page reads only the
@@ -99,46 +115,60 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   });
   await navigate(page, "/");
   await navigate(page, "/allocation");
-  await expect(page.locator(".alp__meta")).toContainText("Deployed");
+  await expect(rmusdcTvl).toHaveText(expected.vault);
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
 
-  // The two figures with no route behind them say so rather than borrowing a
-  // number from the spot share price. One line now, not two display-type tiles.
-  await expect(page.locator(".alp__pending")).toContainText("not published");
+  // The NAV line went to the vault pages with the holdings it described.
+  await expect(page.locator(".alp__pending")).toHaveCount(0);
 
   // #vault is still the anchor the deposit skill and the swarm's vault row
-  // point at. The section it named is gone — the vault's holdings moved into
-  // the sleeve they implement — so the anchor moved onto that sleeve's card.
-  await expect(page.locator("#vault")).toBeVisible();
-  await expect(page.locator("#vault")).toHaveClass(/alp__card/);
+  // point at. It sits on the Vaults heading, inside #vaults.
+  await expect(page.locator("#vaults #vault")).toBeVisible();
   await expect(page.locator("#allocation")).toBeVisible();
 
   // Test performance page with Wallet Performance heading
   await navigate(page, "/performance");
   await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
+  // A member's page is a research record now (RM-121); its h1 still carries
+  // .profile-name. The tagline under it (.profile-role) shows only what the
+  // member declared: the seeded member declares none, and the page used to
+  // invent "Athena reads the session through a macro lens." to fill the line.
+  // The declared lens is what every seat carries, so the rendered page is
+  // proven by it instead.
   await page.goto("/swarm/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
-  await expect(page.locator(".profile-role")).not.toHaveText("");
+  await expect(page.locator("#intent .rr-profile__lens")).not.toHaveText("");
+  await expect(page.locator(".profile-role")).not.toContainText("reads the session through");
 
-  const woonDate = await resolveSeededSessionDate(page, "woon");
-  await page.goto(`/swarm/${woonDate}/woon`);
+  const woon = await resolveSeededSession(page, "woon");
+  await page.goto(`/swarm/${woon.date}/woon`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
-  await expect(page.locator(".session-submissions tbody tr")).toHaveCount(3);
+  // The per-member submissions table became the vote chart (RM-121): one dot
+  // per member who took part, keyed on the member like the table rows were
+  // (issue #573), so a revision never adds a second dot for the same member.
+  const takesSection = page.locator("#takes");
+  await expect(takesSection.locator(".rr-vote__dot")).toHaveCount(woon.takes);
+  // The turnout is the facts row's take count, stated once.
+  await expect(page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Takes/ })).toHaveText(new RegExp(`^\\s*Takes\\s+${woon.takes}\\s*$`));
 
-  // Live loadApi -> camelTake -> sv__take render path (issue #75): a live/current
-  // Woon session served from the Postgres swarm API (not the pre-2026-07-01
-  // static archive) renders one member-opinion card per participating member.
-  // runSession drives athena/boreas/cygnus, so exactly three cards render. Each
-  // card carries the member name, a non-empty role/lens, and a stance-confidence
-  // badge — guards a silent regression in the member-opinion render surface.
-  const takeCards = page.locator(".sv__take");
-  await expect(takeCards).toHaveCount(3);
+  // Live loadApi -> camelTake -> take-card render path (issue #75): a
+  // live/current Woon session served from the Postgres swarm API (not the
+  // pre-2026-07-01 static archive) renders one member-opinion card per
+  // participating member: runSession drives athena/boreas/cygnus, and one card
+  // renders for each that filed. Each card carries the member name, a non-empty
+  // role/lens, a stance badge, its confidence and the signature seal: guards a
+  // silent regression in the member-opinion render surface.
+  const takeCards = takesSection.locator(".rr-take");
+  await expect(takeCards).toHaveCount(woon.takes);
   const firstCard = takeCards.first();
   await expect(firstCard.locator(".sv__member-link")).not.toHaveText("");
   await expect(firstCard.locator(".sv__take-lens")).not.toHaveText("");
-  await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/\S+ · \d+%/);
+  // Stance and confidence apart, as every take card sets them.
+  await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/^\s*[a-z]+\s*$/);
+  await expect(firstCard.locator(".rr-conf")).toHaveText(/^\s*Confidence \d+%\s*$/);
+  await expect(firstCard.locator(".sv__vfy[data-verified-badge]")).toHaveCount(1);
 
   await expectNoBrowserErrors(errors);
 });
@@ -353,14 +383,15 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
 }
 
 test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
-  await page.goto("/");
-  await navigate(page, "/vault");
-  // RM-115 retired views/vault.html into /allocation's `#vault` section, and
-  // /vault now resolves to the allocation view rather than to not-found. It is
-  // still an EXPLICIT entry, not an absence: the catch-all maps any unknown
-  // path to /views/<path>.html, so a bare deletion would 404 a live address.
+  // Bare /vault is the four vaults on /allocation: the router moves the
+  // address to /allocation#vaults before it renders, so navigate(), which
+  // waits for the render of the path it pushed, cannot drive it. A direct load
+  // can. It is still an EXPLICIT route, not an absence: the catch-all maps an
+  // unknown path to /views/<path>.html, which for /vault is now the per-vault
+  // page.
+  await page.goto("/vault");
+  await expect(page).toHaveURL(/\/allocation#vaults$/);
   await expect(page.locator("section.alp")).toHaveCount(1);
-  await expect(page.locator("h1.vp__title")).toHaveCount(0);
   // Two addresses, one page: seo.js names /allocation canonical for both so
   // they do not compete as duplicates, and the page stays indexable.
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(

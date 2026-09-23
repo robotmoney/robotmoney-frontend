@@ -47,6 +47,25 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
     expect(r.composeEnv.TOKEN_PRICE_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
   });
 
+  test("the fast smoke-twin (--cadence fast on the pinned port) injects NO producer crons", () => {
+    // The twin resolves the FAST profile even though it pins the port, so it
+    // must emit nothing — compose resolves its committed defaults, exactly as a
+    // non-stage stack and CI do. Emitting the realistic 3-hour crons here would
+    // be the old drift: research beat out of step with the 2-minute swarm.
+    const r = resolveSmokeEnv({}, { stage: true, cadence: "fast" });
+    expect("PRODUCER_REGIME_CRON" in r.composeEnv).toBe(false);
+    expect("PRODUCER_RESEARCH_CRON" in r.composeEnv).toBe(false);
+  });
+
+  test("an explicit --cadence realistic injects the realistic producer crons even without the port pin", () => {
+    // The override works in BOTH directions: resolveSmokeEnv keys off the
+    // RESOLVED profile, not the stage bit, so a cadence-realistic invocation
+    // states its producer beat whatever the port does.
+    const r = resolveSmokeEnv({}, { cadence: "realistic" });
+    expect(r.composeEnv.PRODUCER_REGIME_CRON).toBe("30 */3 * * *");
+    expect(r.composeEnv.PRODUCER_RESEARCH_CRON).toBe("0 */3 * * *");
+  });
+
   test("empty-string knobs behave as unset (compose interpolation yields empty strings)", () => {
     const r = resolveSmokeEnv({ BASE_RPC_URL: "", ANALYTICS_SOURCE: "", ANALYTICS_FLOOR_SEED: "" });
     expect(r.baseRpcUrl).toBeUndefined();

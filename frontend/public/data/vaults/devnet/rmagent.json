@@ -1,0 +1,303 @@
+{
+  "slug": "rmagent",
+  "symbol": "rmAGENT",
+  "name": "Agent Tokens",
+  "bucket": "agent_tokens",
+  "availability": "live",
+  "status": "active",
+  "address": null,
+  "tvlUsd": 9000,
+  "sharePrice": 0.938,
+  "exitFeeBps": null,
+  "recommendedBps": 1500,
+  "appliedBps": 1000,
+  "actualBps": 900,
+  "gaps": {
+    "governance": -500,
+    "flow": -100,
+    "total": -600
+  },
+  "network": {
+    "chainId": 918453,
+    "label": "Staging devnet",
+    "testData": true
+  },
+  "holdingsAsOf": "2026-09-17T10:00:00Z",
+  "flags": {
+    "depositsPaused": false,
+    "withdrawalsPaused": false,
+    "shutdown": false
+  },
+  "caps": null,
+  "apy": null,
+  "depositors": null,
+  "guards": null,
+  "auditStatus": null,
+  "contracts": {
+    "vault": null,
+    "router": null,
+    "registry": null
+  },
+  "mechanics": {
+    "redeemOnly": true,
+    "maxSlippageBps": null,
+    "venues": []
+  },
+  "holdings": [
+    {
+      "kind": "token",
+      "label": "RobotMoney",
+      "symbol": "ROBOTMONEY",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1300,
+      "weightBps": 1444.44,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Juno",
+      "symbol": "JUNO",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1250,
+      "weightBps": 1388.89,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Woon",
+      "symbol": "WOON",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1250,
+      "weightBps": 1388.89,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Peaq",
+      "symbol": "PEAQ",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1250,
+      "weightBps": 1388.89,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Zyfai",
+      "symbol": "ZYFAI",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1250,
+      "weightBps": 1388.89,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "Giza",
+      "symbol": "GIZA",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1200,
+      "weightBps": 1333.33,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "token",
+      "label": "DEUS",
+      "symbol": "DEUS",
+      "address": null,
+      "balance": null,
+      "valueUsd": 1100,
+      "weightBps": 1222.22,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    },
+    {
+      "kind": "idle",
+      "label": "Idle USDC",
+      "symbol": "USDC",
+      "address": null,
+      "balance": 400,
+      "valueUsd": 400,
+      "weightBps": 444.44,
+      "targetBps": null,
+      "priceSource": null,
+      "note": null
+    }
+  ],
+  "history": {
+    "tvl": [
+      {
+        "t": "2026-09-03T10:00:00Z",
+        "tvlUsd": 6000
+      },
+      {
+        "t": "2026-09-04T10:00:00Z",
+        "tvlUsd": 6214.29
+      },
+      {
+        "t": "2026-09-05T10:00:00Z",
+        "tvlUsd": 6428.57
+      },
+      {
+        "t": "2026-09-06T10:00:00Z",
+        "tvlUsd": 6642.86
+      },
+      {
+        "t": "2026-09-07T10:00:00Z",
+        "tvlUsd": 6857.14
+      },
+      {
+        "t": "2026-09-08T10:00:00Z",
+        "tvlUsd": 7071.43
+      },
+      {
+        "t": "2026-09-09T10:00:00Z",
+        "tvlUsd": 7285.71
+      },
+      {
+        "t": "2026-09-10T10:00:00Z",
+        "tvlUsd": 7500
+      },
+      {
+        "t": "2026-09-11T10:00:00Z",
+        "tvlUsd": 7714.29
+      },
+      {
+        "t": "2026-09-12T10:00:00Z",
+        "tvlUsd": 7928.57
+      },
+      {
+        "t": "2026-09-13T10:00:00Z",
+        "tvlUsd": 8142.86
+      },
+      {
+        "t": "2026-09-14T10:00:00Z",
+        "tvlUsd": 8357.14
+      },
+      {
+        "t": "2026-09-15T10:00:00Z",
+        "tvlUsd": 8571.43
+      },
+      {
+        "t": "2026-09-16T10:00:00Z",
+        "tvlUsd": 8785.71
+      },
+      {
+        "t": "2026-09-17T10:00:00Z",
+        "tvlUsd": 9000
+      }
+    ],
+    "sharePrice": [],
+    "weights": [
+      {
+        "t": "2026-09-01T10:00:00Z",
+        "appliedBps": 1000,
+        "kind": "Effective weight"
+      }
+    ],
+    "receipts": [
+      {
+        "sessionId": null,
+        "t": "2026-09-16T10:00:00Z",
+        "recommendedBps": 1500,
+        "applied": false
+      }
+    ]
+  },
+  "activity": [
+    {
+      "t": "2026-09-15T13:21:00Z",
+      "kind": "Deposit",
+      "assets": 721.32,
+      "shares": 769.0,
+      "tx": null
+    },
+    {
+      "t": "2026-09-14T02:57:00Z",
+      "kind": "Withdrawal",
+      "assets": 336.61,
+      "shares": 358.86,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T23:21:00Z",
+      "kind": "Withdrawal",
+      "assets": 355.63,
+      "shares": 379.14,
+      "tx": null
+    },
+    {
+      "t": "2026-09-12T12:48:00Z",
+      "kind": "Deposit",
+      "assets": 407.63,
+      "shares": 434.57,
+      "tx": null
+    },
+    {
+      "t": "2026-09-11T22:44:00Z",
+      "kind": "Deposit",
+      "assets": 542.23,
+      "shares": 578.07,
+      "tx": null
+    },
+    {
+      "t": "2026-09-11T02:44:00Z",
+      "kind": "Withdrawal",
+      "assets": 735.55,
+      "shares": 784.17,
+      "tx": null
+    },
+    {
+      "t": "2026-09-10T11:52:00Z",
+      "kind": "Deposit",
+      "assets": 312.57,
+      "shares": 333.23,
+      "tx": null
+    },
+    {
+      "t": "2026-09-09T00:52:00Z",
+      "kind": "Deposit",
+      "assets": 647.37,
+      "shares": 690.16,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T23:42:00Z",
+      "kind": "Deposit",
+      "assets": 697.92,
+      "shares": 744.05,
+      "tx": null
+    },
+    {
+      "t": "2026-09-08T03:27:00Z",
+      "kind": "Deposit",
+      "assets": 1797.17,
+      "shares": 1915.96,
+      "tx": null
+    },
+    {
+      "t": "2026-09-07T07:04:00Z",
+      "kind": "Withdrawal",
+      "assets": 1103,
+      "shares": 1175.91,
+      "tx": null
+    }
+  ]
+}

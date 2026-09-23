@@ -85,6 +85,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getVersion",
+    method: "GET",
+    path: ROUTES.version,
+    summary: "Which source commit and tag the running process was built from",
+    description:
+      "Returns the full git commit SHA and the exact tag baked into this deployment's image at build time. Use it to check that a host is running the release it is supposed to: compare `commit` against the tag's commit, not against a checkout on the host, which moves independently of the image. Either field is null with a named reason when the image was built without its identity, and a commit ending in `+dirty` was built from a modified tree and is not the tagged artifact. The same object is also on /health as `build`.",
+    backs: [],
+    contractType: "{ commit, tag, commit_unavailable?, tag_unavailable? }",
+    sizeHint: "under 200 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
@@ -187,7 +198,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.members,
     summary: "The Investment Swarm roster",
     description:
-      "Every swarm member: handle, display name, status (active, inactive, applied), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
+      "Every swarm member: handle, display name, status (active, inactive, applied), role (member, or judge for a consensus judge that files no takes), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
     backs: ["/swarm"],
     contractType: "{ members: SwarmMember[] }",
     sizeHint: "about 20 KB",
@@ -218,14 +229,31 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "about 18 KB with no limit, for an active member",
   },
   {
+    id: "getSwarmMemberJudgements",
+    method: "GET",
+    path: ROUTES.swarm.memberJudgements,
+    summary: "One judge's public judgements across sessions, newest first",
+    description:
+      "Every public opinion this consensus judge has written, newest first: one per published session it judged in `enforce` mode, the one that reached the session. Opinions recorded in `shadow` mode are never public. An unknown member, or a member that has never judged, returns an empty list. The default page is 20; `limit` must be an integer from 1 to 100.",
+    backs: ["/swarm"],
+    params: [
+      { name: "id", in: "path", required: true, description: "Member id or handle.", example: "themis" },
+      { name: "limit", in: "query", description: "Maximum judgements to return, 1 to 100.", example: "20" },
+    ],
+    contractType: "SwarmJudgementsResponse",
+    sizeHint: "about 2 KB per judgement",
+  },
+  {
     id: "listSwarmSessions",
     method: "GET",
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.",
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
     backs: ["/swarm"],
     params: [
+      { name: "subject", in: "query", description: "One subject's sessions, filtered before the page is cut. Cannot be combined with full=1.", example: "robotmoney-allocation" },
+      { name: "search", in: "query", description: "Case-insensitive literal phrase matched against the date, the recommendation's rationale and the synthesis; at most 200 characters. Cannot be combined with full=1." },
       { name: "state", in: "query", description: "Filter by lifecycle state, for example published.", example: "published" },
       { name: "limit", in: "query", description: "Page size.", example: "20" },
       { name: "cursor", in: "query", description: "Opaque cursor from the previous response's nextCursor." },
@@ -277,22 +305,58 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.take,
     summary: "One signed take, verified at read time",
     description:
-      "A single member take with its Ed25519 signature and the canonical bytes that were signed, re-verified when you fetch it. This is the public receipt: a reader can check the signature against the member's public key from the roster without trusting this server.",
+      "A single member take with its Ed25519 signature and the canonical bytes that were signed, re-verified when you fetch it. This is the public receipt: a reader can check the signature against the member's public key from the roster without trusting this server. `sessionId` names the session the take was filed in.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Take id (UUID)." }],
     contractType: "SwarmTakeReceipt",
     sizeHint: "about 4 KB",
   },
   {
+    id: "listSwarmSessionJudgements",
+    method: "GET",
+    path: ROUTES.swarm.sessionJudgements,
+    summary: "The consensus judge's public opinion on one session",
+    description:
+      "A session has one judge: the house judge by default, one picked at random when several are seated, never one related to the session's subject or members. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "SwarmJudgementsResponse",
+    sizeHint: "about 2 KB per judgement",
+  },
+  {
+    id: "getSwarmJudgement",
+    method: "GET",
+    path: ROUTES.swarm.judgement,
+    summary: "One public judgement",
+    description:
+      "A single consensus judge's opinion on one published session, with the judging party (`judgedBy`: a member id, or `robotmoney-in-house`), the model, and the prompt hash and inputs digest that pin what it was asked and what it read. `404` for any judgement the session's list would not serve.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Judgement id.", example: "42" }],
+    contractType: "SwarmJudgement",
+    sizeHint: "about 2 KB",
+  },
+  {
     id: "getConsensusReceipt",
     method: "GET",
     path: ROUTES.swarm.sessionConsensusReceipt,
-    summary: "The signed consensus receipt for a session",
+    summary: "The anchored consensus receipt bytes for a session",
     description:
-      "The aggregate receipt for one session: the signed consensus over the member takes, verified at read time. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one.",
+      "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "ConsensusReceipt",
+    sizeHint: "a few KB",
+  },
+  {
+    id: "getConsensusReceiptVerified",
+    method: "GET",
+    path: ROUTES.swarm.sessionConsensusReceiptVerified,
+    summary: "The consensus receipt with a read-time verification verdict",
+    description:
+      "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "SwarmConsensusReceiptResponse",
     sizeHint: "a few KB",
   },
   {
@@ -571,7 +635,7 @@ export function assertCatalogCoversRoutes(): string[] {
   const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
 
   const missing = flattenRoutes(ROUTES)
-    .filter((p) => p.startsWith("/api/") || p === ROUTES.health)
+    .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)
     .filter((p) => !credentialed(p))
     .filter((p) => !catalogued.has(p) && !excluded.has(p));
 

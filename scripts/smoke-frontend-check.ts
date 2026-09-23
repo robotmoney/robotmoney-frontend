@@ -77,7 +77,7 @@ async function main() {
     "x-for=\"m in members\"",   // members table
     "portfolios()",             // what they review
     "publishedSessions()",      // browsable sessions list
-    "sv__session-card",         // per-session card
+    "rr-hist",                  // recommendation history table, one row per session
     "stanceColor(",             // per-take stance dots on each session
   ]);
   await checkView("/views/regime.html", [
@@ -105,11 +105,18 @@ async function main() {
   ]);
   await checkView("/views/allocation.html", [
     "x-data=\"allocationView()\"",
-    "alp__tbl",                    // vault holdings table (rows reconcile to TVL)
-    "alp__meta",                   // the rail: in force since, provenance, vaults, deployed, chain
-    "sleeveStaleLabel(r.adapter)", // per-row stale provenance, carried over from the page this replaced
-    "vaultBackfilled()",           // scheduler catch-up badge (issue #614 AC4)
-    "id=\"vault\"",                // the anchor RM-115 fixes for the implementation section
+    "x-data=\"sleeveExplorer()\"", // the target ring, each sleeve opening onto its recipe
+    "alp__meta",                   // the rail: in force since, provenance, router
+    "id=\"vaults\"",               // the Vaults section, where bare /vault lands
+    "vaultRows()",                 // its four rows: recommended, applied, actual, gaps
+    "id=\"vault\"",                // the legacy anchor the deposit skill cites, on the Vaults heading
+  ]);
+  // One vault's page, /vault/:slug: the factsheet's Alpine view, its holdings
+  // table, and the data-source label that marks devnet and saved figures.
+  await checkView("/views/vault.html", [
+    "x-data=\"vaultView()\"",
+    "rr-holdings",
+    "data-vault-label",
   ]);
   // The wallet-performance charts (walletPerfView(), formerly embedded in
   // allocation.html) live on their own page under the
@@ -123,7 +130,8 @@ async function main() {
     "profile-name",  // e2e hook (spa.spec.ts asserts member name)
   ]);
   // Session detail renders the members' signed takes + memo links and the
-  // e2e submissions table (spa.spec.ts asserts .session-submissions rows).
+  // vote chart, one dot per member (spa.spec.ts asserts #takes .rr-vote__dot;
+  // it replaced the submissions table in RM-121).
   // The reference-faithful member-opinion cards (issue #75) must survive: one
   // sv__take card per member with a role/lens line and a stance-confidence
   // badge — the surface spa.spec.ts asserts against for live smoke sessions.
@@ -134,7 +142,7 @@ async function main() {
     "sv__stance-badge",      // stance · confidence badge
     "sv__take-lens",         // member role/lens line
     "sv__memo-link",         // memoUrl rendering
-    "session-submissions",   // compact submissions table (e2e hook)
+    "rr-vote__dot",          // one vote dot per member (e2e hook)
   ]);
 
   // Router patterns and globally registered factories keep dynamic fragments

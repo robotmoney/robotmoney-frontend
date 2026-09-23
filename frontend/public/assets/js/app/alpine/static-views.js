@@ -5,7 +5,7 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
-import { ASSET_DOT, assetDot, subjectDot } from "./views/shared.js";
+import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
 import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
@@ -14,8 +14,20 @@ import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
-import { timeAgo, absoluteUtc } from "../lib/relative-time.js";
-import { canonicalUrlFor, setCanonicalUrl } from "../seo.js";
+import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, BUCKET_ORDER } from "../lib/session-summary.js";
+import * as weightChange from "../lib/weight-change.js";
+import { sessionTakes } from "../lib/session-takes.js";
+import { allocationFramework } from "../lib/allocation-framework.js";
+import { sessionBrief } from "../lib/session-brief.js";
+import { sleeveExplorer } from "../lib/sleeve-explorer.js";
+import { takeCard, takeWeightRows } from "../lib/take-card.js";
+import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
+import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
+import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
+import { tvlChart } from "./tvl-chart.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -35,7 +47,10 @@ const OTHER_TOKEN = "other";
 const OTHER_COLOR = "#4a5268";
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
-const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
+// The member-takes route's ceiling (it answers 400 above it) and it does not
+// page, so a member past it shows its latest takes and says so.
+const MEMBER_TAKES_MAX = 100;
+export const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -75,6 +90,9 @@ export function loadAllocationFramework() {
           name: b.name || "",
           target: Number.isFinite(Number(b.target_weight)) ? Number(b.target_weight) : null,
           tokens: (b.tokens || []).map((t) => String(t).toUpperCase()),
+          // The sleeve's constituents in POLICY order, which is the order and
+          // the colour /allocation draws them in.
+          items: (b.items || []).map((it) => ({ id: it.id || "", name: it.name || it.id || "" })),
         })),
       }))
       .catch(() => {
@@ -113,7 +131,7 @@ function camelSession(raw) {
     // The API serves regimeSummary with a camelCase OUTER key but snake_case
     // INNER keys (macro_percentile, macro_regime, …); the archive JSON uses
     // snake_case throughout. Normalize inner keys from either source so
-    // panelInputs()/regime labels read a consistent camelCase shape.
+    // the rail and regime labels read a consistent camelCase shape.
     regimeSummary: (() => {
       const rs = raw.regimeSummary || raw.regime_summary;
       if (!rs) return null;
@@ -127,6 +145,10 @@ function camelSession(raw) {
         macroPercentile: rs.macroPercentile ?? rs.macro_percentile,
         onchainPercentile: rs.onchainPercentile ?? rs.onchain_percentile,
         factorPercentile: rs.factorPercentile ?? rs.factor_percentile,
+        // A whitelist drops what it does not name: without these, a reading
+        // that carries its own cuts (#964) could never draw its zones.
+        bucketThresholds: rs.bucketThresholds ?? rs.bucket_thresholds ?? null,
+        method: rs.method ?? null,
         history: rs.history || [],
       };
     })(),
@@ -190,6 +212,11 @@ export function camelTake(raw) {
     // archive is v0 content by definition.
     archival: raw.archival === true,
     receivedAt: raw.receivedAt || raw.received_at || raw.generated_at || raw.generatedAt,
+    // The member's proposed sleeve weights (#963): the public take DTO serves
+    // them normalized, as [{ bucket, weight }]. Null on a take that proposed
+    // none and on the shipped archive, whose takes predate the field; the
+    // take card's "Proposed weights" panel renders only when they are here.
+    weights: Array.isArray(raw.weights) ? raw.weights : null,
   };
 }
 
@@ -228,13 +255,22 @@ export function camelMember(raw) {
 // endpoint has always returned that field, but nothing mapped it before the
 // public subject profile, so every consumer saw `undefined` and rendered
 // nothing.
+// The house moved to robotmoney.network, and robotmoney.net is a domain
+// someone else once ran: a subject row still carrying the old host links to
+// the new one until its data is corrected.
+/** @param {unknown} url */
+export function houseHomepage(url) {
+  if (typeof url !== "string") return url;
+  return url.replace(/^(https?:\/\/(?:www\.)?)robotmoney\.net(?=[\/?#]|$)/i, "$1robotmoney.network");
+}
+
 export function camelSubject(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
     name: raw.name,
     operator: raw.operator,
-    homepage: raw.homepage,
+    homepage: houseHomepage(raw.homepage),
     financesPage: raw.finances_page || raw.financesPage,
     xHandle: raw.x_handle || raw.xHandle,
     thesisBlurb: raw.thesis_blurb || raw.thesisBlurb,
@@ -258,7 +294,7 @@ export function camelSubject(raw) {
 // structuralNotes() below) so scripts/tests/unit/frontend-routes.test.ts can
 // assert the gate is on .length, not truthiness — camelSubject defaults a
 // missing field to [], which is itself truthy, so a plain `x-show` on the
-// raw value would render an empty panel on every subject that has none.
+// raw value would open an empty disclosure on every subject that has none.
 export function structuralNotesOf(subject) {
   const raw = subject?.structuralNotes;
   if (Array.isArray(raw)) return raw.filter(Boolean);
@@ -345,7 +381,7 @@ function humanizeLabel(id) {
 
 // Pure transform behind the Alpine `withinBucketWeights()` method (below):
 // normalizes a swarmRecommendation's per-bucket constituent weights into
-// the { bucket, items: [{ name, weight }] } rows session.html's `.sv__within`
+// the { bucket, items: [{ name, weight }] } rows session.html's `.sr__within`
 // block iterates. Exported so scripts/tests/unit/frontend-routes.test.ts can
 // assert AC2 (within-bucket weights render, matching production) without a
 // browser — the same reason camelTake/takeHref are exported above.
@@ -360,12 +396,35 @@ export function withinBucketWeightsFrom(rec) {
   })).filter((b) => b.items.length);
 }
 
+// The subject operator this site IS. Compared lower-cased: the field is a
+// free-text slug an admin types, and "RobotMoney" is the same house as
+// "robotmoney".
+const HOUSE_OPERATOR = "robotmoney";
+
 // Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
 // verification-badge WORDING directly, not just the badge's state attribute.
 // The three-state distinction below (verified / unverified / archived) is a
 // copy contract as much as a rendering one — the sentence a reader is shown is
 // the thing that was wrong — so the sentence itself is what gets pinned.
 export const helpers = {
+  // What KIND of subject this is, read from the record's own `source.type`
+  // rather than guessed from the slug. Shared by the subject profile and by
+  // the session detail, because a session's eyebrow and its subject's eyebrow
+  // must not disagree about what the reader is looking at. A `framework`
+  // subject has no book: its structural notes open with "no portfolio to
+  // scrape", which both pages were contradicting by printing "portfolio".
+  subjectKindOf(subject) {
+    return subject?.source?.type === "framework" ? "framework" : "portfolio";
+  },
+  // The operator worth naming is the one the reader does not already know.
+  // Every Robot Money subject is operated by Robot Money, so "· operator
+  // robotmoney" sat under a headline reading ROBOT MONEY ALLOCATION and said
+  // nothing twice. An outside operator is the opposite: peaq runs Woon
+  // Treasury, and naming it is the only reason this slot exists.
+  operatorOf(subject) {
+    const op = String(subject?.operator || "").trim();
+    return op.toLowerCase() === HOUSE_OPERATOR ? "" : op;
+  },
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
   // character is a parenthesis, not a letter.
@@ -426,6 +485,27 @@ export const helpers = {
     const n = Number(value);
     return Number.isFinite(n) ? n.toFixed(digits) : "—";
   },
+  // Shared by the subject and session pages, which print the same positions
+  // table. A token amount at the precision it deserves: billions and millions
+  // compact, thousands grouped without decimals, units to two places, dust
+  // to four significant digits.
+  fmtAmount(v) {
+    const n = Number(v);
+    if (v == null || !Number.isFinite(n)) return "—";
+    const a = Math.abs(n);
+    if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+    if (a >= 1e3) return Math.round(n).toLocaleString("en-US");
+    if (a >= 1) return n.toFixed(2);
+    return a === 0 ? "0" : n.toPrecision(4);
+  },
+  // A unit price: cents above a dollar, four significant digits below it.
+  fmtPrice(v) {
+    const n = Number(v);
+    if (v == null || !Number.isFinite(n) || n <= 0) return "—";
+    if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$${Number(n.toPrecision(4)).toString()}`;
+  },
   clampPct(value) {
     const n = Number(value);
     return Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
@@ -460,16 +540,10 @@ export const helpers = {
       : { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
     try { return date.toLocaleDateString("en-US", opts); } catch (_) { return value; }
   },
-  memberTagline(member) {
-    return member?.tagline || member?.mandate || `${member?.name || "This member"} reads the session through a ${member?.lens || "swarm"} lens.`;
-  },
-  memberBiases(member) {
-    if (Array.isArray(member?.biases) && member.biases.length) return member.biases.filter(Boolean);
-    return member?.lens ? [member.lens] : ["independent review", "signed recommendations"];
-  },
-  fallbackMandate(member) {
-    return `Evaluate each subject through the ${member?.lens || "swarm"} lens and submit a signed stance with confidence and rationale.`;
-  },
+  // Only what the member declared. A newly approved member has no tagline,
+  // biases or mandate yet, and the page says so rather than writing them one.
+  memberTagline(member) { return member?.tagline || member?.mandate || ""; },
+  memberBiases(member) { return Array.isArray(member?.biases) ? member.biases.filter(Boolean) : []; },
   takeHref,
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -492,11 +566,11 @@ export const helpers = {
   verifyLabel(ok, archival) { return this.verifyState(ok, archival); },
   verifyTip(ok, archival) {
     if (archival) {
-      return "Archived from the pre-launch record. Published by v0 before member key registration existed, so it was never member-signed — this is not a failed signature check.";
+      return "Archived from the pre-launch record, filed before members signed their takes.";
     }
     return ok
-      ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key every time this take is served — not just when it was filed."
-      : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
+      ? "Signed on the member's own machine with a key only they hold, and the signature checks out against their public key."
+      : "This take's signature did not check out against the member's public key.";
   },
   // Inner glyph of the badge: a check for verified, a cross for a failed
   // check, a horizontal bar for archived — a state that is neither a pass nor
@@ -520,7 +594,9 @@ export const helpers = {
     return this.escapeHtml(line)
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
-      .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, '$1<a href="$2">$2</a>');
+      // A site path reads as the page's title (seo.js citeTitle), which is
+      // escaped too; a path the site has no page for keeps its own text.
+      .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, (_, pre, path) => `${pre}<a href="${path}">${this.escapeHtml(citeTitle(path) || path)}</a>`);
   },
   // Render a member's take body.
   //
@@ -568,9 +644,34 @@ export function registerStaticViews(Alpine) {
   // One string, four swarm surfaces. See lib/swarm-disclaimer.js for
   // why the wording is production's verbatim and not this repo's to edit.
   Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
+  Alpine.data("sleeveExplorer", sleeveExplorer);
+  // The same explorer over the vault stack's book (the Robot Money Vault
+  // subject's Holdings): one arc per vault at its actual weight, measured
+  // against the weights in force, and a vault's positions in its drawer.
+  // subjectProfile supplies vaultRingRows().
+  Alpine.data("vaultStackExplorer", () => ({
+    ...sleeveExplorer(),
+    explorerRows() { return this.vaultRingRows(); },
+    explorerSvg() {
+      return this.ringSvg(this.vaultRingRows().map((r) => ({ key: r.key, label: r.label, pct: r.pct, colour: r.hue })));
+    },
+    explorerCenter() { return { value: "", label: "Share" }; },
+    explorerLabel() {
+      return this.vaultRingRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    // The weights the vaults are measured against: the target in force, the
+    // router's applied weights once it applies them, else the framework's
+    // (RM-115). One word for both, since both are the target.
+    legendBasis() {
+      return this.vaultRingRows().some((x) => x.was != null) ? "Target" : "";
+    },
+  }));
+  Alpine.data("takeCard", takeCard);
 
   Alpine.data("swarmTakeReceipt", () => ({
     ...helpers,
+    // The ring and its formatting, shared with the subject and session pages.
+    ...sessionSummary,
     loading: true,
     error: null,
     take: null,
@@ -598,6 +699,24 @@ export function registerStaticViews(Alpine) {
       } finally {
         this.loading = false;
       }
+    },
+    // The member's proposed weights as the ring the subject and session pages
+    // draw (lib/sleeve-explorer.js). No breakdown drawer: a take proposes
+    // sleeves, not the assets inside them.
+    explorerRows() {
+      return this.take ? takeWeightRows(this.take).map((w) => ({ ...w, hue: w.colour, assets: [] })) : [];
+    },
+    explorerSvg() { return this.ringSvg(this.explorerRows()); },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    hasBook() { return false; },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    // The signer's page, at the public handle (issue #593): the breadcrumb, the
+    // head, the Signer list and the record link all go there.
+    signerHref() {
+      const ref = this.signer?.handle || this.take?.memberHandle || this.signer?.id || this.take?.memberId || "";
+      return `/swarm/members/${encodeURIComponent(ref)}`;
     },
     // The backend stores a memo whose body is a verbatim copy of the take body
     // (same shape of duplication as the aggregator's consensus echo on the
@@ -930,7 +1049,7 @@ export function registerStaticViews(Alpine) {
     // courtesy on this page, never a reason to fail it.
     async loadRecord() {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=${MEMBER_TAKES_MAX}`);
         this.record = res.takes || [];
         this.recordLoaded = true;
       } catch { /* leave the strip hidden rather than render a wrong zero */ }
@@ -1031,12 +1150,59 @@ export function registerStaticViews(Alpine) {
   // shaping over an API that was already answering.
   Alpine.data("subjectProfile", () => ({
     ...helpers,
+    ...sessionSummary,
+    ...sessionTakes(),
+    ...allocationFramework(),
+    ...sessionBrief(),
+    // The vault stack's TVL over time (alpine/tvl-chart.js).
+    ...tvlChart(),
     loading: true,
     error: null,
     subject: null,
     snapshots: [],
+    brief: null,
+    // subject id → name, off the sessions list already fetched, so a brief's
+    // recent-session refs can name their subjects.
+    subjectNames: {},
     snapshot: null,
+    // The published framework manifest, for its per-bucket token lists; only
+    // a weights subject with a book asks for it. See latestBookWeights().
+    allocationFramework: null,
+    // Every published session on this subject, newest first, as index rows.
+    sessionIndex: [],
+    // The detailed rows: the current history page. sessions[0] on page 1 is
+    // the latest review.
     sessions: [],
+    historyPage: 0,
+    historyBusy: false,
+    historyError: "",
+    historySize: 12,
+    // How the history pages. "index": the whole list is read and filtered
+    // here, which is all a backend before #1007 and the static archive allow.
+    // "server": the API pages this subject's sessions and searches them.
+    // Settled once, by loadHistory().
+    historyMode: "index",
+    historySubject: "",
+    // Server mode. The cursor each page read so far opened at (the first
+    // opens at none), the cursor past the page on screen, and how many
+    // sessions the query holds: known once a page reaches the end, never
+    // estimated. sessionTotal is the same count with no search applied.
+    historyCursors: /** @type {(string | null)[]} */ ([null]),
+    historyNext: /** @type {string | null} */ (null),
+    historyTotal: /** @type {number | null} */ (null),
+    sessionTotal: /** @type {number | null} */ (null),
+    // The search the rows on screen answer, the one last asked for, and a
+    // counter that lets only the newest request land.
+    historyQuery: "",
+    historyAsked: "",
+    historySeq: 0,
+    // The unfiltered first page, kept so clearing a search restores it
+    // without asking again.
+    historyFirst: /** @type {{ rows: any[], next: string | null } | null} */ (null),
+    // The book chart's hover: the reading under the crosshair, and the band a
+    // legend entry has put in focus.
+    chartAt: null,
+    chartFocus: null,
     // How many days of history the concentration chart reads. The API returns
     // every snapshot ever taken (311 on the demo stack), and a two-year stack of
     // 1px columns says nothing a reader can act on.
@@ -1045,6 +1211,34 @@ export function registerStaticViews(Alpine) {
     // is the donut list's own cap on the session page; the two must agree or the
     // same book reads as two different shapes across two pages.
     topN: 7,
+    // The Robot Money Vault's Holdings (isVaultStack): the book grouped by
+    // vault. On the devnet switch (lib/vault-source.js) its readings and
+    // wallets are the four-vault fixture's, kept apart from `snapshots` and
+    // `subject.wallets` so the latest recommendation and the history still
+    // measure real sessions against the real book. null reads those.
+    vaultSnapshots: null,
+    vaultWallets: null,
+    // The vault overview, for the router's applied weights: the Holdings
+    // target. Read after the page draws; until it settles no target shows,
+    // rather than one target and then another.
+    vaultStack: null,
+    vaultStackSettled: false,
+    // Every live vault's deposits and withdrawals, newest first, each naming
+    // its vault; null when no vault's source serves activity (the Base feed).
+    stackActivity: null,
+    // Each live vault's detail, by slug, as loadStackActivity read it.
+    stackDetails: {},
+    stackActivityPage: 0,
+    // The Positions table's order: grouped by vault until a column is picked,
+    // then one list across the vaults by that column.
+    // The Positions table: its order (largest value first until a header is
+    // picked), whether it reads by vault or as one list, and which vaults
+    // are folded.
+    posSortKey: "value",
+    posSortDir: "desc",
+    posView: "vault",
+    /** @type {Record<string, boolean>} */
+    posClosed: {},
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
       // The route this component was mounted on. The fetch below is not
@@ -1053,8 +1247,18 @@ export function registerStaticViews(Alpine) {
       // time it lands. Same guard memberProfile applies for the same reason.
       const routeAtEntry = location.pathname;
       try {
-        this.subject = await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject)
-          .catch(() => loadArchiveSubject(id));
+        // The archive fallback has to cover a subject the API ANSWERED for and
+        // does not have, not just a request that failed. This route replies
+        // 200 with a `null` body for an unknown id, so the promise resolves,
+        // camelSubject(null) returns null, and a .catch() never runs: the page
+        // read "Subject not found" for every subject missing from the database
+        // while the checked-in manifest describing it sat one fetch away. That
+        // is every subject on a stack seeded without them, which is what the
+        // local demo stack is.
+        const fromApi = await api.get(path(ROUTES.swarm.subject, { id }))
+          .then(camelSubject)
+          .catch(() => null);
+        this.subject = fromApi || await loadArchiveSubject(id).catch(() => null);
         if (!this.subject) throw new Error("Subject not found");
         // Route-level SEO titleizes the last URL segment, which for a slug like
         // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
@@ -1064,13 +1268,67 @@ export function registerStaticViews(Alpine) {
         }
         // Each side-fetch is guarded on its own: a subject with no snapshot yet
         // still has sessions worth reading, and vice versa.
-        this.snapshots = await this.loadSnapshots(id);
+        //
+        // A FRAMEWORK subject has no book, so it does not get one — the fetch
+        // is skipped rather than the render being gated downstream. Its own
+        // structural notes open with "no portfolio to scrape", and yet
+        // /swarm/subjects/robotmoney-allocation published a $42,688 holdings
+        // table on production: ensureSmokeSubjectFixtures() writes a
+        // deterministic fake basket into swarm_subject_snapshots for any
+        // subject that is not woon or mav, and a release cutover runs it
+        // against the production database. The top line read "ROBOT 50%",
+        // which is not a token — it is `subjectId.slice(0, 5).toUpperCase()`.
+        // Whatever is in that table, this page is the wrong place to find out:
+        // the subject declares it holds nothing.
+        this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
-        this.sessions = await this.loadSessions(id);
-      } catch (e) {
-        this.error = e.message || "Subject not found";
+        if (this.isVaultStack() && vaultMode().mode === "devnet") {
+          const fixture = await loadVaultSubjectFixture({ hostname: location.hostname });
+          if (fixture) {
+            this.vaultSnapshots = fixture.snapshots;
+            this.vaultWallets = fixture.wallets;
+          }
+        }
+        await this.loadHistory(id);
+        this.latestRow = this.sessions[0] || null;
+        this.heldRow = await this.loadHeld(id);
+        // The brief the last session opened with. Guarded like the rest: the
+        // page describes the handover with or without it, and only the
+        // figures depend on having a real one.
+        this.brief = await this.loadBrief(id).catch(() => null);
+        // A FRAMEWORK subject IS the published allocation, so its own page
+        // opens with the weights in force (hasTargetsCard stays gated on
+        // isFramework). Any weights subject also reads it, as the target a
+        // session was measured against when its brief handed none over. A
+        // book subject never asks: the framework does not describe it, and
+        // asking would put the vault's targets on somebody else's treasury.
+        if (this.isWeightsSubject()) await this.loadAllocationFw();
+        // A weights subject that holds a book also reads the framework's
+        // token lists, which sum that book into sleeves: its latest
+        // recommendation is measured against the book, as its session page
+        // measures it (latestBookWeights).
+        if (this.isWeightsSubject() && this.snapshots.length) this.allocationFramework = await loadAllocationFramework();
+        // The newest session's own regime read first, and the brief's copy of
+        // it as the fallback: an archive-only subject reaches the brief but not
+        // always the session detail, and they carry the same reading under two
+        // spellings. normalizeRegime settles that.
+        this.setBackdrop(this.sessions[0]?.regimeSummary || this.brief?.regime || null, {
+          date: this.sessions[0]?.date || this.brief?.date || "",
+          v0: this.readingIsV0(this.latest()),
+        });
+      } catch (_) {
+        // Never e.message: it is whatever the fetch threw. A subject in hand
+        // means a side-fetch failed, not that the subject is missing.
+        this.error = this.subject ? "This subject could not be loaded." : "Subject not found.";
       } finally {
         this.loading = false;
+      }
+      // Not awaited: the Holdings target follows once the overview answers.
+      if (!this.error && this.isVaultStack()) {
+        loadVaultOverview({ hostname: location.hostname, recommendation: false })
+          .then((r) => { this.vaultStack = r; return this.loadStackActivity(r); })
+          .catch(() => { this.vaultStack = null; })
+          .finally(() => { this.vaultStackSettled = true; });
       }
     },
     async loadSnapshots(id) {
@@ -1106,66 +1364,499 @@ export function registerStaticViews(Alpine) {
     // filtered to this subject first and only the visible page of it is expanded.
     // Same shape as memberProfile.scanSessions: guarded per session, with the
     // shipped static archive behind it for dates that predate the live API.
-    async loadSessions(id) {
+    // The brief is what a member is handed when a session opens: the regime
+    // read, the framework, the research, the subject and what the last three
+    // sessions concluded. It is fetched for the MOST RECENT session, because
+    // "what does the swarm get" is a question about the current shape of the
+    // handover, and the newest one is the best evidence of it.
+    async loadBrief(id) {
+      const latest = this.latest();
+      const date = latest?.date;
+      if (!date) return null;
+      const qs = latest.id && latest.id !== `${date}-${id}`
+        ? `?session=${encodeURIComponent(latest.id)}`
+        : `?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(id)}`;
+      try {
+        const res = await api.get(`${ROUTES.swarm.brief}${qs}`);
+        if (res && !res.error) return res;
+      } catch (_) { /* fall through to the archive */ }
+      return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
+    },
+    latestRow: null,
+    // A weights subject whose newest session set no weights held its target:
+    // the latest block shows the recommendation that stands, the newest that
+    // set weights, and names the newer session above it, as /swarm and
+    // /allocation do. Its brief, reading and vote are that session's.
+    heldRow: null,
+    latest() { return this.heldRow || this.latestRow; },
+    heldBy() { return this.heldRow ? this.latestRow : null; },
+    async loadHeld(id) {
+      const newest = this.latestRow;
+      const setsWeights = (r) => this.recommendation(r)?.kind === "weights";
+      if (!newest || setsWeights(newest) || !this.isWeightsSubject()) return null;
+      let row = this.sessions.find(setsWeights) || null;
+      let cursor = this.historyMode === "server" ? this.historyNext : null;
+      for (let page = 0; !row && cursor && page < 10; page += 1) {
+        const res = await this.requestHistory(id, cursor, "").catch(() => null);
+        if (!res) break;
+        row = res.rows.filter((s) => (s?.subjectId ?? s?.subject_id) === id).map(historyRowOf).find(setsWeights) || null;
+        cursor = res.next;
+      }
+      return row ? this.withDetail(row) : null;
+    },
+    hasTargetsCard() { return this.isFramework() && this.allocationTargets().length > 0; },
+    hasLatestReview() {
+      const l = this.latest();
+      return Boolean(l) && (this.signalRows().length > 0 || this.voteTotal(l) > 0);
+    },
+    // The history's first page. The API pages one subject's published
+    // sessions itself (#1007), each row carrying its take count and the target
+    // its brief handed over, so no row is fetched to be drawn. A backend that
+    // predates it ignores `subject` and answers with every subject's rows, so
+    // the answer is trusted only when servesSubjectHistory() says so; anything
+    // else reads the history as before, the static archive included.
+    async loadHistory(id) {
+      const first = await this.requestHistory(id, null, "").catch(() => null);
+      if (!first || !servesSubjectHistory(first.rows, id)) {
+        this.sessionIndex = await this.loadSessionIndex(id);
+        this.sessions = await this.loadSessionPage(0);
+        return;
+      }
+      this.historyMode = "server";
+      this.historySubject = id;
+      await this.showHistory(0, null, first, "", this.historySeq);
+      this.historyFirst = { rows: this.sessions, next: this.historyNext };
+    },
+    /** @param {string} id @param {string | null} cursor @param {string} search */
+    async requestHistory(id, cursor, search) {
+      /** @type {Record<string, string>} */
+      const query = { subject: id, state: "published", limit: String(this.historySize) };
+      if (cursor) query.cursor = cursor;
+      if (search) query.search = historySearchTerm(search);
+      const res = await api.get(ROUTES.swarm.sessions, query);
+      return {
+        rows: Array.isArray(res?.sessions) ? res.sessions : [],
+        next: typeof res?.nextCursor === "string" && res.nextCursor ? res.nextCursor : null,
+      };
+    },
+    // One server page on screen, unless a newer request has been made since
+    // (`seq`). The count is recorded when the query runs out on this page.
+    async showHistory(page, cursor, res, search, seq) {
+      const rows = await this.historyRows(res.rows, page === 0 && !search);
+      if (seq !== this.historySeq) return false;
+      if (search !== this.historyQuery) this.historyTotal = null;
+      if (!res.next) this.historyTotal = page * this.historySize + rows.length;
+      if (!search && this.historyTotal != null) this.sessionTotal = this.historyTotal;
+      this.sessions = rows;
+      this.historyPage = page;
+      this.historyCursors = [...this.historyCursors.slice(0, page), cursor];
+      this.historyNext = res.next;
+      this.historyQuery = search;
+      return true;
+    },
+    // Server rows as history rows. The row carries everything the table
+    // draws but the takes, which only two readers need: the latest block (the
+    // full synthesis, and a tally counted from the takes) and the consensus
+    // of a portfolio session whose record predates the stance tally. Those
+    // rows are read in full; no other row is fetched.
+    async historyRows(raw, withLatest) {
+      const rows = raw.filter((s) => (s?.subjectId ?? s?.subject_id) === this.historySubject).map(historyRowOf);
+      const weights = this.isFramework() || rows.some((r) => r.swarmRecommendation?.type === "bucket_weights");
+      return Promise.all(rows.map((r, i) => {
+        if (this.latestRow && r.id === this.latestRow.id) return this.latestRow;
+        const full = (withLatest && i === 0) || (!weights && Number(r.takes) > 0 && !this.lean(r));
+        return full ? this.withDetail(r) : r;
+      }));
+    },
+    // The session's own record over its index row, with its takes. The index
+    // row stands when the detail does not load.
+    async withDetail(r) {
+      try {
+        const detail = await api.get(path(ROUTES.swarm.sessionById, { id: r.id }));
+        const full = camelSession(detail.session || detail);
+        return {
+          ...r,
+          synthesis: full?.synthesis || r.synthesis,
+          swarmRecommendation: full?.swarmRecommendation || r.swarmRecommendation,
+          regimeSummary: full?.regimeSummary || r.regimeSummary,
+          takeRows: (detail.takes || []).map(camelTake),
+        };
+      } catch (_) {
+        return r;
+      }
+    },
+    // The search box (server mode only): a literal phrase the API matches
+    // against each session's date, rationale and synthesis before it pages.
+    // An empty box puts the unfiltered first page back.
+    async searchHistory(raw) {
+      const q = String(raw || "").trim().slice(0, HISTORY_SEARCH_MAX);
+      if (this.historyMode !== "server" || q === this.historyAsked) return;
+      this.historyAsked = q;
+      const seq = ++this.historySeq;
+      this.historyError = "";
+      if (!q && this.historyFirst) {
+        this.sessions = this.historyFirst.rows;
+        this.historyNext = this.historyFirst.next;
+        this.historyCursors = [null];
+        this.historyPage = 0;
+        this.historyQuery = "";
+        this.historyTotal = this.sessionTotal;
+        this.historyBusy = false;
+        return;
+      }
+      this.historyBusy = true;
+      try {
+        await this.showHistory(0, null, await this.requestHistory(this.historySubject, null, q), q, seq);
+      } catch (_) {
+        if (seq === this.historySeq) {
+          this.historyError = "These sessions could not be loaded.";
+          this.historyAsked = this.historyQuery;
+        }
+      } finally {
+        if (seq === this.historySeq) this.historyBusy = false;
+      }
+    },
+    // Newer and Older in server mode: a page already read reopens at its
+    // cursor, the next one at the cursor past the page on screen.
+    async goServerHistory(page) {
+      const cursor = page === this.historyPage + 1 ? this.historyNext : this.historyCursors[page];
+      if (this.historyBusy || page < 0 || page === this.historyPage || cursor === undefined) return;
+      if (page > this.historyPage && !cursor) return;
+      const seq = ++this.historySeq;
+      this.historyBusy = true;
+      this.historyError = "";
+      try {
+        const res = await this.requestHistory(this.historySubject, cursor, this.historyQuery);
+        if (await this.showHistory(page, cursor, res, this.historyQuery, seq)) {
+          document.getElementById("history")?.scrollIntoView({ block: "start" });
+        }
+      } catch (_) {
+        if (seq === this.historySeq) this.historyError = "These sessions could not be loaded.";
+      } finally {
+        if (seq === this.historySeq) this.historyBusy = false;
+      }
+    },
+    // How many sessions the subject has published, when the page knows: the
+    // whole index in index mode, and in server mode once the unfiltered
+    // history has been read to its end. Null otherwise, never a guess.
+    sessionCount() { return this.historyMode === "server" ? this.sessionTotal : this.sessionIndex.length; },
+    hasPages() { return this.historyMode === "server" ? this.historyPage > 0 || !!this.historyNext : this.historyPageCount() > 1; },
+    hasOlder() { return this.historyMode === "server" ? !!this.historyNext : this.historyPage < this.historyPageCount() - 1; },
+    // Every published session on the subject, newest first, as index rows.
+    // The fallback when the API does not page by subject (a backend before
+    // #1007): the whole index is read and filtered here, with the static
+    // archive behind it.
+    async loadSessionIndex(id) {
       const pick = (list) => list
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
-        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-        .slice(0, 20)
-        // `id` is carried through because it is now the ONLY unique handle on a
-        // session: a subject may convene more than once a day, so the template
-        // cannot key rows on (date, subjectId) without colliding — and a
-        // duplicate key makes Alpine render the whole list as nothing. The
-        // static archive has no ids, so fall back to the old composite there.
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+          || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+        // `id` is the ONLY unique handle on a session: a subject may convene
+        // more than once a day. The static archive has no ids, so it falls
+        // back to the composite, which sessionHref() recognises.
         .map((s) => ({
           id: s.id ?? `${s.date}-${s.subjectId ?? s.subject_id}`,
           date: s.date,
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
+          generatedAt: s.generatedAt ?? s.generated_at ?? null,
         }));
-      let index = [];
+      const remember = (list) => {
+        const names = { ...this.subjectNames };
+        for (const x of list || []) {
+          const sid = x.subjectId ?? x.subject_id;
+          const name = x.subjectName ?? x.subject_name;
+          if (sid && name && !names[sid]) names[sid] = name;
+        }
+        this.subjectNames = names;
+      };
       try {
-        index = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
+        const all = await publishedSessionList();
+        remember(all);
+        const index = pick(all);
+        if (index.length) return index;
       } catch (_) { /* fall through to the archive */ }
-      // Same archive fallback the snapshots take. index.json is snake_case while
-      // the API is camelCase, so pick() reads both rather than silently matching
-      // nothing and rendering "no published session yet" over a full archive.
-      if (!index.length) {
-        try {
-          index = pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
-        } catch (_) {
-          return [];
-        }
+      try {
+        const all = (await fetchJson("/data/swarm/sessions/index.json")).sessions || [];
+        remember(all);
+        return pick(all);
+      } catch (_) {
+        return [];
       }
-      return Promise.all(index.map(async (s) => {
-        try {
-          const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
-          return { ...s, synthesis: camelSession(detail.session || detail).synthesis, takes: (detail.takes || []).length };
-        } catch (_) {
-          if (archivePreferred(s.date)) {
-            try {
-              const archive = await loadArchiveSession(s.date, s.subjectId);
-              return { ...s, synthesis: archive.session?.synthesis || "", takes: (archive.takes || []).length };
-            } catch (_) { /* fall through */ }
-          }
-          return { ...s, synthesis: "", takes: 0 };
+    },
+    // One page of history, in full: the session detail (recommendation, regime,
+    // takes) and the brief it opened with, which is the only honest source of
+    // the reference weights a row is compared against. Guarded per session,
+    // with the static archive behind each.
+    async loadSessionPage(page) {
+      const rows = this.sessionIndex.slice(page * this.historySize, (page + 1) * this.historySize);
+      return Promise.all(rows.map((s) => this.loadSessionRow(s)));
+    },
+    async loadSessionRow(s) {
+      const archiveId = s.id === `${s.date}-${s.subjectId}`;
+      const briefFor = async () => {
+        if (!archiveId) {
+          const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
+          if (b && !b.error) return b;
         }
+        return archivePreferred(s.date)
+          ? fetchJson(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).catch(() => null)
+          : null;
+      };
+      const withBrief = async (row) => ({ ...row, reference: referenceWeights(await briefFor()) });
+      try {
+        const detail = archiveId
+          ? await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }))
+          : await api.get(path(ROUTES.swarm.sessionById, { id: s.id }));
+        const full = camelSession(detail.session || detail);
+        return withBrief({
+          ...s,
+          synthesis: full?.synthesis || "",
+          swarmRecommendation: full?.swarmRecommendation || null,
+          regimeSummary: full?.regimeSummary || null,
+          publishedAt: full?.publishedAt || null,
+          takes: (detail.takes || []).length,
+          takeRows: (detail.takes || []).map(camelTake),
+        });
+      } catch (_) {
+        if (archivePreferred(s.date)) {
+          try {
+            const archive = await loadArchiveSession(s.date, s.subjectId);
+            return withBrief({
+              ...s,
+              synthesis: archive.session?.synthesis || "",
+              swarmRecommendation: archive.session?.swarmRecommendation || null,
+              regimeSummary: archive.session?.regimeSummary || null,
+              // The index entry has no time; the session file does. Without it
+              // the row printed "3 takes" where /swarm prints "23:58 UTC · 3 takes".
+              generatedAt: s.generatedAt ?? archive.session?.generatedAt ?? null,
+              takes: (archive.takes || []).length,
+              takeRows: archive.takes || [],
+            });
+          } catch (_) { /* fall through */ }
+        }
+        // Marked failed, with no take count: a row that did not load is not a
+        // session that collected nothing and published nothing.
+        return { ...s, failed: true, synthesis: "", swarmRecommendation: null, takes: null, takeRows: [], reference: null };
+      }
+    },
+    historyPageCount() { return Math.max(1, Math.ceil(this.sessionIndex.length / this.historySize)); },
+    async goHistory(page) {
+      if (this.historyMode === "server") return this.goServerHistory(page);
+      if (this.historyBusy || page < 0 || page >= this.historyPageCount()) return;
+      this.historyBusy = true;
+      this.historyError = "";
+      try {
+        this.sessions = await this.loadSessionPage(page);
+        this.historyPage = page;
+        document.getElementById("history")?.scrollIntoView({ block: "start" });
+      } catch (_) {
+        this.historyError = "These sessions could not be loaded.";
+      } finally {
+        this.historyBusy = false;
+      }
+    },
+    historyRange() {
+      if (this.historyMode === "server") {
+        const first = this.historyPage * this.historySize + 1;
+        const last = first + this.sessions.length - 1;
+        return this.historyTotal == null ? `${first}–${last}` : `${first}–${last} of ${this.historyTotal}`;
+      }
+      const from = this.historyPage * this.historySize + 1;
+      const to = Math.min(this.sessionIndex.length, from + this.historySize - 1);
+      return `${from}–${to} of ${this.sessionIndex.length}`;
+    },
+    // ── the record's figures (RM-121) ───────────────────────────────────────
+    // The four sleeves in published order, as table columns.
+    // `short` heads a column on a phone, where four full names do not fit.
+    sleeveColumns() {
+      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), short: this.bucketShort(key) || bucketLabel(key), hue: bucketHue(key, i) }));
+    },
+    // A subject whose sessions recommend sleeve weights reads as a weights
+    // history; any other reads as a verdict history.
+    isWeightsSubject() {
+      return this.isFramework() || this.subject?.recommendationType === "bucket_weights"
+        || this.sessions.some((r) => r?.swarmRecommendation?.type === "bucket_weights");
+    },
+    // The history's one row when it has none: before the first session, or a
+    // search that matched nothing.
+    historyEmptyLabel() { return this.historyQuery ? "No session matches" : "No session published yet"; },
+    // A row's recommended weights in column order, percent, null where absent.
+    rowWeights(row) {
+      const rows = this.sessionWeights(row) || [];
+      return BUCKET_ORDER.map((key) => {
+        const hit = rows.find((r) => r.key === key);
+        return hit ? hit.pct : null;
+      });
+    },
+    // The target a row is measured against: the one its brief handed over, else
+    // the published target when it was already in force that day.
+    rowReference(row) { return row?.reference || targetsInForce(this.allocationFw, row?.date); },
+    // The moves a row recommends against rowReference(). No reference, no
+    // moves: a target published after the session is never read back onto it.
+    // The history table measures every row this way, the latest included.
+    rowMoves(row) { return this.movesAgainst(row, this.rowReference(row)); },
+    // The move in one sleeve's cell, beside its weight, or null when it did not
+    // move: the history table carries each change in its own column rather
+    // than in a last column that named every sleeve again.
+    /** @param {any} row @param {number} i */
+    moveAt(row, i) {
+      const key = this.sleeveColumns()[i]?.key;
+      return (this.rowMoves(row) || []).find((m) => m.key === key) || null;
+    },
+    // A weights row's state when its cells cannot say it: nothing loaded,
+    // nothing published, or no target to measure the weights against.
+    /** @param {any} row */
+    rowState(row) {
+      if (row?.failed) return "Could not be loaded";
+      // A row of this weights table that carries no weights: a rollup with
+      // none, or one typed position_actions on a weights subject.
+      if (this.rowWeights(row).every((v) => v == null)) return row?.swarmRecommendation ? "No weights published" : "No recommendation published";
+      if (!this.recommendation(row)) return "No recommendation published";
+      return this.rowMoves(row) == null ? "No target recorded" : "";
+    },
+    movesAgainst(row, ref) {
+      if (!ref) return null;
+      const w = this.rowWeights(row);
+      if (w.every((v) => v == null)) return null;
+      return BUCKET_ORDER.map((key, i) => {
+        const was = ref[key];
+        const d = weightChange.weightDelta(w[i], was == null ? null : was);
+        return { key, label: bucketLabel(key), was, d };
+      }).filter((m) => m.d != null && m.d !== 0);
+    },
+    outcomeAgainst(row, moves, basis) {
+      const rec = row?.swarmRecommendation;
+      if (rec?.type !== "bucket_weights") return this.actionsOutcome(row);
+      // No weights, no outcome: the history cell and the latest block each
+      // say "no recommendation" in their own words, so this adds nothing.
+      if (!this.rowWeights(row).some((v) => v != null)) return "";
+      if (moves == null) return "No target recorded";
+      return weightsOutcomeLine(moves.length, basis);
+    },
+    // The latest recommendation is measured as its session page measures it
+    // (gapBasis there): against the book when the session read one, on or
+    // before its date, and the framework's token lists can sum it into
+    // sleeves; against its target otherwise. bookSleeveShares() is the one
+    // reading of the book both pages call. Percent by sleeve, or null.
+    latestBookWeights() {
+      const row = this.latest();
+      if (!row || this.isFramework()) return null;
+      /** @type {Record<string, number>} */
+      const out = {};
+      for (const [id, share] of bookSleeveShares(this.allocationFramework, this.latestBook(), row.date)) {
+        const i = bucketRank(id);
+        if (i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = share * 100;
+      }
+      return Object.keys(out).length ? out : null;
+    },
+    latestBasis() { return this.latestBookWeights() ? "book" : "target"; },
+    latestReference() { return this.latestBookWeights() || this.rowReference(this.latest()); },
+    latestMoves() { return this.movesAgainst(this.latest(), this.latestReference()); },
+    latestOutcome() { return this.outcomeAgainst(this.latest(), this.latestMoves(), this.latestBasis()); },
+    // The latest review's legend: each sleeve, its recommended weight, and its
+    // move against what that session is measured against (latestReference).
+    latestLegend() {
+      const row = this.latest();
+      const w = this.rowWeights(row);
+      const ref = this.latestReference();
+      return this.sleeveColumns().map((c, i) => {
+        const was = ref ? ref[c.key] : null;
+        return { ...c, pct: w[i], was: was == null ? null : was, d: ref ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
+      }).filter((r) => r.pct != null);
+    },
+    // The explorer for the latest review: the recommended mix on a weights
+    // subject, the book on that session's date with its actions otherwise.
+    latestActions() {
+      const rec = this.latest()?.swarmRecommendation;
+      // Rollups aggregated 2026-08-06 to 09-04 carry two hardcoded actions
+      // derived from no member input (see the session page's authoredActions).
+      if (!rec || rec.quorum || rec.stances) return [];
+      return (Array.isArray(rec.actions) ? rec.actions : []).filter((a) => a && a.action);
+    },
+    latestBook() {
+      const d = this.latest()?.date;
+      return d ? pickSnapshotFor(this.snapshots, d) : null;
+    },
+    hasBook() { return this.recommendation(this.latest())?.kind !== "weights" && !!this.latestBook() && this.latestActions().length > 0; },
+    hasExplorer() { return this.recommendation(this.latest())?.kind === "weights" || this.hasBook(); },
+    // A weights subject's session recommends only when it publishes weights.
+    hasLatestRecommendation() {
+      const r = this.recommendation(this.latest());
+      return this.isWeightsSubject() ? r?.kind === "weights" : !!r;
+    },
+    // The latest session's own words: its rationale, or its synthesis when it
+    // is not a rollup's. A rollup's synthesis is a template over the tally
+    // printed under it ("3 of 7 members … Stance split: 3 constructive"), and
+    // the session page leaves it out for the same reason.
+    latestProse() {
+      const s = this.latest();
+      const rec = s?.swarmRecommendation;
+      return this.rationaleOf(s) || (rec && (rec.quorum || rec.stances) ? "" : s?.synthesis || "");
+    },
+    explorerSource() { return this.latest(); },
+    explorerSvg() {
+      return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.latest());
+    },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    // The centre speaks for the row in focus. At rest a recommended mix reads
+    // "Recommended", as it does on the session page and /swarm, so one ring
+    // means one thing on every page. The book the latest session read is the
+    // Holdings figure while it is still the newest snapshot; once newer
+    // snapshots land, this is the only place the page gives the total of the
+    // book the recommendation acted on.
+    explorerCenter() {
+      if (!this.hasBook()) return { value: "", label: "Recommended" };
+      const book = this.latestBook();
+      const newest = String(book?.date || "").slice(0, 10) === String(this.snapshot?.date || "").slice(0, 10);
+      return book && !newest ? { value: this.fmtUsdShort(book.totalValueUsd), label: "Holdings" } : { value: "", label: "" };
+    },
+    fmtUsdShort(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "—";
+      return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
+    },
+    // One palette per book: the ring, the positions table and its share bars,
+    // and the chart's bands. A named position keeps one hue on all of them;
+    // only what both the chart and the ring fold into "other" is grey. The ring
+    // is read from latestBook() directly: explorerRows() calls bookColour(),
+    // so reading it here would recurse.
+    bookPalette() {
+      const ring = (this.latestBook()?.positions || [])
+        .map((p) => ({ token: String(p.token || p.symbol || ""), value: Number(p.value_usd ?? p.valueUsd) || 0 }))
+        .filter((p) => p.token).sort((a, b) => b.value - a.value).slice(0, 7).map((p) => p.token);
+      const tokens = [...this.chartTokens(), ...ring, ...this.latestActions().map((a) => a.token)];
+      return resolveTokenColors([...new Set(tokens.filter(Boolean))], [OTHER_COLOR]);
+    },
+    bookColour(token) { return this.bookPalette()[token] || assetDot(token); },
+    explorerRows() {
+      if (this.hasBook()) return bookExplorerRows(this.latestBook(), this.latestActions(), (t) => this.bookColour(t), (v) => this.fmtUsd(v));
+      const row = this.latest();
+      const legend = this.latestLegend();
+      const sleeveWeight = new Map(legend.map((r) => [normKeyOf(r.key), r.pct == null ? null : r.pct / 100]));
+      const within = new Map(withinBucketsFor(row?.swarmRecommendation, this.brief, null, sleeveWeight).map((w) => [normKeyOf(w.bucket), w]));
+      return legend.map((r) => ({
+        ...r,
+        meta: "", action: "", rationale: "",
+        basis: this.latestBasis(),
+        assets: explorerAssets(within.get(normKeyOf(r.label)) || within.get(normKeyOf(r.key)), r.pct),
       }));
     },
-    // One sentence saying what this page is. It replaced a three-figure stat
-    // strip whose "top position" was the fourth place the same holding appeared,
-    // and which never told a reader what a "subject" actually is.
-    summaryLine() {
-      const worth = this.snapshot ? `It holds ${this.fmtUsd(this.snapshot.totalValueUsd)} today` : null;
-      const n = this.sessions.length;
-      const oldest = n ? this.sessions[n - 1].date : null;
-      const since = oldest ? this.formatDate(oldest, "long").replace(/\s*\d{1,2},\s*/, " ") : null;
-      const reviewed = !n
-        ? "The swarm has not reviewed it yet"
-        : `the swarm has reviewed it ${n === 1 ? "once" : n + " times"}${since ? " since " + since : ""}`;
-      const parts = ["This is a portfolio the Robot Money Investment Swarm reviews."];
-      parts.push(worth ? `${worth} and ${reviewed}.` : `${reviewed[0].toUpperCase()}${reviewed.slice(1)}.`);
-      return parts.join(" ");
-    },
+    pctLabel(v) { return weightChange.fmtPctTrim(v); },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    sessionsJsonHref() { return ROUTES.swarm.sessions; },
+    // What KIND of subject this is, from the record rather than from the slug.
+    // A `framework` subject is the allocation recipe and has no book: its own
+    // structural notes open with "no portfolio to scrape", which the page was
+    // contradicting one line above them by calling it a portfolio.
+    isFramework() { return this.subject?.source?.type === "framework"; },
+    subjectKind() { return this.subjectKindOf(this.subject); },
+    operatorLabel() { return this.operatorOf(this.subject); },
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
       return (this.snapshot?.positions || [])
@@ -1200,34 +1891,8 @@ export function registerStaticViews(Alpine) {
     // share its figure, so WOON can be sand here and cyan elsewhere. That is the
     // right trade: an unmapped symbol has no identity to protect, and within one
     // figure being TELLABLE APART beats being globally stable.
-    chartColors() {
-      const tokens = this.chartTokens();
-      const out = {};
-      const used = new Set([OTHER_COLOR]);
-      for (const token of tokens) {
-        const owned = ASSET_DOT[token];
-        if (owned && !used.has(owned)) {
-          out[token] = owned;
-          used.add(owned);
-        }
-      }
-      // Slate is withheld from the fallback pool: the covenant spends it on
-      // muted references and baselines, and a 36%-of-NAV holding is not a
-      // reference — drawn slate it reads as the leftovers bucket. Only a book
-      // deep enough to exhaust every other hue falls back to it.
-      const pool = CATEGORICAL.filter((hue) => hue !== SERIES.slate);
-      for (const token of tokens) {
-        if (out[token]) continue;
-        const hashed = assetDot(token);
-        const free = hashed !== SERIES.slate && !used.has(hashed);
-        const color = free
-          ? hashed
-          : (pool.find((hue) => !used.has(hue)) || CATEGORICAL.find((hue) => !used.has(hue)) || hashed);
-        out[token] = color;
-        used.add(color);
-      }
-      return out;
-    },
+    // Chart tokens lead bookPalette()'s list, so the bands still claim first.
+    chartColors() { return this.bookPalette(); },
     // The snapshots inside the chart window, oldest first.
     //
     // Calendar days, not readings. This was `slice(-windowDays)`, which cut the
@@ -1236,7 +1901,7 @@ export function registerStaticViews(Alpine) {
     // said 9 readings. Fall back to the old cut only if the dates are unusable,
     // and never return fewer than the two points a series needs.
     windowed() {
-      const all = this.snapshots;
+      const all = this.isVaultStack() ? this.stackSnapshots() : this.snapshots;
       if (all.length < 2) return all;
       const day = (s) => Date.parse(`${s?.date}T00:00:00Z`);
       const last = day(all[all.length - 1]);
@@ -1276,6 +1941,7 @@ export function registerStaticViews(Alpine) {
     // only the bottom band has a flat baseline — every band above it is sheared
     // by the ones below, so the position that matters most gets the honest edge.
     concentrationSeries() {
+      if (this.isVaultStack()) return this.vaultSeries();
       const rows = this.windowed();
       const tokens = this.chartTokens();
       if (rows.length < 2 || !tokens.length) return [];
@@ -1301,26 +1967,36 @@ export function registerStaticViews(Alpine) {
       }
       return bands;
     },
-    // The legend: swatch, token, and its share on the most recent reading. The
-    // panel previously shipped no legend at all, so six unlabelled lines could
-    // only be decoded against a 14px rule in the table further down the page.
+    // The legend: swatch and token. The latest reading's share of each is the
+    // positions table's Share column above, and every reading's is in the
+    // crosshair tip. The panel previously shipped no legend at all, so six
+    // unlabelled lines could only be decoded against a 14px rule in the table
+    // further down the page.
     concentrationLegend() {
       const series = this.concentrationSeries();
       if (!series.length) return [];
-      return series.map((b) => ({
+      const items = series.map((b) => ({
         token: b.token,
+        // The residual band's key is lowercase; printed as-is it reads as one
+        // more token among the symbols. Keys and focus stay on `token`.
+        label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token),
         color: b.color,
-        pct: this.fmtPct1(b.shares[b.shares.length - 1] || 0),
-      })).reverse(); // top band first, so the legend reads down the stack
+        mark: b.mark,
+      })); // largest first: the legend runs left to right under the chart
+      // The vault stack's target lines, when any reading has a target, named
+      // by what they are: the router's applied weights, or the framework's.
+      if (this.isVaultStack() && this.vaultTargetLines().length) items.push({ token: "target", label: this.stackTargetName(), target: true });
+      return items;
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
-    // them days would misdescribe the x-axis.
-    spanLabel() {
+    // them days would misdescribe the x-axis. The span is the axis's own first
+    // and last ticks.
+    chartSpan() {
       const w = this.windowed();
-      if (w.length < 2) return "";
-      return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} readings`;
+      return w.length < 2 ? "" : `${w.length} readings`;
     },
+    // ── the book over time (RM-121) ─────────────────────────────────────────
     // Share-of-NAV over time, one stacked BAND per position. A holdings table is
     // a single day; the question a reader has is whether the book is
     // concentrating or diversifying, and only a series answers that.
@@ -1330,63 +2006,493 @@ export function registerStaticViews(Alpine) {
     // top of each other (the vault subject holds MORPHO/AAVE/COMPOUND at 33.3%
     // each and rendered as ONE line), and the long tail of sub-5% holdings piles
     // into an unreadable tangle along the axis. Stacked to a fixed 100%, share
-    // is read as area — equal weights are three equal bands, and "is one
-    // position taking over" is the bottom band's height, no decoding required.
+    // is read as area: equal weights are three equal bands, and "is one position
+    // taking over" is the bottom band's height.
     //
-    // This does put cyan on screen as a mass where the brand grammar wants it as
-    // a line, on any book whose largest holding happens to be ROBOTMONEY.
-    // David's explicit call: legibility of the part-to-whole read wins here, and
-    // this panel now matches what robotmoney.net has always published.
-    concentrationArea() {
+    // Geometry lives in a 1000 x 100 unit box that stretches to the column, and
+    // every label (the axes, the ticks, the tooltip) is HTML over it, so text
+    // stays at its real size at any width instead of scaling with the SVG.
+    // The chart's empty frame: a line needs two readings.
+    chartEmptyLabel() { return this.windowed().length > 1 ? "No positions to draw" : "One reading so far"; },
+    chartModel() {
       const rows = this.windowed();
       const series = this.concentrationSeries();
-      if (rows.length < 2 || !series.length) return "";
-      const W = 640, H = 150, padB = 16, padT = 4, padL = 28;
-      const plotH = H - padB - padT;
-      const y = (frac) => padT + plotH - this.clampPct(frac * 100) / 100 * plotH;
+      if (rows.length < 2 || !series.length) return null;
       // x by DATE, not by index. The archive path carries one reading per
       // session rather than one per day, so evenly-spaced points drew a
-      // three-week gap the same width as a one-day one and made a stale book
-      // look continuously observed. Index spacing stays as the fallback for
-      // snapshots whose dates will not parse.
-      const stamps = rows.map((r) => Date.parse(`${r?.date}T00:00:00Z`));
-      const dated = stamps.every((t) => Number.isFinite(t)) && stamps[stamps.length - 1] > stamps[0];
-      const plotW = W - padL;
-      const span = dated ? stamps[stamps.length - 1] - stamps[0] : 0;
-      const xs = rows.map((_, i) => (dated
-        ? padL + plotW * ((stamps[i] - stamps[0]) / span)
-        : padL + plotW * (i / (rows.length - 1))));
-      // Bands are drawn bottom-up over a running baseline. Each polygon runs
-      // along its own top edge left-to-right, then back along the baseline
-      // beneath it — so the band's height at any x IS that position's share.
-      const base = rows.map(() => 0);
-      const bands = series.map((b) => {
-        const top = base.map((v, i) => v + b.shares[i]);
-        const upper = top.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`);
-        const lower = base.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`).reverse();
-        for (let i = 0; i < base.length; i++) base[i] = top[i];
-        // A hairline in the page ground separates neighbours, so two adjacent
-        // hues of similar value still read as two bands rather than one blur.
-        return `<polygon points="${upper.concat(lower).join(" ")}" fill="${b.color}"
-          stroke="var(--color-deep)" stroke-width="1" stroke-linejoin="round"/>`;
-      }).join("");
-      // Drawn ON TOP of the fills, and in a light wash rather than the dim slate
-      // a gridline takes on an empty ground — over a saturated band, slate is
-      // invisible. 50% is the line a single position crosses when it becomes the
-      // majority of the book, which is the one threshold this panel exists to
-      // show. 0 and 100 need no label: the stack fills the frame by construction.
-      const mid = `<line x1="${padL}" y1="${y(0.5).toFixed(1)}" x2="${W}" y2="${y(0.5).toFixed(1)}"
-          stroke="rgba(255,255,255,0.32)" stroke-width="1" stroke-dasharray="3 4"/>
-        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
-      const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
-      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
-        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
-      // The legend is HTML beside the figure, so the accessible name here spells
-      // out what the bands are for a reader who gets only the image.
-      const named = series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Top positions as a share of net asset value, stacked to 100%, ${this.escapeHtml(rows[0].date || "")} to ${this.escapeHtml(rows[rows.length - 1].date || "")}. Latest reading, largest first: ${this.escapeHtml(named)}.">
-        ${bands}${mid}${axis}${ends}</svg>`;
+      // three-week gap the same width as a one-day one. Index spacing stays as
+      // the fallback for snapshots whose dates will not parse.
+      return { rows, series, xs: shareChartXs(rows.map((r) => r?.date)) };
+    },
+    // The bands, bottom-up over a running baseline, the largest position on the
+    // bottom (only the bottom band has a flat, honest baseline). Each band is a
+    // calm fill with a crisp top edge in its own colour, separated from its
+    // neighbour by a hairline of the page ground.
+    chartSvg() {
+      const m = this.chartModel();
+      if (!m) return "";
+      // The vault stack's target over the bands: one dashed line per boundary
+      // between vaults, in one neutral colour, never a vault's hue.
+      const overlay = this.isVaultStack()
+        ? this.vaultTargetLines().map((points) => `<polyline data-token="target" points="${points}" fill="none" style="stroke:var(--color-text-soft)"`
+          + ` stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`).join("")
+        : "";
+      return shareChartSvg({ xs: m.xs, series: m.series, overlay });
+    },
+    chartLabel() {
+      const m = this.chartModel();
+      if (!m) return "";
+      const named = m.series.map((b) => `${b.label ?? b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
+      const span = `${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}`;
+      if (this.isVaultStack()) {
+        const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
+        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
+        const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
+        return `Share of the book by vault, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
+      }
+      return `Share of the book by position, stacked to 100%, ${span}. Latest reading, top band first: ${named}. Use the arrow keys to step through the readings.`;
+    },
+    // A tick under every reading, month and day; the ones between the ends drop
+    // out on a narrow screen. The last reading's year is the positions label's
+    // above the chart, so the first tick carries its own year only when it
+    // differs (windowed() can fall back to two readings a year or more apart).
+    // Past eight readings only every step-th is dated, or 69 dates print over
+    // one another (the vault subject on production); the rest show under the
+    // crosshair.
+    chartXTicks() {
+      const m = this.chartModel();
+      if (!m) return [];
+      const md = (d) => { try { return new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); } catch (_) { return d; } };
+      const lastYear = String(m.rows[m.rows.length - 1]?.date || "").slice(0, 4);
+      return shareChartTicks(m.rows.map((r) => r.date), m.xs,
+        (d, first) => (first && String(d || "").slice(0, 4) !== lastYear ? this.formatDate(d, "short") : md(d)));
+    },
+    // One reading, for the crosshair and its tooltip: every band's share on
+    // that date, top band first, as the stack reads.
+    chartPoint(i) {
+      const m = this.chartModel();
+      if (!m || i == null || !m.rows[i]) return null;
+      const snap = m.rows[i];
+      const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd);
+      return {
+        left: m.xs[i] / 10,
+        date: this.formatDate(snap.date, "short"),
+        total: Number.isFinite(total) && total > 0 ? this.fmtUsd(total) : "",
+        // Positions the book did not hold on that date are left out.
+        items: m.series.filter((b) => (b.shares[i] || 0) >= 0.0005)
+          .map((b) => ({ token: b.token, label: b.label ?? (b.token === OTHER_TOKEN ? "Other" : b.token), color: b.color, mark: b.mark, pct: this.fmtPct1(b.shares[i] || 0) })).reverse(),
+      };
+    },
+    // The crosshair snaps to the nearest reading under the pointer.
+    chartMove(ev) {
+      const m = this.chartModel();
+      if (!m) return;
+      this.chartAt = nearestReading(m.xs, ev);
+    },
+    chartKey(ev) {
+      const m = this.chartModel();
+      if (!m) return;
+      const last = m.rows.length - 1;
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const from = this.chartAt ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+        this.chartAt = Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+      } else if (ev.key === "Home") { ev.preventDefault(); this.chartAt = 0; }
+      else if (ev.key === "End") { ev.preventDefault(); this.chartAt = last; }
+      else if (ev.key === "Escape") { this.chartAt = null; }
+    },
+    // A band in focus (from the legend): the others recede, as the ring's arcs
+    // do. Classes, not a redraw, so the fade runs on a transition.
+    syncBands(host) {
+      for (const el of host.querySelectorAll("[data-token]")) {
+        el.classList.toggle("is-muted", this.chartFocus !== null && el.getAttribute("data-token") !== this.chartFocus);
+      }
+    },
+    // ── the vault stack (the Robot Money Vault subject) ──────────────────────
+    // A PortfolioRouter and four leg vaults, one per sleeve. Its Holdings is
+    // one book grouped by vault: the total is the four vaults' sum, the ring
+    // is each vault's actual weight against the weights in force, and the
+    // chart stacks the vaults in their sleeves' hues with that target drawn
+    // over them. Every read below goes through stackSnapshots() and
+    // stackWalletList(), which are the devnet fixture's when the switch is on
+    // and the subject's own book otherwise.
+    isVaultStack() { return this.subject?.id === VAULT_SUBJECT_ID; },
+    // The page's lede. The vault's thesis_blurb is agent-facing session
+    // context written for the single Base vault, with the weights in it; the
+    // page states the subject only, however many vaults are live.
+    subjectLede() {
+      if (this.isVaultStack()) return "Depositor capital in the Robot Money vaults, one per sleeve. Distinct from the treasury wallet, which holds protocol-owned capital.";
+      return this.subject?.thesisBlurb || "";
+    },
+    // The devnet fixture's book is on (lib/vault-source.js): Holdings is test
+    // data, while the latest recommendation still reads the real book.
+    stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
+    // Off the devnet switch, Holdings is the vault feed: the read /allocation
+    // and every /vault page make (lib/vault-source.js loadVaultOverview), one
+    // reading, now. Not the subject's own snapshots: on production those are
+    // the treasury's book scaled by 0.7234 (ROBOT and ETH in a USDC lending
+    // vault, $33.6k against a $250 vault) and stopped on Aug 6, so the page
+    // printed a book no vault holds. The sessions still show the book they
+    // reviewed; this is what the vaults hold today. Until the feed answers,
+    // nothing, rather than the snapshot and then the feed.
+    stackSnapshots() {
+      if (this.vaultSnapshots) return this.vaultSnapshots;
+      const live = this.liveStackSnapshot();
+      return live ? [live] : [];
+    },
+    stackSnapshot() {
+      if (!this.vaultSnapshots) return this.liveStackSnapshot();
+      const list = this.vaultSnapshots;
+      return list.length ? normalizeSnapshot(list[list.length - 1]) : null;
+    },
+    // The feed as one reading of the book: every live vault's holdings (a
+    // lending vault's adapters and idle USDC), else the vault at its TVL.
+    liveStackSnapshot() {
+      const ov = this.vaultStack?.overview;
+      if (!ov || !this.vaultStackSettled || ov.combined?.tvlUsd == null) return null;
+      const positions = [];
+      for (const v of ov.vaults || []) {
+        if (v.availability !== "live") continue;
+        const holdings = Array.isArray(v.holdings) ? v.holdings : [];
+        if (holdings.length) {
+          for (const h of holdings) {
+            positions.push({ token: h.symbol || h.label, name: h.label, chain: "base", vault: v.slug, value_usd: Number(h.valueUsd) || 0 });
+          }
+        } else if (v.tvlUsd != null) {
+          positions.push({ token: v.symbol, name: v.symbol, chain: "base", vault: v.slug, value_usd: v.tvlUsd });
+        }
+      }
+      const at = ov.freshness?.indexedAt || ov.asOf;
+      return { date: at ? String(at).slice(0, 10) : "", totalValueUsd: ov.combined.tvlUsd, positions, live: true };
+    },
+    stackWalletList() {
+      if (this.vaultWallets) return this.vaultWallets;
+      return (this.subject?.wallets?.length ? this.subject.wallets : this.snapshot?.wallets) || [];
+    },
+    // The fixture labels the devnet book; the subject's own book carries none.
+    vaultStackLabel() { return this.vaultSnapshots ? DEVNET_LABEL : null; },
+    // The vault a position sits in. A book read before positions named their
+    // vault is the single rmUSDC vault's; once any position names one, a
+    // position that does not is unassigned rather than guessed.
+    vaultOf(p, snap) {
+      const named = String(p?.vault ?? "").toLowerCase();
+      if (VAULT_SLUGS.includes(named)) return named;
+      const anyNamed = (snap?.positions || []).some((x) => x?.vault != null && x.vault !== "");
+      return anyNamed ? null : "rmusdc";
+    },
+    // Each vault's value on one reading, and the unassigned rest.
+    vaultValuesOf(snap) {
+      /** @type {Record<string, number>} */
+      const out = {};
+      let unassigned = 0;
+      for (const p of snap?.positions || []) {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const v = this.vaultOf(p, snap);
+        if (v) out[v] = (out[v] || 0) + value;
+        else unassigned += value;
+      }
+      return { byVault: out, unassigned };
+    },
+    // Read from: the router (it holds nothing, so no value) and each vault
+    // with its sleeve and its value on the latest reading. A wallet that
+    // predates `kind` is the rmUSDC vault when it is rmUSDC's Base address.
+    stackWallets() {
+      const snap = this.stackSnapshot();
+      const { byVault } = this.vaultValuesOf(snap);
+      const rank = (w) => (w.kind === "router" ? -1 : w.vault ? VAULT_SLUGS.indexOf(w.vault) : VAULT_SLUGS.length);
+      return this.stackWalletList().filter(Boolean).map((w) => {
+        let kind = w.kind === "router" || w.kind === "vault" ? w.kind : null;
+        let id = kind === "vault" ? vaultBySlug(w.vault) || vaultForBucket(w.sleeve) : null;
+        if (!kind && String(w.address || "").toLowerCase() === VAULTS[0].baseAddress) {
+          kind = "vault";
+          id = VAULTS[0];
+        }
+        const value = kind === "vault" && id && byVault[id.slug] != null ? byVault[id.slug] : null;
+        return {
+          kind,
+          // The router by its role, whatever the feed calls it (the class
+          // name, PortfolioRouter, is not a reader's word).
+          name: id ? id.symbol : kind === "router" ? "Router" : w.label || w.name || "",
+          vault: id ? id.slug : null,
+          sleeve: id ? (vaultForBucket(w.sleeve) || id).name : "",
+          color: id ? id.color : null,
+          chain: w.chain || "",
+          address: w.address || w.addr || "",
+          value,
+        };
+      }).sort((a, b) => rank(a) - rank(b));
+    },
+    // The chains the stack is read on: the wallets', else the positions'.
+    stackChains() {
+      const chains = this.stackWallets().map((w) => w.chain);
+      for (const p of this.stackSnapshot()?.positions || []) chains.push(p?.chain);
+      return [...new Set(chains.filter(Boolean).map((c) => String(c)))];
+    },
+    // A Chain column only when the stack spans more than one chain; with one,
+    // the total's line names it once.
+    stackMultiChain() { return this.stackChains().length > 1; },
+    // An Address column only when some row has an address to show.
+    stackHasAddress() { return this.stackWallets().some((w) => !!w.address); },
+    // The total's line: the chain it is read on and the reading's date, so a
+    // total that differs from a vault page's names its own date.
+    vaultStatSub() {
+      return [
+        this.stackChains().map((c) => this.chainLabel(c)).join(", "),
+        this.stackSnapshot()?.date ? this.formatDate(this.stackSnapshot().date, "short") : "",
+      ].filter(Boolean).join(" · ");
+    },
+    // The latest reading grouped by vault, in published order, each with its
+    // value, its share of the book and its positions (largest first, each a
+    // share of the book). Positions with no vault close the list as
+    // "Unassigned", so the groups always add up to the total.
+    vaultGroups() {
+      const snap = this.stackSnapshot();
+      const total = Number(snap?.totalValueUsd) || 0;
+      const rows = (snap?.positions || []).map((p) => {
+        const value = Number(p?.value_usd ?? p?.valueUsd) || 0;
+        const vaultSlug = this.vaultOf(p, snap);
+        // The name the vault's own page gives the position.
+        return { ...p, vaultSlug, label: positionName(p, vaultSlug), value, share: total > 0 ? value / total : 0 };
+      });
+      const group = (identity, positions) => {
+        const value = positions.reduce((n, p) => n + p.value, 0);
+        return { ...identity, value, share: total > 0 ? value / total : 0, positions: positions.slice().sort((a, b) => b.value - a.value) };
+      };
+      const groups = VAULTS
+        .map((v) => ({ v, positions: rows.filter((r) => r.vaultSlug === v.slug) }))
+        .filter((g) => g.positions.length)
+        .map((g) => group(g.v, g.positions));
+      const rest = rows.filter((r) => !r.vaultSlug);
+      if (rest.length) groups.push(group({ slug: "unassigned", symbol: "Unassigned", name: "", color: null }, rest));
+      return groups;
+    },
+    // The weights in force on `date`, in basis points by vault slug: the
+    // router's applied weights once they were applied, else the published
+    // framework target in force that day. null when neither is complete, and
+    // until the vault overview has answered.
+    stackTargetAt(date) {
+      return this.stackTargetOf(date)?.by ?? null;
+    },
+    // The same, with where it came from: "applied" (the router's weights) or
+    // "target" (the framework's).
+    stackTargetOf(date) {
+      if (!this.vaultStackSettled || !date) return null;
+      const day = String(date).slice(0, 10);
+      const ov = this.vaultStack?.overview;
+      if (ov) {
+        const applied = VAULTS.map((v) => ov.vaults.find((r) => r.slug === v.slug)?.appliedBps ?? null);
+        const at = String(ov.router?.appliedAt || "").slice(0, 10);
+        if (layerComplete(applied) && at && at <= day) {
+          return { basis: "applied", by: Object.fromEntries(VAULTS.map((v, i) => [v.slug, applied[i]])) };
+        }
+      }
+      const fw = targetsInForce(this.allocationFw, day);
+      if (!fw) return null;
+      /** @type {Record<string, number>} */
+      const out = {};
+      for (const [key, pct] of Object.entries(fw)) {
+        const v = vaultForBucket(key);
+        if (v) out[v.slug] = Math.round(Number(pct) * 100);
+      }
+      return layerComplete(VAULTS.map((v) => out[v.slug])) ? { basis: "target", by: out } : null;
+    },
+    // The chart legend's name for the line over the bands: "Applied" when
+    // every reading it is drawn on used the router's weights, else "Target".
+    // The router's applied weights and the framework's are both the target in
+    // force (RM-115), so the line is named once.
+    stackTargetName() { return "Target"; },
+    // The ring: all four vaults, each at its actual weight on the latest
+    // reading, its value, the target in force on that date, and the drift
+    // between them (actual minus target, as /allocation's Vaults table has it).
+    vaultRingRows() {
+      const snap = this.stackSnapshot();
+      const groups = this.vaultGroups();
+      const target = snap ? this.stackTargetOf(snap.date) : null;
+      return VAULTS.map((v) => {
+        const g = groups.find((x) => x.slug === v.slug);
+        const pct = g ? g.share * 100 : 0;
+        const was = target ? target.by[v.slug] / 100 : null;
+        return {
+          key: v.slug, label: v.symbol, hue: v.color, pct, meta: "", value: g ? g.value : 0,
+          // Drift: this vault's share against the target, in points, as
+          // /allocation's Vaults table takes it.
+          was, d: was == null ? null : Math.round((pct - was) * 10) / 10,
+          basis: target?.basis ?? "target", action: "", rationale: "",
+          assets: (g?.positions || []).map((p) => ({
+            key: `${v.slug}-${p.token}-${p.chain}`,
+            label: positionName(p, v.slug),
+            colour: null,
+            ofSleeve: g && g.value > 0 ? (p.value / g.value) * 100 : null,
+            ofTotal: Number.isFinite(p.share) ? p.share * 100 : null,
+          })),
+        };
+      });
+    },
+    // The chart's bands: each vault's share of the book on every reading, in
+    // published order, a vault that holds nothing across the window left out.
+    // What no vault accounts for is the residual band.
+    vaultSeries() {
+      const rows = this.windowed();
+      if (rows.length < 2) return [];
+      const shares = rows.map((snap) => {
+        const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd ?? 0);
+        const { byVault } = this.vaultValuesOf(snap);
+        return (slug) => (total > 0 ? (byVault[slug] || 0) / total : 0);
+      });
+      const bands = VAULTS
+        .map((v) => ({ token: v.slug, label: v.name, color: v.color, mark: "series", shares: shares.map((at) => at(v.slug)) }))
+        .filter((b) => b.shares.some((s) => s > 0));
+      if (!bands.length) return [];
+      const other = rows.map((_, i) => Math.max(0, 1 - bands.reduce((sum, b) => sum + b.shares[i], 0)));
+      if (other.some((v) => v > 0.005)) bands.push({ token: OTHER_TOKEN, label: "Other", color: OTHER_COLOR, mark: undefined, shares: other });
+      return bands;
+    },
+    // The target over the bands, as the SVG points of each dashed line: one
+    // per boundary between neighbouring vaults, stepping at the reading where
+    // the target changes and broken where there is none. A boundary at 0 or
+    // 100% on every reading is the chart's own edge, and two boundaries that
+    // coincide (a vault targeted at 0%) are drawn once.
+    vaultTargetLines() {
+      const m = this.chartModel();
+      if (!m) return [];
+      const targets = m.rows.map((r) => this.stackTargetAt(r.date));
+      const seen = new Set();
+      const out = [];
+      for (let k = 1; k < VAULTS.length; k++) {
+        const cum = targets.map((t) => (t ? VAULTS.slice(0, k).reduce((n, v) => n + t[v.slug], 0) / 100 : null));
+        if (cum.every((c) => c == null || c <= 0 || c >= 100)) continue;
+        const segments = [];
+        let seg = null;
+        cum.forEach((c, i) => {
+          if (c == null) { seg = null; return; }
+          if (!seg) { seg = []; segments.push(seg); } else seg.push([m.xs[i], cum[i - 1]]);
+          seg.push([m.xs[i], c]);
+        });
+        const lines = segments.filter((s) => s.length > 1)
+          .map((s) => s.map(([x, c]) => `${x.toFixed(1)},${(100 - c).toFixed(2)}`).join(" "));
+        const sig = lines.join("|");
+        if (!sig || seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(...lines);
+      }
+      return out;
+    },
+    vaultUsd(v) { return fmtVaultUsd(v); },
+
+    // ── the vault stack's TVL over time ─────────────────────────────────────
+    // The combined value on every reading of the book: the devnet fixture's
+    // fifteen, one on Base (the feed reads one day). Neutral, not a vault's hue.
+    tvlPoints() {
+      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
+    },
+    tvlAsOf() { return this.vaultStack?.overview?.asOf; },
+    tvlColor() { return "var(--color-text-soft)"; },
+    tvlMark() { return ""; },
+    tvlName() { return "the Robot Money vaults"; },
+    // The router, by its address, under the total: it holds nothing, so it is
+    // a fact about the stack rather than a row among the vaults.
+    stackRouter() { return this.stackWallets().find((w) => w.kind === "router" && w.address) || null; },
+
+    // The vault stack's headline figures, first in the meta row: what it
+    // holds, what it has returned, and how many vaults take deposits. Return
+    // is each vault's share price against the 1.00 it opened at, weighted by
+    // what the vault holds; depositors show once a vault serves them.
+    stackFacts() {
+      const ov = this.vaultStack?.overview;
+      if (!ov) return [];
+      const live = (ov.vaults || []).filter((v) => v?.availability === "live");
+      const facts = [];
+      const tvl = Number(ov.combined?.tvlUsd ?? this.stackSnapshot()?.totalValueUsd);
+      if (Number.isFinite(tvl)) facts.push({ key: "tvl", label: "TVL", value: fmtVaultUsd(tvl) });
+      const priced = live.filter((v) => Number.isFinite(Number(v.sharePrice)) && Number(v.tvlUsd) > 0);
+      const held = priced.reduce((n, v) => n + Number(v.tvlUsd), 0);
+      if (held > 0) {
+        const r = priced.reduce((n, v) => n + (Number(v.sharePrice) - 1) * Number(v.tvlUsd), 0) / held;
+        const pct = Math.round(r * 10000) / 100;
+        facts.push({ key: "ret", label: "Return since launch", value: `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`, cls: this.changeClass(pct),
+          tip: "Each vault's share price against the 1.00 it opened at, weighted by what the vault holds." });
+      }
+      const details = live.map((v) => this.stackDetails[v.slug]).filter(Boolean);
+      const deps = details.filter((d) => Number.isFinite(Number(d.depositors)));
+      if (deps.some((d) => Number(d.depositors) > 0)) facts.push({ key: "dep", label: "Depositors", value: deps.reduce((n, d) => n + Number(d.depositors), 0).toLocaleString("en-US") });
+      if (ov.vaults?.length) facts.push({ key: "live", label: "Vaults live", value: `${live.length} of ${ov.vaults.length}` });
+      return facts;
+    },
+
+    // ── the vault stack's activity ──────────────────────────────────────────
+    async loadStackActivity(load) {
+      const ov = load?.overview;
+      if (!ov) return;
+      const rows = [];
+      let served = false;
+      for (const v of VAULTS) {
+        const row = ov.vaults?.find((r) => r.slug === v.slug);
+        if (row?.availability !== "live") continue;
+        const { detail } = await loadVaultDetail(v.slug, load).catch(() => ({ detail: null }));
+        if (detail) this.stackDetails = { ...this.stackDetails, [v.slug]: detail };
+        if (!Array.isArray(detail?.activity)) continue;
+        served = true;
+        for (const a of detail.activity) rows.push({ ...a, vault: v.slug, symbol: v.symbol, color: v.color });
+      }
+      this.stackActivity = served ? rows.sort((a, b) => (Date.parse(b?.t) || 0) - (Date.parse(a?.t) || 0)) : null;
+    },
+    stackActivityRows() {
+      const all = this.stackActivity || [];
+      return all.slice(this.stackActivityPage * 10, this.stackActivityPage * 10 + 10);
+    },
+    stackActivityPaged() { return (this.stackActivity || []).length > 10; },
+    stackActivityRange() {
+      const n = (this.stackActivity || []).length;
+      const from = this.stackActivityPage * 10 + 1;
+      return `${from}–${Math.min(n, from + 9)} of ${n}`;
+    },
+    stackActivityHasTx() { return (this.stackActivity || []).some((a) => !!a?.tx); },
+    activityEvent(a) {
+      const k = String(a?.kind ?? "").toLowerCase();
+      return k === "withdraw" || k === "withdrawal" ? "Withdrawal" : k === "deposit" ? "Deposit" : (k ? k[0].toUpperCase() + k.slice(1) : "—");
+    },
+    // What moved in the vault's own token, and its value: the USDC that went
+    // in or out, at $1.
+    activityAmount(a) {
+      const n = Number(a?.shares);
+      return a?.shares == null || !Number.isFinite(n) ? "—" : `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${a.symbol}`;
+    },
+    activityValue(a) { return a?.assets == null ? "—" : fmtVaultUsd(a.assets); },
+
+    // ── the Positions table's order ─────────────────────────────────────────
+    sortPositions(key) {
+      if (this.posSortKey === key) this.posSortDir = this.posSortDir === "desc" ? "asc" : "desc";
+      else { this.posSortKey = key; this.posSortDir = "desc"; }
+    },
+    posSortState(key) { return this.posSortKey === key ? (this.posSortDir === "desc" ? "descending" : "ascending") : "none"; },
+    /** @param {any[]} rows */
+    posSorted(rows) {
+      const key = this.posSortKey;
+      const val = (p) => Number(key === "amount" ? p.balance : key === "price" ? p.price_usd : key === "share" ? p.share : p.value);
+      const sign = this.posSortDir === "desc" ? -1 : 1;
+      return rows.slice().sort((a, b) => {
+        const x = val(a); const y = val(b);
+        if (!Number.isFinite(x) && !Number.isFinite(y)) return 0;
+        if (!Number.isFinite(x)) return 1;
+        if (!Number.isFinite(y)) return -1;
+        return sign * (x - y);
+      });
+    },
+    // By vault: each vault keeps its place in the published order, and the
+    // picked order sorts what it holds, so a sort never moves a vault.
+    groupedPositions() {
+      return this.vaultGroups().map((g) => ({ ...g, positions: this.posSorted(g.positions) }));
+    },
+    // Every position across the vaults in the picked order, each with its vault.
+    sortedPositions() {
+      return this.posSorted(this.vaultGroups().flatMap((g) => g.positions.map((p) => ({ ...p, group: g }))));
+    },
+    /** @param {string} slug */
+    togglePosGroup(slug) { this.posClosed = { ...this.posClosed, [slug]: !this.posClosed[slug] }; },
+    // A position's token contract, where the reading names one.
+    positionHref(p) {
+      const addr = p?.address || p?.token_address || p?.tokenAddress;
+      return addr ? this.explorerHref(p.chain, addr) : null;
     },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the
@@ -1409,10 +2515,41 @@ export function registerStaticViews(Alpine) {
       return (this.subject?.nftContracts || []).filter(Boolean).map((n) => ({
         name: n.name || n.label || String(n.address || "").slice(0, 10),
         chain: n.chain || "",
+        address: n.address || "",
       }));
     },
-    structuralNotes() {
-      return structuralNotesOf(this.subject);
+    // A table row names a token, so it takes that token's hue: the one the
+    // ring and the chart give it. Only a position neither figure names is grey.
+    positionColor(token) { return this.bookPalette()[token] || OTHER_COLOR; },
+    // Everything the book is read from, in one list: the tracked wallets, then
+    // the NFT contracts the operator declared (which are not valued).
+    bookSources() {
+      return [
+        ...this.trackedWallets().map((w) => ({ name: w.label || "wallet", kind: "Wallet", chain: w.chain, address: w.address })),
+        ...this.nftContracts().map((n) => ({ name: n.name, kind: "NFT contract", chain: n.chain, address: n.address })),
+      ];
+    },
+    // The chains the book is read on, in the order its wallets list them.
+    walletChains() {
+      return [...new Set(this.trackedWallets().map((w) => w.chain).filter(Boolean))];
+    },
+    // What the total spans and leaves out that the page does not already say:
+    // the chains (both tables drop their Chain column on a phone) and the NFT
+    // contracts it does not value. The date is the positions table's label and
+    // the count is its rows, so the date stays only when there is no table.
+    bookStatSub() {
+      const nft = this.nftContracts().length;
+      return [
+        this.positionRows().length ? "" : this.formatDate(this.snapshot?.date, "short"),
+        this.walletChains().map((c) => this.chainLabel(c)).join(", "),
+        nft ? `${nft === 1 ? "NFT contract" : "NFT contracts"} not valued` : "",
+      ].filter(Boolean).join(" · ");
+    },
+    // An address on a chain whose explorer is known. Base only for now; other
+    // chains print the address without a link rather than guess a URL.
+    explorerHref(chain, address) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(address || ""))) return "";
+      return String(chain).toLowerCase() === "base" ? `https://basescan.org/address/${address}` : "";
     },
     takeCountLabel(s) {
       const n = Number(s?.takes || 0);
@@ -1437,6 +2574,7 @@ export function registerStaticViews(Alpine) {
     sort: "newest",  // see sortedBy(): newest | oldest | confidence
     now: Date.now(), // stamped once — a track record does not need a ticker
     openTakes: {},   // take id → expanded
+    shown: 20,       // rows listed; "Show more" adds 20, a new sort or filter resets it
     // #687: the ref that failed to resolve, and the full roster to land on
     // instead of a blank profile. Kept distinct from `error` — this is not a
     // failure, it is the deliberate not-found render, and the two states show
@@ -1444,6 +2582,10 @@ export function registerStaticViews(Alpine) {
     notFound: false,
     attemptedRef: null,
     members: [],
+    // subject id → the subject record's name. A take row carries the name its
+    // session was filed under, which can lag a rename; /swarm and the subject
+    // page print the record's name, so this page does too.
+    subjectNames: {},
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       // The route this init is answering. Everything below runs after an await,
@@ -1485,8 +2627,14 @@ export function registerStaticViews(Alpine) {
         if (!this.member) {
           this.notFound = true;
           this.attemptedRef = memberId;
+          // The route-level title titleizes the missed ref, which names a
+          // member who does not exist ("Nobody Here").
+          if (location.pathname === routeAtEntry) document.title = "Member not found: Robot Money Investment Swarm";
           const res = await api.get(ROUTES.swarm.members).catch(() => null);
-          this.members = res?.members || [];
+          // The shipped archive's members stand in when the API is not there,
+          // so the roster still lists who the swarm is.
+          this.members = res?.members
+            || (await Promise.all(KNOWN_ARCHIVE_MEMBERS.map((id) => loadArchiveMember(id).catch(() => null)))).filter(Boolean);
           return;
         }
         // Both corrections below name this page after the record rather than
@@ -1513,8 +2661,13 @@ export function registerStaticViews(Alpine) {
           }
         }
         this.rows = await this.loadRows(memberId);
-      } catch (e) {
-        this.error = e.message || "Member not found";
+        try {
+          const ids = [...new Set(this.rows.map((r) => r.session.subjectId).filter(Boolean))];
+          const subs = await Promise.all(ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject).catch(() => null)) || loadArchiveSubject(id).catch(() => null)));
+          this.subjectNames = Object.fromEntries(ids.map((id, i) => [id, subs[i]?.name]).filter(([, n]) => n));
+        } catch (_) { /* the stored names stand */ }
+      } catch (_) {
+        this.error = "This member's record could not be loaded.";
       } finally {
         this.loading = false;
       }
@@ -1529,8 +2682,8 @@ export function registerStaticViews(Alpine) {
     // full history — and it cost 21 requests to get the wrong answer.
     async loadRows(memberId) {
       try {
-        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=50`);
-        return (res.takes || []).map((r) => ({
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=${MEMBER_TAKES_MAX}`);
+        const rows = (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
           // camelTake, not the raw row: raw takes carry no `permalinkId`, only
           // `id`/`member_id`, so takeHref() silently returned null for every
@@ -1538,6 +2691,19 @@ export function registerStaticViews(Alpine) {
           take: camelTake(r.take),
           phase: this.takePhase(r.sessionState),
         }));
+        // This route serves a session's state and not its deadline, so an
+        // overdue `collecting` row read as open here and as closed on /swarm
+        // and the session page (#570). The few rows still collecting read the
+        // deadline from their session, matched on the take itself.
+        await Promise.all(rows.filter((r) => r.phase === "live").map(async (r) => {
+          try {
+            const d = await api.get(path(ROUTES.swarm.session, { date: r.session.date, subject: r.session.subjectId }));
+            if (!(d?.takes || []).some((t) => t.id === r.take.id)) return;
+            r.session.windowClosesAt = camelSession(d.session).windowClosesAt;
+            r.phase = this.rowPhase(r.session);
+          } catch (_) { /* the state stands */ }
+        }));
+        return rows;
       } catch (_) {
         return this.scanSessions();
       }
@@ -1551,7 +2717,17 @@ export function registerStaticViews(Alpine) {
     // window can sit deep in a date-ordered list, so a naive slice would drop it
     // and the page would read "no sessions yet" right after a verified submit.
     async scanSessions() {
-      const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+      // The shipped archive stands in for the index when the API is not there
+      // (a backendless checkout), the same fallback the session and subject
+      // pages take, so a member's archived record still reads.
+      let all;
+      try {
+        all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+      } catch (_) {
+        all = ((await fetchJson("/data/swarm/sessions/index.json")).sessions || [])
+          .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name ?? s.subject_id, state: "published" }))
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      }
       const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judged"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
@@ -1576,7 +2752,7 @@ export function registerStaticViews(Alpine) {
           // from a real take `id` (never from `member_id`). loadArchiveSession
           // has already stamped `archival` on the ones it served.
           const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
-          return take ? { session, take, phase: this.takePhase(session.state) } : null;
+          return take ? { session, take, phase: this.rowPhase(session) } : null;
         })
         .filter(Boolean);
     },
@@ -1585,26 +2761,34 @@ export function registerStaticViews(Alpine) {
       if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
       return "published";
     },
+    // Only `collecting` turns on the deadline (lib/session-phase.js): past it,
+    // the window is shut whatever the row says, and nothing is working on it.
+    rowPhase(session) {
+      const p = this.takePhase(session?.state);
+      if (p !== "live" || !session?.windowClosesAt) return p;
+      return sessionPhase(session).isOpen ? "live" : "closed";
+    },
     // The same three words the swarm index, the apply page and the session
     // page use, from lib/session-phase.js. This page said "Collecting · window
     // open" where they said "collecting", which is one session reading as two
     // states depending on which page you were standing on. The pulsing mark on
     // .rm-sphase--open now carries what the extra words were carrying.
     //
-    // Still derived from the raw DB state, not from the deadline: the
-    // member-takes route does not serve windowClosesAt, so an overdue
-    // `collecting` row reads as open here and as closed everywhere else. That
-    // is issue #570's shape, and it needs the field before it can be fixed.
+    // An overdue `collecting` row reads "closed", as it does on /swarm and
+    // the session page (rowPhase()).
     phaseLabel(phase) {
       return phase === "live" ? "collecting"
         : phase === "closing" ? "aggregating"
+        : phase === "closed" ? "closed"
         : "published";
     },
     phaseChipClass(phase) {
-      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : "published";
+      const key = phase === "live" ? "open" : phase === "closing" ? "aggregating" : phase === "closed" ? "closed" : "published";
       return `rm-sphase rm-sphase--${key}`;
     },
     allTakes() { return this.member ? this.rows : []; },
+    // At the route's ceiling there may be more: the counts are the latest ones.
+    takesCapped() { return this.allTakes().length >= MEMBER_TAKES_MAX; },
     // The record at a glance. Counts every take, published or still collecting,
     // so a just-submitted one registers immediately rather than reading as zero
     // while its window is open. Conviction is the mean confidence across them.
@@ -1638,10 +2822,11 @@ export function registerStaticViews(Alpine) {
       for (const r of this.recentTakes()) {
         const cur = by.get(r.session.subjectId);
         if (cur) cur.count += 1;
-        else by.set(r.session.subjectId, { id: r.session.subjectId, name: r.session.subjectName || r.session.subjectId, count: 1 });
+        else by.set(r.session.subjectId, { id: r.session.subjectId, name: this.subjectNameOf(r.session), count: 1 });
       }
       return [...by.values()].sort((a, b) => b.count - a.count);
     },
+    subjectNameOf(s) { return this.subjectNames[s?.subjectId] || s?.subjectName || s?.subjectId || ""; },
     // ── When ─────────────────────────────────────────────────────────────────
     // TWO CLOCKS reach this page and they are not the same fact: the session's
     // date (when the room convened, and what every /swarm URL is keyed on) and
@@ -1686,7 +2871,7 @@ export function registerStaticViews(Alpine) {
     // "what did this member open with"; confidence answers "what has it argued
     // hardest", which is the question the Avg confidence figure above raises
     // and could not previously be followed up on.
-    setSort(key) { this.sort = key; },
+    setSort(key) { this.sort = key; this.shown = 20; },
     sortedBy(rows) {
       const at = (r) => Date.parse(String(this.filedAt(r) || "")) || 0;
       const copy = [...rows];
@@ -1704,7 +2889,7 @@ export function registerStaticViews(Alpine) {
       const rows = this.recentTakes();
       return this.sortedBy(this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows);
     },
-    filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; },
+    filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; this.shown = 20; },
 
     // ── Take body collapse ───────────────────────────────────────────────────
     // Bodies run to several hundred words across three sections. Collapsed by
@@ -1717,6 +2902,12 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
+    // The review band's vote and the recommendation ring, shared with /swarm
+    // and the subject page. Spread BEFORE this page's own keys, and nothing
+    // below redefines a name it carries: an own method of the same name would
+    // silently replace the one its siblings call through `this`.
+    ...sessionSummary,
+    ...sessionBrief(),
     loading: true,
     error: null,
     source: null,
@@ -1732,7 +2923,44 @@ export function registerStaticViews(Alpine) {
     brief: null,
     takes: [],
     members: [],
+    // subject id → name, for the brief's recent-session refs, which carry ids.
+    subjectNames: {},
+    // The sessions either side of this one on the same subject, for the
+    // record's own prev/next. Filled after render.
+    neighbours: { older: null, newer: null },
+    // A 404, as opposed to a load that failed: retrying cannot find a session
+    // that does not exist, so the page offers no retry for it.
+    notFound: false,
+    // A failed load offers a retry instead of a dead end.
+    retry() {
+      this.error = null;
+      this.notFound = false;
+      this.loading = true;
+      this.session = null;
+      this.init();
+    },
+    // The clock behind an open window's countdown, on /swarm's cadence.
+    now: Date.now(),
+    clock: null,
+    destroy() {
+      if (this.clock) { clearInterval(this.clock); this.clock = null; }
+    },
+    // A session still in its window, stated as /swarm's live strip states it,
+    // so the reader who followed "See full session" finds the same count and
+    // deadline here.
+    isLive() {
+      const k = this.session ? sessionPhase(this.session, this.now).key : "";
+      return k === "open" || k === "aggregating" || k === "closed";
+    },
+    filedCount() {
+      return this.isLive() && this.members.length ? `${this.takes.length} of ${this.members.length}` : String(this.takes.length);
+    },
+    windowLeft() { return this.isLive() ? timeLeft(this.session?.windowClosesAt, this.now) : ""; },
+    windowAgo() { return this.isLive() ? timeAgo(this.session?.windowClosesAt, this.now) : ""; },
+    windowAt() { return absoluteUtc(this.session?.windowClosesAt); },
     async init() {
+      if (!this.clock) this.clock = setInterval(() => { this.now = Date.now(); }, 30 * 1000);
+      const routeAtEntry = location.pathname;
       // TWO addressing forms reach this view:
       //   /swarm/sessions/<uuid>  — one exact session, the only form that can
       //                                 reach an earlier session of a day on which
@@ -1751,8 +2979,11 @@ export function registerStaticViews(Alpine) {
           const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
-        } catch (_) {
-          this.error = "Session not found";
+          this.loadEvidence();
+          this.syncTitle(routeAtEntry);
+        } catch (e) {
+          this.notFound = /** @type {any} */ (e)?.status === 404;
+          this.error = this.notFound ? "Session not found." : "This session could not be loaded.";
         } finally {
           this.loading = false;
         }
@@ -1760,7 +2991,8 @@ export function registerStaticViews(Alpine) {
       }
       const match = location.pathname.match(/^\/swarm\/(\d{4}-\d{2}-\d{2})\/([^/]+)/);
       if (!match) {
-        this.error = "Session not found";
+        this.notFound = true;
+        this.error = "Session not found.";
         this.loading = false;
         return;
       }
@@ -1775,6 +3007,8 @@ export function registerStaticViews(Alpine) {
         // in the database, the archive is a FALLBACK for checkouts with no
         // backend, not a competing source of truth for old dates.
         await this.loadApi(date, subject);
+        this.loadEvidence();
+        this.syncTitle(routeAtEntry);
       } catch (primary) {
         try {
           // Fall back to the static archive. It only carries dates through
@@ -1782,8 +3016,13 @@ export function registerStaticViews(Alpine) {
           // falling back is even worth attempting.
           if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
+          this.loadEvidence();
+          this.syncTitle(routeAtEntry);
         } catch (_) {
-          this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
+          // Not found when the API said so, or when the date is one the archive
+          // covers and it has no such session; any other failure can be retried.
+          this.notFound = /** @type {any} */ (primary)?.status === 404 || archivePreferred(date);
+          this.error = this.notFound ? "Session not found." : "This session could not be loaded.";
         }
       } finally {
         this.loading = false;
@@ -1794,8 +3033,11 @@ export function registerStaticViews(Alpine) {
       this.source = "archive";
       this.session = detail.session;
       this.takes = detail.takes;
+      // Same band the subject profile draws, fed this session's own reading.
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, v0: this.readingIsV0(this.session) });
       this.subject = await loadArchiveSubject(subject).catch(() => null);
-      this.snapshot = await loadArchiveSnapshot(subject, date);
+      // A framework has no book: see loadApi().
+      this.snapshot = this.isFramework() ? null : await loadArchiveSnapshot(subject, date);
       const ids = [...new Set([...this.takes.map((t) => t.memberId), ...KNOWN_ARCHIVE_MEMBERS])];
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
@@ -1811,22 +3053,24 @@ export function registerStaticViews(Alpine) {
     // as before. Everything after the fetch is shared, so the two addressing
     // forms cannot drift into rendering different pages.
     async loadApi(date, subject, preloaded = null) {
-      // Fetch subject + snapshots alongside the session so the live/API path
-      // renders the SAME reference experience as the archive path (charts +
-      // portfolio). Each side-fetch is independently guarded so a missing
-      // subject/snapshot never breaks the takes/session render.
+      // The brief THIS session opened with. Asked for by date, the API answers
+      // with that day's latest brief, which is the right one for the dated
+      // address (it opens the day's latest session) and the wrong one for an
+      // earlier session of the same day reached by its id (#965).
+      const sessionId = preloaded?.session?.id;
+      const briefQuery = sessionId ? { session: sessionId } : { date, subject };
+      // Each side-fetch is independently guarded so a missing subject, snapshot,
+      // brief, roster or framework never breaks the session render.
       const [detail, memberData, brief, subjectData, snapshotData, allocation, framework] = await Promise.all([
         preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
-        api.get(ROUTES.swarm.members),
-        api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
+        // Guarded like the rest. It was the one side-fetch that was not, so a
+        // roster that failed to load took the whole session down with it.
+        api.get(ROUTES.swarm.members).catch(() => ({ members: [] })),
+        api.get(ROUTES.swarm.brief, briefQuery).catch(() => null),
         api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
         api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
         // The allocation framework supplies the TARGET weight each bucket is
-        // measured against. Without it the bucket chart could only draw
-        // "Recommended", so a session that proposed 97/3 against a 95/5 target
-        // rendered as two bars with nothing to compare them to — the reader
-        // could not see that it deviated at all. Guarded like the other
-        // side-fetches: a missing framework degrades the chart, never the page.
+        // measured against when the brief did not hand the session one.
         api.get(ROUTES.dashboards.allocation).catch(() => null),
         // The published framework manifest, for the two things the dashboard
         // endpoint does not carry: which TOKENS belong to each bucket (without
@@ -1837,12 +3081,72 @@ export function registerStaticViews(Alpine) {
       this.source = "api";
       this.session = camelSession(detail.session);
       this.takes = (detail.takes || []).map(camelTake);
-      this.members = (memberData.members || []).map(camelMember);
-      this.subject = subjectData ? camelSubject(subjectData) : null;
-      this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
+      this.setBackdrop(this.session?.regimeSummary, { date: this.session?.date, v0: this.readingIsV0(this.session) });
+      this.members = (memberData?.members || []).map(camelMember);
+      // The API answers 200 with a null body for a subject it does not hold,
+      // which is every subject on a stack seeded without them. The checked-in
+      // manifest is what says whether this is a framework, so it is read the
+      // same way subjectProfile reads it.
+      this.subject = (subjectData ? camelSubject(subjectData) : null) || await loadArchiveSubject(subject).catch(() => null);
+      // A FRAMEWORK subject has no book, so it gets none, as on its subject
+      // page. The release smoke writes a fake basket into
+      // swarm_subject_snapshots for every subject that is not woon or mav, so
+      // this page drew "Portfolio read · $42,688" for robotmoney-allocation,
+      // whose own notes open with "no portfolio to scrape", and measured the
+      // recommendation's gaps against that invented book.
+      this.snapshot = this.isFramework() ? null : pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
       this.allocation = allocation;
       this.allocationFramework = framework;
+      this.subjectNames = { [this.session?.subjectId]: this.session?.subjectName };
+      const body = brief?.body || brief;
+      if ((body?.recentSessions || []).some((/** @type {any} */ r) => r?.subject_id && r.subject_id !== this.session?.subjectId)) {
+        this.loadSubjectNames();
+      }
+    },
+    // The live brief's recent-session refs name their subjects by id. The
+    // sessions list is the one public read that pairs an id with a name, the
+    // same list the subject page names them from. Not awaited: the refs read
+    // as ids until it lands, and as ids for good if it does not.
+    async loadSubjectNames() {
+      try {
+        const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
+        const names = { ...this.subjectNames };
+        for (const x of all) {
+          const sid = x.subjectId ?? x.subject_id;
+          const name = x.subjectName ?? x.subject_name;
+          if (sid && name && !names[sid]) names[sid] = name;
+        }
+        this.subjectNames = names;
+      } catch (_) { /* ids stand in for names */ }
+    },
+    isFramework() { return this.subject?.source?.type === "framework"; },
+    subjectHref() {
+      const id = this.session?.subjectId || this.subject?.id;
+      return id ? `/swarm/subjects/${encodeURIComponent(id)}` : "/swarm";
+    },
+    // The subject record's name, as /swarm and the subject page print it. The
+    // session stores the name it was filed under, which can lag a rename, so
+    // it is only the fallback when the subject record did not load.
+    subjectTitle() { return this.subject?.name || this.session?.subjectName || this.session?.subjectId || ""; },
+    // Route-level SEO titleizes the URL's slug ("Robotmoney Allocation"). Name
+    // the tab after the subject and the session's date once both are known,
+    // unless the visitor has already moved on: the loads are not cancelled
+    // when the router tears this view down.
+    /** @param {string} routeAtEntry */
+    syncTitle(routeAtEntry) {
+      const name = this.subjectTitle();
+      if (!name || !this.session?.date || location.pathname !== routeAtEntry) return;
+      document.title = `${name}, ${this.formatDate(this.session.date, "short")}: Robot Money Investment Swarm`;
+    },
+    // The session in the shape the shared review band reads (lib/
+    // session-summary.js): the record, with its takes on it as `takeRows`.
+    reviewRow() {
+      return this.session ? { ...this.session, takeRows: this.takes } : null;
+    },
+    hasReview() {
+      const row = this.reviewRow();
+      return Boolean(row) && (this.signalRows().length > 0 || this.voteTotal(row) > 0);
     },
     memberLens(memberId) {
       return this.memberById(memberId)?.lens || "swarm member";
@@ -1894,173 +3198,81 @@ export function registerStaticViews(Alpine) {
       return (this.session?.swarmRecommendation?.absent || [])
         .map((id) => this.memberById(id)?.name || id);
     },
-    // Stance distribution, largest first, with each share of the submitted
-    // takes — the proportional bar and the key both read from this so they can
-    // never disagree.
-    stanceSpread() {
-      const stances = this.session?.swarmRecommendation?.stances || {};
-      const total = Object.values(stances).reduce((sum, n) => sum + Number(n || 0), 0);
-      return Object.entries(stances)
-        .map(([stance, n]) => ({ stance, n: Number(n), pct: total ? (Number(n) / total) * 100 : 0 }))
-        .sort((a, b) => b.n - a.n || a.stance.localeCompare(b.stance));
-    },
-    // The recommendation block used to lead with turnout ("3/5", set in the
-    // largest type on the page) and leave the reader to tally the stance chips
-    // themselves. Turnout is procedural; the finding is the modal stance — or,
-    // when nothing outpolls anything else, that there ISN'T one. A split is a
-    // real swarm result and this page stated it nowhere.
-    verdict() {
-      const rows = this.stanceSpread();
-      if (!rows.length) return { label: "No stances recorded", detail: "", color: "#7e889e", split: true };
-      const submitted = rows.reduce((sum, r) => sum + r.n, 0);
-      const tied = rows.filter((r) => r.n === rows[0].n);
-      if (tied.length > 1) {
-        return {
-          label: "Split · no majority",
-          detail: `${tied.map((r) => r.stance).join(", ")} tied at ${rows[0].n} member${rows[0].n === 1 ? "" : "s"} each.`,
-          color: "#7e889e",
-          split: true,
-        };
-      }
-      return {
-        label: rows[0].stance,
-        detail: `${rows[0].n} of ${submitted} submitted take${submitted === 1 ? "" : "s"} took this position.`,
-        color: this.stanceColor(rows[0].stance),
-        split: false,
-      };
-    },
-    quorumText() {
-      const q = this.session?.swarmRecommendation?.quorum;
-      const submitted = q?.submitted ?? this.takes.length;
-      const active = q?.active ?? this.members.length;
-      return `${submitted} of ${active} submitted`;
-    },
-    // The Brief panel rendered "Subject: {name}. Regime: {label}." — the <h1>
-    // and a backdrop chip, restated in a half-width panel that was otherwise
-    // empty. Only the part a reader has not already seen earns the space.
-    briefExtra() {
-      const body = this.brief?.body || this.brief;
-      const n = Array.isArray(body?.researchSignals) ? body.researchSignals.length : 0;
-      return n ? `${n} research signal${n === 1 ? "" : "s"} were attached to the brief members received.` : "";
-    },
-    panelInputs() {
-      const r = this.session?.regimeSummary;
-      if (!r) return [];
-      return [
-        ["macro", r.macroPercentile, r.macroRegime],
-        ["onchain", r.onchainPercentile, r.onchainRegime],
-        ["factor", r.factorPercentile, r.factorRegime],
-      ].filter(([, pct]) => typeof pct === "number").map(([label, pct, regime]) => ({ label, pct, regime }));
-    },
-    // Panels reading the opposite way from the composite. This is the single
-    // most-argued fact on a session page — the 2026-06-19 vault synthesis opens
-    // on "on-chain at the 10th percentile dissents from a 71st-percentile
-    // composite" — and the panel drew three bars that left the reader to notice
-    // it. risk_on vs risk_off only; a neutral panel is not a dissent.
-    dissentingPanels() {
-      const head = String(this.session?.regimeSummary?.regime || "").replace(/-/g, "_");
-      if (head !== "risk_on" && head !== "risk_off") return [];
-      const opposite = head === "risk_on" ? "risk_off" : "risk_on";
-      return this.panelInputs().filter((p) => String(p.regime || "").replace(/-/g, "_") === opposite);
-    },
-    dissentLine() {
-      const out = this.dissentingPanels();
-      if (!out.length) return "";
-      const names = out.map((p) => `${p.label} at the ${this.ordinal(p.pct)}`).join(" and ");
-      const head = this.regimeLabel(this.session?.regimeSummary?.regime);
-      return `${names} — ${out.length === 1 ? "dissents" : "dissent"} from a ${head} composite`;
-    },
-    briefSummary() {
-      const body = this.brief?.body || this.brief;
-      if (!body) return "No brief available.";
-      const subject = body.subject?.name || this.session?.subjectName;
-      const regime = body.regime?.regime ? this.regimeLabel(body.regime.regime) : null;
-      const signals = Array.isArray(body.researchSignals) ? body.researchSignals.length : 0;
-      return [subject ? `Subject: ${subject}.` : "", regime ? `Regime: ${regime}.` : "", signals ? `${signals} research signals attached.` : ""].filter(Boolean).join(" ") || JSON.stringify(body).slice(0, 240);
-    },
-    recommendationKind() {
-      const rec = this.session?.swarmRecommendation;
-      if (!rec) return "none";
-      if (rec.quorum || rec.stances) return "rollup";
-      return rec.type ? String(rec.type).replace(/_/g, " ") : "recommendation";
-    },
     isRollupRecommendation() {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && (rec.quorum || rec.stances));
     },
     // The recommendation's own prose, or "" when it cannot be trusted.
     //
-    // On a rollup the aggregator currently fills `rationale` with the member
-    // take bodies concatenated: measured on 2026-09-25/mav it is 3714 characters
-    // and BYTE-IDENTICAL to session.synthesis. Printing it would repeat the same
-    // text a reader has already scrolled past under the takes, a third time,
-    // under a heading claiming it is the swarm's reasoning. This is the same
-    // judgement synthesisIsEcho() and consensusItems() already make elsewhere on
-    // this page; the fix belongs in the aggregator, and until it lands the page
-    // stays silent rather than pretending three quoted takes are a rationale.
+    // On a rollup the aggregator writes `rationale` from a template over the
+    // stance tally, the mean confidence and the regime percentile
+    // (domain.ts buildRationale), every one of which the review band draws. v0
+    // sessions carry a rationale somebody wrote, and that one is the reason
+    // behind the weights.
+    // The rule itself is sessionSummary.rationaleOf(), so the subject page and
+    // /swarm apply the same one.
     recommendationRationale() {
-      const rec = this.session?.swarmRecommendation;
-      if (!rec || this.isRollupRecommendation()) return "";
-      return rec.rationale || "";
+      return this.rationaleOf(this.session);
     },
-    // Legacy — present only on sessions published before #752 (D42,
-    // architecture.md §9.7). No session aggregated from now on carries an
-    // `actions` array; when present this is append-only history (two
-    // hardcoded USDC/rmUSDC rows derived from no member input) and the page
-    // labels it as pre-#752 output rather than swarm-derived. See
-    // session.html's `.sv__rec-actions` block.
+    // The recommendation's `actions`, as the payload carries them. Rollups
+    // aggregated between 2026-08-06 and 2026-09-04 carry the same two
+    // hardcoded rows (USDC rotate, rmUSDC add) on every subject, derived from
+    // no member input (pre-#752, D42 §9.7); v0 sessions carry actions their
+    // members wrote. authoredActions() is the half this page draws.
     recommendationActions() {
       return this.session?.swarmRecommendation?.actions || [];
+    },
+    authoredActions() {
+      if (this.isRollupRecommendation()) return [];
+      return this.recommendationActions().filter((a) => a && a.action);
     },
     hasRecommendationDetail() {
       return !!(this.isBucketWeights() || this.recommendationActions().length || this.recommendationRationale());
     },
+    // The largest position first, which the subject page's holdings table
+    // already does. The table takes the first eight, and unsorted that was the
+    // first eight the snapshot happened to list.
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
-      return (this.snapshot?.positions || []).map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }));
+      return (this.snapshot?.positions || [])
+        .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
+        .sort((a, b) => b.share - a.share);
     },
-    donutStyle(p, i) {
-      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
-      return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
+    // The book's date, only when it is not the session's own: pickSnapshotFor
+    // falls back to an earlier snapshot, or the latest when none precedes it.
+    bookDate() {
+      const d = String(this.snapshot?.date || "").slice(0, 10);
+      return d && d !== String(this.session?.date || "").slice(0, 10) ? this.formatDate(d, "short") : "";
+    },
+    // Keyed the way the subject page keys the same book: named tokens keep the
+    // colour they own and the rest take a free one, resolved over the rows
+    // this table draws, so no two rows share a key.
+    tokenColor(token) {
+      const tokens = [...this.positionRows().slice(0, 8).map((p) => p.token), ...this.authoredActions().map((a) => a.token)];
+      return resolveTokenColors([...new Set(tokens)])[token] || assetDot(token);
+    },
+    // The holdings table lists every position, and the palette keys eight.
+    // A position past those, and not named by an action, goes grey instead of
+    // hashing onto a hue a keyed row already wears.
+    holdingColor(token) {
+      const keyed = this.positionRows().slice(0, 8).some((p) => p.token === token) || this.authoredActions().some((a) => a.token === token);
+      return keyed ? this.tokenColor(token) : OTHER_COLOR;
+    },
+    // The snapshot's notable lines, minus the ones that are the subject's own
+    // operator notes, which the handover already prints under that name.
+    notableItems() {
+      const body = this.brief?.body || this.brief;
+      const raw = body?.subject?.structuralNotes ?? body?.subject?.structural_notes ?? this.subject?.structuralNotes ?? [];
+      const notes = new Set((Array.isArray(raw) ? raw : [raw]).map((n) => this.normText(n)).filter(Boolean));
+      return (this.snapshot?.notable || []).filter((n) => !notes.has(this.normText(n)));
     },
     humanize(id) {
       return humanizeLabel(id);
     },
-    // Inline-SVG panel-divergence bars (macro/onchain/factor percentiles) with a
-    // dashed 50th-percentile reference line — mirrors the reference
-    // PanelDivergenceBars. Consumes panelInputs() (pct is 0-1). Renders nothing
-    // below 2 panels so it never shows an empty axis.
-    panelDivergenceBars() {
-      const rows = this.panelInputs().filter((p) => Number.isFinite(Number(p.pct)));
-      if (rows.length < 2) return "";
-      const W = 240, labelW = 56, barW = W - labelW, rowH = 16, rowGap = 4;
-      const H = rows.length * rowH + (rows.length - 1) * rowGap + 6;
-      const tick = (p) => labelW + p * barW;
-      const body = rows.map((r, i) => {
-        const y = i * (rowH + rowGap);
-        const pct = this.clampPct(r.pct * 100) / 100;
-        const ty = (y + rowH * 0.7).toFixed(1);
-        // Each panel's bar takes its OWN regime colour. Drawn in one flat accent
-        // these three bars said only "how high", so a panel reading risk-off
-        // looked exactly like the two reading risk-on and the disagreement the
-        // members are arguing about was invisible in the figure.
-        const fill = this.regimeColor(r.regime);
-        return `<g>
-          <text x="0" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
-          <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
-          <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="${fill}" fill-opacity="0.75"/>
-          <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.ordinal(r.pct)}</text>
-        </g>`;
-      }).join("");
-      return `<svg viewBox="0 0 ${W + 32} ${H}" role="img" aria-label="Panel percentile divergence with 50th-percentile reference">
-        ${body}
-        <line x1="${tick(0.5).toFixed(1)}" x2="${tick(0.5).toFixed(1)}" y1="2" y2="${H - 2}" stroke="var(--color-border)" stroke-dasharray="2 2"/>
-      </svg>`;
-    },
-    // Normalize a bucket_weights recommendation into rows the bar chart can draw.
+    // Normalize a bucket_weights recommendation into rows the outcome can draw.
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
-    // payload carries them; otherwise derives Recommended-only rows from the
-    // weights map (target/actual are unavailable without allocation data).
+    // payload carries them; otherwise derives rows from the weights, joined to
+    // a target and, when the book is known, to where it actually sits.
     // Bucket ids and framework labels are written differently on each side
     // ("conservative_defi_yield" vs "Conservative DeFi Yield" — note DeFi's
     // inner capital, which humanize() cannot reproduce). Comparing on
@@ -2074,39 +3286,81 @@ export function registerStaticViews(Alpine) {
       }
       return out;
     },
+    // The targets THIS session was handed, from its own brief. The v0 brief
+    // carries them (allocation.buckets); the live brief does not yet (#961).
+    // They win over the published framework because they are what the swarm
+    // was actually aiming at: the framework row is the CURRENT one, and it can
+    // postdate the session it is being compared against.
+    briefTargets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const body = this.brief?.body || this.brief;
+      const out = new Map();
+      for (const b of body?.allocation?.buckets || []) {
+        const w = Number(b?.target_weight ?? b?.targetWeight);
+        if (!Number.isFinite(w)) continue;
+        const t = { label: b.name || this.humanize(b.id), target: w };
+        if (b.id) out.set(norm(b.id), t);
+        if (b.name) out.set(norm(b.name), t);
+      }
+      return out;
+    },
+    // "brief" when the session's own brief named the targets, "framework" when
+    // the published framework stands in for them, null when neither did.
+    targetSource() {
+      if (!this.bucketWeights().some((b) => b.target != null)) return null;
+      return this.briefTargets().size ? "brief" : "framework";
+    },
     bucketWeights() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
-      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+      const num = (v) => (v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
+      // In the published order whatever order the payload keeps: jsonb stores
+      // keys shortest first, so a map read back from the database listed
+      // Conservative DeFi Yield last.
+      const ranked = (rows) => rows
+        .map((r, i) => ({ r, i }))
+        .sort((a, b) => bucketRank(a.r.id || a.r.name) - bucketRank(b.r.id || b.r.name) || a.i - b.i)
+        .map((x) => x.r);
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
-        return rec.buckets.map((b) => ({
-          name: b.name || this.humanize(b.id),
+        return ranked(rec.buckets.map((b, i) => ({
+          id: b.id || "",
+          name: b.name || bucketLabel(b.id),
+          hue: bucketHue(b.id || b.name, i),
           target: num(b.target ?? b.target_weight),
           actual: num(b.actual ?? b.actual_weight),
-          recommended: num(b.recommended ?? b.weight) ?? 0,
-        }));
+          // A sleeve published with no weight has none. Drawing it as 0% put a
+          // move to zero on the page that the swarm never made.
+          recommended: num(b.recommended ?? b.weight),
+        })));
       }
-      const weights = rec.weights;
-      if (!weights || typeof weights !== "object") return [];
+      // Either shape the weights arrive in: the v0 map or the live array.
+      const entries = weightEntries(rec.weights);
+      if (!entries.length) return [];
+      const handed = this.briefTargets();
       const targets = this.allocationTargets();
       const manifest = this.frameworkBuckets();
       const actuals = this.bucketActuals();
       const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return Object.entries(weights).map(([id, w]) => {
+      return ranked(entries.map(([id, w], i) => {
+        const brief = handed.get(norm(id)) ?? handed.get(norm(this.humanize(id)));
         const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
         const bucket = manifest.get(norm(id)) ?? manifest.get(norm(this.humanize(id)));
+        // The live dashboard's target, with the published manifest behind it
+        // so a backendless checkout still has something to compare against.
+        const published = framework ? framework.target : (bucket ? bucket.target : null);
         return {
           // Prefer the framework's own spelling of the bucket name when it is
           // known; humanize() of an id cannot recover "DeFi".
-          name: framework?.label || bucket?.name || this.humanize(id),
-          // The live dashboard's target wins when it answered — it is the
-          // CURRENT framework — with the published manifest behind it so a
-          // backendless checkout still has something to compare against.
-          target: framework ? framework.target : (bucket ? bucket.target : null),
+          id,
+          name: framework?.label || bucket?.name || brief?.label || bucketLabel(id),
+          hue: bucketHue(id, i),
+          // A brief that named any target names them all, so a sleeve it left
+          // out has no target rather than borrowing the framework's.
+          target: handed.size ? (brief ? brief.target : null) : published,
           actual: bucket ? (actuals.get(bucket.id) ?? null) : null,
-          recommended: num(w) ?? 0,
+          recommended: num(w),
         };
-      });
+      }));
     },
     // The framework's buckets, indexed by both id and name so a weights map
     // keyed "conservative_defi_yield" and a manifest naming it "Conservative
@@ -2130,19 +3384,12 @@ export function registerStaticViews(Alpine) {
     // only when the snapshot and the framework are BOTH present, and a bucket
     // whose tokens are simply absent from the book reads 0%, which is true,
     // rather than "—", which would claim we do not know.
+    //
+    // bookSleeveShares() is the one implementation: the subject page's latest
+    // recommendation reads the book through it too, so the two pages cannot
+    // measure the same session against different things.
     bucketActuals() {
-      const out = new Map();
-      const buckets = this.allocationFramework?.buckets || [];
-      const positions = this.snapshot?.positions || [];
-      const total = Number(this.snapshot?.totalValueUsd ?? this.snapshot?.total_value_usd ?? 0);
-      if (!buckets.length || !positions.length || !(total > 0)) return out;
-      for (const b of buckets) {
-        const held = positions
-          .filter((p) => b.tokens.includes(String(p.token || "").toUpperCase()))
-          .reduce((sum, p) => sum + Number(p.value_usd || 0), 0);
-        out.set(b.id, held / total);
-      }
-      return out;
+      return bookSleeveShares(this.allocationFramework, this.snapshot, this.session?.date);
     },
     // The date the published framework's targets are stated as of.
     // /api/dashboards/allocation serves the SINGLE CURRENT row of
@@ -2153,47 +3400,89 @@ export function registerStaticViews(Alpine) {
     // unqualified claim — see the caller.
     allocationAsOf() { return this.allocation?.asOf || this.allocationFramework?.asOf || null; },
     // Whether the target predates the session it is being compared against.
-    // v0's archive spans 2026-05-25 onward and the framework's asOf is later
-    // than the earliest of them, so a straight join measures a historical
-    // session against a target that did not exist yet — and, because the
-    // framework is admin-editable, an edit today silently rewrites yesterday's
-    // verdict on every archived allocation session.
+    // Only a question for the published framework: v0's archive spans
+    // 2026-05-25 onward and the framework's asOf is later than the earliest of
+    // them, so a straight join measures a historical session against a target
+    // that did not exist yet — and, because the framework is admin-editable, an
+    // edit today silently rewrites yesterday's verdict on every archived
+    // allocation session. A target the brief handed over cannot postdate it.
     targetPostdatesSession() {
+      if (this.targetSource() !== "framework") return false;
       const asOf = this.allocationAsOf();
       const date = this.session?.date;
       return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
     },
-    // Whether the swarm proposed something OTHER than the published target.
-    // Mirrors the reference implementation's half-a-point tolerance, so a
-    // rounding artifact never renders as a deviation.
-    //
-    // Suppressed when the target postdates the session: "deviates from target"
-    // is a judgement on the swarm, and it cannot be made against a target the
-    // swarm could not have been aiming at. The bars still draw, captioned with
-    // the framework's own asOf, so the comparison is visible as a comparison
-    // rather than asserted as a finding.
-    deviatesFromTarget() {
-      if (this.targetPostdatesSession()) return false;
-      return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
+    // Whether the legend and the headline can state a move: there is a basis,
+    // and it is not a target that postdates the session. A move from the book
+    // never reads the target, so the target's date cannot withhold it; the
+    // subject page's latest recommendation follows the same rule.
+    gapIsFair() {
+      const basis = this.gapBasis();
+      return basis === "actual" || (basis === "target" && !this.targetPostdatesSession());
     },
-    // Per-constituent weights inside each bucket. The payload has carried
-    // `within_bucket_weights` all along and nothing rendered it, so allocation
-    // sessions answered "95/5/0/0" and stopped — while the page's own copy asks
-    // "within each bucket are the right constituents weighted correctly?".
-    // Production prints this table; this rebuild dropped it.
+    // Inside each sleeve, as /allocation's sleeve cards draw it: each sleeve
+    // under its published name and hue with its recommended weight, and its
+    // items in POLICY order, each in the colour its position gives it there
+    // (so Morpho is one colour on both pages), under the name the brief or the
+    // published framework gives it rather than the payload's slug.
     withinBucketWeights() {
-      return withinBucketWeightsFrom(this.session?.swarmRecommendation);
+      const sleeveWeight = new Map(this.bucketWeights().map((b) => [normKeyOf(b.id || b.name), b.recommended]));
+      return withinBucketsFor(this.session?.swarmRecommendation, this.brief, this.allocationFramework, sleeveWeight);
+    },
+    // The explorer: the recommended mix on a weights subject, the book with
+    // the session's actions on a portfolio subject.
+    hasBook() { return !this.isBucketWeights() && !!this.snapshot && this.authoredActions().length > 0; },
+    hasExplorer() { return this.isBucketWeights() || this.hasBook(); },
+    explorerSource() { return this.reviewRow(); },
+    explorerSvg() {
+      return this.hasBook() ? this.ringSvg(this.explorerRows().map((r) => ({ ...r, colour: r.hue }))) : this.weightDonutSvg(this.reviewRow());
+    },
+    explorerLabel() {
+      return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", ");
+    },
+    // At rest a recommended mix's centre names the ring and nothing more: the
+    // mix is the whole allocation by definition, so "100%" said nothing, and
+    // it was wrong where the weights do not sum to 100 (ringSvg leaves that
+    // ring open on purpose).
+    explorerCenter() {
+      return this.hasBook()
+        ? { value: this.fmtUsdShort(this.snapshot?.totalValueUsd), label: "Holdings" }
+        : { value: "", label: "Recommended" };
+    },
+    fmtUsdShort(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "—";
+      return n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
+    },
+    explorerRows() {
+      if (this.hasBook()) return bookExplorerRows(this.snapshot, this.authoredActions(), (t) => this.tokenColor(t), (v) => this.fmtUsd(v));
+      const within = new Map(this.withinBucketWeights().map((w) => [normKeyOf(w.bucket), w]));
+      const fair = this.gapIsFair();
+      const basis = this.gapBasis() === "actual" ? "book" : "target";
+      return this.bucketRows().map((b, i) => {
+        const key = BUCKET_ORDER[bucketRank(b.id || b.name)] || String(b.id || b.name || i);
+        const pct = b.recommended == null ? null : b.recommended * 100;
+        const was = this.gapBasis() === "actual" ? b.actual : b.target;
+        return {
+          key, label: b.name, hue: b.hue, pct, meta: "", action: "", rationale: "",
+          d: fair ? b.gap : null, was: fair && was != null ? was * 100 : null, basis,
+          assets: explorerAssets(within.get(normKeyOf(b.id || b.name)) || within.get(normKeyOf(b.name)), pct),
+        };
+      });
     },
     isBucketWeights() {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
-    // The bucket table's rows: the recommendation as numbers, and the move it
-    // implies. The bars alone could not carry this panel — a book weighted
-    // 97/3/0/0 draws one long bar and three that round to nothing, so the whole
-    // recommendation was legible only in the value labels, and the reader had to
-    // do the arithmetic that matters (how far is this from where we are?) in
-    // their head.
+    // A subject whose recommendation is a set of weights: the framework, or a
+    // subject declared bucket_weights. Its session that publishes none says "No
+    // weights published", whatever type the payload claims; production's
+    // weights subjects published position_actions rollups from August on.
+    weightsSubject() {
+      return this.isFramework() || this.session?.swarmRecommendation?.type === "bucket_weights"
+        || this.subject?.recommendationType === "bucket_weights";
+    },
+    // The outcome's rows: the recommendation, and the move it implies.
     //
     // The gap is measured against ACTUAL where we know it, because that is the
     // move being asked for; against target otherwise, which is a different
@@ -2203,193 +3492,538 @@ export function registerStaticViews(Alpine) {
       const basis = this.gapBasis();
       return this.bucketWeights().map((b) => {
         const from = basis === "actual" ? b.actual : b.target;
-        const gap = from == null ? null : b.recommended - from;
+        const gap = from == null || b.recommended == null ? null : weightChange.weightDelta(b.recommended * 100, from * 100);
         return { ...b, gap };
       });
     },
     // "actual" once any bucket reports where the book actually sits, else
-    // "target" when the framework supplies one, else null — no basis, no column.
+    // "target" when a target is known, else null — no basis, no column.
     gapBasis() {
       const buckets = this.bucketWeights();
       if (buckets.some((b) => b.actual != null)) return "actual";
       if (buckets.some((b) => b.target != null)) return "target";
       return null;
     },
-    // A gap under half a point is rounding, not a proposal — the same tolerance
-    // deviatesFromTarget() uses, so the table and the ⚠ line cannot disagree.
-    fmtGap(gap) {
-      if (gap == null) return "—";
-      const pp = gap * 100;
-      if (Math.abs(pp) < 0.5) return "—";
-      return `${pp > 0 ? "↑ +" : "↓ −"}${Math.abs(pp).toFixed(0)}pp`;
+    hasTargetColumn() { return this.bucketWeights().some((b) => b.target != null); },
+    hasActualColumn() { return this.bucketWeights().some((b) => b.actual != null); },
+    // The full comparison, only when it holds a figure the legend does not:
+    // the target beside the book, or a target the legend withholds because it
+    // postdates the session.
+    hasLedger() {
+      return !!this.gapBasis() && ((this.hasTargetColumn() && this.hasActualColumn()) || this.targetPostdatesSession());
     },
-    gapClass(gap) {
-      if (gap == null || Math.abs(gap * 100) < 0.5) return "";
-      return gap > 0 ? "is-up" : "is-down";
+    // The number of figure columns in the outcome register, for its grid.
+    outcomeColumns() {
+      return 1 + (this.hasTargetColumn() ? 1 : 0) + (this.hasActualColumn() ? 1 : 0) + (this.gapBasis() ? 1 : 0);
     },
-    fmtWeight(v) {
-      return v == null ? "—" : `${Math.round(v * 100)}%`;
+    // Weights and moves read as /allocation's "What changed" writes them
+    // (lib/weight-change.js): 95%, 14.3%; ▲ +2.00% / ▼ −2.00%, or "—".
+    // Weights here are fractions, so they are scaled to percent first.
+    fmtWeight(v) { return v == null ? "—" : weightChange.fmtPctTrim(v * 100); },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
+    changeLabel(d) { return weightChange.changeLabel(d); },
+    changeClass(d) { return weightChange.changeClass(d); },
+    hasOutcome() { return this.isBucketWeights() || this.authoredActions().length > 0; },
+    // The outcome in a word, the way the band states the signal and the
+    // reasoning: whether the swarm moved anything, and how much of it. Only
+    // when there is something to measure against and the comparison is fair.
+    outcomeState() {
+      if (this.isBucketWeights()) {
+        const basis = this.gapBasis();
+        if (!this.gapIsFair()) return null;
+        const rows = this.bucketRows().filter((b) => b.gap != null);
+        if (!rows.length) return null;
+        const moved = rows.filter((b) => this.changeClass(b.gap) !== "flat").length;
+        const what = basis === "actual" ? "the book" : "the target";
+        return moved
+          ? { label: "Change", detail: `${moved} of ${rows.length} sleeves move from ${what}` }
+          : { label: "No change", detail: `matches ${what}` };
+      }
+      const acts = this.authoredActions();
+      if (!acts.length) return null;
+      const moved = acts.filter((a) => String(a.action).toLowerCase() !== "hold").length;
+      return moved
+        ? { label: "Change", detail: `${moved} of the ${acts.length} positions it reviewed` }
+        : { label: "No change", detail: `holds all ${acts.length} positions it reviewed` };
     },
-    // Inline-SVG grouped bars per bucket: Target (open outline), Actual (muted
-    // fill), Recommended (accent fill) — mirrors the reference BucketWeightsBars.
-    // Target/Actual rows only appear when at least one bucket supplies them, so
-    // the chart degrades cleanly to Recommended-only when allocation data is
-    // absent. Axis pinned 0-100% for cross-bucket comparability.
-    bucketWeightsBars() {
-      const buckets = this.bucketWeights();
-      if (!buckets.length) return "";
-      const hasTarget = buckets.some((b) => b.target != null);
-      const hasActual = buckets.some((b) => b.actual != null);
-      const series = [
-        hasTarget ? { key: "target", label: "target", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
-        // "actual" is a filled bar rather than type, so it takes the muted tone
-        // knocked back rather than the tone itself: at full strength the slab
-        // would out-shout the recommended bar it exists to be compared against.
-        // The opacity is set so the bar composites to roughly the weight it had
-        // on the retired --color-text-dim rung.
-        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-muted)", opacity: "0.45", txt: "var(--color-text-muted)" } : null,
-        { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
-      ].filter(Boolean);
-      // The series are NOT named per row. Repeating "target / actual /
-      // recommended" beside every bucket printed the same three words four
-      // times and left the figure looking like a form; the key lives once,
-      // under the chart, as bucketBarsKey(). The values keep their % suffix,
-      // because that unit is per-number and a key cannot supply it.
-      //
-      // There is also no 0/50/100 tick row. Each bar sits on a full-width track
-      // that IS 100% of NAV, so the scale is already stated by the geometry and
-      // again by the value at the end of every bar — a tick row on top of that
-      // read as a third, competing scale next to the "% of NAV" heading.
-      // The bucket name sits in a left COLUMN beside its bars, not on a line of
-      // its own above them. Dropping the series column had left the bars running
-      // the full width of the panel as ~3px hairlines with the name stranded
-      // above — more air than figure. Beside the name they are shorter, thicker,
-      // and the whole thing reads as the table it is.
-      const W = 580, labelW = 160, valW = 44;
-      const barX = labelW;
-      const barW = W - barX - valW;
-      const subH = 8, subGap = 4, gap = 14;
-      const headY = 8, axisH = 23;
-      const groupH = series.length * subH + (series.length - 1) * subGap;
-      const H = axisH + buckets.length * (groupH + gap) + 2;
-      const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
-      const mono = 'font-family="ui-monospace,monospace"';
-      const heads = `<text x="0" y="${headY}" fill="var(--color-text-muted)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">Sleeve</text>
-        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-muted)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
-      const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
-      const body = buckets.map((b, i) => {
-        const top = axisH + i * (groupH + gap);
-        const sub = series.map((s, si) => {
-          const v = b[s.key];
-          const barY = top + si * (subH + subGap);
-          const txtY = barY + subH - 1;
-          // The full-width track. Without it a 0% bucket drew nothing at all —
-          // three of four rows on a 97/3/0/0 recommendation were an empty band
-          // and a number, which reads as missing data rather than as zero.
-          const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
-          if (v == null) {
-            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-muted)" font-size="9" ${mono}>—</text>`;
-          }
-          const w = Math.max(0, x(v) - barX);
-          const rect = s.fill === "transparent"
-            ? `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
-            : `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
-          // The order the bars are stacked in IS the key's order, so the two can
-          // be read against each other without either being numbered.
-          return `${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
-        }).join("");
-        // Centred against its own group of bars, so the name and the rows it
-        // labels are unambiguously one block.
-        const nameY = top + groupH / 2 + 3.5;
-        return `<g>
-          <text x="0" y="${nameY.toFixed(1)}" fill="var(--color-text)" font-size="10" ${mono}>${this.escapeHtml(b.name)}</text>
-          ${sub}
-        </g>`;
-      }).join("");
-      // The accessible name states the comparison AND the bar order, since a
-      // screen reader gets the figure without the visual key beneath it.
-      const drawn = series.map((s) => s.label).join(", then ");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Sleeve weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per sleeve, in order: ${drawn}.">
-        ${heads}${rule}${body}
-      </svg>`;
-    },
-    // The key for the bars above, rendered once under the figure rather than
-    // repeated on all four buckets. Order matches the stacking order inside each
-    // group, so a reader maps top-to-top without a numbered legend.
-    bucketBarsKey() {
-      const buckets = this.bucketWeights();
-      if (!buckets.length) return [];
-      return [
-        buckets.some((b) => b.target != null) ? { key: "target", label: "target" } : null,
-        buckets.some((b) => b.actual != null) ? { key: "actual", label: "actual" } : null,
-        { key: "recommended", label: "recommended" },
-      ].filter(Boolean);
-    },
-    // The composite's trailing run. The two dashed rules are the regime
-    // thresholds — 0.33 and 0.67 — and they used to be drawn unnamed, so the
-    // line's most important property (which BAND it is in, and how close it sits
-    // to crossing out of it) was invisible. Naming them turns the sparkline from
-    // a shape into a reading.
-    regimeSparkline() {
-      const h = this.session?.regimeSummary?.history || [];
-      if (h.length < 2) return "";
-      const W = 260, H = 58, pad = 5, gutter = 26;
-      const x = (i) => gutter + (i / (h.length - 1)) * (W - gutter - pad);
-      const y = (v) => H - pad - Number(v || 0) * (H - pad * 2);
-      const pts = h.map((d, i) => `${x(i).toFixed(1)},${y(d.composite).toFixed(1)}`).join(" ");
-      const band = (v, label) => `<line x1="${gutter}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
-        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-muted)" font-size="8"
-          font-family="ui-monospace,monospace">${label}</text>`;
-      const last = h[h.length - 1];
-      // The end dot takes the regime's own colour, so the line lands on the same
-      // reading the headline states rather than on a flat accent.
-      const dot = this.regimeColor(last.regime || this.session?.regimeSummary?.regime);
-      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Regime composite over the trailing ${h.length} sessions, against the 0.33 risk-off and 0.67 risk-on thresholds">
-        ${band(0.67, "0.67")}${band(0.33, "0.33")}
-        <polyline fill="none" stroke="var(--color-accent)" stroke-width="1.6" points="${pts}"/>
-        <circle cx="${x(h.length - 1)}" cy="${y(last.composite)}" r="2.8" fill="${dot}"/>
-      </svg>`;
-    },
-    // The aggregator currently fills `consensus` with every take body verbatim
-    // and `disagreements[].positions[].view` with two of those same bodies
-    // (backend swarm/domain.ts: `authoredTakes.map(t => t.body)`). Rendered
-    // literally, one take appears three times on this page under three headings
-    // that each promise synthesis.
-    //
-    // So anything byte-identical to a take already listed above is treated as an
-    // echo and dropped. This is deliberately shape-agnostic: the day the
-    // aggregator emits real synthesis, those items stop matching any body and
-    // appear on their own. Nothing here has to change for that to work.
-    // NB: takes live on the factory root (`this.takes`), not under `session` —
-    // the page's own x-for iterates `takes`.
+    // Anything byte-identical to a take already on this page is an echo, and
+    // dropped. Shape-agnostic: a real synthesis stops matching any body and
+    // appears on its own. Takes live on the factory root (`this.takes`).
     takeBodies() {
       return new Set((this.takes || []).map((t) => this.normText(t.body)).filter(Boolean));
     },
     normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); },
     isEcho(text) { const n = this.normText(text); return !!n && this.takeBodies().has(n); },
-    // Synthesis has the same problem one level up: the aggregator builds it by
-    // joining every take body, so the section headed "Synthesis" reprints the
-    // member takes already listed above it rather than drawing a conclusion
-    // from them. Suppressed when it demonstrably contains every body verbatim;
-    // a genuine synthesis will not, and will render untouched.
+    // Suppressed when it demonstrably contains every take body verbatim; a
+    // genuine synthesis will not, and will render untouched.
     synthesisIsEcho() {
       const bodies = [...this.takeBodies()];
       if (!bodies.length) return false;
       const n = this.normText(this.session?.synthesis);
       return !!n && bodies.every((b) => n.includes(b));
     },
-    takeOf(memberId) { return (this.takes || []).find((t) => t.memberId === memberId); },
+    // The take a disagreement position belongs to. v0 sessions imported into
+    // the database kept v0's slugs in their disagreements ("robotmoney") while
+    // their takes carry the live id and handle ("robot-money"); letters and
+    // digits only lets the two meet.
+    takeOf(memberId) {
+      const takes = this.takes || [];
+      const hit = takes.find((t) => t.memberId === memberId || t.memberHandle === memberId);
+      if (hit) return hit;
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const n = norm(memberId);
+      return n ? takes.find((t) => norm(t.memberHandle) === n || norm(t.memberId) === n) : undefined;
+    },
+    // Where a take card sits on this page, for the index above the cards.
+    takeAnchor(t) { return `take-${String(t?.memberId || t?.id || "").replace(/[^A-Za-z0-9_-]/g, "")}`; },
+    // THE DISCUSSION, when somebody wrote it. A live aggregate's consensus,
+    // disagreements and synthesis are templates over the stance tally, the
+    // quorum, the mean confidence and the regime percentile (domain.ts
+    // buildConsensus, buildDisagreements, buildSynthesis), every one of which
+    // the review band already draws, and a disagreement's views are two take
+    // bodies copied verbatim. A judge rewrites the rationale and the
+    // disagreements, and only a MODEL judge writes its own: the fallback
+    // (judge.source other than "model", the shipped default) writes the same
+    // templates. v0 sessions authored all of it.
     consensusItems() {
+      if (this.isRollupRecommendation()) return [];
       return (this.session?.swarmRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
     },
-    // Kept even when every view is an echo: WHO disagreed, and how far apart
-    // they sat, is real information the takes list does not state anywhere.
-    // Only the duplicated prose is suppressed — see the markup.
     disagreements() {
-      return this.session?.swarmRecommendation?.disagreements || [];
+      const rec = this.session?.swarmRecommendation;
+      if (this.isRollupRecommendation() && rec?.judge?.source !== "model") return [];
+      return rec?.disagreements || [];
+    },
+    showSynthesis() {
+      return !this.isRollupRecommendation() && !!this.session?.synthesis && !this.synthesisIsEcho();
+    },
+    hasDiscussion() {
+      return this.showSynthesis() || this.consensusItems().length > 0 || this.disagreements().length > 0;
+    },
+
+    // ── the research record (RM-121) ────────────────────────────────────────
+    // Evidence read after render: this session's neighbours on its subject. It
+    // does not block the page.
+    //
+    // NO CONSENSUS RECEIPT PROBE. The page used to ask for the session's
+    // receipt to print its status. No route says whether a receipt exists
+    // without answering 404, and a published weights session has none until it
+    // is published, so every such page logged a failed request (the full-stack
+    // smoke fails on any). The status belongs on the session payload; until the
+    // API carries it, the page does not guess.
+    async loadEvidence() {
+      const s = this.session;
+      if (!s) return;
+      subjectSessionIndex(s.subjectId).then((list) => {
+        const at = list.findIndex((x) => (s.id && x.id === s.id) || (!String(x.id).match(/^[0-9a-f-]{36}$/) && x.date === s.date));
+        if (at < 0) return;
+        this.neighbours = { newer: list[at - 1] || null, older: list[at + 1] || null };
+      }).catch(() => {});
+    },
+    // A session is addressed by id when it has a real one, by date otherwise.
+    sessionHrefOf(s) {
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s?.id || ""))
+        ? `/swarm/sessions/${encodeURIComponent(s.id)}`
+        : `/swarm/${s?.date}/${encodeURIComponent(s?.subjectId || this.session?.subjectId || "")}`;
+    },
+    // The time of day matters once a subject convenes more than once a day.
+    sessionTime() {
+      // When it convened, the moment the date beside it names (rowTime).
+      const at = this.session?.generatedAt || this.session?.publishedAt;
+      if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
+      return `${new Date(at).toISOString().slice(11, 16)} UTC`;
+    },
+    // Record generated, as a time when it is the session's own day (the header
+    // prints that date), dated only when generated on another. Guarded:
+    // toISOString() throws on an unparseable stamp, so that one prints as is.
+    generatedLabel() {
+      const at = this.session?.generatedAt || this.session?.generated_at;
+      const t = Date.parse(at);
+      if (!Number.isFinite(t)) return at || "";
+      const iso = new Date(t).toISOString();
+      const time = `${iso.slice(11, 16)} UTC`;
+      return iso.slice(0, 10) === String(this.session?.date || "").slice(0, 10) ? time : `${this.formatDate(at, "short")} · ${time}`;
+    },
+    sessionJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return path(ROUTES.swarm.sessionById, { id: s.id });
+      return `/data/swarm/sessions/${s?.date}-${s?.subjectId}.json`;
+    },
+    briefJsonHref() {
+      const s = this.session;
+      if (this.source === "api" && s?.id) return `${ROUTES.swarm.brief}?session=${encodeURIComponent(s.id)}`;
+      return `/data/swarm/briefs/${s?.date}-${s?.subjectId}.json`;
+    },
+    // The session as the subject page's summary reads a row: the record with
+    // its takes on it, so the stance tally and turnout under the rationale are
+    // drawn by the same helpers, from the same takes, as the subject page's.
+    recordRow() { return this.session ? { ...this.session, takeRows: this.takes } : null; },
+    hasRecommendationSection() {
+      return this.hasOutcome() || !!this.recommendationRationale();
+    },
+    // The decision in one line, only where the legend cannot say it: that no
+    // sleeve moved from what the session was measured against. A count of
+    // moves is the legend's rows that carry one, and every action is labelled
+    // on its own row, as on the subject page. Nothing when there is no fair
+    // comparison: the legend still shows the mix.
+    outcomeHeadline() {
+      if (!this.isBucketWeights() || !this.gapIsFair()) return "";
+      const rows = this.bucketRows().filter((b) => b.gap != null);
+      if (!rows.length || rows.some((b) => this.changeClass(b.gap) !== "flat")) return "";
+      // The subject page's wording (weightsOutcomeLine), so the same
+      // session reads the same on both pages.
+      return weightsOutcomeLine(0, this.gapBasis() === "actual" ? "book" : "target");
+    },
+    isLong(text, chars) { return String(text || "").length > chars; },
+    // ── the vote, as a chart ────────────────────────────────────────────────
+    // Each member at their stance (a fifth of the width each, bearish to
+    // bullish) and their confidence. Members sharing a stance spread apart
+    // inside its column, ordered by confidence, so no two dots sit on top of
+    // each other.
+    // The confidence axis fits the room: members rarely report under half, so
+    // a fixed 0-100 scale pressed every dot into one line along the top and
+    // left the chart two-thirds empty. The floor steps down in tens to clear
+    // the lowest reading; it is a dot plot, so a floor above zero misstates
+    // nothing.
+    voteDomain() {
+      const vals = (this.takes || []).map((t) => Number(t.confidence) * 100).filter((n) => Number.isFinite(n));
+      const min = vals.length ? Math.min(...vals) : 50;
+      const lo = Math.max(0, Math.min(50, Math.floor((min - 5) / 10) * 10));
+      const step = 100 - lo <= 50 ? 10 : 25;
+      const ticks = [];
+      for (let v = 100; v >= lo; v -= step) ticks.push({ v, pos: ((v - lo) / (100 - lo)) * 100 });
+      return { lo, ticks };
+    },
+    votePos(pct) {
+      const { lo } = this.voteDomain();
+      return Math.max(0, Math.min(100, ((pct - lo) / (100 - lo)) * 100));
+    },
+    voteDots() {
+      const axis = ["bearish", "cautious", "neutral", "constructive", "bullish"];
+      const takes = (this.takes || []).filter((t) => axis.includes(String(t.stance || "").toLowerCase()));
+      const byCol = new Map();
+      for (const t of takes) {
+        const col = axis.indexOf(String(t.stance).toLowerCase());
+        if (!byCol.has(col)) byCol.set(col, []);
+        byCol.get(col).push(t);
+      }
+      const out = [];
+      for (const [col, list] of byCol) {
+        list.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+        list.forEach((t, j) => {
+          const conf = Number(t.confidence);
+          const spread = list.length > 1 ? (j - (list.length - 1) / 2) * Math.min(5, 14 / list.length) : 0;
+          const x = 10 + col * 20 + spread;
+          const y = Number.isFinite(conf) ? Math.round(this.clampPct(conf * 100)) : 0;
+          out.push({
+            key: t.memberId || t.id,
+            name: t.memberName || t.memberId,
+            stance: String(t.stance).toLowerCase(),
+            color: this.stanceColor(t.stance),
+            x,
+            y,
+            pos: this.votePos(y),
+            anchor: this.takeAnchor(t),
+            // Members sharing a stance put their names on opposite sides of
+            // their dots; the last column always labels to the left, away
+            // from the edge.
+            flip: col === 4 || (list.length > 1 && j % 2 === 0),
+          });
+        });
+      }
+      return this.placeVoteLabels(out);
+    },
+    // Sides alone do not keep three names apart: three members at 60 to 62%
+    // in one column wrote "Athena", "Robot Money" and "Noop Analyst" over one
+    // another on production. A label that would overlap one already placed,
+    // or run across another member's dot, tries the dot's other side, then
+    // sits centred above or below its own dot, a label's height at a time
+    // until it clears; the dot stays where the vote put it. Units are % of
+    // the plot.
+    placeVoteLabels(dots) {
+      const H = 9;
+      const placed = [];
+      const clear = (d, x0, x1, y) => y >= 0 && y <= 100
+        && !placed.some((p) => p.x0 < x1 && x0 < p.x1 && Math.abs(p.y - y) < H)
+        && !dots.some((o) => o !== d && o.x > x0 && o.x < x1 && Math.abs(o.pos - y) < H / 2);
+      for (const d of [...dots].sort((a, b) => a.x - b.x)) {
+        const w = (String(d.name || "").length + 5) * 0.6;
+        const tries = [
+          { flip: d.flip, dy: 0 }, { flip: !d.flip, dy: 0 },
+          // A stacked name clears its own dot as well as its neighbours'.
+          ...[1, -1, 2, -2, 3, -3].map((step) => ({ stack: true, dy: step * (H + 2) })),
+        ];
+        const at = tries.find((t) => {
+          const x0 = t.stack ? d.x - w / 2 : t.flip ? d.x - w : d.x;
+          return clear(d, x0, x0 + w, d.pos + t.dy);
+        }) || tries[0];
+        const x0 = at.stack ? d.x - w / 2 : at.flip ? d.x - w : d.x;
+        placed.push({ x0, x1: x0 + w, y: d.pos + at.dy });
+        Object.assign(d, { flip: !!at.flip, stack: !!at.stack, dy: at.dy });
+      }
+      return dots;
+    },
+    voteMean() {
+      const vals = (this.takes || []).map((t) => Number(t.confidence)).filter((n) => Number.isFinite(n));
+      if (!vals.length) return null;
+      return Math.round((vals.reduce((a, n) => a + n, 0) / vals.length) * 100);
+    },
+    voteLeanStance() { return this.leanStance(this.reviewRow()); },
+    // The consensus as a fact: the stance with the most members, or "split"
+    // when two or more tie for it.
+    consensusText() {
+      const row = this.reviewRow();
+      const lean = this.lean(row);
+      if (!lean) return "No consensus recorded";
+      if (!lean.stance) return "Split, no stance has a majority";
+      const word = lean.stance.charAt(0).toUpperCase() + lean.stance.slice(1);
+      return `${word}, ${this.leadShare(row)} members`;
+    },
+    // The plot's accessible name carries the mean: its dashed rule is
+    // decoration inside role=img, and the caption no longer repeats it.
+    voteLabel() {
+      const dots = this.voteDots();
+      const mean = this.voteMean();
+      return `How members voted, by stance and confidence. ${this.consensusText()}. `
+        + dots.map((d) => `${d.name} ${d.stance} at ${d.y}%`).join(", ") + "."
+        + (mean === null ? "" : ` Mean confidence ${mean}%.`);
+    },
+    signatureHeadline() {
+      const t = this.takes || [];
+      if (!t.length) return "";
+      if (t.every((x) => x.archival)) return "Archived, unsigned research";
+      const ok = t.filter((x) => x.verified).length;
+      return ok === t.length ? "Every take is signed and verified" : `${ok} of ${t.length} takes verified`;
+    },
+    targetPolicyLabel() {
+      const src = this.targetSource();
+      if (src === "brief") {
+        const asof = (this.brief?.body || this.brief)?.allocation?.asof;
+        return asof ? `Handed to this session, dated ${this.formatDate(asof, "short")}` : "Handed to this session";
+      }
+      if (src === "framework" && this.allocationAsOf()) {
+        const when = this.formatDate(this.allocationAsOf(), "short");
+        return this.targetPostdatesSession() ? `Published ${when}, after this session` : `Published ${when}`;
+      }
+      return "Not recorded";
     },
   }));
+}
+
+/** @param {unknown} v */
+export const normKeyOf = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Inside each sleeve: each sleeve under its published name and hue, and its
+// items in POLICY order, each in the colour its position gives it there (so
+// Morpho is one colour on every page), named as the brief or the published
+// framework names it rather than by the payload's slug.
+/** @param {any} rec @param {any} brief @param {any} framework @param {Map<string, number|null>} sleeveWeight */
+export function withinBucketsFor(rec, brief, framework, sleeveWeight) {
+  const body = brief?.body || brief;
+  const policyOf = (/** @type {string} */ bucket) => {
+    const n = normKeyOf(bucket);
+    const fromBrief = (body?.allocation?.buckets || []).find((/** @type {any} */ b) => normKeyOf(b.id) === n || normKeyOf(b.name) === n);
+    if (fromBrief?.items?.length) return fromBrief.items.map((/** @type {any} */ it) => ({ id: it.id || "", name: it.name || it.id || "" }));
+    return (framework?.buckets || []).find((/** @type {any} */ b) => normKeyOf(b.id) === n || normKeyOf(b.name) === n)?.items || [];
+  };
+  return withinBucketWeightsFrom(rec)
+    .map((b, i) => {
+      const policy = policyOf(b.bucket);
+      const items = b.items.map((it, j) => {
+        const at = policy.findIndex((/** @type {any} */ p) => normKeyOf(p.id) === normKeyOf(it.name) || normKeyOf(p.name) === normKeyOf(it.name));
+        const order = at >= 0 ? at : policy.length + j;
+        return { ...it, label: at >= 0 ? policy[at].name : it.name, order, colour: CATEGORICAL[order % CATEGORICAL.length] };
+      }).sort((x, y) => x.order - y.order);
+      const w = sleeveWeight.get(normKeyOf(b.bucket));
+      return { ...b, label: bucketLabel(b.bucket), hue: bucketHue(b.bucket, i), weight: w == null ? null : w * 100, items, rank: bucketRank(b.bucket) };
+    })
+    .sort((a, b) => a.rank - b.rank);
+}
+
+// A book as the explorer draws it: each position with its share of the book,
+// and the action the session took on it. Positions past the seventh fold into
+// "Other", as the concentration chart folds them. An action on a token the
+// book does not hold still gets a row, at 0%, so no recommendation is dropped.
+/** @param {any} snapshot @param {any[]} actions @param {(t: string) => string} colourOf @param {(v: number) => string} usd */
+function bookExplorerRows(snapshot, actions, colourOf, usd) {
+  const total = Number(snapshot?.totalValueUsd) || 0;
+  if (!snapshot || total <= 0) return [];
+  const byToken = new Map((actions || []).map((a) => [String(a.token || "").toLowerCase(), a]));
+  const positions = (snapshot.positions || [])
+    .map((/** @type {any} */ p) => ({ token: String(p.token || p.symbol || ""), chain: p.chain || "", value: Number(p.value_usd ?? p.valueUsd) || 0, amount: p.balance ?? p.amount ?? null }))
+    .filter((p) => p.token)
+    .sort((a, b) => b.value - a.value);
+  const shown = positions.slice(0, 7);
+  const rest = positions.slice(7);
+  const row = (/** @type {any} */ p) => {
+    const act = byToken.get(p.token.toLowerCase());
+    const pct = (p.value / total) * 100;
+    // What the position is worth on the row itself: its value, and its units
+    // when the token is not the dollar it is valued in. A manager reads "add
+    // USDC" beside "$8,995 · 9,037 USDC" without opening the drawer, and a
+    // token priced far from $1 shows how many units that is.
+    const units = p.amount == null || !Number.isFinite(Number(p.amount)) ? "" : `${helpers.fmtAmount(p.amount)} ${p.token}`;
+    return {
+      key: p.token, label: p.token, hue: colourOf(p.token), pct,
+      worth: [usd(p.value), units].filter(Boolean).join(" · "),
+      meta: p.chain ? sessionSummary.chainLabel(p.chain) : "",
+      action: act ? String(act.action).toLowerCase() : "", rationale: act?.rationale || "",
+      d: null, was: null, basis: "", assets: [],
+    };
+  };
+  const rows = shown.map(row);
+  const restValue = rest.reduce((a, p) => a + p.value, 0);
+  if (restValue > 0) {
+    const pct = (restValue / total) * 100;
+    rows.push({ key: OTHER_TOKEN, label: `Other (${rest.length})`, hue: OTHER_COLOR, pct,
+      worth: usd(restValue), meta: "", action: "", rationale: "", d: null, was: null, basis: "", assets: [] });
+  }
+  const held = new Set(positions.map((p) => p.token.toLowerCase()));
+  for (const a of actions || []) {
+    const t = String(a.token || "");
+    if (!t || held.has(t.toLowerCase())) continue;
+    rows.push({ key: t, label: t, hue: colourOf(t), pct: 0, worth: "Not held", meta: "",
+      action: String(a.action).toLowerCase(), rationale: a.rationale || "", d: null, was: null, basis: "", assets: [] });
+  }
+  return rows;
+}
+
+// A sleeve's assets as the explorer lists them: share of the sleeve, and share
+// of the whole allocation that implies.
+/** @param {any} sleeve @param {number | null} pct */
+export function explorerAssets(sleeve, pct) {
+  return (sleeve?.items || []).map((/** @type {any} */ it) => ({
+    key: it.name,
+    label: it.label || it.name,
+    colour: it.colour,
+    ofSleeve: it.weight * 100,
+    ofAllocation: pct == null ? null : it.weight * pct,
+  }));
+}
+
+// The sleeve weights a brief handed its session, as { bucket key: percent }.
+// Null when the brief carried none: the live brief does not yet (#961).
+/** @param {any} brief */
+export function referenceWeights(brief) {
+  const body = brief?.body || brief;
+  const buckets = body?.allocation?.buckets;
+  if (!Array.isArray(buckets) || !buckets.length) return null;
+  /** @type {Record<string, number>} */
+  const out = {};
+  for (const b of buckets) {
+    const w = Number(b?.target_weight ?? b?.targetWeight);
+    const i = bucketRank(b?.id || b?.name);
+    if (Number.isFinite(w) && i < BUCKET_ORDER.length) out[BUCKET_ORDER[i]] = w * 100;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The published targets in force on `date`, as { bucket key: percent }, or
+// null. The framework keeps one current row and no history, so a row dated
+// after the session is never read back onto it (the session page's
+// targetPostdatesSession rule).
+/** @param {any} fw @param {string} date */
+export function targetsInForce(fw, date) {
+  const asOf = fw?.asOf ? String(fw.asOf).slice(0, 10) : "";
+  if (!asOf || !date || String(date) < asOf) return null;
+  const rows = (fw.strategy || []).filter((r) => r?.targetPct != null && Number.isFinite(Number(r.targetPct)));
+  return referenceWeights({ allocation: { buckets: rows.map((r) => ({ name: r.label, target_weight: Number(r.targetPct) / 100 })) } });
+}
+
+// The API's own limit on a history search (#1007): a literal phrase, short.
+const HISTORY_SEARCH_MAX = 200;
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// A history search as the API matches it. The page prints dates as "Aug 3,
+// 2026" and the API matches the stored "2026-08-03" literally, so a query
+// that reads as a date ("Aug 3", "3 August 2026", "Aug 2026", "August") is
+// sent in the stored form. Anything else goes as typed.
+/** @param {unknown} raw */
+export function historySearchTerm(raw) {
+  const q = String(raw ?? "").trim();
+  const toks = q.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  if (!toks.length || toks.length > 3) return q;
+  let month = 0, day = 0, year = 0;
+  for (const t of toks) {
+    const w = t.replace(/\.$/, "");
+    const m = w.length >= 3 ? MONTHS.findIndex((name) => name.startsWith(w)) + 1 : 0;
+    if (m && !month) { month = m; continue; }
+    const d = /^(\d{1,2})(st|nd|rd|th)?$/.exec(t);
+    if (d && !day && Number(d[1]) >= 1 && Number(d[1]) <= 31) { day = Number(d[1]); continue; }
+    if (/^\d{4}$/.test(t) && !year) { year = Number(t); continue; }
+    return q;
+  }
+  if (!month) return q;
+  const mm = String(month).padStart(2, "0"), dd = String(day).padStart(2, "0");
+  if (day) return year ? `${year}-${mm}-${dd}` : `${mm}-${dd}`;
+  return year ? `${year}-${mm}` : `-${mm}-`;
+}
+
+// Whether a session list answered a `subject=` request as #1007 does: every
+// row that subject's, and each carrying its take count. A backend before it
+// ignores the parameter and returns every subject's rows, with no takeCount.
+// An empty answer proves nothing either way, so it is not trusted.
+/** @param {any[]} rows @param {string} subjectId */
+export function servesSubjectHistory(rows, subjectId) {
+  return Array.isArray(rows) && rows.length > 0
+    && rows.every((s) => Number.isFinite(s?.takeCount) && (s.subjectId ?? s.subject_id) === subjectId);
+}
+
+// A light index row (#1007) as a subject history row: the fields
+// loadSessionRow() builds from a session and its brief, read off the row. The
+// take count is the members who filed; the reference is the target that
+// session's own brief carried, or null.
+/** @param {any} s */
+function historyRowOf(s) {
+  const full = camelSession(s);
+  return {
+    id: full?.id,
+    date: full?.date,
+    subjectId: full?.subjectId,
+    subjectName: full?.subjectName,
+    generatedAt: full?.generatedAt ?? null,
+    publishedAt: s?.publishedAt ?? s?.published_at ?? null,
+    synthesis: full?.synthesis || "",
+    swarmRecommendation: full?.swarmRecommendation || null,
+    regimeSummary: full?.regimeSummary || null,
+    takes: Number.isFinite(s?.takeCount) ? s.takeCount : null,
+    takeRows: [],
+    reference: referenceWeights({ allocation: s?.referenceAllocation }),
+  };
+}
+
+// Every published session the list answers, walking `nextCursor` as /swarm's
+// loadAllSessions() does. The list pages at 20 by default, so its first page
+// alone held 5 of the allocation's 63 sessions on production, and the subject
+// page said "Sessions 5". Capped so a runaway cursor cannot loop.
+async function publishedSessionList() {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 40; page += 1) {
+    /** @type {Record<string, string>} */
+    const query = { state: "published", limit: "50" };
+    if (cursor) query.cursor = cursor;
+    const res = await api.get(ROUTES.swarm.sessions, query);
+    rows.push(...(res?.sessions || []));
+    cursor = res?.nextCursor || null;
+    if (!cursor) break;
+  }
+  return rows;
+}
+
+// A subject's published sessions, newest first, as { id, date, subjectId }.
+// A backend without #1007's subject filter answers every subject's rows, so
+// the whole index is read and filtered here, with the static archive behind it.
+/** @param {string} subjectId */
+async function subjectSessionIndex(subjectId) {
+  const pick = (/** @type {any[]} */ list) => list
+    .filter((s) => (s.subjectId ?? s.subject_id) === subjectId && s.state === "published")
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
+      || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
+    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
+  try {
+    const list = pick(await publishedSessionList());
+    if (list.length) return list;
+  } catch (_) { /* fall through to the archive */ }
+  return pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
 }

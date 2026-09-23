@@ -9,6 +9,7 @@
 // surface. Where this module's session lifecycle overlaps with domain.ts (e.g.
 // aggregateSessionGuarded still calls domain.aggregateSession for the rich
 // rollup), it composes those functions rather than duplicating them.
+import { createHash } from "node:crypto";
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { isRegistrablePublicKey } from "../lib/signing.ts";
@@ -28,6 +29,16 @@ import { deriveMemberHandle } from "./handle.ts";
 // the judge off published sessions without restarting anything.
 import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
+// R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
+// is the admin path below, so that every transition is an audited admin action
+// exactly as `swarm_judge_config.mode` already is.
+import {
+  assertFaultInjectionAllowed,
+  getJudgeFaultInjection,
+  JudgeFaultInjectionRefused,
+  writeJudgeFaultInjection,
+  type JudgeFaultInjectionState,
+} from "./judge-fault-injection.ts";
 import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
@@ -986,6 +997,13 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     const jobIds: number[] = [];
     for (const kind of SESSION_JOB_KINDS) {
       const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
+      // RESCHEDULE RE-ARMS THE JOB, IT DOES NOT LEAVE IT BEHIND. This used to
+      // be `ON CONFLICT DO NOTHING`, which meant re-creating a still-scheduled
+      // session silently kept each job's STALE run_after and SPENT attempts —
+      // a session moved to a new date never actually ran on it. DO UPDATE
+      // moves run_after to the new instant and resets status/attempts/lock
+      // fields so a previously-succeeded or exhausted row runs again on the
+      // new timeline exactly like a fresh insert would.
       const r = await tx`
         INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
         VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
@@ -1047,14 +1065,72 @@ export async function rosterAddAdmin(sessionId: string, memberId: string, actor:
   });
 }
 
-export async function rosterExcuseAdmin(sessionId: string, memberId: string, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
+// THE AUDITED OPERATOR LEVER (T17). `force` excuses a member from the FROZEN
+// roster AFTER collection has begun, which the plain path refuses. It exists
+// for one shape of stuck session and no other: a `bucket_weights` session whose
+// receipt is refused (`weights_absent_for_bucket_weights_subject`,
+// `weights_not_authored_by_every_take`) because a take on file carries no
+// canonical-four vector. Those takes cannot be repaired — `swarm_recommendations`
+// is append-only, and the amendment window is shut — so without this the session
+// never publishes a receipt at all.
+//
+// IT IS A BACKSTOP, NOT THE FIX. The fix is `submitRecommendation`'s 400 (see
+// swarm/domain.ts), which stops such a take existing; this clears the ones that
+// already do. So:
+//   * it is REFUSED on a terminal session (`published`/`cancelled`) — nothing
+//     re-writes a session that has already published, and
+//   * it writes a DISTINCT audit action (`roster_excuse_forced`) carrying the
+//     session's state and the operator's reason, so the exceptional path is
+//     never indistinguishable from the ordinary one in the log, and
+//   * it does not itself re-aggregate: the operator runs `aggregate` (and
+//     `judge`) explicitly afterwards, through the guarded transitions, so the
+//     rollup is recomputed by the same path that computes every other rollup.
+//     `loadFrozenTakeSet` filters on non-excused roster rows, which is what
+//     makes the excused member's take drop out of the rollup AND out of the
+//     receipt's frozen take set.
+const FORCE_EXCUSE_TERMINAL_STATES: ReadonlySet<string> = new Set(["published", "cancelled"]);
+
+export interface RosterExcuseOptions {
+  /** Excuse after collection has begun. Audited as `roster_excuse_forced`. */
+  force?: boolean;
+  /** Free-text operator justification, recorded on the audit row. */
+  reason?: string;
+}
+
+export async function rosterExcuseAdmin(
+  sessionId: string,
+  memberId: string,
+  actor: Actor = ADMIN_ACTOR,
+  options: RosterExcuseOptions = {},
+): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const gate = await requireRosterEditable(tx, sessionId);
-    if (!gate.ok) return err(gate.status, gate.error);
+    let state: string | undefined;
+    if (options.force) {
+      const s = (await tx`SELECT id, state FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
+        | { id: string; state: string }
+        | undefined;
+      if (!s) return err(404, "session not found");
+      if (FORCE_EXCUSE_TERMINAL_STATES.has(s.state)) {
+        return err(409, `session is ${s.state}; a terminal session is never re-rostered (forced excuse refused)`);
+      }
+      state = s.state;
+    } else {
+      const gate = await requireRosterEditable(tx, sessionId);
+      if (!gate.ok) return err(gate.status, gate.error);
+    }
     const upd = await tx`UPDATE swarm_session_members SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
-    await audit(actor, "roster_excuse", { sessionId, memberId }, tx);
-    return { ok: true, status: 200, sessionId, memberId };
+    if (options.force) {
+      await audit(actor, "roster_excuse_forced", {
+        sessionId,
+        memberId,
+        state,
+        reason: options.reason ?? null,
+      }, tx);
+    } else {
+      await audit(actor, "roster_excuse", { sessionId, memberId }, tx);
+    }
+    return { ok: true, status: 200, sessionId, memberId, forced: options.force === true };
   });
 }
 
@@ -1263,7 +1339,20 @@ export async function judgeSessionAdmin(
       return t;
     },
   });
-  if (!result.ok) return err(result.status, result.error ?? "judge failed");
+  // PRESERVE THE FULL RESULT, not just status/error via err()'s minimal shape.
+  // `judgeUnavailableReason` (credit_exhausted / credential_rejected /
+  // model_not_supported — see JudgeUnavailableError in judge.ts) is the one
+  // field that says WHICH fail-closed class this is, and `err()` here used to
+  // drop it silently: qualifyJudgeUnavailable() (worker/handlers/swarm.ts)
+  // reads exactly this field to turn the bare `judge_unavailable` into
+  // `judge_unavailable:<reason>` before it reaches job_runs.last_error and the
+  // console — but by the time judgeSession()'s cron handler received this
+  // object, the field was already gone, so the qualifier had nothing to
+  // qualify and every occurrence logged as the bare word forever. Confirmed
+  // against a real staging failure (2026-09-18): the actual cause was
+  // unrecoverable once the session/job was gone, because nothing between the
+  // throw site and the console ever wrote it down.
+  if (!result.ok) return { ...result, ok: false as const, error: result.error ?? "judge failed" };
   await audit(actor, "session_judged", {
     sessionId, mode: result.mode, applied: result.applied === true,
     appliedSkippedReason: result.appliedSkippedReason ?? null,
@@ -1363,6 +1452,94 @@ export async function setJudgeConfigAdmin(
     thirdPartyEnabled: judge.thirdPartyEnabled, warnings,
   });
   return { ok: true, status: 200, judge, warnings };
+}
+
+/**
+ * READ the fault lever. Safe on every path and in every environment — knowing
+ * whether the judge is being faulted is exactly what an operator staring at a
+ * run of `malformed_output` judgements needs, and refusing to answer would make
+ * an armed lever harder to find than to arm.
+ *
+ * The body is NOT projected. It is operator-supplied text chosen to be
+ * malformed, it can be 20,000 characters, and a GET that echoes it turns the
+ * admin surface into a place to park a payload. Its length and digest are
+ * enough to say WHICH body is armed.
+ */
+export async function getJudgeFaultInjectionAdmin(): Promise<AdminResult> {
+  const state = await getJudgeFaultInjection();
+  return { ok: true, status: 200, faultInjection: projectFaultInjection(state) };
+}
+
+function projectFaultInjection(state: JudgeFaultInjectionState) {
+  return {
+    enabled: state.enabled,
+    bodyChars: state.body.length,
+    bodyDigest: state.body ? createHash("sha256").update(state.body, "utf8").digest("hex").slice(0, 16) : null,
+    remaining: state.remaining,
+    sessionId: state.sessionId,
+    note: state.note,
+    updatedBy: state.updatedBy,
+    updatedAt: state.updatedAt,
+  };
+}
+
+/**
+ * ARM OR DISARM the fault lever (R13) — the one documented, audited way to make
+ * the judge transport answer with a body an operator chose.
+ *
+ * THE REFUSAL IS THE FEATURE. `assertFaultInjectionAllowed` runs BEFORE the
+ * write and only for `enabled: true`: a process without
+ * `SWARM_JUDGE_FAULT_INJECTION` refuses (403 `fault_injection_refused`), and on
+ * an ACCEPTANCE path — RM_ENV=prod, which staging and production both run, and
+ * which an unset RM_ENV resolves to under D13 — it refuses again unless the
+ * second opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also
+ * present. Disarming is never refused.
+ *
+ * THE AUDIT ROW IS THE ACCEPTANCE ARTIFACT. Arming this on staging is a
+ * RECORDED ACCEPTANCE MUTATION — while it is on, the judge is not exercising
+ * the model, so nothing it writes is evidence about the model — and the pair of
+ * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
+ * cites to bound the window. The BODY never reaches the audit row for the same
+ * reason it never reaches the GET.
+ */
+export async function setJudgeFaultInjectionAdmin(
+  patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
+  actor: Actor = ADMIN_ACTOR,
+): Promise<AdminResult> {
+  if (patch.enabled) {
+    try {
+      assertFaultInjectionAllowed();
+    } catch (e) {
+      if (e instanceof JudgeFaultInjectionRefused) {
+        return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
+      }
+      throw e;
+    }
+  }
+  let state: JudgeFaultInjectionState;
+  try {
+    state = await writeJudgeFaultInjection(patch, actor);
+  } catch (e) {
+    return err(400, e instanceof Error ? e.message : "invalid judge fault injection");
+  }
+  const projected = projectFaultInjection(state);
+  await audit(actor, "judge_fault_injection", {
+    ...projected,
+    acceptanceMutation: true,
+    testOnly: true,
+  });
+  return {
+    ok: true,
+    status: 200,
+    faultInjection: projected,
+    warnings: state.enabled
+      ? [
+        "TEST-ONLY: the consensus judge is now answering from swarm_judge_fault_injection, not from its model. " +
+        "Judgements written while this is armed are NOT evidence of model behaviour — they are a recorded acceptance " +
+        "mutation. Disarm it ({ enabled: false }) as the last step of the demonstration.",
+      ]
+      : [],
+  };
 }
 
 // ── The soak's read path (issue #767, folded from #768) ────────────────────
@@ -1536,7 +1713,16 @@ export async function publishConsensusReceiptAdmin(sessionId: string, actor: Act
       publishedAt: stored.publishedAt,
       // From the contract, never a literal — routes.js is the single source of
       // truth for URLs (finding 019).
+      //
+      // `url` is the ANCHORED one (decision D10): it serves the bare canonical
+      // bytes, so `keccak256(domain separator + body)` is the `payloadDigest`
+      // robotmoney-core writes beside it, and "the URL drafted from IS the
+      // anchored payloadUri" stays a string equality. `verifiedUrl` is the
+      // read-time verification envelope — the human/verifier surface — and is
+      // never anchored. Both are returned so a caller never has to build either
+      // by hand.
       url: path(ROUTES.swarm.sessionConsensusReceipt, { id: stored.sessionId }),
+      verifiedUrl: path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: stored.sessionId }),
       canonicalBytes: stored.canonicalBytes,
       receipt: stored.receipt,
     },

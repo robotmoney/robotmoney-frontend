@@ -4,6 +4,7 @@
 import {
   canonicalizeApplication,
   classifyRegime,
+  RECEIPT_CANONICAL_BUCKET_ORDER,
   REGIME_METHOD,
   type RegimeLabel,
   type RegimeSummary,
@@ -341,6 +342,8 @@ export async function getSubjectSnapshots(id: string, opts: { limit?: number; be
 // subjectSnapshotTotalValueUsd stay full-only.
 const SESSIONS_LIST_DEFAULT_LIMIT = 20;
 const SESSIONS_LIST_MAX_LIMIT = 100;
+// A search is a literal phrase, not a pattern, and a short one.
+const SESSIONS_SEARCH_MAX_LENGTH = 200;
 
 interface SessionsCursor { d: string; g: string; i: string }
 
@@ -386,7 +389,7 @@ function decodeSessionsCursor(cursor?: string | null): SessionsCursor | null {
 // Explicit-but-invalid limit is a 400 (thrown), not a silent clamp; an
 // absent/empty param falls back to the default. Mirrors api/routes/admin.ts's
 // parseLimit convention for the same reason (issue #155 AC).
-function parseSessionsLimit(raw?: number): number {
+export function parseSessionsLimit(raw?: number): number {
   if (raw == null) return SESSIONS_LIST_DEFAULT_LIMIT;
   if (!Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1 || raw > SESSIONS_LIST_MAX_LIMIT) {
     throw new Error(`limit must be an integer between 1 and ${SESSIONS_LIST_MAX_LIMIT}`);
@@ -396,6 +399,12 @@ function parseSessionsLimit(raw?: number): number {
 
 export interface ListSessionsOptions {
   state?: string;
+  /** One subject's sessions (issue #991): a subject page pages its own
+   * history instead of filtering the whole index in the browser. */
+  subject?: string;
+  /** Case-insensitive literal match on the date, the recommendation's
+   * rationale or the synthesis. Not a pattern: `%` and `_` match themselves. */
+  search?: string;
   limit?: number;
   cursor?: string | null;
   /** Reproduce the pre-#243 unpaginated, unprojected (every field, no state
@@ -426,6 +435,11 @@ async function getNextSwarmSessionAt(): Promise<string | null> {
 
 export async function listSessions(opts: ListSessionsOptions = {}) {
   const nextSessionAt = await getNextSwarmSessionAt();
+  const search = opts.search?.trim() ?? "";
+  // The filters page; full=1 is the unpaginated escape hatch, and combining
+  // the two would quietly return an unbounded filtered list.
+  if (opts.full && (opts.subject || search)) throw new Error("subject and search page the light index; drop full=1");
+  if (search.length > SESSIONS_SEARCH_MAX_LENGTH) throw new Error(`search must be at most ${SESSIONS_SEARCH_MAX_LENGTH} characters`);
   if (opts.full) {
     const rows = await sql`SELECT * FROM swarm_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
     return { sessions: rows.map(toSession), nextCursor: null as string | null, nextSessionAt };
@@ -434,6 +448,12 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   const limit = parseSessionsLimit(opts.limit);
   const conds = [];
   if (opts.state) conds.push(sql`state = ${opts.state}`);
+  if (opts.subject) conds.push(sql`subject_id = ${opts.subject}`);
+  // strpos, not LIKE: the phrase is matched literally, so a reader's `%` is a
+  // percent sign rather than a wildcard over the whole history.
+  if (search) {
+    conds.push(sql`strpos(lower(date::text || ' ' || COALESCE(swarm_recommendation->>'rationale', '') || ' ' || COALESCE(synthesis, '')), lower(${search})) > 0`);
+  }
   const cur = decodeSessionsCursor(opts.cursor);
   // Bind the timestamp as text before casting on the server.  If postgres.js
   // infers a timestamptz parameter directly it serializes the string through a
@@ -445,8 +465,14 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // COUNT query; the (date, generated_at, id) triple is both the ORDER BY and
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
+  // Two per-row facts a history row needs without fetching each session
+  // (issue #991): how many members filed (distinct members, not revisions),
+  // and the target the session's own brief carried. Bounded by LIMIT, so they
+  // run for at most one page of rows.
   const rows = await sql`
-    SELECT *, generated_at::text AS cursor_generated_at
+    SELECT *, generated_at::text AS cursor_generated_at,
+      (SELECT count(DISTINCT member_id)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id) AS take_count,
+      (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
     LIMIT ${limit + 1}`;
@@ -634,6 +660,10 @@ export async function getTakeReceipt(id: string) {
   const take = await toVerifiedTake(row);
   const memoId = hostedMemoId(take.memoUrl ?? null);
   return {
+    // The session this take was filed in — a take carries no date/subject
+    // handle that resolves to ONE session (migration 0022), so a receipt page
+    // links back by id.
+    sessionId: String(row.session_id),
     take,
     memo: memoId == null ? null : await getMemo(memoId),
     supersededBy: superseding
@@ -908,6 +938,56 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     WHERE member_id = ${memberId} AND nonce = ${sub.nonce} LIMIT 1`;
   if (replayed.length > 0) {
     return { ok: false, status: 409, error: "nonce already used by this member (replay); mint a fresh nonce to amend" };
+  }
+
+  // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
+  //
+  // A `bucket_weights` subject convenes the swarm to produce a NUMBER. Until
+  // this gate existed the only refusal of a take that cannot support one was at
+  // RECEIPT ASSEMBLY (consensus-receipt.ts gates 5 and 5b), and that refusal is
+  // TERMINAL: `swarm_recommendations` is append-only, amendments are gated on
+  // `window_closes_at > now()`, and neither `reopenSessionAdmin` nor
+  // `publishConsensusReceiptAdmin` can reach a published session. So ONE keyed
+  // member — or any rmpc/MCP/API client, which is never asked for a vector —
+  // destroyed the receipt of every `bucket_weights` session it touched, by
+  // behaving normally. Here the same fact is a 400 with the window still open,
+  // which the member answers by amending its take.
+  //
+  // BREAKING, AND DELIBERATELY SO (D4): a member client that does not carry the
+  // four-bucket vector for these sessions now fails loudly at submission
+  // instead of silently stranding the session. The assembly gates STAY as
+  // defence in depth — they are the only guard over takes already on file.
+  //
+  // ORDERED BELOW THE CHEAP REFUSALS AND ABOVE THE VERIFY: it is one indexed
+  // lookup, so a looping agent is still refused without paying for an Ed25519
+  // verification, and a take that is a replay or over the amendment cap is
+  // answered by the more specific refusal above.
+  //
+  // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
+  // does not exist yet while takes are being collected, and the subject is what
+  // the brief was built from (`publishBrief`, takeSchema.weights.optional).
+  const subjectRow = (await sql<{ recommendation_type: string | null }[]>`
+    SELECT recommendation_type FROM swarm_subjects WHERE id = ${sub.subjectId}`)[0];
+  if (subjectRow?.recommendation_type === "bucket_weights") {
+    const vector = sub.weights;
+    if (vector == null || vector.length === 0) {
+      return {
+        ok: false,
+        status: 400,
+        error: `weights_required_for_bucket_weights_subject: ${sub.subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
+          "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
+      };
+    }
+    const named = new Set(vector.map((w) => w.bucket));
+    if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
+        !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
+      return {
+        ok: false,
+        status: 400,
+        error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
+          "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
+      };
+    }
   }
 
   const key = await activeKeyFor(memberId);
@@ -1746,13 +1826,23 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
-  const recent = await sql`SELECT date, subject_id, state FROM swarm_sessions WHERE state = 'published' AND subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 5`;
+  // Each ref carries its session id (issue #965): a subject may convene more
+  // than once a day, so date and subject alone cannot reach an earlier session
+  // of that day. Ordered by convened_at, the order getSession() uses to pick a
+  // day's latest, so same-day refs come back newest first.
+  const recent = await sql`SELECT id, date, convened_at, subject_id, state FROM swarm_sessions
+                           WHERE state = 'published' AND subject_id = ${s.subject_id}
+                           ORDER BY convened_at DESC, id DESC LIMIT 5`;
 
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const subject = await getSubject(s.subject_id);
+  // The ONE read of the subject's recommendation type on this path — the same
+  // value `aggregateSession()` normalizes, so the ask published to the swarm and
+  // the derivation applied to its answers come from one column.
+  const recommendationType = subject?.recommendationType === "bucket_weights" ? "bucket_weights" : "position_actions";
   const framework =
     (subject?.source as { type?: string } | null)?.type === "framework"
       ? (await sql<{ asof: Date | string; buckets: unknown[] }[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`)[0]
@@ -1780,11 +1870,21 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
       stance: { type: "string", enum: [...STANCES] },
       confidence: { type: "number", minimum: 0, maximum: 1 },
       body: { type: "string" },
+      // WHAT THIS SESSION ACTUALLY ASKS FOR. `optional` used to be an
+      // unconditional `true`, which said — truthfully, and uselessly — that the
+      // API accepts a take with no vector. It never said that a
+      // `bucket_weights` subject NEEDS one, so the brief an analyst reasons
+      // from could not distinguish "an allocation is wanted" from "prose is
+      // wanted", and v0.5.0-rc.1 published `bucket_weights` receipts carrying
+      // no allocation at all. `buckets` is the canonical four, from the
+      // contract, so the brief and the receipt schema can never disagree about
+      // which vaults exist.
       weights: {
         type: "array",
-        optional: true,
+        optional: recommendationType !== "bucket_weights",
+        buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER],
         items: {
-          bucket: { type: "string" },
+          bucket: { type: "string", enum: [...RECEIPT_CANONICAL_BUCKET_ORDER] },
           weight: { type: "number", minimum: 0 },
         },
       },
@@ -1932,7 +2032,9 @@ export async function getAgentHealthEvents(filter: AgentHealthFilter = {}) {
   };
 }
 
-export async function closeWindow(sessionId: string) {
+export async function closeWindow(
+  sessionId: string,
+): Promise<{ sessionId: string; state: "window_closed"; telemetryWarnings?: string[] }> {
   // THE TRANSITION IS ITS OWN STATEMENT, NOT ONE TRANSACTION WITH THE
   // ABSENCE RECORD. It used to be `sql.begin` around both, which made a
   // failure in the telemetry inserts ROLL BACK the state change: the window
@@ -2460,9 +2562,50 @@ export async function aggregateSession(sessionId: string) {
   };
 }
 
+/**
+ * Publish a session — GUARDED (T21), like the admin path it sits beside.
+ *
+ * WHAT IT WAS. A bare `UPDATE … SET state='published', published_at=now()
+ * WHERE id=$1`, with no state guard and no `published_at IS NULL` guard, while
+ * `publishSessionAdmin` has both plus a `guardedTransition` that refuses
+ * terminal states and writes session-event and audit rows. Two consequences,
+ * both reachable from the `swarm.publish` job's ordinary retries:
+ *
+ *   * every retry RE-STAMPED `published_at`, so the recorded publication
+ *     instant drifted and `swarm/receipt-gap.ts`'s alert named a time the
+ *     session did not publish at;
+ *   * an operator who CANCELLED a session inside the retry window had it
+ *     silently flipped back to `published` — no transition, no event row, no
+ *     audit row, from a state the lifecycle calls terminal.
+ *
+ * WHAT IT IS NOW. The same single statement, with the admin path's two guards:
+ * it fires only from a publishable state and stamps `published_at` once. It
+ * stays a single statement rather than becoming `guardedTransition` because the
+ * cadence deliberately keeps the two surfaces separate (see
+ * `worker/handlers/swarm.ts`), and it reports whether it actually transitioned
+ * so a caller can tell an effective publish from a no-op instead of reading
+ * "published" either way.
+ */
+const PUBLISHABLE_STATES = ["aggregated", "judged"] as const;
+
 export async function publishSession(sessionId: string) {
-  await sql`UPDATE swarm_sessions SET state = 'published', published_at = now() WHERE id = ${sessionId}`;
-  return { sessionId, state: "published" };
+  const rows = await sql`
+    UPDATE swarm_sessions
+       SET state = 'published',
+           published_at = COALESCE(published_at, now()),
+           version = version + 1
+     WHERE id = ${sessionId}
+       AND state = ANY(${[...PUBLISHABLE_STATES]})
+    RETURNING id, state`;
+  if (rows.length > 0) return { sessionId, state: "published", transitioned: true };
+  // Nothing transitioned: either the session is ALREADY published (an ordinary
+  // job redelivery — idempotent success, and `published_at` is untouched) or it
+  // is somewhere this call may not publish from, which is reported as the
+  // state it is actually in rather than as a publication that did not happen.
+  const current = (await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
+    | { state: string }
+    | undefined;
+  return { sessionId, state: current?.state ?? "unknown", transitioned: false };
 }
 
 // ── Memos ───────────────────────────────────────────────────────────────────

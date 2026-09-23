@@ -13,8 +13,8 @@
 // real HTTP dispatcher. The database is a clean clone of the migrated schema
 // per file; if Postgres is unavailable the suite fails loudly rather than
 // skipping.
-import { expect, test } from "bun:test";
-import { ROUTES, canonicalizeSubmission, path } from "@robotmoney/contract";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { RECEIPT_DOMAIN_SEPARATOR, ROUTES, canonicalizeSubmission, path } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
@@ -23,10 +23,20 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig, judgeSession } from "../src/swarm/judge-session.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt, getConsensusReceipt, verifyAssembledReceipt } from "../src/swarm/consensus-receipt.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
+
 // A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
+// suite that needs one on file answers through the stub endpoint. ONE stub, the
+// launcher-shaped one: it is the endpoint resolveJudgeTransport() actually
+// reaches, and it is also the only one that can serve a deliberately malformed
+// answer (setJudgeStubAnswer, used below).
+//
+// A real judge endpoint, locally served: these tests drive the judging through
+// judgeSessionAdmin, which has no injectable transport. Before issue #969 they
+// leaned on `model` being NULL and anchored the resulting TEMPLATE prose into a
+// signed receipt — the exact thing #969 makes impossible.
+import { installJudgeStub, removeJudgeStub, resetJudgeStubAnswer, setJudgeStubAnswer, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+beforeAll(installJudgeStub);
+afterAll(removeJudgeStub);
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -99,10 +109,9 @@ async function advanceToPublished(sessionId: string) {
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
-  // The stub endpoint answers, so this records a MODEL judgement — the only
-  // kind there is. A receipt over template prose was the defect this release
-  // removed: it attested "the judge read the takes and wrote this" over the
-  // aggregator's own sentences.
+  // The local stub judge answers, so this records `source: "model"` — a real,
+  // anchorable opinion. It used to record `source: "fallback"` because no model
+  // was configured, which anchored TEMPLATE prose into a signed receipt (#969).
   const judged = await admin.judgeSessionAdmin(sessionId, undefined);
   if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
   const published = await admin.publishSessionAdmin(sessionId, undefined);
@@ -172,8 +181,19 @@ test("a judged session publishes a receipt that is fetchable, verified, and byte
   const url = path(ROUTES.swarm.sessionConsensusReceipt, { id: sessionId });
   expect((published as any).receipt.url).toBe(url);
   expect(url).toBe(`/api/swarm/sessions/${sessionId}/consensus-receipt`);
+  // THE ANCHORED URL SERVES THE ANCHORED BYTES (D10): that path answers the
+  // bare canonical JSON, and the read-time verification envelope this test goes
+  // on to inspect lives at its `/verified` sibling. Asserted here, on the URL
+  // the publish result actually hands to the anchoring side, so the two can
+  // never drift apart silently.
+  const anchored = (await get(url)) as Response;
+  expect(anchored).toBeInstanceOf(Response);
+  expect(anchored.headers.get("content-type")).toBe("application/json");
+  const verifiedUrl = path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: sessionId });
+  expect((published as any).receipt.verifiedUrl).toBe(verifiedUrl);
+  expect(verifiedUrl).toBe(`${url}/verified`);
 
-  const res = (await get(url)) as { status: number; body: any };
+  const res = (await get(verifiedUrl)) as { status: number; body: any };
   expect(res.status).toBe(200);
   expect(res.body.verified).toBe(true);
   expect(res.body.unverifiedReasons).toEqual([]);
@@ -186,6 +206,9 @@ test("a judged session publishes a receipt that is fetchable, verified, and byte
   expect(receipt.weights.map((w: any) => w.bucket)).toEqual(CANONICAL_FOUR);
   expect(receipt.weights.reduce((t: number, w: any) => t + w.weight_bps, 0)).toBe(10_000);
   expect(receipt.judge.rationale.length).toBeGreaterThan(0);
+  // A NEWLY PUBLISHED RECEIPT ALWAYS SAYS "model" (issue #969). This asserted
+  // "fallback" for as long as the fixture withheld a judge model — which is
+  // what a production receipt said too, for the same reason.
   expect(receipt.judge.source).toBe("model");
   // THE MODE IS IN THE SIGNED BYTES. A verifier holding only the receipt can
   // tell an opinion the session adopted from one it withheld.
@@ -211,9 +234,15 @@ test("a judged session publishes a receipt that is fetchable, verified, and byte
 
   // Read twice: the SAME bytes, and every signature re-verified on each read
   // rather than a stored flag being echoed.
-  const again = (await get(url)) as { status: number; body: any };
+  const again = (await get(verifiedUrl)) as { status: number; body: any };
   expect(again.body.canonicalBytes).toBe(res.body.canonicalBytes);
   expect(again.body.verified).toBe(true);
+  // The ANCHORED route is byte-stable across the same two reads, and what it
+  // serves is the envelope's `canonicalBytes` minus the pinned domain prefix —
+  // one receipt, two representations, no third.
+  const anchoredAgain = await ((await get(url)) as Response).text();
+  expect(RECEIPT_DOMAIN_SEPARATOR + anchoredAgain).toBe(res.body.canonicalBytes);
+  expect(anchoredAgain).toBe(await anchored.text());
 
   // ACROSS A REDEPLOY, and this is what that reduces to. A redeploy replaces the
   // process and keeps the database, so "the URL is stable and serves
@@ -342,7 +371,7 @@ test("a receipt carrying a LOW-ORDER embedded key is served UNVERIFIED, with the
     VALUES (${other.sessionId}, ${other.subjectId}, '1.0', ${judgement.id}, ${Number(version.version)},
             ${sql.json(swapped)}, ${honest.canonicalBytes})`;
 
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: other.sessionId }))) as { status: number; body: any };
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: other.sessionId }))) as { status: number; body: any };
   expect(res.status).toBe(200);
   expect(res.body.verified).toBe(false);
   // TWO independent refusals, and both are load-bearing. The shipped verifier
@@ -376,7 +405,7 @@ test("a receipt whose payload no longer matches its published bytes is SERVED as
     VALUES (${other.sessionId}, ${other.subjectId}, '1.0', ${judgement.id}, ${Number(version.version)},
             ${sql.json(tampered)}, ${honest.canonicalBytes})`;
 
-  const res = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: other.sessionId }))) as { status: number; body: any };
+  const res = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: other.sessionId }))) as { status: number; body: any };
   expect(res.status).toBe(200);
   expect(res.body.verified).toBe(false);
   expect(res.body.unverifiedReasons.join(" ")).toContain("no longer canonicalizes");
@@ -401,7 +430,8 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   expect(refusedUnjudged.ok).toBe(false);
   expect(refusedUnjudged.status).toBe(409);
   expect((refusedUnjudged as any).error).toBe("not_judged");
-  expect((await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: bare.sessionId }))) as any).toMatchObject({ status: 404 });
+  expect(((await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: bare.sessionId }))) as Response).status).toBe(404);
+  expect(((await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: bare.sessionId }))) as any).status).toBe(404);
 
   // A THREE-BUCKET vector: valid to the producer, publicly served, and
   // uncarriable by schema 1.0. Refused rather than published with the
@@ -413,6 +443,12 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   const s3 = await ic.openSession(threeSubject);
   await ic.publishBrief(s3.id, 60);
   const date3 = s3.date instanceof Date ? s3.date.toISOString().slice(0, 10) : String(s3.date).slice(0, 10);
+  // T17 refuses a three-bucket take at SUBMISSION now, so this is how such a
+  // take comes to exist at all: filed while the subject still asked for prose,
+  // and retyped afterwards (what migration 0051 did in production). The receipt
+  // refusal below is defence in depth over takes ALREADY ON FILE, and it is
+  // exactly the case this test is about.
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${threeSubject}`;
   for (let i = 0; i < 2; i++) {
     const mi = await member();
     const sub = {
@@ -427,6 +463,7 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
     const res = await ic.submitRecommendation(mi.token, { ...sub, signature: await signMessage(canonicalizeSubmission(sub), mi.privateKey) });
     expect(res.status).toBe(201);
   }
+  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${threeSubject}`;
   await advanceToPublished(s3.id);
 
   // The public API really does serve an allocation for this session — which is
@@ -620,13 +657,64 @@ test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one 
     SELECT judgement_id FROM swarm_consensus_receipts WHERE session_id = ${live.sessionId}`) as any[];
   expect(String(stored.judgement_id)).toBe(adoptedId);
   // And it says so inside the signed bytes.
-  const body = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: live.sessionId }))) as any;
+  const body = (await get(path(ROUTES.swarm.sessionConsensusReceiptVerified, { id: live.sessionId }))) as any;
   expect(body.body.receipt.judge.mode).toBe("enforce");
   expect(body.body.verified).toBe(true);
   // The judge block in the receipt IS the judge block the session serves.
   const [record] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${live.sessionId}`) as any[];
   expect(body.body.receipt.judge.rationale).toBe(record.swarm_recommendation.rationale);
   expect(body.body.receipt.judge.release_safety).toEqual(record.swarm_recommendation.release_safety);
+});
+
+// Issue #1019: the adopted judgement can be `source='fallback'` (D-A7 — a real,
+// ongoing outcome class main's judge.ts still writes on a genuine model
+// failure, e.g. a malformed response) WITHOUT the session ever having been in
+// `shadow`. `judgement_not_adopted` only catches "no opinion reached the
+// session" — a fallback opinion still gets applyOpinion()'d onto an `enforce`
+// session, so before this fix a receipt over TEMPLATE PROSE published exactly
+// like one over a model's own words. `judgement_not_authored` closes that.
+test("BLOCKER 3: a FALLBACK judgement (template prose) never reaches a receipt, by name — a model-authored one is unaffected", async () => {
+  const fallback = await collectingSession("recfallback", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  expect((await admin.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  expect((await admin.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+
+  // A body that is NOT valid judge JSON forces judge.ts's parse-failure
+  // fallback path (parseJudgeResponse throws, judge.ts:1280) — a real
+  // recorded outcome with `source: 'fallback'`, not a simulated field.
+  setJudgeStubAnswer("this is not a judge response");
+  let judgedFallback: any;
+  try {
+    judgedFallback = await admin.judgeSessionAdmin(fallback.sessionId, undefined);
+  } finally {
+    resetJudgeStubAnswer();
+  }
+  expect(judgedFallback.ok).toBe(true);
+  expect(judgedFallback.judge.applied).toBe(true);
+  expect(judgedFallback.judge.source).toBe("fallback");
+  expect(judgedFallback.judge.fallbackReason).toBeTruthy();
+  expect((await admin.publishSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+
+  // The session DID adopt it — this is not the judgement_not_adopted case.
+  const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${fallback.sessionId}`) as any[];
+  expect(sess.swarm_recommendation.judge).toBeDefined();
+
+  const refused = await admin.publishConsensusReceiptAdmin(fallback.sessionId);
+  expect(refused.ok).toBe(false);
+  expect((refused as any).error).toBe("judgement_not_authored");
+  expect((refused as any).message).toContain("source='fallback'");
+  const [none] = (await sql`
+    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${fallback.sessionId}`) as any[];
+  expect(none.n).toBe(0);
+
+  // A sibling session judged by the (stub) MODEL, over the same shape of
+  // takes, is entirely unaffected — no new refusal on the existing passing
+  // path.
+  const modelAuthored = await judgedSession("recauthored", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  const publishedModel = await admin.publishConsensusReceiptAdmin(modelAuthored.sessionId);
+  expect(publishedModel.ok).toBe(true);
+  const [stored] = (await sql`
+    SELECT session_id FROM swarm_consensus_receipts WHERE session_id = ${modelAuthored.sessionId}`) as any[];
+  expect(stored).toBeDefined();
 });
 
 test("a LATE FIRST take names its remedy instead of reading like a corrupted rollup", async () => {

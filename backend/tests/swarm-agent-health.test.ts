@@ -16,6 +16,7 @@ import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
@@ -50,7 +51,7 @@ async function getAgentHealth(query: string) {
 
 test("closeWindow records exactly one absent event per missing expected roster member; queryable by session/member and counted", async () => {
   const subj = rid("s");
-  await ic.ensureSubject(subj, "S");
+  await ensureProseSubject(subj, "S");
   const present = await activeMember();
   const absent = await activeMember();
   const session = await ic.openSession(subj);
@@ -162,7 +163,7 @@ test("closeWindow closes the window even when the absence record cannot be writt
 
 test("a wrong-key/tampered submission is rejected 400 and recorded to the durable rejected-signature surface", async () => {
   const subj = rid("s2");
-  await ic.ensureSubject(subj, "S2");
+  await ensureProseSubject(subj, "S2");
   const m = await activeMember();
   const session = await ic.openSession(subj);
   // The DATABASE dates the session (migration 0022) — read it back rather
@@ -208,6 +209,63 @@ test("a wrong-key/tampered submission is rejected 400 and recorded to the durabl
 test("rejects an invalid eventType query parameter (400, no query executed)", async () => {
   const result = await getAgentHealth("?eventType=bogus");
   expect(result?.status).toBe(400);
+});
+
+// Issue #1019: closeWindow used to wrap the collecting->window_closed
+// transition and the absence-telemetry inserts in ONE transaction, so a
+// telemetry failure rolled back the transition itself — the session stayed
+// `collecting` forever, the close_window job retried to exhaustion, and
+// every later submission 409-rejected. Dropping the partial unique index the
+// absence insert's ON CONFLICT target depends on forces exactly that insert
+// to fail (Postgres: no unique/exclusion constraint matches ON CONFLICT),
+// with no other write in closeWindow touched — a real telemetry failure, not
+// a simulated one.
+//
+// This test intentionally runs LAST in this file: it permanently drops
+// swarm_agent_health_events_absent_once_idx from this file's own cloned
+// database, so nothing later in this file may depend on absence-event
+// recording succeeding again.
+test("closeWindow commits window_closed even when absence-event recording fails, and collects the failure into telemetryWarnings instead of throwing", async () => {
+  const subj = rid("s3");
+  await ensureProseSubject(subj, "S3");
+  const present = await activeMember();
+  const absent = await activeMember();
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  for (const m of [present, absent]) {
+    await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name, status)
+              VALUES (${session.id}, ${m.id}, ${m.id}, 'expected')`;
+  }
+  await ic.publishBrief(session.id, 60);
+
+  const sub = { memberId: present.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "present" };
+  const signature = await signMessage(canonicalizeSubmission(sub), present.privateKey);
+  expect((await ic.submitRecommendation(present.token, { ...sub, signature })).status).toBe(201);
+
+  await sql.unsafe(`DROP INDEX swarm_agent_health_events_absent_once_idx`);
+
+  const result = await ic.closeWindow(session.id);
+  expect(result.state).toBe("window_closed");
+  expect(Array.isArray(result.telemetryWarnings)).toBe(true);
+  expect(result.telemetryWarnings!.length).toBeGreaterThan(0);
+  expect(result.telemetryWarnings!.some((w) => w.includes("absence event for"))).toBe(true);
+
+  // The transition itself committed and is NOT rolled back by the telemetry
+  // failure — the whole point of the fix.
+  const rows = await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${session.id}`;
+  expect(rows[0]!.state).toBe("window_closed");
+
+  // No absence event was actually persisted — the insert genuinely failed,
+  // it was not silently swallowed.
+  const events = await sql`SELECT id FROM swarm_agent_health_events WHERE session_id = ${session.id}`;
+  expect(events.length).toBe(0);
+
+  // A second close on the now-already-closed session is still a no-op that
+  // does not throw, even with the index still gone: the UPDATE affects 0 rows
+  // so recordAbsenceEvents never runs.
+  const second = await ic.closeWindow(session.id);
+  expect(second.state).toBe("window_closed");
+  expect(second.telemetryWarnings).toBeUndefined();
 });
 
 // 0020's own DDL creates committee_agent_health_events (immutable historical

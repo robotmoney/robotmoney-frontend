@@ -1,0 +1,184 @@
+// The allocation mix, explorable (RM-121). A ring and its legend: hovering or
+// focusing a sleeve previews it (the other arcs recede and the ring's centre
+// names it), selecting it keeps its asset breakdown open, and Escape or Close
+// lets it go. Keyboard, pointer and touch reach the same states; a touch never
+// previews, it selects.
+//
+// It draws two kinds of whole: a recommended sleeve mix (a weights subject)
+// and a book of holdings with the session's action on each position (a
+// portfolio subject, whose sessions set no target sizes). A nested Alpine
+// component; the page around it supplies, under the same names everywhere:
+//   explorerSvg()     the ring, drawn once
+//   explorerCenter()  { value, label } the ring's centre shows at rest; an
+//                     empty value shows the label alone, and both empty
+//                     leave the centre blank until a row is in focus
+//   explorerRows()    [{ key, label, hue, pct, meta, d, was, basis, action,
+//                     rationale, assets: [{ key, label, colour, ofSleeve,
+//                     ofAllocation }] }] in the order the legend lists them
+//
+// Smoothness, which is most of what makes this feel right:
+// - The ring is drawn ONCE. Focus is a class on the arcs (syncArcs), so the
+//   receding arcs fade on a CSS transition instead of being redrawn.
+// - Hover intent. Moving from a legend row down to the breakdown crosses the
+//   rows below it; switching on every row the pointer grazes made the panel
+//   flicker through them. A new sleeve is previewed only once the pointer
+//   rests on it (INTENT_MS), and leaving it first cancels the switch. The
+//   first preview is immediate.
+// - Moving between two sleeves while the breakdown is open fades the panel
+//   out, swaps it and fades it back in (SWAP_MS), rather than cutting to the
+//   next sleeve's figures. The fade is a data-swap attribute on the
+//   explorer's root, so every page's explorer gets it from views.css.
+// - The pointer leaving the explorer lets go after a short grace (LEAVE_MS),
+//   so a pointer skimming the edge does not collapse the panel under it.
+// - The breakdown stays mounted and animates its height (0fr to 1fr), and it
+//   keeps showing the last sleeve while it closes rather than emptying first.
+const INTENT_MS = 140;
+const LEAVE_MS = 240;
+const SWAP_MS = 120;
+
+// An action as a chip reads it: the direction glyph first, so the column
+// survives greyscale, then the word. Shared with the recommendation history.
+/** @param {string} action */
+export function actionLabel(action) {
+  const a = String(action || "").toLowerCase();
+  if (!a) return "—";
+  const glyph = /^(add|buy|increase|accumulate)/.test(a) ? "▲ "
+    : /^(trim|reduce|sell|exit|cut)/.test(a) ? "▼ "
+    : /^rotate/.test(a) ? "⇄ " : "";
+  return glyph + a;
+}
+
+export function sleeveExplorer() {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let intent;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let leaving;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let swap;
+  /** @param {any} root */
+  const endSwap = (root) => { clearTimeout(swap); root?.removeAttribute?.("data-swap"); };
+  return {
+    /** @type {string | null} */
+    pinned: null,
+    /** @type {string | null} */
+    hovered: null,
+    // The sleeve the panel last showed, kept through the closing animation.
+    /** @type {string | null} */
+    shown: null,
+    // The sleeve the explorer rests on when nothing is hovered or pinned. Null
+    // closes the breakdown, as every page but /allocation has it; there the
+    // largest sleeve stays open, a hover previews another and leaving returns.
+    /** @type {string | null} */
+    rest: null,
+    status: "",
+    /** @returns {string | null} */
+    active() { return this.pinned ?? this.hovered ?? this.rest; },
+    /** @param {string | null} key */
+    rowFor(key) {
+      if (!key) return null;
+      return /** @type {any} */ (this).explorerRows().find((/** @type {any} */ r) => r.key === key) || null;
+    },
+    activeRow() { return this.rowFor(this.active()); },
+    // The legend's middle column: what a recommended weight is set against,
+    // "Target" or "Book" (a vault session reads against its book). "" when no
+    // row has a basis, and the legend shows the recommended weights alone. A
+    // book of positions is not a weights legend and has no such column.
+    legendBasis() {
+      const host = /** @type {any} */ (this);
+      if (host.hasBook && host.hasBook()) return "";
+      const r = host.explorerRows().find((/** @type {any} */ x) => x.was != null);
+      return r ? (r.basis === "book" ? "Book" : "Target") : "";
+    },
+    // What the breakdown panel draws: the active sleeve, or the one it is
+    // closing on.
+    panelRow() { return this.activeRow() || this.rowFor(this.shown); },
+    /** @param {string | null} key */
+    set(key) {
+      const root = /** @type {any} */ (this).$root;
+      endSwap(root);
+      // What the panel will show: the hovered sleeve, or the rest one.
+      const next = key ?? this.rest;
+      if (!next || !root || this.active() === null || next === this.shown) {
+        this.hovered = key;
+        if (next) this.shown = next;
+        return;
+      }
+      root.setAttribute("data-swap", "");
+      swap = setTimeout(() => {
+        this.hovered = key;
+        this.shown = next;
+        root.removeAttribute("data-swap");
+      }, SWAP_MS);
+    },
+    /** @param {string} key @param {PointerEvent} [ev] */
+    preview(key, ev) {
+      if (ev && ev.pointerType === "touch") return;
+      clearTimeout(leaving);
+      if (this.pinned !== null || this.hovered === key) return;
+      clearTimeout(intent);
+      // Keyboard focus and the first pointer preview are immediate.
+      if (!ev || this.hovered === null) { this.set(key); return; }
+      intent = setTimeout(() => { if (this.pinned === null) this.set(key); }, INTENT_MS);
+    },
+    // The pointer left a sleeve before resting on it: it was passing over.
+    cancelIntent() { clearTimeout(intent); },
+    leave() {
+      clearTimeout(intent);
+      clearTimeout(leaving);
+      endSwap(/** @type {any} */ (this).$root);
+      if (this.pinned !== null) return;
+      leaving = setTimeout(() => { if (this.pinned === null) this.set(null); }, LEAVE_MS);
+    },
+    /** @param {string} key */
+    toggle(key) {
+      clearTimeout(intent);
+      clearTimeout(leaving);
+      endSwap(/** @type {any} */ (this).$root);
+      this.pinned = this.pinned === key ? null : key;
+      this.hovered = null;
+      if (this.pinned) this.shown = this.pinned;
+      const row = this.activeRow();
+      this.status = row ? `${row.label}, breakdown open` : "Breakdown closed";
+    },
+    close() {
+      clearTimeout(intent);
+      clearTimeout(leaving);
+      if (this.pinned === null && this.hovered === null) return;
+      const key = this.pinned ?? this.hovered;
+      this.pinned = null;
+      this.hovered = null;
+      this.status = "Breakdown closed";
+      // Focus goes back to the sleeve's row only when it was inside the
+      // explorer (Close, or Escape from the panel): a hover preview dismissed
+      // with Escape leaves focus where the reader had it. Focusing the row
+      // fires its preview synchronously, which would reopen the panel Close
+      // just shut, so that preview is dropped.
+      const root = /** @type {any} */ (this).$root;
+      if (root && root.contains(document.activeElement)) {
+        root.querySelector(`[data-sleeve-btn="${CSS.escape(String(key))}"]`)?.focus();
+        this.hovered = null;
+      }
+    },
+    actionLabel,
+    // The arcs are drawn with x-html and cannot carry Alpine bindings, so the
+    // focus class is set on them from an effect on their host.
+    /** @param {Element} host */
+    syncArcs(host) {
+      const key = this.active();
+      for (const arc of host.querySelectorAll("[data-sleeve]")) {
+        arc.classList.toggle("is-muted", key !== null && arc.getAttribute("data-sleeve") !== key);
+      }
+    },
+    // One listener serves every arc.
+    /** @param {PointerEvent} ev */
+    overRing(ev) {
+      const key = /** @type {Element} */ (ev.target)?.closest?.("[data-sleeve]")?.getAttribute("data-sleeve");
+      if (key) this.preview(key, ev);
+    },
+    /** @param {MouseEvent} ev */
+    clickRing(ev) {
+      const key = /** @type {Element} */ (ev.target)?.closest?.("[data-sleeve]")?.getAttribute("data-sleeve");
+      if (key) this.toggle(key);
+    },
+  };
+}

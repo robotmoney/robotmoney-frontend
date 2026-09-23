@@ -76,6 +76,13 @@ export const THIS_RELEASE_MIGRATIONS = [
   // it removes no row, so it is a lock in exactly the sense already established
   // here — never a write.
   "0052_swarm_judgement_digest_scheme.sql",
+  // 0061 (checklist B05, v0.4.0-to-0.5.0 cycle): grants rm_worker write access
+  // on chain_day_blocks, created by 0033 above — itself declared in THIS list.
+  // Declared here too, following this file's own established pattern (see
+  // 0.3.0-to-0.4.0/release.ts's overlapping 0053/0054): this test's "v0.2.2
+  // baseline" is everything NOT in this array, and an undeclared later
+  // migration that depends on a table 0033 creates gets replayed before it.
+  "0061_rm_worker_wallet_backfill_grant.sql",
 ] as const;
 
 /**

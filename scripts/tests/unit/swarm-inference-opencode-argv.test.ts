@@ -176,10 +176,33 @@ test("parses a well-formed trailing control line and strips it from the body", (
     });
   });
 
-  test("throws when the WEIGHTS clause is absent (no fabricated allocation)", () => {
-    expect(() => parseStanceFromBody("**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8")).toThrow(
-      /missing its trailing "WEIGHTS:.*rendered ABSENT/,
-    );
+  // CHANGED BY THE 2026-09-23 main merge, and the reason matters more than the
+  // assertion. This case used to require a THROW: our line demanded a trailing
+  // `| WEIGHTS:` clause on every control line, so a take without one was an
+  // error. main's line puts WEIGHTS on its OWN line and emits it only for
+  // `requireWeights` sessions, so an unweighted session's take legitimately
+  // carries none. The merged parser accepts both shapes and treats the clause
+  // as optional.
+  //
+  // The guarantee that case actually existed to protect was "no fabricated
+  // allocation", and that guarantee is UNCHANGED — it is simply enforced
+  // somewhere better. An absent clause now yields NO `weights` key at all
+  // rather than a zeroed or invented vector, and `member-session-client.ts`
+  // signs a weights vector only when `authored.weights?.length` is truthy, so
+  // an empty one is omitted rather than signed. Nothing downstream can read an
+  // allocation the model never stated.
+  //
+  // What is still strict: a clause that IS present must name every canonical
+  // bucket, with parseable in-range values and no duplicates. Those three cases
+  // are the tests immediately below, and they are the ones that would let a
+  // malformed allocation through.
+  test("omits weights entirely when the WEIGHTS clause is absent (no fabricated allocation)", () => {
+    const parsed = parseStanceFromBody("**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8");
+    expect(parsed.stance).toBe("bullish");
+    expect(parsed.confidence).toBe(0.8);
+    // Not `toBeUndefined()`: the key must be ABSENT, so nothing can serialize a
+    // null allocation into a signed take.
+    expect("weights" in parsed).toBe(false);
   });
 
   test("throws when the WEIGHTS clause omits a canonical bucket", () => {

@@ -68,6 +68,13 @@ function fireMinutesOfDay(cron: string): number[] {
 }
 
 describe("resolveSmokeCadence — one profile per invocation, selected by --stage", () => {
+  test("an explicit --cadence override wins over the invocation shape (the fast twin)", () => {
+    // The smoke-twin pins the port (→ realistic) but passes --cadence fast, so
+    // the override must win BOTH ways: pinned+fast = fast, unpinned+realistic = realistic.
+    expect(resolveSmokeCadence({ stage: true, cadence: "fast" }).profile).toBe("fast");
+    expect(resolveSmokeCadence({ stage: false, cadence: "realistic" }).profile).toBe("realistic");
+  });
+
   test("fast (default) profile is TODAY'S values, pinned — a globally-slow smoke is a regression", () => {
     const c = resolveSmokeCadence({ stage: false });
     expect(c.profile).toBe("fast");
@@ -540,11 +547,44 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       .toThrow(/REFUSING TO BOOT/);
   });
 
+  test("a pinned-port boot with an explicit --cadence fast is a TEST boot: resolves fast, no production duties", () => {
+    // The smoke-twin. `--static-port` pins the port FOR THE TUNNEL, but
+    // `--cadence fast` declares this a TEST boot (production-shaped DATA at the
+    // test cadence), so it takes the non-production branch and owes none of the
+    // production claims — SWARM_SCHEDULES_ENABLED may even be absent, because
+    // the compose overlay pins it "0" in-container regardless.
+    expect(resolveSmokeCadenceForBoot({ stage: true, cadence: "fast", env: {} })).toEqual(fast);
+  });
+
+  test("an explicit --cadence realistic on the pinned port IS production and must export the switch", () => {
+    // Saying the quiet part out loud is not a waiver: being explicit about the
+    // default keeps the boot inside the production branch with all its duties.
+    expect(
+      resolveSmokeCadenceForBoot({ stage: true, cadence: "realistic", env: { SWARM_SCHEDULES_ENABLED: "0" } }),
+    ).toEqual(realistic);
+    expect(() => resolveSmokeCadenceForBoot({ stage: true, cadence: "realistic", env: {} }))
+      .toThrow(/REFUSING TO BOOT/);
+  });
+
+  test("a non-pinned boot cannot opt into the realistic profile — --cadence realistic dies", () => {
+    // The one-argument rule holds in BOTH directions: only the port pin may
+    // select realistic, so a fast-shaped boot demanding it is a lie the
+    // assertion refuses to tell.
+    expect(() => resolveSmokeCadenceForBoot({ stage: false, cadence: "realistic", env: {} }))
+      .toThrow(/non-production boot resolved the 'realistic' profile/);
+  });
+
   test("smoke-main.ts boots through the CHECKED resolver, not the bare one", () => {
     // The bare resolver would boot a stack whose constants nobody proved. A
     // separate assert line next to it is a line that can be deleted or omitted
     // from a new entry point; this cannot be.
-    expect(smokeMain).toContain("resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), env: process.env })");
+    // Both halves in one assertion: the DERIVED stage argument
+    // (stageCadenceApplies) and the explicit `--cadence` override the resolver
+    // now accepts. Split across two `toContain`s either half could be dropped
+    // while the other kept the test green.
+    expect(smokeMain).toMatch(
+      /resolveSmokeCadenceForBoot\(\{\s*stage: stageCadenceApplies\(staticPortMode, twinBoot\),\s*cadence: parsed\.cadence,\s*env: process\.env,?\s*\}\)/,
+    );
     expect(smokeMain).not.toMatch(/=\s*resolveSmokeCadence\(/);
     // The stage argument is DERIVED, not the raw flag: a twin wears the same
     // `--static-port` pin and must still run FAST (stageCadenceApplies).

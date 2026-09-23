@@ -15,20 +15,61 @@
 // actually finds in the takes, and an opinion on whether the session is safe to
 // release. All three are prose about numbers someone else computed.
 //
-// REFUSE, DO NOT SUBSTITUTE (changed 2026-09-19). This runs on a LIVE swarm on
-// a cadence, and the old rule here was "fail closed, never fail loud": a model
-// that timed out, refused, returned prose instead of JSON, returned JSON of the
-// wrong shape, or smuggled a weight in fell back to the SAME template producers
-// the aggregator uses (buildRationale / buildDisagreements), recorded why, and
-// carried on. Nothing was ever blocked — and the price was that the
-// AGGREGATOR'S OWN SENTENCES were recorded as the judge's opinion, and a
-// consensus receipt signed them as an opinion the session adopted. The only
-// thing separating that from a real judgement was one column nothing read.
+// REFUSE, DO NOT SUBSTITUTE (the D-A7 ruling as this line narrowed it,
+// 2026-09-19; issues #969, #1012). This runs on a LIVE swarm on a cadence, and
+// the old rule here was "fail closed, never fail loud": a model that timed out,
+// refused, returned prose instead of JSON, returned JSON of the wrong shape, or
+// smuggled a weight in fell back to the SAME template producers the aggregator
+// uses (buildRationale / buildDisagreements), recorded why, and carried on.
+// Nothing was ever blocked — and the price was that the AGGREGATOR'S OWN
+// SENTENCES were recorded as the judge's opinion, and a consensus receipt
+// signed them as an opinion the session adopted. The only thing separating that
+// from a real judgement was one column nothing read.
 //
-// So every failure now THROWS JudgeUnavailable and writes nothing. A session is
-// still never BLOCKED on the judge — an unjudged session publishes, just
-// without a judge block and therefore without a receipt — and a
-// partially-trusted model response still never reaches one.
+// So EVERY failure now throws and writes nothing. A judgement is a model's
+// opinion or it does not exist. The failures still keep their own NAMES,
+// because an operator fixes them differently:
+//
+//   1. MISCONFIGURATION — no model on `swarm_judge_config`, no
+//      OPENCODE_API_KEY for the process that must call it, or a
+//      SWARM_JUDGE_TIMEOUT_MS that is not a number: NOTHING WAS EVER ASKED of a
+//      model. With them, the three refusals where the call WAS made but the
+//      account or the id, not the model, is what failed — an unfunded workspace
+//      (`credit_exhausted`), a rejected key (`credential_rejected`), and an id
+//      this endpoint does not serve (`model_not_supported`). And the one that is
+//      neither the model nor the credential but the RAIL that carries the call —
+//      the agent-launcher service could not be reached, refused the request, or
+//      could not get a judge container to produce a well-formed answer
+//      (`launcher_unavailable`, issue #1012). See judgeTransportGap(): a 402
+//      answered with template prose is an exhausted account manufacturing a
+//      signed receipt that looks exactly like a legitimate outage fallback,
+//      which is the one conflation the QA plan forbids by name.
+//
+//   2. RUNTIME MODEL FAILURE — a transport WAS built and a model WAS asked:
+//      it timed out, the call threw, the answer was empty/not JSON/the wrong
+//      shape, or it smuggled a weight. The response is discarded WHOLE. This
+//      used to be the class that fell back to template prose; it no longer
+//      does, because a model that was asked and did not answer has not judged
+//      either.
+//
+//   3. NOTHING TO JUDGE — no takes, or no member-authored sentence among them
+//      (`JudgeNothingToJudgeError`). Not a failure and not retryable: there is
+//      simply no opinion to be had.
+//
+// Classes 1 and 2 both raise `JudgeUnavailableError`; no judgement row is
+// written, the session stays unjudged, it publishes no consensus receipt, and
+// the 503 the caller returns lands as a degraded `swarm.judge` run — which
+// admin/overview.ts raises as an alert.
+//
+// A session is still never BLOCKED on the judge: an unjudged session publishes,
+// just without a judge block and therefore without a receipt. And a
+// partially-trusted model response still never reaches a session — rejection is
+// whole-response, never a merge. In every refusal the weights are untouched:
+// meanTakeWeights() remains their only author.
+//
+// `source: "fallback"` survives on the RECORD TYPE for one reason only: the
+// judgement table is append-only (migration 0040), so pre-#969 rows stay
+// readable and rehydratable. judge() can no longer produce one.
 //
 // PINNED INPUTS. `promptHash` is the digest of the instruction template, so a
 // stored opinion says which judge wrote it. `inputsDigest` is the digest of
@@ -42,6 +83,8 @@
 // See canonicalizeDigestInputs() for the decision and its reasoning.
 import { createHash } from "node:crypto";
 import { buildDisagreements, buildRationale } from "./domain.ts";
+import { DEFAULT_JUDGE_TIMEOUT_MS } from "./judge-budget.ts";
+import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 
 // ── The judged inputs ───────────────────────────────────────────────────────
 
@@ -136,19 +179,104 @@ export function noDrops(): JudgeDrops {
   return { positions: 0, disagreements: 0 };
 }
 
+/**
+ * The RECORD shape — what `swarm_session_judgements` holds, what reading a
+ * historical row yields, and what judge() returns.
+ *
+ * `source: "fallback"` is BOTH history and a live outcome. The table is
+ * append-only (migration 0040), so pre-#969 rows stay readable; and under the
+ * D-A7 ruling a RUNTIME model failure writes a new one, with the reason naming
+ * what the model did. What it is NOT, and can no longer be, is a
+ * misconfiguration: `model_unconfigured` and `credential_unconfigured` throw
+ * before any row is written (see judge()).
+ */
 export interface JudgeOutcome {
   opinion: JudgeOpinion;
-  /** Always `"model"`. A judgement this repo records was authored by one. */
-  source: "model";
-  /** Present iff source === "fallback"; the reason the model's answer was not used. */
+  source: "model" | "fallback";
+  /**
+   * Set on every `source: "fallback"` outcome, and never on a model one. It
+   * names WHAT THE MODEL DID (`model_timeout`, `weight_like_field:…`, …), never
+   * a configuration gap — those throw.
+   */
   fallbackReason?: string;
   model: string | null;
   promptHash: string;
   inputsDigest: string;
   takeCount: number;
   minTakes: number;
-  /** What the parser dropped out of a model response. Zeroed on every fallback. */
+  /** What the parser dropped out of a model response. */
   drops: JudgeDrops;
+  /**
+   * What the completion COST, as the provider reported it (R19), or null when
+   * it reported nothing — which is every fallback and every refusal, because no
+   * model answered. NULL is "not recorded", never "free". See parseJudgeUsage().
+   */
+  usage?: JudgeUsage | null;
+}
+
+/**
+ * The narrowed shape of a judging that actually reached a model and was
+ * trusted whole. judge() returns the wider `JudgeOutcome` only because a
+ * HISTORICAL row rehydrated from the append-only judgement table (migration
+ * 0040) may still read `source: "fallback"`; a fresh judging can no longer
+ * produce one. This type is what callers use when they need "the model spoke"
+ * in the type system.
+ */
+export interface ModelJudgeOutcome extends JudgeOutcome {
+  source: "model";
+  fallbackReason?: undefined;
+  model: string;
+}
+
+/**
+ * THE JUDGE WAS NEVER ASKED — it is not configured to be askable. No model on
+ * the config row (`model_unconfigured`), no OpenCode Zen credential in this
+ * process (`credential_unconfigured`), or a `SWARM_JUDGE_TIMEOUT_MS` that is not
+ * a number (`invalid_timeout_config:…`). THE SESSION DOES NOT PUBLISH: no
+ * judgement row is written, and the caller turns this into a 503 whose degraded
+ * `swarm.judge` run is what admin/overview.ts alerts on.
+ *
+ * It ALSO carries a model that answered badly. Upstream that case had a
+ * deterministic template fallback; this line removed it, because quietly
+ * substituting template prose for an opinion no model authored is precisely how
+ * every enforce-mode opinion production ever published came to be a template
+ * wearing the judge's name. The two classes still keep distinct REASONS, so an
+ * operator can tell a missing credential from a model that timed out.
+ */
+export class JudgeUnavailableError extends Error {
+  readonly reason: string;
+  readonly model: string | null;
+  /**
+   * The reason is bounded HERE rather than at each throw site. Two of them
+   * interpolate model-controlled text (`unparsable:<label>`,
+   * `weight_like_field:<path>`) and the value is written to a table an operator
+   * reads, so one choke point keeps "nothing unbounded escapes" a property of
+   * the type instead of a promise each call site has to remember.
+   */
+  constructor(reason: string, model: string | null) {
+    const bounded = boundedReason(reason);
+    super(`consensus judge unavailable (${bounded})${model ? ` [model=${model}]` : ""}`);
+    this.name = "JudgeUnavailableError";
+    this.reason = bounded;
+    this.model = model;
+  }
+}
+
+/**
+ * The session holds nothing any judge could speak to — no takes at all, or no
+ * member-authored body among them. Distinct from JudgeUnavailableError because
+ * NOTHING IS WRONG: there is no failure to retry and no outage to report, there
+ * is simply no opinion to be had. The caller records no judgement and the
+ * session publishes no consensus receipt.
+ */
+export class JudgeNothingToJudgeError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    const bounded = boundedReason(reason);
+    super(`nothing for the consensus judge to speak to (${bounded})`);
+    this.name = "JudgeNothingToJudgeError";
+    this.reason = bounded;
+  }
 }
 
 // ── Weight-like rejection ───────────────────────────────────────────────────
@@ -644,16 +772,119 @@ export function parseJudgeResponse(raw: string, input: JudgeInput, drops: JudgeD
 // Injectable, and injected by every test. The default reaches OpenCode Zen —
 // the SAME vendor and the SAME credential (OPENCODE_API_KEY) the member agents
 // already use, so the judge adds no vendor and no second key. It is null when
-// the credential or the model is unconfigured, which is the "model unavailable"
-// path, which is the template-prose path.
+// the credential or the model is unconfigured — which, under the D-A7 ruling,
+// is the FAIL-CLOSED path, not the template-prose path. The two null causes are
+// reported apart (`model_unconfigured` vs `credential_unconfigured`) because
+// they have different operators and different fixes: one is a database row an
+// admin sets, the other is a `.env`/compose credential a deployer sets.
+
+/**
+ * WHAT ONE COMPLETION COST (R19). Every field is independently nullable because
+ * the provider's `usage` object is not a contract: Zen returns token counts on
+ * every 200 and a cost figure on most of them, and a body that carries neither
+ * must still produce an opinion. `null` is "the provider did not say", never 0
+ * — the distinction is the whole reason a spend report can be trusted.
+ */
+export interface JudgeUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  /** Completion cost in USD, as reported. Not computed here from a rate card. */
+  costUsd: number | null;
+}
+
+/**
+ * A completion, with the usage the provider reported beside it.
+ *
+ * `complete()` may still return a bare string — every injected test transport
+ * in this repo does, and a transport that knows nothing about cost should not
+ * have to say so. A string is read as "no usage reported".
+ */
+export interface JudgeCompletion {
+  text: string;
+  usage?: JudgeUsage | null;
+}
 
 export interface JudgeTransport {
   model: string;
-  complete(prompt: string, signal: AbortSignal): Promise<string>;
+  complete(prompt: string, signal: AbortSignal): Promise<string | JudgeCompletion>;
+}
+
+/** One numeric field of a provider `usage` object, or null when it is absent/unusable. */
+function usageNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+/**
+ * Like usageNumber, but also accepts a numeric STRING — captured live against
+ * `https://opencode.ai/zen/v1/chat/completions` (deepseek-v4-flash) on
+ * 2026-09-15: `{"usage":{...no cost...},"cost":"0.00001694"}`. The top-level
+ * `cost` field is a JSON string, not a number, on this endpoint — the reason
+ * `usage_cost_usd` recorded NULL on every real judgement despite the token
+ * counts in the SAME response parsing correctly (they arrive as numbers).
+ * Token counts are deliberately left on the strict usageNumber() above: this
+ * is a targeted widening for the one field observed to need it, not a general
+ * loosening of provider-response parsing.
+ */
+function usageCost(value: unknown): number | null {
+  if (typeof value === "number") return usageNumber(value);
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * The provider's own cost/token report, lifted out of a `/chat/completions`
+ * body — or null when it carried none.
+ *
+ * READ DEFENSIVELY, LIKE THE ERROR BODY. A `usage` object that changes shape
+ * upstream must never be able to fail a judging: the opinion is the product and
+ * the spend figure is bookkeeping beside it. Every unreadable field degrades to
+ * null, and a body with no readable field at all degrades to null entirely
+ * rather than to a row of zeroes that would read as a free call.
+ *
+ * Both spellings of the cost field are accepted because Zen has used both
+ * (`usage.cost` on the chat endpoint, `usage.total_cost` in its usage export);
+ * a rate-card multiplication is deliberately NOT done here — a spend report
+ * that quotes the provider is auditable and one that recomputes is a second
+ * source of truth. The top-level `cost` fallback may arrive as a numeric
+ * STRING (see usageCost()) — every spelling still goes through it.
+ */
+export function parseJudgeUsage(body: unknown): JudgeUsage | null {
+  const usage = (body as { usage?: unknown } | null)?.usage;
+  if (usage === null || typeof usage !== "object") return null;
+  const u = usage as Record<string, unknown>;
+  const inputTokens = usageNumber(u.prompt_tokens) ?? usageNumber(u.input_tokens);
+  const outputTokens = usageNumber(u.completion_tokens) ?? usageNumber(u.output_tokens);
+  const totalTokens = usageNumber(u.total_tokens) ??
+    (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
+  const costUsd = usageCost(u.cost) ?? usageCost(u.total_cost) ?? usageCost((body as { cost?: unknown } | null)?.cost);
+  if (inputTokens === null && outputTokens === null && totalTokens === null && costUsd === null) return null;
+  return { inputTokens, outputTokens, totalTokens, costUsd };
+}
+
+/** Normalise either `complete()` return shape into one. */
+function readCompletion(value: string | JudgeCompletion): { text: string; usage: JudgeUsage | null } {
+  if (typeof value === "string") return { text: value, usage: null };
+  const text = typeof value?.text === "string" ? value.text : "";
+  return { text, usage: value?.usage ?? null };
 }
 
 export const DEFAULT_JUDGE_BASE_URL = "https://opencode.ai/zen/v1";
-export const DEFAULT_JUDGE_TIMEOUT_MS = 60_000;
+// Re-exported, not redefined (issue #1012), for the same reason
+// DEFAULT_JUDGE_TIMEOUT_MS is: the launcher SERVICE and the compose-topology
+// test are the contract's two other readers and neither may import this
+// module's database wiring. Every caller of this file keeps the same import.
+import {
+  DEFAULT_JUDGE_LAUNCHER_URL, JUDGE_LAUNCH_PATH, type JudgeLaunchAnswer,
+} from "./judge-launcher.ts";
+export { DEFAULT_JUDGE_LAUNCHER_URL, JUDGE_LAUNCH_PATH, type JudgeLaunchAnswer };
+export { JUDGE_LAUNCHER_HEALTH_PATH, JUDGE_LAUNCHER_PORT } from "./judge-launcher.ts";
+// Re-exported, not redefined: the constant lives in the leaf judge-budget.ts so
+// the smoke driver can derive its judge ceiling from it without importing this
+// module's database wiring. Every caller of this file keeps the same import.
+export { DEFAULT_JUDGE_TIMEOUT_MS } from "./judge-budget.ts";
 
 export function resolveJudgeTimeoutMs(env: Record<string, string | undefined> = process.env): number {
   const raw = env.SWARM_JUDGE_TIMEOUT_MS;
@@ -666,10 +897,128 @@ export function resolveJudgeTimeoutMs(env: Record<string, string | undefined> = 
 }
 
 /**
- * The production transport, or null when it cannot be built. Null is not an
- * error: an operator who has turned the judge on without giving it a model gets
- * template prose and a `model_unconfigured` reason on every judgement, which is
- * a legible state rather than a crash loop on a live swarm.
+ * A NON-2xx ANSWER FROM ZEN, WITH THE STATUS AND THE BODY STILL ATTACHED.
+ *
+ * It used to be `new Error(`judge model responded ${res.status}`)` — one
+ * untyped throw for every failure the endpoint has, which judge()'s catch then
+ * classified, uniformly, as a runtime model failure. That flattening is what
+ * let an EXHAUSTED ACCOUNT manufacture evidence: a 402 `insufficient_credit`
+ * came back, the judge answered it with deterministic template prose, and the
+ * session published a signed consensus receipt that is indistinguishable from a
+ * legitimate AC-FE-05 outage fallback. The QA plan forbids exactly that
+ * conflation by name (§4.1 "Exhausted credit vs. model failure") and makes a
+ * credit error a stop condition — one the old code could never raise.
+ *
+ * The analyst half of the system has always got this right:
+ * scripts/agent/classify-outcome.ts maps 401/402/403 to
+ * `provider-rejected-harness-credential`, never retries them, and excludes them
+ * from the scored denominator. This type is what lets the judge be symmetric.
+ *
+ * The body is kept BOUNDED and is used only to refine the classification (Zen
+ * answers an unsupported model id with 401 + a `ModelError` body, and an
+ * unfunded workspace with `CreditsError: Insufficient balance`). It never
+ * becomes a reason string: every reason this file produces is a fixed literal
+ * pinned to docs/architecture.md §9.7.
+ */
+export class JudgeTransportError extends Error {
+  readonly status: number;
+  readonly bodyLabel: string;
+  constructor(status: number, bodyLabel: string) {
+    const bounded = boundedReason(bodyLabel);
+    super(`judge model responded ${status}${bounded ? `: ${bounded}` : ""}`);
+    this.name = "JudgeTransportError";
+    this.status = status;
+    this.bodyLabel = bounded;
+  }
+}
+
+/**
+ * THE RAIL FAILED, NOT THE MODEL AND NOT THE CREDENTIAL (issue #1012).
+ *
+ * Since the judge stopped calling Zen in-process and started asking the
+ * `agent-launcher` service to run one short-lived judge container per call
+ * (the SAME rail a member agent rides — scripts/agent/judge-agent.ts on top of
+ * runMemberAgent()), a third thing can fail that neither of the two existing
+ * classes describes: the launcher itself. It was unreachable, it answered
+ * non-2xx, it answered with a body this cannot read, or it reported that the
+ * container never launched / hung / exited without one well-formed line.
+ *
+ * It is its OWN reason rather than either neighbour because the operator fix is
+ * different from both: `credential_rejected` says re-issue the key,
+ * `model_unavailable:` says wait for the vendor, and `launcher_unavailable`
+ * says look at the one service in the stack that holds the Docker socket.
+ * Folding it into `model_unavailable:` (the deterministic-fallback path) would
+ * be worse still: a stack whose launcher is down would publish template prose
+ * on a signed receipt for every session, which is exactly the D-A7 forgery this
+ * file exists to make impossible.
+ */
+export class JudgeLauncherError extends Error {
+  readonly detail: string;
+  constructor(detail: string) {
+    const bounded = boundedReason(detail);
+    super(`judge launcher failed${bounded ? `: ${bounded}` : ""}`);
+    this.name = "JudgeLauncherError";
+    this.detail = bounded;
+  }
+}
+
+/** Credit/quota wording, from any status. An exhausted workspace, not an outage. */
+const CREDIT_BODY = /insufficient|credit|balance|quota|billing|payment_required|payment required/i;
+/** "this endpoint does not serve that model id" — the `opencode/` prefix case. */
+const UNSUPPORTED_MODEL_BODY = /not supported|modelerror|unknown model|model_not_found|no such model/i;
+
+/**
+ * WHICH FAIL-CLOSED REASON A TRANSPORT FAILURE IS — or null when it is a
+ * runtime model failure the pipeline is designed to survive (AC-FE-05).
+ *
+ * Three answers fail closed, because none of them is a model that was reachable
+ * and misbehaved; all three are a deployment that cannot do the job it claims
+ * to do, which is the D-A7 misconfiguration class:
+ *
+ *   `credit_exhausted`     — 402, or any status whose body names credit /
+ *                            balance / quota / payment. AC-MODEL-01's
+ *                            "absent or UNFUNDED credential fails closed": an
+ *                            authenticated key with no money behind it is
+ *                            exactly the unfunded case, and it is a §10 stop
+ *                            condition — nothing produced after it is evidence.
+ *   `credential_rejected`  — 401/403 with no model complaint in the body. A
+ *                            revoked, wrong or truncated key. An operator fix,
+ *                            not a retryable blip.
+ *   `launcher_unavailable` — the agent-launcher rail (issue #1012), not the
+ *                            model and not the key. Checked FIRST, and never
+ *                            re-derived from a status, because a launcher
+ *                            failure carries no model verdict at all: reading
+ *                            one out of it would report a vendor or an account
+ *                            problem the vendor was never asked about.
+ *   `model_not_supported`  — a body that names the model rather than the
+ *                            credential. Zen answers `opencode/deepseek-v4-flash`
+ *                            (the prefixed selector) with 401 + `ModelError`,
+ *                            which is the defect commit a8fcbf26 exists for;
+ *                            falling back there would hide it again.
+ *
+ * Everything else — 5xx, a network throw, an abort, a body this cannot read —
+ * returns null and keeps the deterministic fallback. Ambiguity resolves TOWARD
+ * failing closed: a 429 whose body mentions quota is treated as exhausted
+ * credit, because the cost of a wrong fallback is a poisoned receipt and the
+ * cost of a wrong refusal is one unjudged session.
+ */
+export function judgeTransportGap(
+  err: unknown,
+): "credit_exhausted" | "credential_rejected" | "model_not_supported" | "launcher_unavailable" | null {
+  if (err instanceof JudgeLauncherError) return "launcher_unavailable";
+  if (!(err instanceof JudgeTransportError)) return null;
+  const body = err.bodyLabel;
+  if (err.status === 402 || CREDIT_BODY.test(body)) return "credit_exhausted";
+  if (UNSUPPORTED_MODEL_BODY.test(body)) return "model_not_supported";
+  if (err.status === 401 || err.status === 403) return "credential_rejected";
+  return null;
+}
+
+/**
+ * The production transport, or null when it cannot be built. Null IS an error
+ * now (D-A7): a judge that was never given a model, or a process that was never
+ * given the funded credential, fails closed rather than publishing prose no
+ * model authored. `judgeConfigGap()` below says which of the two it was.
  *
  * WHICH MODEL IS NOT AN ENVIRONMENT VARIABLE. It is passed in, from the
  * `swarm_judge_config.model` row. D22 rule 1 keeps model selection to a single
@@ -709,53 +1058,110 @@ export function resolveJudgeTransport(
 ): JudgeTransport | null {
   const apiKey = (env.OPENCODE_API_KEY ?? "").trim();
   const selected = (model ?? "").trim();
+  // RE-ASSERTED AT USE, not merely at write (AC-MODEL-01). setJudgeConfig()
+  // refuses a disqualified model, but it is not the only writer the
+  // swarm_judge_config row has ever had — migrations, a psql session and a
+  // restored backup all bypass it, and the read path used to post whatever the
+  // column held straight to Zen. A model this environment may not use is a
+  // configuration fault, so it fails CLOSED with a named reason rather than
+  // returning null (which would be reported as "nothing was configured") or
+  // producing a judgement that disqualifies the whole run.
+  if (selected) {
+    try {
+      assertJudgeModelAllowed(selected, env);
+    } catch {
+      throw new JudgeUnavailableError("model_disallowed", selected);
+    }
+  }
   if (!apiKey || !selected) return null;
-  const baseUrl = (env.SWARM_JUDGE_BASE_URL ?? "").trim() || DEFAULT_JUDGE_BASE_URL;
+  const launcherUrl = ((env.SWARM_AGENT_LAUNCHER_URL ?? "").trim() || DEFAULT_JUDGE_LAUNCHER_URL).replace(/\/+$/, "");
   return {
     model: selected,
-    async complete(prompt: string, signal: AbortSignal): Promise<string> {
-      const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: wireModelId(selected),
-          temperature: 0,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) {
-        // The BODY, not just the status: Zen answers an unsupported model with
-        // 401, so a bare status sends whoever reads this hunting a credential
-        // that was never the problem. Bounded, and the key is never in it.
-        const detail = (await res.text().catch(() => "")).slice(0, 200).replace(/\s+/g, " ");
-        throw new Error(`judge model responded ${res.status}${detail ? `: ${detail}` : ""}`);
+    async complete(prompt: string, signal: AbortSignal): Promise<JudgeCompletion> {
+      // The container's own ceiling. judge()'s AbortSignal is the backstop, not
+      // the mechanism: the launcher bounds the container BELOW this so a hung
+      // container comes back as `launcher_unavailable` rather than racing the
+      // host's abort into `model_timeout`. A malformed SWARM_JUDGE_TIMEOUT_MS
+      // never reaches here (judge() fails closed on it first), so the catch is
+      // a belt, not a policy.
+      let timeoutMs: number;
+      try {
+        timeoutMs = resolveJudgeTimeoutMs(env);
+      } catch {
+        timeoutMs = resolveJudgeTimeoutMs({});
       }
-      const body = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
-      const content = body?.choices?.[0]?.message?.content;
-      if (typeof content !== "string") throw new Error("judge model returned no assistant text");
-      return content;
+      let res: Response;
+      try {
+        res = await fetch(`${launcherUrl}${JUDGE_LAUNCH_PATH}`, {
+          method: "POST",
+          signal,
+          headers: { "content-type": "application/json" },
+          // THE CREDENTIAL IS NOT IN THIS BODY. The launcher holds its own copy
+          // of OPENCODE_API_KEY and injects it into the container it starts, the
+          // same single explicit `-e` a member agent gets. A judge key crossing
+          // this hop per request would put it in an internal request log.
+          body: JSON.stringify({ model: selected, prompt, timeoutMs }),
+        });
+      } catch (err) {
+        // An abort is the CALLER's timeout, not a launcher fault — judge()
+        // reads `signal.aborted` and records `model_timeout`. Rethrow it
+        // untouched so that classification still works.
+        if (signal.aborted) throw err;
+        throw new JudgeLauncherError(`launcher unreachable: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.text()).slice(0, 400); } catch { detail = ""; }
+        throw new JudgeLauncherError(`launcher responded ${res.status}${detail ? `: ${detail}` : ""}`);
+      }
+      let answer: JudgeLaunchAnswer;
+      try {
+        answer = (await res.json()) as JudgeLaunchAnswer;
+      } catch {
+        throw new JudgeLauncherError("launcher answer was not JSON");
+      }
+      if (answer?.ok === true) {
+        if (typeof answer.text !== "string") throw new JudgeLauncherError("launcher answer carried no text");
+        // R19: the spend travels WITH the text. The container hands the
+        // provider's own usage object back UNPARSED — parseJudgeUsage() stays
+        // here, host-side, so the one reader of a provider's cost report is
+        // still the one file that documents how it reads it.
+        return { text: answer.text, usage: parseJudgeUsage(answer.providerUsage) };
+      }
+      if (answer?.kind === "model_status") {
+        // The MODEL refused, and the container faithfully relayed the status and
+        // the bounded body. This is the SAME typed error the in-process fetch
+        // used to throw, so judgeTransportGap()'s credit / credential /
+        // unsupported-id taxonomy is unchanged by the move into a container.
+        const status = Number(answer.status);
+        throw new JudgeTransportError(Number.isFinite(status) ? status : 0, String(answer.body ?? ""));
+      }
+      throw new JudgeLauncherError(
+        typeof answer?.detail === "string" && answer.detail ? answer.detail : "launcher answer had no recognised shape",
+      );
     },
   };
 }
 
 /**
- * The judge could not produce a judgement, and none was recorded.
+ * WHICH configuration is missing, for a transport that could not be built.
  *
- * Carries the same `reason` vocabulary `fallback_reason` used to hold
- * (`model_timeout`, `weight_like_field:weights`, `model_unconfigured`), so an
- * operator reads the identical words — they now arrive on a FAILED JOB instead
- * of on a row that looked like a judgement.
+ * Separate from resolveJudgeTransport() rather than folded into its return so
+ * an injected `transport: null` (every test that exercises the fail-closed path
+ * passes one) classifies identically to a real unbuildable transport. The model
+ * comes from the caller's config row; the credential from the environment.
  */
-export class JudgeUnavailable extends Error {
-  readonly reason: string;
-  readonly model: string | null;
-  constructor(reason: string, model: string | null) {
-    super(`judge produced no judgement (${reason}${model ? `, model ${model}` : ""})`);
-    this.name = "JudgeUnavailable";
-    this.reason = reason;
-    this.model = model;
-  }
+export function judgeConfigGap(
+  model: string | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): "model_unconfigured" | "credential_unconfigured" {
+  const selected = (model ?? "").trim();
+  const credential = (env.OPENCODE_API_KEY ?? "").trim();
+  // A model was chosen and the credential is what is missing — the AC-MODEL-01
+  // case, and the one an operator fixes in `.env`/`.env.readonly` rather than
+  // in the admin UI. Every other way to get here is a missing model.
+  if (selected && !credential) return "credential_unconfigured";
+  return "model_unconfigured";
 }
 
 // ── The judge ───────────────────────────────────────────────────────────────
@@ -766,36 +1172,87 @@ export interface JudgeOptions {
   /** The configured model, used only when `transport` is not supplied. */
   model?: string | null;
   timeoutMs?: number;
+  /**
+   * THE TEST-ONLY FAULT LEVER, already authorised (R13, AC-E2E-06).
+   *
+   * judge() does NOT read the database or the environment for it: the caller
+   * (judge-session.ts) resolves it through judge-fault-injection.ts, which owns
+   * the three gates — the audited admin row, the process flag, and the second
+   * acceptance opt-in. Passing a value here is therefore the SAME statement as
+   * "every gate was open", and a caller that never resolves one can never fault
+   * a judging by accident.
+   */
+  faultInjection?: JudgeFaultInjection | null;
+}
+
+/** The authorised lever, as judge() receives it. Structurally the judge-fault-injection.ts type. */
+export interface JudgeFaultInjection {
+  /** The body the transport returns INSTEAD of calling the model. */
+  body: string;
+  note?: string | null;
 }
 
 /**
- * Form an opinion, or THROW JudgeUnavailable. There is no third answer: an
- * outcome this returns was authored by a model.
+ * THE TRANSPORT HONOURS THE LEVER — the model is not called, and the chosen
+ * body is what comes back.
+ *
+ * Wrapping rather than branching inside judge() keeps the substitution at the
+ * one seam that talks to the vendor: `model` still reports the id that WOULD
+ * have been called, so a judgement row written under an injected fault still
+ * names the configured judge, and nothing downstream has to learn a fourth
+ * shape. `usage` is null by construction — an injected body cost nothing, and
+ * R19's spend report must not be able to invent a charge.
+ */
+export function faultInjectedTransport(
+  transport: JudgeTransport,
+  fault: JudgeFaultInjection,
+): JudgeTransport {
+  return {
+    model: transport.model,
+    async complete(): Promise<JudgeCompletion> {
+      return { text: fault.body, usage: null };
+    },
+  };
+}
+
+/**
+ * Form an opinion, or THROW. There is no third answer: an outcome this returns
+ * was authored by a model, and it only ever returns `source: "model"`.
+ *
+ * Throws `JudgeNothingToJudgeError` when the session holds nothing any judge
+ * could speak to — no takes, or no member-authored sentence among them. That is
+ * not a failure and not retryable.
+ *
+ * Throws `JudgeUnavailableError` for everything else: the judge could not be
+ * ASKED at all (no model, no credential, an unparseable timeout setting, a
+ * launcher that could not carry the call), or it WAS asked and the answer could
+ * not be trusted whole (timeout, transport error, unparsable/malformed output,
+ * a smuggled weight). Both write nothing. See this file's header for why the
+ * deterministic template fallback that used to answer the second class is gone.
  */
 export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise<JudgeOutcome> {
-  const transport = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
+  const resolved = opts.transport === undefined ? resolveJudgeTransport(opts.model ?? null) : opts.transport;
+  // THE LEVER DOES NOT CREATE A TRANSPORT. A stack with no model and no
+  // credential still fails closed (D-A7) with the lever armed: a fault
+  // injection that could manufacture a judgement on an unconfigured judge would
+  // be a way to fake exactly the outage-vs-misconfiguration distinction this
+  // file exists to keep apart.
+  const fault = resolved && opts.faultInjection ? opts.faultInjection : null;
+  const transport = resolved && fault ? faultInjectedTransport(resolved, fault) : resolved;
   // ONE `input`, DIGESTED AND DERIVED FROM. Three of the values the digest now
   // covers (`byStance`, `meanConfidence`, and `regimeSummary`'s composite) are
   // read out of the mutable `swarm_recommendation` / `regime_summary` jsonb,
   // which applyOpinion() read-modify-writes after this returns. They are read
-  // ONCE, by buildJudgeInput(), into this frozen argument — and both
-  // inputsDigest() below and templateOpinion() on the fallback path read that
-  // same object, never the database. Re-reading either here would rebuild
-  // #765's defect one layer out: a digest over values that had moved since the
-  // opinion was derived from them.
+  // ONCE, by buildJudgeInput(), into this frozen argument — and inputsDigest()
+  // below reads that same object, never the database. Re-reading it here would
+  // rebuild #765's defect one layer out: a digest over values that had moved
+  // since the opinion was derived from them.
   const base = {
     promptHash: JUDGE_PROMPT_HASH,
     inputsDigest: inputsDigest(input),
     takeCount: input.takes.length,
     minTakes: input.minTakes,
   };
-  // EVERY reason string leaves through here, and every one of them is bounded
-  // on the way out — including the two that interpolate model-controlled text
-  // (`weight_like_field:<path>`, `unknown_member:<id>`). One choke point, so
-  // "nothing unbounded reaches fallback_reason" is not a per-call promise.
-  // A fallback's opinion is template prose built from the frozen take set, so it
-  // drops nothing by construction — its counters are zero, and each fallback
-  // gets its OWN object so a later mutation can never reach across calls.
   // NO FALLBACK. THERE IS NO SECOND KIND OF JUDGEMENT.
   //
   // This function used to answer every failure with templateOpinion() and a
@@ -815,50 +1272,95 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
   //
   // Annotated, not inferred: a never-returning call only narrows control flow
   // (so `transport` is non-null below) when the callee carries an explicit type.
+  //
+  // EVERY reason string leaves through here, and JudgeUnavailableError's own
+  // constructor bounds it — including the ones that interpolate
+  // model-controlled text (`weight_like_field:<path>`, `unknown_member:<id>`).
+  // One choke point, so "nothing unbounded reaches an operator-read column" is
+  // a property of the type rather than a per-call-site promise.
   const refuse: (reason: string, model: string | null) => never = (reason, model) => {
-    throw new JudgeUnavailable(boundedReason(reason), model);
+    throw new JudgeUnavailableError(reason, model);
   };
 
-  if (!transport) refuse("model_unconfigured", null);
-  // A session nobody submitted to has nothing to explain. Not an error — the
-  // templates already say the right thing about an empty session, and spending
-  // a model call to be told so is waste.
-  if (input.takes.length === 0) refuse("no_takes", transport.model);
-  // A session where EVERY take is stance-only has no member-authored sentence
-  // in it, so there is nothing any disagreement could quote and nothing the
-  // model could attribute — `view` comes from the frozen bodies and from
-  // nowhere else. Answering it would burn a model call to produce an opinion
-  // with an empty `disagreements` array. Template prose says the same thing,
-  // and `no_take_bodies` is the operator's signal that this is why.
+  // NOT failures. A session nobody submitted to, or one where every take is
+  // stance-only, contains no member-authored sentence — there is nothing for
+  // any judge, model or otherwise, to quote or explain. The caller records no
+  // judgement rather than manufacturing one about an empty room.
+  if (input.takes.length === 0) throw new JudgeNothingToJudgeError("no_takes");
   if (!input.takes.some((t) => typeof t.body === "string" && t.body.trim() !== "")) {
-    refuse("no_take_bodies", transport.model);
+    throw new JudgeNothingToJudgeError("no_take_bodies");
   }
 
-  // THE CONFIG READ IS ITSELF A FAILURE PATH. `resolveJudgeTimeoutMs()` throws
-  // on a malformed SWARM_JUDGE_TIMEOUT_MS, and docker-compose passes that
-  // variable into the container that runs the swarm lane — so one typo (`60s`,
-  // `60_000`, a stray space) used to make judge() throw on EVERY session, from
-  // OUTSIDE the try below. That is exactly the "fail loud" this file's header
-  // says cannot happen: the job retries to `dead` and the API returns 500 on a
-  // live swarm because of an environment string. A bad bound is an outcome
-  // like any other — template prose, a recorded reason, carry on.
+  // NO MODEL, OR NO CREDENTIAL, MEANS NO JUDGING (D-A7). This is the state that
+  // reached production: `swarm_judge_config.mode = 'enforce'` with `model` NULL,
+  // and later a staging `.env` carrying `AGENT_MODEL=free` and an empty
+  // OPENCODE_API_KEY. A transport could never be built, so a model was never
+  // ASKED — and every "fallback" opinion recorded for it was a template wearing
+  // the judge's name on a signed receipt. It fails closed here instead:
+  // migration 0056 and setJudgeConfig() refuse the mode/model pair in the first
+  // place, and this is the backstop for every other way the pair can go missing
+  // (an unfunded or absent OPENCODE_API_KEY among them — AC-MODEL-01).
+  if (!transport) {
+    const gap = judgeConfigGap(opts.model, process.env);
+    throw new JudgeUnavailableError(gap, opts.model ?? null);
+  }
+
+  // A malformed SWARM_JUDGE_TIMEOUT_MS is an operator error on a value
+  // docker-compose passes into the swarm lane — CONFIGURATION, not a model that
+  // misbehaved, so it belongs with the fail-closed class and not with the
+  // deterministic fallback. The model is never called at all on this path, so
+  // there is no model failure to survive: it stops the judging until someone
+  // fixes the string.
   let timeoutMs: number;
   try {
     timeoutMs = opts.timeoutMs ?? resolveJudgeTimeoutMs();
   } catch (err) {
-    refuse(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
+    throw new JudgeUnavailableError(`invalid_timeout_config:${errorLabel(err)}`, transport.model);
   }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let raw: string;
+  let usage: JudgeUsage | null = null;
   try {
-    raw = await transport.complete(renderJudgePrompt(input), controller.signal);
+    const completion = readCompletion(await transport.complete(renderJudgePrompt(input), controller.signal));
+    raw = completion.text;
+    usage = completion.usage;
   } catch (err) {
+    // FIRST: was this a model that failed, or an ACCOUNT/CREDENTIAL that did?
+    // They arrive down the same `catch`, and answering both with template prose
+    // is how an empty Zen workspace would publish a signed receipt that looks
+    // exactly like a legitimate AC-FE-05 outage fallback. A credit, credential
+    // or unsupported-model refusal is the D-A7 MISCONFIGURATION class: it fails
+    // closed here, writes no judgement row, publishes nothing, and surfaces as
+    // a degraded `swarm.judge` run in the alert feed.
+    const gap = judgeTransportGap(err);
+    if (gap) throw new JudgeUnavailableError(gap, transport.model);
+    // THE MODEL WAS ASKED AND DID NOT ANSWER. This used to answer with
+    // deterministic template prose under `source: "fallback"`; it refuses
+    // instead, because a judge that did not answer has not judged and the
+    // aggregator's own sentences must never be recorded as its opinion. The
+    // session is not blocked — it publishes unjudged, with no receipt.
     const reason = controller.signal.aborted ? "model_timeout" : `model_unavailable:${errorLabel(err)}`;
     refuse(reason, transport.model);
   } finally {
     clearTimeout(timer);
   }
+
+  // AN INJECTED BODY IS NEVER PARSED AND NEVER TRUSTED (R13). Running it
+  // through parseJudgeResponse would make the lever's outcome a function of
+  // which malformed body an operator happened to paste — a body that happened
+  // to be well-formed would be recorded as MODEL prose the model never wrote,
+  // which is precisely the forgery the D-A7 split exists to make impossible. So
+  // the answer is one deterministic outcome for every injected body:
+  // `malformed_output` (docs/architecture.md §9.7), and — the property
+  // AC-E2E-06 is really about — no weights, because a refusal writes nothing.
+  //
+  // It REFUSES rather than recording template prose under `source: "fallback"`,
+  // which is what it did upstream. Same lever, same reason code, same
+  // "an injected body is never parsed"; what changed is that this line can no
+  // longer put a judgement row on a session the model never spoke to.
+  if (fault) refuse("malformed_output", transport.model);
 
   try {
     // `drops` is filled BY the parse. It survives onto the outcome so the
@@ -866,8 +1368,11 @@ export async function judge(input: JudgeInput, opts: JudgeOptions = {}): Promise
     // silent about (issue #767/#787).
     const drops = noDrops();
     const opinion = parseJudgeResponse(raw, input, drops);
-    return { ...base, opinion, source: "model", model: transport.model, drops };
+    return { ...base, opinion, source: "model", model: transport.model, drops, usage };
   } catch (err) {
+    // INCLUDES the weight-smuggling rejection. The response is discarded whole
+    // and nothing replaces it: a response that could not be trusted leaves the
+    // session unjudged rather than judged by a template.
     const reason = err instanceof JudgeResponseError ? err.reason : `unparsable:${errorLabel(err)}`;
     refuse(reason, transport.model);
   }

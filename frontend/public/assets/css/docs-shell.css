@@ -22,7 +22,7 @@ body:has(.docs-shell) .footer { display: none !important; }
   font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
   letter-spacing: 0.22em; color: var(--color-text-muted); text-decoration: none;
 }
-.docs-sidebar__home:hover { color: var(--color-accent); }
+.docs-sidebar__home:hover { color: var(--color-text); }
 .docs-sidebar__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .docs-sidebar__group { margin-bottom: 2rem; }
 .docs-sidebar__grouptitle {
@@ -37,7 +37,7 @@ body:has(.docs-shell) .footer { display: none !important; }
   transition: color 0.15s, border-color 0.15s;
 }
 .docs-sidebar__link:hover { color: var(--color-text); border-color: var(--color-border-light); }
-.docs-sidebar__link--active { color: var(--color-text); border-color: var(--color-accent); }
+.docs-sidebar__link--active { color: var(--color-text); border-color: var(--color-text); }
 .docs-sidebar__foot {
   margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border);
   font-size: 11px; color: var(--color-text-muted);
@@ -71,19 +71,21 @@ body:has(.docs-shell) .footer { display: none !important; }
 
 /* Code-block copy button (bar lives in each docs view; styled here once since
    docs-shell.css loads on every /docs* route). Scoped under .docs-shell so it
-   wins over the per-view .docs-codeblock__bar rules regardless of order. */
+   wins over the per-view .docs-codeblock__bar rules regardless of order. It is
+   a secondary button, sized to the bar: outlined, mono caps, never cyan; the
+   label turning to "Copied!", not a colour, confirms the copy. */
 .docs-shell .docs-codeblock__bar {
   display: flex; align-items: center; justify-content: space-between; gap: 1rem;
 }
 .docs-shell .docs-codeblock__copy {
   flex-shrink: 0;
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.15em; color: var(--color-text-muted);
-  background: transparent; border: 1px solid var(--color-border);
-  padding: 0.1rem 0.5rem; border-radius: var(--radius); cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text);
+  background: transparent; border: 1px solid var(--color-border-light);
+  padding: 0.1rem 0.5rem; border-radius: 0; cursor: pointer;
+  transition: border-color 0.2s;
 }
 .docs-shell .docs-codeblock__copy:hover,
 .docs-shell .docs-codeblock__copy.is-copied {
-  color: var(--color-accent); border-color: var(--color-accent);
+  border-color: var(--color-text);
 }

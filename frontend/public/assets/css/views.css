@@ -138,14 +138,13 @@
    holding tooltips, and both kinds are absolutely positioned — the header
    .rm-tip bubbles open UPWARD over the card head, and the last row's .rv__tip
    opens downward past the card foot. Clipping is what made the bottom-row
-   tooltip a sliver. The radius the clip used to enforce is on the head.
+   tooltip a sliver.
    `min-width: 0` comes with it: `overflow: hidden` was also, silently, what
    kept the three grid columns even, because a scroll container contributes no
    min-content to its track. Dropping the clip without this let the widest
    panel table set its own column, and the 3-across grid grew past the 1280px
    page. The panel table is trimmed below to fit the track it is given. */
 .rv__panel-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: visible; min-width: 0; }
-.rv__panel-card > .rv__panel-card-head { border-radius: var(--radius) var(--radius) 0 0; }
 /* Buying back the ~20px the panel table needs to fit its track at three across:
    inner cells give up 1.6px a side (the 1rem card gutter on the outer edges is
    untouched), and the mono provenance line may break mid-token — "Blockchain.com"
@@ -175,33 +174,34 @@
    a tooltip instead of clicking through. The dotted rule moves to the inner
    label so it underlines the words and not the info glyph beside them. */
 .rv__ind-name { font-size: 0.85rem; color: var(--color-text); }
-a.rv__ind-name { text-decoration: none; }
+a.rv__ind-name { color: var(--color-link); text-decoration: none; }
 /* The last word of the name plus the glyph, travelling as one word. */
 .rv__ind-tail { white-space: nowrap; }
 .rv__ind-label {
   text-decoration: underline; text-decoration-style: dotted;
-  text-decoration-color: var(--color-text-muted); text-underline-offset: 4px;
+  text-decoration-color: var(--color-link-line); text-underline-offset: 4px;
 }
-a.rv__ind-name:hover { color: var(--color-accent); }
-a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-label { text-decoration-color: var(--color-link); }
 a.rv__ind-name:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 /* name + info-icon + hover tooltip wrapper (source PanelTable "group") */
 .rv__ind-tipwrap { position: relative; display: inline; }
 .rv__ind-info { margin-left: 0.25rem; display: inline-block; color: var(--color-text-muted); vertical-align: baseline; transition: color 0.15s; }
-a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
+a.rv__ind-name:hover .rv__ind-info { color: var(--color-text); }
 .rv__ind-info svg { display: inline-block; vertical-align: baseline; }
+/* Anchoring only: the bubble's skin is the one in components.css (.rm-tip__bub
+   and friends). */
 .rv__tip {
   pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
-  margin-top: 0.5rem; width: 18rem; border-radius: var(--radius);
-  border: 1px solid var(--color-border); background: var(--color-surface);
-  padding: 0.75rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
-  color: var(--color-text-muted);
+  margin-top: 0.5rem; width: 18rem;
   opacity: 0; transition: opacity 0.15s;
 }
 .rv__ind-tipwrap:hover .rv__tip { opacity: 1; }
 .rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); margin-top: 0.15rem; }
-.rv__ind-src a { color: var(--color-text-muted); text-decoration: none; }
-.rv__ind-src a:hover { color: var(--color-accent); }
+/* A nav-weight link: the provenance line's muted rung over the link rule, full
+   text on hover. */
+.rv__ind-src a { color: var(--color-text-muted); text-decoration: underline;
+  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.rv__ind-src a:hover { color: var(--color-text); text-decoration-color: var(--color-link); }
 .rv__spark { width: 78px; }
 .rv__spark-svg { display: block; }
 .rv__spark-empty { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-muted); }
@@ -233,7 +233,9 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .rv__method-list li { margin-bottom: 0.25rem; }
 .rv__method-card p { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 0; }
 .rv__method-note { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 1rem 0 0; }
-.rv__link { color: var(--color-accent); text-decoration: underline; }
+.rv__link { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rv__link:hover { text-decoration-color: var(--color-link); }
 
 /* swarm — each .sv__* selector is declared in EXACTLY ONE block per media
    context (base props for several classes live in the port section below).
@@ -242,7 +244,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__hero-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(6,8,12,0.25), rgba(6,8,12,0.72) 70%, var(--color-void)); pointer-events: none; }
 .sv__hero .sv__detail-title .text-gradient { font-family: var(--font-display); font-weight: 700; background: none; -webkit-text-fill-color: currentColor; color: inherit; }
 .sv__feed-title { margin: 0 0 0.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.8rem; }
-.sv__back:hover { color: var(--color-accent); }
 /* Backdrop chip: ONE border, a dim label and a bright value. The rule this
    replaces was `.sv__fact-row span`, which also matched the value <span>
    nested inside each chip and drew it a second box whose right edge landed on
@@ -257,35 +258,12 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    sized to the stance dots — it shipped square, which quietly filed it with the
    subject marks instead. */
 .sv__fact-dot { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; margin-right: -0.12rem; }
-.sv__bar { margin: 0.6rem 0 1rem; }
-.sv__action-row span { color: var(--color-text); }
 .sv__avatar--large { width: 4.5rem; height: 4.5rem; font-size: 1.4rem; flex: 0 0 auto; }
 .sv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
 .sv__metadata-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
 .sv__metadata-grid div { border-top: 1px solid var(--color-border); padding-top: 0.65rem; }
 .sv__metadata-grid span { display: block; color: var(--color-text-muted); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
 .sv__metadata-grid b { display: block; margin-top: 0.25rem; color: var(--color-text); font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
-/* Swarm verdict. Replaces the .sv__aggregate box whose largest element was
-   "3/5" — turnout, not a finding. The call leads, the proportional bar shows
-   the weight behind it, and the procedural numbers (quorum, mean confidence,
-   who was absent) drop to a footer where they belong. */
-.sv__verdict { margin: 0.6rem 0 0; }
-.sv__verdict-call { display: flex; align-items: center; gap: 0.6rem; margin: 0;
-  font-family: var(--font-display, var(--font-mono)); font-size: 1.55rem; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.01em; color: var(--color-text); }
-.sv__verdict-call i { width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 50%; }
-/* A split is a real result, but it is not a call — it reads muted so it can
-   never be mistaken for the swarm endorsing a position. */
-.sv__verdict-call.is-split { font-size: 1.25rem; color: var(--color-text-muted); }
-.sv__verdict-detail { margin: 0.4rem 0 0; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
-.sv__verdict-bar { display: flex; gap: 2px; height: 6px; margin: 1rem 0 0.75rem; }
-.sv__verdict-bar i { display: block; height: 100%; min-width: 2px; }
-.sv__stances { display: flex; flex-wrap: wrap; gap: 0.9rem; font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
-.sv__verdict-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 1.25rem 0 0;
-  padding-top: 0.9rem; border-top: 1px solid var(--color-border); }
-.sv__verdict-meta div { min-width: 0; }
-.sv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.sv__verdict-meta dd { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text-muted); overflow-wrap: anywhere; }
 
 .sv__takes { display: flex; flex-direction: column; gap: 1rem; }
 .sv__take { position: relative; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; --vfy-inset: 1.25rem; }
@@ -299,21 +277,21 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    conventions for the same data. Lives here rather than in either page's
    scoped <style> for exactly that reason. */
 .mp-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1rem; }
+/* The button family's mono caps at the chip rung of the type scale. */
 .mp-chip { display: inline-flex; align-items: center; gap: 0.42rem; min-height: 34px;
   padding: 0.3rem 0.62rem; background: transparent; color: var(--color-text-muted);
-  border: 1px solid var(--color-border); border-radius: var(--radius);
-  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; cursor: pointer;
+  border: 1px solid var(--color-border); border-radius: 0;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer;
   transition: color .16s ease, border-color .16s ease, background .16s ease; }
 /* The hover lift is a border, not type, so it steps along the border tokens:
-   border to border-light, while the label goes to full text. The same pair
-   .sv__more:hover already uses further down this sheet. */
+   border to border-light, while the label goes to full text. */
 .mp-chip:hover { color: var(--color-text); border-color: var(--color-border-light); }
-/* Selected: a filled plane edged in cyan. Cyan is the house interface line by
-   covenant, so it says "this control is active" without competing with the dot,
-   which says "which subject" — two jobs, two roles, no ambiguity. The × makes
-   it obvious the filter clears by clicking again. */
-.mp-chip.is-on { color: var(--color-text); border-color: var(--color-accent); background: var(--color-surface); }
-.mp-chip__x { color: var(--color-accent); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
+/* Selected: a raised plane edged in the text colour. No hue, so "this control
+   is active" never competes with a colour that means something else on the
+   page. The × makes it obvious the filter clears by clicking again. */
+.mp-chip.is-on { color: var(--color-text); border-color: var(--color-text); background: var(--color-surface); }
+.mp-chip__x { color: var(--color-text-muted); font-size: 0.78rem; line-height: 1; margin-left: 0.05rem; }
+.mp-chip:hover .mp-chip__x { color: var(--color-text); }
 .mp-chip__n { font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
 .mp-chip.is-on .mp-chip__n { color: var(--color-text-muted); }
 .mp-chip:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
@@ -331,8 +309,8 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    plus a plain-language line on hover or keyboard focus.
    The full sentence also rides on aria-label, so assistive tech gets the
    explanation without depending on a hover-only tooltip. */
-/* Neutral, not cyan. Cyan is interface state in this system, and on a take row
-   it sat beside a stance pill that IS carrying meaning in colour — so the mark
+/* Neutral, not cyan. Cyan is kept for the filled primary button and the focus
+   ring, and on a take row it sat beside a stance pill that IS carrying meaning in colour — so the mark
    competed with the one thing on the row that had earned a hue. That a take is
    signed and checkable is a fact, and facts read in the text colour. The
    failure and archive variants below keep their colour, because those ARE
@@ -346,15 +324,10 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    earn) or the warn colour (a failure that never happened). */
 .sv__vfy--arch { color: var(--color-text-muted); }
 .sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
-/* .mp-when__tip rides these rules rather than becoming a third copy of the
-   same bubble (this one, and .rm-tip__bub in components.css, were already
-   two). It only overrides which edge it hangs from — see member.html. */
+/* Anchoring only: the bubble's skin is the one in components.css (.rm-tip__bub
+   and friends). .mp-when__tip hangs from the other edge — see member.html. */
 .sv__vfy-tip, .mp-when__tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
-  width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-top: 1px solid currentColor; border-radius: var(--radius);
-  font-family: var(--font-sans, system-ui, sans-serif); font-size: 0.72rem; line-height: 1.5;
-  letter-spacing: 0; text-transform: none; color: var(--color-text-muted); text-align: left;
+  width: max-content; max-width: min(17rem, 72vw); white-space: normal;
   opacity: 0; visibility: hidden; transform: translateY(3px); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s; }
 .sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip,
@@ -408,7 +381,7 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    mechanism and every session below the fold, so a visitor met a picture
    instead of an answer. The field keeps its full width and loses its claim on
    the viewport. */
-.sv__hero { position: relative; min-height: 20rem; display: flex; align-items: flex-end; overflow: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-void); }
+.sv__hero { position: relative; min-height: 52vh; display: flex; align-items: flex-end; overflow: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-void); }
 .sv__hero::after { content: ""; position: absolute; inset: auto 0 0; height: 110px; background: linear-gradient(to top, var(--color-void), transparent); pointer-events: none; z-index: 1; }
 .sv__hero-inner { position: relative; z-index: 2; width: min(100%, 80rem); margin: 0 auto; padding: 2.5rem 1.5rem; }
 .sv__hero-field { position: absolute; inset: 0; }
@@ -430,20 +403,45 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
    moves between are built on the same grid. /swarm keeps 80rem because it is
    an index of everything, not one document. Prose inside still takes its own
    ch cap; a container is not a measure. */
-.sv__body--narrow { width: min(100%, 67.5rem); padding-top: 8rem; }
-.sv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
-.sv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
+/* Not narrower any more. A detail page (subject, session, member, take) sat
+   at 67.5rem while /swarm sat at 80rem, so moving between a list and one of
+   its rows changed the width of the site. The modifier now means only "no
+   hero above this, so start lower". */
+.sv__body--narrow { padding-top: 8rem; }
+/* No measure cap. A capped paragraph in a full-width band leaves a hole on the
+   right that reads as an unfinished layout rather than as a choice (cab327fe,
+   on /allocation). --compact carried a second, tighter cap on top of this one,
+   so the same paragraph also wrapped differently depending on which page it
+   was on. */
+.sv__lede { margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
+.sv__lede--compact { font-size: 0.95rem; }
 .sv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
 .sv__rail-grid--compact { margin: 0 0 2rem; }
 .sv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
 .sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.sv__back { display: inline-block; margin-bottom: 2rem; }
-.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
+/* The way back, as a control rather than a raw path with a rule under it: the
+   outlined secondary button, which drops the underline that made a navigation
+   affordance read as body copy with a link in it. The arrow is drawn here
+   rather than typed into five views, and steps left on hover. */
+.sv__back { display: inline-flex; align-items: center; gap: 0.45rem;
+  margin-bottom: 2rem; padding: 0.34rem 0.65rem 0.34rem 0.55rem;
+  border: 1px solid var(--color-border-light); text-decoration: none;
+  color: var(--color-text); font-weight: 500;
+  transition: color 150ms var(--ease-out-expo), border-color 150ms var(--ease-out-expo); }
+.sv__back::before { content: "\2190"; display: inline-block;
+  transition: transform 150ms var(--ease-out-expo); }
+.sv__back:hover { border-color: var(--color-text); }
+.sv__back:hover::before { transform: translateX(-2px); }
+.sv__back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .sv__back, .sv__back::before { transition: none; }
+}
+.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; }
 .sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
 .sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
-   radius <= 2px. It used to carry a 1px Beam seam along the top edge. That was
+   square corners. It used to carry a 1px Beam seam along the top edge. That was
    covenant-legal (cyan as a line) and still wrong: the seam repeated down every
    row of an identical card grid, marking nothing, which is the accent rail the
    brand sheet argues against. The border is uniform now and the mark carries
@@ -471,15 +469,15 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-accent); }
 .sv__row-main { min-width: 0; flex: 1; }
 .sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
 .sv__row-title { color: var(--color-text); font-weight: 700; }
-/* A title that is a link. No rule at rest — a heading underlined all the time
-   is heavy — and the accent arrives underneath it on hover, which is the same
-   thing every other link on the site does. These were the last four still
-   turning cyan instead. */
+/* A title that is a link, in the link colour, never cyan. A take card's name
+   carries the whole link rule, --color-link-line at rest and --color-link on
+   hover, from .rr-take a.rr-take__name, which outranks the card's resets.
+   The selectors here add the rule on hover only. */
 .sv__row-title, .sv__member-link, a.sv__session-title, .sv__take-who { text-decoration: none; }
 .sv__row-title:hover, .sv__member-link:hover, a.sv__session-title:hover, .sv__take-who:hover,
 .sv__row-title:focus-visible, .sv__member-link:focus-visible,
 a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
-  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration: underline; text-decoration-color: var(--color-link);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); }
 .sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; max-width: 78ch; }
@@ -734,7 +732,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__mtable tr:last-child td { border-bottom: 0; }
 .sv__mwho { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
 .sv__mwho a { color: var(--color-text); font-weight: 500; text-decoration: none; white-space: nowrap; }
-.sv__mwho a:hover { color: var(--color-accent); }
+.sv__mwho a:hover { text-decoration: underline; text-decoration-color: var(--color-link);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
 /* Lens is proposer flavour, not a fact about every seat, so it sits under the
    name rather than owning a column a validator could never fill. */
 .sv__mlens { display: block; font-style: normal; font-family: var(--font-mono); font-size: 0.7rem;
@@ -771,10 +770,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__qualifier::before { content: "·"; margin-right: 0.5rem; color: var(--color-text-muted); }
 
 .sv__more { display: block; width: 100%; margin-top: 0.75rem; padding: 0.75rem; cursor: pointer;
-  background: none; border: 1px solid var(--color-border); border-radius: var(--radius);
-  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); }
-.sv__more:hover { border-color: var(--color-border-light); color: var(--color-text-soft); }
+  background: none; border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text); }
+.sv__more:hover { border-color: var(--color-text); }
 .sv__more[disabled] { opacity: 0.5; cursor: default; }
 .sv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
 .sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
@@ -788,7 +787,12 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* Full-width spread under the title, then consensus left and recommendation
    right. The card used to stack a 26rem bar over a coloured "lean" word over
    a 68ch rec, which left the right half of a 1232px card empty. */
-.sv__session-body { display: grid; grid-template-columns: minmax(14rem, 0.85fr) minmax(0, 1.4fr);
+/* Decision first, then how much weight to put behind it. The consensus led
+   for a while and took the wider half while carrying three short facts, so the
+   card opened on a stance badge and the reader found the recommendation second.
+   The payload is the left, dominant column now, and the DOM order matches — see
+   the comment on .sv__session-consensus in the views. */
+.sv__session-body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(12rem, 0.75fr);
   gap: 1rem 2rem; align-items: start; margin-top: 0.95rem; }
 .sv__session-consensus { min-width: 0; display: grid; gap: 0.5rem; align-content: start; }
 .sv__session-payload { min-width: 0; }
@@ -799,7 +803,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    Disagreements panel reused the badge markup but not the badge class, so it
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
-.sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
+.sv__stance-dotline i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
 
 /* ── A session's outcome, on the index ────────────────────────────────────
    The card used to be a date, a row of stance pills, and five lines of the
@@ -829,6 +833,304 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__rec dd b { color: var(--color-text); font-weight: 500; text-transform: uppercase;
   font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; }
 .sv__rec-n { font-variant-numeric: tabular-nums; }
+
+/* A REVIEW as a chain: signal, reasoning, outcome (RM-121). Shared by the
+   subject profile's latest review and the session page's signal. Each column
+   opens on a one-word state, then the one chart that fits its data. Columns
+   share the width whatever the count, so the band holds with two today and
+   three once reviews produce weights (#960). */
+.sr { border: 1px solid var(--color-border); margin: 2.5rem 0 0; }
+.sr__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 0.4rem 1rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--color-border); }
+.sr__title { margin: 0; font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.3rem; line-height: 1; color: var(--color-text); }
+.sr__meta { margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-family: var(--font-mono);
+  font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-muted); }
+.sr__meta a { color: var(--color-link); text-decoration: none; border-bottom: 1px solid var(--color-link-line); }
+.sr__meta a:hover { border-bottom-color: var(--color-link); }
+.sr__cols { display: grid; grid-template-columns: 1fr; }
+.sr__col { min-width: 0; padding: 1.1rem 1.25rem 1.25rem; }
+.sr__col + .sr__col { border-top: 1px solid var(--color-border); }
+@media (min-width: 62rem) {
+  .sr__cols { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); grid-template-columns: none; }
+  .sr__col + .sr__col { border-top: 0; border-left: 1px solid var(--color-border); }
+}
+.sr--panel .sr__col { padding: 0; }
+.sr__k { margin: 0; font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--color-text-muted); }
+.sr__state { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.7rem; margin: 0.55rem 0 0.9rem; }
+.sr__state i { width: 10px; height: 10px; flex: none; align-self: center; }
+.sr__state b { font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.9rem; line-height: 1; letter-spacing: -0.005em; color: var(--color-text); }
+.sr__state span { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-soft);
+  font-variant-numeric: tabular-nums; }
+.sr__foot { margin: 0.8rem 0 0; font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.06em;
+  line-height: 1.5; color: var(--color-text-muted); }
+
+/* SIGNAL: dots on one percentile axis. A position, not an amount, so never a
+   bar from zero. The lead dot is the composite; hollow is context. */
+.sig { display: grid; gap: 0.5rem; }
+.sig__scale, .sig__row { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) 2.8rem;
+  gap: 0.75rem; align-items: center; }
+.sig__ticks { position: relative; height: 1rem; }
+.sig__ticks b { position: absolute; bottom: 0; transform: translateX(-50%); font-family: var(--font-mono);
+  font-weight: 400; font-size: 0.56rem; letter-spacing: 0.08em; color: var(--color-text-muted); }
+.sig__ticks b:first-of-type { transform: none; }
+.sig__ticks b:last-of-type { transform: translateX(-100%); }
+.sig__ticks:has(.sig__zone) { height: 1.9rem; }
+.sig__zone { position: absolute; top: 0; text-align: center; font-style: normal; font-family: var(--font-mono);
+  font-size: 0.54rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); }
+.sig__l { font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-text-soft); justify-self: start; }
+.sig__track { position: relative; height: 1rem; }
+.sig__track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+  background: var(--color-border); }
+.sig__mid { position: absolute; left: 50%; top: 1px; bottom: 1px; border-left: 1px dashed #3a4456; }
+.sig__cut { position: absolute; top: 0; bottom: 0; border-left: 1px solid #3a4456; }
+.sig__dot { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%;
+  transform: translate(-50%, -50%); background: var(--color-text-muted); }
+/* A dot's reading on hover of its row (the dot alone is 8px to aim at), in the
+   one bubble skin (components.css). It sits over the dot, and turns inward at
+   either end of the scale so it never leaves the card. */
+.sig__row:hover { cursor: default; }
+.sig__tip { position: absolute; bottom: calc(100% + 0.375rem); transform: translateX(-50%); z-index: 5;
+  width: max-content; max-width: 17rem; white-space: normal;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 100ms var(--ease-out-expo), visibility 0s linear 100ms; }
+.sig__tip.is-start { transform: translateX(-0.5rem); }
+.sig__tip b { display: block; font-weight: 500; }
+.sig__tip span { display: block; margin-top: 0.25rem; color: var(--color-text-soft); }
+.sig__tip.is-end { transform: translateX(calc(-100% + 0.5rem)); }
+.sig__row:hover .sig__tip { opacity: 1; visibility: visible; transition-delay: 0s; }
+.sig__v { font-family: var(--font-mono); font-size: 0.72rem; text-align: right; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums; }
+.sig__row.is-lead .sig__l, .sig__row.is-lead .sig__v { color: var(--color-text); }
+.sig__row.is-lead .sig__dot { width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--color-void); }
+.sig__row.is-context { margin-top: 0.45rem; }
+.sig__row.is-context .sig__dot { background: var(--color-void); box-shadow: inset 0 0 0 1.5px var(--color-text-muted); }
+
+/* REASONING: each member in their stance's column, bearish to bullish. */
+/* Each column at least as wide as its stance word: at phone width equal fifths
+   ran CONSTRUCTIVE into BULLISH. */
+.vote { display: grid; grid-template-columns: repeat(5, minmax(min-content, 1fr)); gap: 0.25rem; align-items: end; }
+.vote__col { display: flex; flex-direction: column; align-items: stretch; gap: 0.45rem; min-width: 0; }
+.vote__stack { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; }
+.vote__m { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; max-width: 100%;
+  font-family: var(--font-mono); font-size: 0.58rem; line-height: 1.25; text-align: center;
+  color: var(--color-text-soft); text-decoration: none; overflow-wrap: anywhere; }
+.vote__m i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.vote__m[href]:hover span { color: var(--color-text); }
+.vote__axis { border-top: 1px solid var(--color-border); padding-top: 0.4rem; text-align: center;
+  font-family: var(--font-mono); font-size: 0.54rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-text-muted); }
+.vote__col.is-lead .vote__axis { color: var(--color-text); border-top-color: var(--color-text-muted); }
+.vote__sq { display: flex; flex-wrap: wrap; gap: 3px; margin: 0; }
+.vote__sq i { width: 10px; height: 10px; display: block; }
+
+/* Target weights as a ring: parts of one whole, read at a glance. The track
+   behind the arcs is what a 0% sleeve leaves visible, so an incomplete
+   framework shows as an unclosed ring rather than being rescaled to look
+   complete. Arcs are painted from CATEGORICAL by the sleeve's published
+   position, so a sleeve is the same colour here and on /allocation's donut. */
+.sv__wmix { display: flex; align-items: center; gap: 1rem 1.25rem; flex-wrap: wrap; }
+.sv__wdonut-host { display: block; flex: none; line-height: 0; }
+.sv__wdonut { width: 92px; height: 92px; display: block; }
+.sv__wkeys { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.sv__wkeys li { display: flex; align-items: center; gap: 0.45rem;
+  font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.04em;
+  color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.sv__wkeys li i { width: 7px; height: 7px; flex: none; }
+.sv__wkeys li b { color: var(--color-text); font-weight: 500; margin-left: auto; padding-left: 0.75rem; }
+/* A sleeve held at zero is a decision, so it keeps its row and reads as one:
+   dimmed, with a hollow key, rather than dropped. */
+.sv__wkeys li.is-zero { opacity: 0.55; }
+.sv__wkeys li.is-zero i { background: none !important; box-shadow: inset 0 0 0 1px var(--color-text-muted); }
+.sv__wkeys li.is-zero b { color: var(--color-text-muted); }
+/* ── /allocation's sleeve card and change ledger ──────────────────────────
+   Shared with a session's outcome, so a sleeve's weights and a move between
+   two weights read the same on both pages. The formatting is shared too:
+   lib/weight-change.js. */
+/* ── one card per sleeve ───────────────────────────────────────────────── */
+/* One card per row, never a gallery. Two up halves the width the merged vault
+   table has to render in, and that table is seven columns: name, balance,
+   price, value, policy, in vault, drift. At half width it scrolls sideways
+   inside the card, which turns the comparison the section exists for into a
+   thing you have to drag to read. Full width, it fits. */
+.alp__cards { display: grid; gap: 1rem; }
+/* One line, brightened. The card is not itself clickable, so it gets an edge
+   that acknowledges the pointer and nothing that implies a click. */
+.alp__card {
+  background: var(--color-deep); border: 1px solid var(--color-border);
+  display: flex; flex-direction: column;
+  transition: border-color 150ms var(--ease-out-expo);
+}
+.alp__card:hover { border-color: var(--color-border-light); }
+.alp__card-top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem 1.25rem;
+  flex-wrap: wrap; padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid var(--color-border);
+}
+.alp__card-name { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.alp__card-name i { flex: 0 0 auto; width: 0.6rem; height: 0.6rem; transform: translateY(-0.05em); }
+.alp__card-name b {
+  font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
+  font-size: 1.05rem; letter-spacing: 0.01em; color: var(--color-text);
+}
+.alp__card-w { text-align: right; }
+.alp__card-w b {
+  font-family: var(--font-mono); font-weight: 500; font-size: 1.15rem;
+  color: var(--color-text); font-variant-numeric: tabular-nums;
+}
+.alp__card-w small {
+  display: block; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text-muted);
+}
+.alp__card-body { padding: 1rem 1.25rem 1.25rem; display: flex; flex-direction: column; flex: 1 1 auto; }
+
+/* The policy bar, drawn to the SLEEVE's own hundred rather than to its share
+   of the book, so a 5% sleeve holding seven names is as readable as a 95% one.
+   The 2px separators are the surface showing through, not a border colour: a
+   stacked bar needs a gap between fills, and a line would read as a rule. */
+.alp__stk {
+  display: flex; height: 1.6rem; background: var(--color-surface-light);
+  border: 1px solid var(--color-border);
+}
+.alp__stk > span {
+  display: block; height: 100%;
+  transition: opacity 150ms var(--ease-out-expo);
+}
+.alp__stk > span + span { border-left: 2px solid var(--color-deep); }
+.alp__stk.zero { opacity: 0.45; }
+.alp__names { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin-top: 0.75rem; font-size: 0.8rem; }
+.alp__names > span { display: inline-flex; align-items: baseline; gap: 0.5rem; color: var(--color-text-soft); }
+.alp__names i { flex: 0 0 auto; width: 0.45rem; height: 0.45rem; transform: translateY(-0.05em); }
+.alp__names b {
+  font-family: var(--font-mono); font-weight: 400; color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.alp__dot {
+  display: inline-block; width: 0.45rem; height: 0.45rem; margin-right: 0.5rem;
+  vertical-align: 0.05em;
+}
+/* Direction is the GLYPH first and the colour second, so the column survives
+   greyscale, forced-colors and colourblindness. Beacon appears here as one
+   arrow at type size, which is the point size the covenant allows it. */
+.alp__mv { display: inline-flex; align-items: baseline; gap: 0.25rem; justify-content: flex-end; }
+.alp__mv i { font-style: normal; font-size: 0.78em; line-height: 1; }
+/* Up and down read the same way wherever a move shows: the ring's legend and
+   the Vaults table's gaps. --color-warn is the red the palette already carries.
+   Beacon no longer marks notes anywhere here: the only warm hues left are
+   CATEGORICAL series colours, which mean a sleeve or a name and nothing else. */
+.alp__mv.up { color: var(--color-green); }
+.alp__mv.down { color: var(--color-warn); }
+.alp__mv.flat { color: var(--color-text-muted); }
+/* ── The review band's lower half ────────────────────────────────────────
+   Shared by the subject page's latest review and the session page. */
+/* OUTCOME leads the band: what the session decided, then the signal and the
+   reasoning under it. The ring is the session cards' own; the ledger beside
+   it is /allocation's "What changed" (.alp__tbl, .alp__mv above). */
+.sr__out { padding: 1.1rem 1.25rem 1.25rem; }
+.sr__out ~ .sr__cols { border-top: 1px solid var(--color-border); }
+.sr__mix { display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem 2rem; }
+.sr__ring { margin: 0; display: grid; justify-items: center; gap: 0.5rem; flex: none; }
+.sr__ring figcaption { font-family: var(--font-mono); font-size: 0.56rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--color-text-muted); }
+.sr__ledger { flex: 1 1 30rem; min-width: 0; }
+/* Actions a v0 session's members wrote: the position, the verb in a column of
+   its own so the reasons start at one edge, then the reason. */
+.sr__acts { margin: 0; display: grid; }
+.sr__act { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 0.3rem 1.25rem;
+  padding: 0.6rem 0; border-bottom: 1px solid var(--color-border); }
+.sr__act:last-child { border-bottom: 0; }
+.sr__act dt { font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text); }
+.sr__act dd { margin: 0; display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: 1rem;
+  align-items: baseline; font-size: 0.84rem; line-height: 1.5; color: var(--color-text-soft); }
+.sr__act dd b { font-family: var(--font-mono); font-weight: 500; font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--color-text); }
+.sr__why { margin: 1rem 0 0; font-size: 0.9rem; line-height: 1.65; color: var(--color-text-soft); }
+.sr__within { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.sr__within .alp__cards { margin-top: 0.8rem; }
+@media (max-width: 720px) {
+  .sr__act { grid-template-columns: minmax(0, 1fr); }
+}
+/* "What the swarm was handed", the disclosure at the foot of the review
+   band on the subject page and the session page. Mirrors /allocation's
+   .alp__hold: the same tokens, the same 0fr/1fr grid transition, the same
+   flat edges. */
+.sp-brief { margin-top: 1rem; border: 1px solid var(--color-border); }
+.sp-brief__sum {
+  width: 100%; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; gap: 0.5rem 1rem;
+  padding: 0.7rem 0.9rem; background: var(--color-surface);
+  border: 0; border-bottom: 1px solid transparent; text-align: left;
+  transition: background-color 150ms var(--ease-out-expo), color 150ms var(--ease-out-expo);
+}
+.sp-brief__sum-k {
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--color-text);
+}
+.sp-brief__sum-m {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-muted);
+}
+.sp-brief__sum:hover { background: var(--color-surface-light); }
+.sp-brief__sum:hover .sp-brief__sum-m { color: var(--color-text-soft); }
+.sp-brief__sum:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.sp-brief__sum-m i { transition: transform 300ms var(--ease-out-expo); font-style: normal; }
+.sp-brief.is-open .sp-brief__sum { border-bottom-color: var(--color-border); }
+.sp-brief.is-open .sp-brief__sum-m i { transform: rotate(180deg); }
+.sp-brief__anim {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--ease-out-expo);
+}
+.sp-brief.is-open .sp-brief__anim { grid-template-rows: 1fr; }
+.sp-brief__clip { overflow: hidden; min-height: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .sp-brief__anim, .sp-brief__sum i { transition: none; }
+}
+/* What the swarm was handed: a record of the brief, one row per part it
+   actually contains. */
+.sr .sp-brief { margin: 0; border: 0; border-top: 1px solid var(--color-border); }
+.hand { margin: 0; padding: 0.3rem 1.25rem 1rem; }
+.hand__row { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 0.3rem 1.5rem;
+  padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
+.hand__row:last-child { border-bottom: 0; }
+.hand dt { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--color-text-muted); padding-top: 0.25rem; }
+.hand dd { margin: 0; min-width: 0; font-size: 0.86rem; color: var(--color-text); }
+.hand q { color: var(--color-text-soft); }
+.hand__pills { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.hand__pill { font-family: var(--font-mono); font-size: 0.66rem; border: 1px solid var(--color-border);
+  padding: 0.2rem 0.45rem; color: var(--color-text-soft); white-space: nowrap; }
+.hand ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.hand li { position: relative; padding-left: 0.8rem; font-size: 0.8rem; line-height: 1.45; color: var(--color-text-soft); }
+.hand li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 4px; height: 1px;
+  background: var(--color-text-muted); }
+/* The allocation targets the brief carried: sleeve and figure, no bars. */
+.hand .hand__targets { max-width: 22rem; gap: 0.25rem; }
+.hand .hand__targets li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: center; column-gap: 0.5rem;
+  padding-left: 0; font-size: 0.8125rem; color: var(--color-text-soft); }
+.hand .hand__targets li::before { content: none; }
+.hand .hand__targets i { width: 0.5rem; height: 0.5rem; }
+.hand .hand__targets b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
+.hand__links li { font-size: 0.84rem; color: var(--color-text); }
+/* A 10rem label column leaves a phone a sliver for the value, so the label
+   goes on top. Same breakpoint the register drops its bars at. */
+@media (max-width: 720px) {
+  .hand { padding: 0.2rem 1rem 0.85rem; }
+  .hand__row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .hand dt { padding-top: 0; }
+}
+.hand__pill-wrap { display: contents; }
+/* A recent session is an inline link, not a box: at the pills' 0.35rem gap
+   the underlines run together into one. */
+.hand__pills a.rr-lnk { margin-right: 0.65rem; }
+/* The holdings table, on the subject page and the session page. The series
+   key matches the chart's band for the same token: a filled square, not a
+   rule, because the figure is a stack of areas and the key has to look like
+   the thing it points at. */
+.sp-holdings { margin-top: 1rem; }
+.sp-key { display: inline-block; width: 0.5rem; height: 0.5rem; background: var(--k, var(--color-border));
+          vertical-align: baseline; margin-right: 0.5rem; }
 .sv__rec-more { color: var(--color-text-muted); font-size: 0.8rem; }
 /* Its own class, not a .sv__rec modifier: a selector that matches both the
    recommendation and the notice that there isn't one cannot be asserted on. */
@@ -836,14 +1138,13 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 
 .sv__session-foot { display: flex; align-items: center; justify-content: space-between;
   gap: 1rem; margin-top: 1rem; }
+/* The outlined secondary button. */
 .sv__takes-btn { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 34px;
   padding: 0 0.6rem 0 0.45rem; cursor: pointer; background: none;
-  border: 1px solid var(--color-border); border-radius: var(--radius);
-  font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--color-text-muted); }
-/* Border, not type: the same border to border-light hover step as .mp-chip and
-   .sv__more. */
-.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-border-light); color: var(--color-text); }
+  border: 1px solid var(--color-border-light); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text); }
+.sv__takes-btn:hover:not([disabled]) { border-color: var(--color-text); }
 .sv__takes-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .sv__takes-btn[disabled] { opacity: 0.45; cursor: default; }
 .sv__takes-caret { display: inline-block; transition: transform 0.16s ease; font-size: 0.9rem; line-height: 1; }
@@ -876,7 +1177,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__take-absent-who { color: var(--color-text); font-weight: 500; font-size: 0.85rem;
   text-decoration: none; }
 .sv__take-absent-who:hover, .sv__take-absent-who:focus-visible {
-  text-decoration: underline; text-decoration-color: var(--color-accent);
+  text-decoration: underline; text-decoration-color: var(--color-link);
   text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .sv__take-absent-who + .sv__take-absent-who::before { content: ", "; color: var(--color-text-muted);
   font-weight: 400; }
@@ -891,115 +1192,40 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__meta-grid dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
 /* The signer's name was falling through to the browser's default link colours
    — a purple :visited link on the receipt, off the palette entirely. */
-.sv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
-.sv__meta-grid dd a:hover { text-decoration: underline; }
+.sv__meta-grid dd a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.sv__meta-grid dd a:hover { text-decoration-color: var(--color-link); }
 .sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; max-width: 82ch; }
 .sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
 .sv__bullet-list li::before { content: "· "; color: var(--color-text-muted); }
-.sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
 /* Market backdrop. One panel, not two: the old "Brief" half held a single
    derived sentence restating the <h1> and a backdrop chip. A note says what
    the section IS — neither old heading did, and a reader had no way to tell
    whether this was the swarm's reading or the input they were handed. */
-.sv__backdrop { margin: 1.5rem 0 2rem; }
 .sv__panel-note { margin: 0.55rem 0 0; max-width: 46rem; color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; }
-.sv__backdrop-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem 2.5rem; margin-top: 0.4rem; }
-.sv__metric-line { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-top: 0.8rem; font-family: var(--font-mono); color: var(--color-text-muted); }
-.sv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
-.sv__bar, .sv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
-.sv__bar i, .sv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
 /* The regime read in words, above the figures that support it. Set larger than
    the metric line because it IS the answer — the composite, the bar and the
    sparkline are all evidence for this one word. */
-.sv__regime-call { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.85rem;
-                   font-family: var(--font-mono); font-size: 1.05rem; letter-spacing: 0.02em;
-                   color: var(--color-text); }
 /* Beacon is a POINT in the covenant, never a run of type — so the direction is
    carried by a small square beside the word, not by colouring the word itself. */
-.sv__regime-call i { width: 0.5rem; height: 0.5rem; flex: none; }
-.sv__sparkline { margin-top: 1rem; height: 4.25rem; }
-.sv__sparkline svg { width: 100%; height: 100%; display: block; }
-.sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
-/* The dissent line is a finding, not a caption: it keeps the panel-sub scale but
-   drops the uppercase tracking so it reads as a sentence. Written as a compound
-   selector and placed AFTER .sv__panel-sub deliberately — as a bare .sv__dissent
-   earlier in the file it lost the cascade to panel-sub's text-transform and the
-   sentence rendered in caps. */
-.sv__panel-sub.sv__dissent { text-transform: none; letter-spacing: 0; font-size: 0.7rem;
-                             line-height: 1.5; color: var(--color-text-muted); max-width: 34ch; }
-.sv__panel-divergence { overflow-x: auto; }
-.sv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
-.sv__bucket-bars-svg { overflow-x: auto; }
-/* Wider than the old 34rem: the bars figure now carries its own series names
-   and a "% of NAV" value column, and squeezed to 34rem the 10.5px bucket labels
-   collided with the series column. */
-.sv__bucket-bars-svg svg { width: 100%; min-width: 26rem; max-width: 42rem; height: auto; display: block; }
-.sv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
-.sv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.sv__panel-bar b { color: var(--color-text); text-align: right; }
-.sv__portfolio, .sv__recommendation { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
-.sv__portfolio-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin: 1.5rem 0; align-items: start; }
-.sv__donut-list { display: grid; gap: 0.55rem; }
-.sv__donut-row { display: grid; grid-template-columns: 2.5rem 1fr auto; gap: 0.6rem; align-items: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
-.sv__donut-row i { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,0.06) 0); border: 1px solid var(--color-border); position: relative; }
-.sv__donut-row i::after { content: ""; position: absolute; inset: 0.42rem; border-radius: 50%; background: var(--color-void); }
-.sv__donut-row span { color: var(--color-text); }
-.sv__donut-row b { color: var(--color-text-muted); font-weight: 500; }
+.sv__portfolio { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
 .sv__table-wrap { overflow-x: auto; }
 .sv__data-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.72rem; }
 .sv__data-table th { color: var(--color-text-muted); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
-/* The bars' key. Each swatch is drawn with the SAME treatment as the bar it
-   names — open outline, muted fill, accent fill — so the mapping is visual
-   rather than positional. */
-.sv__bars-key { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex;
-                flex-wrap: wrap; gap: 0.3rem 1.1rem;
-                font-family: var(--font-mono); font-size: 0.66rem; }
-.sv__bars-key li { display: flex; align-items: center; gap: 0.4rem; }
-.sv__bars-key span { color: var(--color-text-muted); }
-.sv__bars-key__swatch { width: 0.7rem; height: 0.4rem; flex: none; }
-.sv__bars-key__swatch.is-target { border: 1px solid var(--color-text-muted); }
-/* Not type but a SAMPLE of the actual bar, so its job is to composite to what
-   that bar composites to. bucketWeightsBars() in static-views.js now draws that
-   bar as --color-text-muted at fill-opacity 0.45, so the swatch carries the
-   same pair; left at 0.9 it would have been brighter than the series it names,
-   which is the one thing a key may not be. */
-.sv__bars-key__swatch.is-actual { background: var(--color-text-muted); opacity: 0.45; }
-.sv__bars-key__swatch.is-recommended { background: var(--color-accent); }
-.sv__bars-key li:last-child span { color: var(--color-accent); }
-/* The bucket table repeats the bars as numbers. Sits directly under the figure
-   it restates, so it reads as one block rather than a second exhibit. */
-.sv__bucket-table { margin-top: 0.9rem; }
-.sv__bucket-table .sv__data-table { font-variant-numeric: tabular-nums; }
-/* Recommended is the column the panel exists to publish — it takes the accent
-   the R bar already uses above, so the eye lands in the same place in both. */
-.sv__num--rec { color: var(--color-accent) !important; }
-.sv__bucket-table td.sv__num--rec { color: var(--color-accent); }
-/* The move being asked for. Direction is carried by the ↑/↓ glyph in the text,
-   not by colour alone, so it survives a monochrome read; the colours only
-   reinforce it. Green = add, sand = trim — never red/green as the sole signal. */
-.sv__gap.is-up { color: var(--color-green); }
-.sv__gap.is-down { color: var(--color-warm, #e8a640); }
 .sv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
 .sv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
-.sv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
-.sv__rich-rec { display: grid; gap: 1rem; }
-.sv__rec-actions { display: grid; gap: 0.5rem; }
-.sv__action-row { display: grid; grid-template-columns: 7rem 5rem 1fr; gap: 0.75rem; align-items: start; border-top: 1px solid var(--color-border); padding-top: 0.65rem; font-size: 0.82rem; }
-.sv__action-row span, .sv__action-row b { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
-.sv__action-row b { color: var(--color-text); }
-.sv__action-row p { margin: 0; color: var(--color-text-muted); line-height: 1.5; }
-/* Cyan seams the top edge instead of washing the whole plane: the covenant
-   makes cyan a LINE, never a mass, and a tinted field is a mass. */
-.sv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
 /* The stance chip. nowrap so it cannot break mid-label and pull the view
    column out of alignment on a narrow panel. */
 .sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
 .sv__dis-nostance { color: var(--color-text-muted); font-style: italic; }
-.sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
-  color: var(--color-accent) !important; text-transform: none !important; }
+.sv__disagreement .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
+  color: var(--color-link); text-transform: none; text-decoration: underline;
+  text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.sv__disagreement .sv__dis-read:hover, .sv__disagreement .sv__dis-read:focus-visible {
+  color: var(--color-link); text-decoration-color: var(--color-link); }
 .sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
 .sv__disagreement h3 { margin: 0 0 0.7rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
 .sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
@@ -1016,8 +1242,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
    are unequal heights, and whitespace on its own stopped saying where one
    member's position ended and the next began. */
 .sv__disagreement li + li { border-top: 1px solid rgba(255,255,255,0.05); }
-.sv__disagreement a { color: var(--color-text); text-decoration: none; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
-.sv__disagreement a:hover { color: var(--color-accent); }
+.sv__disagreement a { color: var(--color-link); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem;
+  text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.sv__disagreement a:hover, .sv__disagreement a:focus-visible { text-decoration-color: var(--color-link); }
 /* "Settles when" is the resolution condition, not body copy — set it off from
    the positions above it so it reads as the disagreement's footer. */
 .sv__disagreement p { margin: 0.8rem 0 0; padding-top: 0.7rem;
@@ -1047,9 +1274,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sv__take-h:first-child { margin-top: 0; }
 .sv__take-body strong { color: var(--color-text); font-weight: 700; }
 
-.sv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
-.sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
-.sv__synthesis p { margin: 0 0 0.75rem; }
+/* A session's synthesis: the paragraph a v0 session wrote, at reading size.
+   No accent rail: cyan is a line this brand draws on a figure, not a margin. */
+.sv__synthesis { margin: 1.1rem 0 0; font-size: 0.95rem; line-height: 1.7; color: var(--color-text); }
+.sv__synthesis p { margin: 0 0 0.8rem; }
 @media (max-width: 720px) {
   /* Two columns, not one: identity keeps the left and cadence keeps the right.
      The blurb goes full width underneath. */
@@ -1064,14 +1292,11 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
   .sv__session-body { grid-template-columns: 1fr; gap: 1.15rem; }
-  .sv__action-row { grid-template-columns: 1fr; }
   /* Member and stance share the top line, view below across both — three 6.5rem
      columns do not survive a phone, and stacking all three wasted a full line
      on a two-word stance chip. */
   .sv__disagreement li { grid-template-columns: auto 1fr; gap: 0.2rem 0.7rem; }
   .sv__disagreement .sv__dis-view { grid-column: 1 / -1; }
-  .sv__panel-bar { grid-template-columns: 4.5rem 1fr; }
-  .sv__panel-bar b { display: none; }
 }
 
 /* swarm application form (/swarm/apply) */
@@ -1083,11 +1308,14 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 }
 .sv__input:focus { outline: none; border-color: var(--color-accent); }
 .sv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
+/* The primary button, as .btn-primary draws it. */
 .sv__submit {
-  align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+  align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: var(--radius);
-  color: var(--color-bg); background: var(--color-accent); border: none;
+  color: var(--color-void); background: var(--color-accent); border: none;
+  transition: background-color 0.3s;
 }
+.sv__submit:hover:not(:disabled) { background: #fff; }
 .sv__submit:disabled { opacity: 0.5; cursor: default; }
 .sv__applied { flex-direction: column; align-items: flex-start; }
 
@@ -1103,14 +1331,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
   .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  /* .sv__discussion stays single-column at every width. Consensus and
-     Disagreements are different KINDS of claim about the session, not a pair to
-     compare side by side, and they are wildly unequal in length — two columns
-     forced a ragged bottom and implied they carry equal weight. Now that echoed
-     prose is suppressed, Consensus is often empty too, which left a lone
-     column stranded in half the grid. They read as a sequence. */
-  .sv__portfolio-grid { grid-template-columns: 0.75fr 1.25fr; }
   .sv__metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -1163,8 +1383,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .alloc-total { color: var(--color-green); font-weight: 700; }
 .alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
 .alloc-foot { margin-top: 2.5rem; }
-.alloc-foot a { color: var(--color-accent); text-decoration: none; }
-.alloc-foot a:hover { text-decoration: underline; }
+.alloc-foot a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.alloc-foot a:hover { text-decoration-color: var(--color-link); }
 @media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
 
 /* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
@@ -1265,7 +1486,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   border: 1px solid var(--color-border); border-radius: var(--radius-pill);
 }
 .adm-nav__link:hover { color: var(--color-text); }
-.adm-nav__link--active { color: var(--color-deep); background: var(--color-accent); border-color: var(--color-accent); }
+.adm-nav__link--active { color: var(--color-text); background: var(--color-surface); border-color: var(--color-text); }
 
 .adm-alerts { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem; }
 .adm-alert {
@@ -1297,8 +1518,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .adm-artifacts { display: flex; flex-direction: column; gap: 0.75rem; }
 .adm-artifact__head { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: baseline; font-family: var(--font-mono); font-size: 0.75rem; }
 
-.adm-link { color: var(--color-accent); text-decoration: none; font-family: var(--font-mono); font-size: 0.78rem; }
-.adm-link:hover { text-decoration: underline; }
+.adm-link { color: var(--color-link); font-family: var(--font-mono); font-size: 0.78rem;
+  text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.adm-link:hover { text-decoration-color: var(--color-link); }
 
 .adm-form { display: flex; flex-direction: column; gap: 0.75rem; max-width: 34rem; margin: 0.5rem 0 1.5rem; padding: 1rem 1.25rem; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); }
 .adm-form__row { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -1324,25 +1546,730 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   padding: 0.4rem 0.9rem; font-family: var(--font-mono); font-size: 0.78rem; cursor: pointer;
   color: var(--color-text-muted); background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius);
 }
-.adm-tab--active { color: var(--color-accent); border-color: rgba(0, 229, 255, 0.4); background: rgba(0, 229, 255, 0.08); }
+.adm-tab--active { color: var(--color-text); border-color: var(--color-text); background: var(--color-surface); }
 
 .adm-meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; font-size: 0.85rem; }
 .adm-meta-grid dt { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .adm-meta-grid dd { margin: 0; }
 .adm-bullet-list { list-style: disc; margin: 0 0 1rem; padding-left: 1.25rem; font-size: 0.85rem; }
 
-/* Within-bucket weights. The bucket bars say how much goes to each bucket; this
-   says what is inside them. Rows are a name and a number, tabular so the column
-   of percentages reads down. No fills: the figure is the point, not a bar. */
-.sv__within { margin-top: 1rem; }
-.sv__within-bucket { margin-top: 0.75rem; }
-.sv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
-                   text-transform: uppercase; color: var(--color-text-muted); margin: 0 0 0.35rem; }
-.sv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
-                   background: var(--color-border); border: 1px solid var(--color-border); }
-.sv__within-list li { display: flex; justify-content: space-between; align-items: baseline;
-                      gap: 1rem; background: var(--color-surface); padding: 0.4rem 0.65rem;
-                      font-size: 0.85rem; color: var(--color-text-muted); }
-.sv__within-list b { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-                     color: var(--color-text); font-weight: 600; }
-@media (min-width: 640px) { .sv__within-list { grid-template-columns: 1fr 1fr; } }
+
+/* ── The research record (RM-121) ────────────────────────────────────────────
+   A subject page and a session page read as one document: a breadcrumb, the
+   head, a hairline row of facts, then sections divided by hairlines instead
+   of boxed cards. Taken from the #990 prototype's information
+   architecture and rebuilt on house tokens. One type scale and one spacing
+   scale for every rule below:
+     type    0.625 (label) · 0.75 (note, table) · 0.875 (body) · 0.9375 (prose) · 1 (name) · 1.3125 (h3) · 1.5 / 1.6875 (figure, h2) · 2.25rem (stat)
+     space   0.25 · 0.5 · 0.75 · 1 · 1.5 · 2.25rem
+   Section headings carry no numbers (David, 2026-09-18): a "01 / 02" index
+   in front of an h2 reads as generated filler, and the headings name their
+   sections on their own. */
+.rr a:not(.btn-primary) { color: inherit; text-decoration: none; }
+/* Two link treatments and no third, both monochrome (David, 2026-09-18: no
+   cyan links). Inline: --color-link, lighter than the text it sits in, over
+   --color-link-line. Nav: mono, uppercase, text-soft over the same line. Every
+   selector is at least (0,2,1), so it matches the reset above and, written
+   after it, wins. */
+.rr .rr-prose a, .rr .rr-dl a, .rr a.rr-lnk {
+  color: var(--color-link); border-bottom: 1px solid var(--color-link-line);
+  transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr .rr-crumbs, .rr .rr-recnav, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-soft); }
+.rr .rr-crumbs a, .rr .rr-recnav a, .rr a.rr-meta__lnk, .rr a.rr-sec__aside {
+  border-bottom: 1px solid var(--color-link-line); padding-bottom: 0.25rem;
+  transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr .rr-prose a:hover, .rr .rr-dl a:hover, .rr a.rr-lnk:hover,
+.rr .rr-prose a:focus-visible, .rr .rr-dl a:focus-visible, .rr a.rr-lnk:focus-visible {
+  border-bottom-color: var(--color-link); }
+.rr .rr-crumbs a:hover, .rr .rr-recnav a:hover, .rr a.rr-meta__lnk:hover, .rr a.rr-sec__aside:hover,
+.rr .rr-crumbs a:focus-visible, .rr .rr-recnav a:focus-visible, .rr a.rr-meta__lnk:focus-visible, .rr a.rr-sec__aside:focus-visible {
+  color: var(--color-text); border-bottom-color: var(--color-text); }
+.rr a:focus-visible, .rr button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.rr-k { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.5; text-transform: uppercase;
+  letter-spacing: 0.11em; color: var(--color-text-muted); }
+.rr-note { margin: 0.75rem 0 0; font-size: 0.75rem; line-height: 1.65; color: var(--color-text-muted); }
+.rr-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.rr-crumbs { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0 0 2.25rem; }
+.rr-crumbs [aria-current] { color: var(--color-text-soft); }
+
+.rr-head { padding-bottom: 1.5rem; }
+.rr-head .sv__eyebrow { margin: 0 0 0.75rem; }
+.rr-when { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; margin: 0.75rem 0 0;
+  font-size: 0.875rem; color: var(--color-text-soft); }
+.rr-when .rm-sphase { font-size: 0.625rem; }
+.rr-links { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0 0; font-size: 0.75rem; color: var(--color-text-soft); }
+
+/* Facts as label and figure on one hairline row, not as bordered chips. */
+.rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; padding: 0.75rem 0;
+  border-block: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A row of facts that opens a section, above a figure: clear of it. */
+.rr-meta--lead { margin-bottom: 1.5rem; }
+.rr-meta__i { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+.rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
+.rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+/* The live mark stays square beside the round regime dot it would inherit. */
+.rr-meta__i .rm-pulse { width: 0.4rem; height: 0.4rem; border-radius: 0; }
+.rr-meta__lnk { position: relative; margin-left: auto; }
+/* A 13px (i) and a 21px link are too small to hit on a phone, and the tip is
+   the only way to learn what a figure means: each gets an invisible tap area. */
+.rr-meta__lnk::before { content: ""; position: absolute; inset: -0.5rem -0.25rem; }
+.rr .rm-tip__btn { position: relative; }
+.rr .rm-tip__btn::before { content: ""; position: absolute; inset: -0.75rem; }
+
+
+.rr-sec { padding: 2.25rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
+.rr-sec:last-of-type { border-bottom: 0; }
+.rr-sec__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1.5rem; margin: 0 0 1.5rem; }
+.rr-sec__h { margin: 0; font-family: var(--font-display); font-weight: 700;
+  font-size: 1.6875rem; line-height: 1.15; letter-spacing: -0.015em; text-transform: uppercase; color: var(--color-text); }
+.rr-sec__aside { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A note the reader must not miss (a vault's risk): the live strip's surface
+   and hairline, a mono-caps label, and no hue, since colour would read as an
+   error state rather than a standing fact. */
+.rr-callout { margin: 0 0 1.5rem; padding: 1rem 1.15rem; border: 1px solid var(--color-border); background: var(--color-surface); }
+.rr-callout__k { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); }
+.rr-callout__b { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+/* A block's title inside a section (Wallets, Positions, the chart): the
+   section heading's face a size down, so it reads as a subtitle and not as
+   the mono label a figure carries. Its fact sits on the right, in the
+   section aside's voice. */
+.rr-subhead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin: 0 0 1rem; }
+.rr-subhead__h { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 1.0625rem; line-height: 1.2;
+  letter-spacing: -0.005em; text-transform: uppercase; color: var(--color-text); }
+/* A part of a block (Positions' "Over time"): the block title's face a step
+   smaller and quieter, so it reads as inside the block, not beside it. */
+.rr-subhead__h--minor { font-size: 0.8125rem; color: var(--color-text-soft); }
+/* One sub-heading style inside every section: the mono label. The outcome of
+   a recommendation, the synthesis, the market reading, a take's call and the
+   state of its signatures all open the same way. */
+.rr-sub { margin: 0 0 1rem; }
+
+/* Two columns that stack under 860px. --rule draws the seam between them. */
+.rr-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2.25rem; }
+.rr-split--rule > :last-child { border-left: 1px solid var(--color-border); padding-left: 2.25rem; }
+/* One column when there is nothing to set beside the text. */
+.rr-split--one { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 860px) {
+  .rr-split { grid-template-columns: minmax(0, 1fr); }
+  .rr-split--rule > :last-child { border-left: 0; padding-left: 0; border-top: 1px solid var(--color-border); padding-top: 1.5rem; }
+}
+
+/* Prose, clamped until a reader asks for all of it. */
+.rr-prose { font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); overflow-wrap: anywhere; }
+.rr-prose > :first-child { margin-top: 0; }
+.rr-prose p { margin: 0 0 0.75rem; }
+.rr-prose.is-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--rr-lines, 6); overflow: hidden; }
+.rr-prose.is-clamped > * { display: inline; }
+.rr-prose.is-clamped > * + *::before { content: " "; }
+
+/* A disclosure row: a hairline, a label, a count, a plus. Always-mounted
+   content on a 0fr/1fr grid row, per the motion rule. */
+.rr-disc { border-top: 1px solid var(--color-border); }
+.rr-disc + .rr-disc { border-top: 0; }
+.rr-disc__btn { width: 100%; display: flex; align-items: center; gap: 1rem; padding: 1rem 0; background: none; border: 0;
+  border-bottom: 1px solid var(--color-border); color: var(--color-text); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer; }
+.rr-disc__btn small { font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-disc__btn::after { content: "+"; margin-left: auto; font-family: var(--font-mono); color: var(--color-text-soft);
+  transition: transform 300ms var(--ease-out-expo); }
+.rr-disc.is-open > .rr-disc__btn::after { transform: rotate(45deg); }
+.rr-disc__btn:hover::after { color: var(--color-text); }
+.rr-disc__anim { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 300ms var(--ease-out-expo); }
+.rr-disc.is-open > .rr-disc__anim { grid-template-rows: 1fr; }
+.rr-disc__clip { overflow: hidden; min-height: 0; }
+.rr-disc__body { padding: 1rem 0 1.5rem; }
+.rr-more { position: relative; display: inline-flex; align-items: baseline; gap: 0.75rem; margin: 0.75rem 0 0; padding: 0; background: none; border: 0;
+  border-bottom: 1px solid var(--color-link-line); color: var(--color-link); font: inherit; font-size: 0.875rem; cursor: pointer; }
+/* A 23px line of text, repeated down a member's page: an invisible tap area
+   around it, as .rr-meta__lnk has. */
+.rr-more::before { content: ""; position: absolute; inset: -0.625rem -0.5rem; }
+.rr-more:hover { border-bottom-color: var(--color-link); }
+/* A take's other actions (its memo, its verification receipt) read as "Read
+   full take" does, in a row beside it rather than run into it. (0,2,0) over
+   the legacy mono-caps .sv__memo-link. */
+.rr-take .rr-take__act { display: inline-block; margin-top: 0.75rem; font-family: inherit; font-size: 0.875rem; text-transform: none; letter-spacing: 0; }
+.rr-take .rr-more ~ .rr-take__act, .rr-take .rr-take__act ~ .rr-take__act { margin-left: 1.5rem; }
+@media (prefers-reduced-motion: reduce) {
+  .rr-disc__anim, .rr-disc__btn::after { transition: none; }
+}
+/* On a phone a long label and its count would squeeze into two ragged
+   columns: the count drops below only when it does not fit, and the plus
+   stays centred on the right either way. */
+@media (max-width: 640px) {
+  .rr-disc:not(.rr-q) > .rr-disc__btn { position: relative; flex-wrap: wrap; column-gap: 1rem; row-gap: 0.25rem; padding-right: 1.5rem; }
+  .rr-disc:not(.rr-q) > .rr-disc__btn::after { position: absolute; right: 0; top: 50%; translate: 0 -50%; margin: 0; }
+}
+
+/* The mix: a ring and its legend. The ring is the shared weightDonutSvg. */
+.rr-mix { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 1.5rem 2.25rem; }
+.rr-mix .sv__wdonut { width: 11.5rem; height: 11.5rem; }
+.rr-ring { position: relative; margin: 0; cursor: default; }
+.rr-ring figcaption { position: absolute; inset: 0; display: grid; place-content: center; gap: 0.25rem; text-align: center; pointer-events: none;
+  font-size: 0.625rem; line-height: 1.4; color: var(--color-text-muted); }
+.rr-ring figcaption b { font-family: var(--font-mono); font-weight: 400; font-size: 1.5rem; line-height: 1.2; color: var(--color-text); }
+@media (max-width: 560px) {
+  .rr-mix { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .rr-mix > .rr-legend { justify-self: stretch; }
+}
+.rr-legend { list-style: none; margin: 0; padding: 0; }
+.rr-legend li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: baseline; column-gap: 0.75rem;
+  padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
+.rr-legend li > i { width: 0.5rem; height: 0.5rem; align-self: center; }
+.rr-legend li > b { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
+.rr-legend li.is-zero { color: var(--color-text-muted); }
+.rr-legend li > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-legend .alp__mv { justify-content: flex-start; }
+
+/* The one prominent control on a subject page: the way into the latest session.
+   A full-width secondary button, outlined, in the family's mono caps: filled
+   cyan at this width would be a bar of Beam as a mass. */
+.rr-cta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border-light); color: var(--color-text);
+  font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
+  transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
+.rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text); }
+
+/* Stance tallies, one dot and count per stance that has any. */
+.rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.75rem; }
+.rr-counts > span { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.rr-counts > span i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.rr-counts > span b { font-weight: 500; color: var(--color-text); }
+.rr-counts > em { font-style: normal; color: var(--color-text-muted); }
+
+/* Supporting context beside the main column: no box, the column's own grid. */
+.rr-context__head { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+
+.rr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.rr-list li { position: relative; padding-left: 1rem; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
+.rr-list li::before { content: ""; position: absolute; left: 0; top: 0.8em; width: 0.375rem; height: 1px; background: var(--color-text-muted); }
+.rr-block ~ .rr-block { margin-top: 2.25rem; }
+
+/* A disagreement: a question row that opens onto each member's view. */
+.rr-q .rr-disc__btn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; padding: 1rem 0; }
+.rr-q .rr-disc__btn b { display: block; font-weight: 500; font-size: 0.875rem; }
+.rr-q .rr-disc__btn::after { margin-left: 0; }
+.rr-views { display: grid; gap: 0; }
+.rr-view { display: grid; grid-template-columns: 10rem 11rem minmax(0, 1fr); gap: 0.5rem 1.5rem; padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border); font-size: 0.875rem; line-height: 1.6; }
+.rr-view > p { margin: 0; color: var(--color-text-soft); }
+.rr-settles { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-soft); }
+@media (max-width: 720px) { .rr-view { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
+
+/* A take: hairline-separated, body clamped, proposed weights aside. */
+.rr-take { padding: 1.5rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
+.rr-take:last-child { border-bottom: 0; }
+.rr-take__top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 0.75rem 1.5rem; margin-bottom: 1rem; }
+.rr-take__who { display: flex; align-items: center; gap: 0.75rem; }
+.rr-take__who .sv__avatar { width: 2.25rem; height: 2.25rem; flex: none; }
+.rr-take__name { font-size: 1rem; font-weight: 500; color: var(--color-text); }
+.rr-take .rr-take__lens { margin-top: 0.25rem; font-family: var(--font-sans); font-size: 0.75rem; text-transform: none; letter-spacing: 0; color: var(--color-text-muted); }
+.rr-take__stance { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-take__stance b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); }
+.rr-take__main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem 2.25rem; }
+/* The card carries its own link treatment, so it reads the same inside a
+   research record (.rr) and on a member's page, which is not one yet. */
+.rr-take a:not(.sv__vfy) { color: inherit; text-decoration: none; }
+/* The seal links to the take's verification receipt; it keeps its own colour
+   (warn when a signature failed, muted when archived). */
+a.sv__vfy { text-decoration: none; }
+.rr-take a:focus-visible, .rr-take button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* The same weight as the resets above and .rr a:not(.btn-primary), and later
+   in the sheet, so the name keeps its underline. */
+.rr-take a.rr-take__name { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rr-take a.rr-take__name:hover, .rr-take a.rr-take__name:focus-visible { text-decoration-color: var(--color-link); }
+.rr-take__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; min-width: 0; }
+.rr-take__call { margin: 0 0 0.5rem; }
+.rr-take__text > div > .sv__take-body, .rr-take__text > .sv__take-body { margin-top: 0; }
+/* Confidence is its own figure beside the stance chip, never inside it. */
+.rr-conf { font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
+.rr-conf b { font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
+/* The signature seal, in flow and always worded: the one claim a take card
+   exists to make. Its tooltip is .sv__vfy-tip's. */
+.rr-vfy { font-size: 0.625rem; }
+.rr-vfy .sv__vfy-mark { width: 11px; height: 11px; }
+.rr-vfy .sv__vfy-label { font-size: inherit; letter-spacing: 0.04em; text-transform: capitalize; }
+.rr-take .sv__take-body { font-size: 0.9375rem; max-width: none; }
+.rr-take .sv__take-body > :first-child { margin-top: 0; }
+.rr-take .sv__take-body ul { margin: 0 0 0.75rem; padding-left: 1rem; }
+.rr-take .sv__take-body li + li { margin-top: 0.5rem; }
+
+/* Evidence as label/value rows. */
+.rr-dl { margin: 0; }
+.rr-dl > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
+.rr-dl dt { color: var(--color-text-muted); }
+.rr-dl dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
+/* What the swarm was handed sits under that list: the same sans labels, and
+   its regime facts as label and figure in a row rather than bordered chips
+   (the markup keeps .sv__fact, which the specs read). */
+.rr .hand { padding: 0; }
+.rr .hand dt { font-family: var(--font-sans); font-size: 0.875rem; letter-spacing: 0; text-transform: none; padding-top: 0; color: var(--color-text-muted); }
+.rr .hand .sv__fact-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; }
+.rr .hand .sv__fact { border: 0; border-radius: 0; padding: 0; gap: 0.5rem; }
+.rr .hand .sv__fact b { font-family: var(--font-mono); letter-spacing: 0; }
+
+.rr-recnav { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; padding: 1.5rem 0; border-top: 1px solid var(--color-border); }
+.rr-recnav > :last-child { justify-self: end; }
+/* On a phone the three cells are too narrow for a date: the two dates share
+   the top line and the subject link drops below, so no date breaks. */
+@media (max-width: 640px) {
+  .rr-recnav { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 0.75rem; }
+  .rr-recnav > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .rr-recnav a { white-space: nowrap; }
+}
+
+/* The history table. */
+.rr-tablewrap { width: 100%; overflow-x: auto; }
+/* A table with an (i) tip in its header must not scroll on desktop: the bubble
+   is absolutely positioned there, so a scroll container slices it to a sliver
+   (the Role tip on /swarm). Under 700px the bubble is position: fixed and a
+   scroll container no longer clips it, as on the regime dashboard's panels. */
+@media (min-width: 700px) { .rr-tablewrap--tips { overflow: visible; } }
+.rr-table { width: 100%; min-width: 44rem; border-collapse: collapse; text-align: left; }
+.rr-table th, .rr-table td { padding: 0.75rem 0.625rem; border-bottom: 1px solid var(--color-border); font-size: 0.75rem; vertical-align: middle; }
+.rr-table thead th { background: var(--color-surface); font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; color: var(--color-text-muted); vertical-align: bottom; }
+.rr-table thead th small { display: block; margin-top: 0.25rem; font-size: 0.625rem; }
+/* A column a reader can sort by: the heading is the button, in the heading's
+   own voice, with the direction after it once it is the order. */
+.rr-sort { padding: 0; background: none; border: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.rr-sort:hover, .rr-sort:focus-visible { color: var(--color-text); }
+.rr-table thead th[aria-sort="descending"] .rr-sort::after { content: " ↓"; }
+.rr-table thead th[aria-sort="ascending"] .rr-sort::after { content: " ↑"; }
+.rr-table thead th[aria-sort="descending"], .rr-table thead th[aria-sort="ascending"] { color: var(--color-text); }
+.rr-table thead th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
+.rr-table tbody th { font-weight: 500; font-size: 0.875rem; }
+/* Rules divide, they never close: a table's last row draws no line, because
+   whatever follows it already does (the section's rule, the apply strip's),
+   and the two stacked 36px apart read as a double line. :last-of-type, since
+   Alpine's <template> elements sit after the rows. */
+.rr-table tbody tr:last-of-type > th, .rr-table tbody tr:last-of-type > td { border-bottom: 0; }
+.rr-table tbody th small { display: block; margin-top: 0.25rem; font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); }
+.rr-table td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text-soft); }
+.rr-table .q { text-align: right; }
+.rr-table td.is-zero { color: var(--color-text-muted); }
+.rr-table .rr-out > div > span { display: block; white-space: nowrap; }
+.rr-table .rr-out > div > span + span { margin-top: 0.25rem; }
+.rr-table tbody tr:hover { background: var(--color-surface); }
+.rr-pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-pager div { display: flex; gap: 0.5rem; }
+/* The secondary button: outlined, the family's mono caps. */
+.rr-btn { min-height: 2.25rem; padding: 0.5rem 1rem; border: 1px solid var(--color-border-light); border-radius: 0; background: transparent; color: var(--color-text);
+  font: inherit; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
+  cursor: pointer; transition: border-color 100ms var(--ease-out-expo); }
+.rr-btn:hover:not(:disabled) { border-color: var(--color-text); }
+.rr-btn:disabled { opacity: 0.4; cursor: default; }
+/* The history's search, beside its heading: the pager's hairline and mono,
+   square like every control on the record. appearance: none drops the
+   rounded field Safari draws for type=search. */
+.rr-search { flex: 0 1 18rem; min-width: 12rem; }
+.rr-search__in { -webkit-appearance: none; appearance: none; box-sizing: border-box; width: 100%; min-height: 2.25rem; margin: 0;
+  padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-light); border-radius: 0; background: transparent;
+  color: var(--color-text); font-family: var(--font-mono); font-size: 0.75rem;
+  transition: border-color 100ms var(--ease-out-expo); }
+.rr-search__in::placeholder { color: var(--color-text-muted); opacity: 1; }
+.rr-search__in:hover { border-color: var(--color-text-muted); }
+.rr-search__in:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+/* Full width once it wraps under the heading, and 16px type so a phone does
+   not zoom the page when the field takes focus. */
+@media (max-width: 640px) {
+  .rr-search { flex-basis: 100%; }
+  .rr-search__in { font-size: 1rem; }
+}
+
+/* The explorable mix (lib/sleeve-explorer.js). Legend rows are buttons; the
+   ring's arcs recede around the sleeve in focus, and its centre names it. */
+.rr-ring circle[data-sleeve] { cursor: pointer; transition: opacity 240ms var(--ease-out-expo); }
+.rr-ring circle.is-muted { opacity: 0.26; }
+.rr-ring figcaption span { max-width: 7.5rem; }
+.rr-legend__row { width: 100%; display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto auto; align-items: baseline; column-gap: 0.75rem;
+  padding: 0.75rem 0.5rem; background: transparent; border: 1px solid transparent; border-bottom-color: var(--color-border);
+  color: var(--color-text); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer;
+  transition: background 240ms var(--ease-out-expo), border-color 240ms var(--ease-out-expo), opacity 240ms var(--ease-out-expo); }
+.rr-legend__row > i { width: 0.5rem; height: 0.5rem; align-self: center; }
+.rr-legend__row > b { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
+.rr-legend__row > small { grid-column: 2 / -1; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-legend__row .alp__mv { justify-content: flex-start; }
+/* A weights legend set against a basis reads as a table: Recommended, the
+   Target (or Book) it is set against, and the Change in points, each in its
+   own labelled column, so a reader never has to tell a move from a value. */
+.rr-legend__head, .rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 3.25rem 4.75rem; column-gap: 0.5rem; }
+.rr-legend__head { display: grid; padding: 0 0.5rem 0.5rem; border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
+.rr-legend__head > span:nth-child(n+3), .rr-legend--cols .rr-legend__row > b { text-align: right; }
+/* A basis named by a long word (a vault set against its Recommended weight)
+   takes the width its head needs. */
+.rr-legend--long .rr-legend__head, .rr-legend--long.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 3.25rem 5.5rem 4.75rem; }
+/* A value before the share: Vault, Value, Share, Target (the vault subject's
+   By vault). The share stays the bright figure, the ring's own. */
+.rr-legend--value .rr-legend__head, .rr-legend--value.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem; }
+/* The vault stack's one Vaults table: value, share, target and drift. */
+.rr-legend--drift .rr-legend__head, .rr-legend--drift.rr-legend--cols .rr-legend__row { grid-template-columns: 0.5rem minmax(0, 1fr) 5.5rem 3.25rem 3.25rem 4.25rem; }
+/* A move is one token: "−4.33 pp" never breaks between its figure and its unit. */
+.rr-legend__was, .rr-legend__d { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.rr-legend__was { color: var(--color-text-muted); }
+.rr-legend--cols .rr-legend__d .alp__mv { justify-content: flex-end; }
+.rr-legend__s { display: none; }
+@media (max-width: 560px) {
+  /* A phone names a sleeve by its short name; the full one stays for screen
+     readers. General sibling: x-if leaves its <template> between the two. */
+  .rr-legend--cols .rr-legend__l:has(~ .rr-legend__s) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rr-legend--cols .rr-legend__s { display: inline; }
+}
+.rr-legend__row.is-zero { color: var(--color-text-muted); }
+.rr-legend__row.is-muted { opacity: 0.55; }
+.rr-legend__row.is-active { background: var(--color-surface); border-color: var(--color-border); opacity: 1; }
+.rr-legend__row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* The breakdown drawer: always mounted, its height on a 0fr/1fr grid row.
+   Opens in 300ms, closes at ~75% of that. */
+.rr-x__drawer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 225ms var(--ease-out-expo); }
+.rr-x__drawer.is-open { grid-template-rows: 1fr; transition-duration: 300ms; }
+.rr-x__clip { overflow: hidden; min-height: 0; }
+/* Once open, the drawer stops clipping, so the (i) tip in the panel head can
+   open over the page. The clip is only there for the 0fr/1fr animation: it
+   comes off after the 300ms open and is back the instant the drawer closes. */
+@keyframes rr-unclip { to { overflow: visible; } }
+.rr-x__drawer.is-open .rr-x__clip { animation: rr-unclip 0s linear 300ms forwards; }
+.rr-x__panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border);
+  opacity: 0; transition: opacity 200ms var(--ease-out-expo); }
+.rr-x__drawer.is-open .rr-x__panel { opacity: 1; }
+/* Between two sleeves: out in SWAP_MS (lib/sleeve-explorer.js), then in. */
+.rr-x[data-swap] .rr-x__drawer.is-open .rr-x__panel { opacity: 0; transition-duration: 120ms; }
+.rr-x__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
+.rr-x__head p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; font-size: 0.875rem; }
+.rr-x__head p i { width: 0.5rem; height: 0.5rem; align-self: center; }
+.rr-x__head p b { font-weight: 500; }
+/* The meta line, not the tip beside the name: a bubble wears its own skin. */
+.rr-x__head p > span:not(.rm-tip) { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+/* A session's action on a position. Direction by glyph first, colour second,
+   the delta convention: adding reads green, trimming reads warn, a rotation
+   and a hold stay neutral. Fixed width so the figures align down the legend. */
+.rr-act { display: inline-block; min-width: 4.75rem; font-family: var(--font-mono); font-style: normal; font-size: 0.625rem;
+  letter-spacing: 0.08em; text-transform: uppercase; text-align: right; color: var(--color-text-soft); white-space: nowrap; }
+.rr-act.is-hold, .rr-act.is-none { color: var(--color-text-muted); }
+.rr-act[class*="is-add"], .rr-act[class*="is-buy"], .rr-act[class*="is-increase"], .rr-act[class*="is-accumulate"] { color: var(--color-green); }
+.rr-act[class*="is-trim"], .rr-act[class*="is-reduce"], .rr-act[class*="is-sell"], .rr-act[class*="is-exit"], .rr-act[class*="is-cut"] { color: var(--color-warn); }
+.rr-x__why { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
+.rr-x__assets { min-width: 0; }
+.rr-x__assets th, .rr-x__assets td { padding: 0.5625rem 0.5rem; font-size: 0.75rem; }
+.rr-x__assets tbody th { font-weight: 400; font-size: 0.75rem; }
+.rr-x__assets tbody th i { display: inline-block; width: 0.4375rem; height: 0.4375rem; margin-right: 0.5rem; }
+@media (prefers-reduced-motion: reduce) {
+  .rr-ring circle[data-sleeve], .rr-legend__row, .rr-x__drawer, .rr-x__panel { transition: none; }
+}
+.rr-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* The book over time: a full-width stacked area with real axes. The SVG
+   stretches to the column; every label is HTML over it, at its true size. */
+.rr-area { margin: 0; }
+.rr-area__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin-bottom: 1rem; }
+.rr-area__frame { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); grid-template-rows: 16rem 1.75rem; }
+.rr-area__y { position: relative; grid-row: 1; grid-column: 1; }
+.rr-area__y span { position: absolute; right: 0.625rem; transform: translateY(-50%); font-family: var(--font-mono); font-size: 0.625rem;
+  color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.rr-area__plot { position: relative; grid-row: 1; grid-column: 2; border-bottom: 1px solid var(--color-border-light); cursor: crosshair; }
+.rr-area__plot:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+.rr-area__svg, .rr-area__svg svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.rr-area__svg polygon, .rr-area__svg polyline { transition: opacity 160ms var(--ease-out-expo); }
+.rr-area__svg .is-muted { opacity: 0.18; }
+.rr-area__x { position: relative; grid-row: 2; grid-column: 2; }
+.rr-area__x span { position: absolute; top: 0.5rem; transform: translateX(-50%); font-family: var(--font-mono); font-size: 0.625rem;
+  color: var(--color-text-muted); white-space: nowrap; }
+.rr-area__x span::before { content: ""; position: absolute; left: 50%; top: -0.5rem; width: 1px; height: 0.3125rem; background: var(--color-border-light); }
+.rr-area__x .is-on { color: var(--color-text); z-index: 1; background: var(--color-void); }
+.rr-area__x .is-sparse:not(.is-on) { display: none; }
+.rr-area__x .is-first { transform: none; }
+.rr-area__x .is-first::before { left: 0; }
+.rr-area__x .is-last { transform: translateX(-100%); }
+.rr-area__x .is-last::before { left: auto; right: 0; }
+@media (max-width: 640px) {
+  .rr-area__frame { grid-template-rows: 12rem 1.75rem; }
+  .rr-area__x .is-mid:not(.is-on) { display: none; }
+}
+.rr-area__cross { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: rgba(237, 239, 241, 0.55); pointer-events: none; }
+.rr-area__tip { position: absolute; top: 0.75rem; min-width: 11rem; padding: 0.625rem 0.75rem; transform: translateX(0.75rem);
+  background: var(--color-surface); border: 1px solid var(--color-border-light); pointer-events: none; z-index: 2; }
+.rr-area__tip.is-left { transform: translateX(calc(-100% - 0.75rem)); }
+.rr-area__tip-h { display: flex; justify-content: space-between; gap: 1rem; margin: 0 0 0.5rem; font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-area__tip-h b { font-weight: 500; color: var(--color-text); }
+.rr-area__tip-h span { font-family: var(--font-mono); }
+.rr-area__tip ul { list-style: none; margin: 0; padding: 0; }
+.rr-area__tip li { display: grid; grid-template-columns: 0.4375rem minmax(0, 1fr) auto; align-items: center; column-gap: 0.5rem;
+  padding: 0.25rem 0; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-soft); transition: opacity 160ms var(--ease-out-expo); }
+.rr-area__tip li i, .rr-area__legend li i { width: 0.4375rem; height: 0.4375rem; }
+.rr-area__tip li b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
+.rr-area__tip li.is-muted, .rr-area__legend li.is-muted { opacity: 0.4; }
+/* Indented by the y-axis gutter (a track width, not a step on the spacing
+   scale), so the legend starts under the plot. */
+.rr-area__legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1rem 0 0 2.75rem; padding: 0; list-style: none; }
+.rr-area__legend li { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem;
+  color: var(--color-text-soft); cursor: default; transition: opacity 160ms var(--ease-out-expo); }
+.rr-area__notes { margin-top: 2.25rem; }
+@media (prefers-reduced-motion: reduce) {
+  .rr-area__svg polygon, .rr-area__svg polyline, .rr-area__tip li, .rr-area__legend li { transition: none; }
+}
+
+/* Agreement and disagreement, side by side and closed by default. The lead
+   rows read as sub-headings; the questions inside open on their own. */
+.rr-pair { margin-top: 2.25rem; align-items: start; }
+.rr-disc--lead > .rr-disc__anim > .rr-disc__clip > .rr-disc__body { padding-top: 0.5rem; }
+.rr-disc--lead .rr-q:first-of-type { border-top: 0; }
+.rr-views--stack .rr-view { grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; }
+.rr-views--stack .rr-view > p { grid-column: 1 / -1; }
+@media (max-width: 860px) {
+  .rr-pair { row-gap: 0; }
+  .rr-pair > .rr-disc ~ .rr-disc { border-top: 0; }
+}
+
+/* The vote: stance across, confidence up, on the holdings chart's frame. */
+.rr-vote { margin: 0 0 1.5rem; }
+.rr-vote__sum { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; margin-bottom: 1rem;
+  font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-vote__share { font-family: var(--font-mono); font-style: normal; color: var(--color-text-soft); }
+.rr-vote__frame { grid-template-rows: 11rem 2rem; }
+.rr-vote__ytitle { margin: 0 0 0.75rem; }
+.rr-vote__plot { position: relative; grid-row: 1; grid-column: 2; border-bottom: 1px solid var(--color-border-light); }
+.rr-vote__grid { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid rgba(237, 239, 241, 0.08); }
+.rr-vote__col { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--color-border); }
+.rr-vote__mean { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed rgba(237, 239, 241, 0.3); pointer-events: none; }
+.rr-vote__mean span { position: absolute; right: 0; bottom: 0.25rem; font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
+.rr-vote__dot { position: absolute; display: inline-flex; align-items: center; gap: 0.5rem; transform: translate(-0.3125rem, -50%);
+  font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; z-index: 1;
+  transition: opacity 160ms var(--ease-out-expo); }
+.rr-vote__dot i { width: 0.625rem; height: 0.625rem; border-radius: 50%; background: var(--c); flex: none;
+  box-shadow: 0 0 0 3px var(--color-void); transition: transform 160ms var(--ease-out-expo); }
+.rr-vote__dot b { font-weight: 400; color: var(--color-text-muted); }
+/* The ground is on the words, not the whole mark, so a name on the mean line
+   is not struck through by it. */
+.rr-vote__lbl { display: inline-flex; gap: 0.5rem; background: var(--color-void); }
+.rr-vote__dot.is-flip { flex-direction: row-reverse; transform: translate(calc(-100% + 0.3125rem), -50%); }
+.rr-vote__dot.is-flip .rr-vote__lbl { flex-direction: row-reverse; }
+/* A name with no room on either side (placeVoteLabels) sits centred over or
+   under its own dot; the plot is 11rem tall, so --dy is its % offset of that
+   height. */
+.rr-vote__dot.is-stack .rr-vote__lbl { position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, calc(-50% + var(--dy, 0))); }
+.rr-vote__dot:hover i, .rr-vote__dot:focus-visible i { transform: scale(1.3); }
+.rr-vote__dot:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.rr-vote__dot.is-dim { opacity: 0.35; }
+.rr-vote__x span { display: inline-flex; align-items: center; gap: 0.5rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.rr-vote__x span::before { display: none; }
+.rr-vote__x span i { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--c); }
+.rr-vote__x span em { font-style: normal; }
+.rr-vote__x span.is-on { color: var(--color-text); }
+.rr-vote__x span em.is-short { display: none; }
+@media (max-width: 640px) {
+  .rr-vote__frame { grid-template-rows: 10rem 2rem; }
+  .rr-vote__x span em { display: none; }
+  .rr-vote__x span em.is-short { display: inline; }
+  /* No room for names beside the dots: they show on touch or hover. */
+  .rr-vote__lbl { display: none; }
+  .rr-vote__dot:hover .rr-vote__lbl, .rr-vote__dot:focus-visible .rr-vote__lbl { display: inline-flex; }
+  .rr-vote__dot:hover, .rr-vote__dot:focus-visible { z-index: 3; background: var(--color-void); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rr-vote__dot, .rr-vote__dot i { transition: none; }
+}
+
+/* The book's value, as the one large figure in the Holdings section. */
+.rr-stat { margin: 0; }
+.rr-bookhead { align-items: start; }
+/* The dense table: holdings and sources. Same columns grammar as .rr-table,
+   tighter rows. */
+.rr-table--compact { min-width: 0; }
+.rr-table--compact th, .rr-table--compact td { padding: 0.5rem 0.625rem; }
+.rr-table--compact thead th { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.rr-sources tbody th { font-weight: 400; font-size: 0.75rem; }
+.rr-sources td a, .rr-sources td span { font-size: 0.75rem; }
+.rr-stat__v { margin: 0; font-family: var(--font-mono); font-weight: 400; font-size: 2.25rem; line-height: 1.1;
+  color: var(--color-text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.rr-stat__sub { margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--color-text-muted); }
+
+/* Today's positions under the total: token swatches match the chart's bands,
+   and the share carries a thin bar so the column reads at a glance. */
+.rr-positions { margin-top: 2.25rem; }
+.rr-positions .rr-table { min-width: 36rem; }
+.rr-positions tbody th { font-family: var(--font-mono); font-weight: 400; font-size: 0.75rem; }
+.rr-positions tbody th i { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.625rem; }
+.rr-share { display: inline-grid; grid-template-columns: 5rem auto; align-items: center; gap: 0.75rem; }
+.rr-share i { display: block; height: 0.25rem; justify-self: end; opacity: 0.7; }
+
+/* A vault page (/vault/:slug). One square swatch in the vault's hue, the same
+   hue it has on /allocation and the swarm pages. */
+.rr-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.5rem; vertical-align: middle; }
+/* A token symbol keeps its case (rmUSDC, not RMUSDC) in an uppercase title or
+   breadcrumb; the title rule it overrides is itself !important. */
+.rr .rr-sym { text-transform: none !important; }
+/* Recommended, applied and actual for one vault, as bars on one 0 to 100%
+   scale, so the gaps between them read as lengths. */
+.rr-layers { display: grid; gap: 0.75rem; }
+.rr-layers__row { display: grid; grid-template-columns: 7rem minmax(0, 1fr) 4.5rem; align-items: center; gap: 1rem; }
+.rr-layers__row .rr-mono { text-align: right; font-size: 0.875rem; color: var(--color-text); }
+.rr-layers__bar { height: 0.375rem; background: var(--color-surface-light); }
+.rr-layers__bar i { display: block; height: 100%; }
+.rr-layers + .rr-meta { margin-top: 1.5rem; }
+/* A gap's glyph inside a fact: .rr-meta__i's swatch rule would shrink it to a
+   7px dot. */
+.rr-meta__i .alp__mv i { width: auto; height: auto; border-radius: 0; }
+/* A sparse series: one square point per reading, no line between them. */
+.rr-area__pt { position: absolute; width: 0.4375rem; height: 0.4375rem; transform: translate(-50%, -50%); pointer-events: none; }
+/* The reading under the crosshair, on the line: a touch larger, ringed in the
+   page ground so it stands off the fill. */
+.rr-area__pt.is-on { width: 0.5625rem; height: 0.5625rem; box-shadow: 0 0 0 2px var(--color-void); }
+/* /allocation's four vaults: up to seven columns, which scroll inside
+   .rr-tablewrap on a narrow screen rather than squeezing the gaps onto two
+   lines. A phone drops the .rr-vaults__wide columns instead (the two gaps),
+   which each vault's page carries. */
+.rr-vaults { min-width: 40rem; }
+/* Each weight's dollars at the combined TVL, under it. */
+.rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
+/* A vault's activity with no transaction to link has no Transaction column. */
+.rr-activity:not(.has-tx) .rr-activity__tx { display: none; }
+/* The Robot Money Vault's positions, grouped by vault: the vault's row reads
+   as the group's head, and its positions sit indented under it. */
+.rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }
+.rr-positions .rr-in th { padding-left: 1.75rem; }
+/* The vault stack's positions: fixed columns, so a sort or a fold moves
+   nothing sideways; each vault's head row folds its positions under a
+   square chevron, and the head sits on the surface a step above the rows. */
+.rr-subhead__tools { display: flex; align-items: center; gap: 1rem; }
+.rr-postable { table-layout: fixed; }
+.rr-postable__name { width: 34%; }
+.rr-postable__chain { width: 10%; }
+.rr-postable__n { width: 14%; }
+.rr-postable__share { width: 24%; }
+.rr-postable td, .rr-postable th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-postable tbody + tbody .rr-group > * { border-top: 1px solid var(--color-border-light); }
+.rr-postable .rr-group > * { background: var(--color-surface); padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.rr-postable .rr-group th { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-body); font-size: 0.875rem; }
+.rr-group__id { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.rr-group__id .rr-dot { margin-right: 0; align-self: center; }
+.rr-group__id small { font-family: var(--font-body); font-size: 0.75rem; font-weight: 400; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; }
+.rr-postable .rr-in th { padding-left: 2.75rem; }
+.rr-postable .rr-in > * { color: var(--color-text-soft); }
+.rr-postable .rr-in:hover > * { color: var(--color-text); }
+.rr-fold { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; padding: 0; margin-left: -0.25rem;
+  background: none; border: 1px solid transparent; color: var(--color-text-muted); cursor: pointer; }
+.rr-fold:hover, .rr-fold:focus-visible { border-color: var(--color-border); color: var(--color-text); }
+.rr-fold span { width: 0.375rem; height: 0.375rem; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: translateY(-0.0625rem) rotate(45deg); transition: transform 160ms var(--ease-out-expo); }
+.rr-fold[aria-expanded="false"] span { transform: rotate(-45deg); }
+/* The target drawn over the vault chart: a dashed rule, not a swatch. */
+.rr-area__legend li i.is-target { background: none; height: 0; width: 0.875rem; border-top: 1px dashed var(--color-text-soft); }
+@media (max-width: 560px) {
+  .rr-positions .rr-table { min-width: 0; }
+  .rr-postable { table-layout: auto; }
+  .rr-postable td, .rr-postable th { white-space: normal; }
+  .rr-positions th:nth-child(2), .rr-positions td:nth-child(2),
+  .rr-positions th:nth-child(4), .rr-positions td:nth-child(4) { display: none; }
+  .rr-sources th:nth-child(3), .rr-sources td:nth-child(3) { display: none; }
+  .rr-share { grid-template-columns: auto; }
+  .rr-share i { display: none; }
+  .rr-holdings th:nth-child(2), .rr-holdings td:nth-child(2) { display: none; }
+  .rr-activity th, .rr-activity td { white-space: nowrap; }
+  .rr-layers__row { grid-template-columns: 6rem minmax(0, 1fr) 3.5rem; gap: 0.75rem; }
+  .rr-vaults { min-width: 0; }
+  .rr-vaults .rr-vaults__wide { display: none; }
+  /* The columns left on a phone are the plain ones; their tips cost the width
+     the table no longer has, and the gaps' definitions left with the gaps. */
+  .rr-vaults thead .rm-tip { display: none; }
+}
+
+/* A portfolio's recommendation history: the moves as the same action chips
+   the ring's legend wears, then how many positions it held. */
+.rr-rowacts { font-family: var(--font-mono); white-space: normal; }
+.rr-rowacts > span { display: inline-flex; align-items: baseline; gap: 0.5rem; margin: 0.25rem 1rem 0.25rem 0; }
+.rr-rowacts .rr-act { min-width: 0; text-align: left; }
+/* The same chip in an action list, where the dd's own column sets the width. */
+.sr__act dd .rr-act { min-width: 0; text-align: left; }
+.rr-rowtext { font-family: var(--font-sans); color: var(--color-text-soft); }
+/* /swarm's history verdict: one word, in the row's reading type. */
+.rr-verdict__l { font-family: var(--font-sans); color: var(--color-text); }
+.rr-verdict .rr-note { margin: 0; }
+.rr-held { color: var(--color-text-muted); cursor: default; }
+
+/* /swarm in the research record's grammar (RM-121). */
+/* A weights recommendation as its four figures, each beside its sleeve's hue. */
+.rr-mixline { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; font-family: var(--font-mono); }
+.rr-mixline > span { display: inline-flex; align-items: center; gap: 0.5rem; }
+.rr-mixline i { width: 0.4375rem; height: 0.4375rem; flex: none; }
+.rr-mixline b { font-weight: 400; color: var(--color-text); font-variant-numeric: tabular-nums; }
+/* Portfolios: identity, the latest consensus and recommendation in their own
+   columns (as both history tables set them), then cadence. */
+.rr-ports { min-width: 44rem; }
+.rr-ports tbody th { width: 42%; vertical-align: top; }
+.rr-ports tbody th small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-ports__blurb { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 0.5rem;
+  font-family: var(--font-sans); font-weight: 400; font-size: 0.75rem; line-height: 1.55; color: var(--color-text-muted); }
+.rr-ports td { vertical-align: top; }
+.rr-hist { min-width: 46rem; }
+/* (0,2,1), to beat .rr-table td's mono: a subject name reads sans here as it
+   does in Portfolios. */
+.rr-table td.rr-hist__subj { font-family: var(--font-sans); color: var(--color-text); white-space: nowrap; }
+/* Members: the mark, the name and lens. */
+.rr-members__who { display: inline-flex; align-items: center; gap: 0.75rem; }
+.rr-members__who .sv__mmark { flex: none; line-height: 0; }
+.rr-members__who small { display: block; margin-top: 0.25rem; font-family: var(--font-sans); font-size: 0.75rem; color: var(--color-text-muted); }
+.rr-members td { font-family: var(--font-mono); color: var(--color-text-soft); }
+.rr-apply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem 2.25rem;
+  margin-top: 2.25rem; padding-top: 2.25rem; border-top: 1px solid var(--color-border); }
+.rr-apply p { margin: 0; max-width: 46rem; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+.rr-apply b { color: var(--color-text); font-weight: 500; }
+.rr-apply__seats { color: var(--color-text-muted); }
+/* How it works: three steps, divided by hairlines, not boxed. */
+/* One column per step, however many a page has (/swarm and /allocation share
+   these blocks with different counts). */
+.rr-steps { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border-top: 1px solid var(--color-border); }
+.rr-steps > div { padding: 1rem 1.5rem 0 0; }
+.rr-steps > div + div { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
+.rr-steps__t { margin: 0.5rem 0 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
+.rr-steps__d { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+.rr-steps__d b { font-weight: 500; color: var(--color-text); }
+@media (max-width: 760px) {
+  .rr-steps { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); }
+  .rr-steps > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border); margin-top: 1rem; }
+}
+
+/* A table that stacks on a phone instead of scrolling sideways: the first
+   cells share a line (a date and its subject), the rest run full width under
+   them. --full stacks every cell. Weights tables keep their columns: four
+   figures side by side are the point. */
+@media (max-width: 640px) {
+  .rr-table.rr-stack { min-width: 0 !important; }
+  .rr-stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rr-stack tbody tr { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline;
+    gap: 0.5rem 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
+  .rr-stack tbody tr:last-of-type { border-bottom: 0; }
+  .rr-stack tbody th, .rr-stack tbody td { display: block; padding: 0; border: 0; text-align: left; }
+  .rr-stack tbody td:nth-of-type(n+2) { grid-column: 1 / -1; }
+  .rr-stack--full tbody tr > * { grid-column: 1 / -1; }
+  .rr-stack--full tbody td.q { display: block; text-align: left; }
+  .rr-stack tbody td.rr-table__empty { grid-column: 1 / -1; padding: 1.5rem 0; text-align: center; }
+  .rr-ports tbody th { width: auto; }
+}
+
+/* A member's page: the mark beside the name, the declared lens and biases. */
+.rr-profile { display: flex; align-items: flex-start; gap: 1rem; }
+.rr-profile__mark { flex: none; width: 4.5rem; height: 4.5rem; }
+/* The lens is a value under its label, not a sub-heading: body text. */
+.rr-profile__lens { margin: 0; font-size: 1rem; font-weight: 500; color: var(--color-text); }
+.rr-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+.rr-tags li { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light); font-family: var(--font-mono);
+  font-size: 0.625rem; letter-spacing: 0.04em; color: var(--color-text-soft); }
+/* EMPTY STATES (RM-121). One pattern for every chart and table: the frame it
+   would fill stays, and one line in it states what is not there yet. A table
+   keeps its head and gets one row; a ring is drawn as its bare track with the
+   line in its centre; a chart or a list of cards keeps a frame of its size. */
+.rr-empty__t { margin: 0; font-family: var(--font-mono); font-size: 0.625rem; line-height: 1.6; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--color-text-muted); }
+.rr-empty { display: grid; place-content: center; justify-items: center; gap: 0.75rem; min-height: 7rem; padding: 1.5rem;
+  border: 1px solid var(--color-border); text-align: center; }
+.rr-empty--chart { min-height: 16rem; }
+.rr-table td.rr-table__empty { padding: 2.25rem 0.625rem; text-align: center; }
+.rr-ring--empty { width: 11.5rem; }
+.rr-ring--empty .sv__wdonut { display: block; width: 11.5rem; height: 11.5rem; }
+.rr-ring--empty figcaption { padding: 0 2.25rem; }
+@media (max-width: 560px) {
+  .rr-profile { flex-direction: column; gap: 0.75rem; }
+  .rr-profile__mark { width: 3.5rem; height: 3.5rem; }
+}

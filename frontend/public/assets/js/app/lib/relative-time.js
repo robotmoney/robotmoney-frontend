@@ -40,6 +40,30 @@ export function timeAgo(value, now = Date.now()) {
 }
 
 /**
+ * "3h 20m", "45 min", "under a minute": the time left until an instant, for a
+ * window's countdown. Empty once it has passed (or when there is no instant),
+ * so a caller switches to timeAgo() on the same stamp.
+ *
+ * @param {string|number|Date|null|undefined} value
+ * @param {number} now
+ * @returns {string}
+ */
+export function timeLeft(value, now = Date.now()) {
+  const t = value instanceof Date ? value.getTime()
+    : typeof value === "number" ? value
+      : value ? Date.parse(value) : NaN;
+  if (!Number.isFinite(t)) return "";
+  const ms = t - now;
+  if (ms <= 0) return "";
+  const mins = Math.floor(ms / MIN);
+  if (mins < 1) return "under a minute";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/**
  * The absolute instant, for the title attribute behind a relative stamp.
  * Minute precision and always UTC, matching how the swarm states times
  * everywhere else.

@@ -24,6 +24,7 @@ export {
 export {
   bannerFor,
   BACKUP_DIR_FLAG,
+  cadenceOverride,
   DB_FLAG,
   DB_MODES,
   DEMO_FLAGS,

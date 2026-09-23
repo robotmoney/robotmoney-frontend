@@ -39,8 +39,31 @@ const META = {
     description: "$ROBOTMONEY directs allocation of the Robot Money USDC vault on Base. Holders vote which agent tokens it holds; protocol revenue funds buybacks and burns.",
   },
   "/allocation": {
-    title: "Allocation — Target Sleeves & Vault | Robot Money",
-    description: "What a Robot Money deposit is allocated to: four target sleeves against what the ERC-4626 vault holds on Base, per-venue balances, drift, and what it pays.",
+    title: "Allocation: Target Sleeves and Vaults | Robot Money",
+    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
+  },
+  // The four vault pages (/vault/:slug). noindex until the production launch
+  // review: three of the four are not on Base yet, and none is in sitemap.xml.
+  // `follow`, because every link on them goes to a real page.
+  "/vault/rmusdc": {
+    title: "rmUSDC: Conservative DeFi Yield Vault | Robot Money",
+    description: "rmUSDC, the Robot Money vault for the Conservative DeFi Yield sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmagent": {
+    title: "rmAGENT: Agent Tokens Vault | Robot Money",
+    description: "rmAGENT, the Robot Money vault for the Agent Tokens sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmproto": {
+    title: "rmPROTO: Protocol Tokens Vault | Robot Money",
+    description: "rmPROTO, the Robot Money vault for the Protocol Tokens sleeve.",
+    robots: "noindex, follow",
+  },
+  "/vault/rmrwa": {
+    title: "rmRWA: Real World Assets Vault | Robot Money",
+    description: "rmRWA, the Robot Money vault for the Real World Assets sleeve.",
+    robots: "noindex, follow",
   },
   "/performance": {
     title: "Wallet Performance & AUM History — Robot Money",
@@ -150,15 +173,6 @@ const META = {
   // site's soft 404s. `follow` (not `nofollow`, unlike the styleguide below)
   // because each stub's only links are /changelog and /, both real indexed
   // pages whose value should carry.
-  // /vault was live and in sitemap.xml between #774 and this rollback, so
-  // crawlers have the URL. It resolves to the not-found view now; noindex says
-  // so directly rather than leaving a soft 404 to be inferred. `follow` because
-  // the not-found view links only to real indexed pages.
-  "/vault": {
-    title: "Vault (not available) — Robot Money",
-    description: "The Robot Money vault factsheet is being rebuilt. Allocation and holdings are at /allocation; wallet performance history is at /performance.",
-    robots: "noindex, follow",
-  },
   "/flow-field": {
     title: "Flow Field (in progress) — Robot Money",
     description: "Placeholder for an experimental flow-field visualization of capital movement across the Robot Money vault's strategies. Not yet released.",
@@ -276,6 +290,22 @@ const SECTIONS = [
   { prefix: "/media", suffix: "Robot Money Media" },
 ];
 
+// A post's own title, as its page's h1 reads (views/blog/<slug>.html). A
+// section page otherwise takes a title made from its slug, which turned
+// "Conservative vs aggressive: combining macro and on-chain regime signals"
+// into "Regime Conservative Aggressive" in the tab, in link unfurls, and
+// wherever a swarm text cites the post by its path (citeTitle below).
+/** @type {Record<string, string>} */
+const BLOG_TITLES = {
+  "ai-ate-the-bull-market": "AI ate the bull market",
+  "announcement": "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
+  "honest-backtesting-weights": "Backtesting honestly: what survives when you remove hindsight",
+  "peaq-partnership": "peaq Announces Partnership with Robot Money",
+  "regime-conservative-aggressive": "Conservative vs aggressive: combining macro and on-chain regime signals",
+  "regime-eq-vs-base": "Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel",
+  "treasury-allocation": "Treasury Allocation for On-Chain Businesses",
+};
+
 // Legacy path aliases, mirroring every content-serving rewrite `viewFor()`
 // performs in routes.js (issue #263 pass 2's /committee -> /swarm rename, plus
 // the two older one-off renames below). routes.js resolves an
@@ -306,8 +336,10 @@ const LEGACY_ALIASES = [
   // /vault renders views/allocation.html (RM-115). Without an entry here both
   // addresses return 200 with the same page and neither names the other
   // canonical, and /vault, having no META entry of its own, would serve the
-  // product sheet under "Page Not Found" and `noindex, follow`.
-  ["/vault", "/allocation"],
+  // product sheet under "Page Not Found" and `noindex, follow`. "exact": the
+  // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
+  // /allocation.
+  ["/vault", "/allocation", "exact"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META
@@ -397,9 +429,9 @@ function normalize(pathname) {
  */
 function canonicalPath(pathname) {
   const p = normalize(pathname);
-  for (const [from, to] of LEGACY_ALIASES) {
+  for (const [from, to, mode] of LEGACY_ALIASES) {
     if (p === from) return to;
-    if (p.startsWith(from + "/")) return to + p.slice(from.length);
+    if (mode !== "exact" && p.startsWith(from + "/")) return to + p.slice(from.length);
   }
   return p;
 }
@@ -428,7 +460,7 @@ export function metaFor(pathname) {
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
       const seg = p.split("/").filter(Boolean).pop();
-      const name = titleize(seg || "");
+      const name = (prefix === "/blog" && BLOG_TITLES[seg || ""]) || titleize(seg || "");
       return {
         title: name ? `${name} — ${suffix}` : suffix,
         description: (META[prefix] || META["/"]).description,
@@ -461,6 +493,32 @@ export function metaFor(pathname) {
     }
   }
   return NOT_FOUND_META;
+}
+
+/**
+ * A page's own name, for text that cites it by path: the title before its
+ * " — " qualifier ("Smart Contract Risks — How DeFi Vaults Get Exploited"
+ * cites as "Smart Contract Risks"), through the alias table, so
+ * /articles/treasury-allocation cites as the post it renders. "" for a path
+ * the site has no page for, which the caller then shows as written.
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function citeTitle(pathname) {
+  if (!isKnownPage(pathname)) return "";
+  return String(metaFor(pathname).title || "").split(" — ")[0].trim();
+}
+
+/**
+ * Whether the site renders a real page at this path, by the same table that
+ * names every page: anything metaFor() does not know falls to the not-found
+ * meta. Lets a surface link a data-supplied path only when it goes somewhere,
+ * rather than keeping a second list of pages that drifts from this one.
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+export function isKnownPage(pathname) {
+  return typeof pathname === "string" && pathname.startsWith("/") && metaFor(pathname) !== NOT_FOUND_META;
 }
 
 /**

@@ -5,8 +5,11 @@
 # issue #892 — website-server/nginx.conf proxies /api/ and /health through to
 # `api` so this stack still presents as one origin, matching frontend/public/
 # config.js's same-origin default and this repo's own local dev/smoke/e2e
-# harness, which loads pages from `backendUrl`). `api` no longer serves any
-# static content or STATIC_DIR; see website-server/Dockerfile.
+# harness, which loads pages from `backendUrl`). `api` no longer SERVES any
+# static content — see website-server/Dockerfile — but still reads the same
+# `_static` mount read-only, for AC-ID-03/T26 identity purposes only (see the
+# STATIC_DIR comment on the api service; tracked for removal once the static
+# bundle is baked into website-server's own image instead of assembled here).
 #
 # HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
 # use the container-port-only short form (`- "8787"`), which makes the Docker
@@ -103,6 +106,8 @@ x-worker-base: &worker-base
     dockerfile: backend/Dockerfile
     args:
       AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+      RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+      RM_BUILD_TAG: ${RM_BUILD_TAG:-}
   command: ["bun", "run", "src/worker/index.ts"]
   depends_on:
     postgres:
@@ -121,7 +126,15 @@ x-worker-env: &worker-env
   # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  RM_ENV: ${RM_ENV:-smoke}
+  # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+  # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+  # service, so the value is a property of the stack config rather than of
+  # whatever the operator's shell last exported. It used to default to `smoke`,
+  # which meant a bare `docker compose up` — or any bring-up path that forgot to
+  # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+  # `prod` is the strict/acceptance path: if the default IS ever reached, the
+  # stack refuses a keyless or unpinned model instead of accepting one.
+  RM_ENV: ${RM_ENV:-prod}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
@@ -216,11 +229,21 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/api/index.ts"]
     environment:
       
       DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-smoke}
+      # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
+      # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
+      # service, so the value is a property of the stack config rather than of
+      # whatever the operator's shell last exported. It used to default to `smoke`,
+      # which meant a bare `docker compose up` — or any bring-up path that forgot to
+      # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
+      # `prod` is the strict/acceptance path: if the default IS ever reached, the
+      # stack refuses a keyless or unpinned model instead of accepting one.
+      RM_ENV: ${RM_ENV:-prod}
       # website-server (nginx) now sits in front of `api` for EVERY request in
       # every composition this file resolves (issue #892) — website-server/
       # nginx.conf forwards X-Real-IP/X-Forwarded-For/X-Forwarded-Proto to
@@ -237,9 +260,15 @@ services:
       TRUST_PROXY: "1"
       # The handle/id namespace boot guard's two operator controls (issue #602):
       # its escape hatch and its wall-clock budget. ENUMERATED HERE BECAUSE THIS
-      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here
-      # and backend/Dockerfile sets no ENV, so a variable that is not named here
-      # NEVER reaches the container. Without these two lines the runbook's
+      # BLOCK IS AN ALLOWLIST — there is no `env_file:` in any compose file here,
+      # so a variable that is not named here NEVER reaches the container at RUN
+      # time. The one exception is deliberate and is the opposite of a leak:
+      # backend/Dockerfile bakes AUM_PRODUCER_REVISION and RM_BUILD_COMMIT /
+      # RM_BUILD_TAG as ENV from its build args, because those are properties of
+      # the IMAGE rather than of a deployment. They must NOT be repeated in this
+      # block — an `environment:` entry with a blank default would override the
+      # baked value with the empty string and erase the identity /version
+      # reports. Without the two lines below the runbook's
       # emergency override (§2.1) is a silent no-op: the operator sets it in the
       # droplet env, redeploys, and the api's refusal log still tells them to set
       # the variable they just set. Blank default = unset inside the container,
@@ -299,12 +328,38 @@ services:
       # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
       # keeps model selection to one reviewable signal. What is left here is the
       # shared OpenCode Zen credential (the member agents' existing key, not a
-      # second one), the endpoint, and the per-call bound. All blank by default:
-      # an unconfigured model means template prose and a recorded reason, never
-      # a failed session.
+      # second one), the endpoint, and the per-call bound. All blank by default.
+      # An unconfigured model no longer means template prose and a recorded
+      # reason (issue #969): `shadow`/`enforce` REQUIRE a model, and a judge
+      # that cannot be reached stops the judging rather than authoring prose
+      # under its own name and letting it reach a signed receipt.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
+      # NOT hold the Docker socket and must never be given it: it asks the
+      # agent-launcher service below for one short-lived judge container and
+      # reads the answer back over the compose network. A launcher that cannot
+      # be reached is its own fail-closed reason (`launcher_unavailable`), never
+      # a model or credential verdict.
+      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts). This service arms/disarms the row over
+      # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
+      # `assertFaultInjectionAllowed()` runs on THIS process's env before that
+      # write — a row armed without the flag present here is refused at arm
+      # time, not merely inert. Blank by default so no deployment honours a
+      # fault-injected judge unless an operator explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
+      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY (issue #892 follow-up tracked
+      # separately: this mount should not exist by the time that work lands —
+      # the static bundle should be baked into website-server's own image, and
+      # deploy-time should only write/check a small identity JSON, never build
+      # anything). website-server, not this process, SERVES the SPA from the
+      # same underlying `_static` directory; api reads the manifest here purely
+      # to compare its own build identity against what was assembled.
+      STATIC_DIR: /srv/frontend
     ports:
       # HOST side: ABSENT on purpose — the short form publishes the container
       # port on a host port the Docker daemon picks and binds atomically (see
@@ -328,6 +383,10 @@ services:
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
+    volumes:
+      # READ-ONLY, FOR AC-ID-03/T26 IDENTITY ONLY — api does not serve from
+      # this mount (website-server does). See the STATIC_DIR comment above.
+      - ./_static:/srv/frontend:ro
     secrets:
       - analytics_token
     depends_on:
@@ -387,13 +446,32 @@ services:
       # credential, the endpoint and the per-call bound are declared on this
       # service rather than in the *worker-env anchor above: worker-analytics
       # and worker-research would otherwise receive a live inference credential
-      # they never use. Without them HERE the one process that actually runs
-      # the judge on a schedule falls back to template prose silently.
+      # they never use. Without them HERE the one process that actually runs the
+      # judge on a schedule cannot reach a model at all — which since issue #969
+      # STOPS the judging loudly (503 judge_unavailable, session left unjudged)
+      # instead of falling back to template prose silently, which is what this
+      # comment used to warn about and what production actually did.
       # On/off AND which model are database rows, not env vars; see the api
       # block above.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
+      # NOT hold the Docker socket and must never be given it: it asks the
+      # agent-launcher service below for one short-lived judge container and
+      # reads the answer back over the compose network. A launcher that cannot
+      # be reached is its own fail-closed reason (`launcher_unavailable`), never
+      # a model or credential verdict.
+      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
+      # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
+      # judge-fault-injection.ts) — THIS LANE ONLY, same reasoning as the three
+      # knobs above: `selectFaultInjection()` runs inside `swarm.judge`, which
+      # only this worker lane executes. Without the flag present here the
+      # lever stays inert even once armed through the api. Blank by default so
+      # no deployment honours a fault-injected judge unless an operator
+      # explicitly sets these.
+      SWARM_JUDGE_FAULT_INJECTION: ${SWARM_JUDGE_FAULT_INJECTION:-}
+      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: ${SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN:-}
 
   worker-analytics:
     <<: *worker-base
@@ -429,6 +507,8 @@ services:
       dockerfile: backend/Dockerfile
       args:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
+        RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
+        RM_BUILD_TAG: ${RM_BUILD_TAG:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       
@@ -460,6 +540,74 @@ services:
       # each catch-up loop (src/producer/index.ts). This window only has to
       # cover container start up to that first record.
       start_period: 300s
+
+  # ── The one service that holds the Docker socket (issue #1012) ─────────────
+  #
+  # THE JUDGE IS AN ACTOR LIKE ANY OTHER. A member agent gets its own
+  # short-lived container with its credential injected by one explicit `-e`
+  # (scripts/agent/member-agent.ts). The judge used to be the exception: a bare
+  # in-process fetch() from inside the long-running worker-swarm service, fed a
+  # credential only by this file's `${OPENCODE_API_KEY:-}` interpolation — which
+  # is precisely why one path's credential delivery drifted from the other's and
+  # CI judged every session `credential_unconfigured`. It now rides the same
+  # rail, and this service is what starts the container for it.
+  #
+  # WHY A SEPARATE SERVICE AT ALL. Starting a container needs the Docker socket,
+  # and the Docker socket IS root on the host — there is no read-only mode for
+  # it and no capability to drop that makes it safe. Mounting it into `api` or
+  # `worker-swarm` would put root behind every request handler and every piece
+  # of model-derived text those processes touch. So it is concentrated here,
+  # behind one internal route with one verb, and they ask over HTTP instead.
+  # scripts/tests/integration/agent-launcher-compose-config.test.ts asserts that
+  # exactly one service in every composition (base / smoke / stage) has this
+  # mount, so a future `- /var/run/docker.sock` added to any other service is a
+  # red gate rather than a quiet privilege escalation.
+  #
+  # NO `ports:`, EVER. This surface has no authentication of its own because it
+  # is reachable only from the compose network. Publishing it would hand
+  # anything that can reach the host's port a container-start primitive.
+  agent-launcher:
+    build:
+      context: .
+      dockerfile: scripts/lib/agent-launcher/Dockerfile
+    environment:
+      # ITS OWN COPY, not a per-request parameter. The launcher injects this
+      # into each judge container the way runMemberAgent() injects a member's;
+      # a key travelling in the request body would be logged by every hop
+      # between worker-swarm and here.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
+      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # Which compose project the judge containers join. Emitted for every
+      # service by scripts/stack/config.ts's buildComposeEnv(); the launcher
+      # refuses to start without it rather than guessing a project name.
+      SMOKE_PROJECT: ${SMOKE_PROJECT:-}
+      COMPOSE_FILE: ${COMPOSE_FILE:-}
+      # The labels docker-compose.smoke.yml stamps on every container it starts,
+      # so a judge container this service leaks is attributable to the run that
+      # leaked it by LABEL and reapable by `bun run smoke:reap`.
+      RM_STACK_ENV_CLASS: ${RM_STACK_ENV_CLASS:-}
+      RM_STACK_ENV_HASH: ${RM_STACK_ENV_HASH:-}
+      SWARM_LAUNCHER_SPOOL_DIR: ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
+    volumes:
+      # THE SOCKET. The only one in this file, and the reason for this service.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The shared spool, bound at the SAME PATH on both sides. `-v` sources are
+      # resolved by the daemon against the HOST filesystem, so the judge-runner
+      # bundle and the prompt file this process writes have to live somewhere
+      # that means the same thing here and there — see
+      # scripts/agent/judge-agent.ts's header.
+      - ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}:${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      # `bun -e`, not curl/wget: the oven/bun image is Debian-based and ships
+      # neither — the same constraint the api's own check works around.
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8799/internal/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).

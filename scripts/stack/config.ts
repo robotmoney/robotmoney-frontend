@@ -18,6 +18,7 @@
 //   3. Nothing here has an inference-off, injection, or skip affordance
 //      (D22 §11.3 E2). A missing dependency is the caller's problem to throw
 //      about, never something this layer papers over.
+import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import {
   ENV_CLASS_COMPOSE_VAR,
   ENV_HASH_COMPOSE_VAR,
@@ -40,7 +41,17 @@ export type StackProfile = "core" | "full";
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
 export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
-export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
+// The one service that holds the Docker socket (issue #1012). It belongs to
+// `full` and NOT to `core` for the same reason the worker lanes do: `core` is
+// postgres + api + the static origin, which never judges a session and so never
+// needs a container started on its behalf. A `full` stack DOES judge, and a
+// judge with no launcher fails closed with `launcher_unavailable` on every
+// session — so leaving it out of this list would make the stack's own judging
+// permanently broken rather than merely unconfigured.
+export const LAUNCHER_SERVICES = ["agent-launcher"] as const;
+export const FULL_SERVICES = [
+  ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
+] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),
@@ -202,10 +213,39 @@ export interface StackConfig {
   // not be attributed to a CI job or to an operator's shell, and therefore
   // could not be reaped without risking the standing smoke.
   environment: StackEnvironment;
+  /**
+   * WHICH RM_ENV THIS STACK DECLARES (D13). Emitted into every service by
+   * buildComposeEnv(), so a container never has to fall back to
+   * docker-compose.yml's interpolation default and no reader of RM_ENV is ever
+   * looking at whatever the operator's shell exported.
+   *
+   * OPTIONAL, AND THE OMITTED CASE IS THE STRICT ONE: absent means `prod`, the
+   * acceptance path, matching backend/src/config.ts's "fail-closed: default to
+   * prod when RM_ENV is unset" and the shared predicate in
+   * backend/src/acceptance-path.ts. A consumer that wants the permissive
+   * development rules — the local smoke boot — says so; a consumer that forgets
+   * gets refused rather than silently unpinned.
+   *
+   * Never read from the ambient environment here. scripts/lib/smoke-main.ts
+   * resolves it with resolveStackRmEnv(), which knows the KIND of boot.
+   */
+  rmEnv?: RmEnv;
   // Extra compose interpolation values a specific consumer needs (the smoke
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
   extraComposeEnv?: Record<string, string>;
+  /**
+   * AC-ID-05. Path to a compose overlay pinning every built service to an image
+   * that was built on `pinza` and shipped here (scripts/stack/images.ts). When
+   * set, this stack BUILDS NOTHING: the file is appended last to the compose
+   * file list, `up` carries `--no-build`, and `build()` refuses outright.
+   *
+   * An absolute path outside the pinned checkout. It is a config field rather
+   * than an environment read for the reason at the top of this file — a stack
+   * that could acquire this from the ambient environment is a stack whose
+   * artifacts an exported variable can change.
+   */
+  imagesOverride?: string;
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
@@ -215,6 +255,13 @@ export interface StackConfig {
 // topology is expressed as argv (`-p` / `-f`, see composeArgs) so a stale
 // exported COMPOSE_* value can never redirect a bring-up.
 export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
+  if (cfg.extraComposeEnv && "RM_ENV" in cfg.extraComposeEnv) {
+    throw new Error(
+      "RM_ENV must not be passed through extraComposeEnv — it is a first-class StackConfig field (`rmEnv`). " +
+        "Routing it through the extras map is how it became a property of the operator's shell instead of the " +
+        "stack's configuration (D13).",
+    );
+  }
   if (cfg.profile === "full" && !cfg.credentials.analyticsTokenFile) {
     throw new Error(
       "full stack profile requires credentials.analyticsTokenFile for the independent analytics producer",
@@ -240,6 +287,9 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // them now would be a value nothing reads, which is how the last one
     // survived long enough to look like configuration; `bun smoke` warns loudly
     // when it finds either in the operator's environment.
+    // D13: explicit, always, and NOT overridable from extraComposeEnv (asserted
+    // above) — the whole point is that one place decides.
+    RM_ENV: cfg.rmEnv ?? "prod",
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,
@@ -308,14 +358,28 @@ export function buildArgs(services: string[] = []): string[] {
   return ["build", ...services];
 }
 
+// `--no-build` is the TEETH of the images-override path, not a hint: compose
+// exits with "service X needs to be built" rather than building it, so a stack
+// whose shipped image is missing STOPS on the staging host instead of quietly
+// compiling a replacement that no longer corresponds to anything pinza built.
 export function upArgs(
   services: string[],
-  opts: { wait?: boolean; waitTimeoutSeconds?: number } = {},
+  opts: { noBuild?: boolean; wait?: boolean; waitTimeoutSeconds?: number } = {},
 ): string[] {
-  const wait = opts.wait
-    ? ["--wait", "--wait-timeout", String(opts.waitTimeoutSeconds ?? 600)]
-    : [];
-  return ["up", "-d", ...wait, ...services];
+  const wait = opts.wait ? ["--wait", "--wait-timeout", String(opts.waitTimeoutSeconds ?? 600)] : [];
+  return ["up", "-d", ...(opts.noBuild ? ["--no-build"] : []), ...wait, ...services];
+}
+
+/**
+ * The compose file list with the images override APPENDED LAST (compose merges
+ * later files over earlier ones, so last is the only position that wins), and
+ * never twice — a caller that already spelled it into its own list, as
+ * scripts/lib/smoke-main.ts does so child processes inherit the same
+ * COMPOSE_FILE, still gets exactly one `-f`.
+ */
+export function composeFilesWithImagesOverride(files: string[], imagesOverride?: string): string[] {
+  if (!imagesOverride) return files;
+  return files.includes(imagesOverride) ? files : [...files, imagesOverride];
 }
 
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready

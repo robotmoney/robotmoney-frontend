@@ -33,6 +33,7 @@ import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/c
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -68,7 +69,7 @@ type Member = Awaited<ReturnType<typeof activeMember>>;
 
 async function openCollectingSession(prefix: string) {
   const subj = rid(prefix);
-  await ic.ensureSubject(subj, `${prefix} subject`);
+  await ensureProseSubject(subj, `${prefix} subject`);
   const s = await ic.openSession(subj);
   await ic.publishBrief(s.id, 60);
   return { subj, session: s, date: sessionDate(s) };

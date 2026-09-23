@@ -52,9 +52,17 @@
   --color-accent: #00e5ff;
   --color-accent-dim: #00b8d4;
   --color-accent-glow: rgba(0, 229, 255, 0.12);
-  /* Beam at rest, for a rule that marks a control without shouting. Still a
-     LINE and still Beam's hue — only its weight changes, never its meaning. */
+  /* Beam at rest, for the frame of a panel that should be noticed without
+     shouting (the /swarm apply block, the allocation panel). Still a LINE and
+     still Beam's hue; only its weight changes. Never a link's rule, a button's
+     outline or a chip's edge: those are --color-link-line and
+     --color-border-light. */
   --color-accent-line: rgba(0, 229, 255, 0.42);
+  /* Text links are monochrome (David, 2026-09-18): a lighter neutral than the
+     text around them over a neutral rule, never Beam. Cyan stays a chart line,
+     a filled button and a focus ring. */
+  --color-link: var(--color-text);
+  --color-link-line: rgba(242, 244, 249, 0.3);
   --color-warm: #e8a640;
   --color-warn: #ff6644;
   --color-green: #10b981;
@@ -65,9 +73,12 @@
   --color-blue: #4488ff;
   --color-purple: #8b5cf6;
 
-  /* corner ceiling */
-  --radius: 2px;
-  --radius-pill: 2px;
+  /* Corners are square (David, 2026-09-19), buttons, chips and tooltips
+     included. The only circles are point marks (dots, avatars, the (i) glyph,
+     spinners), and those set their own full radius (50% or 9999px) rather
+     than reading a token. */
+  --radius: 0;
+  --radius-pill: 0;
 
   /* easing */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);

@@ -54,6 +54,26 @@ export const RELEASE_MIGRATIONS = [
   "0059_swarm_framework_subject_snapshot_cleanup.sql",
   "0060_analytics_ledger_cutover.sql",
   "0061_source_value_provenance.sql",
+  // DELIBERATELY NOT EXTENDED BY THE 2026-09-23 main merge, and this is the
+  // rule the merge had to learn. That merge brought in six migrations authored
+  // on the main line while this branch was authoring 0056-0062 of its own:
+  // 0056_swarm_judge_requires_model, 0057_swarm_judge_policy_stamp,
+  // 0058_swarm_judge_fault_injection, 0059_swarm_judgement_completion_usage,
+  // 0061_rm_worker_wallet_backfill_grant and
+  // 0062_rm_worker_analytics_ledger_read_grant. They were briefly added here
+  // and that was WRONG: this list is the frozen record of what v0.5.0 ACTUALLY
+  // SHIPPED to production from this branch, and not one of those six was in it.
+  // `rollout-steps-0-5-1.test.ts` is what catches the falsification, by
+  // requiring v0.5.1's PRIOR set to equal v0.4.0's plus this one exactly.
+  //
+  // Those six are unshipped work and belong to a FUTURE release's manifest,
+  // not to a shipped release's history. Note also that both lines independently
+  // allocated 0056-0062, so several numbers now name two files. That is neither
+  // new nor a defect — the repo already carried eight duplicate-numbered groups
+  // (0014, 0021, 0022, 0023, 0028, 0029, 0032, 0033) before either branch
+  // existed, because the runner sorts and records by FULL FILENAME. It is
+  // exactly why the smoke production spec (§8.1) makes the filename list, never
+  // the number, the schema identity.
 ] as const;
 
 export const REQUIRED_TABLES = [

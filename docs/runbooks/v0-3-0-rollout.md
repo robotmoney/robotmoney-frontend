@@ -249,7 +249,7 @@ Grouped by what they mean for an operator:
 | **Deploy/docs** | `7acf6e7` (#720), `b4a2560` (#719) | Removes a build script — see §2.3. |
 | **Worktree noise** | `010bf29`, `d0d16b1` | No production effect. |
 
-### 2.2 🔴 The database delta — twenty-one migrations
+### 2.2 🔴 The database delta — twenty-two migrations
 
 **This is the part of the upgrade that cannot be rolled back by restarting.**
 
@@ -280,6 +280,7 @@ git diff --name-only v0.2.2 main -- backend/migrations/
 | `0050_swarm_member_keys_append_only.sql` | Install the statement- and row-level `rm_append_only_guard()` triggers on `swarm_member_keys` (issue #697) | Triggers on a table this release did **not** create — see §2.2.1 |
 | `0051_swarm_vault_recommendation_type_repair.sql` | `UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id IN ('robotmoney-vault', 'robotmoney-allocation') AND recommendation_type = 'position_actions'` — repairs the two subjects `ensureSmokeSubjectFixtures`'s pre-fix upsert clobbered on every smoke session start (issue #780) | **No DDL — a pure, idempotent data write, restricted to two known-affected rows** |
 | `0052_swarm_judgement_digest_scheme.sql` | `ALTER TABLE swarm_session_judgements ADD COLUMN digest_scheme text NOT NULL DEFAULT 'derivation-v1';` + a `COMMENT` — records which canonical form (`judge.ts`'s `DIGEST_SCHEME`) produced a row's `inputs_digest`, so `swarm-judge-replay` can tell a row written under a future canonicalization change apart from one that genuinely no longer reproduces (issue #829, D44) | Additive column with a constant default, catalog-only on PG 11+; safe because no row on any v0.2.2 database predates it (`swarm_judge_config.mode` ships `off`) |
+| `0061_rm_worker_wallet_backfill_grant.sql` | `GRANT INSERT, UPDATE, DELETE ON chain_day_blocks, wallet_backfill_state, chain_address_floors TO rm_worker` — `0054` (v0.4.0-to-0.5.0) replaced this release's broad/default worker grant with an explicit allow-list and dropped these three by omission, though the wallet-backfill repair driver (`worker/handlers/repair.ts`) writes all three through the restricted worker connection (checklist B05) | Grants only, on tables `0033` above already creates; no data written |
 
 **Lock and downtime profile.** The first four are additive DDL. The two `ADD COLUMN`s
 are non-rewriting on any supported Postgres — `0032_wallet_*` adds a nullable

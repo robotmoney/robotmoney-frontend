@@ -59,6 +59,12 @@ export interface SwarmMember {
    */
   handle?: string;
   status: MemberStatus;
+  /**
+   * `judge` authors consensus judgements and files no takes; `member` files
+   * takes (migration 0043, docs/decisions.md D42's #812 amendment). Always
+   * emitted by the API, defaulting to `member`; optional only for payloads
+   * produced before this field existed (the shipped static archive JSON).
+   */
   role?: "member" | "judge";
   name: string;
   tagline: string | null;
@@ -182,6 +188,8 @@ export interface SwarmTakeSupersededBy {
 
 /** Public receipt; verification is recomputed by the server on every read. */
 export interface SwarmTakeReceipt {
+  /** The session this take was filed in (GET /api/swarm/sessions/:id). */
+  sessionId: string;
   take: SwarmTake;
   memo: SwarmMemo | null;
   signer: SwarmTakeSigner;
@@ -296,6 +304,91 @@ export interface SwarmRecommendation {
   actions?: SwarmRecommendedAction[];
   weights?: SwarmBucketWeight[];
   citedSignals?: Record<string, number>;
+  /**
+   * The judge's release-safety opinion. Present only once an `enforce`
+   * judgement has reached the session (backend applyOpinion); absent on a
+   * session that was never judged, or judged only in `shadow`.
+   */
+  release_safety?: SwarmReleaseSafety;
+  /** Which judgement the session carries. Present exactly when `release_safety` is. */
+  judge?: SwarmRecommendationJudge;
+}
+
+/**
+ * ADVICE, not a lock: nothing in the lifecycle refuses to publish on `hold`.
+ * Snake_case like the rest of the stored recommendation.
+ */
+export interface SwarmReleaseSafety {
+  release: "safe" | "hold";
+  thinly_supported: boolean;
+  take_count: number;
+  min_takes: number;
+  concerns: string[];
+}
+
+/**
+ * The fingerprint of the judgement a session adopted, written beside the
+ * judge's prose by applyOpinion. `prompt_hash` + `inputs_digest` pin what the
+ * judge was asked and what it read; they do NOT name the judge — two judges
+ * given the same prompt over the same take set share both — which is what
+ * `judged_by` is for.
+ */
+export interface SwarmRecommendationJudge {
+  /** `fallback` only on judgements recorded before the judge stopped writing template prose (issue #969). */
+  source: "model" | "fallback";
+  model: string | null;
+  prompt_hash: string;
+  inputs_digest: string;
+  fallback_reason?: string;
+  /**
+   * The judging party, as `swarm_session_judgements.judged_by` stores it: the
+   * judge's immutable member id, or `robotmoney-in-house` for the built-in
+   * worker. Absent on sessions judged before this field was written.
+   */
+  judged_by?: string;
+  /** Set only when the judge is a seated member; equals `judged_by` then. */
+  judged_by_member_id?: string;
+}
+
+/**
+ * One consensus judge's PUBLIC opinion on one published session — its own
+ * record, with its own permalink, like a take.
+ *
+ * Public means: recorded in `enforce` mode, it reached the session (`applied`),
+ * the session is `published`, and it is the newest such opinion from its judging
+ * party on that session. `shadow` opinions are never public (docs/decisions.md
+ * D42: that mode exists to keep them off public surfaces). A session judged by
+ * several judges has one public judgement per judge.
+ */
+export interface SwarmJudgement {
+  id: string;
+  sessionId: string;
+  subjectId: string;
+  sessionDate: string;
+  /** The judging party: an immutable member id, or `robotmoney-in-house`. */
+  judgedBy: string;
+  /** The judge's member id when the judge is a seated member, else null. */
+  judgedByMemberId: string | null;
+  /** `fallback` only on judgements recorded before issue #969. */
+  source: "model" | "fallback";
+  model: string | null;
+  promptHash: string;
+  inputsDigest: string;
+  rationale: string;
+  disagreements: SwarmDisagreement[];
+  releaseSafety: SwarmReleaseSafety | null;
+  /**
+   * Whether the session's recommendation set weights. Only then does the
+   * judge's call have a target to update; a session that published no
+   * weights, or a portfolio review, has nothing to update.
+   */
+  recommendsWeights: boolean;
+  createdAt: string;
+}
+
+/** GET /api/swarm/sessions/:id/judgements and GET /api/swarm/members/:id/judgements. */
+export interface SwarmJudgementsResponse {
+  judgements: SwarmJudgement[];
 }
 
 export interface SwarmSession {
@@ -345,6 +438,16 @@ export interface SwarmSessionListItem {
   swarmRecommendation: SwarmRecommendation | null;
   socialDraftId: string | null;
   generatedAt: string;
+  /** Distinct members who filed a take (issue #991). Light index rows only. */
+  takeCount?: number | null;
+  /** The sleeve targets this session's own brief carried, compact (issue
+   * #991). Null when the brief carried none; never today's framework. */
+  referenceAllocation?: SwarmReferenceAllocation | null;
+}
+
+export interface SwarmReferenceAllocation {
+  asof: string | null;
+  buckets: { id: string; target_weight: number }[];
 }
 
 export interface SwarmSessionListResponse {
@@ -404,11 +507,24 @@ export interface SwarmBriefResearchSignalRef {
   href: string;
 }
 
+// One of the subject's recent published sessions, as a brief lists it (issue
+// #965). A subject may convene more than once a day, so date and subject do
+// not name a session; the id does. `id` and `convened_at` are absent on briefs
+// published before this change.
+export interface SwarmBriefSessionRef {
+  id?: string;
+  convened_at?: string;
+  /** UTC midnight as an ISO instant, not YYYY-MM-DD. */
+  date: string;
+  subject_id: string;
+  state: string;
+}
+
 export interface SwarmBriefBody {
   allocation?: { asof: string; buckets: { id: string; target_weight: number; items?: unknown[] }[] };
   regime: unknown;
   subject: SwarmSubject | null;
-  recentSessions: unknown[];
+  recentSessions: SwarmBriefSessionRef[];
   previousSession?: { outcome: string };
   researchSignals: SwarmBriefResearchSignalRef[];
   prompt: { system: string; user: string };
@@ -416,11 +532,27 @@ export interface SwarmBriefBody {
     stance: { type: "string"; enum: Stance[] };
     confidence: { type: "number"; minimum: 0; maximum: 1 };
     body: { type: "string" };
+    /**
+     * The session's ALLOCATION ask.
+     *
+     * `optional` is FALSE exactly when the subject's `recommendationType` is
+     * `bucket_weights` — the brief is where an analyst learns that this session
+     * wants a number and not only prose. It used to be an unconditional `true`,
+     * which was true of the API (a weightless take is a valid take) and useless
+     * to a reader: v0.5.0-rc.1's analysts could not tell an allocation session
+     * from a narrative one, so every `bucket_weights` receipt it published was
+     * silent about the allocation.
+     *
+     * `buckets` is the receipt's canonical bucket order
+     * (`RECEIPT_CANONICAL_BUCKET_ORDER`), carried on the brief so the ask and
+     * the receipt schema cannot name different vaults.
+     */
     weights: {
       type: "array";
-      optional: true;
+      optional: boolean;
+      buckets: string[];
       items: {
-        bucket: { type: "string" };
+        bucket: { type: "string"; enum: string[] };
         weight: { type: "number"; minimum: 0 };
       };
     };

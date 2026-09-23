@@ -43,6 +43,7 @@ import {
   redactPostgresUrl,
   resolveExternalPg,
 } from "./smoke-external-pg.ts";
+import type { SmokeCadenceProfile } from "./smoke-schedule.ts";
 
 export { redactPostgresUrl };
 
@@ -53,6 +54,8 @@ export const DB_MODES: readonly DbMode[] = Object.freeze(["ephemeral", "external
 
 /** Where a `--db smoke-twin` boot looks for its encrypted dump, when not the default. */
 export const BACKUP_DIR_FLAG = "--backup-dir";
+/** The flag that EXPLICITLY picks the cadence profile, overriding the one the invocation implies. */
+export const CADENCE_FLAG = "--cadence";
 /** The scenario flag a smoke-twin REQUIRES. Owned by smoke-mode.ts; named here to explain a refusal. */
 const SMOKE_FLAG = "--smoke";
 const PG_DATA_FLAG = "--pg-data";
@@ -193,6 +196,14 @@ export type ResolvedDataPath =
 
 export interface ParsedDataPath {
   dataPath: DataPathRequest;
+  /**
+   * The cadence override this argv carries (`--cadence fast|realistic`), decoded
+   * here with the same argv a smoke-main boots — a bad value is one more invalid
+   * invocation that fails in this one try/catch, before any container work.
+   * Absent, it is undefined and the cadence resolver picks the profile the
+   * invocation shape implies (scripts/lib/smoke-schedule.ts).
+   */
+  cadence: SmokeCadenceProfile | undefined;
   /** Deprecation notices for the caller to print. Never printed from here. */
   warnings: string[];
 }
@@ -240,7 +251,7 @@ export interface FlagSpec {
  * EVERY flag `bun run smoke` / `bun smoke` accepts. Nothing else may appear.
  *
  * Verified against every `process.argv` read in scripts/lib/smoke-main.ts
- * (`:141`, `:143-144`, `:220`, `:327-328`, `:504`) — note that `--rm`,
+ * (`:141`, `:143-144`, `:154`, `:220`, `:327-328`, `:504`) — note that `--rm`,
  * `--no-deps`, `--tail`, `--no-color`, `--transport` and `--already-migrated`
  * also appear in that file but are arguments smoke-main passes OUT to docker
  * compose and to child scripts; they are not accepted here, and adding them
@@ -253,8 +264,12 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: SEED_FLAG, arity: 0 as const }),
   Object.freeze({ flag: AGENTS_FLAG, arity: 1 as const }),
   Object.freeze({ flag: BACKUP_DIR_FLAG, arity: 1 as const }),
+  Object.freeze({ flag: CADENCE_FLAG, arity: 1 as const }),
   Object.freeze({ flag: "--static-port", arity: 0 as const }),
   Object.freeze({ flag: "--stage", arity: 0 as const }),
+  // AC-ID-05: a path to a compose overlay pinning every image to an artifact
+  // built on pinza and shipped here. Its value is a path, so arity 1.
+  Object.freeze({ flag: "--images-override", arity: 1 as const }),
   Object.freeze({ flag: "--no-tui", arity: 0 as const }),
   // Deprecated spellings, still accepted (with a warning) — see parseDataPath.
   Object.freeze({ flag: DB_FLAG, arity: 1 as const }),
@@ -369,6 +384,22 @@ function has(argv: readonly string[], flag: string): boolean {
 }
 
 /**
+ * The cadence override this argv asks for, or undefined when absent.
+ *
+ * THROWS on a value that is not a cadence profile — an unknown `--cadence` value
+ * must not fall back to the default any more than a typo'd `--db` value may.
+ * Absent, it is undefined and the boot resolves the cadence from its own shape
+ * (scripts/lib/smoke-schedule.ts). The value domain lives here only as a
+ * passthrough shim; the profiles themselves are smoke-schedule.ts's.
+ */
+export function cadenceOverride(argv: readonly string[]): SmokeCadenceProfile | undefined {
+  const value = valueOf(argv, CADENCE_FLAG);
+  if (value === undefined) return undefined;
+  if (value === "fast" || value === "realistic") return value;
+  throw new Error(`--cadence accepts "fast" or "realistic", got "${value}".`);
+}
+
+/**
  * Resolve the data path this argv asks for.
  *
  * THROWS with an actionable message rather than falling back — the same rule
@@ -457,6 +488,7 @@ export function parseDataPath(
         `data path while looking like the one you asked for.)`,
     );
   }
+  const cadence = cadenceOverride(argv);
 
   // ── Resolve the database from the flags ───────────────────────────────────
   // Default is REMOTE (the server in $HOME/.env). `--local [path]` picks a local
@@ -512,12 +544,11 @@ export function parseDataPath(
   }
 
   if (mode === "smoke-twin") {
-    // A restored smoke-twin is POPULATED by definition, and db-preflight.ts refuses a
     // A twin implies its own scenario — it is a restored, POPULATED database, so
     // the boot never runs the simulation seed against it (that is what the
     // `--seed`-with-`--twin` refusal above enforces). `--twin` no longer needs a
     // separate scenario flag to say so.
-    return { dataPath: { kind: "smoke-twin", backupDir: valueOf(argv, BACKUP_DIR_FLAG) }, warnings };
+    return { dataPath: { kind: "smoke-twin", backupDir: valueOf(argv, BACKUP_DIR_FLAG) }, cadence, warnings };
   }
 
   if (mode === "external") {
@@ -535,6 +566,7 @@ export function parseDataPath(
         host: ext.host!,
         source: ext.source!,
       },
+      cadence,
       warnings,
     };
   }
@@ -542,7 +574,7 @@ export function parseDataPath(
   if (valueOf(argv, BACKUP_DIR_FLAG) !== undefined) {
     throw new Error(`${BACKUP_DIR_FLAG} only applies to ${DB_FLAG} smoke-twin.`);
   }
-  return { dataPath: { kind: "ephemeral", ...(pgDataDir ? { pgDataDir } : {}) }, warnings };
+  return { dataPath: { kind: "ephemeral", ...(pgDataDir ? { pgDataDir } : {}) }, cadence, warnings };
 }
 
 // --- what the boot says and generates ----------------------------------------

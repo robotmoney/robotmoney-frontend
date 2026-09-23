@@ -106,7 +106,10 @@ describe("generated artefacts", () => {
   test("llms.txt carries every catalogued endpoint as an absolute URL", () => {
     const llms = read("frontend/public/llms.txt");
     for (const e of PUBLIC_ENDPOINTS) {
-      if (e.path === "/health") continue;
+      // /health and /version are catalogued (so the drift guard covers them)
+      // but deliberately outside the generated "Live data" block: neither is a
+      // dataset, and both are named in llms.txt's own prose instead.
+      if (e.path === "/health" || e.path === "/version") continue;
       expect(llms, `llms.txt is missing ${e.id}`).toContain(ORIGIN + openApiPath(e.path));
     }
   });

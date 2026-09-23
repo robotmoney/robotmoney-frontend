@@ -14,7 +14,7 @@
 // two-member session) rather than importing its private helpers, so this file
 // stays a clean regression pin for one thing: the CADENCE PATH
 // (`worker/handlers/swarm.ts publishSession`), not the admin ladder.
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
@@ -23,10 +23,13 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { publishSession as publishSessionJob } from "../src/worker/handlers/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
+
+// A real judge endpoint, locally served (issue #969): this file judges through
+// judgeSessionAdmin, which has no injectable transport, and the judge no longer
+// invents an opinion when it has no model to ask.
+import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+beforeAll(installJudgeStub);
+afterAll(removeJudgeStub);
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -69,7 +72,8 @@ async function judgedButUnpublished(prefix: string, mode: "shadow" | "enforce") 
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(session.id, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
-  // No model configured: the judge takes its template-fallback path.
+  // The local stub judge answers, so this is a real, model-authored opinion —
+  // the only kind a receipt may attest to since issue #969.
   const judged = await admin.judgeSessionAdmin(session.id, undefined);
   if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
   return session.id;
@@ -102,5 +106,28 @@ test("swarm.publish still completes cleanly for a shadow-judged session — no r
   // deliberately withheld from the session (consensus-receipt.ts), so there is
   // no opinion the session adopted for a receipt to embed.
   expect(result.consensusReceipt).toEqual({ published: false, reason: "judgement_not_adopted" });
+  // The expected-refusal allowlist leaves the RUN successful: no `ok`, so
+  // loop.ts's isDegradedResult() does not match and the cadence is not retried.
+  expect(result).not.toHaveProperty("ok");
   expect(await receiptRow(sessionId)).toBeNull();
+});
+
+test("a receipt refusal that is NOT an expected one degrades the run instead of reporting success", async () => {
+  // `no_session` stands in for the whole assembly-failure family (no_takes,
+  // schema_invalid, canonicalization_failed, the weights_* reasons): it is the
+  // one that needs no key material to provoke, and it takes the same branch.
+  // Before this, EVERY refusal returned a result with no `ok` field, so
+  // isDegradedResult() never matched and a broken receipt path was recorded as
+  // a SUCCEEDED publish carrying a quiet `published: false` — the feature could
+  // stop producing receipts in production with nothing to alert on.
+  // A well-formed id that matches no row: `swarm_sessions.id` is a uuid, so a
+  // non-uuid string fails in the UPDATE before assembly is ever reached.
+  const result = (await publishSessionJob({ sessionId: crypto.randomUUID() })) as {
+    ok?: boolean;
+    error?: string;
+    consensusReceipt: { published: boolean; reason?: string };
+  };
+  expect(result.consensusReceipt).toEqual({ published: false, reason: "no_session" });
+  expect(result.ok, "loop.ts's isDegradedResult() matches on ok === false").toBe(false);
+  expect(result.error).toContain("no_session");
 });

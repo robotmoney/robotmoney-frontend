@@ -38,7 +38,7 @@ import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
 // suite that needs one on file answers through the stub endpoint.
 useStubJudge();
 import {
-  judge, parseJudgeResponse,
+  judge, parseJudgeResponse, templateOpinion,
   type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
 } from "../src/swarm/judge.ts";
 
@@ -166,11 +166,17 @@ test("the two lower bounds coincide: zero positions is refused by the parser AND
   expect(schema.definitions.disagreement.properties.positions.minItems).toBe(1);
 });
 
+// ISSUE #969 REMOVED ONE OF THE TWO SOURCES, AND a42d6c5a REMOVED THE OTHER
+// HALF OF IT. This used to assert that a template "fallback" opinion
+// round-trips into an anchorable receipt too — which is precisely the defect:
+// a receipt is a signed attestation, and one carrying template prose under the
+// judge's name attests to a judging that never happened. A NEW receipt can now
+// carry exactly one source.
 test("a model judgement round-trips into an anchorable receipt, and `source` records that it was one", async () => {
   // The MODEL path, through the shipped orchestration rather than the parser
   // alone: a transport that returns the one-position answer.
   const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
-  const modelOutcome: JudgeOutcome = await judge(input, { transport, timeoutMs: 5_000 });
+  const modelOutcome = await judge(input, { transport, timeoutMs: 5_000 });
   expect(modelOutcome.source).toBe("model");
   expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
 
@@ -179,12 +185,30 @@ test("a model judgement round-trips into an anchorable receipt, and `source` rec
   // "fallback"`, identical to the model path in every other pinned field. That
   // similarity was the danger, not the feature: a receipt could attest prose no
   // model wrote and look exactly like one that did. A judge with no transport
-  // now refuses, so the only thing that can reach a receipt is the path above.
+  // now refuses — and so does one whose model was asked and did not answer, so
+  // the only thing that can reach a NEW receipt is the path above.
   await expect(judge(input, {})).rejects.toThrow("model_unconfigured");
+  const brokenTransport: JudgeTransport = {
+    model: "test-model",
+    complete: async () => { throw new Error("connect ECONNREFUSED"); },
+  };
+  await expect(judge(input, { transport: brokenTransport, timeoutMs: 5_000 }))
+    .rejects.toThrow("model_unavailable:");
   const receipt = assembleReceipt(modelOutcome.opinion, modelOutcome.source);
   assertAnchorable(receipt);
   expect(receipt.judge.source).toBe("model");
   expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
+});
+
+// …but a receipt WRITTEN BEFORE the fallback was removed must still read and
+// validate. Those rows are append-only history and some of them are already
+// signed and served, so the schema keeps `source: "fallback"` legal even
+// though nothing emits it any more.
+test("a pre-#969 fallback receipt still validates — history stays readable", () => {
+  const historical = assembleReceipt(templateOpinion(input), "fallback");
+  assertAnchorable(historical);
+  expect(historical.judge.source).toBe("fallback");
+  expect(canonicalizeReceipt(historical, spec)).toContain('"source":"fallback"');
 });
 
 test("every JudgeOpinion field has a receipt field, and the receipt invents none", () => {

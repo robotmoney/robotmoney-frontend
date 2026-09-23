@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { DASH_LAYOUT_VIEW, routeMetaFor, viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { existsSync } from "node:fs";
+import { DASH_LAYOUT_VIEW, NOT_FOUND_VIEW, VAULT_DETAIL_VIEW, routeMetaFor, viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // These are the PRODUCTION archive loaders: the same functions the browser
 // runs when it falls back to the shipped static archive (static-views.js is a
 // plain ES module, so Bun executes the real code path — not a test double). The old
@@ -50,12 +51,31 @@ describe("frontend route resolution", () => {
   test("resolves static routes to matching fragments", () => {
     expect(viewFor("/")).toBe("/views/home.html");
     expect(viewFor("/allocation")).toBe("/views/allocation.html");
-    // RM-115 retired views/vault.html into /allocation's `#vault` section, so
-    // /vault resolves to the allocation view. It stays an EXPLICIT entry rather
-    // than an absence: the catch-all maps any unknown path to
-    // `/views/<path>.html`, so a bare deletion would 404 a live address.
+    // Bare /vault resolves to the allocation view (router.js moves the address
+    // to /allocation#vaults). It stays an EXPLICIT entry rather than an
+    // absence: the catch-all maps any unknown path to `/views/<path>.html`,
+    // which for /vault is now the per-vault page.
     expect(viewFor("/vault")).toBe("/views/allocation.html");
+    expect(viewFor("/vault/")).toBe("/views/allocation.html");
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
+  });
+
+  test("/vault/:slug resolves the four vault pages, and nothing else under /vault/", () => {
+    for (const slug of ["rmusdc", "rmagent", "rmproto", "rmrwa"]) {
+      expect({ slug, view: viewFor(`/vault/${slug}`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
+      expect({ slug, view: viewFor(`/vault/${slug}/`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
+      expect(routeMetaFor(`/vault/${slug}`)).toBeNull();
+    }
+    expect(VAULT_DETAIL_VIEW).toBe("/views/vault.html");
+    expect(existsSync(join(repoRoot, "frontend/public", VAULT_DETAIL_VIEW))).toBe(true);
+    // An unknown slug, an address, or a path below a vault is not found, never
+    // the catch-all's per-path fragment.
+    expect(viewFor("/vault/nope")).toBe(NOT_FOUND_VIEW);
+    expect(viewFor("/vault/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd")).toBe(NOT_FOUND_VIEW);
+    expect(viewFor("/vault/rmusdc/x")).toBe(NOT_FOUND_VIEW);
+    // /vaults/:id (plural) is still the gated analytics dossier.
+    expect(viewFor("/vaults/1")).toBe("/views/dash/vault-profile.html");
+    expect(routeMetaFor("/vaults/1")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
   test("resolves every /admin subpath to the one buildless admin shell fragment", () => {
@@ -470,17 +490,16 @@ describe("frontend route resolution", () => {
     expect(noNft.nftContracts).toEqual([]);
   });
 
-  // subject.html gates the "Structural notes" panel on `x-show="structuralNotes().length"`,
-  // not on the raw field's truthiness. camelSubject defaults a missing
-  // structural_notes field to `[]`, which is itself truthy in JS — a plain
-  // `x-show="subject.structuralNotes"` would render an empty panel on every
-  // subject that declares none. structuralNotesOf must gate on .length.
+  // The "Brief to the swarm" disclosure gates on .length, not on the raw
+  // field's truthiness. camelSubject defaults a missing structural_notes field
+  // to `[]`, which is itself truthy in JS — a plain gate would put an empty
+  // disclosure on every subject that declares none.
   test("structuralNotesOf gates on .length, not truthiness of the raw field", () => {
     expect(structuralNotesOf({ structuralNotes: [] })).toEqual([]);
-    expect(structuralNotesOf({ structuralNotes: [] }).length).toBe(0);
     expect(structuralNotesOf(camelSubject({ id: "robotmoney-vault" }))).toEqual([]);
 
-    // A real list of notes passes through, filtered of any falsy entries.
+    // A real list passes through, filtered of falsy entries — the count is the
+    // disclosure's own label ("· 4 notes"), so a blank must not be counted.
     expect(structuralNotesOf({ structuralNotes: ["a", "", "b", null] })).toEqual(["a", "b"]);
 
     // Older manifests carry a single paragraph instead of a list; that still
@@ -491,6 +510,26 @@ describe("frontend route resolution", () => {
 
     // No subject at all (still loading / not found) must not throw.
     expect(structuralNotesOf(null)).toEqual([]);
+  });
+
+  // The eyebrow names an operator only when it is not this house. Every Robot
+  // Money subject declares `operator: "robotmoney"`, so the slot rendered
+  // "· operator robotmoney" beneath a headline already reading ROBOT MONEY
+  // ALLOCATION. An outside operator is the whole point of the slot: peaq runs
+  // Woon Treasury, and that must keep printing.
+  test("operatorOf names an outside operator and suppresses this house", () => {
+    expect(helpers.operatorOf({ operator: "peaq" })).toBe("peaq");
+    expect(helpers.operatorOf({ operator: "robotmoney" })).toBe("");
+
+    // The field is free text an admin types, so the house is matched
+    // case- and whitespace-insensitively rather than by exact string.
+    expect(helpers.operatorOf({ operator: "RobotMoney" })).toBe("");
+    expect(helpers.operatorOf({ operator: "  robotmoney  " })).toBe("");
+
+    // A subject that declares no operator renders no separator, and no
+    // subject at all (still loading / not found) must not throw.
+    expect(helpers.operatorOf({})).toBe("");
+    expect(helpers.operatorOf(null)).toBe("");
   });
 
   // issue #359: camelTake used to derive `id` with a member-id fallback
@@ -510,6 +549,16 @@ describe("frontend route resolution", () => {
     const withRealId = camelTake({ id: "take-9f2c1e0a", member_id: "athena", stance: "bullish", confidence: 0.9 });
     expect(withRealId.permalinkId).toBe("take-9f2c1e0a");
     expect(takeHref(withRealId)).toBe("/swarm/takes/take-9f2c1e0a");
+  });
+
+  // #963: the public take DTO serves each take's proposed weights. camelTake
+  // dropped every field it did not name, so the session page's "Proposed
+  // weights" panel never rendered against the live API.
+  test("camelTake keeps a take's proposed weights, and reads none as null", () => {
+    const weights = [{ bucket: "conservative_defi_yield", weight: 0.93 }, { bucket: "agent_tokens", weight: 0.07 }];
+    expect(camelTake({ id: "t1", member_id: "athena", stance: "cautious", confidence: 0.7, weights }).weights).toEqual(weights);
+    expect(camelTake({ id: "t2", member_id: "athena", stance: "cautious", confidence: 0.7, weights: null }).weights).toBeNull();
+    expect(camelTake({ member_id: "athena", stance: "cautious", confidence: 0.7 }).weights).toBeNull();
   });
 
   // The member profile page (/swarm/members/:id) builds its rows from two
@@ -617,8 +666,8 @@ describe("frontend route resolution", () => {
 
     expect(helpers.verifyLabel(archival.verified, archival.archival)).toBe("archived");
     const tip = helpers.verifyTip(archival.verified, archival.archival);
-    expect(tip).toContain("never member-signed");
-    expect(tip).toContain("not a failed signature check");
+    expect(tip).toContain("filed before members signed");
+    expect(tip).toContain("pre-launch record");
     // The exact copy that must not reach these rows.
     expect(tip).not.toContain("did not check out");
     expect(tip).not.toContain("unattributed");

@@ -21,9 +21,29 @@
 // deliberately outside the write path; see that file's header for why the
 // pre-#766 version of it proved nothing.
 import { sql, type DbHandle } from "../db/client.ts";
+import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 import { loadFrozenTakeSet } from "./domain.ts";
-import { DIGEST_SCHEME, judge, type JudgeInput, type JudgeOptions, type JudgeOutcome, type JudgeTake } from "./judge.ts";
+import {
+  DIGEST_SCHEME,
+  judge,
+  JudgeNothingToJudgeError,
+  JudgeUnavailableError,
+  type JudgeInput,
+  type JudgeOptions,
+  type JudgeOutcome,
+  type JudgeTake,
+} from "./judge.ts";
 import { LIVE_ROSTER_HANDLES } from "./roster-seed.ts";
+// R13 — the TEST-ONLY judge fault-injection lever. Resolved HERE, not inside
+// judge(): this is the layer that has a database and a session id, and keeping
+// the three gates (audited row, process flag, acceptance opt-in) in one module
+// with one caller is what makes "a judging cannot be faulted by accident" a
+// property of the wiring rather than of a reviewer's attention.
+import {
+  consumeJudgeFaultInjection,
+  getJudgeFaultInjection,
+  selectFaultInjection,
+} from "./judge-fault-injection.ts";
 
 export type JudgeMode = "off" | "shadow" | "enforce";
 
@@ -67,9 +87,54 @@ export async function getJudgeConfig(): Promise<JudgeConfig> {
   };
 }
 
+/**
+ * The `opencode/` half of a `provider/model` selector, which this column must
+ * NOT carry (issue #969).
+ *
+ * `swarm_judge_config.model` is posted VERBATIM as the `model` field of an
+ * OpenAI-compatible request to SWARM_JUDGE_BASE_URL. That is a different
+ * contract from the one `resolveAgentModel()` serves: the opencode CLI takes a
+ * `provider/model` selector and splits it itself, so the registry yields
+ * `opencode/deepseek-v4-flash` — and Zen's REST endpoint answers that with
+ *
+ *   401 {"type":"error","error":{"type":"ModelError",
+ *        "message":"Model opencode/deepseek-v4-flash is not supported"}}
+ *
+ * while the bare `deepseek-v4-flash` returns 200. (Probed directly against
+ * https://opencode.ai/zen/v1 on 2026-09-13.) That 401 is not a silent fallback:
+ * judge.ts's judgeTransportGap() classifies a body naming the MODEL rather than
+ * the credential as `model_not_supported`, which is the fail-closed class — it
+ * stops the judging and the session never publishes, so a prefix nobody noticed
+ * would have wedged every twin and production session rather than quietly
+ * publishing template prose. (Between #969 and D-A7 that was briefly untrue: the
+ * restored deterministic fallback caught every non-2xx, this 401 included.)
+ */
+const JUDGE_MODEL_PROVIDER_PREFIX = "opencode/";
+
+/**
+ * NORMALISE AT THE WRITE BOUNDARY, so the stored column always equals the wire
+ * id. The alternative — stripping inside resolveJudgeTransport — leaves the
+ * config saying one thing and the judgement row, the receipt and the admin API
+ * recording another, which is the sort of two-value split this file exists to
+ * avoid. An operator may paste either form; exactly one is ever stored.
+ *
+ * This is NOT a model substitution (the thing model-registry.ts refuses to do
+ * silently): it is the same model, addressed the way this endpoint addresses it.
+ */
+export function normalizeJudgeModel(model: string): string {
+  const trimmed = model.trim();
+  return trimmed.startsWith(JUDGE_MODEL_PROVIDER_PREFIX)
+    ? trimmed.slice(JUDGE_MODEL_PROVIDER_PREFIX.length).trim()
+    : trimmed;
+}
+
 export async function setJudgeConfig(
   patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean },
 ): Promise<JudgeConfig> {
+  // Before every model check below, so "non-empty" is asserted of the value
+  // that will actually be STORED and SENT — a bare `opencode/` normalises to
+  // the empty string and must be refused like any other blank.
+  if (typeof patch.model === "string") patch = { ...patch, model: normalizeJudgeModel(patch.model) };
   if (patch.mode !== undefined && !["off", "shadow", "enforce"].includes(patch.mode)) {
     throw new Error(`invalid judge mode "${patch.mode}" — expected off | shadow | enforce`);
   }
@@ -79,26 +144,143 @@ export async function setJudgeConfig(
   if (patch.model !== undefined && patch.model !== null && (typeof patch.model !== "string" || patch.model.trim() === "" || patch.model.length > 200)) {
     throw new Error("invalid judge model — expected a non-empty model id, or null to unset it");
   }
+  // WHICH model, not merely SOME model (AC-MODEL-01). Migration 0056's CHECK
+  // and the length test above prove the column is non-empty and nothing more,
+  // so a keyless `nemotron-3-ultra-free` satisfied every gate the 0.5.0 rollout
+  // adds and was then posted verbatim to Zen. The free family is refused
+  // everywhere; on an acceptance path only the pinned model is accepted. See
+  // judge-model-policy.ts for why the two rules differ in strength.
+  if (patch.model !== undefined && patch.model !== null && typeof patch.model === "string") {
+    assertJudgeModelAllowed(patch.model);
+  }
   if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
     throw new Error("invalid judge thirdPartyEnabled — expected a boolean");
+  }
+  // A JUDGE THAT IS ON MUST HAVE A MODEL (issue #969). `mode` and `model` are
+  // two columns an operator sets independently, and the combination
+  // `enforce`+NULL is exactly the state production reached: the switch reads
+  // ON, the transport can never be built, and every session it judged adopted
+  // template prose under the judge's name. The pair is now validated as a
+  // PAIR, against the row as it WILL BE rather than as it was — setting the
+  // mode and clearing the model in one patch is refused too. Migration 0053
+  // enforces the same rule in the schema, for writers that never come through
+  // here.
+  if (patch.mode !== undefined || patch.model !== undefined) {
+    const current = await getJudgeConfig();
+    const resultingMode = patch.mode ?? current.mode;
+    const resultingModel = patch.model === undefined ? current.model : (patch.model === null ? null : patch.model.trim());
+    // WHICH MODEL THE ROW WILL CARRY, not which one this patch mentioned
+    // (AC-MODEL-01). assertJudgeModelAllowed() above is guarded on the patch
+    // CARRYING a model, and the UPDATE below COALESCEs the stored value
+    // forward — so `{"mode":"enforce"}` against a row already holding
+    // `nemotron-3-ultra-free` enabled a keyless judge that every gate the
+    // 0.5.0 rollout adds then passed. Commit 14741336, the one that made a
+    // mode-only patch work at all, is what opened that door. The resulting
+    // model is what will be posted verbatim to Zen and written into signed,
+    // append-only judgement rows, so it is the value that must satisfy the
+    // policy.
+    if (resultingMode !== "off" && resultingModel) {
+      assertJudgeModelAllowed(resultingModel);
+    }
+    if (resultingMode !== "off" && !resultingModel) {
+      throw new Error(
+        `judge mode "${resultingMode}" requires a model — set { mode, model } together, or leave the judge off. ` +
+          "A judge with no model cannot form an opinion, and it must not record one it did not form.",
+      );
+    }
   }
   // `model: null` UNSETS deliberately, which is why it is passed through
   // separately from the COALESCE-on-undefined the other two fields get: taking
   // the model away is how an operator stops model prose without stopping the
   // judge recording template opinions.
   const clearModel = patch.model === null;
-  await sql`
-    INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at)
-    VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
-            ${patch.model ? patch.model.trim() : null}, ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now())
-    ON CONFLICT (id) DO UPDATE SET
-      mode = COALESCE(${patch.mode ?? null}, swarm_judge_config.mode),
-      min_takes = COALESCE(${patch.minTakes ?? null}::integer, swarm_judge_config.min_takes),
+
+  // ── A PLAIN UPDATE, NOT AN UPSERT — and that is the fix, not a style change.
+  //
+  // THE DEFECT. This used to be `INSERT … ON CONFLICT (id) DO UPDATE`, whose
+  // DO UPDATE arm COALESCEd the model so a mode-only patch would preserve it.
+  // That arm never ran. PostgreSQL evaluates a table CHECK constraint against
+  // the PROPOSED INSERT TUPLE before the arbiter index redirects the statement
+  // to the DO UPDATE arm, and on a mode-only patch the proposed tuple carried
+  // model = NULL (patch.model is undefined -> the VALUES expression yields
+  // null) beside mode = 'enforce'. Migration 0056's
+  // `CHECK (mode = 'off' OR model IS NOT NULL AND btrim(model) <> '')` therefore
+  // fired on a row that was never going to be stored, and `POST
+  // /api/swarm/admin/judge {"mode":"enforce"}` answered 400 with a raw driver
+  // string. The documented `{ mode, model }` pair still worked, so nothing was
+  // unreachable — the COALESCE was simply dead code with a confusing 400 in
+  // front of it.
+  //
+  // WHY NOT "READ THE ROW AND SEND THE RESOLVED MODEL IN VALUES". That is the
+  // obvious repair and it was built and measured against this one (see the RC2
+  // bundle's D3-two-designs-setJudgeConfig): both fix the mode-only patch, but
+  // it is a read-modify-write, and with a second writer landing in the window
+  // it SILENTLY REVERTED that writer's model change. This form cannot: the
+  // COALESCE is evaluated against the row as it stands when the UPDATE runs,
+  // and the CHECK is evaluated on the row the UPDATE actually produces. So the
+  // preserved model is the stored one by construction rather than by a
+  // snapshot taken earlier.
+  //
+  // The INSERT is the empty-table fallback only (migration 0056 seeds id = 1,
+  // so in practice the UPDATE always matches); `DO NOTHING` makes a race
+  // between two cold starts harmless, and the pair validation above has already
+  // refused a first row that would be on-with-no-model.
+  const updated = await sql`
+    UPDATE swarm_judge_config SET
+      mode = COALESCE(${patch.mode ?? null}, mode),
+      min_takes = COALESCE(${patch.minTakes ?? null}::integer, min_takes),
       model = CASE WHEN ${clearModel} THEN NULL
-                   ELSE COALESCE(${patch.model ? patch.model.trim() : null}, swarm_judge_config.model) END,
-      third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, swarm_judge_config.third_party_enabled),
-      updated_at = now()`;
+                   ELSE COALESCE(${patch.model ? patch.model.trim() : null}, model) END,
+      third_party_enabled = COALESCE(${patch.thirdPartyEnabled ?? null}, third_party_enabled),
+      updated_at = now(),
+      -- THE POLICY STAMP MOVES ONLY WHEN THE POLICY MOVES (T04, migration
+      -- 0057). updated_at is bumped by every patch; swarm/receipt-gap.ts
+      -- asks a narrower question — "is today's config entitled to speak for a
+      -- session that published before it?" — and that is decided by mode and
+      -- min_takes alone. Reading updated_at there made a model rotation
+      -- silently retract the missing-receipt alert for a session that is still
+      -- permanently receiptless. The comparison is IS DISTINCT FROM against
+      -- the row AS IT STANDS when this UPDATE runs (not a snapshot read
+      -- earlier), so a no-op patch — setting mode to the mode it already has
+      -- — does not move it either.
+      policy_updated_at = CASE
+        WHEN mode IS DISTINCT FROM COALESCE(${patch.mode ?? null}, mode)
+          OR min_takes IS DISTINCT FROM COALESCE(${patch.minTakes ?? null}::integer, min_takes)
+        THEN now() ELSE policy_updated_at END
+    WHERE id = 1
+    RETURNING id`.catch(rethrowAsNamedModelRefusal(patch));
+  if ((updated as unknown[]).length === 0) {
+    await sql`
+      INSERT INTO swarm_judge_config (id, mode, min_takes, model, third_party_enabled, updated_at, policy_updated_at)
+      VALUES (1, ${patch.mode ?? DEFAULT_CONFIG.mode}, ${patch.minTakes ?? DEFAULT_CONFIG.minTakes},
+              ${clearModel ? null : (patch.model ? patch.model.trim() : null)},
+              ${patch.thirdPartyEnabled ?? DEFAULT_CONFIG.thirdPartyEnabled}, now(), now())
+      ON CONFLICT (id) DO NOTHING`.catch(rethrowAsNamedModelRefusal(patch));
+  }
   return getJudgeConfig();
+}
+
+/**
+ * Migration 0056's CHECK, reported in this function's OWN words.
+ *
+ * The pair validation above refuses the on-with-no-model combination before any
+ * statement runs, so the constraint can now only fire on a genuine race — a
+ * second writer clearing the model between that check and this UPDATE. When it
+ * does, the operator gets the named refusal and the remedy, not
+ * `new row for relation "swarm_judge_config" violates check constraint …`.
+ * Every other database error is rethrown untouched.
+ */
+function rethrowAsNamedModelRefusal(patch: { mode?: JudgeMode }) {
+  return (err: unknown): never => {
+    const text = err instanceof Error ? err.message : String(err);
+    if (text.includes("swarm_judge_config_mode_requires_model_check")) {
+      throw new Error(
+        `judge mode "${patch.mode ?? "(unchanged)"}" requires a model — set { mode, model } together, or leave the judge off. ` +
+          "The stored model was taken away by a concurrent write while this patch was in flight; re-send the patch with both fields.",
+      );
+    }
+    throw err instanceof Error ? err : new Error(text);
+  };
 }
 
 // ── Building the judged input from stored state ─────────────────────────────
@@ -181,6 +363,14 @@ export interface JudgeSessionResult {
   /** Set iff `enforce` recorded an opinion that did NOT reach the session, and why. */
   appliedSkippedReason?: string;
   outcome?: JudgeOutcome;
+  /**
+   * Set iff the judging was REFUSED rather than performed (issue #969): the
+   * judge could not be reached, or the session held nothing to speak to. No
+   * judgement row was written and the session did not advance. This is the
+   * field that used to be a `fallback_reason` on a row nobody could tell from
+   * a real judging.
+   */
+  judgeUnavailableReason?: string;
 }
 
 export interface JudgeSessionOptions extends JudgeOptions {
@@ -284,7 +474,49 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   const input = await buildJudgeInput(sessionId, config.minTakes);
   if (!input) return { ok: false, status: 404, error: "session not found", sessionId, mode: config.mode };
 
-  let outcome = await judge(input, { model: config.model, ...judgeOpts });
+  // THE JUDGING EITHER HAPPENS OR IT DOES NOT (issue #969). judge() used to
+  // absorb every failure into a `source: "fallback"` outcome carrying template
+  // prose, which then travelled the identical write path as a real opinion —
+  // same row, same session, same signed consensus receipt. Nothing downstream
+  // could tell the two apart, so nothing did. Both refusals now return BEFORE
+  // the transaction below opens: no judgement row is written, the session does
+  // not advance, and the reason travels to the caller under its own name.
+  //
+  // `outcome` stays widened to JudgeOutcome because the re-entrant paths below
+  // rehydrate it from a row on file, and a row written before this change may
+  // legitimately still read `source: "fallback"` — that history is append-only
+  // (migration 0040) and stays readable. Only the FRESH value is narrowed.
+  // An explicitly passed `faultInjection` (tests, and only tests) wins; every
+  // other call resolves the armed row through the gates. `undefined` means "ask
+  // the lever", `null` means "this caller has decided: no fault".
+  const faultInjection = judgeOpts.faultInjection !== undefined
+    ? judgeOpts.faultInjection
+    : selectFaultInjection(await getJudgeFaultInjection(), sessionId);
+
+  let outcome: JudgeOutcome;
+  try {
+    outcome = await judge(input, { model: config.model, ...judgeOpts, faultInjection });
+  } catch (err) {
+    if (err instanceof JudgeNothingToJudgeError) {
+      // Not a failure: the session holds no member-authored sentence, so there
+      // is no opinion to be had and nothing to retry. 409, not 503 — a worker
+      // that retried this would retry it forever.
+      return {
+        ok: false, status: 409, error: "nothing_to_judge", sessionId, mode: config.mode,
+        judgeUnavailableReason: err.reason,
+      };
+    }
+    if (err instanceof JudgeUnavailableError) {
+      // A real outage or a response that could not be trusted whole. 503 so the
+      // job queue retries it; the session stays unjudged and unpublished until
+      // a judge actually answers.
+      return {
+        ok: false, status: 503, error: "judge_unavailable", sessionId, mode: config.mode,
+        judgeUnavailableReason: err.reason,
+      };
+    }
+    throw err;
+  }
 
   // NO TEMPLATE PROSE ON AN ACTIVE JUDGE. A judgement whose `opinion` came from
   // templateOpinion() is not a judgement — it is the aggregator's own sentences
@@ -436,7 +668,7 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
     // SHADOW NEVER APPLIES. That is the whole point of the mode, and migration
     // 0041's CHECK refuses a shadow row that claims otherwise.
     const attempt = config.mode === "enforce"
-      ? await applyOpinion(tx, sessionId, outcome)
+      ? await applyOpinion(tx, sessionId, outcome, judgeMemberId)
       : { applied: false as const, reason: null };
     const applied = attempt.applied;
     const appliedSkippedReason = applied ? null : attempt.reason;
@@ -454,6 +686,21 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
         ${sql.json(outcome.opinion as any)}
       ) RETURNING id`)[0] as { id: string | number };
 
+    // R19 — what this judging COST, written beside the opinion it bought. A
+    // separate UPDATE rather than four more VALUES placeholders keeps the
+    // insert above readable and, more to the point, keeps a spend figure from
+    // ever being able to fail the write that matters: the CHECKs are
+    // "NULL or >= 0" and the values are already normalised by parseJudgeUsage.
+    if (outcome.usage) {
+      await tx`
+        UPDATE swarm_session_judgements SET
+          usage_input_tokens = ${outcome.usage.inputTokens},
+          usage_output_tokens = ${outcome.usage.outputTokens},
+          usage_total_tokens = ${outcome.usage.totalTokens},
+          usage_cost_usd = ${outcome.usage.costUsd}
+        WHERE id = ${inserted.id}`;
+    }
+
     recorded = { id: inserted.id, applied, ...(appliedSkippedReason ? { skipped: appliedSkippedReason } : {}) };
   };
 
@@ -462,6 +709,21 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
   } catch (e) {
     if (!(e instanceof JudgeRollback)) throw e;
     recorded = undefined;
+  }
+
+  // R13 — the lever is SPENT ONLY BY A JUDGING THAT WAS RECORDED. Decrementing
+  // before the transaction would let a rolled-back judging (a refusal in
+  // `beforeRecord`, a terminal session) burn a call an operator counted on, and
+  // an armed-for-one lever would then be gone with nothing to show for it.
+  // Outside the transaction, and deliberately not fatal: a judging that
+  // happened must not be reported as failed because the counter could not be
+  // decremented — the row stays armed and the next call spends it instead.
+  if (recorded && faultInjection && judgeOpts.faultInjection === undefined) {
+    try {
+      await consumeJudgeFaultInjection();
+    } catch (e) {
+      console.warn(`[judge] fault-injection counter not decremented for ${sessionId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   if (!recorded) {
@@ -528,7 +790,14 @@ type ApplyOutcome = { applied: true; reason: null } | { applied: false; reason: 
 //
 // Takes a `tx` because the read and the write are a read-modify-write and must
 // be one transaction, under the caller's advisory lock.
-async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutcome): Promise<ApplyOutcome> {
+//
+// `judgeMemberId` NAMES THE JUDGE on the session, spelled exactly as the
+// judgement row's `judged_by`/`judged_by_member_id` are (the INSERT in
+// judgeSession). The fingerprint alone cannot: two judges given the same prompt
+// over the same take set share `prompt_hash` and `inputs_digest`.
+async function applyOpinion(
+  tx: DbHandle, sessionId: string, outcome: JudgeOutcome, judgeMemberId?: string,
+): Promise<ApplyOutcome> {
   const row = (await tx`
     SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
     | { state: string; swarm_recommendation: Record<string, unknown> | null }
@@ -546,6 +815,8 @@ async function applyOpinion(tx: DbHandle, sessionId: string, outcome: JudgeOutco
     prompt_hash: outcome.promptHash,
     inputs_digest: outcome.inputsDigest,
     ...(outcome.fallbackReason ? { fallback_reason: outcome.fallbackReason } : {}),
+    judged_by: judgeMemberId ?? "robotmoney-in-house",
+    ...(judgeMemberId ? { judged_by_member_id: judgeMemberId } : {}),
   };
   const upd = await tx`
     UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}

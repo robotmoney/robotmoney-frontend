@@ -28,7 +28,7 @@ body {
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--color-void); }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-border-light); }
 
 /* ── Animations ── */
@@ -96,10 +96,14 @@ body {
   line-height: 1.8;
   font-size: 1.05rem;
 }
+/* Monochrome, like every text link on the site: a step lighter than the
+   muted paragraph, over a neutral rule that brightens on hover. Never cyan. */
 .prose-rm a {
-  color: var(--color-accent);
+  color: var(--color-link);
   text-decoration: underline;
+  text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px;
   text-underline-offset: 3px;
-  transition: opacity 0.2s;
+  transition: text-decoration-color 0.2s;
 }
-.prose-rm a:hover { opacity: 0.8; }
+.prose-rm a:hover { text-decoration-color: var(--color-link); }

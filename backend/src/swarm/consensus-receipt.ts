@@ -45,7 +45,7 @@ import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalizati
 import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
 import { sql } from "../db/client.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
-import { loadFrozenTakeSet } from "./domain.ts";
+import { loadFrozenTakeSet, normalizedTakeWeights } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
 import { judgeInputFromFrozen } from "./judge-session.ts";
 
@@ -128,6 +128,16 @@ export type ConsensusReceiptRefusalReason =
   | "weights_malformed"
   | "weights_not_canonical_four"
   | "weights_not_a_share_vector"
+  // A `bucket_weights` session that produced NO vector at all. Distinct from
+  // the three above, which are all "a vector exists and is wrong": this one is
+  // "the allocation the session was convened to produce is absent", and it is
+  // the only weights reason reachable when every layer below behaved correctly.
+  | "weights_absent_for_bucket_weights_subject"
+  // A `bucket_weights` session whose published allocation was authored by only
+  // SOME of the takes the receipt claims. Distinct from the reason above, which
+  // is "no take carried a vector": this one is "the vector exists, and the
+  // receipt's own take_count overstates who voted on it".
+  | "weights_not_authored_by_every_take"
   | "schema_invalid"
   | "semantics_invalid"
   | "canonicalization_failed";
@@ -285,6 +295,28 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
       `the session's weight vector is not a share vector, so it has no basis-point representation: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
+}
+
+/**
+ * Is this value a vector over EXACTLY the four canonical buckets?
+ *
+ * Used for both halves of gate 5b — the rollup's published vector and each
+ * take's own — so "the allocation is canonical" and "this analyst authored the
+ * canonical allocation" are the same question asked twice, never two spellings
+ * of it that can drift apart.
+ */
+function isCanonicalFourVector(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const buckets = new Set<string>();
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const bucket = (entry as { bucket?: unknown }).bucket;
+    const weight = (entry as { weight?: unknown }).weight;
+    if (typeof bucket !== "string" || typeof weight !== "number" || !Number.isFinite(weight)) return false;
+    buckets.add(bucket);
+  }
+  return buckets.size === RECEIPT_CANONICAL_BUCKET_ORDER.length &&
+    RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => buckets.has(bucket));
 }
 
 /**
@@ -659,6 +691,20 @@ async function loadAssemblyInput(
       [`session judge prompt_hash ${adopted.prompt_hash}`, `session judge inputs_digest ${adopted.inputs_digest}`],
     );
   }
+  // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
+  // row came from templateOpinion() — the aggregator's own sentences — and a
+  // certificate saying "the judge read the takes and concluded this" over them
+  // attests something that never happened. The refusal is separate from
+  // `judgement_not_adopted` because the fix is different: that one says judge in
+  // enforce, this one says give the judge a model it can actually reach.
+  if (judgement.source !== "model") {
+    throw new ConsensusReceiptRefusal(
+      "judgement_not_authored",
+      `session ${sessionId}'s adopted judgement has source='${judgement.source}' — its opinion is TEMPLATE PROSE, not a model's. ` +
+        "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
+        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
+    );
+  }
 
   // ── 4. THAT OPINION WAS FORMED OVER THIS TAKE SET ─────────────────────────
   // `inputs_digest` is the judge's own claim about what it read, and until now
@@ -679,6 +725,82 @@ async function loadAssemblyInput(
       `the adopted judgement of session ${sessionId} was formed over a different set of inputs than the one this receipt would embed — re-judge the session in \`enforce\` mode, then publish the receipt`,
       [`judgement inputs_digest ${judgement.inputs_digest}`, `rebuilt inputs_digest ${rebuiltDigest}`],
     );
+  }
+
+  // ── 5. A `bucket_weights` SESSION MUST CARRY AN ALLOCATION ────────────────
+  // The hole this closes is the one v0.5.0-rc.1 shipped through: schema 1.0
+  // makes `weights` optional, `meanTakeWeights()` returns undefined when no
+  // take carried a vector, and the assembler then omitted the field — so a
+  // session whose subject EXISTS TO PRODUCE AN ALLOCATION published a signed,
+  // judge-attested, read-time-verified receipt that was silent about the
+  // allocation, and no gate anywhere called that a failure. Publication
+  // SUCCEEDED, which is precisely why AC-FE-10's missing-publication alarm
+  // could never fire for it.
+  //
+  // THE TYPE IS READ OFF THE ROLLUP, NOT OFF `swarm_subjects`. `rec.type` is
+  // what `aggregateSession()` wrote into this session's own snapshot at the
+  // moment it decided whether to derive a vector, so it is the same fact the
+  // decision was made on. Re-reading the subject here would let a subject
+  // retyped after aggregation refuse a receipt for a session that was never
+  // asked for weights (or, worse, let one through that was).
+  //
+  // `weights` STAYS OPTIONAL IN THE SCHEMA (no version bump): what changes is
+  // that a `bucket_weights` subject may no longer reach publication without
+  // one. A `position_actions` session is untouched.
+  const recommendationType = String((rec as { type?: unknown }).type ?? "");
+  if (recommendationType === "bucket_weights" && rec.weights == null) {
+    throw new ConsensusReceiptRefusal(
+      "weights_absent_for_bucket_weights_subject",
+      `session ${sessionId} is a bucket_weights session, so its receipt must carry the four-bucket allocation the swarm was convened to produce — but its rollup has no weight vector, which means no contributing take carried one. ` +
+        "A receipt is NOT published without it: an allocation receipt that is silent about the allocation verifies, anchors and says nothing, and omission is not detectable from the receipt itself. " +
+        "Re-run the session against analysts that author a WEIGHTS control line (scripts/lib/swarm/inference.ts), or retype the subject if it was never meant to produce an allocation.",
+      [`rollup recommendation type "${recommendationType}"`, `takes on file ${frozen.takes.length}`],
+    );
+  }
+
+  // ── 5b. THE ALLOCATION MUST BE AUTHORED BY EVERY TAKE THE RECEIPT CLAIMS ──
+  // Gate 5 asks that a `bucket_weights` session produce an allocation. It does
+  // not ask WHO produced it, and `meanTakeWeights()` divides by the number of
+  // VECTORS it found, not by the number of takes — so a receipt could carry an
+  // allocation written by one analyst while `release_safety.take_count` said
+  // three, `thinly_supported` said false, and `receiptSemanticErrors`
+  // recomputed the same mean over the same minority subset and verified clean.
+  // Nothing in the signed bytes disclosed it. The same arithmetic turns a
+  // member who simply never NAMED `real_world_assets` into an explicit 0.00
+  // vote on it, because the union across takes still satisfies
+  // `weights_not_canonical_four`.
+  //
+  // This is reachable in the RC's own pipeline rather than theoretical: the
+  // member client derives `requireWeights` from a brief read that tolerates a
+  // 404 (a member racing the brief authors prose only), and any rmpc/MCP/API
+  // member is never asked at all — `optionalWeights()` accepts a take with no
+  // vector and nothing server-side rejects one for a `bucket_weights` session.
+  //
+  // REFUSED, NOT DISCLOSED. The alternative was a `weights_take_count` beside
+  // `release_safety.take_count`; it was dropped because it adds a field to a
+  // cross-repo schema to describe a state that should not be published at all.
+  // A signed allocation attributed to N analysts must have been written by N
+  // analysts; anything else is re-run, loudly, with the reason named.
+  //
+  // ORDERED AFTER toBps()'s OWN REFUSAL. A rollup vector that is not the
+  // canonical four is already refused by name (`weights_not_canonical_four`)
+  // and that is the more specific fact about the same session, so this gate
+  // speaks only when the published allocation would otherwise be well-formed.
+  if (recommendationType === "bucket_weights" && isCanonicalFourVector(rec.weights)) {
+    const unsupported = frozen.takes.filter((take) => {
+      const payload = (take.payload ?? {}) as { weights?: unknown };
+      return !isCanonicalFourVector(normalizedTakeWeights(payload.weights));
+    });
+    if (unsupported.length > 0) {
+      throw new ConsensusReceiptRefusal(
+        "weights_not_authored_by_every_take",
+        `session ${sessionId} would publish a four-bucket allocation authored by ${frozen.takes.length - unsupported.length} of the ${frozen.takes.length} take(s) the receipt attests to. ` +
+          "the mean derivation averages over the VECTORS on file, not over the takes on file, so the allocation would be signed, verifiable and silently unrepresentative — " +
+          "release_safety.take_count would report every take while the numbers came from a subset, and a bucket a member never named would be counted as that member's explicit 0.00 vote. " +
+          "Every contributing take of a bucket_weights session must carry the full canonical-four vector (scripts/lib/swarm/inference.ts's WEIGHTS control line); the receipt is refused rather than published with support it does not have.",
+        unsupported.slice(0, 4).map((take) => `take of member "${take.member_id}" carries no canonical-four weight vector`),
+      );
+    }
   }
 
   const analysts: ConsensusReceiptAnalystInput[] = [];
@@ -892,6 +1014,22 @@ export async function verifyAssembledReceipt(
 }
 
 export interface PublicConsensusReceipt extends StoredConsensusReceipt, ConsensusReceiptVerification {}
+
+/**
+ * The ANCHORED read (decision D10): the stored receipt and its published
+ * `canonical_bytes`, with NO verification verdict attached.
+ *
+ * Separate from `getConsensusReceipt` on purpose. The route that serves the
+ * bytes `payloadDigest` commits to must hand over the stored text column
+ * unchanged and must not depend on a read-time verdict — a verifier fetching
+ * the anchored URL checks the commitment themselves with keccak256, and bytes
+ * withheld or altered because this server privately disagreed with them would
+ * make the on-chain anchor unresolvable precisely when it matters. It is also
+ * the cheaper read: no signature verification, no re-canonicalization.
+ */
+export async function getStoredConsensusReceipt(sessionId: string): Promise<StoredConsensusReceipt | null> {
+  return await readStoredReceipt(sessionId);
+}
 
 /** The public read: the stored receipt plus a freshly recomputed verdict. */
 export async function getConsensusReceipt(sessionId: string): Promise<PublicConsensusReceipt | null> {

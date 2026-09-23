@@ -6,6 +6,7 @@ import { judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judg
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ensureProseSubject } from "./support/prose-subject.ts";
 import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
 // A judgement is a model's opinion now — there is no modelless path — so a
 // suite that needs one on file answers through the stub endpoint.
@@ -25,7 +26,7 @@ async function member(prefix: string) {
 
 async function session(prefix: string) {
   const subjectId = rid(prefix);
-  await swarm.ensureSubject(subjectId, subjectId);
+  await ensureProseSubject(subjectId, subjectId);
   const opened = await swarm.openSession(subjectId);
   await swarm.publishBrief(opened.id, 60);
   return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };

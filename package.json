@@ -24,6 +24,7 @@
     "smoke": "bun scripts/smoke.ts",
     "migrate": "bun run --cwd backend scripts/migrate.ts",
     "e2e:local": "bash scripts/e2e-local.sh",
+    "static:manifest": "bun scripts/static-manifest.ts",
     "smoke:stage": "bun scripts/smoke-stage.ts",
     "smoke:archive": "bun scripts/smoke.ts --smoke --static-port --db external --seed",
     "eval": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bun test",
