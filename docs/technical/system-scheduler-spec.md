@@ -204,7 +204,7 @@ There are four kinds of credential in this system, and they must not be confused
 
 `system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
-How that automation token is provisioned is defined in `smoke-production-spec.md` §3: issued at production initialization, placed by the boot as a per-instance file, never in `~/.env` and never in the image, rotated by re-provisioning and restarting the container.
+How that automation token is issued, validated, delivered and rotated is defined in `smoke-production-spec.md`: §3 for the token store and delivery, §9.1 for production, §5 for rehearsal (blank, dump, volume and remote rehearsal targets). Every environment in §8 obtains it by one of those two paths; none reuses another's.
 
 ## 8. Environments
 
@@ -270,7 +270,10 @@ Adopting this document superseded these clauses of `smoke-production-spec.md`. T
 |---|---|---|
 | §4.4 | stage runs "accelerated `SWARM_*_CRON` values"; `--schedules-off` flag | stage sets short epoch durations on subjects through the admin API; no flag |
 | §6.3 | `worker-swarm` schedules sessions from `job_schedules` rows; `bun run schedules:enable`; preflight-vs-readiness on `next_run_at` | `system-scheduler` and epochs, per this document; no enable command; nothing to disable |
-| §7 check 6 | "the five `swarm.*` schedule rows are enabled and their cron strings parse" | every active subject has an epoch duration and a `collecting` session at readiness |
+| §7 check 6 | "the five `swarm.*` schedule rows are enabled and their cron strings parse" | preflight: every active subject has an epoch duration. Readiness, separately (§6.3): every active subject has a `collecting` session and the scheduler reports healthy |
+| §6.3 (addition) | readiness = a `collecting` row per active subject | readiness also requires scheduler authentication, a synchronized stream, a completed initial rebuild, and no exhausted work; receipt vs live health distinguished |
+| §5 (addition) | local modes generate role passwords only | preparation also provisions the scheduler's API token for rehearsal targets; `volume` reuses it |
+| §6.2 (addition) | every participant "polls the API" | agents poll; judges subscribe and are served pending `judging` requests on every connect |
 | §7.2 | database-holding containers are `api`, `worker`, `worker-swarm` | `api` only, within this document's scope |
 | §8.1 | bootstrap data includes "seed schedules" | bootstrap data includes each subject's epoch duration; there are no schedule rows |
 | §9.1 step 4 | `bun run schedules:enable` | deleted |
@@ -278,4 +281,4 @@ Adopting this document superseded these clauses of `smoke-production-spec.md`. T
 | §3 (addition) | covers database and signing credentials | adds how an API automation token is provisioned to `system-scheduler` |
 | §2 / §1.2 | `bun run schedules:enable` listed among the tools sharing the target-lock protocol | removed from that list |
 
-The companion's participant model — agents polling for a new window — is not changed by this document and is not in tension with judges receiving a pushed request; the two are different actors with different protocols, both defined there.
+The companion's participant model — agents polling for a new window, judges subscribing for judging requests — is defined in its §6.2. The judge subscription is its own connection and its own contract: the API serves pending `judging` sessions as state on every connect, so it does not depend on this document's cursor-and-sequence stream (§6.3), which exists for the scheduler alone.

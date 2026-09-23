@@ -90,11 +90,11 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **Participant keys** live in `credential.json` (§6.1), never in `~/.env`.
 
-**API automation token.** `system-scheduler` calls the API and nothing else, so it holds one API credential and no other kind (scheduler spec §7). That token is provisioned at production initialization (§9.1) and handed to the container the way a participant's key is handed to its container — a file the boot places, named per instance, never in `~/.env` and never in the image. Rotation is a re-provision and a container restart.
+**API automation token.** `system-scheduler` calls the API and nothing else, so it holds one API credential and no other kind (scheduler spec §7). The token is issued by the API's own automation-token store: a row holding the token's hash and its rights (read subjects and sessions, perform lifecycle transitions), written by the same authorized preparation that writes `deployment_identity`. The API validates a presented token against that row; a file on disk establishes nothing by itself. The secret is handed to the container the way a participant's key is handed to its container — a file the boot places in the instance's state directory, named per instance, never in `~/.env` and never in the image. In production the token is provisioned once at initialization (§9.1). In rehearsal it is provisioned by preparation (§5), unattended. Each instance holds its own token, so provisioning one never invalidates another's. Rotation is a re-provision and a container restart.
 
 **Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime role passwords are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
 
-**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that poll over HTTP (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
+**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that reach the API over HTTP only (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
 
 **What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
 
@@ -138,6 +138,8 @@ There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit fl
 
 `--local <mode>` starts a Postgres container that smoke owns. In `blank` and `dump` modes smoke generates the four role passwords and saves them in the instance's state directory beside the volume; `volume` mode reuses them. No terminal prompt exists in local modes.
 
+**Scheduler token in rehearsal.** In `blank` and `dump` modes, preparation also provisions `system-scheduler`'s API automation token (§3) for the rehearsal target — same rights, same delivery, same file location as production — and journals that phase like any other. `volume` mode reuses the instance's saved token. A rerun under the same plan id reuses a completed provisioning rather than silently rotating it (§1.3). A remote rehearsal target uses a token provisioned for that enrolled target by the same procedure, run explicitly. In every environment the scheduler receives only its API credential; no database or signing credential is ever introduced for it.
+
 | mode | start state |
 |---|---|
 | `blank` | empty database bootstrapped from the snapshot (§8.1): schema, bootstrap data, ledger baselined to the snapshot's filename list, manifest written, `deployment_identity = rehearsal` |
@@ -167,7 +169,10 @@ Path: `RM_CREDENTIALS=<path>` in `~/.env` or `--credentials <path>`; arg overrid
 
 ### 6.2 Standing participant containers
 
-Each roster entry is one long-lived container (`restart: unless-stopped`) that behaves like a third-party deployment: it polls the API over HTTP for sessions that need it, runs each take as a one-shot process in a fresh per-take workspace with a timeout and process-group cleanup, reports, and sleeps. No participant container holds a database credential, and no container in the stack — participant or service — holds a Docker socket (§3).
+Each roster entry is one long-lived container (`restart: unless-stopped`) that behaves like a third-party deployment. What every participant shares: a standing container, a participant-held signing key, HTTP interaction with the API only, model work run as a one-shot process in a fresh per-item workspace with a timeout and process-group cleanup, and no database credential or Docker socket (§3). What differs is how each kind discovers its work:
+
+- **Agents poll.** An agent polls the API for `collecting` sessions it has not yet taken, submits, and sleeps.
+- **Judges subscribe.** A judge holds an authenticated stream to the API and receives judging requests created by the scheduler's request-judging transition (scheduler spec §4.4). The request is state, not a fleeting event: on every connect or reconnect the API serves every session in `judging` for which this judge has not yet submitted, so a judge that was down when the request was created still obtains it if it returns before the deadline. The judge performs its model work and submits its judgement through the participant API. Redelivery can never change an outcome: a submission after finalize is recorded as late evidence (scheduler spec §4.4). The deadline and finalization belong to the scheduler, never to the judge, so an absent judge delays nothing and yields `no_consensus`. Readiness (§6.3) never requires a judge to be connected or a consensus to exist.
 
 **Idempotent submission.** Take identity is `(session, member)`, unique server-side. A resubmission on an existing key returns the existing record and the participant treats it as success, so a crash after submit or an old/new container overlap during a roster change produces at most a redundant request, never a second take. One take in flight per participant.
 
@@ -179,7 +184,9 @@ Sessions are timed by `system-scheduler`, per subject, in epochs — [`system-sc
 
 **There is nothing to enable.** A subject's epoch duration is the whole schedule: set by bootstrap data on a blank database, changed afterwards only through the admin API, and never disabled. There are no schedule rows, no cron strings, no `next_run_at`, and no enable command. A plain restart never rewrites operator state, and `system-scheduler` rebuilds its timers from the API on every start.
 
-**Preflight vs readiness.** Preflight has nothing to check about scheduling. Readiness, once `system-scheduler` is up, checks that every active subject has a session in `collecting` (scheduler spec §2.1, §3).
+**Preflight vs readiness.** Preflight checks that every active subject has an epoch duration (§7 check 6). It does not require an open epoch before the scheduler starts. Readiness checks first-epoch creation and scheduler health after startup.
+
+**Scheduler readiness** requires all of: the scheduler authenticated to the API; its stream established and synchronized (scheduler spec §3.1); its initial rebuild complete, meaning timers reconstructed and recoverable work resumed, not that any settlement has finished; and every active subject holding a `collecting` session. A scheduler reporting exhausted work (scheduler spec §4.6) is not ready. `collecting` rows alone establish nothing, since an exhausted turnover leaves such a row in place. Smoke reads this from the scheduler's health endpoint and records the result in the receipt. `smoke:status` and the TUI show the receipt as history and the health endpoint as now, side by side, including any degradation with its subject or session and last error. A session waiting on its judging deadline, or published `no_consensus`, is not a health failure. Recovery from exhausted work is a restart of that instance's scheduler container (`docker restart` of the instance's `system-scheduler`) after the failing dependency is back; smoke never restarts it on its own.
 
 ### 6.4 Spoofed keys
 
@@ -292,6 +299,10 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - `volume` reuse after restart.
 - Receipt read by `smoke:status`.
 - Overlay-free stage boots with the real `system-scheduler` against short epoch durations.
+- A fresh `--local blank` boot authenticates the real scheduler with no production initialization; `--local dump` yields a token that works against the restored rehearsal; `volume` reuse and an interrupted-then-retried preparation keep the same token; two concurrent CI instances never share a token file.
+- With `collecting` rows already present, a scheduler that cannot authenticate or synchronize fails readiness. Exhaust turnover retries: degradation is visible in `smoke:status` with subject and last error. Restore the dependency and restart the scheduler: degradation clears and the boundary fires once.
+- Disconnect a judge at the judging request, reconnect it before the deadline: it obtains the pending request. Leave it disconnected: the session publishes `no_consensus` and readiness still passes.
+- A subject with a duration and no epoch passes preflight, then gains its first epoch from the scheduler before readiness passes; a subject missing its duration fails preflight.
 
 **W2 schema and privilege verification**
 - `RM_ENV=stage` + typed owner password against `deployment_identity = production` refuses; plain stage boot incl. `--allow-insecure` against production identity refuses.
