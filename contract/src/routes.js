@@ -222,6 +222,20 @@ export const ROUTES = {
       subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
       subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
 
+      // ── The epoch lifecycle (issue #1026 W4.2, system-scheduler-spec.md §4)
+      // Every one of these is a STATE-GUARDED transition that `system-scheduler`
+      // calls at an instant it already holds. They are POSTs under the admin
+      // namespace because an operator drives the same transitions by hand
+      // (§4.3: "An operator ending a window early does it through the same
+      // endpoint with the same `expected_session_id`"), and because the API
+      // decides nothing about timing on its own.
+      epochOpen: "/api/swarm/admin/epochs/open", // POST { subjectId } — create+brief+window, one transaction
+      epochTurnover: "/api/swarm/admin/epochs/turnover", // POST { subjectId, expectedSessionId } — close N, open N+1
+      epochAggregate: "/api/swarm/admin/epochs/aggregate", // POST { sessionId } — deterministic rollup
+      epochRequestJudging: "/api/swarm/admin/epochs/request-judging", // POST { sessionId } — stores the absolute deadline
+      epochConsensus: "/api/swarm/admin/epochs/consensus", // POST { sessionId, judgementId } — record the acceptance instant
+      epochFinalize: "/api/swarm/admin/epochs/finalize", // POST { sessionId } — decide the outcome from stored instants
+
       // GET list (all statuses, redacted) / POST manual add.
       // POST body is { name, publicKey, lens?, contact? } — issue #690: the id is
       // GENERATED server-side and returned as `member.id`; a body carrying

@@ -83,7 +83,10 @@
     "0063_deployment_identity.sql",
     "0064_schema_manifest.sql",
     "0065_append_only_grant_transition.sql",
-    "0066_drop_swarm_notifications.sql"
+    "0066_drop_swarm_notifications.sql",
+    "0067_subject_epoch_duration.sql",
+    "0068_session_epoch_lifecycle.sql",
+    "0069_automation_tokens.sql"
   ],
-  "contentHash": "d6b3814ea7c1a0c6b8c86aa4d4bd54d58bc5dcd1ddf2dc29c4198448ce29d563"
+  "contentHash": "fd04040c9e5fc82b5f13cf3752907d2a553e8d3152fbdbfdbd40e97e418f2a1d"
 }

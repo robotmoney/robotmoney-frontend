@@ -21,6 +21,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
+import { lookupAutomationToken, type AutomationGrant, type AutomationRight } from "../db/automation-tokens.ts";
 
 export function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
@@ -73,6 +74,54 @@ export function hasAutomationRole(
 ): boolean {
   const presented = req.headers.get("X-Automation-Token") ?? bearer(req);
   return cfg.automationToken ? secretEq(presented, cfg.automationToken) : cfg.allowInsecure;
+}
+
+// ── The automation-token STORE (issue #1026 W4.5) ───────────────────────────
+//
+// `hasAutomationRole` above is the pre-existing, env-configured automation
+// credential: one shared secret, no identity, no rights, and no way to
+// provision a second one. That is what `system-scheduler` cannot use.
+// Smoke spec §3 requires a per-instance credential validated against a row
+// carrying its rights, so that "each instance holds its own token" and
+// "provisioning one never invalidates another's" are structural facts rather
+// than operational care.
+//
+// The two live side by side deliberately and are NOT merged. The env token
+// still authorizes the existing stack-internal drivers exactly as before —
+// merging would silently change who may call what — while a right-bearing
+// route asks `hasAutomationRight`, which the env token satisfies only as the
+// unscoped legacy credential it already is.
+export type { AutomationGrant, AutomationRight } from "../db/automation-tokens.ts";
+
+/**
+ * The grant behind a presented bearer, or null.
+ *
+ * Reads the store and nothing else: a token that matches no row is refused
+ * whether or not an env token happens to be configured, because the store is
+ * about identity and the env token has none.
+ */
+export async function automationTokenGrant(req: Request): Promise<AutomationGrant | null> {
+  return lookupAutomationToken(req.headers.get("X-Automation-Token") ?? bearer(req));
+}
+
+/**
+ * Does the caller hold `right`?
+ *
+ * Order matters and is fail-closed. The store is consulted first, because a
+ * provisioned token is an identity and its rights are the answer. Only if the
+ * presented secret is in no row at all does this fall back to the legacy
+ * unscoped automation credential — which, being unscoped, carries every right
+ * by definition. `allowInsecure` is last and means what it means everywhere
+ * else in this file: RM_ENV=ephemeral, never smoke or production.
+ */
+export async function hasAutomationRight(
+  req: Request,
+  right: AutomationRight,
+  cfg: Pick<typeof config, "allowInsecure"> & { automationToken?: string | null } = config,
+): Promise<boolean> {
+  const grant = await automationTokenGrant(req);
+  if (grant) return grant.rights.includes(right);
+  return hasAutomationRole(req, cfg);
 }
 
 // analytics-provider role: ANALYTICS_TOKEN presented as a Bearer token.

@@ -14,6 +14,7 @@
 -- Ownership: applied by rm_owner, so every object it creates is owned by rm_owner,
 -- which is what the check-2 denylist (`object_ownership`) requires.
 --
+--
 -- PostgreSQL database dump
 --
 
@@ -43,6 +44,7 @@ SET row_security = off;
 --
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
+
 
 
 
@@ -1066,6 +1068,24 @@ ALTER SEQUENCE public.audit_log_id_seq OWNED BY public.audit_log.id;
 
 
 --
+-- Name: automation_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.automation_tokens (
+    instance text NOT NULL,
+    token_hash text NOT NULL,
+    rights text[] NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by text DEFAULT CURRENT_USER NOT NULL,
+    note text,
+    CONSTRAINT automation_tokens_hash_shape_check CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT automation_tokens_instance_check CHECK ((instance ~ '^[a-z0-9][a-z0-9_-]{2,63}$'::text)),
+    CONSTRAINT automation_tokens_rights_known_check CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])),
+    CONSTRAINT automation_tokens_rights_nonempty_check CHECK ((cardinality(rights) > 0))
+);
+
+
+--
 -- Name: buyback_scan_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1848,19 +1868,6 @@ ALTER SEQUENCE public.research_signals_id_seq OWNED BY public.research_signals.i
 
 
 --
--- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.schema_migrations (
-    name text NOT NULL,
-    applied_at timestamp with time zone DEFAULT now() NOT NULL,
-    compat text,
-    metadata_version integer,
-    CONSTRAINT schema_migrations_compat_check CHECK (((compat IS NULL) OR (compat = ANY (ARRAY['additive'::text, 'breaking'::text]))))
-);
-
-
---
 -- Name: schema_manifest; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1871,6 +1878,19 @@ CREATE TABLE public.schema_manifest (
     filenames text[] NOT NULL,
     content_hash text NOT NULL,
     CONSTRAINT schema_manifest_singleton_check CHECK (singleton)
+);
+
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_migrations (
+    name text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL,
+    compat text,
+    metadata_version integer,
+    CONSTRAINT schema_migrations_compat_check CHECK (((compat IS NULL) OR (compat = ANY (ARRAY['additive'::text, 'breaking'::text]))))
 );
 
 
@@ -2304,7 +2324,33 @@ CREATE TABLE public.swarm_sessions (
     cancelled_at timestamp with time zone,
     convened_at timestamp with time zone DEFAULT now() CONSTRAINT committee_sessions_convened_at_not_null NOT NULL,
     date date GENERATED ALWAYS AS (((convened_at AT TIME ZONE 'UTC'::text))::date) STORED,
-    CONSTRAINT swarm_sessions_state_check CHECK ((state = ANY (ARRAY['scheduled'::text, 'collecting'::text, 'window_closed'::text, 'aggregated'::text, 'judged'::text, 'published'::text, 'cancelled'::text])))
+    judge_mode text,
+    judging_requested_at timestamp with time zone,
+    judging_deadline_at timestamp with time zone,
+    consensus_recorded_at timestamp with time zone,
+    judging_outcome text,
+    successor_session_id uuid,
+    CONSTRAINT swarm_sessions_judge_mode_check CHECK (((judge_mode IS NULL) OR (judge_mode = ANY (ARRAY['off'::text, 'enforce'::text])))),
+    CONSTRAINT swarm_sessions_judging_outcome_check CHECK (((judging_outcome IS NULL) OR (judging_outcome = ANY (ARRAY['judged'::text, 'no_consensus'::text, 'not_judged'::text])))),
+    CONSTRAINT swarm_sessions_judging_request_pair_check CHECK (((judging_requested_at IS NULL) = (judging_deadline_at IS NULL))),
+    CONSTRAINT swarm_sessions_state_check CHECK ((state = ANY (ARRAY['collecting'::text, 'window_closed'::text, 'aggregated'::text, 'judging'::text, 'judged'::text, 'published'::text, 'scheduled'::text, 'cancelled'::text]))),
+    CONSTRAINT swarm_sessions_successor_not_self_check CHECK (((successor_session_id IS NULL) OR (successor_session_id <> id)))
+);
+
+
+--
+-- Name: swarm_stream_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.swarm_stream_events (
+    seq bigint NOT NULL,
+    kind text NOT NULL,
+    subject_id text,
+    session_id uuid,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    committed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT swarm_stream_events_kind_check CHECK ((kind = ANY (ARRAY['subject.changed'::text, 'epoch.turned_over'::text, 'session.judged'::text]))),
+    CONSTRAINT swarm_stream_events_seq_positive_check CHECK ((seq > 0))
 );
 
 
@@ -2344,6 +2390,8 @@ CREATE TABLE public.swarm_subjects (
     last_reviewed date,
     version integer DEFAULT 1 CONSTRAINT committee_subjects_version_not_null NOT NULL,
     updated_at timestamp with time zone DEFAULT now() CONSTRAINT committee_subjects_updated_at_not_null NOT NULL,
+    epoch_duration_seconds integer DEFAULT 3600 NOT NULL,
+    CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK ((epoch_duration_seconds > 0)),
     CONSTRAINT swarm_subjects_status_check CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))
 );
 
@@ -3282,6 +3330,22 @@ ALTER TABLE ONLY public.audit_log
 
 
 --
+-- Name: automation_tokens automation_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.automation_tokens
+    ADD CONSTRAINT automation_tokens_pkey PRIMARY KEY (instance);
+
+
+--
+-- Name: automation_tokens automation_tokens_token_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.automation_tokens
+    ADD CONSTRAINT automation_tokens_token_hash_key UNIQUE (token_hash);
+
+
+--
 -- Name: buyback_scan_state buyback_scan_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3791,6 +3855,14 @@ ALTER TABLE ONLY public.swarm_session_members
 
 ALTER TABLE ONLY public.swarm_sessions
     ADD CONSTRAINT swarm_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: swarm_stream_events swarm_stream_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_stream_events
+    ADD CONSTRAINT swarm_stream_events_pkey PRIMARY KEY (seq);
 
 
 --
@@ -4505,6 +4577,13 @@ CREATE INDEX swarm_session_judgements_session_idx ON public.swarm_session_judgem
 
 
 --
+-- Name: swarm_sessions_one_collecting_per_subject; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX swarm_sessions_one_collecting_per_subject ON public.swarm_sessions USING btree (subject_id) WHERE (state = 'collecting'::text);
+
+
+--
 -- Name: swarm_sessions_subject_convened_desc_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4516,6 +4595,20 @@ CREATE INDEX swarm_sessions_subject_convened_desc_idx ON public.swarm_sessions U
 --
 
 CREATE UNIQUE INDEX swarm_sessions_subject_convened_key ON public.swarm_sessions USING btree (subject_id, convened_at);
+
+
+--
+-- Name: swarm_sessions_unsettled_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_sessions_unsettled_idx ON public.swarm_sessions USING btree (state) WHERE (state = ANY (ARRAY['window_closed'::text, 'aggregated'::text, 'judging'::text, 'judged'::text]));
+
+
+--
+-- Name: swarm_stream_events_subject_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_stream_events_subject_idx ON public.swarm_stream_events USING btree (subject_id, seq);
 
 
 --
@@ -5887,6 +5980,22 @@ ALTER TABLE ONLY public.swarm_session_judgements
 
 ALTER TABLE ONLY public.swarm_sessions
     ADD CONSTRAINT swarm_sessions_subject_fk FOREIGN KEY (subject_id) REFERENCES public.swarm_subjects(id);
+
+
+--
+-- Name: swarm_sessions swarm_sessions_successor_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_sessions
+    ADD CONSTRAINT swarm_sessions_successor_fk FOREIGN KEY (successor_session_id) REFERENCES public.swarm_sessions(id);
+
+
+--
+-- Name: swarm_stream_events swarm_stream_events_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_stream_events
+    ADD CONSTRAINT swarm_stream_events_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.swarm_sessions(id);
 
 
 --

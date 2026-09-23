@@ -13,11 +13,12 @@
 //    enforces it with a uniqueness constraint."
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import * as epoch from "../src/swarm/epoch.ts";
+import * as epoch from "../src/swarm/domain.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
   activeSubject,
+  refusedByDatabase,
   seat,
   sessionDate,
   sessionRow,
@@ -105,10 +106,9 @@ test("a take stamped after the window is not counted as present when absences ar
 
 test("the database refuses a second collecting session for one subject", async () => {
   const { subjectId } = await openedEpoch("win_unique");
-  await expect(
+  await refusedByDatabase(() =>
     sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
-        VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '1 hour')`,
-  ).rejects.toThrow();
+        VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '1 hour')`);
 });
 
 test("the constraint is per subject, so two subjects each keep their own open window", async () => {

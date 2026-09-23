@@ -25,7 +25,7 @@
 // instant deterministically.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import * as epoch from "../src/swarm/epoch.ts";
+import * as epoch from "../src/swarm/domain.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 

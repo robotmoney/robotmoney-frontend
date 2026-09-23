@@ -27,7 +27,7 @@ import {
   checkEnvCredentials,
   checkEnvIdentity,
   checkPrivileges,
-  checkProdSchedules,
+  checkSubjectEpochDurations,
   checkRoleTokens,
   checkSchemaCompatibility,
   checkSchemaIntegrity,
@@ -39,7 +39,6 @@ import {
   type PreflightFinding,
 } from "../src/db/preflight.ts";
 import type { RmRole } from "../src/db/registry.ts";
-import { SWARM_SCHEDULE_KINDS } from "../scripts/schedules-enable.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
@@ -652,59 +651,93 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Check 6 — the five prod swarm schedules
+// Check 6 — every active subject has an epoch duration
 // ───────────────────────────────────────────────────────────────────────────
+//
+// REWRITTEN (issue #1026 W4). This block used to assert the five `swarm.*`
+// schedule rows were enabled and their crons parsed. The scheduler spec's §12
+// amendment table replaces that clause with "preflight: every active subject
+// has an epoch duration", and the same change retires the rows — so the old
+// assertions could only have been kept by keeping a check that refuses every
+// production boot for the absence of rows the design forbids.
 
-describe("check 6 — on prod, the five swarm.* schedule rows are enabled and their crons parse", () => {
-  test("reports nothing on stage, where the rows are legitimately off", async () => {
-    await sql`UPDATE job_schedules SET enabled = false WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    const result = await checkProdSchedules(sql, context({ env: "stage" }));
-    expect(result.check).toBe("prod_schedules");
+describe("check 6 — every active subject has an epoch duration", () => {
+  test("passes when every active subject has one", async () => {
+    const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
+    expect(result.check).toBe("subject_epoch_durations");
     expect(result.findings).toEqual([]);
   });
 
-  test("refuses on prod when a row is disabled, naming the kind", async () => {
-    await sql`UPDATE job_schedules SET enabled = true WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'swarm.publish'`;
-    const result = await checkProdSchedules(sql, context({ env: "prod" }));
-    expect(refusals(result.findings)).toHaveLength(1);
-    expect(result.findings[0]?.message).toContain("swarm.publish");
+  test("has NO environment qualifier — stage is checked exactly like prod", async () => {
+    // The old check returned empty off `prod`, because the rows were
+    // legitimately disabled on stage. Nothing about a duration is
+    // environment-specific (spec §8), so both environments answer alike.
+    const subjectId = `pf_dur_${crypto.randomUUID().slice(0, 8)}`;
+    await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'pf')`;
+    await sql.unsafe(
+      `ALTER TABLE swarm_subjects DROP CONSTRAINT swarm_subjects_epoch_duration_seconds_check`,
+    );
+    await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds DROP NOT NULL`);
+    try {
+      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${subjectId}`;
+      for (const env of ["prod", "stage"] as const) {
+        const result = await checkSubjectEpochDurations(sql, context({ env }));
+        const text = refusals(result.findings).map((f) => f.message).join("\n");
+        expect(text).toContain(subjectId);
+      }
+    } finally {
+      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = 3600 WHERE epoch_duration_seconds IS NULL`;
+      await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds SET NOT NULL`);
+      await sql.unsafe(
+        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
+      );
+    }
   });
 
-  test("refuses on prod when a row is missing entirely", async () => {
-    await sql`UPDATE job_schedules SET enabled = true WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    await sql`DELETE FROM job_schedules WHERE kind = 'swarm.aggregate'`;
-    const result = await checkProdSchedules(sql, context({ env: "prod" }));
-    expect(refusals(result.findings)).toHaveLength(1);
-    expect(result.findings[0]?.message).toContain("swarm.aggregate");
+  test("an INACTIVE subject without one is not a refusal — it runs no epochs", async () => {
+    const subjectId = `pf_dur_off_${crypto.randomUUID().slice(0, 8)}`;
+    await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'inactive', 'pf')`;
+    await sql.unsafe(
+      `ALTER TABLE swarm_subjects DROP CONSTRAINT swarm_subjects_epoch_duration_seconds_check`,
+    );
+    await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds DROP NOT NULL`);
+    try {
+      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${subjectId}`;
+      const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
+      const text = refusals(result.findings).map((f) => f.message).join("\n");
+      expect(text).not.toContain(subjectId);
+    } finally {
+      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = 3600 WHERE epoch_duration_seconds IS NULL`;
+      await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds SET NOT NULL`);
+      await sql.unsafe(
+        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
+      );
+    }
   });
 
-  test("refuses on prod when a cron string does not parse", async () => {
-    await sql`UPDATE job_schedules SET enabled = true WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    await sql`UPDATE job_schedules SET cron = 'not a cron' WHERE kind = 'swarm.open_session'`;
-    const result = await checkProdSchedules(sql, context({ env: "prod" }));
-    const text = refusals(result.findings).map((f) => f.message).join("\n");
-    expect(text).toContain("swarm.open_session");
-    expect(text).toContain("not a cron");
+  test("refuses when the column itself is absent — the migration has not reached this database", async () => {
+    await sql.unsafe(`ALTER TABLE swarm_subjects DROP COLUMN epoch_duration_seconds`);
+    try {
+      const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
+      expect(refusals(result.findings)).toHaveLength(1);
+      expect(result.findings[0]?.message).toContain("epoch_duration_seconds");
+    } finally {
+      await sql.unsafe(
+        `ALTER TABLE swarm_subjects ADD COLUMN epoch_duration_seconds integer NOT NULL DEFAULT 3600`,
+      );
+      await sql.unsafe(
+        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
+      );
+    }
   });
 
-  test("does NOT refuse on a NULL or overdue next_run_at — refusing would block the boot that repairs it", async () => {
-    // Spec §6.3, and this repo's own scar: #614's wedge leaves a `* * * * *`
-    // schedule frozen after a long outage, and the CLAMP that drains the
-    // backlog only runs if the worker starts.
-    await sql`UPDATE job_schedules SET enabled = true WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    await sql`UPDATE job_schedules SET next_run_at = NULL WHERE kind = 'swarm.open_session'`;
-    await sql`UPDATE job_schedules SET next_run_at = now() - interval '30 days' WHERE kind = 'swarm.publish_brief'`;
-    const result = await checkProdSchedules(sql, context({ env: "prod" }));
-    expect(result.findings).toEqual([]);
-  });
-
-  test("never enables a row — enablement is an operator action (`bun run schedules:enable`)", async () => {
-    await sql`UPDATE job_schedules SET enabled = false WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    await checkProdSchedules(sql, context({ env: "prod" }));
-    const rows = await sql<{ enabled: boolean }[]>`
-      SELECT enabled FROM job_schedules WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`;
-    expect(rows.every((r) => r.enabled === false)).toBe(true);
+  test("changes nothing — a preflight measures and never repairs", async () => {
+    const before = await sql<{ id: string; epoch_duration_seconds: number }[]>`
+      SELECT id, epoch_duration_seconds FROM swarm_subjects ORDER BY id`;
+    await checkSubjectEpochDurations(sql, context({ env: "prod" }));
+    const after = await sql<{ id: string; epoch_duration_seconds: number }[]>`
+      SELECT id, epoch_duration_seconds FROM swarm_subjects ORDER BY id`;
+    expect(after).toEqual(before);
   });
 });
 
@@ -722,7 +755,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
       "schema_compatibility",
       "env_credentials",
       "env_identity",
-      "prod_schedules",
+      "subject_epoch_durations",
     ]);
 
     const own = new Map<RmRole, string>([["rm_app", PASSWORDS.rm_app]]);

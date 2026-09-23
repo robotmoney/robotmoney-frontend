@@ -58,7 +58,6 @@
 // roles and the production preflight." A separate CI-shaped check proves
 // nothing about production.
 import { readFileSync } from "node:fs";
-import parser from "cron-parser";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
@@ -75,13 +74,6 @@ import type { RmRole, TablePrivilege } from "./registry.ts";
 import { MANIFEST_TABLE, detectManifestState, readManifest } from "./schema-manifest.ts";
 import type { SchemaManifest } from "./schema-manifest.ts";
 import { checkCompatibility } from "./schema-compat.ts";
-// The five `swarm.*` rows, from the command that writes them. Imported rather
-// than copied: check 6 asserts the same set `bun run schedules:enable` (§6.3,
-// §9.1) establishes, and two copies of "the five" is how a sixth row becomes
-// invisible to one of them. backend/scripts/ ships in the api/worker image
-// (backend/Dockerfile `COPY backend/ /app/`), and that module is import-safe —
-// its entry point is behind `import.meta.main`.
-import { SWARM_SCHEDULE_KINDS } from "../../scripts/schedules-enable.ts";
 
 export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
@@ -93,7 +85,7 @@ export type PreflightCheckId =
   | "schema_compatibility"
   | "env_credentials"
   | "env_identity"
-  | "prod_schedules";
+  | "subject_epoch_durations";
 
 /** `prod` and `stage` only — spec §4.1. `stage` covers stage, test and CI,
  *  which "are isomorphic and share `stage`". `smoke` is not a value; §9.3
@@ -1029,82 +1021,80 @@ export async function checkEnvIdentity(
 }
 
 /**
- * Check 6 — on `prod`, the five `swarm.*` schedule rows are enabled and their
- * cron strings parse.
+ * Check 6 — every ACTIVE subject has an epoch duration.
  *
- * Inputs: a handle and the context. Output: findings; an empty result on
- * `stage`, where the rows are legitimately off (`--schedules-off`, §4.4).
+ * Inputs: a handle and the context. Output: findings, one per offending
+ * subject, naming it.
  *
- * WHAT IT DELIBERATELY DOES NOT CHECK. Spec §6.3: "It does not require a future
- * `next_run_at`: `NULL` and overdue rows are the scheduler's to initialize or
- * drain per `catchup_policy`, and refusing to start the worker that advances
- * them would block recovery after downtime."
+ * WHAT THIS REPLACED, and why it had to (issue #1026 W4). Until now check 6
+ * asked whether "the five `swarm.*` schedule rows are enabled and their cron
+ * strings parse". The scheduler spec's §12 amendment table rewrites that clause
+ * in those words: "preflight: every active subject has an epoch duration."
+ * Keeping the old body would have been worse than merely stale — the same
+ * change that gives a subject its duration retires the schedule rows, so the
+ * old check would have refused every production boot for the absence of rows
+ * the design forbids.
  *
- * That is this repo's own scar. The wedge recorded in #614 leaves a `* * * * *`
- * schedule frozen after a long outage, and the fix is the CLAMP that drains the
- * backlog per tick — which only runs if the worker starts. A preflight that
- * refused on an overdue row would refuse exactly the boot that repairs it.
- * Readiness, after `worker` is up, is where "every enabled row has been
- * initialized or advanced per its policy" is checked (§6.3), and readiness is
- * W1.9's, not this module's.
+ * NO ENVIRONMENT QUALIFIER. The old check returned an empty result off `prod`,
+ * because stage legitimately ran with the rows disabled (`--schedules-off`).
+ * Nothing about a subject's duration is environment-specific: §8 says the same
+ * image runs everywhere and "only the subjects' epoch durations differ", and
+ * spec §7 check 6 states the rule unconditionally. A stage subject with no
+ * duration is exactly as broken as a production one, so the early return is
+ * gone rather than kept with a new reason.
  *
- * Refusals: on `prod`, any of the five rows missing or disabled; any cron
- * string that does not parse. Enablement is an operator action
- * (`bun run schedules:enable`, §6.3/§9.1), never a boot side-effect, so this
- * check reports the absence and never fixes it.
+ * WHY IT CAN STILL FIND ANYTHING. Migration 0067's column is NOT NULL with a
+ * positive default, so on a database that migration has reached this check
+ * passes by construction. That is the point of a preflight: it measures rather
+ * than assumes, and the case it exists for is the one where the column is
+ * absent or a subject predates it — a partially applied migration, a restore
+ * that stopped early, an older image against a newer database. A check that is
+ * only interesting when something is wrong is a check doing its job.
  *
- * Serves the §9.1 production-initialization sequence; its failure is what tells
- * an operator step 4 has not been done.
+ * WHAT IT DELIBERATELY DOES NOT CHECK. Whether a subject has a `collecting`
+ * session. That is READINESS, not preflight, and the distinction is stated in
+ * the same amendment: readiness additionally requires the scheduler to be
+ * authenticated, its stream synchronized, its initial rebuild complete and no
+ * work exhausted (`smoke-production-spec.md` §6.3). Preflight runs before the
+ * scheduler exists, so requiring its output would refuse every first boot.
  */
-export async function checkProdSchedules(
+export async function checkSubjectEpochDurations(
   db: PreflightDb,
-  context: PreflightContext,
+  _context: PreflightContext,
 ): Promise<PreflightCheckResult> {
   const findings: PreflightFinding[] = [];
-  // On stage the rows are legitimately off (`--schedules-off`, §4.4), so there
-  // is nothing to report — not a warning, not a pass line.
-  if (context.env !== "prod") return { check: "prod_schedules", findings };
 
-  const rows = (await db`
-    SELECT kind, cron, enabled FROM job_schedules WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})`) as unknown as {
-    kind: string;
-    cron: string;
-    enabled: boolean;
-  }[];
-  const byKind = new Map(rows.map((row) => [row.kind, row]));
-
-  for (const kind of SWARM_SCHEDULE_KINDS) {
-    const row = byKind.get(kind);
-    if (!row) {
-      findings.push({
-        check: "prod_schedules",
-        severity: "refuse",
-        message: `${kind} has no job_schedules row: run \`bun run schedules:enable\` (§9.1 step 4)`,
-      });
-      continue;
-    }
-    if (!row.enabled) {
-      findings.push({
-        check: "prod_schedules",
-        severity: "refuse",
-        message: `${kind} is disabled: enablement is an operator action (\`bun run schedules:enable\`, §6.3), never a boot side-effect`,
-      });
-    }
-    try {
-      parser.parseExpression(row.cron);
-    } catch {
-      findings.push({
-        check: "prod_schedules",
-        severity: "refuse",
-        message: `${kind} carries a cron string that does not parse: ${row.cron}`,
-      });
-    }
+  const [present] = (await db`
+    SELECT count(*)::int AS n FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'swarm_subjects'
+       AND column_name = 'epoch_duration_seconds'`) as unknown as { n: number }[];
+  if (!present || present.n === 0) {
+    findings.push({
+      check: "subject_epoch_durations",
+      severity: "refuse",
+      message:
+        "swarm_subjects has no epoch_duration_seconds column: migration 0067 has not reached this database, " +
+        "so no subject has a schedule at all (scheduler spec §2.3)",
+    });
+    return { check: "subject_epoch_durations", findings };
   }
 
-  // Deliberately NOT checked: `next_run_at`. §6.3 — NULL and overdue rows are
-  // the scheduler's to initialize or drain per `catchup_policy`, and refusing
-  // on one would refuse exactly the boot that repairs it (#614's wedge).
-  return { check: "prod_schedules", findings };
+  const rows = (await db`
+    SELECT id FROM swarm_subjects
+     WHERE status = 'active' AND (epoch_duration_seconds IS NULL OR epoch_duration_seconds <= 0)
+     ORDER BY id`) as unknown as { id: string }[];
+
+  for (const row of rows) {
+    findings.push({
+      check: "subject_epoch_durations",
+      severity: "refuse",
+      message:
+        `active subject ${row.id} has no epoch duration: it is the subject's only scheduling parameter ` +
+        "(scheduler spec §2.2), set through the admin subject route",
+    });
+  }
+
+  return { check: "subject_epoch_durations", findings };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1166,7 +1156,7 @@ export async function runPreflight(
   if (scope === "full") {
     results.push(await checkEnvCredentials(context));
     results.push(await checkEnvIdentity(db, context));
-    results.push(await checkProdSchedules(db, context));
+    results.push(await checkSubjectEpochDurations(db, context));
   }
 
   const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));

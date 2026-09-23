@@ -19,7 +19,7 @@
 // never reach N+1.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import * as epoch from "../src/swarm/epoch.ts";
+import * as epoch from "../src/swarm/domain.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 
@@ -109,6 +109,49 @@ test("two schedulers racing the same epoch yield exactly one successor", async (
   expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
   expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
   expect((await collectingSessions(subjectId)).length).toBe(1);
+});
+
+test("expected_session_id is mandatory: a turnover that names nothing closes nothing", async () => {
+  // §4.3: "Turnover is bound to the epoch, never to 'whatever is open.'" An
+  // omitted, empty or malformed id must be refused rather than fall back to the
+  // subject's current collecting session — that fallback IS the unbound
+  // turnover the spec forbids.
+  const { subjectId, sessionId } = await openedEpoch("to_unbound");
+  for (const bad of ["", "   ", "not-a-uuid", undefined as unknown as string, null as unknown as string]) {
+    const r = await epoch.turnOverEpoch(subjectId, bad);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("expected_session_not_found");
+  }
+  expect((await sessionRow(sessionId)).state).toBe("collecting");
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(1);
+});
+
+test("already done and not allowed are DIFFERENT answers, and a caller can tell them apart", async () => {
+  // §5: "Where the transition has already happened, the guard returns the
+  // original result rather than a bare refusal, so a caller can tell 'already
+  // done' from 'not allowed.'" The two cases are asserted separately because a
+  // guard that answered both with the same no-op would satisfy neither.
+  const done = await openedEpoch("to_already_done");
+  const first = await epoch.turnOverEpoch(done.subjectId, done.sessionId);
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  const again = await epoch.turnOverEpoch(done.subjectId, done.sessionId);
+  // ALREADY DONE: ok, replayed, and carrying the ORIGINAL turnover's result.
+  expect(again.ok).toBe(true);
+  if (!again.ok) return;
+  expect(again.replayed).toBe(true);
+  expect(again.closedSessionId).toBe(first.closedSessionId);
+  expect(again.openedSessionId).toBe(first.openedSessionId);
+  expect(again.windowClosesAt).toBe(first.windowClosesAt);
+  expect(again.judgeMode).toBe(first.judgeMode);
+
+  // NOT ALLOWED: a refusal with a reason, and no result to replay.
+  const blocked = await openedEpoch("to_not_allowed");
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE id = ${blocked.sessionId}`;
+  const refused = await epoch.turnOverEpoch(blocked.subjectId, blocked.sessionId);
+  expect(refused.ok).toBe(false);
+  if (refused.ok) return;
+  expect(refused.error).toBe("epoch_not_collecting");
 });
 
 test("naming an epoch that is not this subject's, or does not exist, is a reasoned no-op", async () => {

@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, rid } from "./support/epoch-fixtures.ts";
+import { activeSubject, refusedByDatabase, rid } from "./support/epoch-fixtures.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -43,9 +43,11 @@ test("the schema snapshot declares it, so a blank-database boot sets every subje
   // bootstrap ROW carries the value because bootstrap-data.sql seeds no
   // subjects; the declaration's NOT NULL default is therefore the thing that
   // makes "every subject has a duration" true from the first instant.
+  // `includes`, not `toContain`: the snapshot is ~200KB and a failing
+  // `toContain` renders the whole of it into the diff.
   const snapshot = readFileSync(SNAPSHOT, "utf8");
-  expect(snapshot).toContain("epoch_duration_seconds");
-  expect(snapshot).toContain("swarm_subjects_epoch_duration_seconds_check");
+  expect(snapshot.includes("epoch_duration_seconds integer DEFAULT")).toBe(true);
+  expect(snapshot.includes("swarm_subjects_epoch_duration_seconds_check")).toBe(true);
 });
 
 test("every subject on a freshly migrated database has a positive duration", async () => {
@@ -57,15 +59,9 @@ test("every subject on a freshly migrated database has a positive duration", asy
 
 test("there is no off switch: zero and negative durations are refused by the database", async () => {
   const id = await activeSubject("dur_off");
-  await expect(
-    sql`UPDATE swarm_subjects SET epoch_duration_seconds = 0 WHERE id = ${id}`,
-  ).rejects.toThrow();
-  await expect(
-    sql`UPDATE swarm_subjects SET epoch_duration_seconds = -1 WHERE id = ${id}`,
-  ).rejects.toThrow();
-  await expect(
-    sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${id}`,
-  ).rejects.toThrow();
+  await refusedByDatabase(() => sql`UPDATE swarm_subjects SET epoch_duration_seconds = 0 WHERE id = ${id}`);
+  await refusedByDatabase(() => sql`UPDATE swarm_subjects SET epoch_duration_seconds = -1 WHERE id = ${id}`);
+  await refusedByDatabase(() => sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${id}`);
 });
 
 test("a subject created through the admin API carries a duration without being given one", async () => {

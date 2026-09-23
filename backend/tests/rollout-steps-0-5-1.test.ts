@@ -144,7 +144,19 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0063_deployment_identity.sql",
     "0064_schema_manifest.sql",
     "0065_append_only_grant_transition.sql",
+    //   0067 — W4.1's `swarm_subjects.epoch_duration_seconds`, the subject's
+    //          one scheduling parameter (scheduler spec §2.2).
+    //   0068 — W4.2/W4.3's epoch lifecycle on `swarm_sessions`: the captured
+    //          judge mode, the stored judging request instant and absolute
+    //          deadline, the consensus acceptance instant, the judging
+    //          outcome, the successor link turnover is bound by, and the
+    //          at-most-one-`collecting`-per-subject unique index (§2.1).
+    //   0069 — W4.5's `automation_tokens`, the API automation-credential store
+    //          (smoke spec §3): a hash and the rights, never the secret.
     "0066_drop_swarm_notifications.sql",
+    "0067_subject_epoch_duration.sql",
+    "0068_session_epoch_lifecycle.sql",
+    "0069_automation_tokens.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

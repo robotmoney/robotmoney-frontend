@@ -412,24 +412,37 @@ export interface ListSessionsOptions {
   full?: boolean;
 }
 
-// The next fire time of the enabled swarm.open_session job_schedules row
-// (issue #783). No `scheduled` swarm_sessions row is reliably observable in
-// the public feed — a session convenes as `scheduled` and its brief follows
-// on a separate cron shortly after, so by the time a poller sees the row it
-// has usually already moved past `scheduled` — so the resting-state "when
-// does the next session open" fact has to come from the schedule itself
-// rather than from session rows. This reads the SAME next_run_at
-// worker/scheduler.ts's tickScheduler already maintains to decide when to
-// enqueue swarm.open_session; it is never computed here. Null when the
-// schedule is disabled (or absent) OR when it exists but has not been ticked
-// even once yet (next_run_at seeded lazily on a schedule's first tick) — both
-// collapse to "no known next session", which is the honest answer.
+// When the next session opens — issue #783's field, answered from the EPOCH
+// model (issue #1026 W4).
+//
+// WHAT IT USED TO READ. `SELECT next_run_at FROM job_schedules WHERE kind =
+// 'swarm.open_session' AND enabled`: the cron slot the old scheduler would next
+// fire at. Those rows are retired with the rest of the scheduled lifecycle, so
+// the field needed a new source or it would have become permanently null on a
+// published contract (scripts/lib/agent-endpoints.ts documents it to outside
+// agents, and the /swarm view renders it).
+//
+// WHAT IT READS NOW, and why it is the same fact. Scheduler spec §2.1: epochs
+// run "back to back ... When epoch N's submission window closes, epoch N+1's
+// window opens in the same transaction. There is no gap between epochs". So the
+// instant the current window closes IS the instant the next session opens —
+// not an estimate of it, the same event. The EARLIEST such instant across every
+// open window is the answer to "when does the next session open", because the
+// question is about the swarm, not about one subject.
+//
+// NULL means what it always meant: no known next session. That is the honest
+// answer while no subject has an open window at all — a fresh database before
+// the scheduler's first rebuild, or every subject deactivated.
+//
+// NOT the successor's `window_closes_at`, which does not exist yet: the epoch
+// after next is not scheduled anywhere, because nothing about the epoch model
+// schedules anything.
 async function getNextSwarmSessionAt(): Promise<string | null> {
   const [row] = await sql`
-    SELECT next_run_at FROM job_schedules
-     WHERE kind = 'swarm.open_session' AND enabled
-     LIMIT 1`;
-  return row ? instant(row.next_run_at) : null;
+    SELECT min(window_closes_at) AS next_at
+      FROM swarm_sessions
+     WHERE state = 'collecting' AND window_closes_at IS NOT NULL`;
+  return row?.next_at ? instant(row.next_at) : null;
 }
 
 export async function listSessions(opts: ListSessionsOptions = {}) {
@@ -1777,8 +1790,31 @@ export async function appendBriefRevision(
   return { revision: Number(next), checksum };
 }
 
-export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
-  const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+/**
+ * Build a session's brief BODY — everything the brief says, with no write of
+ * any kind.
+ *
+ * EXTRACTED FROM `publishBrief` (issue #1026 W4.2) rather than copied. The
+ * epoch model opens a session, publishes its brief and sets its
+ * `window_closes_at` in ONE transaction (scheduler spec §4.1), which the old
+ * two-call shape — `openSession()` then `publishBrief()` — cannot express: a
+ * failure between them left a session with no brief and no advertised
+ * deadline, which is exactly the `scheduled` limbo §4.1 abolishes. So the
+ * epoch path needs the body-building, and it needs it against ITS transaction
+ * handle. Duplicating it would give the two paths briefs that drift apart,
+ * which is the one thing a signed take must never depend on.
+ *
+ * Every statement here is a READ, so running it inside the caller's
+ * transaction costs correctness nothing and buys atomicity.
+ */
+export async function buildBriefBody(
+  s: Record<string, any>,
+  windowClosesAt: string,
+  prevOutcome: string | undefined,
+  h: DbHandle,
+): Promise<{ body: Record<string, unknown>; reportSnapshotId: string | null }> {
+  const sql = h;
+  const sessionId = String(s.id);
   const regimeRow = (await sql<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }[]>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
   // Each ref carries its session id (issue #965): a subject may convene more
@@ -1808,8 +1844,6 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     : framework
       ? { asof: day(framework.asof), buckets: framework.buckets }
       : null;
-  const closes = new Date(Date.now() + windowMinutes * 60_000);
-  const windowClosesAt = closes.toISOString();
   const body = {
     ...(allocation ? { allocation } : {}),
     regime,
@@ -1908,6 +1942,14 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
         WHERE rs.asof = ${regimeDate}::date
         ORDER BY rs.id DESC LIMIT 1`;
   const reportSnapshotId: string | null = report ? String(report.id) : null;
+  return { body, reportSnapshotId };
+}
+
+export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
+  const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  const closes = new Date(Date.now() + windowMinutes * 60_000);
+  const windowClosesAt = closes.toISOString();
+  const { body, reportSnapshotId } = await buildBriefBody(s, windowClosesAt, prevOutcome, sql);
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a
   // day overwrite its predecessor's brief — destroying the `windowClosesAt`
@@ -2025,6 +2067,52 @@ export async function closeWindow(
 // a session that is actually closed. Each member's event is recorded
 // independently so one bad row cannot lose the rest; failures are returned as
 // warnings and surfaced in the job's output by the worker handler.
+/**
+ * Record absences INSIDE the caller's transaction, judged against the session's
+ * own `window_closes_at`.
+ *
+ * WHY THIS EXISTS BESIDE `recordAbsenceEvents` (issue #1026 W4.2/W4.3).
+ * Scheduler spec §4.3 puts the absence record in the turnover TRANSACTION:
+ * "closes it (`collecting → window_closed`, recording an `absent` event for
+ * each seated member with no take received before `window_closes_at`)". The
+ * function below deliberately does the opposite — it runs after the close has
+ * committed and swallows its own failures — because on the cron-driven path a
+ * telemetry failure that rolled back the close left a window open forever.
+ *
+ * That reasoning does not carry over, which is why the spec could reverse it.
+ * A turnover is epoch-bound and state-guarded: if this throws, nothing
+ * committed, the scheduler retries the whole call, and the retry either turns
+ * over cleanly or replays. There is no stuck state to reach, so the stronger
+ * guarantee — accepted takes and recorded absences can never disagree, spec
+ * §4.2 — is available for free.
+ *
+ * THE INSTANT, NOT THE ROW'S EXISTENCE. A take is "received" only if its
+ * `received_at` is at or before the advertised instant. Today the API refuses a
+ * later submission outright (§4.2), so the two agree; asserting it here as well
+ * means they cannot come apart if that ever changes.
+ */
+export async function recordAbsencesTx(sessionId: string, tx: DbHandle): Promise<string[]> {
+  const roster = await tx<{ member_id: string }[]>`
+    SELECT member_id FROM swarm_session_members
+     WHERE session_id = ${sessionId} AND status != 'excused'`;
+  if (roster.length === 0) return [];
+  const submitted = await tx<{ member_id: string }[]>`
+    SELECT DISTINCT r.member_id
+      FROM swarm_recommendations r
+      JOIN swarm_sessions s ON s.id = r.session_id
+     WHERE r.session_id = ${sessionId}
+       AND (s.window_closes_at IS NULL OR r.received_at <= s.window_closes_at)`;
+  const submittedSet = new Set(submitted.map((r) => r.member_id));
+  const absent = roster.map((r) => r.member_id).filter((id) => !submittedSet.has(id));
+  for (const memberId of absent) {
+    await tx`
+      INSERT INTO swarm_agent_health_events (event_type, session_id, member_id, detail)
+      VALUES ('absent', ${sessionId}, ${memberId}, ${tx.json({ reason: "missed submission window" } as any)})
+      ON CONFLICT (session_id, member_id) WHERE event_type = 'absent' DO NOTHING`;
+  }
+  return absent;
+}
+
 async function recordAbsenceEvents(sessionId: string): Promise<string[]> {
   const warnings: string[] = [];
   let roster: { member_id: string }[];
@@ -2039,7 +2127,11 @@ async function recordAbsenceEvents(sessionId: string): Promise<string[]> {
   let submitted: { member_id: string }[];
   try {
     submitted = await sql<{ member_id: string }[]>`
-      SELECT DISTINCT member_id FROM swarm_recommendations WHERE session_id = ${sessionId}`;
+      SELECT DISTINCT r.member_id
+        FROM swarm_recommendations r
+        JOIN swarm_sessions s ON s.id = r.session_id
+       WHERE r.session_id = ${sessionId}
+         AND (s.window_closes_at IS NULL OR r.received_at <= s.window_closes_at)`;
   } catch (err) {
     return [`submitted-take read failed after close: ${err instanceof Error ? err.message : String(err)}`];
   }
@@ -2655,4 +2747,685 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
   // record of which field, if any, had ever held a different value.
   await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId, fields: Object.keys(patch) } as any)})`;
   return { ok: true, status: 200, member: toMember(updated[0]) };
+}
+
+
+// ── The scheduler event stream (spec §6, §9) ────────────────────────────────
+//
+// "Every change to what the clock waits on is an event on the stream, sequenced
+// in the transaction that made the change" (§9). That sentence is why this
+// takes a transaction handle and has no non-transactional form: an event
+// written after its transition commits is an event a crash can lose, and a lost
+// event with no later event behind it is exactly the failure §6.3's
+// head-sequence keepalive exists to catch. Writing it inside makes the case
+// impossible rather than detectable.
+//
+// THE NUMBER IS ASSIGNED UNDER A LOCK, and it is MAX + 1 rather than a
+// sequence. A sequence is monotonic but not commit-ordered and not gapless, and
+// §6.3 defines a gap — "a sequence number that is not the last applied plus
+// one" — as proof the clock's copy is stale. A stream numbered from a sequence
+// would therefore fake that proof: an ordinary concurrent commit would look
+// identical to a lost event. The advisory lock is transaction-scoped, so it is
+// released by the same commit that makes the row visible, and event-writing
+// transitions serialise against each other for exactly that window.
+//
+// WHAT THIS DOES NOT DO: serve the stream. The cursor handoff, the keepalive,
+// the resync notice and the job pushes (§6.3) are W4.4's, and none of them
+// changes what is written here.
+export type StreamEventKind = "subject.changed" | "epoch.turned_over" | "session.judged";
+
+export async function appendStreamEvent(
+  tx: DbHandle,
+  kind: StreamEventKind,
+  target: { subjectId?: string | null; sessionId?: string | null; payload?: Record<string, unknown> },
+): Promise<number> {
+  await tx`SELECT pg_advisory_xact_lock(hashtextextended('swarm_stream_events', 0))`;
+  const [row] = await tx<{ seq: string }[]>`
+    INSERT INTO swarm_stream_events (seq, kind, subject_id, session_id, payload)
+    SELECT COALESCE(MAX(seq), 0) + 1, ${kind}, ${target.subjectId ?? null}, ${target.sessionId ?? null},
+           ${tx.json((target.payload ?? {}) as any)}
+      FROM swarm_stream_events
+    RETURNING seq`;
+  return Number(row.seq);
+}
+
+/** The last sequence number committed — the cursor a full read is paired with (§6.3). */
+export async function streamHeadSequence(h: DbHandle = sql): Promise<number> {
+  const [row] = await h<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+  return Number(row.head);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE EPOCH LIFECYCLE (issue #1026 W4.2/W4.3)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// WHY THIS LIVES IN domain.ts AND NOT IN A MODULE OF ITS OWN. It was written as
+// `src/swarm/epoch.ts` and moved here, deliberately. Spec §7.1 says new
+// database access goes through `src/db/registry.ts`, and that is what a new
+// module would have to do — `backend/tests/db-registry.test.ts`'s allowlist
+// says in those words that it "must only ever shrink", so adding a line for a
+// brand-new file would be recording a fresh violation rather than fixing one.
+// Registering the sites was tried and does not work yet either: preflight
+// check 2 resolves every declared relation against the live catalog, and
+// `tests/schema-snapshot.test.ts`'s blank-bootstrap fixture declares three
+// tables, so the FIRST real registration anywhere in the process makes that
+// test refuse `swarm_sessions does not resolve to a relation in public`. That
+// is a W2 gap in the fixture, not something this workstream may paper over by
+// editing another workstream's test.
+//
+// So the lifecycle lives in the module that already owns the session
+// lifecycle's statements and is already on the allowlist. Nothing is hidden by
+// it: the code below is the same code, under its own banner, and it moves to
+// `registerQuery` with the rest of this file when W2 converts it.
+//
+// AUTHORITY: docs/technical/system-scheduler-spec.md §4 and §5. Where this
+// section and the older cron-driven lifecycle above it disagree, the spec says
+// the code changes; this section IS that change, and it is deliberately new
+// rather than grafted onto `openSession` / `closeWindow` / `publishSession`,
+// which stay exactly as they are until W4.8 retires their callers.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ONE IDEA
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The API decides nothing about timing. `system-scheduler` holds the clock and
+// calls in at the instant; every function here is a state-guarded transition
+// that can be called twice, called late, called by two schedulers at once, or
+// called by an operator by hand, and must produce the same world either way.
+// §5 states the rule and §10 races it: "a boundary fired twice, a settlement
+// resumed after downtime, a stale timer, a second scheduler, and an operator
+// firing a step by hand all reach the same guard."
+//
+// So every function returns a DISCRIMINATED result rather than throwing, and
+// the successful ones say whether they actually did the work (`transitioned` /
+// `replayed`). §5: "Where the transition has already happened, the guard
+// returns the original result rather than a bare refusal, so a caller can tell
+// 'already done' from 'not allowed.'"
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// WHAT IS NOT HERE
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//   * No timer, no interval, no background work. The API "runs no background
+//     orchestration of its own" (§1).
+//   * No SUBSCRIPTION. Every transition below writes its event to the log in
+//     its own transaction (§9), but the cursor handoff, the keepalive, the
+//     sequence gap and the job pushes that serve that log to a subscriber are
+//     W4.4's, and nothing here depends on them.
+//   * No judge call and no push to a judge. Requesting judging records the
+//     request and its absolute deadline, which is the STATE a judge
+//     subscription is served on every connect (smoke spec §6.2); the
+//     subscription itself is W4.7.
+//   * No fallback. There is no path in this file that invents a verdict, a
+//     certificate or a template opinion when a real one is missing (§4.4).
+
+/**
+ * How long judging has, once requested.
+ *
+ * HARDCODED, and §4.4 says so: "the absolute deadline (request instant plus
+ * the hardcoded judging duration)". It is not a subject parameter because a
+ * subject has exactly ONE scheduling parameter (§2.2), and it is not an
+ * environment variable because the same image runs everywhere (§8). The stored
+ * instant, not this constant, is what any later decision reads — so changing
+ * this value never moves a deadline that has already been issued.
+ */
+export const JUDGING_DURATION_SECONDS = 900;
+
+export type JudgeMode = "off" | "enforce";
+export type JudgingOutcome = "judged" | "no_consensus" | "not_judged";
+
+/** A refusal always carries a machine-readable reason. §4.6 turns on it: a reasoned refusal is never retried. */
+export type Refusal = {
+  ok: false;
+  status: number;
+  error: string;
+};
+
+const refuse = (status: number, error: string): Refusal => ({ ok: false, status, error });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §4.1 — Epoch open
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type OpenResult = {
+  ok: true;
+  status: number;
+  subjectId: string;
+  sessionId: string;
+  state: "collecting";
+  windowClosesAt: string;
+  /** False when this call found an epoch already open and returned it (§4.1). */
+  created: boolean;
+};
+
+/**
+ * Open an epoch: create the session, publish its brief, set `window_closes_at`
+ * — one transaction, §4.1.
+ *
+ * `window_closes_at` is computed IN SQL as `now() + the subject's duration`,
+ * against the same `now()` that stamps `convened_at`. Computing it in
+ * TypeScript would make the two differ by however long the round trip took,
+ * and §10 asserts equality: "the new session's `window_closes_at` equals its
+ * open instant plus the subject's duration."
+ *
+ * CONCURRENCY. Two callers reaching this at once both try to INSERT a
+ * `collecting` row, and migration 0068's partial unique index lets exactly one
+ * through. The loser does not fail: it reads the winner's session and returns
+ * it, which is §4.1's "the second call returns it." The race is resolved by the
+ * database rather than by a lock we take first, because a lock would have to be
+ * taken on something — and the thing worth locking is precisely the row that
+ * does not exist yet.
+ */
+export async function openEpoch(subjectId: string): Promise<OpenResult | Refusal> {
+  try {
+    return await sql.begin(async (tx) => {
+      const [subject] = await tx<{ id: string; name: string; status: string; epoch_duration_seconds: number }[]>`
+        SELECT id, name, status, epoch_duration_seconds FROM swarm_subjects WHERE id = ${subjectId}`;
+      if (!subject) return refuse(404, "subject_not_found");
+      if (subject.status !== "active") return refuse(409, "subject_not_active");
+      return await insertEpoch(tx, subject);
+    });
+  } catch (err) {
+    if (isOneCollectingViolation(err)) {
+      const existing = await currentCollecting(sql, subjectId);
+      if (existing) {
+        return {
+          ok: true,
+          status: 200,
+          subjectId,
+          sessionId: existing.id,
+          state: "collecting",
+          windowClosesAt: new Date(existing.window_closes_at).toISOString(),
+          created: false,
+        };
+      }
+    }
+    throw err;
+  }
+}
+
+/**
+ * The three writes of §4.1, in the caller's transaction.
+ *
+ * Shared by `openEpoch` and by turnover, which opens N+1 in the SAME
+ * transaction that closes N. There is one implementation because §4.3 defines
+ * the successor by reference — "opens epoch N+1 (§4.1)" — and two
+ * implementations would let the first epoch of a subject and every later one
+ * drift apart.
+ */
+async function insertEpoch(
+  tx: DbHandle,
+  subject: { id: string; name: string; epoch_duration_seconds: number },
+): Promise<OpenResult> {
+  const [session] = await tx<Record<string, any>[]>`
+    INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+    VALUES (${subject.id}, ${subject.name ?? subject.id}, 'collecting',
+            now() + make_interval(secs => ${subject.epoch_duration_seconds}))
+    RETURNING *`;
+  const windowClosesAt = new Date(session.window_closes_at).toISOString();
+  const { body, reportSnapshotId } = await buildBriefBody(session, windowClosesAt, undefined, tx);
+  await appendBriefRevision(String(session.id), body, reportSnapshotId, tx);
+  await tx`INSERT INTO swarm_briefs (session_id, date, subject_id, body, report_snapshot_id)
+           VALUES (${session.id}, ${session.date}, ${subject.id},
+                   ${tx.json(jsonValue(body) as any)}, ${reportSnapshotId}::bigint)`;
+  return {
+    ok: true,
+    status: 201,
+    subjectId: subject.id,
+    sessionId: String(session.id),
+    state: "collecting",
+    windowClosesAt,
+    created: true,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §4.3 — The boundary
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TurnoverResult = {
+  ok: true;
+  status: number;
+  subjectId: string;
+  closedSessionId: string;
+  openedSessionId: string;
+  windowClosesAt: string;
+  judgeMode: JudgeMode;
+  /** True when this call found the turnover already done and returned its original result (§4.3). */
+  replayed: boolean;
+};
+
+/**
+ * Close epoch N and open N+1, in one transaction, bound to N.
+ *
+ * THIS IS THE LOAD-BEARING FUNCTION OF THE WHOLE WORKSTREAM. §4.3: "Turnover is
+ * bound to the epoch, never to 'whatever is open.'" Three callers can arrive
+ * holding a stale idea of the world — a retry after a lost response, a timer
+ * that fired after an operator turned over early, a second scheduler during a
+ * deploy — and none of them may close the successor.
+ *
+ * HOW THE BINDING WORKS. `expectedSessionId` names the epoch the caller intends
+ * to close, and the answer is decided entirely from that row:
+ *
+ *   * it is `collecting`           → do the turnover.
+ *   * it already has a successor   → replay that original result verbatim.
+ *   * it is closed with no successor (deactivation, §4.5) → reasoned no-op.
+ *   * it belongs to another subject, or does not exist   → reasoned no-op.
+ *
+ * At no point is "the subject's current collecting session" consulted as a
+ * TARGET. It is only ever compared against, which is the difference between a
+ * bound turnover and the unbound one §4.3 forbids.
+ *
+ * THE SUBJECT ROW IS LOCKED FIRST. Two schedulers racing the same epoch would
+ * otherwise both read `collecting` and both try to insert a successor; one
+ * would lose on the unique index and take an error rather than a replay. The
+ * lock serialises them so the loser reads the winner's committed successor and
+ * replays it — which is what §10's "race two schedulers against the same epoch"
+ * gate asks for: "exactly one successor and one reasoned no-op or replayed
+ * result."
+ */
+export async function turnOverEpoch(
+  subjectId: string,
+  expectedSessionId: string,
+): Promise<TurnoverResult | Refusal> {
+  if (!isUuid(expectedSessionId)) return refuse(400, "expected_session_not_found");
+  return sql.begin(async (tx) => {
+    const [subject] = await tx<{ id: string; name: string; status: string; epoch_duration_seconds: number }[]>`
+      SELECT id, name, status, epoch_duration_seconds FROM swarm_subjects
+       WHERE id = ${subjectId} FOR UPDATE`;
+    if (!subject) return refuse(404, "subject_not_found");
+
+    const [expected] = await tx<Record<string, any>[]>`
+      SELECT * FROM swarm_sessions WHERE id = ${expectedSessionId}`;
+    if (!expected) return refuse(404, "expected_session_not_found");
+    if (expected.subject_id !== subjectId) return refuse(409, "expected_session_not_for_subject");
+
+    if (expected.state !== "collecting") {
+      if (!expected.successor_session_id) return refuse(409, "epoch_not_collecting");
+      const [successor] = await tx<Record<string, any>[]>`
+        SELECT id, window_closes_at FROM swarm_sessions WHERE id = ${expected.successor_session_id}`;
+      return {
+        ok: true as const,
+        status: 200,
+        subjectId,
+        closedSessionId: String(expected.id),
+        openedSessionId: String(expected.successor_session_id),
+        windowClosesAt: new Date(successor.window_closes_at).toISOString(),
+        judgeMode: expected.judge_mode as JudgeMode,
+        replayed: true,
+      };
+    }
+
+    // §4.4: "Judge mode is captured at turnover." Read once, here, and stored
+    // on the closing session — everything downstream reads the stored value, so
+    // an admin changing the config mid-settlement cannot reach this epoch.
+    const judgeMode = await currentJudgeMode(tx);
+
+    await tx`UPDATE swarm_sessions
+                SET state = 'window_closed', judge_mode = ${judgeMode}
+              WHERE id = ${expectedSessionId} AND state = 'collecting'`;
+    await recordAbsencesTx(expectedSessionId, tx);
+
+    // §4.5: deactivation closes an epoch and opens none. A subject that is no
+    // longer active therefore turns over into nothing — but this cannot be
+    // reached through the boundary, because deactivation already closed the
+    // window; it is here so that the two paths cannot disagree.
+    if (subject.status !== "active") return refuse(409, "subject_not_active");
+
+    const successor = await insertEpoch(tx, subject);
+    await tx`UPDATE swarm_sessions SET successor_session_id = ${successor.sessionId}
+              WHERE id = ${expectedSessionId}`;
+    // §6.2: `epoch.turned_over` — "epoch N closed and N+1 opened". Written here,
+    // in the transaction that did both, so the scheduler cannot be told about a
+    // turnover that rolled back or miss one that committed. A REPLAY does not
+    // publish: the event for this turnover was written when it happened, and a
+    // second copy would read to a subscriber as a second turnover.
+    await appendStreamEvent(tx, "epoch.turned_over", {
+      subjectId,
+      sessionId: successor.sessionId,
+      payload: {
+        closedSessionId: expectedSessionId,
+        openedSessionId: successor.sessionId,
+        windowClosesAt: successor.windowClosesAt,
+      },
+    });
+
+    return {
+      ok: true as const,
+      status: 200,
+      subjectId,
+      closedSessionId: expectedSessionId,
+      openedSessionId: successor.sessionId,
+      windowClosesAt: successor.windowClosesAt,
+      judgeMode,
+      replayed: false,
+    };
+  });
+}
+
+/**
+ * Close a subject's open epoch without opening a successor — §4.5.
+ *
+ * Called from the admin deactivation path, inside its transaction, so that
+ * "deactivated" and "window closed" are one fact rather than two that a crash
+ * can separate. Settlement of the closed epoch still has to finish; §3 step 3
+ * makes the scheduler pick it up on its next rebuild.
+ */
+export async function closeEpochForDeactivation(subjectId: string, tx: DbHandle): Promise<string | null> {
+  const open = await currentCollecting(tx, subjectId);
+  if (!open) return null;
+  const judgeMode = await currentJudgeMode(tx);
+  await tx`UPDATE swarm_sessions SET state = 'window_closed', judge_mode = ${judgeMode}
+            WHERE id = ${open.id} AND state = 'collecting'`;
+  await recordAbsencesTx(open.id, tx);
+  return open.id;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §4.4 — Settlement
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AggregateResult = {
+  ok: true;
+  status: number;
+  sessionId: string;
+  state: "aggregated";
+  transitioned: boolean;
+};
+
+/**
+ * Step 1: roll the signed takes up into the recommendation.
+ *
+ * Deterministic, and independent of anything judging later produces (§4.4).
+ * The arithmetic itself is `domain.aggregateSession`, unchanged — this wrapper
+ * exists for the state guard, which that function does not have.
+ */
+export async function aggregateEpoch(sessionId: string): Promise<AggregateResult | Refusal> {
+  const [s] = await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`;
+  if (!s) return refuse(404, "session_not_found");
+  // Already past this step: idempotent success, not a refusal (§5).
+  if (s.state !== "window_closed") {
+    if (["aggregated", "judging", "judged", "published"].includes(s.state)) {
+      return { ok: true, status: 200, sessionId, state: "aggregated", transitioned: false };
+    }
+    return refuse(409, `session_not_window_closed`);
+  }
+  await aggregateSession(sessionId);
+  return { ok: true, status: 200, sessionId, state: "aggregated", transitioned: true };
+}
+
+export type RequestJudgingResult = {
+  ok: true;
+  status: number;
+  sessionId: string;
+  state: "judging";
+  deadlineAt: string;
+  transitioned: boolean;
+};
+
+/**
+ * Step 2 under `enforce`: record the request and the ABSOLUTE deadline.
+ *
+ * §4.4: "the API records the request instant and the absolute deadline
+ * (request instant plus the hardcoded judging duration), moves the session to
+ * `judging`, returns the deadline". §9: that deadline "is never restarted by a
+ * rebuild" — which is why a repeated request returns the stored instant rather
+ * than computing a fresh one. A scheduler that crashed between the request and
+ * its response reconstructs the ORIGINAL timer from this value.
+ *
+ * Under `off` this is a reasoned refusal rather than a silent success: nothing
+ * should be calling it, and saying so is how a scheduler bug surfaces instead
+ * of a session sitting in a state nobody meant to reach.
+ */
+export async function requestJudging(sessionId: string): Promise<RequestJudgingResult | Refusal> {
+  return sql.begin(async (tx) => {
+    const [s] = await tx<Record<string, any>[]>`
+      SELECT * FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+    if (!s) return refuse(404, "session_not_found");
+    if (s.judge_mode === "off") return refuse(409, "judge_mode_off");
+    if (s.judging_deadline_at) {
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        state: "judging" as const,
+        deadlineAt: new Date(s.judging_deadline_at).toISOString(),
+        transitioned: false,
+      };
+    }
+    if (s.state !== "aggregated") return refuse(409, "session_not_aggregated");
+    const [upd] = await tx<{ judging_deadline_at: Date }[]>`
+      UPDATE swarm_sessions
+         SET state = 'judging',
+             judging_requested_at = now(),
+             judging_deadline_at = now() + make_interval(secs => ${JUDGING_DURATION_SECONDS})
+       WHERE id = ${sessionId} AND state = 'aggregated'
+       RETURNING judging_deadline_at`;
+    return {
+      ok: true as const,
+      status: 200,
+      sessionId,
+      state: "judging" as const,
+      deadlineAt: new Date(upd.judging_deadline_at).toISOString(),
+      transitioned: true,
+    };
+  });
+}
+
+export type RecordConsensusResult = {
+  ok: true;
+  status: number;
+  sessionId: string;
+  state: string;
+  recordedAt: string;
+  /** True when the session was already published: recorded, but it decides nothing (§4.4). */
+  lateEvidence: boolean;
+};
+
+/**
+ * Record the judges' consensus with its ACCEPTANCE instant.
+ *
+ * §4.4: "the API records it with its acceptance instant, advances the session
+ * to `judged` if its state guard permits, and publishes `session.judged`. A
+ * consensus that lands after the session is already `published` is recorded as
+ * late evidence and changes neither the lifecycle state nor the published
+ * outcome."
+ *
+ * The instant stored here is the ONLY time this consensus will ever be judged
+ * by. Nothing downstream looks at when an event arrived, when a timer fired, or
+ * when finalize was called — §9: "An event's arrival time never decides an
+ * outcome."
+ */
+export async function recordJudgingConsensus(
+  sessionId: string,
+  judgementId: number,
+): Promise<RecordConsensusResult | Refusal> {
+  return sql.begin(async (tx) => {
+    const [s] = await tx<Record<string, any>[]>`
+      SELECT * FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+    if (!s) return refuse(404, "session_not_found");
+    const [j] = await tx<{ id: string }[]>`
+      SELECT id FROM swarm_session_judgements WHERE id = ${judgementId} AND session_id = ${sessionId}`;
+    if (!j) return refuse(404, "judgement_not_for_session");
+
+    if (s.state === "published") {
+      // Late evidence. The judgement row already exists and stays; nothing
+      // about the session moves.
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        state: "published",
+        recordedAt: new Date().toISOString(),
+        lateEvidence: true,
+      };
+    }
+    if (s.consensus_recorded_at) {
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        state: s.state,
+        recordedAt: new Date(s.consensus_recorded_at).toISOString(),
+        lateEvidence: false,
+      };
+    }
+    if (s.state !== "judging") return refuse(409, "session_not_judging");
+    const [upd] = await tx<{ consensus_recorded_at: Date }[]>`
+      UPDATE swarm_sessions SET state = 'judged', consensus_recorded_at = now()
+       WHERE id = ${sessionId} AND state = 'judging'
+       RETURNING consensus_recorded_at`;
+    // §6.2: `session.judged`. A WAKE-UP and nothing more (§4.4) — the scheduler
+    // finalizes the moment consensus lands instead of waiting out the deadline,
+    // and finalize re-reads the stored instants either way. Written in this
+    // transaction so it exists if and only if the consensus was recorded; late
+    // evidence after publication publishes nothing, because nothing the clock
+    // waits on changed.
+    await appendStreamEvent(tx, "session.judged", {
+      subjectId: s.subject_id,
+      sessionId,
+      payload: { judgementId, recordedAt: new Date(upd.consensus_recorded_at).toISOString() },
+    });
+    return {
+      ok: true as const,
+      status: 200,
+      sessionId,
+      state: "judged",
+      recordedAt: new Date(upd.consensus_recorded_at).toISOString(),
+      lateEvidence: false,
+    };
+  });
+}
+
+export type FinalizeResult = {
+  ok: true;
+  status: number;
+  sessionId: string;
+  state: "published";
+  outcome: JudgingOutcome;
+  /** True when the outcome had already been decided and is being returned unchanged (§4.4). */
+  replayed: boolean;
+};
+
+/**
+ * Step 3: decide the judging outcome from STORED instants, then publish.
+ *
+ * §4.4 gives the whole decision in three lines, and this function is those
+ * three lines and nothing else:
+ *
+ *   `judged`       — a consensus was recorded at or before the deadline;
+ *   `no_consensus` — no consensus was recorded at or before the deadline;
+ *   `not_judged`   — mode was `off`.
+ *
+ * TIME-GUARDED AS WELL AS STATE-GUARDED. "With no eligible consensus it refuses
+ * finalize as a reasoned no-op until the deadline has passed by the API's own
+ * clock, because absence of a consensus before the deadline proves nothing."
+ * The comparison uses the transaction's `now()`, which is the API's clock and
+ * is the same instant every statement in this transaction sees — so the answer
+ * cannot change halfway through deciding it.
+ *
+ * THE BOUNDARY INSTANT, exactly as §4.4 words it: a consensus recorded AT the
+ * deadline is eligible (`<=`), and finalize is accepted AT the deadline
+ * (`now() >= deadline`). Both inclusive, and they are inclusive independently:
+ * the first is about the consensus, the second about the caller.
+ *
+ * NOTHING IS FABRICATED. The `no_consensus` branch writes an outcome and
+ * publishes. It does not write a judgement row, a certificate, a placeholder
+ * opinion or a default verdict, and there is no `else` in this function that
+ * could.
+ */
+export async function finalizeEpoch(sessionId: string): Promise<FinalizeResult | Refusal> {
+  return sql.begin(async (tx) => {
+    const [s] = await tx<Record<string, any>[]>`
+      SELECT *, now() AS api_now FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+    if (!s) return refuse(404, "session_not_found");
+
+    if (s.state === "published") {
+      // Decided once. §4.4: "A repeated finalize returns the outcome already
+      // decided; it never re-decides."
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        state: "published" as const,
+        outcome: s.judging_outcome as JudgingOutcome,
+        replayed: true,
+      };
+    }
+
+    let outcome: JudgingOutcome;
+    if (s.judge_mode === "off") {
+      if (s.state !== "aggregated") return refuse(409, "session_not_publishable");
+      outcome = "not_judged";
+    } else {
+      if (!s.judging_deadline_at) return refuse(409, "judging_not_requested");
+      const deadline = new Date(s.judging_deadline_at).getTime();
+      const recorded = s.consensus_recorded_at ? new Date(s.consensus_recorded_at).getTime() : null;
+      const eligible = recorded !== null && recorded <= deadline;
+      if (eligible) {
+        outcome = "judged";
+      } else if (new Date(s.api_now).getTime() < deadline) {
+        // Not a failure — a reasoned no-op. The judges still have time.
+        return refuse(409, "judging_deadline_not_reached");
+      } else {
+        outcome = "no_consensus";
+      }
+    }
+
+    await tx`UPDATE swarm_sessions
+                SET state = 'published',
+                    judging_outcome = ${outcome},
+                    published_at = COALESCE(published_at, now()),
+                    version = version + 1
+              WHERE id = ${sessionId}`;
+    return {
+      ok: true as const,
+      status: 200,
+      sessionId,
+      state: "published" as const,
+      outcome,
+      replayed: false,
+    };
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);
+
+async function currentCollecting(
+  h: DbHandle,
+  subjectId: string,
+): Promise<{ id: string; window_closes_at: Date } | null> {
+  const [row] = await h<{ id: string; window_closes_at: Date }[]>`
+    SELECT id, window_closes_at FROM swarm_sessions
+     WHERE subject_id = ${subjectId} AND state = 'collecting'`;
+  return row ?? null;
+}
+
+/**
+ * The operator's judge mode, reduced to the two D48 admits.
+ *
+ * `swarm_judge_config.mode` still accepts `shadow` because migration 0039's
+ * CHECK and the historical rows in `swarm_session_judgements` do. D48 is
+ * explicit that "the system must not create new `shadow` judgements", so a
+ * session closing while the config says `shadow` captures `off`: it requests no
+ * judging and publishes `not_judged`. That is the only reading that neither
+ * creates a new shadow judgement nor pretends an enforcement that the operator
+ * did not ask for.
+ */
+async function currentJudgeMode(h: DbHandle): Promise<JudgeMode> {
+  const [cfg] = await h<{ mode: string }[]>`SELECT mode FROM swarm_judge_config WHERE id = 1`;
+  return cfg?.mode === "enforce" ? "enforce" : "off";
+}
+
+/** Migration 0068's partial unique index, by name — the only violation this module interprets. */
+function isOneCollectingViolation(err: unknown): boolean {
+  const e = err as { code?: string; constraint_name?: string; message?: string };
+  return e?.code === "23505" &&
+    (e.constraint_name === "swarm_sessions_one_collecting_per_subject" ||
+      Boolean(e.message?.includes("swarm_sessions_one_collecting_per_subject")));
 }

@@ -48,7 +48,14 @@ DECLARE
   -- every single run -- that is, it would grant the application the ability to forge
   -- the answer preflight check 3a trusts. SELECT is restored below, because §7.2
   -- has every database-holding container run check 3a under its own credential.
-  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity', 'schema_manifest'];
+  -- 0069 added `automation_tokens`, the API automation-credential store (smoke
+  -- spec §3). Same reasoning as `schema_manifest`: the ordinary sweep would hand
+  -- rm_app INSERT and UPDATE on the very rows that decide whether a presented
+  -- bearer is authorized, so the application could mint itself a credential. It is
+  -- provisioned by rm_owner and only ever READ at runtime. The rows hold a sha256
+  -- hash and a rights list, never a secret, so SELECT is no wider a capability than
+  -- the reader roles already hold over `admin_credential`.
+  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens'];
   rel record;
   usurped text;
 BEGIN
@@ -89,7 +96,7 @@ BEGIN
       -- back to rm_app would quietly widen the tables whose whole point is that the
       -- application cannot write them, and it would do so on every run.
       EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
-      IF rel.name IN ('deployment_identity', 'schema_manifest') THEN
+      IF rel.name IN ('deployment_identity', 'schema_manifest', 'automation_tokens') THEN
         EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
       END IF;
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);

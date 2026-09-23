@@ -348,7 +348,7 @@ export function parsePositiveNumber(value: unknown, fallback: number): number {
 export function parseSubjectCreate(body: JsonObject | null): {
   id: string; name: string; operator?: string; homepage?: string; xHandle?: string; thesisBlurb?: string;
   wallets?: unknown; nftContracts?: unknown; source?: unknown; recommendationType?: string;
-  linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string;
+  linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string; epochDuration?: number;
 } | null {
   if (!body) return null;
   const id = requiredString(body, "id", 100);
@@ -367,6 +367,11 @@ export function parseSubjectCreate(body: JsonObject | null): {
     linkedMemberId: optionalString(body, "linkedMemberId", 100),
     structuralNotes: body.structuralNotes,
     lastReviewed: optionalString(body, "lastReviewed", 10),
+    // Passed through unvalidated ON PURPOSE: createSubjectAdmin refuses a
+    // non-positive or fractional duration with a message naming the field
+    // (scheduler spec §2.4), and a second check here would be a second place
+    // for that rule to drift from migration 0067's CHECK.
+    epochDuration: typeof body.epochDuration === "number" ? body.epochDuration : undefined,
   };
 }
 

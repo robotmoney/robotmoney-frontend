@@ -13,15 +13,16 @@
 //    (recording absences as in §4.3) and opens no new one."
 //
 // NOT ASSERTED HERE. "Activating a subject ... opens an epoch with no operator
-// action" is the SCHEDULER's rebuild (spec §3), whose test file is
-// scripts/tests/unit/system-scheduler-rebuild.test.ts and whose container is
-// W4.6 — a later worker. This file proves only what that worker will call.
+// action" is the SCHEDULER's rebuild (spec §3), whose test file is the
+// system-scheduler-rebuild one under the scripts unit suite and whose
+// container is W4.6 — a later worker, and neither exists yet. This file proves
+// only what that worker will call.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
-import * as epoch from "../src/swarm/epoch.ts";
+import * as epoch from "../src/swarm/domain.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, collectingSessions, sessionRow } from "./support/epoch-fixtures.ts";
+import { activeSubject, collectingSessions, refusedByDatabase, sessionRow } from "./support/epoch-fixtures.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -77,10 +78,9 @@ test("the database, not the code, enforces at most one collecting session per su
   const subjectId = await activeSubject("open_constraint", 600);
   const r = await epoch.openEpoch(subjectId);
   expect(r.ok).toBe(true);
-  await expect(
+  await refusedByDatabase(() =>
     sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
-        VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '1 hour')`,
-  ).rejects.toThrow();
+        VALUES (${subjectId}, ${subjectId}, 'collecting', now() + interval '1 hour')`);
 });
 
 test("an inactive subject cannot have an epoch opened", async () => {

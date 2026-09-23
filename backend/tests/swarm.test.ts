@@ -844,25 +844,45 @@ test("GET /api/swarm/sessions: malformed cursor and out-of-range limit are 400s 
 });
 
 // ── Issue #783: nextSessionAt on the sessions envelope ──────────────────────
+//
+// RE-SOURCED FROM THE EPOCH MODEL (issue #1026 W4). The field used to report
+// the enabled `swarm.open_session` cron row's `next_run_at`; those rows are
+// retired, and the epoch model answers the same question exactly rather than
+// approximately. Scheduler spec §2.1: epochs run back to back, so the instant
+// the current window closes IS the instant the next session opens. The field's
+// NAME, SHAPE and NULL semantics are unchanged, because it is a published
+// contract (scripts/lib/agent-endpoints.ts documents it to outside agents).
 
-test("GET /api/swarm/sessions: nextSessionAt is null when the swarm.open_session schedule is disabled (the seeded production baseline)", async () => {
+test("GET /api/swarm/sessions: nextSessionAt is null when no subject has an open window", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   expect(res?.status).toBe(200);
   const body = res!.body as { nextSessionAt: string | null };
-  expect("nextSessionAt" in body).toBe(true); // never omitted, so a caller can tell "not scheduled" apart from "older API"
+  expect("nextSessionAt" in body).toBe(true); // never omitted, so a caller can tell "none open" apart from "older API"
   expect(body.nextSessionAt).toBeNull();
 });
 
-test("GET /api/swarm/sessions: nextSessionAt reads the SAME next_run_at tickScheduler maintains for the enabled swarm.open_session row, on both the default page and ?full=1", async () => {
-  const slot = new Date(Date.now() + 3 * 60 * 60 * 1000); // arbitrary future instant
-  await sql`UPDATE job_schedules SET enabled = true, next_run_at = ${slot} WHERE kind = 'swarm.open_session'`;
+test("GET /api/swarm/sessions: nextSessionAt is the EARLIEST open window's close instant, on both the default page and ?full=1", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
+  const soon = new Date(Date.now() + 60 * 60 * 1000);
+  const later = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  const a = rid("nextA");
+  const b = rid("nextB");
+  await ensureProseSubject(a, "Next A");
+  await ensureProseSubject(b, "Next B");
+  // The question is about the swarm, not one subject, so the earliest boundary
+  // across every open window is the answer.
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${b}, ${b}, 'collecting', ${later})`;
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${a}, ${a}, 'collecting', ${soon})`;
 
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   expect(res?.status).toBe(200);
   const body = res!.body as { nextSessionAt: string | null };
-  expect(body.nextSessionAt).toBe(slot.toISOString());
+  expect(body.nextSessionAt).toBe(soon.toISOString());
 
   // ?full=1 is a different response branch in listSessions() — assert it
   // carries the identical value rather than dropping it like it drops
@@ -870,11 +890,15 @@ test("GET /api/swarm/sessions: nextSessionAt reads the SAME next_run_at tickSche
   const fullReq = new Request("http://test/api/swarm/sessions?full=1");
   const fullRes = await handleSwarm(fullReq, new URL(fullReq.url));
   const fullBody = fullRes!.body as { nextSessionAt: string | null };
-  expect(fullBody.nextSessionAt).toBe(slot.toISOString());
+  expect(fullBody.nextSessionAt).toBe(soon.toISOString());
 });
 
-test("GET /api/swarm/sessions: nextSessionAt is null when the schedule is enabled but has never ticked (next_run_at not yet seeded)", async () => {
-  await sql`UPDATE job_schedules SET enabled = true, next_run_at = NULL WHERE kind = 'swarm.open_session'`;
+test("GET /api/swarm/sessions: a collecting session with no advertised instant does not answer for the swarm", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
+  const subjectId = rid("nextNull");
+  await ensureProseSubject(subjectId, "Next Null");
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${subjectId}, ${subjectId}, 'collecting', NULL)`;
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   const body = res!.body as { nextSessionAt: string | null };

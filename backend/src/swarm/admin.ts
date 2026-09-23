@@ -20,6 +20,8 @@ import {
   getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
+  appendStreamEvent,
+  closeEpochForDeactivation,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
@@ -81,6 +83,10 @@ function toSubjectAdmin(row: Record<string, any>) {
     linkedMemberId: row.linked_member_id ?? null,
     structuralNotes: row.structural_notes ?? null,
     lastReviewed: row.last_reviewed ?? null,
+    // The subject's ONE scheduling parameter (scheduler spec §2.2). Surfaced on
+    // every admin read because §2.3 makes this route the only way it changes,
+    // and an operator cannot change a value the surface never shows.
+    epochDuration: row.epoch_duration_seconds != null ? Number(row.epoch_duration_seconds) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -142,6 +148,8 @@ export interface SubjectInput {
   linkedMemberId?: string;
   structuralNotes?: unknown;
   lastReviewed?: string;
+  /** Seconds the submission window stays open (scheduler spec §2.2). Omitted on create means the schema default. */
+  epochDuration?: number;
 }
 
 export async function listSubjectsAdmin() {
@@ -152,19 +160,42 @@ export async function listSubjectsAdmin() {
 export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   const existing = (await sql`SELECT id FROM swarm_subjects WHERE id = ${input.id}`)[0];
   if (existing) return err(409, "subject id already exists");
-  const rows = await sql`
-    INSERT INTO swarm_subjects
-      (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
-       source, recommendation_type, linked_member_id, structural_notes, last_reviewed)
-    VALUES
-      (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
-       ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${sql.json((input.wallets ?? null) as any)},
-       ${sql.json((input.nftContracts ?? null) as any)}, ${sql.json((input.source ?? null) as any)},
-       ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
-       ${sql.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null})
-    RETURNING *`;
-  await audit(actor, "subject_create", { subjectId: input.id });
-  return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  if (input.epochDuration !== undefined && !isPositiveWholeSeconds(input.epochDuration)) {
+    return err(400, "epochDuration must be a positive whole number of seconds");
+  }
+  // ONE TRANSACTION, because a created subject is an ACTIVE subject and §6.2
+  // makes activation a `subject.changed` event the scheduler acts on by opening
+  // that subject's first epoch. A create that committed without its event would
+  // leave an active subject the clock never hears about until its next rebuild.
+  return sql.begin(async (tx) => {
+    const rows = await tx`
+      INSERT INTO swarm_subjects
+        (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
+         source, recommendation_type, linked_member_id, structural_notes, last_reviewed,
+         epoch_duration_seconds)
+      VALUES
+        (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
+         ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${tx.json((input.wallets ?? null) as any)},
+         ${tx.json((input.nftContracts ?? null) as any)}, ${tx.json((input.source ?? null) as any)},
+         ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
+         ${tx.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null},
+         ${input.epochDuration !== undefined ? tx`${input.epochDuration}` : tx`DEFAULT`})
+      RETURNING *`;
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: input.id,
+      payload: { reason: "activated", epochDurationSeconds: Number(rows[0].epoch_duration_seconds) },
+    });
+    await audit(actor, "subject_create", { subjectId: input.id }, tx);
+    return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  });
+}
+
+/**
+ * A whole, positive number of seconds — the only shape an epoch duration may
+ * take (scheduler spec §2.2/§2.4, migration 0067's CHECK).
+ */
+function isPositiveWholeSeconds(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
 }
 
 export type SubjectPatch = Partial<Omit<SubjectInput, "id">>;
@@ -192,7 +223,14 @@ export async function updateSubjectAdmin(
       linked_member_id: patch.linkedMemberId ?? row.linked_member_id,
       structural_notes: patch.structuralNotes !== undefined ? patch.structuralNotes : row.structural_notes,
       last_reviewed: patch.lastReviewed ?? row.last_reviewed,
+      epoch_duration_seconds: patch.epochDuration ?? row.epoch_duration_seconds,
     };
+    // §2.4: "There is no on/off state for scheduling." A zero, a negative or a
+    // fractional duration is refused HERE, before the write, so the caller gets
+    // a 400 naming the field rather than a 23514 from migration 0067's CHECK.
+    if (patch.epochDuration !== undefined && !isPositiveWholeSeconds(patch.epochDuration)) {
+      return err(400, "epochDuration must be a positive whole number of seconds");
+    }
     const upd = await tx`
       UPDATE swarm_subjects SET
         name = ${merged.name}, operator = ${merged.operator}, homepage = ${merged.homepage},
@@ -200,7 +238,8 @@ export async function updateSubjectAdmin(
         wallets = ${tx.json(merged.wallets as any)}, nft_contracts = ${tx.json(merged.nft_contracts as any)},
         source = ${tx.json(merged.source as any)}, recommendation_type = ${merged.recommendation_type},
         linked_member_id = ${merged.linked_member_id}, structural_notes = ${tx.json(merged.structural_notes as any)},
-        last_reviewed = ${merged.last_reviewed}, version = version + 1, updated_at = now()
+        last_reviewed = ${merged.last_reviewed}, epoch_duration_seconds = ${merged.epoch_duration_seconds},
+        version = version + 1, updated_at = now()
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
@@ -215,6 +254,17 @@ export async function updateSubjectAdmin(
       await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
     }
 
+    // Scheduler spec §6.2: `subject.changed` — "epoch duration changed, or
+    // subject activated / deactivated". Published for ANY subject edit, not
+    // only a duration change: the scheduler's documented reaction is to re-read
+    // the subject, and deciding here which fields it cares about would make
+    // this function the second place that knowledge lives. Written inside the
+    // same transaction as the edit (§9), so the clock is never told about a
+    // change that rolled back.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "updated", epochDurationSeconds: Number(upd[0].epoch_duration_seconds) },
+    });
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
@@ -234,7 +284,20 @@ export async function deactivateSubjectAdmin(
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    await audit(actor, "subject_deactivate", { subjectId: id }, tx);
+    // Scheduler spec §4.5: "Deactivating a subject through the admin API closes
+    // its open epoch (recording absences as in §4.3) and opens no new one."
+    // In the SAME transaction as the status flip, so a crash between them
+    // cannot leave an inactive subject with a window still advertised open.
+    // Settlement of the closed epoch still has to finish, and §3 step 3 makes
+    // the scheduler pick it up on its next rebuild.
+    const closedEpochId = await closeEpochForDeactivation(id, tx);
+    // §6.2: on deactivation the scheduler "drops its boundary timer and settles
+    // the closed epoch". Same transaction as the status flip and the close.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "deactivated", closedEpochId },
+    });
+    await audit(actor, "subject_deactivate", { subjectId: id, closedEpochId }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
 }
@@ -843,40 +906,22 @@ function isValidUtcDate(date: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
 }
 
-// Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
-// `swarm:<session-id>:<action>`.
-//
-// `swarm.judge` is ON THIS LIST (issue #767) and that is the ONLY thing that
-// makes `swarm_judge_config.mode` mean anything on the cadence. The handler,
-// the per-session enqueue endpoint and the admin button all shipped with #752,
-// but nothing SCHEDULED a judging — so a session was judged only when a human
-// asked for one, and flipping the mode to `shadow` changed nothing about what
-// the swarm actually did. The mode switch stays the on/off control; this list
-// is what gives it something to switch.
-const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
 
 // The narrowest gap a session may declare between two of its own instants
 // (issue #806). Validation used to be strict `<` on millisecond timestamps,
 // which admits a ONE-MILLISECOND window — and the lifecycle needs three
 // distinct instants between `windowClosesAt` and `publishAt` to order
-// aggregate, judge and publish at all. Below three seconds the clamp below can
-// only collapse them onto each other, and once `aggregate` and `judge` share a
-// `run_after` the claim order among them is a tiebreak, not a schedule. Stating
-// the requirement in validation is cheaper than making every consumer of the
-// queue defend against a degenerate one that was accepted.
+// aggregate, judge and publish at all. Stating the requirement in validation is
+// cheaper than making every consumer defend against a degenerate session that
+// was accepted.
 //
-// The clamp is KEPT even though validation now guarantees the room it needs:
-// it is the property (monotonic, never crossing) and this is the input bound,
-// and a bound is not a substitute for the property holding.
+// THE CLAMP IT GUARDED IS GONE (issue #1026 W4): the five scheduled jobs whose
+// `run_after` values it kept monotonic were removed with the rest of the
+// scheduled lifecycle. The BOUND is kept, because the instants an admin
+// declares are still stored on the session and a one-millisecond window is
+// still not a window. It is now an input sanity rule and nothing more.
 export const MIN_SESSION_STEP_MS = 3_000;
 
-const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
-  "swarm.publish_brief": "publish_brief",
-  "swarm.close_window": "close_window",
-  "swarm.aggregate": "aggregate",
-  "swarm.judge": "judge",
-  "swarm.publish": "publish",
-};
 
 export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
@@ -945,82 +990,38 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
         ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // One deduplicated, session-scoped job per lifecycle step (docs §4 US-C3):
-    // dedupe key `swarm:<session-id>:<action>` so re-creating a still-scheduled
-    // session never double-enqueues.
+    // NO JOBS ARE ENQUEUED HERE ANY MORE (issue #1026 W4).
     //
-    // ORDERING, not spacing, is what these instants buy. The queue claims
-    // `ORDER BY priority DESC, run_after` (worker/loop.ts), so a lane draining
-    // serially runs aggregate before judge before publish purely because their
-    // run_after values are ordered — the seconds between them are not a bet on
-    // how long a step takes. The judge reads the AGGREGATED take set and must
-    // land before the session publishes, so it sits one second behind aggregate
-    // and is clamped strictly below publishAt.
+    // WHAT WAS HERE. Five deduplicated, session-scoped rows —
+    // `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
+    // `swarm.judge`, `swarm.publish` — each with a `run_after` derived from the
+    // admin's three instants, plus a clamp that kept aggregate before judge
+    // before publish when the declared gaps were too narrow to hold three.
     //
-    // BOTH intermediate instants are clamped, not just the judge's. Validation
-    // guarantees only `windowClosesAt < publishAt` — a gap that may be a single
-    // millisecond — so `windowClosesAt + 1s` can itself land at or beyond
-    // publish. Clamping the judge alone then pulled it BELOW the aggregate and
-    // inverted the one pair whose order is the whole point. Clamping downward
-    // from publish keeps the sequence monotonic for any legal input; on a gap
-    // too narrow to hold three distinct instants they collapse onto each other
-    // rather than crossing, which a two-second window is already wide enough to
-    // avoid.
-    const lastBeforePublish = publishAt.getTime() - 1;
-    const judgeMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 2_000, lastBeforePublish));
-    const aggregateMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 1_000, judgeMs));
-    const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
-      "swarm.publish_brief": briefOpensAt,
-      "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": new Date(aggregateMs),
-      "swarm.judge": new Date(judgeMs),
-      "swarm.publish": publishAt,
-    };
-    // DO UPDATE, NOT DO NOTHING (the reschedule case this used to lose). A
-    // session re-created while still `scheduled` (the UPDATE branch above)
-    // keeps its original job rows — with DO NOTHING they also kept their
-    // ORIGINAL run_after, so a rescheduled session ran on its old timeline:
-    // a step whose old instant had already passed fired as a benign no-op
-    // (e.g. close_window against a `scheduled` session updates 0 rows and
-    // settles `succeeded`), and when the session actually reached the state
-    // that step exists for, the job was already spent — the window never
-    // closed and the session stayed `collecting` forever. On reschedule every
-    // job is re-armed to the NEW instants: `run_after` moves with the session
-    // and a no-op that already settled is revived as `pending` so it fires
-    // again at the right time. A fresh insert never conflicts, so the DO
-    // UPDATE branch is unreachable there.
-    const jobIds: number[] = [];
-    for (const kind of SESSION_JOB_KINDS) {
-      const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
-      // RESCHEDULE RE-ARMS THE JOB, IT DOES NOT LEAVE IT BEHIND. This used to
-      // be `ON CONFLICT DO NOTHING`, which meant re-creating a still-scheduled
-      // session silently kept each job's STALE run_after and SPENT attempts —
-      // a session moved to a new date never actually ran on it. DO UPDATE
-      // moves run_after to the new instant and resets status/attempts/lock
-      // fields so a previously-succeeded or exhausted row runs again on the
-      // new timeline exactly like a fresh insert would.
-      const r = await tx`
-        INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
-        VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
-          run_after = EXCLUDED.run_after,
-          status = 'pending',
-          attempts = 0,
-          locked_at = NULL,
-          locked_by = NULL,
-          last_error = NULL,
-          updated_at = now()
-        RETURNING id`;
-      if (r[0]) jobIds.push(Number(r[0].id));
-    }
-
+    // WHY IT IS GONE. Scheduler spec §4 gives the lifecycle a different shape
+    // entirely. A session is `collecting` from its first instant with no
+    // deferred brief (§4.1); it closes when the scheduler fires the boundary it
+    // holds, bound to a named epoch (§4.3); and settlement is "not scheduled —
+    // a chain the scheduler drives through the API, each step as soon as the
+    // previous one returns" (§4.4). Every one of the five rows was a scheduled
+    // step, which is precisely what the spec removes. Leaving them would have
+    // meant two mechanisms driving one session: the epoch path below opening
+    // and closing windows while five queue rows fired at their own instants
+    // against the states they expected to find.
+    //
+    // WHAT REPLACES IT. `openEpoch` and `turnOverEpoch` (domain.ts) for the
+    // window, and `aggregateEpoch` / `requestJudging` / `finalizeEpoch` for
+    // settlement, all driven by `system-scheduler` through the epoch routes.
+    //
+    // WHAT IS UNTOUCHED. The job queue itself and every non-swarm kind — the
+    // analytics, research, vault, wallet, buyback and project work — all still
+    // enqueue exactly as they did. This removes five swarm rows, not a queue.
     await audit(actor, "session_create", { sessionId, date: input.date, subjectId: input.subjectId }, tx);
     return {
       ok: true,
       status: existing ? 200 : 201,
       session: { id: sessionId, date: session.date, subjectId: session.subject_id, subjectName: session.subject_name, state: session.state, version: Number(session.version) },
       rosterSize: activeMembers.length,
-      jobIds,
     };
   });
 }

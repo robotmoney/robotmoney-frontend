@@ -106,3 +106,21 @@ export async function seat(sessionId: string, member: TestMember): Promise<void>
             VALUES (${sessionId}, ${member.id}, ${member.id})
             ON CONFLICT DO NOTHING`;
 }
+
+/**
+ * Assert a statement is REFUSED by the database, and return the error.
+ *
+ * Not `expect(sql`…`).rejects.toThrow()`. A postgres.js query is a lazy
+ * thenable, and handing one to `.rejects` in bun 1.3 never settles — the test
+ * times out at five seconds and the runner then hangs on the unfinished query.
+ * Running it inside a try/catch executes it exactly once and observes the
+ * refusal directly.
+ */
+export async function refusedByDatabase(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (err) {
+    return err as Error;
+  }
+  throw new Error("expected the database to refuse this statement, and it did not");
+}

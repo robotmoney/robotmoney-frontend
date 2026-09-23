@@ -6,9 +6,10 @@
 // that guard BEFORE parsing the request body or touching the database, so an
 // unauthenticated caller never causes SQL work (issue #152 AC7).
 import * as admin from "../../swarm/admin.ts";
+import * as epoch from "../../swarm/domain.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
 import { config as globalConfig } from "../../config.ts";
-import { isPrivileged, hasAutomationRole } from "../auth.ts";
+import { isPrivileged, hasAutomationRole, hasAutomationRight } from "../auth.ts";
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import {
   optionalString,
@@ -28,6 +29,7 @@ function ownsPath(p: string): boolean {
   if (!p.startsWith(PREFIX)) return false;
   const rest = p.slice(PREFIX.length);
   return (
+    rest.startsWith("epochs/") ||
     rest === "subjects" || rest.startsWith("subjects/") ||
     rest === "members" || rest.startsWith("members/") ||
     rest === "applications" ||
@@ -64,11 +66,74 @@ export async function handleSwarmAdmin(
   const m = req.method;
   if (!ownsPath(p)) return null;
 
-  // Auth FIRST — before any body parsing or DB query (AC7).
-  if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) return FORBIDDEN;
-
   const rest = p.slice(PREFIX.length);
   const segs = rest.split("/").filter(Boolean);
+
+  // Auth FIRST — before any body parsing or DB query (AC7).
+  //
+  // The epoch-lifecycle routes ask for a RIGHT, not merely for the automation
+  // role (issue #1026 W4.5, smoke spec §3): `system-scheduler` presents a
+  // per-instance token whose row names what it may do, and a token provisioned
+  // to read subjects and sessions must not be able to turn an epoch over. Every
+  // other admin route keeps exactly the guard it had.
+  if (segs[0] === "epochs") {
+    if (!(await isPrivileged(req, cfg) || await hasAutomationRight(req, "lifecycle_transitions", cfg))) {
+      return FORBIDDEN;
+    }
+  } else if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) {
+    return FORBIDDEN;
+  }
+
+  // ── The epoch lifecycle (scheduler spec §4) ───────────────────────────
+  //
+  // Thin transport, exactly like the rest of this file: each route parses its
+  // body, calls one state-guarded transition, and passes the domain layer's own
+  // {ok, status, ...} envelope straight through. No route here decides
+  // anything — a refusal's reason comes from the transition, because the
+  // transition is the only thing that saw the stored state.
+  if (segs[0] === "epochs" && m === "POST" && segs.length === 2) {
+    const b = (await readJsonObject(req)) ?? {};
+    const str = (k: string) => (typeof b[k] === "string" && b[k] ? (b[k] as string) : null);
+    switch (segs[1]) {
+      case "open": {
+        const subjectId = str("subjectId");
+        if (!subjectId) return { status: 400, body: { error: "subjectId required" } };
+        return fromResult(await epoch.openEpoch(subjectId));
+      }
+      case "turnover": {
+        const subjectId = str("subjectId");
+        const expectedSessionId = str("expectedSessionId");
+        if (!subjectId || !expectedSessionId) {
+          return { status: 400, body: { error: "subjectId and expectedSessionId required" } };
+        }
+        return fromResult(await epoch.turnOverEpoch(subjectId, expectedSessionId));
+      }
+      case "aggregate": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await epoch.aggregateEpoch(sessionId));
+      }
+      case "request-judging": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await epoch.requestJudging(sessionId));
+      }
+      case "consensus": {
+        const sessionId = str("sessionId");
+        const judgementId = typeof b.judgementId === "number" ? b.judgementId : null;
+        if (!sessionId || judgementId == null) {
+          return { status: 400, body: { error: "sessionId and judgementId required" } };
+        }
+        return fromResult(await epoch.recordJudgingConsensus(sessionId, judgementId));
+      }
+      case "finalize": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await epoch.finalizeEpoch(sessionId));
+      }
+    }
+  }
+  if (segs[0] === "epochs") return { status: 404, body: { error: "unknown epochs admin route" } };
 
   // ── Topics ────────────────────────────────────────────────────────────
   if (segs[0] === "subjects") {

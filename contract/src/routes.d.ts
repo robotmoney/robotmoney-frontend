@@ -82,6 +82,12 @@ export const ROUTES: {
       subjects: string;
       subjectUpdate: string;
       subjectDeactivate: string;
+      epochOpen: string;
+      epochTurnover: string;
+      epochAggregate: string;
+      epochRequestJudging: string;
+      epochConsensus: string;
+      epochFinalize: string;
       members: string;
       applications: string;
       memberReview: string;
