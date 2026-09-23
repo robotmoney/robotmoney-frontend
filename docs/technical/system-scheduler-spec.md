@@ -1,12 +1,13 @@
 # System scheduler spec
 
-> **Status: first draft, 2026-09-23. Prescriptive.** This document describes
+> **Status: second draft, 2026-09-23. Prescriptive.** This document describes
 > the scheduling architecture the system is to have. It does not describe the
 > current implementation and does not inherit from it. Where it conflicts with
 > code, the code is what changes. It sits beside
 > [`smoke-production-spec.md`](./smoke-production-spec.md), which owns
 > deployment, credentials and participants; this document owns how sessions are
-> timed and driven once the stack is running.
+> timed and driven once the stack is running. §12 lists the companion clauses
+> this document supersedes on adoption.
 
 ---
 
@@ -16,17 +17,22 @@ Three things take part. Each has exactly one job.
 
 | Role | Job | Database connection |
 |---|---|---|
-| **API** | Stores. Exposes authenticated endpoints to read subjects, read sessions, change a subject's epoch duration, and perform each lifecycle transition. Publishes change events and pushes ad-hoc work to subscribers over a stream. Decides nothing about timing, beyond computing `window_closes_at` from the subject's duration when it opens an epoch. | Yes — the only running service that holds one. |
-| **`system-scheduler`** | Is the clock. Holds one timer per active subject, fires each subject's epoch boundary, and drives settlement. Subscribes to the stream. | **No.** Never. |
+| **API** | Stores. Exposes authenticated endpoints to read subjects, read sessions, change a subject's epoch duration, and perform each lifecycle transition. Serves the event stream to subscribers as part of handling their connections. Decides nothing about timing, beyond computing `window_closes_at` from the subject's duration when it opens an epoch. It runs no background orchestration of its own. | Yes — the only running service in this document's scope that holds one. |
+| **`system-scheduler`** | Is the clock. Holds one timer per active subject, fires each subject's epoch boundary, drives settlement, and recovers all of it after any interruption. Subscribes to the stream. | **No.** Never. |
 | **Participants** (agents, judges) | Do the work that needs a model: takes and judgements. Defined in `smoke-production-spec.md` §6. | No. |
 
-`system-scheduler` is one long-running container. It replaces the process formerly called `worker-swarm`. There is no separate clock process and no separate executor process.
+`system-scheduler` is one long-running container. It replaces the process formerly called `worker-swarm`. There is no separate clock process and no separate executor process. Correctness does not depend on there being exactly one: two schedulers briefly overlapping during a deploy must produce the same results as one (§4.3, §10).
 
 ## 2. Epochs
 
 ### 2.1 The model
 
-A subject's sessions run in **epochs**, back to back. Each epoch is one session. When epoch N's submission window closes, epoch N+1's window opens at that same instant. For an active subject there is always exactly one open window. There is no gap between epochs, no idle state, and no daily convene.
+A subject's sessions run in **epochs**, back to back. Each epoch is one session. When epoch N's submission window closes, epoch N+1's window opens in the same transaction. There is no gap between epochs, no idle state, and no daily convene.
+
+Two statements, kept separate because they have different strength:
+
+- **Invariant, always true:** an active subject has **at most one** session in `collecting`. The database enforces it with a uniqueness constraint.
+- **Liveness, true in normal operation:** an active subject has **exactly one** open window. The scheduler opens a missing one when it processes an activation or rebuilds (§3). Between an activation and the scheduler processing it, or during scheduler downtime, a subject can briefly have none. Bootstrap readiness (`smoke-production-spec.md` §1.4) requires every active subject's first epoch to exist before the stack is declared ready.
 
 ### 2.2 The one duration
 
@@ -43,82 +49,115 @@ No environment variable sets it. No seed command sets it. No boot overwrites it 
 
 ### 2.4 Never disabled
 
-An active subject always has an open epoch. There is no on/off state for scheduling. Activating a subject opens its first epoch (§3). A subject that must stop running epochs is deactivated, and deactivation closes its open epoch and settles it (§4.5).
+There is no on/off state for scheduling. Activating a subject opens its first epoch (§3). A subject that must stop running epochs is deactivated, and deactivation closes its open epoch and settles it (§4.5).
 
 ## 3. The clock
 
-`system-scheduler` is the clock. It holds one timer per active subject: the instant that subject's current epoch closes. On start, and on every rebuild:
+`system-scheduler` is the clock. It holds one timer per active subject: the instant that subject's current epoch closes. It also holds one timer per session in `judging`: that session's judging deadline (§4.4). On start, and on every rebuild, it performs a **full read** through the API:
 
-1. Read every active subject, with its epoch duration, through the API.
-2. Read every subject's current open session, with its `window_closes_at`, through the API.
-3. For each subject, set the timer to that instant.
-4. Wait until the earliest timer. Fire it (§4.3). Recompute that subject's timer. Repeat.
+1. Every active subject, with its epoch duration.
+2. Every session in `collecting`, with its `window_closes_at`.
+3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated` or `judging` — with its state, and for `judging` its recorded deadline. This includes sessions whose subject has since been deactivated; deactivation closes an epoch but settlement still has to finish.
+4. The stream cursor the API returns with the read (§6.3).
 
-**An active subject with no open epoch is opened immediately** (§4.1) as part of the rebuild — a fresh database, a subject activated while the scheduler was down, a subject whose epoch an operator closed by deactivating and then re-activated. This is how the invariant in §2.1 holds from the first instant; nothing else opens a first epoch.
+Then it sets a boundary timer per collecting session, a deadline timer per judging session, resumes every unfinished settlement from its recorded state, opens an epoch for every active subject that has none, and waits until the earliest timer. Fire it. Recompute. Repeat.
+
+**An active subject with no session in `collecting` is opened immediately** as part of the rebuild — a fresh database, a subject activated while the scheduler was down, a subject deactivated and re-activated. Nothing else opens a first epoch.
 
 It fires at the instant. It does not poll the API on an interval. It does not tick.
 
 ### 3.1 The clock is current, or it is rebuilt
 
-The clock's copy of the subjects and open sessions is current if and only if two things hold: its stream connection (§6) is live, and it has applied every change event since its last full read, with no gap in the event sequence. When both hold, it acts. When either fails, it stops acting, performs a full read (steps 1–2 above), rebuilds every timer, and resumes.
+The clock's copy of the world is current if and only if: its stream connection (§6) is live, and it has applied every event with a sequence number above its full read's cursor, in order, with no gap. When both hold, it acts. When either fails, it stops acting, performs a full read, rebuilds every timer, and resumes.
 
 There is no third state. The clock never reconciles on a timer, never re-reads "just in case", and never acts on a copy it cannot prove is current.
 
 ### 3.2 Downtime, and what happens after it
 
-**Downtime is any interval during which the clock was not current under §3.1.** That covers three cases, treated identically:
+**Downtime is any interval during which the clock was not current under §3.1.** That covers four cases, treated identically:
 
 - the process was not running — a crash, a restart, a redeploy;
 - the process was running but its stream connection was down;
-- the process was running and connected but detected a sequence gap.
+- the process was running and connected but detected a sequence gap;
+- the API told it to resync (§6.3).
 
 In every case the clock stops acting at the start of the interval and rebuilds at the end of it.
 
-**On rebuild, for each subject whose window instant fell inside the interval:** fire the boundary once, now. That closes the stale epoch, opens a fresh one, and starts settlement of the stale one. **Missed boundaries are not replayed.** A subject that should have turned over three times during a two-day outage turns over once, on rebuild. Epochs are not opened into the past.
+**On rebuild, for each collecting session whose `window_closes_at` fell inside the interval:** fire the boundary once, now, against that session (§4.3). That closes it, opens a fresh one, and starts its settlement. **Missed boundaries are not replayed.** A subject that should have turned over three times during a two-day outage turns over once, on rebuild. Epochs are not opened into the past.
 
-An epoch that was already closed and mid-settlement when downtime began resumes settlement (§4.4) on rebuild; every settlement step is state-guarded (§5), so nothing runs twice.
+**For each unfinished settlement:** resume it from its recorded state (§4.4). A `judging` session whose recorded deadline has already passed is finalized immediately; one whose deadline is still ahead gets its timer reconstructed from the recorded instant, never restarted from now. Every settlement step is state-guarded (§5), so nothing runs twice.
 
 ## 4. The session lifecycle
 
 ### 4.1 Epoch open
 
-Opening an epoch is one API call that does three things atomically: create the session, publish its brief, and set `window_closes_at = now + epoch duration`. The session is `collecting` from its first instant. There is no `scheduled` state and no "brief opens later."
+Opening an epoch is one API call that does three things atomically: create the session, publish its brief, and set `window_closes_at = now + epoch duration`. The session is `collecting` from its first instant. There is no `scheduled` state and no "brief opens later." The uniqueness constraint in §2.1 makes two concurrent first-openings for one subject yield one session; the second call returns it.
 
 ### 4.2 The submission window
 
-While `collecting`, participants submit takes through the API. The window is the only timed part of a session's life, and the only part with a fixed duration.
+While a session is `collecting` **and now is before its `window_closes_at`**, participants submit takes through the API. The advertised instant is the contract participants are bound to, not the state: a submission after `window_closes_at` is refused even if delayed turnover has not yet moved the session out of `collecting`. Absences (§4.3) are judged against the same instant, so accepted takes and recorded absences can never disagree about who was on time.
+
+The window is the only timed part of a session's life, and the only part with a fixed duration.
 
 ### 4.3 The boundary
 
-When a subject's timer fires, `system-scheduler` makes one API call for that subject: **turn over**. The API closes epoch N (`collecting → window_closed`, recording an `absent` event for each seated member who did not file) and opens epoch N+1 (§4.1), in one transaction. The scheduler then sets that subject's timer to the new `window_closes_at`.
+When a session's boundary timer fires, `system-scheduler` makes one API call: **turn over**, naming the epoch it intends to close — `expected_session_id`. The API, in one transaction and behind the state guard (§5): checks that the named session is the subject's current `collecting` session; closes it (`collecting → window_closed`, recording an `absent` event for each seated member with no take received before `window_closes_at`); opens epoch N+1 (§4.1); and records the turnover. The scheduler then sets the subject's boundary timer to the new `window_closes_at` and starts settlement of N (§4.4).
 
-Turnover is the only way an epoch closes while its subject stays active. An operator ending a window early does it through the same turnover endpoint; the scheduler learns of it by event (§6.2) and treats it exactly as it treats its own.
+**Turnover is bound to the epoch, never to "whatever is open."** If the named session is no longer the current collecting one — because this call is a retry after a lost response, because a stale timer fired after an operator's early turnover, or because a second scheduler got there first — the API returns the original turnover's result if it has one, or a reasoned no-op. It never closes the successor. This is what makes a repeated boundary safe under §5 and §10.
+
+Turnover is the only way an epoch closes while its subject stays active. An operator ending a window early does it through the same endpoint with the same `expected_session_id`; the scheduler learns of it by event (§6.2) and treats it exactly as it treats its own.
 
 ### 4.4 Settlement
 
-Closing an epoch starts its settlement, and settlement is **not scheduled**. It is an event chain that runs as soon as each step can:
+Closing an epoch starts its settlement, and settlement is **not scheduled**. It is a chain the scheduler drives through the API, each step as soon as the previous one returns. Settlement of session N and the open window of N+1 are independent: nothing about N blocks submissions to N+1, and nothing about one subject's settlement blocks another subject's boundary.
 
-1. **Aggregate** — roll the signed takes up into the recommendation. `window_closed → aggregated`.
-2. **Judge** — the scheduler requests judging; the API pushes the request to the judge participants (`smoke-production-spec.md` §6) and moves the session to `judging`. When the judges' consensus lands, the API records it, moves the session to `judged`, and publishes `session.judged`. This step has a **hardcoded deadline**. It is a timeout the scheduler holds while waiting, not a scheduled instant.
+**Judge mode is captured at turnover.** The session records the judge mode in force (`off` or `enforce`, per D48) at the instant it closes. An admin changing the mode afterwards affects later sessions, never one already settling.
+
+1. **Aggregate** — roll the signed takes up into the recommendation. `window_closed → aggregated`. Deterministic; the allocation arithmetic and the signed member history are the same whatever judging later produces.
+2. **Judge** — branches on the captured mode:
+   - **`off`:** no judging is requested and nothing waits. `aggregated → publish` directly, with judging outcome `not_judged`. This is not a failure and is never presented as one.
+   - **`enforce`:** the scheduler requests judging. The API records the request instant and the **absolute deadline** (request instant plus the hardcoded judging duration), moves the session to `judging`, returns the deadline, and pushes the request to the judge participants (`smoke-production-spec.md` §6). The scheduler holds a timer for that deadline. When the judges' consensus lands, the API records it with its acceptance instant, moves the session to `judged`, and publishes `session.judged`.
 3. **Publish** — the session goes public, with its consensus certificate when one exists. `→ published`.
 
-`system-scheduler` drives the chain: it calls aggregate the moment turnover returns, requests judging the moment aggregate returns, then waits for **either** the `session.judged` event **or** the deadline — whichever comes first — and calls publish. It never polls for the judgement; the event brings it.
+The scheduler waits for **either** `session.judged` **or** its deadline timer, whichever first, and then calls **finalize**. It never polls for the judgement.
 
-**No consensus.** If the deadline passes before `session.judged` arrives, the scheduler marks the session `no_consensus` and publishes it in that state. No consensus certificate is produced. Nothing is fabricated: no template opinion, no placeholder certificate, no default verdict. A session with no consensus says so.
+**The event is a wake-up and nothing more.** It lets the scheduler finalize the moment consensus lands instead of waiting out the deadline. It decides nothing. Its arrival time is never compared to anything. A late event, a duplicate event, or a lost event changes no outcome: the scheduler finalizes on the deadline instead, and finalize reads the same stored facts.
+
+**Finalize is one API call and decides the judging outcome atomically from stored data.** The API compares the stored consensus acceptance instant (if a consensus was recorded) against the stored deadline. Its outcome is one of:
+
+- `judged` — a consensus was recorded at or before the deadline;
+- `no_consensus` — no consensus was recorded at or before the deadline;
+- `not_judged` — mode was `off`.
+
+Then it publishes. A repeated finalize returns the outcome already decided; it never re-decides. A consensus recorded after the deadline is kept as a record but does not change a `no_consensus` outcome.
+
+**No consensus.** A session finalized as `no_consensus` is published in that state with no consensus certificate. Nothing is fabricated: no template opinion, no placeholder certificate, no default verdict. A session with no consensus says so. Its aggregate and its signed takes are published unchanged.
+
+**`no_consensus`, `not_judged` and `judged` are outcomes recorded on the published session, not lifecycle states.** The lifecycle ends at `published` in every case.
 
 ### 4.5 Deactivating a subject
 
-Deactivating a subject through the admin API closes its open epoch and settles it, and opens no new one. The scheduler drops its timer on the `subject.changed` event.
+Deactivating a subject through the admin API closes its open epoch (recording absences as in §4.3) and opens no new one. Settlement of that closed epoch proceeds and must finish; §3 step 3 includes it in every rebuild. The scheduler drops the subject's boundary timer on the `subject.changed` event and settles the closed epoch.
+
+### 4.6 Transition calls that fail
+
+A transition call from the scheduler can fail three ways, and they are handled differently:
+
+- **A refusal with a reason** (the state guard, a bound epoch that is no longer current, a permanent validation error) is final. The scheduler records it, does not retry, and moves on. If the refusal means the work is already done — the original result is returned — the scheduler continues the chain from there.
+- **A transient error or a lost response** is retried by the scheduler with bounded exponential backoff. Retrying is safe because every transition is state-guarded and turnover is epoch-bound. After the retry budget is exhausted the scheduler leaves the settlement in its recorded state and reports it; the next rebuild resumes it.
+- **A stream problem** is not a transition failure and is handled by §3.1, not here.
+
+These retries are triggered by a failure and are bounded. They are not polling.
 
 ## 5. Transitions are state-guarded
 
-Every transition endpoint checks the session's current state before acting and refuses, as a no-op with a reason, if the transition is not valid from that state. This is what makes the clock safe: a boundary fired twice, a settlement resumed after downtime, and an operator firing a step by hand all reach the same guard.
+Every transition endpoint checks the session's current state — and, for turnover, the named epoch — before acting, and refuses as a no-op with a reason if the transition is not valid. This is what makes the clock safe: a boundary fired twice, a settlement resumed after downtime, a stale timer, a second scheduler, and an operator firing a step by hand all reach the same guard. Where the transition has already happened, the guard returns the original result rather than a bare refusal, so a caller can tell "already done" from "not allowed."
 
 ## 6. Timed work, event-driven work, and the stream
 
 ### 6.1 Two kinds of work
 
-- **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per active subject. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judge deadline (§4.4) is also a timer the scheduler holds, but it is a timeout inside settlement, not a schedule.
+- **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per active subject. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judging deadline (§4.4) is also a timer the scheduler holds, reconstructed from the instant the API stored, but it is a timeout inside settlement, not a schedule.
 - **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — its own, or an operator's — and advanced by the `session.judged` event. An operator triggering a step is event-driven. A change to a subject's epoch duration is itself an event.
 
 ### 6.2 Change events
@@ -127,26 +166,29 @@ Any write that alters what the scheduler is waiting on is published by the API a
 
 | event | cause | scheduler does |
 |---|---|---|
-| `subject.changed` | epoch duration changed, or subject activated / deactivated | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its timer and settles the closed epoch (§4.5) |
-| `epoch.turned_over` | epoch N closed and N+1 opened — by the boundary or by an operator | sets that subject's timer to the new `window_closes_at`; settles N if it is not already settling |
-| `session.judged` | the judges' consensus was recorded | proceeds to publish (§4.4) |
+| `subject.changed` | epoch duration changed, or subject activated / deactivated | re-reads that subject; on activation opens its first epoch (§3); on deactivation drops its boundary timer and settles the closed epoch (§4.5) |
+| `epoch.turned_over` | epoch N closed and N+1 opened — by the boundary or by an operator | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
+| `session.judged` | the judges' consensus was recorded | proceeds to finalize (§4.4) |
 
 A duration change takes effect at the **next** boundary: the current window keeps the `window_closes_at` it was opened with, and the epoch opened at that boundary uses the new duration.
 
-This is what keeps the in-memory timers honest without polling: the copy is never more than one unapplied event behind, and §3.1 says what to do when it might be.
-
 ### 6.3 Contract
 
-- `system-scheduler` opens one long-lived, authenticated connection to the API and subscribes.
-- Every message carries a **monotonic sequence number**. The scheduler records the last one it applied.
-- A change event carries what changed. A job push carries kind, target, and an idempotency key.
-- The scheduler acks a job through the API when it is done. An unacked job is re-pushed after a timeout; redelivery is safe because the target transition is state-guarded and the key is idempotent.
-- A **gap** — a sequence number that is not the last applied plus one — means the copy is no longer provably current. The scheduler treats it exactly like a dropped connection: stop, full read, rebuild.
-- A dropped connection is reconnected with backoff. On reconnect the scheduler performs a full read (§3.1) and the API re-pushes anything unacked. The scheduler does not replay from its last sequence number; it rebuilds. Rebuilding is cheap and provably correct; replay would have to be proven complete.
+**The read/stream handoff.** A full read is a consistent snapshot, and the API returns with it a **cursor**: the sequence number of the last event committed before that snapshot. The scheduler then subscribes from that cursor. Every committed change that the snapshot does not reflect has a sequence number above the cursor, and the API delivers those in order. Writes that land while the read is in flight are therefore either in the snapshot or on the stream, never lost between the two. The scheduler applies only events above its cursor and ignores any at or below it as duplicates.
+
+- **Sequence numbers** are monotonic across the API's event log, not per connection. A reconnect that subscribes from an old cursor receives everything above it, in order.
+- **Duplicates** (a sequence number at or below the last applied) are ignored.
+- **A gap** — a sequence number that is not the last applied plus one — means the copy is no longer provably current. Stop, full read, rebuild.
+- **Resync.** If the API cannot serve from the requested cursor — its retained log does not reach that far, or its buffer for this subscriber overflowed — it says so, and the scheduler treats that as downtime (§3.2): full read, rebuild. The API never silently skips.
+- **Silent failure detection.** The connection carries a transport-level keepalive (a WebSocket ping/pong or equivalent). A missed keepalive is a dropped connection under §3.1. This is a transport frame, not an API call, and not a read of business state; §10's no-API-call gate is stated accordingly.
+- **A dropped connection** is reconnected with backoff and followed by a full read. The scheduler does not replay from its last cursor after a drop; it rebuilds. Rebuilding is cheap and provably correct; replay would have to be proven complete.
+- **Job pushes.** An ad-hoc job the API pushes carries kind, target, and an idempotency key. The scheduler acks it through the API when done. Timed redelivery of an unacked job on a live connection is part of the API's serving of that subscription — it is not autonomous orchestration and does not need a background worker. On reconnect the API re-pushes anything unacked.
+
+Serving a subscription and writing an event's sequence number in the same transaction as the change it describes are the API's only stream duties. Neither is a background process.
 
 ## 7. Credentials
 
-There are three kinds of credential in this system, and they must not be confused:
+There are four kinds of credential in this system, and they must not be confused:
 
 | kind | proves | held by | lives in |
 |---|---|---|---|
@@ -157,7 +199,7 @@ There are three kinds of credential in this system, and they must not be confuse
 
 `system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
-How that automation token is provisioned to the container is not defined here or in `smoke-production-spec.md` §3 yet; §3 covers database and signing credentials only. It is the one addition that spec needs.
+How that automation token is provisioned to the container is not defined here or in `smoke-production-spec.md` §3 yet; §3 covers database and signing credentials only. That provisioning is one of the companion amendments listed in §12.
 
 ## 8. Environments
 
@@ -165,34 +207,66 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 
 ## 9. Invariants
 
-- Among running services, only the API connects to the database.
+- Among the running services this document covers, only the API connects to the database. (The analytics and research workers are outside this document; their move to the same model is a later document, and until then they keep the credentials they have. This invariant is not silently extended to them.)
 - A subject's epoch duration is set once by bootstrap and afterwards only by the admin API.
-- An active subject always has exactly one open epoch. There is no scheduling on/off state.
+- An active subject has at most one `collecting` session, enforced by the database.
 - The submission window is the only timed part of a session. Settlement is never scheduled.
-- `system-scheduler` never polls the API on an interval, and never re-reads on a timer.
+- A submission after `window_closes_at` is refused regardless of state.
+- Turnover is bound to a named epoch and never retargets its successor.
+- `system-scheduler` never polls the API on an interval, and never re-reads on a timer. Failure-triggered, bounded retries are not polling.
 - The clock is either provably current or rebuilding. There is no third state.
-- Every change to what the clock waits on is an event on the stream.
-- A fired transition is safe to fire again.
-- A session without consensus is published as `no_consensus`. Nothing is ever fabricated to fill the gap.
+- Every change to what the clock waits on is an event on the stream, sequenced in the transaction that made the change.
+- A fired transition is safe to fire again, and a repeated one returns the original result.
+- A judging deadline is stored by the API when judging is requested and is never restarted by a rebuild.
+- A session's judging outcome is decided once, by finalize, from stored instants, and is one of `judged`, `no_consensus`, `not_judged`. An event's arrival time never decides an outcome. Nothing is ever fabricated to fill a gap.
 
 ## 10. Acceptance gates
 
+Timing gates distinguish **dispatch** (the scheduler issued the call at the instant) from **completion** (the API transaction committed); each names a tolerance.
+
 - A blank-database boot sets every subject's epoch duration from the snapshot; a boot on a populated database changes none of them.
-- No service other than `api` carries a database credential in any composition, asserted by rendering the compose config.
-- For an active subject, closing epoch N and opening N+1 happen in one transaction at `window_closes_at`, and the new session's `window_closes_at` equals its open instant plus the subject's duration.
+- No service other than `api` carries a database credential in any composition in this document's scope, asserted by rendering the compose config.
+- For an active subject, closing epoch N and opening N+1 happen in one transaction; turnover is dispatched within one second of `window_closes_at`; the new session's `window_closes_at` equals its open instant plus the subject's duration.
+- **Epoch binding:** drop a successful turnover's response and retry; fire a stale timer after an operator's early turnover; race two schedulers against the same epoch. Each yields exactly one successor and one reasoned no-op or replayed result; N+1 is never closed by a retry aimed at N.
+- Two concurrent first-openings for one subject yield one `collecting` session.
 - Two subjects with different durations turn over independently at their own instants.
 - Changing a subject's duration through the admin API publishes `subject.changed`; the current window is unaffected; the next epoch uses the new duration; no restart.
+- A take submitted after `window_closes_at`, while the session is still `collecting` because turnover is delayed, is refused; a take submitted just before it is accepted; the member is not recorded absent.
 - Settlement of a closed epoch runs aggregate, judge and publish with no scheduled delay between them.
-- A judge that does not reach consensus by the deadline yields a session published as `no_consensus` with no certificate and no fabricated content, asserted by inspecting every row the settlement wrote; a `session.judged` event arriving after the deadline changes nothing.
-- Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action.
+- **Judge off:** a session that closes with mode `off` is published with outcome `not_judged`, requests no judging, and waits for nothing.
+- **Deadline:** a session finalized with no eligible consensus is published as `no_consensus` with no certificate and no fabricated content, asserted by inspecting every row the settlement wrote.
+- **Eligibility is decided by stored time, not event arrival:** a consensus recorded before the stored deadline whose `session.judged` event arrives after it yields `judged`. A consensus recorded after the deadline yields `no_consensus` and is kept as a record. Repeated finalize returns the same outcome. A lost or duplicated `session.judged` event changes no outcome.
+- **Deadline reconstruction:** kill the scheduler after judging was requested and restart it before the deadline — the deadline timer fires at the originally stored instant, not later. Restart after the deadline — finalize runs immediately.
+- **Recovery read:** kill the scheduler between every pair of settlement transitions — after turnover, after aggregate, after the judging request, after `judged` — including for a subject deactivated meanwhile, and after an API commit whose response was lost. On restart each settlement resumes from its recorded state and no durable effect repeats.
+- **Isolation:** a judge wait on one session and a failed transition on another do not delay any subject's boundary or any other session's settlement.
+- Transient aggregate failure with a healthy stream is retried and succeeds; a refusal with a reason is not retried.
+- Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action; activation during scheduler downtime yields one fresh epoch on rebuild, not backdated.
 - An operator turning over an epoch early through the admin API settles it and opens the next exactly as the boundary would, and the scheduler's timer moves to the new instant.
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
-- Killing `system-scheduler` mid-settlement and restarting it resumes settlement; no step runs twice.
-- Firing any transition twice yields one state change and one no-op with a reason.
 - Deactivating a subject closes and settles its open epoch and opens no new one.
-- Dropping one event from the stream (a sequence gap) causes a full read and rebuild before any further fire.
-- Between instants, with a live stream and no events, `system-scheduler` makes no API call at all.
+- **Handoff:** a turnover committed by an operator between the scheduler's full read and its subscription is delivered on the stream above the cursor, not lost.
+- **Final-event loss and silent stall:** stall the connection without closing it — the keepalive detects it, the scheduler rebuilds, and no stale timer fires. Drop the last event before a quiet period — the next full read reflects it.
+- Dropping one event from the stream (a sequence gap) causes a full read and rebuild before any further fire. An API resync notice does the same.
+- Between instants, with a live stream and no events, `system-scheduler` makes no API call; transport keepalive frames are not API calls.
 
 ## 11. Out of scope
 
-The participant protocol (takes, judgements) and how a judgement is signed — `smoke-production-spec.md` §6. How judges reach consensus among themselves. The analytics and research workers, which will follow the same no-database, subscribe-and-ack model in a later document.
+The participant protocol (takes, judgements), how a judgement is signed, and how agents learn of a new window — `smoke-production-spec.md` §6; this document's no-polling rule applies to the scheduler, not to participants. How judges reach consensus among themselves, and the format of what they record. The analytics and research workers, which will follow the same no-database, subscribe-and-ack model in a later document.
+
+## 12. Companion amendments on adoption
+
+Adopting this document supersedes these clauses of `smoke-production-spec.md`, which must be rewritten to point here:
+
+| clause | says today | becomes |
+|---|---|---|
+| §4.4 | stage runs "accelerated `SWARM_*_CRON` values"; `--schedules-off` flag | stage sets short epoch durations on subjects through the admin API; no flag |
+| §6.3 | `worker-swarm` schedules sessions from `job_schedules` rows; `bun run schedules:enable`; preflight-vs-readiness on `next_run_at` | `system-scheduler` and epochs, per this document; no enable command; nothing to disable |
+| §7 check 6 | "the five `swarm.*` schedule rows are enabled and their cron strings parse" | every active subject has an epoch duration and a `collecting` session at readiness |
+| §7.2 | database-holding containers are `api`, `worker`, `worker-swarm` | `api` only, within this document's scope |
+| §8.1 | bootstrap data includes "seed schedules" | bootstrap data includes each subject's epoch duration; there are no schedule rows |
+| §9.1 step 4 | `bun run schedules:enable` | deleted |
+| §9.3 | "`job_schedules` rows are disabled" as a transition fact | replaced by the epoch model's first-boot behaviour (§3) |
+| §3 (addition) | covers database and signing credentials | adds how an API automation token is provisioned to `system-scheduler` |
+| §2 / §1.2 | `bun run schedules:enable` listed among the tools sharing the target-lock protocol | removed from that list |
+
+The companion's participant model — agents polling for a new window — is not changed by this document and is not in tension with judges receiving a pushed request; the two are different actors with different protocols, both defined there.
