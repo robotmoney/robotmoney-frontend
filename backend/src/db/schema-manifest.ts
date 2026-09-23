@@ -72,7 +72,16 @@
 // two migrations unrecoverable except by hand, which is precisely the situation
 // the operator reaches for the tool in. `detectManifestState()` below reports
 // the condition; `resumePlan()` is the migrate tool's half.
+import { createHash } from "node:crypto";
 import type postgresTypes from "postgres";
+import {
+  APPEND_ONLY_MIGRATIONS,
+  APPEND_ONLY_TABLES,
+  APPEND_ONLY_TABLE_MIGRATION,
+  LEDGER_IMMUTABLE_FAMILIES,
+  ledgerTriggerNames,
+  triggerNames,
+} from "./append-only-guard.ts";
 
 export type ManifestDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
@@ -171,9 +180,65 @@ export type ManifestState =
  * and refuses unknown `metadata_version`" and the integrity half of "old code
  * boots after an additive change ... while genuine drift still fails".
  */
-export function readManifest(db: ManifestDb): Promise<SchemaManifest | null> {
-  void db;
-  throw new Error("NOT IMPLEMENTED: read the schema_manifest row — spec §8.3, issue #1026 W2.6");
+export async function readManifest(db: ManifestDb): Promise<SchemaManifest | null> {
+  if (!(await manifestTableExists(db))) return null;
+
+  const rows = (await db`
+    SELECT format_version, declaration, filenames, content_hash
+    FROM schema_manifest`) as unknown as ManifestRow[];
+
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    throw new Error(
+      `${MANIFEST_TABLE} holds ${rows.length} rows; it is a one-row table and no choice between two manifests is defensible`,
+    );
+  }
+  return rowToManifest(rows[0] as ManifestRow);
+}
+
+/** The one row's columns, exactly as the table spells them. */
+interface ManifestRow {
+  readonly format_version: number;
+  readonly declaration: string;
+  readonly filenames: string[];
+  readonly content_hash: string;
+}
+
+function rowToManifest(row: ManifestRow): SchemaManifest {
+  return {
+    formatVersion: Number(row.format_version),
+    declaration: { text: row.declaration },
+    filenames: row.filenames,
+    contentHash: row.content_hash,
+  };
+}
+
+/** `to_regclass` rather than a catalog join: a database that predates the
+ *  manifest has no table at all, and that is `absent`, not an error. */
+async function manifestTableExists(db: ManifestDb): Promise<boolean> {
+  const [row] = (await db`SELECT to_regclass(${`public.${MANIFEST_TABLE}`}) IS NOT NULL AS present`) as unknown as {
+    present: boolean;
+  }[];
+  return row?.present === true;
+}
+
+/** The ledger's recorded filenames, in apply order. */
+async function ledgerFilenames(db: ManifestDb): Promise<string[]> {
+  const rows = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
+  return rows.map((r) => r.name);
+}
+
+/** Effective role, for the §8.3 write restriction. */
+async function effectiveRole(db: ManifestDb): Promise<string> {
+  const [row] = (await db`SELECT current_user AS role`) as unknown as { role: string }[];
+  return row?.role ?? "";
+}
+
+function sameNameSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((name, index) => name === right[index]);
 }
 
 /**
@@ -207,10 +272,47 @@ export function readManifest(db: ManifestDb): Promise<SchemaManifest | null> {
  * Serves spec §10 W2 "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state."
  */
-export function writeManifest(db: ManifestDb, manifest: SchemaManifest): Promise<void> {
-  void db;
-  void manifest;
-  throw new Error("NOT IMPLEMENTED: publish the schema manifest — spec §8.3, issue #1026 W2.6");
+export async function writeManifest(db: ManifestDb, manifest: SchemaManifest): Promise<void> {
+  // Validate everything BEFORE writing anything: a refused write must leave no
+  // row, and the cheapest way to guarantee that is never to have written one.
+  const role = await effectiveRole(db);
+  if (role !== "rm_owner") {
+    throw new Error(
+      `${MANIFEST_TABLE} may only be written by rm_owner (§8.3); the effective role is ${role}. ` +
+        "It is a trusted input to boot decisions.",
+    );
+  }
+
+  if (manifest.formatVersion !== MANIFEST_FORMAT_VERSION) {
+    throw new Error(
+      `${MANIFEST_TABLE} format version ${manifest.formatVersion} is not this code's ${MANIFEST_FORMAT_VERSION}`,
+    );
+  }
+
+  const ledger = await ledgerFilenames(db);
+  if (!sameNameSet(manifest.filenames, ledger)) {
+    throw new Error(
+      `${MANIFEST_TABLE} filename list does not equal the ledger recorded in this transaction ` +
+        `(manifest ${manifest.filenames.length} files, ledger ${ledger.length} files)`,
+    );
+  }
+
+  const expected = hashManifest(manifest.declaration, manifest.filenames);
+  if (manifest.contentHash !== expected) {
+    throw new Error(
+      `${MANIFEST_TABLE} content hash ${manifest.contentHash} does not match the declaration and filename list ` +
+        `(expected ${expected})`,
+    );
+  }
+
+  // One row by construction. DELETE + INSERT rather than an upsert, because the
+  // table is one-row by constraint in some shapes and merely by convention in
+  // others, and both must publish the same single manifest.
+  await db`DELETE FROM schema_manifest`;
+  await db`
+    INSERT INTO schema_manifest (format_version, declaration, filenames, content_hash)
+    VALUES (${manifest.formatVersion}, ${manifest.declaration.text}, ${manifest.filenames as string[]},
+            ${manifest.contentHash})`;
 }
 
 /**
@@ -229,9 +331,16 @@ export function writeManifest(db: ManifestDb, manifest: SchemaManifest): Promise
  * table while genuine drift on the same database still fails."
  */
 export function hashManifest(declaration: SchemaDeclaration, filenames: readonly string[]): string {
-  void declaration;
-  void filenames;
-  throw new Error("NOT IMPLEMENTED: hash the declaration and filename list — spec §8.3, issue #1026 W2.6");
+  // JSON, so the two inputs cannot be confused for one another: a declaration
+  // ending in a filename and a filename list starting with the same text must
+  // not collide, and a length-free concatenation would let them.
+  const payload = JSON.stringify({
+    formatVersion: MANIFEST_FORMAT_VERSION,
+    declaration: declaration.text,
+    // In RECORDED order, never sorted — the order is part of the identity.
+    filenames: [...filenames],
+  });
+  return createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
 /**
@@ -251,9 +360,41 @@ export function hashManifest(declaration: SchemaDeclaration, filenames: readonly
  * Serves spec §10 W2 "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state."
  */
-export function detectManifestState(db: ManifestDb): Promise<ManifestState> {
-  void db;
-  throw new Error("NOT IMPLEMENTED: classify manifest vs ledger — spec §8.3, issue #1026 W2.6");
+export async function detectManifestState(db: ManifestDb): Promise<ManifestState> {
+  const manifest = await readManifest(db);
+  if (manifest === null) return { kind: "absent" };
+
+  // Unknown format first: a declaration this code cannot parse is a declaration
+  // whose other fields it cannot reason about either.
+  if (manifest.formatVersion !== MANIFEST_FORMAT_VERSION) {
+    return { kind: "unknown_format", formatVersion: manifest.formatVersion };
+  }
+
+  const ledger = await ledgerFilenames(db);
+  const recorded = new Set(ledger);
+  const reasons: string[] = [];
+
+  const expected = hashManifest(manifest.declaration, manifest.filenames);
+  if (manifest.contentHash !== expected) {
+    reasons.push(
+      `${MANIFEST_TABLE}: stored content hash ${manifest.contentHash} does not match the stored declaration and ` +
+        `filename list (expected ${expected})`,
+    );
+  }
+
+  for (const name of manifest.filenames) {
+    if (!recorded.has(name)) {
+      reasons.push(`${MANIFEST_TABLE}: embodies ${name}, which the ledger does not record`);
+    }
+  }
+
+  if (reasons.length > 0) return { kind: "inconsistent", reasons };
+
+  const embodied = new Set(manifest.filenames);
+  const ahead = ledger.filter((name) => !embodied.has(name));
+  if (ahead.length > 0) return { kind: "in_progress", manifest, ahead };
+
+  return { kind: "published", manifest };
 }
 
 /** What the migrate tool must do to finish an interrupted run. */

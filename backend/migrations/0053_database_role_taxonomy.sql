@@ -1,5 +1,16 @@
 -- Production database role taxonomy (issue #692).
 --
+-- compat: additive
+-- metadata_version: 1
+--
+-- The reviewed claim (spec §8.4): every query the older registry declares still
+-- succeeds with the same semantics after this file.  It moves OWNERSHIP to
+-- rm_owner and revokes the schema's PUBLIC grants, then re-grants each runtime
+-- role explicitly -- rm_app keeps SELECT/INSERT/UPDATE/DELETE, rm_worker its
+-- allow-list, rm_readonly SELECT -- so no privilege a runtime path needs is
+-- removed, no bootstrap row is reshaped, and no table changes shape.  What it
+-- takes away is DDL and ownership, which no application query uses.
+--
 -- `rm_owner` is deliberately NOLOGIN: it owns schema objects but no persistent
 -- process can authenticate as it.  A human-run deployment connects with the
 -- short-lived MIGRATE_DATABASE_URL and SET ROLE rm_owner for DDL.  Runtime

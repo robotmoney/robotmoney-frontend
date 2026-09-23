@@ -71,7 +71,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { instancePaths, listInstances, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
+import { listInstances, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
 import { readJournal, readReceipt, type DeploymentPlan } from "./lib/smoke-journal.ts";
 
 /** Flags §1 retires "with no alias"; naming one in a refusal is the point. */
@@ -189,9 +189,21 @@ export function resolveObservedInstance(
   requested: string | undefined,
   available: readonly { readonly name: string; readonly paths: InstancePaths }[],
 ): InstancePaths {
-  void requested;
-  void available;
-  throw new Error("NOT IMPLEMENTED: observer instance selection — spec §1.1, issue #1026 W1.8");
+  const names = available.map((entry) => entry.name);
+  if (available.length === 0) {
+    throw new Error("Refusing: no instance has state on this host — nothing has been deployed from here.");
+  }
+  if (requested !== undefined) {
+    const found = available.find((entry) => entry.name === requested);
+    if (found === undefined) {
+      throw new Error(`Refusing: instance \`${requested}\` has no state on this host. Known: ${names.join(", ")}.`);
+    }
+    return found.paths;
+  }
+  if (available.length > 1) {
+    throw new Error(`Refusing: several instances have state here; name one with \`--instance\`. Known: ${names.join(", ")}.`);
+  }
+  return available[0]!.paths;
 }
 
 /**
@@ -239,9 +251,83 @@ export interface ObservedStack {
  *    the journal is still readable and still worth showing, and this is exactly
  *    the moment an operator is trying to find out what happened.
  */
-export function observe(paths: InstancePaths): Promise<ObservedStack> {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: read-only stack observation — spec §1.4, issue #1026 W1.8");
+interface SeenContainer {
+  readonly name: string;
+  readonly state: string;
+  readonly image: string;
+}
+
+/** `docker ps` only: nothing here starts, stops, removes or recreates anything. */
+async function seeContainers(instance: string): Promise<{ containers: SeenContainer[]; note: string | null }> {
+  try {
+    const child = Bun.spawn(
+      [
+        "docker",
+        "ps",
+        "-a",
+        "--filter",
+        `label=com.docker.compose.project=${instance}`,
+        "--format",
+        "{{.Names}}\t{{.State}}\t{{.Image}}",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    if (code !== 0) return { containers: [], note: "docker is unreachable; container state is unknown." };
+    const containers = stdout
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => {
+        const [name = "", state = "", image = ""] = line.split("\t");
+        return { name, state, image };
+      });
+    return { containers, note: null };
+  } catch {
+    return { containers: [], note: "docker is unreachable; container state is unknown." };
+  }
+}
+
+export async function observe(paths: InstancePaths): Promise<ObservedStack> {
+  const instance = basename(paths.dir);
+  // Journal first: a malformed one must propagate its own refusal, not be
+  // masked by whatever the receipt read says.
+  const journal = readJournal(paths);
+  const receipt = readReceipt(paths);
+  const plan: DeploymentPlan | null = receipt?.plan ?? journal?.plan ?? null;
+
+  const source: "receipt" | "journal" = receipt !== null ? "receipt" : "journal";
+  const phase = receipt !== null ? "readiness" : (journal?.phases.at(-1)?.phase ?? "plan");
+
+  const notes: string[] = [];
+  const runInProgress = existsSync(paths.lockFile);
+  if (runInProgress) {
+    let holderPid: unknown;
+    try {
+      holderPid = (JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: number }).holderPid;
+    } catch {
+      /* an unreadable lock is still a lock */
+    }
+    notes.push(`lock held by pid ${typeof holderPid === "number" ? holderPid : "unknown"}`);
+  }
+
+  const { containers, note } = await seeContainers(instance);
+  if (note !== null) notes.push(note);
+
+  const match = (member: string): SeenContainer | undefined => containers.find((c) => c.name.includes(member));
+
+  const services = Object.entries(plan?.images ?? {}).map(([name, digest]) => {
+    const container = match(name);
+    const version: "new" | "old" | "unknown" =
+      container === undefined ? "unknown" : container.image.includes(digest) ? "new" : "old";
+    return { name, state: container?.state ?? "absent", version };
+  });
+
+  const participants = [
+    ...(plan?.roster.agents ?? []).map((name) => ({ name, kind: "agent" as const })),
+    ...(plan?.roster.judges ?? []).map((name) => ({ name, kind: "judge" as const })),
+  ].map((member) => ({ ...member, state: match(member.name)?.state ?? "absent" }));
+
+  return { instance, source, phase, runInProgress, services, participants, notes };
 }
 
 /**
@@ -252,10 +338,26 @@ export function observe(paths: InstancePaths): Promise<ObservedStack> {
  * pastes into an incident thread, and §1.2's redaction promise does not stop at
  * the plan.
  */
+/** §1.2's redaction promise does not stop at the plan: the frame is a screenshot. */
+function redact(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+):[^\s@/]*@/gi, "$1:***@");
+}
+
 export function renderFrame(stack: ObservedStack, width: number): string {
-  void stack;
-  void width;
-  throw new Error("NOT IMPLEMENTED: TUI frame rendering — spec §1, issue #1026 W1.8");
+  const lines = [
+    `smoke:tui — instance ${stack.instance}`,
+    stack.source === "receipt"
+      ? "source: receipt — this deployment FINISHED; nothing below is happening now"
+      : "source: journal — this deployment is IN PROGRESS or was interrupted",
+    `phase: ${stack.phase}    run in progress: ${stack.runInProgress ? "yes" : "no"}`,
+    "services:",
+    ...stack.services.map((s) => `  ${s.name}  ${s.state}  ${s.version}`),
+    "participants:",
+    ...stack.participants.map((p) => `  ${p.name}  ${p.kind}  ${p.state}`),
+    "notes:",
+    ...stack.notes.map((n) => `  ${redact(n)}`),
+  ];
+  return lines.map((line) => line.slice(0, Math.max(0, width))).join("\n");
 }
 
 /**
@@ -272,7 +374,41 @@ export function renderFrame(stack: ObservedStack, width: number): string {
  * the command an operator reaches for when something is wrong, and the reflex
  * that ends it is Ctrl-C.
  */
-export function main(argv: readonly string[]): Promise<number> {
-  void argv;
-  throw new Error("NOT IMPLEMENTED: smoke:tui entry point — spec §1, issue #1026 W1.8");
+export async function main(argv: readonly string[]): Promise<number> {
+  let paths: InstancePaths;
+  let options: TuiOptions;
+  try {
+    options = parseTuiArgs(argv);
+    const root = stateRoot(process.env);
+    const available = listInstances(root).map((entry) => ({ name: entry.name, paths: entry.paths }));
+    paths = resolveObservedInstance(options.instance, available);
+  } catch (error) {
+    console.error(String(error instanceof Error ? error.message : error));
+    return 1;
+  }
+
+  const width = process.stdout.columns ?? 100;
+  const draw = async (): Promise<void> => {
+    console.log(renderFrame(await observe(paths), width));
+  };
+
+  try {
+    if (options.once) {
+      await draw();
+      return 0;
+    }
+    // Quitting must leave the stack untouched: there is nothing to undo here,
+    // because nothing above was acquired.
+    for (;;) {
+      await draw();
+      await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
+    }
+  } catch (error) {
+    console.error(String(error instanceof Error ? error.message : error));
+    return 1;
+  }
+}
+
+if (import.meta.main) {
+  process.exit(await main(process.argv.slice(2)));
 }

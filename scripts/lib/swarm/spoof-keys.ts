@@ -1,8 +1,8 @@
 // `--spoof-keys [names]` — fresh keypairs for named in-house members so a
 // production-shaped database can be driven without real keys
-// (smoke-production-spec.md §6.4, issue #1026 W3.5). STEP 1 STUB: every
-// function throws NOT IMPLEMENTED; the types, the four guards, the four-step
-// order and the recovery argument below are the deliverable of this step.
+// (smoke-production-spec.md §6.4, issue #1026 W3.5). The types, the four
+// guards, the four-step order and the recovery argument below are the design;
+// the bodies implement it.
 //
 // ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
 // It exists for TWINS. A twin is a production-shaped database restored from a
@@ -66,6 +66,8 @@
 // an overwrite, because overwriting it on a mistargeted run would destroy the
 // only copy of a host's real participant keys. It never runs on production:
 // four independent guards below each refuse on their own.
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { PersonaIdentity } from "./persona-keys.ts";
 import type { RunningParticipant } from "./credential-file.ts";
 
@@ -176,9 +178,38 @@ export interface SpoofGuardContext {
  * `spoofGenerationPath` below.
  */
 export function assertSpoofKeysAllowed(context: SpoofGuardContext): void {
-  throw new Error(
-    "NOT IMPLEMENTED: run the four --spoof-keys guards — spec §6.4, issue #1026 W3.5",
-  );
+  if (context.rmEnv === "prod") {
+    throw new SpoofKeysRefusal(
+      "rm_env_prod",
+      "--spoof-keys refuses when RM_ENV = prod; spoofing production keys is never a rehearsal flag's business",
+    );
+  }
+  if (context.deploymentIdentity !== "rehearsal") {
+    // The env var is the operator's claim; the row is the target's own
+    // enrollment. Unknown is not rehearsal.
+    throw new SpoofKeysRefusal(
+      "identity_not_rehearsal",
+      `--spoof-keys refuses: the target's deployment_identity is ${context.deploymentIdentity ?? "unenrolled"}, not rehearsal`,
+    );
+  }
+  if (!context.hasOwnerCredential) {
+    throw new SpoofKeysRefusal(
+      "no_owner_credential",
+      "--spoof-keys refuses: no rm_owner credential is in hand, and the rebind is an owner mutation",
+    );
+  }
+  if (!context.flagExplicit) {
+    throw new SpoofKeysRefusal(
+      "flag_not_explicit",
+      "--spoof-keys refuses: the flag was not passed explicitly, and it is never implied, defaulted or inherited",
+    );
+  }
+  if (context.credentialPath !== null && context.credentialPath === context.outputPath) {
+    throw new SpoofKeysRefusal(
+      "credential_path_collision",
+      `--spoof-keys refuses: the generation would be written over the credential file ${context.outputPath}`,
+    );
+  }
 }
 
 /**
@@ -194,9 +225,8 @@ export function assertSpoofKeysAllowed(context: SpoofGuardContext): void {
  * rather than as a side effect of computing a name.
  */
 export function spoofGenerationPath(stateDir: string, instance: string): string {
-  throw new Error(
-    "NOT IMPLEMENTED: resolve the instance-scoped generation path — spec §6.4, issue #1026 W3.5",
-  );
+  const safe = instance.trim().replace(/[^A-Za-z0-9._-]/g, "_") || "instance";
+  return `${stateDir.replace(/\/+$/, "")}/spoof-generation-${safe}.json`;
 }
 
 /**
@@ -225,9 +255,40 @@ export function writeSpoofGeneration(
   outputPath: string,
   instance: string,
 ): SpoofGeneration {
-  throw new Error(
-    "NOT IMPLEMENTED: generate keypairs and persist the generation file — spec §6.4, issue #1026 W3.5",
-  );
+  const spoofed: Record<string, SpoofedMember> = {};
+  for (const member of members) {
+    // Each member gets its OWN keypair: sharing one would let any container
+    // holding it sign as any other spoofed member.
+    spoofed[member.name] = { name: member.name, memberId: member.memberId, identity: freshIdentity() };
+  }
+  const createdAt = new Date().toISOString();
+  const generationId = `gen-${createHash("sha256")
+    .update(JSON.stringify({ instance, createdAt, members: spoofed }))
+    .digest("hex")
+    .slice(0, 16)}`;
+  const generation: SpoofGeneration = { generationId, createdAt, instance, members: spoofed };
+  // Write-then-rename, and BEFORE the rebind: a generation written after a
+  // crashed rebind would leave the database holding keys no file records.
+  const temp = `${outputPath}.tmp-${randomBytes(6).toString("hex")}`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(generation, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, outputPath);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    throw err;
+  }
+  return generation;
+}
+
+/** One fresh Ed25519 identity, in the same shape the credential file carries. */
+function freshIdentity(): PersonaIdentity {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicJwk = publicKey.export({ format: "jwk" }) as { x?: string };
+  const privateJwk = privateKey.export({ format: "jwk" }) as Record<string, unknown>;
+  return {
+    publicKeyB64: Buffer.from(publicJwk.x ?? "", "base64url").toString("base64"),
+    privateJwk,
+  };
 }
 
 /**
@@ -244,9 +305,30 @@ export function writeSpoofGeneration(
  * Gate (spec §10 W3): "interrupted rebind then rerun".
  */
 export function readSpoofGeneration(generationPath: string): SpoofGeneration | null {
-  throw new Error(
-    "NOT IMPLEMENTED: read the persisted generation for retry — spec §6.4, issue #1026 W3.5",
-  );
+  if (!existsSync(generationPath)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(generationPath, "utf8"));
+  } catch (err) {
+    // A corrupt generation reported as absent would mint a SECOND generation
+    // while the database may already hold the first.
+    throw new Error(
+      `${generationPath} is not readable JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const gen = parsed as Partial<SpoofGeneration> | null;
+  if (!gen || typeof gen !== "object" || typeof gen.generationId !== "string" || gen.generationId === "") {
+    throw new Error(`${generationPath} carries no generationId; it is not a spoof generation`);
+  }
+  if (!gen.members || typeof gen.members !== "object") {
+    throw new Error(`${generationPath} carries no members; it is not a spoof generation`);
+  }
+  return {
+    generationId: gen.generationId,
+    createdAt: typeof gen.createdAt === "string" ? gen.createdAt : "",
+    instance: typeof gen.instance === "string" ? gen.instance : "",
+    members: gen.members as Record<string, SpoofedMember>,
+  };
 }
 
 /** What the caller supplies so this module performs no database access itself. */
@@ -288,9 +370,15 @@ export async function rebindSpoofedKeys(
   generation: SpoofGeneration,
   deps: SpoofRebindDeps,
 ): Promise<void> {
-  throw new Error(
-    "NOT IMPLEMENTED: rebind member keys in one fenced transaction — spec §6.4/§2, issue #1026 W3.5",
-  );
+  const installed = await deps.readInstalledGeneration();
+  // A rerun after a crash between (2) and (4): the database is already there,
+  // so this step is a no-op and the caller proceeds to (3) and (4).
+  if (installed === generation.generationId) return;
+  await deps.withFencedTransaction(async () => {
+    for (const member of Object.values(generation.members)) {
+      await deps.rebindMemberKey(member.memberId, member.identity.publicKeyB64, generation.generationId);
+    }
+  });
 }
 
 /** The container lifecycle the caller owns; this module only decides. */
@@ -324,9 +412,30 @@ export async function replaceSpoofedParticipants(
   running: readonly RunningParticipant[],
   deps: SpoofContainerDeps,
 ): Promise<void> {
-  throw new Error(
-    "NOT IMPLEMENTED: stop old-generation participants and start the new ones — spec §6.4, issue #1026 W3.5",
-  );
+  const plan = spoofReplacementPlan(generation, running);
+  // Stop-then-start, never a rolling restart: two containers for one member
+  // would both poll for the same session.
+  for (const participant of plan.stop) await deps.stopParticipant(participant);
+  for (const member of plan.start) await deps.startParticipant(member, generation.generationId);
+}
+
+/**
+ * Which containers step (3) stops and which step (4) starts. Separated so
+ * `spoofKeys` can report the restarted members without replaying the rule.
+ */
+function spoofReplacementPlan(
+  generation: SpoofGeneration,
+  running: readonly RunningParticipant[],
+): { stop: RunningParticipant[]; start: SpoofedMember[] } {
+  const stop: RunningParticipant[] = [];
+  const start: SpoofedMember[] = [];
+  for (const member of Object.values(generation.members)) {
+    const live = running.find((p) => p.name === member.name);
+    if (live && live.generation === generation.generationId) continue; // already current
+    if (live) stop.push(live);
+    start.push(member);
+  }
+  return { stop, start };
 }
 
 /** Everything one `--spoof-keys` invocation needs. */
@@ -366,7 +475,59 @@ export interface SpoofKeysOutcome {
  * container replacement recovers."
  */
 export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOutcome> {
-  throw new Error(
-    "NOT IMPLEMENTED: run the four-step spoof-keys sequence — spec §6.4, issue #1026 W3.5",
-  );
+  assertSpoofKeysAllowed(options.guards);
+  const generationPath = options.guards.outputPath;
+  const targets = selectSpoofTargets(options.names, options.members);
+
+  // (1) A persisted generation is REUSED, never replaced: minting a second one
+  // while the database may already hold the first strands the members.
+  const persisted = readSpoofGeneration(generationPath);
+  const generation = persisted
+    ?? writeSpoofGeneration(
+      targets.map((m) => ({ name: m.name, memberId: m.memberId })),
+      generationPath,
+      options.instance,
+    );
+
+  // (2) One fenced transaction, keyed by member id — skipped when the database
+  // already reports this generation.
+  const installed = await options.db.readInstalledGeneration();
+  const resumed = installed === generation.generationId;
+  if (!resumed) await rebindSpoofedKeys(generation, options.db);
+
+  // (3) and (4).
+  const plan = spoofReplacementPlan(generation, options.running);
+  await replaceSpoofedParticipants(generation, options.running, options.containers);
+
+  return {
+    generationId: generation.generationId,
+    generationPath,
+    rebound: resumed ? [] : Object.keys(generation.members),
+    restarted: plan.start.map((m) => m.name),
+    resumed,
+  };
+}
+
+/**
+ * The members this run spoofs: the explicit names, or every in-house member.
+ *
+ * A third party's member is NEVER spoofed, named or not — their key is theirs,
+ * and rebinding it would let this host sign as them.
+ */
+function selectSpoofTargets(
+  names: readonly string[],
+  members: readonly { name: string; memberId: string; operator: string }[],
+): { name: string; memberId: string; operator: string }[] {
+  const inHouse = (m: { operator: string }) => m.operator === "robotmoney";
+  if (names.length === 0) return members.filter(inHouse);
+  return names.map((name) => {
+    const member = members.find((m) => m.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (!member) throw new Error(`--spoof-keys names "${name}", which is not a member of this target`);
+    if (!inHouse(member)) {
+      throw new Error(
+        `--spoof-keys refuses "${name}": it belongs to operator ${member.operator}, and a third party's key is theirs`,
+      );
+    }
+    return member;
+  });
 }

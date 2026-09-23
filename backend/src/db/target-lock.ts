@@ -103,14 +103,8 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import type { DbHandle } from "./client.ts";
 
-/**
- * The advisory-lock key as `pg_locks` reports it: the 64-bit key is split into
- * `classid` (high 32 bits) and `objid` (low 32), so every catalog question in
- * this module reassembles it the same way. Written once, because two spellings
- * of this expression is two namespaces again.
- */
-const KEY_FROM_CATALOG = "((classid::bigint << 32) | objid::bigint)";
-
+// Every catalog question below reassembles the key the way `pg_locks` splits
+// it: `classid` is the high 32 bits, `objid` the low 32.
 /**
  * How a session-lock holder publishes itself.
  *
@@ -273,6 +267,45 @@ export interface TargetLock {
   release(): Promise<void>;
 }
 
+/**
+ * Wrap an acquired session lock and its dedicated connection.
+ *
+ * `stillHeld` always asks the server and never reads a local flag — including
+ * after {@link TargetLock.release}, where the round trip fails because the
+ * connection is gone. A question that cannot be answered is answered `false`:
+ * §2 gives "not held", "connection dead" and "cannot tell" the same verdict.
+ */
+function makeLock(key: TargetLockKey, holder: LockHolder, client: postgresTypes.Sql<{}>): TargetLock {
+  let released = false;
+  return {
+    key,
+    holder,
+    connection: client,
+    async stillHeld(): Promise<boolean> {
+      try {
+        const rows = await client<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM pg_locks
+           WHERE locktype = 'advisory' AND granted
+             AND pid = pg_backend_pid()
+             AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
+        return Number(rows[0]?.count ?? "0") > 0;
+      } catch {
+        return false;
+      }
+    },
+    async release(): Promise<void> {
+      if (released) return;
+      released = true;
+      try {
+        await client`SELECT pg_advisory_unlock(${key.toString()}::bigint)`;
+      } catch {
+        // The connection is already gone, which released the lock for us.
+      }
+      await client.end({ timeout: 5 });
+    },
+  };
+}
+
 /** What happened when a tool tried to take the lock. */
 export type AcquireResult =
   | { readonly acquired: true; readonly lock: TargetLock }
@@ -383,7 +416,7 @@ export async function acquireTargetLock(options: {
  * Refusal cases are exactly those three mismatches plus an unreadable input —
  * a manifest or identity that cannot be read is a mismatch, not a pass.
  */
-export function revalidateAfterAcquire(
+export async function revalidateAfterAcquire(
   lock: TargetLock,
   expected: {
     readonly identity: "production" | "rehearsal";
@@ -391,9 +424,52 @@ export function revalidateAfterAcquire(
     readonly manifestHash: string | null;
   },
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
-  void lock;
-  void expected;
-  throw new Error("NOT IMPLEMENTED: post-acquisition revalidation — spec §2, issue #1026 W1.7");
+  const conn = lock.connection;
+  const reasons: string[] = [];
+
+  // deployment_identity (§4.2). No row is "rehearsal": production identity is
+  // something a target is explicitly enrolled into, so an unenrolled database
+  // can never revalidate as production. A table that cannot be READ is a
+  // different thing entirely and refuses.
+  try {
+    const rows = await conn<{ kind: string }[]>`SELECT kind FROM deployment_identity LIMIT 1`;
+    const actual = rows[0]?.kind ?? "rehearsal";
+    if (actual !== expected.identity) {
+      reasons.push(`deployment_identity is ${actual}, but the plan was built against ${expected.identity}`);
+    }
+  } catch (err) {
+    reasons.push(`deployment_identity could not be re-read (${(err as Error).message}) — an unreadable identity is a mismatch`);
+  }
+
+  // The migration ledger. A null expectation is "the plan made no claim here",
+  // which is the only reading that lets a caller revalidate one input.
+  if (expected.ledgerHead !== null) {
+    try {
+      const rows = await conn<{ filename: string }[]>`
+        SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1`;
+      const actual = rows[0]?.filename ?? null;
+      if (actual !== expected.ledgerHead) {
+        reasons.push(`the migration ledger head is ${actual ?? "empty"}, but the plan was built against ${expected.ledgerHead}`);
+      }
+    } catch (err) {
+      reasons.push(`the migration ledger could not be re-read (${(err as Error).message}) — an unreadable ledger is a mismatch`);
+    }
+  }
+
+  // The schema manifest (§8.3).
+  if (expected.manifestHash !== null) {
+    try {
+      const rows = await conn<{ content_hash: string }[]>`SELECT content_hash FROM schema_manifest LIMIT 1`;
+      const actual = rows[0]?.content_hash ?? null;
+      if (actual !== expected.manifestHash) {
+        reasons.push(`the schema manifest hash is ${actual ?? "absent"}, but the plan was built against ${expected.manifestHash}`);
+      }
+    } catch (err) {
+      reasons.push(`the schema manifest could not be re-read (${(err as Error).message}) — an unreadable manifest is a mismatch`);
+    }
+  }
+
+  return reasons.length === 0 ? { ok: true } : { ok: false, reason: reasons.join("; ") };
 }
 
 /**
@@ -429,13 +505,37 @@ export function revalidateAfterAcquire(
  * Serves spec §10 W1: "Kill the lock connection mid-migration, start a second
  * mutation tool: no overlap."
  */
-export function withMutationFence<T>(
+export async function withMutationFence<T>(
   options: { readonly databaseUrl: string; readonly key: TargetLockKey; readonly label: string },
   body: (tx: DbHandle) => Promise<T>,
 ): Promise<T> {
-  void options;
-  void body;
-  throw new Error("NOT IMPLEMENTED: pg_advisory_xact_lock mutation fence — spec §2, issue #1026 W1.7");
+  const client = dedicatedClient(options.databaseUrl, `rm-tl-fence:${options.label}`.slice(0, APP_NAME_MAX));
+  try {
+    const result = await client.begin(async (tx) => {
+      // FIRST statement in the transaction, and the blocking form: a competitor
+      // waits for the in-flight mutation to end rather than concluding it ended.
+      await tx`SELECT pg_advisory_xact_lock(${options.key.toString()}::bigint)`;
+      const value = await body(tx);
+      // The fence is released by commit and by nothing else, so if it is gone
+      // here the body ended this transaction itself and whatever it did after
+      // that ran unfenced.
+      const rows = await tx<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM pg_locks
+         WHERE locktype = 'advisory' AND granted
+           AND pid = pg_backend_pid()
+           AND ((classid::bigint << 32) | objid::bigint) = ${options.key.toString()}::bigint`;
+      if (Number(rows[0]?.count ?? "0") === 0) {
+        throw new Error(
+          `the mutation fence for ${options.label} was lost before commit: the body committed or rolled back its own ` +
+            "transaction, and work that escapes this transaction is unfenced work.",
+        );
+      }
+      return value;
+    });
+    return result as T;
+  } finally {
+    await client.end({ timeout: 5 });
+  }
 }
 
 /**
@@ -463,10 +563,13 @@ export function withMutationFence<T>(
  * Serves spec §10 W1: "Standalone `bun run migrate` and `bun smoke` contend on
  * the target lock, including connection loss mid-phase."
  */
-export function assertStillHeld(lock: TargetLock, phase: string): Promise<void> {
-  void lock;
-  void phase;
-  throw new Error("NOT IMPLEMENTED: phase-boundary lock proof — spec §2, issue #1026 W1.7");
+export async function assertStillHeld(lock: TargetLock, phase: string): Promise<void> {
+  if (await lock.stillHeld()) return;
+  throw new Error(
+    `target lock ${lock.key} cannot be proven held, so the phase "${phase}" does not start. ` +
+      `It was taken by ${lock.holder.tool} on ${lock.holder.host} pid ${lock.holder.pid} at ${lock.holder.acquiredAt}. ` +
+      "The lock is not re-acquired: another tool may have run in the gap.",
+  );
 }
 
 /**
@@ -480,8 +583,18 @@ export function assertStillHeld(lock: TargetLock, phase: string): Promise<void> 
  * the lock IS held, and printing "not held" there would send an operator to
  * force something.
  */
-export function describeHolder(lock: DbHandle, key: TargetLockKey): Promise<LockHolder | null> {
-  void lock;
-  void key;
-  throw new Error("NOT IMPLEMENTED: identify the target-lock holder — spec §2, issue #1026 W1.7");
+export async function describeHolder(lock: DbHandle, key: TargetLockKey): Promise<LockHolder | null> {
+  // A session lock and a fence can both be granted on one key; the session
+  // holder is the one a contention refusal is about, so it sorts first.
+  const rows = await lock<{ application_name: string | null; backend_start: Date | null }[]>`
+    SELECT a.application_name, a.backend_start
+      FROM pg_locks l
+      JOIN pg_stat_activity a ON a.pid = l.pid
+     WHERE l.locktype = 'advisory' AND l.granted
+       AND ((l.classid::bigint << 32) | l.objid::bigint) = ${key.toString()}::bigint
+     ORDER BY (a.application_name LIKE ${`${HOLDER_PREFIX}%`}) DESC
+     LIMIT 1`;
+  const row = rows[0];
+  if (row === undefined) return null;
+  return decodeHolder(row.application_name, row.backend_start);
 }

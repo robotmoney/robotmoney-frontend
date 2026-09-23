@@ -238,10 +238,43 @@ function singleDeclaration(filename: string, block: readonly string[], key: stri
  * Serves spec §10 W2 "Old release reads compat metadata written by a newer one
  * and refuses unknown `metadata_version`."
  */
-export function readLedgerCompat(db: CompatDb, filenames: readonly string[]): Promise<readonly LedgerCompatRow[]> {
-  void db;
-  void filenames;
-  throw new Error("NOT IMPLEMENTED: read the ledger's compat columns — spec §8.2, issue #1026 W2.6");
+export async function readLedgerCompat(
+  db: CompatDb,
+  filenames: readonly string[],
+): Promise<readonly LedgerCompatRow[]> {
+  // Nothing requested reads nothing — and asks the database nothing, so a
+  // caller with no surplus never depends on §8.2's migration having landed.
+  if (filenames.length === 0) return [];
+
+  const present = new Set(
+    (
+      await db<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+          AND column_name = ANY(${[...COMPAT_COLUMNS]})`
+    ).map((row) => row.column_name),
+  );
+  const missing = COMPAT_COLUMNS.filter((column) => !present.has(column));
+  if (missing.length > 0) {
+    throw new Error(
+      `schema_migrations has no ${missing.join("/")} column: this database predates spec §8.2's ledger columns. ` +
+        "That is not the same as every row carrying NULL, and it is not a compatible database.",
+    );
+  }
+
+  const rows = await db<{ name: string; compat: string | null; metadata_version: number | null }[]>`
+    SELECT name, compat, metadata_version FROM schema_migrations WHERE name = ANY(${[...filenames]})`;
+  const byName = new Map(rows.map((row) => [row.name, row]));
+
+  return filenames.map((filename) => {
+    const row = byName.get(filename);
+    if (!row) throw new Error(`${filename} is not recorded in schema_migrations — it cannot carry compat metadata.`);
+    return {
+      filename,
+      compat: (row.compat as MigrationCompat | null) ?? null,
+      metadataVersion: row.metadata_version ?? null,
+    };
+  });
 }
 
 /** The verdict of the §8.4 rule. */
@@ -279,15 +312,48 @@ export type CompatibilityVerdict =
  * reads compat metadata written by a newer one and refuses unknown
  * `metadata_version`."
  */
-export function checkCompatibility(
+export async function checkCompatibility(
   db: CompatDb,
   codeFilenames: readonly string[],
   ledgerFilenames: readonly string[],
 ): Promise<CompatibilityVerdict> {
-  void db;
-  void codeFilenames;
-  void ledgerFilenames;
-  throw new Error("NOT IMPLEMENTED: apply the §8.4 compatibility rule — spec §8.4, issue #1026 W2.7");
+  const ledger = new Set(ledgerFilenames);
+  // The code is AHEAD of the database: a pending-migration situation, not a
+  // compatibility one, and answering it here would answer the wrong question.
+  const ahead = codeFilenames.filter((filename) => !ledger.has(filename));
+  if (ahead.length > 0) {
+    throw new Error(
+      `the booting code ships migrations the ledger does not record (${ahead.join(", ")}): the database is BEHIND ` +
+        "the code, which is a pending migration, not a compatibility question.",
+    );
+  }
+
+  const code = new Set(codeFilenames);
+  const surplus = ledgerFilenames.filter((filename) => !code.has(filename));
+  const rows = await readLedgerCompat(db, surplus);
+
+  const reasons: string[] = [];
+  for (const row of rows) {
+    if (row.compat === null) {
+      reasons.push(
+        `${row.filename}: compat is NULL — recorded by a runner that predates §8.2's columns, or by something that ` +
+          "was not the runner at all. Unknown is not 'probably fine'.",
+      );
+      continue;
+    }
+    if (row.compat === "breaking") {
+      reasons.push(`${row.filename}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`);
+      continue;
+    }
+    if (row.metadataVersion === null || row.metadataVersion > COMPAT_METADATA_VERSION) {
+      reasons.push(
+        `${row.filename}: metadata_version ${row.metadataVersion ?? "NULL"} is not one this release understands ` +
+          `(it knows ${COMPAT_METADATA_VERSION}), so it cannot know what 'additive' promised.`,
+      );
+    }
+  }
+
+  return reasons.length > 0 ? { kind: "refused", reasons } : { kind: "compatible", surplus };
 }
 
 /**
@@ -312,8 +378,32 @@ export function checkCompatibility(
  * Serves spec §10 W2 "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state."
  */
-export function recordMigrationCompat(db: CompatDb, header: MigrationHeader): Promise<void> {
-  void db;
-  void header;
-  throw new Error("NOT IMPLEMENTED: record compat metadata with the migration — spec §8.2, issue #1026 W2.6");
+export async function recordMigrationCompat(db: CompatDb, header: MigrationHeader): Promise<void> {
+  const [effective] = await db<{ role: string }[]>`SELECT current_user AS role`;
+  if (effective?.role !== "rm_owner") {
+    throw new Error(
+      `compat metadata may only be written as rm_owner, not as '${effective?.role ?? "unknown"}' — it is a trusted ` +
+        "input to boot decisions (spec §8.3).",
+    );
+  }
+
+  const [existing] = await db<{ compat: string | null }[]>`
+    SELECT compat FROM schema_migrations WHERE name = ${header.filename}`;
+  if (!existing) {
+    throw new Error(
+      `${header.filename} has no schema_migrations row: the declaration is recorded with the migration, in the ` +
+        "migration's own transaction, never separately.",
+    );
+  }
+  if (existing.compat !== null) {
+    throw new Error(
+      `${header.filename} already declares compat = '${existing.compat}': schema_migrations is append-only and a ` +
+        "declaration that could be revised after the fact is not evidence of anything.",
+    );
+  }
+
+  await db`
+    UPDATE schema_migrations
+    SET compat = ${header.compat}, metadata_version = ${header.metadataVersion}
+    WHERE name = ${header.filename}`;
 }

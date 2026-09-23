@@ -84,7 +84,73 @@
 // plan id succeeds; changed roster/image/target does not reuse completed
 // phases", "Receipt read by `smoke:status`".
 
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
+
 import type { InstancePaths } from "./smoke-state.ts";
+
+/** On-disk format version of the journal; an unknown one refuses. */
+const JOURNAL_FORMAT_VERSION = 1;
+/** On-disk format version of the receipt; an unknown one refuses. */
+const RECEIPT_FORMAT_VERSION = 1;
+/** An image identity: a digest, never a tag. */
+const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+/** Canonical serialization: object keys sorted, arrays in their given order. */
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([key, inner]) => `${JSON.stringify(key)}:${canonicalize(inner)}`).join(",")}}`;
+}
+
+/** The §1.2 redaction check, enforced at the one choke point every plan passes. */
+function assertRedacted(value: unknown, path: string): void {
+  if (typeof value === "string") {
+    if (/postgres(ql)?:\/\//i.test(value) || /PRIVATE KEY/.test(value)) {
+      throw new Error(`Refusing: plan field ${path} carries a credential; §1.2 requires a redacted plan.`);
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((inner, index) => assertRedacted(inner, `${path}[${index}]`));
+    return;
+  }
+  for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+    assertRedacted(inner, `${path}.${key}`);
+  }
+}
+
+/** Write and fsync: a record still in a page cache is a record that did not exist. */
+function writeDurably(file: string, text: string): void {
+  writeFileSync(file, text);
+  const fd = openSync(file, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Read a versioned JSON state file, refusing on malformed or unknown-version content. */
+function readVersioned<T>(file: string, version: number, kind: string): T | null {
+  if (!existsSync(file)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+  }
+  const record = parsed as { formatVersion?: unknown; payload?: unknown };
+  if (record.formatVersion !== version) {
+    throw new Error(`Refusing: the ${kind} at ${file} has an unknown format version: ${String(record.formatVersion)}.`);
+  }
+  return record.payload as T;
+}
 
 /**
  * The phases of spec §1.3, in order:
@@ -179,8 +245,13 @@ export type PlanId = string & { readonly __brand: "PlanId" };
  * phases."
  */
 export function computePlanId(plan: DeploymentPlan): PlanId {
-  void plan;
-  throw new Error("NOT IMPLEMENTED: plan content hash — spec §1.2, issue #1026 W1.6");
+  assertRedacted(plan, "plan");
+  for (const [service, image] of Object.entries(plan.images)) {
+    if (!DIGEST_PATTERN.test(image)) {
+      throw new Error(`Refusing: image for ${service} is a tag, not a digest: ${image}`);
+    }
+  }
+  return createHash("sha256").update(canonicalize(plan)).digest("hex") as PlanId;
 }
 
 /**
@@ -193,9 +264,23 @@ export function computePlanId(plan: DeploymentPlan): PlanId {
  * the contract, not a formatting preference.
  */
 export function renderPlan(plan: DeploymentPlan, id: PlanId): string {
-  void plan;
-  void id;
-  throw new Error("NOT IMPLEMENTED: redacted plan rendering — spec §1.2, issue #1026 W1.6");
+  assertRedacted(plan, "plan");
+  const lines = [
+    `instance: ${plan.instance}`,
+    `target: ${plan.target.rmEnv} (${plan.target.identity})`,
+    `database: ${plan.target.database}`,
+    ...Object.keys(plan.images)
+      .sort()
+      .map((service) => `image: ${service} ${plan.images[service]}`),
+    `agents: ${plan.roster.agents.join(", ")}`,
+    `judges: ${plan.roster.judges.join(", ")}`,
+    ...Object.keys(plan.configuration)
+      .sort()
+      .map((key) => `config: ${key}=${plan.configuration[key]}`),
+    `mutations: ${plan.mutations.length === 0 ? "none" : plan.mutations.join(", ")}`,
+    `plan id: ${id}`,
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 /**
@@ -292,8 +377,7 @@ export interface Journal {
  * redone from the top.
  */
 export function readJournal(paths: InstancePaths): Journal | null {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: read the phase journal — spec §1.3, issue #1026 W1.6");
+  return readVersioned<Journal>(paths.journalFile, JOURNAL_FORMAT_VERSION, "journal");
 }
 
 /** What a rerun should do with an existing journal. */
@@ -346,15 +430,112 @@ export type ResumeDecision =
  * Serves spec §10 W1: "Resume after committed preparation under the same plan
  * id succeeds; changed roster/image/target does not reuse completed phases."
  */
+/**
+ * The journal's own expectations ADVANCED BY its own recorded outcomes — the
+ * world as this journal believes it left it. Rule 1's second sentence lives
+ * here: work the journal itself committed is part of the expectation, not a
+ * difference to refuse over.
+ */
+function projectExpectations(journal: Journal): StateExpectations {
+  const first = journal.phases[0]?.expectations ?? null;
+  let schemaHead = first?.schemaHead ?? null;
+  let manifestHash = first?.manifestHash ?? null;
+  let spoofGeneration = first?.spoofGeneration ?? null;
+  const participants = new Set<string>(first?.participants ?? []);
+  const services: Record<string, string> = { ...(first?.services ?? {}) };
+  for (const record of journal.phases) {
+    const done = record.outcome;
+    if (done === null) continue;
+    const lastMigration = done.migrationsApplied.at(-1);
+    if (lastMigration !== undefined) schemaHead = lastMigration;
+    if (done.manifestPublished !== null) manifestHash = done.manifestPublished;
+    if (done.spoofGenerationWritten !== null) spoofGeneration = done.spoofGenerationWritten;
+    for (const name of done.participantsStarted) participants.add(name);
+    for (const name of done.participantsStopped) participants.delete(name);
+    for (const [service, digest] of Object.entries(done.servicesReplaced)) services[service] = digest;
+  }
+  return {
+    schemaHead,
+    manifestHash,
+    identity: first?.identity ?? "rehearsal",
+    participants: [...participants],
+    services,
+    spoofGeneration,
+  };
+}
+
+/** The phase a rerun continues at: the open phase, or the one after the last committed. */
+function nextPhaseAfter(journal: Journal): DeploymentPhase {
+  const last = journal.phases.at(-1);
+  if (last === undefined) return DEPLOYMENT_PHASES[0] as DeploymentPhase;
+  if (last.status !== "committed") return last.phase;
+  const index = DEPLOYMENT_PHASES.indexOf(last.phase);
+  return DEPLOYMENT_PHASES[Math.min(index + 1, DEPLOYMENT_PHASES.length - 1)] as DeploymentPhase;
+}
+
 export function decideResume(
   journal: Journal | null,
   planId: PlanId,
   observed: StateExpectations,
 ): ResumeDecision {
-  void journal;
-  void planId;
-  void observed;
-  throw new Error("NOT IMPLEMENTED: journal resume rules — spec §1.3, issue #1026 W1.6");
+  if (journal === null) return { kind: "fresh-start", reason: "no journal for this instance" };
+  if (journal.closedAt !== null) {
+    return { kind: "fresh-start", reason: `the journal was closed at ${journal.closedAt}` };
+  }
+
+  if (journal.planId !== planId) {
+    const migrations = journal.phases.flatMap((record) => record.outcome?.migrationsApplied ?? []);
+    const report = [
+      `The previous plan ${journal.planId} is superseded by ${planId}; its completed phases are not reused.`,
+      `It reached phase ${nextPhaseAfter(journal)} before stopping.`,
+      migrations.length === 0 ? "It applied no migrations." : `It applied migrations: ${migrations.join(", ")}.`,
+    ].join("\n");
+    return { kind: "supersede", previous: journal, report };
+  }
+
+  const expected = projectExpectations(journal);
+  if (observed.identity !== expected.identity) {
+    return {
+      kind: "refuse",
+      reason: `the deployment identity is now ${observed.identity}, not ${expected.identity}: the target was re-enrolled underneath this journal.`,
+    };
+  }
+  if (observed.schemaHead !== expected.schemaHead) {
+    return {
+      kind: "refuse",
+      reason: `the schema head is ${String(observed.schemaHead)}, not ${String(expected.schemaHead)}, and no journaled outcome accounts for the move.`,
+    };
+  }
+  if (observed.manifestHash !== expected.manifestHash) {
+    return {
+      kind: "refuse",
+      reason: `the schema manifest hash is ${String(observed.manifestHash)}, not ${String(expected.manifestHash)}, and no journaled outcome accounts for the move.`,
+    };
+  }
+  if (observed.spoofGeneration !== expected.spoofGeneration) {
+    return {
+      kind: "refuse",
+      reason: `the spoofed-key generation in force is ${String(observed.spoofGeneration)}, which no journaled outcome wrote.`,
+    };
+  }
+  const expectedParticipants = [...expected.participants].sort().join(",");
+  const observedParticipants = [...observed.participants].sort().join(",");
+  if (observedParticipants !== expectedParticipants) {
+    return {
+      kind: "refuse",
+      reason: `the running participants are [${observedParticipants}], not [${expectedParticipants}], and no journaled outcome accounts for the change.`,
+    };
+  }
+  for (const [service, digest] of Object.entries(observed.services)) {
+    if (expected.services[service] === digest) continue;
+    if (journal.plan.images[service] === digest) continue;
+    return {
+      kind: "refuse",
+      reason: `service ${service} is on digest ${digest}, which neither the plan nor this journal names.`,
+    };
+  }
+
+  return { kind: "resume", journal, nextPhase: nextPhaseAfter(journal) };
 }
 
 /**
@@ -397,10 +578,77 @@ export interface JournalWriter {
  *    a warning.
  */
 export function openJournal(paths: InstancePaths, decision: ResumeDecision, plan: DeploymentPlan): JournalWriter {
-  void paths;
-  void decision;
-  void plan;
-  throw new Error("NOT IMPLEMENTED: open the phase journal for writing — spec §1.3, issue #1026 W1.6");
+  if (decision.kind === "refuse") {
+    throw new Error(`Refusing to open a journal: ${decision.reason}`);
+  }
+  if (!existsSync(paths.dir)) {
+    throw new Error(
+      `Refusing: the state directory ${paths.dir} does not exist, so this run cannot be written to a journal and must not mutate.`,
+    );
+  }
+  const planId = computePlanId(plan);
+  let journal: Journal =
+    decision.kind === "resume"
+      ? decision.journal
+      : {
+          planId,
+          plan,
+          instance: plan.instance,
+          openedAt: new Date().toISOString(),
+          closedAt: null,
+          phases: [],
+        };
+
+  function persist(): void {
+    writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: journal }, null, 2));
+  }
+
+  function markOpenPhase(update: (record: PhaseRecord) => PhaseRecord): void {
+    const last = journal.phases.at(-1);
+    if (last === undefined) throw new Error("Refusing: there is no open phase to mark.");
+    journal = { ...journal, phases: [...journal.phases.slice(0, -1), update(last)] };
+    persist();
+  }
+
+  persist();
+
+  return {
+    planId,
+    beginPhase(phase, step, expectations) {
+      journal = {
+        ...journal,
+        phases: [
+          ...journal.phases,
+          {
+            phase,
+            step,
+            status: "started",
+            startedAt: new Date().toISOString(),
+            endedAt: null,
+            expectations,
+            outcome: null,
+            reason: null,
+          },
+        ],
+      };
+      persist();
+      return Promise.resolve();
+    },
+    commitPhase(outcome) {
+      markOpenPhase((record) => ({ ...record, status: "committed", endedAt: new Date().toISOString(), outcome }));
+      return Promise.resolve();
+    },
+    endPhase(status, reason) {
+      markOpenPhase((record) => ({ ...record, status, endedAt: new Date().toISOString(), reason }));
+      return Promise.resolve();
+    },
+    close(reason) {
+      journal = { ...journal, closedAt: new Date().toISOString() };
+      void reason;
+      persist();
+      return Promise.resolve();
+    },
+  };
 }
 
 /**
@@ -437,7 +685,21 @@ export interface InterruptWatch {
  * resumes."
  */
 export function watchForInterrupt(): InterruptWatch {
-  throw new Error("NOT IMPLEMENTED: phase-boundary interruption watch — spec §1.4, issue #1026 W1.6");
+  let stopRequested = false;
+  let disposed = false;
+  const handler = (): void => {
+    if (!disposed) stopRequested = true;
+  };
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+  return {
+    requested: () => stopRequested,
+    dispose: () => {
+      disposed = true;
+      process.removeListener("SIGINT", handler);
+      process.removeListener("SIGTERM", handler);
+    },
+  };
 }
 
 /**
@@ -479,10 +741,21 @@ export interface Receipt {
  *
  * Serves spec §10 W1: "Receipt read by `smoke:status`."
  */
-export function writeReceipt(paths: InstancePaths, receipt: Receipt): Promise<void> {
-  void paths;
-  void receipt;
-  throw new Error("NOT IMPLEMENTED: write the readiness receipt — spec §1.4, issue #1026 W1.6");
+export async function writeReceipt(paths: InstancePaths, receipt: Receipt): Promise<void> {
+  const failed = receipt.readiness.filter((check) => !check.pass);
+  if (failed.length > 0) {
+    throw new Error(
+      `Refusing: readiness did not pass (${failed.map((check) => check.check).join(", ")}), so there is no receipt to write.`,
+    );
+  }
+  const journal = readJournal(paths);
+  if (journal !== null && journal.planId !== receipt.planId) {
+    throw new Error(
+      `Refusing: the receipt's plan id ${receipt.planId} does not match the open journal's plan id ${journal.planId}.`,
+    );
+  }
+  writeDurably(paths.receiptFile, JSON.stringify({ formatVersion: RECEIPT_FORMAT_VERSION, payload: receipt }, null, 2));
+  await Promise.resolve();
 }
 
 /**
@@ -496,8 +769,7 @@ export function writeReceipt(paths: InstancePaths, receipt: Receipt): Promise<vo
  * routes the reader to the journal, and an unreadable receipt is not that.
  */
 export function readReceipt(paths: InstancePaths): Receipt | null {
-  void paths;
-  throw new Error("NOT IMPLEMENTED: read the readiness receipt — spec §1.4, issue #1026 W1.6");
+  return readVersioned<Receipt>(paths.receiptFile, RECEIPT_FORMAT_VERSION, "receipt");
 }
 
 /**
