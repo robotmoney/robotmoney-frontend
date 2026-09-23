@@ -1,6 +1,6 @@
 // The PER-TAKE one-shot runner (smoke-production-spec.md §6.2, issue #1026
-// W3.2). STEP 1 STUB: every function throws NOT IMPLEMENTED; the types and the
-// idempotency argument below are the deliverable of this step.
+// W3.2). The types and the idempotency argument below are the design; the
+// bodies implement it.
 //
 // ── A TAKE IS A PROCESS, NOT A CONTAINER ────────────────────────────────────
 // Say it plainly because the predecessor got it wrong. Issue #1014 ran each
@@ -59,7 +59,26 @@
 // §6.2 (one-shot per take, fresh workspace, timeout, process-group cleanup,
 // idempotent submission, one take in flight), §10 W3 ("Participant crash after
 // submit: one take"; "Roster change with overlapping containers: one take").
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { ROUTES } from "@robotmoney/contract";
 import type { ParticipantConfig, PendingWork } from "./main.ts";
+
+/**
+ * The one-shot's argv, injected like everything else this container receives
+ * (spec §6.2: a container inherits nothing). Compose injects the judge's shim
+ * — `bun scripts/agent/participant/judge-runner.ts` — for a judge entry and the
+ * authoring CLI for an agent entry. A participant with none reports a failed
+ * take rather than guessing a binary to run as the member.
+ */
+export const TAKE_COMMAND_ENV = "RM_TAKE_COMMAND";
+
+/** The single stdout tag the one-shot prints its authored draft on. */
+export const TAKE_DRAFT_TAG = "RM_TAKE_DRAFT";
+
+/** Output is a label, not a payload: enough to read, bounded against a flood. */
+const OUTPUT_MAX = 64 * 1024;
 
 /**
  * A take's disposable working directory. `dispose()` is called in a `finally`
@@ -87,9 +106,18 @@ export function createTakeWorkspace(
   sessionId: string,
   memberId: string,
 ): TakeWorkspace {
-  throw new Error(
-    "NOT IMPLEMENTED: create the fresh per-take workspace — spec §6.2, issue #1026 W3.2",
-  );
+  // An unwritable root throws: authoring into an unknown directory is worse
+  // than failing the take, and the error names the root that was configured.
+  mkdirSync(root, { recursive: true });
+  // `mkdtemp` is what makes two attempts at the SAME (session, member) two
+  // directories: a retry never inherits the previous attempt's residue.
+  const path = mkdtempSync(join(root, `take-${sessionId}-${memberId}-`));
+  return {
+    path,
+    dispose(): void {
+      rmSync(path, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -132,9 +160,93 @@ export async function runOneShot(
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<OneShotResult> {
-  throw new Error(
-    "NOT IMPLEMENTED: run the per-take one-shot in its own process group — spec §6.2, issue #1026 W3.2",
-  );
+  const started = Date.now();
+  const [command, ...args] = argv;
+  if (!command) {
+    return { status: "crashed", exitCode: null, stdout: "", stderr: "no command given", durationMs: 0 };
+  }
+  return new Promise<OneShotResult>((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let status: OneShotStatus = "ok";
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const child = spawn(command, args, {
+      cwd: workspace.path,
+      // A child inherits ONLY what is passed: no ambient credential, no
+      // DOCKER_HOST, nothing from the container's own environment.
+      env,
+      // Its OWN process group, so the timeout can kill the group rather than
+      // leaving grandchildren holding the workspace and the model credential.
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    // Both pipes are drained throughout: a child that fills a pipe buffer
+    // while nobody reads it blocks forever.
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length < OUTPUT_MAX) stdout += redact(chunk.toString(), env);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < OUTPUT_MAX) stderr += redact(chunk.toString(), env);
+    });
+
+    const timer = setTimeout(() => {
+      status = "timeout";
+      killGroup(child.pid, "SIGTERM");
+      // A grace period, then the group dies for certain.
+      killTimer = setTimeout(() => killGroup(child.pid, "SIGKILL"), 2_000);
+    }, timeoutMs);
+
+    const finish = (exitCode: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      // The group is killed on every exit path, not only on timeout: a child
+      // that exits while a grandchild lives would leak one per take.
+      killGroup(child.pid, "SIGKILL");
+      resolve({ status, exitCode, stdout, stderr, durationMs: Date.now() - started });
+    };
+
+    child.on("error", (err: Error) => {
+      // A failure is a returned STATUS, never a throw: the caller must always
+      // reach its `finally` and dispose the workspace.
+      stderr += err.message;
+      if (status === "ok") status = "crashed";
+      finish(null);
+    });
+    child.on("close", (code: number | null) => {
+      if (status === "ok" && code !== 0) status = "crashed";
+      finish(code);
+    });
+  });
+}
+
+/** Signal the whole process GROUP, tolerating a group that is already gone. */
+function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Already dead: nothing to clean up.
+    }
+  }
+}
+
+/** Keep an injected credential out of the captured output. */
+function redact(text: string, env: Record<string, string>): string {
+  let out = text;
+  for (const [key, value] of Object.entries(env)) {
+    if (!value || value.length < 8) continue;
+    if (!/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|JWK/i.test(key)) continue;
+    out = out.split(value).join("[redacted]");
+  }
+  return out;
 }
 
 /**
@@ -183,9 +295,84 @@ export async function submitTake(
   work: PendingWork,
   draft: Record<string, unknown>,
 ): Promise<SubmissionResult> {
-  throw new Error(
-    "NOT IMPLEMENTED: sign and submit the take idempotently on (session, member) — spec §6.2, issue #1026 W3.2/W3.3",
-  );
+  // FETCHED, never reconstructed: a locally rebuilt payload that drifts by a
+  // byte produces a valid signature over the wrong message. A transport error
+  // here throws, and the next poll retries under the same idempotent key.
+  const payloadRes = await fetch(`${config.apiUrl}${ROUTES.swarm.signingPayload}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
+    body: JSON.stringify(draft),
+  });
+  const payloadBody = (await readJson(payloadRes)) as { canonical?: unknown } | null;
+  const canonical = typeof payloadBody?.canonical === "string" ? payloadBody.canonical : "";
+  if (!payloadRes.ok || canonical === "") {
+    return {
+      status: "refused",
+      takeId: null,
+      verified: false,
+      reason: `${ROUTES.swarm.signingPayload} returned HTTP ${payloadRes.status} without canonical bytes`,
+    };
+  }
+
+  const signature = await signCanonical(canonical, config);
+  const submitRes = await fetch(`${config.apiUrl}${ROUTES.swarm.submit}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
+    body: JSON.stringify({ ...draft, signature }),
+  });
+  const body = (await readJson(submitRes)) as
+    | { ok?: unknown; alreadySubmitted?: unknown; recommendationId?: unknown; verified?: unknown; error?: unknown }
+    | null;
+  const takeId = typeof body?.recommendationId === "string" ? body.recommendationId : null;
+
+  // The EXISTING record is the authority, not the wire status: a crash after
+  // submit, or an old/new container overlap, lands here and is SUCCESS. There
+  // is no retry-on-conflict branch and no second authoring.
+  if (body?.alreadySubmitted === true) {
+    return { status: "already_submitted", takeId, verified: body.verified === true };
+  }
+  if (submitRes.ok && body?.ok === true) {
+    return { status: "submitted", takeId, verified: body.verified === true };
+  }
+  return {
+    status: "refused",
+    takeId,
+    verified: false,
+    reason: typeof body?.error === "string" ? body.error.slice(0, 400) : `HTTP ${submitRes.status}`,
+  };
+}
+
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sign the canonical bytes with THIS participant's own key.
+ *
+ * A key this container cannot import is never replaced with an invented one:
+ * the submission goes out with an empty signature, the server's verification
+ * refuses it, and the operator reads the refusal. That is the same property
+ * that makes a superseded spoof-keys generation harmless (spec §6.4) — a key
+ * that is not the member's current one simply never verifies.
+ */
+async function signCanonical(canonical: string, config: ParticipantConfig): Promise<string> {
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      config.identity.privateJwk as JsonWebKey,
+      { name: "Ed25519" },
+      false,
+      ["sign"],
+    );
+    const signature = await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(canonical));
+    return Buffer.from(new Uint8Array(signature)).toString("base64");
+  } catch {
+    return "";
+  }
 }
 
 /** What one take attempt reports back to the poll loop. */
@@ -217,7 +404,115 @@ export async function runTake(
   config: ParticipantConfig,
   work: PendingWork,
 ): Promise<TakeOutcome> {
-  throw new Error(
-    "NOT IMPLEMENTED: run one take end to end — spec §6.2, issue #1026 W3.2",
-  );
+  const started = Date.now();
+  const base = { sessionId: work.sessionId, memberId: config.memberId };
+  const report = (
+    oneShot: OneShotStatus,
+    submission: SubmissionStatus | null,
+    reason?: string,
+  ): TakeOutcome => ({
+    ...base,
+    oneShot,
+    submission,
+    durationMs: Date.now() - started,
+    ...(reason === undefined ? {} : { reason: reason.slice(0, 400) }),
+  });
+
+  let workspace: TakeWorkspace;
+  try {
+    workspace = createTakeWorkspace(config.workspaceRoot, work.sessionId, config.memberId);
+  } catch (err) {
+    return report("crashed", null, `workspace unusable: ${errorText(err)}`);
+  }
+  try {
+    const argv = oneShotArgv(process.env[TAKE_COMMAND_ENV]);
+    if (argv.length === 0) {
+      return report("crashed", null, `${TAKE_COMMAND_ENV} was not injected into this participant container`);
+    }
+    const oneShot = await runOneShot(workspace, argv, oneShotEnv(config, work, workspace), config.takeTimeoutMs);
+    if (oneShot.status !== "ok") {
+      return report(oneShot.status, null, oneShot.stderr || `one-shot exited ${oneShot.exitCode}`);
+    }
+    const draft = parseDraftLine(oneShot.stdout);
+    if (!draft) return report("ok", null, `the one-shot printed no ${TAKE_DRAFT_TAG} line`);
+    const submission = await submitTake(config, work, draft);
+    return report("ok", submission.status, submission.reason);
+  } catch (err) {
+    // A take that fails is a REPORTED OUTCOME: one bad session must not take
+    // down a container that has weeks of later sessions to serve.
+    return report("crashed", null, errorText(err));
+  } finally {
+    // On every path, including timeout and crash. Disposal never masks the
+    // take's own failure.
+    try {
+      workspace.dispose();
+    } catch {
+      // A workspace that will not delete is not a reason to lose the outcome.
+    }
+  }
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** The injected argv, as a JSON array or a single command path. */
+function oneShotArgv(raw: string | undefined): string[] {
+  const text = (raw ?? "").trim();
+  if (text === "") return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string");
+    } catch {
+      return [];
+    }
+    return [];
+  }
+  return text.split(/\s+/);
+}
+
+/** Exactly what the one-shot is given: its coordinates, and nothing ambient. */
+function oneShotEnv(
+  config: ParticipantConfig,
+  work: PendingWork,
+  workspace: TakeWorkspace,
+): Record<string, string> {
+  return {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: workspace.path,
+    RM_API_URL: config.apiUrl,
+    RM_MEMBER_ID: config.memberId,
+    RM_MEMBER_NAME: config.name,
+    RM_MEMBER_TOKEN: config.token,
+    RM_MEMBER_IDENTITY: JSON.stringify(config.identity),
+    RM_SESSION_ID: work.sessionId,
+    RM_SUBJECT_ID: work.subjectId,
+    RM_SESSION_DATE: work.date,
+    RM_WORKSPACE: workspace.path,
+  };
+}
+
+/**
+ * The authored draft, read off the one-shot's LAST tagged line.
+ *
+ * Last wins, and a torn line is not a draft — the same rule the judge's answer
+ * line follows, for the same reason: a container killed mid-flush must not
+ * have its half-written output submitted as a take.
+ */
+export function parseDraftLine(stdout: string): Record<string, unknown> | null {
+  let found: Record<string, unknown> | null = null;
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith(`${TAKE_DRAFT_TAG} `)) continue;
+    try {
+      const parsed = JSON.parse(line.slice(TAKE_DRAFT_TAG.length + 1)) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        found = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Half a line is not a draft.
+    }
+  }
+  return found;
 }

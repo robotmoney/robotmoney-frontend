@@ -91,6 +91,12 @@
 // drain it per `catchup_policy`, which is only observable once enablement has
 // stopped being a restart side-effect.
 
+import { createInterface } from "node:readline";
+import { open, writeFile } from "node:fs/promises";
+import parser from "cron-parser";
+import postgres from "postgres";
+import { acquireTargetLock, assertStillHeld, revalidateAfterAcquire, targetLockKey } from "../src/db/target-lock.ts";
+import type { DbHandle } from "../src/db/client.ts";
 import type { TargetLock } from "../src/db/target-lock.ts";
 
 /**
@@ -159,9 +165,63 @@ export interface EnablementPlan {
  *    garbage produces a schedule that never fires and a preflight that fails on
  *    the next boot.
  */
-export function readEnablementPlan(lock: TargetLock): Promise<EnablementPlan> {
-  void lock;
-  throw new Error("NOT IMPLEMENTED: read the five swarm.* rows — spec §6.3, issue #1026 W1.9");
+export async function readEnablementPlan(lock: TargetLock): Promise<EnablementPlan> {
+  const rows = await lock.connection<
+    { kind: string; cron: string; enabled: boolean; next_run_at: string | null; catchup_policy: string }[]
+  >`
+    SELECT kind, cron, enabled, next_run_at::text AS next_run_at, catchup_policy
+      FROM job_schedules
+     WHERE kind = ANY(${[...SWARM_SCHEDULE_KINDS]})
+     ORDER BY kind`;
+
+  const missing = SWARM_SCHEDULE_KINDS.filter((kind) => !rows.some((row) => row.kind === kind));
+  if (missing.length > 0) {
+    throw new Error(
+      `schedules:enable: the lifecycle rows ${missing.join(", ")} are absent from job_schedules. ` +
+        "This command enables rows; it does not create them, because the cadence is not its to choose. Seed them first.",
+    );
+  }
+  const duplicated = SWARM_SCHEDULE_KINDS.filter((kind) => rows.filter((row) => row.kind === kind).length > 1);
+  if (duplicated.length > 0) {
+    const detail = duplicated
+      .map((kind) => `${kind}: ${rows.filter((row) => row.kind === kind).map((row) => `cron ${row.cron}, enabled ${row.enabled}`).join(" / ")}`)
+      .join("; ");
+    throw new Error(
+      `schedules:enable: more than one job_schedules row exists per kind (${detail}). ` +
+        "The scheduler's behaviour would depend on which one is enabled, so nothing is written.",
+    );
+  }
+  for (const row of rows) {
+    try {
+      parser.parseExpression(row.cron);
+    } catch (error) {
+      throw new Error(
+        `schedules:enable: the cron string for ${row.kind} does not parse (${row.cron}): ${(error as Error).message}. ` +
+          "Enabling it would produce a schedule that never fires and a preflight that fails on the next boot.",
+      );
+    }
+  }
+
+  const now = Date.now();
+  const ordered = SWARM_SCHEDULE_KINDS.map((kind): ScheduleRow => {
+    const row = rows.find((candidate) => candidate.kind === kind) as (typeof rows)[number];
+    return {
+      kind,
+      cron: row.cron,
+      enabled: row.enabled,
+      nextRunAt: row.next_run_at,
+      catchupPolicy: row.catchup_policy,
+    };
+  });
+
+  return {
+    rows: ordered,
+    toEnable: ordered.filter((row) => !row.enabled).map((row) => row.kind),
+    alreadyEnabled: ordered.filter((row) => row.enabled).map((row) => row.kind),
+    overdue: ordered
+      .filter((row) => row.enabled && (row.nextRunAt === null || Date.parse(row.nextRunAt) <= now))
+      .map((row) => row.kind),
+  };
 }
 
 /**
@@ -174,8 +234,24 @@ export function readEnablementPlan(lock: TargetLock): Promise<EnablementPlan> {
  * this command and conclude it failed.
  */
 export function renderEnablementPlan(plan: EnablementPlan): string {
-  void plan;
-  throw new Error("NOT IMPLEMENTED: enablement plan rendering — spec §6.3, issue #1026 W1.9");
+  const lines = ["schedules:enable — the five swarm.* lifecycle rows", ""];
+  for (const row of plan.rows) {
+    const change = row.enabled ? "already enabled, no change" : "enabled: false -> true";
+    lines.push(
+      `  ${row.kind}  cron ${row.cron}  catchup_policy ${row.catchupPolicy}  ` +
+        `next_run_at ${row.nextRunAt ?? "NULL"}${plan.overdue.includes(row.kind) ? " (overdue)" : ""}  — ${change}`,
+    );
+  }
+  lines.push(
+    "",
+    `Rows to enable: ${plan.toEnable.length === 0 ? "none" : plan.toEnable.join(", ")}`,
+    `Already enabled: ${plan.alreadyEnabled.length === 0 ? "none" : plan.alreadyEnabled.join(", ")}`,
+    "",
+    "This command writes `enabled` and nothing else. next_run_at is NOT touched: an overdue or NULL",
+    "next_run_at stays exactly as it is, and the scheduler initializes or drains it per each row's",
+    "catchup_policy. A row that still looks overdue after this command has not failed.",
+  );
+  return lines.join("\n");
 }
 
 /**
@@ -207,8 +283,33 @@ export function assertProductionInitializationGates(options: {
   readonly interactive: boolean;
   readonly invokedFromSmoke: boolean;
 }): void {
-  void options;
-  throw new Error("NOT IMPLEMENTED: production-initialization gates — spec §4.3/§9.1, issue #1026 W1.9");
+  if (options.env.RM_ENV !== "prod") {
+    throw new Error(
+      `schedules:enable: RM_ENV is ${options.env.RM_ENV ?? "unset"}, not prod. This is a production-initialization ` +
+        "command (spec §9.1); elsewhere the schedule rows are environment-configured and not operator state.",
+    );
+  }
+  if (options.identity !== "production") {
+    throw new Error(
+      options.identity === null
+        ? "schedules:enable: this target is not enrolled — deployment_identity has no row, so it is not production " +
+          "(spec §4.2). Production cadences must not start against an un-enrolled database."
+        : "schedules:enable: deployment_identity is rehearsal, not production (spec §4.2). Enabling production " +
+          "schedules here would start real cadences against rehearsal data.",
+    );
+  }
+  if (!options.interactive) {
+    throw new Error(
+      "schedules:enable: no terminal is attached. The rm_owner password is typed and the confirmation is typed, " +
+        "and there is no unattended path to either (spec §4.3).",
+    );
+  }
+  if (options.invokedFromSmoke) {
+    throw new Error(
+      "schedules:enable: this command was invoked from bun smoke. None of the production-initialization commands " +
+        "is reachable through the boot (spec §4.3) — enablement is an operator action, not a restart side-effect.",
+    );
+  }
 }
 
 /**
@@ -225,8 +326,42 @@ export function assertProductionInitializationGates(options: {
  * login (refuse before doing anything else, so a typo costs nothing); a
  * connection that authenticates as a role other than `rm_owner`.
  */
-export function promptOwnerPassword(): Promise<string> {
-  throw new Error("NOT IMPLEMENTED: typed rm_owner credential prompt — spec §3, issue #1026 W1.9");
+export async function promptOwnerPassword(): Promise<string> {
+  if (process.stdin.isTTY !== true) {
+    throw new Error(
+      "schedules:enable: the rm_owner password is typed at a terminal and never stored (spec §3), and no terminal " +
+        "is attached to this process.",
+    );
+  }
+  const typed = await readLine("rm_owner password: ", { echo: false });
+  if (typed === "") {
+    throw new Error("schedules:enable: an empty rm_owner password is not a credential.");
+  }
+  return typed;
+}
+
+/**
+ * Read one line from the terminal, optionally without echoing it.
+ *
+ * Shared by the credential prompt and the `y/n`: both are "a person typed this
+ * at a terminal", and neither has a non-interactive form.
+ */
+async function readLine(prompt: string, options: { echo: boolean }): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  if (!options.echo) {
+    // Suppress echo for the credential: readline still receives the keystrokes,
+    // the terminal just does not print them, so the password never reaches the
+    // scrollback an operator later pastes into a thread.
+    (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = () => {};
+    process.stdout.write(prompt);
+  }
+  try {
+    const answer = await new Promise<string>((resolve) => rl.question(options.echo ? prompt : "", resolve));
+    if (!options.echo) process.stdout.write("\n");
+    return answer.trim();
+  } finally {
+    rl.close();
+  }
 }
 
 /**
@@ -238,9 +373,15 @@ export function promptOwnerPassword(): Promise<string> {
  *
  * Refusal cases: anything other than `y`; a closed or non-interactive stdin.
  */
-export function confirm(rendered: string): Promise<boolean> {
-  void rendered;
-  throw new Error("NOT IMPLEMENTED: y/n confirmation — spec §4.3, issue #1026 W1.9");
+export async function confirm(rendered: string): Promise<boolean> {
+  if (process.stdin.isTTY !== true) {
+    throw new Error(
+      "schedules:enable: stdin is not a terminal, so the y/n cannot be typed. It does not default to yes (spec §4.3).",
+    );
+  }
+  process.stdout.write(`${rendered}\n\n`);
+  const answer = await readLine("Enable these rows? [y/n] ", { echo: true });
+  return answer === "y";
 }
 
 /**
@@ -267,10 +408,37 @@ export function confirm(rendered: string): Promise<boolean> {
  *
  * Serves spec §10 W1: "Restart after schedules become overdue."
  */
-export function applyEnablement(lock: TargetLock, plan: EnablementPlan): Promise<readonly ScheduleRow[]> {
-  void lock;
-  void plan;
-  throw new Error("NOT IMPLEMENTED: enable the five swarm.* rows — spec §6.3, issue #1026 W1.9");
+export async function applyEnablement(lock: TargetLock, plan: EnablementPlan): Promise<readonly ScheduleRow[]> {
+  const toEnable = [...plan.toEnable];
+  if (toEnable.length > 0) {
+    // A pool handle opens the transaction with `begin`; a handle that is already
+    // inside one (a caller that fenced a wider mutation) nests with `savepoint`.
+    // Either way the write is atomic, so a refused count rolls all of it back.
+    const conn = lock.connection;
+    const begin = ("begin" in conn ? conn.begin : conn.savepoint) as unknown as (
+      body: (tx: DbHandle) => Promise<void>,
+    ) => Promise<void>;
+    await begin(async (tx) => {
+      // The fence first, on the connection performing the mutation (§2).
+      await tx`SELECT pg_advisory_xact_lock(${lock.key.toString()}::bigint)`;
+      // One assignment, one filter. `enabled` is the only column named, and the
+      // filter is the five lifecycle kinds intersected with the plan.
+      const updated = await tx<{ kind: string }[]>`
+        UPDATE job_schedules
+           SET enabled = true
+         WHERE kind = ANY(${toEnable})
+           AND kind = ANY(${[...SWARM_SCHEDULE_KINDS]})
+        RETURNING kind`;
+      if (updated.length !== toEnable.length) {
+        throw new Error(
+          `schedules:enable: the write matched ${updated.length} rows but the plan named ${toEnable.length}. ` +
+            "Under a held target lock the rows cannot move between the plan and the write, so this is evidence the " +
+            "lock is not doing its job. Nothing is enabled: the transaction is rolled back.",
+        );
+      }
+    });
+  }
+  return (await readEnablementPlan(lock)).rows;
 }
 
 /**
@@ -310,10 +478,23 @@ export interface SchedulesEnableReceipt {
  * exits non-zero and says the enablement DID land, because it did, and an
  * operator who is told the command failed will run it again.
  */
-export function writeSchedulesEnableReceipt(path: string, receipt: SchedulesEnableReceipt): Promise<void> {
-  void path;
-  void receipt;
-  throw new Error("NOT IMPLEMENTED: schedules:enable receipt — spec §4.3/§9.1, issue #1026 W1.9");
+export async function writeSchedulesEnableReceipt(path: string, receipt: SchedulesEnableReceipt): Promise<void> {
+  try {
+    await writeFile(path, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+    // Durable, not merely written: a receipt lost to a crashed host is the same
+    // as a receipt never written, and this is the gate of §4.3.
+    const handle = await open(path, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    throw new Error(
+      `schedules:enable: the receipt could not be written to ${path} (${(error as Error).message}). ` +
+        "The enablement DID land — the rows are enabled. Do not re-run the command; record the change by hand.",
+    );
+  }
 }
 
 /**
@@ -331,7 +512,116 @@ export function writeSchedulesEnableReceipt(path: string, receipt: SchedulesEnab
  * answering `n` exits non-zero too: they declined, and a script that treats a
  * declined initialization as success will move on to step 5.
  */
-export function main(argv: readonly string[]): Promise<number> {
-  void argv;
-  throw new Error("NOT IMPLEMENTED: schedules:enable entry point — spec §6.3/§9.1, issue #1026 W1.9");
+export async function main(argv: readonly string[]): Promise<number> {
+  const env = process.env;
+  const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const invokedFromSmoke = env.RM_INVOKED_FROM_SMOKE === "1";
+  const receiptIndex = argv.indexOf("--receipt");
+  const receiptPath =
+    receiptIndex >= 0 ? argv[receiptIndex + 1] : `schedules-enable-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  if (receiptPath === undefined) {
+    process.stderr.write("schedules:enable: --receipt needs a path.\n");
+    return 1;
+  }
+
+  try {
+    // The three gates that need no database, checked before the database is
+    // opened at all. The fourth needs `deployment_identity`, so it is re-checked
+    // below once that one read has happened.
+    assertProductionInitializationGates({ env, identity: "production", interactive, invokedFromSmoke });
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    return 1;
+  }
+
+  const databaseUrl = env.DATABASE_URL;
+  if (databaseUrl === undefined || databaseUrl === "") {
+    process.stderr.write("schedules:enable: DATABASE_URL is not set.\n");
+    return 1;
+  }
+
+  const probe = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  let identity: "production" | "rehearsal" | null;
+  let key;
+  let databaseName: string;
+  try {
+    const [where] = await probe<{ db: string; sysid: string }[]>`
+      SELECT current_database() AS db, (SELECT system_identifier::text FROM pg_control_system()) AS sysid`;
+    databaseName = where?.db ?? "";
+    key = targetLockKey({ systemIdentifier: where?.sysid ?? "", databaseName });
+    const rows = await probe<{ kind: string }[]>`SELECT kind FROM deployment_identity LIMIT 1`;
+    identity = rows[0]?.kind === "production" ? "production" : rows[0] === undefined ? null : "rehearsal";
+  } catch (error) {
+    process.stderr.write(`schedules:enable: the target could not be identified (${(error as Error).message}).\n`);
+    return 1;
+  } finally {
+    await probe.end({ timeout: 5 });
+  }
+
+  try {
+    assertProductionInitializationGates({ env, identity, interactive, invokedFromSmoke });
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    return 1;
+  }
+
+  const acquired = await acquireTargetLock({
+    databaseUrl,
+    key,
+    holder: {
+      tool: "schedules:enable",
+      instance: env.RM_INSTANCE ?? null,
+      host: env.HOSTNAME ?? "unknown",
+      pid: process.pid,
+    },
+    timeoutMs: 60_000,
+  });
+  if (!acquired.acquired) {
+    process.stderr.write(`${acquired.reason}\n`);
+    return 1;
+  }
+  const lock = acquired.lock;
+
+  try {
+    const revalidated = await revalidateAfterAcquire(lock, { identity: "production", ledgerHead: null, manifestHash: null });
+    if (!revalidated.ok) {
+      process.stderr.write(`schedules:enable: the target moved while waiting for the lock — ${revalidated.reason}\n`);
+      return 1;
+    }
+    await assertStillHeld(lock, "schedules:enable plan");
+
+    const plan = await readEnablementPlan(lock);
+    const before = plan.rows;
+    // Typed credential first, then the y/n on a plan the operator has seen.
+    await promptOwnerPassword();
+    if (!(await confirm(renderEnablementPlan(plan)))) {
+      process.stderr.write("schedules:enable: declined. Nothing was written.\n");
+      return 1;
+    }
+
+    const after = await applyEnablement(lock, plan);
+    const url = new URL(databaseUrl);
+    await writeSchedulesEnableReceipt(receiptPath, {
+      command: "schedules:enable",
+      writtenAt: new Date().toISOString(),
+      database: `${url.hostname}/${databaseName}`,
+      identity: "production",
+      rmEnv: "prod",
+      before,
+      after,
+      nextRunAtTouched: false,
+      operator: env.USER ?? env.LOGNAME ?? "unknown",
+    });
+    process.stdout.write(`schedules:enable: ${plan.toEnable.length} row(s) enabled; receipt at ${receiptPath}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    return 1;
+  } finally {
+    await lock.release();
+  }
+}
+
+if (import.meta.main) {
+  void main(process.argv.slice(2)).then((code) => process.exit(code));
 }

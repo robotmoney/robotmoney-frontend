@@ -57,8 +57,10 @@
 // entry too many is a blind spot in the drift check. It is a list of specific
 // names and extension memberships, never a pattern that could swallow an
 // application object by accident.
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type postgresTypes from "postgres";
-import type { SchemaManifest } from "./schema-manifest.ts";
+import { MANIFEST_TABLE, hashManifest, writeManifest, type SchemaManifest } from "./schema-manifest.ts";
 
 export type SnapshotDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
