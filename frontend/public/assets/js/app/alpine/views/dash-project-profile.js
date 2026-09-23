@@ -120,9 +120,11 @@ export function registerProjectProfileView(Alpine) {
       const history = this.project?.history || [];
       const labels = history.map((h) => h.date);
       for (const card of CHART_CARDS) {
-        const canvas = this.$refs[card.ref];
-        if (!canvas || !window.Chart) continue;
         this._charts[card.key]?.destroy();
+        delete this._charts[card.key];
+        // An empty card has no canvas in the DOM (see chartEmpty()).
+        const canvas = this.$refs[card.ref];
+        if (!canvas || !window.Chart || this.chartEmpty(card.key)) continue;
         const data = history.map((h) => h[card.key]);
         this._charts[card.key] = new window.Chart(canvas, {
           type: "line",
@@ -141,10 +143,28 @@ export function registerProjectProfileView(Alpine) {
         });
       }
     },
-    // §5.5: "empty 'Not enough history yet.'" — a section-level empty state
-    // (the whole 90d History block), not per-chart.
+    // §5.5's section-level empty state (the whole 90d History block). A line
+    // needs two days: with one, every card would be a lone invisible point
+    // (pointRadius 0) on blank axes, so the section says so once.
+    historyDays() {
+      return this.project?.history?.length ?? 0;
+    },
     historyEmpty() {
-      return (this.project?.history?.length ?? 0) === 0;
+      return this.historyDays() < 2;
+    },
+    // Per card, past the section check: a metric is null on the days it was
+    // not recorded (spanGaps bridges those), so one card can have fewer than
+    // two readings while the others draw. That card gets the empty chart.
+    chartReadings(key) {
+      return (this.project?.history || []).filter((h) => typeof h[key] === "number" && Number.isFinite(h[key])).length;
+    },
+    chartEmpty(key) {
+      return this.chartReadings(key) < 2;
+    },
+    // The empty chart's title (.rm-nodata): nothing recorded, or too little
+    // to draw a line through.
+    emptyChartTitle(readings) {
+      return readings ? "Not enough data yet" : "No data yet";
     },
 
     // ── facet table sparklines ───────────────────────────────────────────────

@@ -29,11 +29,16 @@
   </header>
 
   <p class="rs__loading" x-show="loading">Loading live signal&hellip;</p>
-  <p class="rs__error" x-show="error" x-text="error" x-cloak></p>
 
   <!-- Live gauges from the signal payload (btc_beta_vs_risk_appetite,
-       btc_qqq_ratio_percentile, stables_vs_qqq_flow). -->
-  <template x-if="payload">
+       btc_qqq_ratio_percentile, stables_vs_qqq_flow). With none to show, the
+       panel keeps a frame and states it the way every chart below does
+       (.rm-nodata), a failed read included: the API's own error text is not
+       copy, and the reference table's caption points a reader here. -->
+  <template x-if="gaugesEmpty()">
+    <div class="rs__gauges"><div class="rs__gauge rm-nodata"><p class="rm-nodata__h" x-text="gaugesEmpty()"></p></div></div>
+  </template>
+  <template x-if="payload?.gauges?.length">
     <div class="rs__gauges">
       <template x-for="g in payload.gauges" :key="g.id">
         <div class="rs__gauge">
@@ -97,9 +102,17 @@
     </p>
     <figure class="rs__figure">
       <figcaption class="rs__figcap">BTC &beta; to (QQQ&minus;SPY), 90d rolling &middot; 8y median 1.04</figcaption>
-      <template x-if="payload">
-        <div class="rs__series-canvas"><canvas data-series="btc_beta_vs_risk_appetite"></canvas></div>
-      </template>
+      <!-- Each chart's box is there from the start, so nothing moves when the
+           read lands. With nothing to draw, .rm-nodata lies over the box and
+           the canvas is hidden rather than left blank: an undrawn canvas keeps
+           its 300x150 default, which spills out of a phone-width box. It is
+           never drawn once hidden, so Chart.js never sizes it at display:none. -->
+      <div class="rs__series-canvas" x-data="{ series: 'btc_beta_vs_risk_appetite' }">
+        <canvas data-series="btc_beta_vs_risk_appetite" x-show="!seriesEmpty(series)"></canvas>
+        <template x-if="seriesEmpty(series)">
+          <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+        </template>
+      </div>
       <p class="rs__note">
         Higher = BTC moves with risk appetite. Compressing toward 0 = channel breaking.
       </p>
@@ -116,9 +129,12 @@
     </p>
     <figure class="rs__figure">
       <figcaption class="rs__figcap">BTC/QQQ 3y rolling %ile &middot; scale 0 to 1 &middot; 8y median 57%</figcaption>
-      <template x-if="payload">
-        <div class="rs__series-canvas"><canvas data-series="btc_qqq_ratio_percentile"></canvas></div>
-      </template>
+      <div class="rs__series-canvas" x-data="{ series: 'btc_qqq_ratio_percentile' }">
+        <canvas data-series="btc_qqq_ratio_percentile" x-show="!seriesEmpty(series)"></canvas>
+        <template x-if="seriesEmpty(series)">
+          <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+        </template>
+      </div>
       <p class="rs__note">
         Higher = BTC winning vs AI-tech basket. Below 0.5 and falling = speculation rotating out
         of crypto.
@@ -136,9 +152,12 @@
     </p>
     <figure class="rs__figure">
       <figcaption class="rs__figcap">Stables 90d &Delta;% &minus; QQQ 90d &Delta;% &middot; scale &minus;0.5 to 0.5 &middot; 8y median +8.9%</figcaption>
-      <template x-if="payload">
-        <div class="rs__series-canvas"><canvas data-series="stables_vs_qqq_flow"></canvas></div>
-      </template>
+      <div class="rs__series-canvas" x-data="{ series: 'stables_vs_qqq_flow' }">
+        <canvas data-series="stables_vs_qqq_flow" x-show="!seriesEmpty(series)"></canvas>
+        <template x-if="seriesEmpty(series)">
+          <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+        </template>
+      </div>
       <p class="rs__note">
         Positive = new flow into crypto rails. Negative = flow rotating to equity rails.
         (Early-2018 readings of +500%+ are clipped off the top &mdash; the stablecoin asset class

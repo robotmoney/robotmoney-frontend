@@ -51,6 +51,14 @@
       <span><strong style="color:#e8a640">Regime data may be stale.</strong> <span x-text="staleMessage()"></span></span>
     </div>
 
+    <!-- No snapshot, so no dashboard: its place holds the empty chart rather
+         than the methodology rising into a blank page. A read that failed has
+         no data available (.rv__error above names the outage); a read that
+         found no snapshot has none yet. -->
+    <template x-if="!loading && !latest">
+      <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="error ? 'No data available' : 'No data yet'"></p></div>
+    </template>
+
     <template x-if="latest">
       <div class="rv__dash">
         <!-- Live composite header -->
@@ -116,7 +124,13 @@
               </template>
             </div>
           </div>
-          <div class="rv__chart"><canvas x-ref="chart"></canvas></div>
+          <!-- Positioned for the empty state laid over the canvas's box. -->
+          <div class="rv__chart" style="position:relative">
+            <canvas x-ref="chart"></canvas>
+            <template x-if="historyEmpty()">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="historyEmptyTitle()"></p><p class="rm-nodata__d" x-show="historyEmptyDetail()" x-text="historyEmptyDetail()"></p></div>
+            </template>
+          </div>
         </div>
 
         <!-- Per-panel indicator tables -->
@@ -264,7 +278,12 @@
                   </template>
                 </span>
               </div>
-              <div class="rv__bt-chart"><canvas :data-bt="bt.key"></canvas></div>
+              <div class="rv__bt-chart" style="position:relative">
+                <canvas :data-bt="bt.key"></canvas>
+                <template x-if="btEmptyTitle(bt.key)">
+                  <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="btEmptyTitle(bt.key)"></p><p class="rm-nodata__d" x-show="btEmptyDetail(bt.key)" x-text="btEmptyDetail(bt.key)"></p></div>
+                </template>
+              </div>
             </div>
             <div class="rv__foot">
               <p>Out-of-sample window starts 2024-02-01. Risky legs earn each asset's spot return; cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps charged only when the bucket changes. Chart background is shaded by composite regime (cyan = risk-on, amber = risk-off).</p>

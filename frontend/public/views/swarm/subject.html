@@ -241,6 +241,10 @@
                 </template>
                 <template x-if="latestProse()">
                   <div>
+                    <!-- Words a judge wrote carry its name. -->
+                    <template x-if="rationaleJudgeLabel(latest(), judgeRoster)">
+                      <p class="rr-k rr-sub" x-html="rationaleJudgeLabel(latest(), judgeRoster)"></p>
+                    </template>
                     <div class="rr-prose" :class="!more && isLong(latestProse(), 480) ? 'is-clamped' : ''" style="--rr-lines:8"
                          x-html="linkified(latestProse())"></div>
                     <template x-if="isLong(latestProse(), 480)">
@@ -255,7 +259,7 @@
                     <template x-for="x in stanceTally(latest())" :key="x.stance">
                       <span :style="`color:${stanceColor(x.stance)}`"><i :style="`background:${stanceColor(x.stance)}`" aria-hidden="true"></i><span x-text="x.stance"></span><b x-text="x.n"></b></span>
                     </template>
-                    <em x-text="[latest().swarmRecommendation?.quorum ? quorumText(latest()) : '', meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
+                    <em x-text="[latest().swarmRecommendation?.quorum ? quorumText(latest(), judgeRoster) : '', meanConfidenceText(latest())].filter(Boolean).join(' · ')"></em>
                   </p>
                 </template>
                 <a class="rr-cta" :href="sessionHref(latest())">
@@ -302,7 +306,7 @@
                 <template x-if="tvl().points.length < 2">
                   <figure class="rr-area" style="margin-top:1.5rem">
                     <figcaption class="rr-area__head"><h3 class="rr-subhead__h">TVL</h3></figcaption>
-                    <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="tvl().points.length ? 'One reading so far' : 'No readings yet'"></p></div>
+                    <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="tvl().points.length ? 'Not enough data yet' : 'No data yet'"></p></div>
                   </figure>
                 </template>
                 <template x-if="tvl().points.length > 1">
@@ -492,7 +496,7 @@
             <template x-if="!chartModel() && snapshot">
               <figure class="rr-area" style="margin-top:2.25rem">
                 <figcaption class="rr-area__head"><h3 class="rr-subhead__h" :class="isVaultStack() ? '' : 'rr-subhead__h--minor'" x-text="isVaultStack() ? 'Sleeves over time' : 'Over time'">Over time</h3></figcaption>
-                <div class="rr-empty rr-empty--chart"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></div>
+                <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><template x-if="chartEmptyLabel()"><p class="rr-empty__t" x-text="chartEmptyLabel()"></p></template></div>
               </figure>
             </template>
             <template x-if="chartModel()">

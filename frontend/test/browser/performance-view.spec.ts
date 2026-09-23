@@ -208,6 +208,42 @@ test("performance view discloses that SP500's position size is asserted, not rea
   expect(text).toMatch(/SP500 position size is asserted, not read from a live position — last confirmed March 2026\./);
 });
 
+// A chart with nothing to draw says so (.rm-nodata) over its own box, and the
+// table keeps its head with one row. A failed read used to hide both charts
+// and the table outright, under the API's own error text; they say it now.
+test("a failed read keeps both charts and the table, each saying no data is available", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.route("**/api/dashboards/wallet-balances", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) }));
+  await page.goto("/");
+  await navigate(page, "/performance");
+
+  await expect(page.locator(".a2-status--error")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("database unavailable");
+  await expect(page.locator(".a2-chart .rm-nodata__h")).toHaveText(["No data available", "No data available"]);
+  await expect(page.locator("table.a2-table tbody tr")).toHaveCount(1);
+  await expect(page.locator("table.a2-table tbody .rr-empty__t")).toHaveText("No data available");
+});
+
+// One day is not a line: Chart.js drew empty axes for it. Neither chart is
+// drawn now, and "Show All" has nothing beyond the last five to reveal.
+test("one day of history shows the empty chart and draws no empty axes", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.route("**/api/dashboards/wallet-balances", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...walletStub(), history: HISTORY.slice(-1) }) }));
+  await page.goto("/");
+  await navigate(page, "/performance");
+
+  await expect(page.locator(".a2-chart .rm-nodata__h")).toHaveText(["Not enough data yet", "Not enough data yet"]);
+  await expect(page.locator(".a2-chart .rm-nodata__d")).toHaveText(["One day so far", "One day so far"]);
+  const drawn = await page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [...document.querySelectorAll(".a2-chart canvas")].some((c) => (window as any).Chart.getChart(c)));
+  expect(drawn).toBe(false);
+  await expect(page.locator("table.a2-table tbody tr")).toHaveCount(1);
+  await expect(page.locator(".a2-table__toggle")).toBeHidden();
+});
+
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");

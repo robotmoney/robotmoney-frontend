@@ -554,7 +554,7 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   // third page's subject between the headline and the weights.
   const how = page.locator("#how-weights-are-set");
   // The swarm page's steps, in its blocks.
-  await expect(how.locator(".rr-steps .rr-steps__t")).toHaveText(["The regime is read", "Analysts file takes", "A recommendation is published"]);
+  await expect(how.locator(".rr-steps .rr-steps__t")).toHaveText(["The regime is read", "Analysts file takes", "The judge reads the takes", "A recommendation is published"]);
   // No role nobody holds: the mechanism describes the analysts that file.
   await expect(how).not.toContainText(/Validators|Proposers/);
   await expect(how.locator('a[href="/swarm/subjects/robotmoney-allocation"]')).toBeVisible();

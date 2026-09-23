@@ -286,6 +286,9 @@
           <h4 class="tok__mini-title">Fee Distribution</h4>
           <div class="tok__donut-wrap">
             <canvas x-ref="fee"></canvas>
+            <template x-if="feeEmptyTitle()">
+              <div class="rm-nodata rm-nodata--fill rm-nodata--ring"><p class="rm-nodata__h" x-text="feeEmptyTitle()"></p></div>
+            </template>
           </div>
           <div class="tok__legend">
             <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span><span x-text="feeLegend(0)">—</span></div>

@@ -177,13 +177,24 @@ test("sparse agent renders honest empty/missing states, not fabricated data", as
   mockAgentApi(page, SPARSE_AGENT);
   await login(page, "/agents/a2");
   await expect(page.locator("[data-money-wallet-status]")).toContainText("Wallet missing");
-  await expect(page.locator("[data-perf-chart-placeholder]")).toContainText("No attributed x402 payment history yet.");
+  await expect(page.locator("[data-perf-chart-placeholder] .rm-nodata__h")).toHaveText("No data yet");
+  await expect(page.locator("[data-perf-chart-placeholder] .rm-nodata__d")).toHaveText("No weekly x402 volume recorded");
   await expect(page.locator("[data-vaults-empty]")).toContainText("No vaults linked yet.");
   await expect(page.locator("[data-wallets-empty]")).toContainText("No wallets linked yet.");
   await expect(page.locator("[data-lever-panel] .a3-lever-card")).toHaveCount(3); // 3 of the 5 gaps surfaced as levers
   for (const key of ["wallet", "moneyIn", "x402", "identity", "freshness"]) {
     await expect(page.locator(`[data-evidence-row="${key}"] .a3-badge`)).toHaveText("Missing");
   }
+});
+
+// Snapshots from a single week bucket to one week: volume, but a lone
+// invisible point on blank axes if drawn. The empty chart says so instead.
+test("one week of x402 volume shows the empty chart, not blank axes", async ({ page }) => {
+  mockAgentApi(page, { ...RICH_AGENT, x402Sparkline: [40] });
+  await login(page, "/agents/a1");
+  await expect(page.locator("[data-perf-chart-card]")).toHaveCount(0);
+  await expect(page.locator("[data-perf-chart-placeholder] .rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(page.locator("[data-perf-chart-placeholder] .rm-nodata__d")).toHaveText("One week so far");
 });
 
 test("unknown agent id renders the honest not-found state, never a stub row", async ({ page }) => {

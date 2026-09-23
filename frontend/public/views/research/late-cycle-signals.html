@@ -38,11 +38,16 @@
     </header>
 
     <p class="rs__loading" x-show="loading">Loading live signal&hellip;</p>
-    <p class="rs__error" x-show="error" x-text="error" x-cloak></p>
 
     <!-- Live gauges from the signal payload: CONCENTRATION, TOP7_VS_SPY, MNA,
-         MARGIN, CONF (research-signals.ts computeLateCycle gauges[]). -->
-    <template x-if="payload">
+         MARGIN, CONF (research-signals.ts computeLateCycle gauges[]). With none
+         to show, the panel keeps a frame and states it the way every chart
+         below does (.rm-nodata), a failed read included: the API's own error
+         text is not copy. -->
+    <template x-if="gaugesEmpty()">
+      <div class="rs__gauges"><div class="rs__gauge rm-nodata"><p class="rm-nodata__h" x-text="gaugesEmpty()"></p></div></div>
+    </template>
+    <template x-if="payload?.gauges?.length">
       <div class="rs__gauges">
         <template x-for="g in payload.gauges" :key="g.id">
           <div class="rs__gauge">
@@ -116,13 +121,25 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: SPY/RSP 3y percentile (scale 0 to 1)</div>
-          <template x-if="payload">
-            <div class="rs__series-canvas"><canvas data-series="concentration_cap_vs_equal_pct"></canvas></div>
-          </template>
+          <!-- Each chart's box is there from the start, so nothing moves when
+               the read lands. With nothing to draw, .rm-nodata lies over the
+               box and the canvas is hidden rather than left blank: an undrawn
+               canvas keeps its 300x150 default, which spills out of the 120px
+               box. It is never drawn once hidden, so Chart.js never sizes it
+               at display:none. -->
+          <div class="rs__series-canvas" x-data="{ series: 'concentration_cap_vs_equal_pct' }">
+            <canvas data-series="concentration_cap_vs_equal_pct" x-show="!seriesEmpty(series)"></canvas>
+            <template x-if="seriesEmpty(series)">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+            </template>
+          </div>
           <div class="stub__series-label">Secondary: Top-7-today basket vs SPY, 3y %ile (survivorship caveat)</div>
-          <template x-if="payload">
-            <div class="rs__series-canvas"><canvas data-series="concentration_top7_vs_spy_pct"></canvas></div>
-          </template>
+          <div class="rs__series-canvas" x-data="{ series: 'concentration_top7_vs_spy_pct' }">
+            <canvas data-series="concentration_top7_vs_spy_pct" x-show="!seriesEmpty(series)"></canvas>
+            <template x-if="seriesEmpty(series)">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+            </template>
+          </div>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Higher = narrower leadership. Persistent readings above 0.8 are the late-cycle
@@ -144,9 +161,12 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: S-4 monthly count, 3y percentile (scale 0 to 1)</div>
-          <template x-if="payload">
-            <div class="rs__series-canvas"><canvas data-series="mna_pct"></canvas></div>
-          </template>
+          <div class="rs__series-canvas" x-data="{ series: 'mna_pct' }">
+            <canvas data-series="mna_pct" x-show="!seriesEmpty(series)"></canvas>
+            <template x-if="seriesEmpty(series)">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+            </template>
+          </div>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Higher = more deal-making = later cycle. Lows mark early-cycle risk aversion
@@ -167,9 +187,12 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: Margin debt YoY growth</div>
-          <template x-if="payload">
-            <div class="rs__series-canvas"><canvas data-series="margin_debt_yoy"></canvas></div>
-          </template>
+          <div class="rs__series-canvas" x-data="{ series: 'margin_debt_yoy' }">
+            <canvas data-series="margin_debt_yoy" x-show="!seriesEmpty(series)"></canvas>
+            <template x-if="seriesEmpty(series)">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+            </template>
+          </div>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Positive and rising = leverage expanding (risk-on, but froth at extremes). Deeply
@@ -190,9 +213,12 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: UMich consumer sentiment</div>
-          <template x-if="payload">
-            <div class="rs__series-canvas"><canvas data-series="consumer_conf_level"></canvas></div>
-          </template>
+          <div class="rs__series-canvas" x-data="{ series: 'consumer_conf_level' }">
+            <canvas data-series="consumer_conf_level" x-show="!seriesEmpty(series)"></canvas>
+            <template x-if="seriesEmpty(series)">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="seriesEmpty(series)"></p><p class="rm-nodata__d" x-show="seriesEmptyDetail(series)" x-text="seriesEmptyDetail(series)"></p></div>
+            </template>
+          </div>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Elevated and rolling over = late-cycle warning. Depressed = contrarian risk-on.

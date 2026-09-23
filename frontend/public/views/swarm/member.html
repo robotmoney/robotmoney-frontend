@@ -27,18 +27,26 @@
           <div class="sv__avatar sv__avatar--mark rr-profile__mark"
                x-html="memberMark(member.keyFingerprint || member.id, member.name, 72, member.avatar?.path, member.handle)"></div>
           <div>
-            <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
+            <!-- Every member's role, beside the name: an analyst files takes,
+                 a judge files none and explains them. Beside, not under, so
+                 the tagline keeps its place under the name. -->
+            <div class="rm-named">
+              <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
+              <span class="rm-role" x-text="roleLabel(member)"></span>
+            </div>
             <p class="sv__lede sv__lede--compact profile-role" x-show="memberTagline(member)" x-text="memberTagline(member)"></p>
           </div>
         </header>
 
         <!-- Whether it holds a seat now and since when, then the record in
              figures, then who runs it. -->
-        <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes">
+        <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes || judgements.length">
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="rm-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
+          <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
+          <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>
           <!-- A record of archived takes only has nothing to verify: "0 / 0"
                reads as a failing score, so it states the archived count. -->
           <template x-if="recordStats().verifiable"><span class="rr-meta__i">Signed &amp; verified<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About signed and verified">i</button><span class="rm-tip__bub" role="tooltip" x-text="takesCapped() ? `Signatures re-checked against this member’s key, over the latest ${recordStats().takes} takes.` : 'Signatures re-checked against this member’s key.'"></span></span> <b x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></b></span></template>
@@ -140,6 +148,68 @@
           </section>
         </template>
 
+        <!-- A judge's record, in the cards an analyst's record uses: the
+             subject and date where a take's are, the call where a take's
+             stance is (a Hold or Update badge), how many questions it found
+             the takes apart on where a take's confidence is, then for a hold
+             its reason, its own account, and the way to the judgement. -->
+        <template x-if="isJudge(member)">
+        <section class="rr-sec" id="record" aria-labelledby="record-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="record-h">Track record</h2>
+            <template x-if="judgementsCapped()"><span class="rr-sec__aside" x-text="`Latest ${judgements.length}`"></span></template>
+          </div>
+          <template x-if="!judgements.length">
+            <div class="rr-empty mp-empty"><p class="rr-empty__t">No judgement published yet</p></div>
+          </template>
+          <div class="rr-takes">
+            <template x-for="j in judgements.slice(0, shown)" :key="j.id">
+              <article class="rr-take rr-take--judgement" x-data="takeCard()">
+                <div class="rr-take__top">
+                  <div class="rr-take__what">
+                    <a class="rr-take__name" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a>
+                    <time class="mp-take__date" :datetime="j.sessionDate" x-text="formatDate(j.sessionDate, 'short')"></time>
+                  </div>
+                  <div class="rr-take__stance">
+                    <template x-if="adviceCall(j)">
+                      <span class="sv__stance-badge rr-advice-badge" :class="`rr-advice-badge--${adviceCall(j).key}`"><i aria-hidden="true"></i><span x-text="adviceCall(j).label"></span></span>
+                    </template>
+                    <template x-if="j.disagreements.length">
+                      <span class="rr-conf">Disagreements <b x-text="j.disagreements.length"></b></span>
+                    </template>
+                  </div>
+                </div>
+                <div class="rr-take__main">
+                  <div>
+                    <template x-if="adviceReason(j)"><p class="rr-advice__why" x-text="adviceReason(j)"></p></template>
+                    <!-- The judge's own words, clamped and opened as a take's
+                         body is (lib/take-card.js). -->
+                    <template x-if="judgementProse(j)">
+                      <div class="rr-take__text" x-ref="text">
+                        <div class="sv__take-body rr-prose" :class="!open && long(judgementProse(j)) ? 'is-clamped' : ''" style="--rr-lines:5" x-html="linkified(judgementProse(j))"></div>
+                      </div>
+                    </template>
+                    <template x-if="long(judgementProse(j))">
+                      <button type="button" class="rr-more" @click="toggle()" :aria-expanded="open ? 'true' : 'false'">
+                        <span x-text="open ? 'Show less' : 'Read full judgement'"></span>
+                      </button>
+                    </template>
+                    <a class="rr-lnk rr-take__act" :href="judgementHref(j)">Read the judgement</a>
+                  </div>
+                </div>
+              </article>
+            </template>
+          </div>
+          <template x-if="judgements.length > shown">
+            <div class="rr-pager">
+              <span x-text="`${shown} of ${judgements.length}`"></span>
+              <div><button type="button" class="rr-btn" @click="shown += 20">Show more</button></div>
+            </div>
+          </template>
+        </section>
+        </template>
+
+        <template x-if="!isJudge(member)">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
@@ -250,6 +320,7 @@
             </div>
           </template>
         </section>
+        </template>
       </div>
     </template>
 

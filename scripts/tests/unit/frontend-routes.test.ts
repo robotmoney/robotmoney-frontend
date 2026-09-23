@@ -294,6 +294,9 @@ describe("frontend route resolution", () => {
     expect(viewFor("/swarm/members/athena")).toBe("/views/swarm/member.html");
     expect(viewFor("/swarm/members/woon")).toBe("/views/swarm/member.html");
     expect(viewFor("/swarm/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe("/views/swarm/take.html");
+    // A consensus judge's judgement: a bigserial id, its own page.
+    expect(viewFor("/swarm/judgements/42")).toBe("/views/swarm/judgement.html");
+    expect(viewFor("/swarm/judgements/42/")).toBe("/views/swarm/judgement.html");
     expect(viewFor("/swarm/2026-07-01/woon")).toBe("/views/swarm/session.html");
     expect(viewFor("/swarm/2026-06-25/woon")).toBe("/views/swarm/session.html");
   });
@@ -344,6 +347,7 @@ describe("frontend route resolution", () => {
       "/admin/swarm/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
       "/swarm/apply",
       "/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8",
+      "/swarm/judgements/42",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
@@ -361,6 +365,7 @@ describe("frontend route resolution", () => {
     expect(viewFor("/committee/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
       viewFor("/swarm/takes/4e9991de-0501-44f5-b21d-254acecd15a8"),
     );
+    expect(viewFor("/committee/judgements/42")).toBe(viewFor("/swarm/judgements/42"));
     expect(viewFor("/committee/apply")).toBe(viewFor("/swarm/apply"));
     expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
       viewFor("/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8"),

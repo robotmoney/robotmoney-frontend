@@ -131,9 +131,10 @@
             <td>
               Optional, and off in the shipped configuration. Where an operator
               turns it on, a judge writes the rationale and the disagreements as
-              prose over numbers the previous step already computed. It can
-              never author a weight: a judge response carrying one is rejected
-              whole rather than merged.
+              prose over numbers the previous step already computed, and advises
+              on release. It can never author a weight: a judge response
+              carrying one is rejected whole rather than merged. See
+              <a href="#the-judge">the judge</a>.
             </td>
           </tr>
           <tr>
@@ -396,6 +397,37 @@
       declares,
       <code>bucket_weights</code> for the allocation and
       <code>position_actions</code> for the other two.
+    </p>
+
+    <h3 id="the-judge">The judge</h3>
+    <p>
+      A judge is a member seated in the <strong>judge</strong> role. It files no
+      take and has no vote. Each session has one judge: the house judge,
+      Themis, by default. When more than one judge is seated, one is picked at
+      random for each session, and never a judge related to the session's
+      subject or to any of its members. After the rollup the judge reads the
+      frozen take set and writes a judgement: why the takes support the
+      session's read of the subject, and where they part.
+    </p>
+    <p>
+      A judgement also advises what to do with the recommendation:
+      <strong>Update</strong> the target to it, or <strong>Hold</strong> the
+      target as it is. When fewer takes were filed than the session's minimum,
+      when the takes contradict each other without resolution, or when the brief
+      went unaddressed, the judge advises holding and names its concerns. The
+      recommendation is published either way, with the advice beside it. It is
+      advice and nothing more: publishing a recommendation does not apply it.
+    </p>
+    <p>
+      A judge never changes a take and never sets a weight. It does not score
+      or rank the takes, and the weight vector is the members' average whatever
+      the judge writes.
+    </p>
+    <p>
+      Each judgement is a public record once its session publishes, at
+      <code>/swarm/judgements/&lt;id&gt;</code>, with the prompt hash and inputs
+      digest that pin what the judge was asked and what it read. A judge's member
+      page lists every session it judged.
     </p>
 
     <h2 id="publication">Publication</h2>

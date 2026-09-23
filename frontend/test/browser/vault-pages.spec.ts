@@ -361,9 +361,12 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   await expect(page.locator("#allocation .rr-meta .rr-meta__i")).toHaveText([/^Recommended/, /^Governance gap/]);
   await expect(page.locator("#allocation")).not.toContainText("Applied");
 
-  // The Base feed serves no history, activity or router weights: no empty
-  // sections standing in for them.
-  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "mechanics", "deposit"]);
+  // The Base feed serves no history, activity or router weights. The TVL and
+  // position charts and the Activity table keep their frames and say no data
+  // is available; router weights, a disclosure rather than a frame, stay out.
+  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "activity", "mechanics", "deposit"]);
+  await expect(page.locator("#holdings .rm-nodata__h")).toHaveText(["No data available", "No data available"]);
+  await expect(page.locator("#activity .rr-empty__t")).toHaveText("No data available");
   await expect(page.locator(".rr-disc")).toHaveCount(0);
 
   const mech = page.locator("#mechanics .rr-dl");
@@ -442,7 +445,7 @@ test("a scheduler catch-up reads as caught up late, not as stale or stub", async
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
 });
 
-test("rmAGENT on Base is not live: its allocation and mechanics, nothing to hold", async ({ page }) => {
+test("rmAGENT on Base is not live: every frame drawn, each saying it holds nothing yet", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
   await setMode(page, "base");
@@ -452,9 +455,15 @@ test("rmAGENT on Base is not live: its allocation and mechanics, nothing to hold
   await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
   await expect(fact(page, "Network").locator("b")).toHaveText("Base");
   await expect(fact(page, "Share price")).toHaveCount(0);
-  // Nothing to hold, so no Holdings. Nothing stated about its mechanics, so
-  // its risk line stands alone, with no heading over one line.
-  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["allocation"]);
+  // Holdings and Activity keep their frames, as the vault subject's do: $0,
+  // charts with no data yet, and one row each. Nothing stated about its
+  // mechanics, so its risk line stands alone, with no heading over one line.
+  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "activity"]);
+  await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$0");
+  await expect(page.locator("#holdings .rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Over time"]);
+  await expect(page.locator("#holdings .rm-nodata__h")).toHaveText(["No data yet", "No data yet"]);
+  await expect(page.locator("#holdings .rr-holdings .rr-empty__t")).toHaveText("No positions");
+  await expect(page.locator("#activity .rr-empty__t")).toHaveText("No activity yet");
   await expect(page.locator("#mechanics h2")).toHaveCount(0);
   await expect(page.locator("#mechanics .rr-callout__b")).toContainText("Capital and returns are not guaranteed.");
   // The archive's 3% against the policy's 5%, and nothing held against the
@@ -663,7 +672,7 @@ test("the switch carries from /allocation to a vault by its link, survives a rel
   }
   await navigate(page, "/vault/rmagent");
   await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
-  await expect(page.locator("#holdings")).toHaveCount(0);
+  await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$0");
   await expectNoBrowserErrors(errors);
 });
 
@@ -684,9 +693,11 @@ test("devnet-unreadable: rmPROTO cannot be read, so no vault has an actual weigh
   await expect(fact(page, "Status")).toContainText("Data unavailable");
   // Its Holdings keep their frame and say so once: History and Activity come
   // from the same read, so they do not repeat it.
-  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "mechanics"]);
+  expect(await page.locator("section.rr-sec").evaluateAll((els) => els.map((e) => e.id))).toEqual(["holdings", "allocation", "activity", "mechanics"]);
   await expect(page.locator("#holdings .rr-empty__t")).toHaveText("Holdings unavailable");
-  await expect(page.locator("#holdings .rr-stat__v")).toHaveCount(0);
+  await expect(page.locator("#holdings .rr-stat__v")).toHaveText("—");
+  await expect(page.locator("#holdings .rm-nodata__h")).toHaveText(["No data available", "No data available"]);
+  await expect(page.locator("#activity .rr-empty__t")).toHaveText("No data available");
   await expect(layerRow(page, "Actual")).toHaveText("—");
   await navigate(page, "/vault/rmusdc");
   await expect(layerRow(page, "Actual")).toHaveText("—");
@@ -788,10 +799,12 @@ test("the detail failing leaves the overview's figures and names the gap where t
   await page.route("**/data/vaults/devnet/rmusdc.json", (route) => route.fulfill({ status: 503, body: "down" }));
   await openVault(page, "rmusdc");
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$72,000");
-  // Named once, in the Holdings frame: History and Activity are the same
-  // read, so they are not drawn to repeat it.
+  // Named once, in the Positions row; TVL and Activity keep their frames with
+  // no data available. Positions over time are the subject's fixture, a
+  // separate read, so they still draw.
   await expect(page.locator("#holdings .rr-empty__t")).toHaveText("Vault detail unavailable");
-  await expect(page.locator("#tvl, #activity")).toHaveCount(0);
+  await expect(page.locator("#holdings .rm-nodata__h")).toHaveText(["No data available"]);
+  await expect(page.locator("#activity .rr-empty__t")).toHaveText("No data available");
   await expect(layerRow(page, "Actual")).toHaveText("72%");
 });
 
@@ -920,6 +933,49 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expectNoBrowserErrors(errors);
 });
 
+test("the vault subject's TVL: the archive's own readings and the feed's history, never a fabricated basket", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const venue = (usd: number) => [
+    { token: "MORPHO", chain: "base", value_usd: usd / 3 },
+    { token: "AAVE", chain: "base", value_usd: usd / 3 },
+    { token: "COMPOUND", chain: "base", value_usd: usd / 3 },
+  ];
+  const snapshots = [
+    { subject_id: "robotmoney-vault", date: "2026-08-03", total_value_usd: 202.39, positions: venue(202.39), wallets: [{ label: "vault" }] },
+    { subject_id: "robotmoney-vault", date: "2026-08-04", total_value_usd: 202.85, positions: venue(202.85), wallets: [{ label: "vault" }] },
+    // The smoke fixture's basket, written to production at the cutover.
+    { subject_id: "robotmoney-vault", date: "2026-08-06", total_value_usd: 33601.3, wallets: [], positions: [
+      { token: "ROBOT", chain: "base", value_usd: 16800 }, { token: "ETH", chain: "base", value_usd: 9408 },
+      { token: "USDC", chain: "base", value_usd: 4704 }, { token: "rmUSDC", chain: "base", value_usd: 1680 },
+      { token: "ROBOTMONEY", chain: "base", value_usd: 1009 },
+    ] },
+  ];
+  const history = Array.from({ length: 7 }, (_, i) => ({ t: `2026-08-${String(6 + i).padStart(2, "0")}`, tvlUsd: 203.87 + i / 2 }));
+  const economics = { ...goldenVault(), asOf: "2026-08-13T11:00:00.000Z", tvlUsd: 207.4, history: { tvl: history, sharePrice: [] } };
+  await stubLive(page, economics);
+  await page.route("**/api/swarm/subjects/robotmoney-vault/snapshots**", (route) => route.fulfill(json({ snapshots })));
+  await openWithQuery(page, "/swarm/subjects/robotmoney-vault", "base");
+  await subjectLoaded(page);
+
+  // Aug 3 and 4 from the archive, Aug 6 to 12 from the feed's history (not
+  // the basket), and Aug 13 from the feed now: one line, no reading near $33.6k.
+  const plot = page.locator("#tvl .rr-area__plot");
+  await expect(plot).toHaveAttribute("aria-label", /Aug 3, 2026 to Aug 13, 2026: \$202 to \$207\./);
+  await expect(page.locator("#tvl polyline")).toHaveCount(1);
+  await expect(page.locator("#tvl .rr-area__y span").first()).not.toHaveText(/K/);
+  await expectNoBrowserErrors(errors);
+});
+
+test("rmUSDC's page draws the feed's daily TVL once the feed serves it", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const days = Array.from({ length: 10 }, (_, i) => ({ t: `2026-08-${String(6 + i).padStart(2, "0")}`, tvlUsd: 203.87 + i }));
+  await stubLive(page, { ...goldenVault(), history: { tvl: days, sharePrice: [] } });
+  await openVault(page, "rmusdc");
+  await expect(page.locator("#tvl polyline")).toHaveCount(1);
+  await expect(page.locator("#tvl .rm-nodata__h")).toHaveCount(0);
+  await expectNoBrowserErrors(errors);
+});
+
 test("the vault subject on Base: rmUSDC alone, against the weights in force", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
@@ -957,9 +1013,13 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
   await expect(hold).not.toContainText("Notable");
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
-  // A line needs two readings: both charts' frames say there is one.
+  // TVL draws the archive's readings of rmUSDC's own book up to the feed's
+  // reading now; the sleeves chart has one reading of the four vaults, so its
+  // frame says so.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
-  await expect(hold.locator(".rr-area .rr-empty__t")).toHaveText(["One reading so far", "One reading so far"]);
+  await expect(hold.locator("#tvl polyline")).not.toHaveCount(0);
+  await expect(hold.locator(".rr-area .rm-nodata__h")).toHaveText(["Not enough data yet"]);
+  await expect(hold.locator(".rr-area .rr-empty__t")).toHaveCount(0);
   await expect(hold.locator(".rr-area__legend")).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
   await expect(page.locator("#view")).not.toContainText("Staging devnet");

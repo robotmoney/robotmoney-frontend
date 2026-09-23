@@ -1343,6 +1343,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rs__loading { color: var(--color-text-muted); font-family: var(--font-mono); }
 .rs__error { color: var(--color-warn); font-family: var(--font-mono); }
 .rs__gauges { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 2rem 0; }
+/* The panel's empty state (.rm-nodata) spans the panel, not one gauge's column. */
+.rs__gauges > .rm-nodata { grid-column: 1 / -1; }
 .rs__gauge { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; }
 .rs__gauge-name { font-size: 0.95rem; }
 .rs__gauge-val { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--color-text); margin: 0.25rem 0; }
@@ -1365,7 +1367,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rs__series-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
 .rs__series-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 0.75rem 1rem 1rem; }
 .rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-muted); margin-bottom: 0.5rem; }
-.rs__series-canvas { height: 120px; }
+/* Positioned: an empty chart's .rm-nodata--fill lies over this box. */
+.rs__series-canvas { height: 120px; position: relative; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* allocation (/allocation) residue — the page is built almost entirely from the
@@ -1729,6 +1732,15 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
   transition: background 100ms var(--ease-out-expo), border-color 100ms var(--ease-out-expo); }
 .rr .rr-cta:hover, .rr .rr-cta:focus-visible { background: var(--color-surface); border-color: var(--color-text); }
+/* A record that is not there, or could not be read: the page's own frame
+   (breadcrumb, title, one line) and the ways on, as outlined buttons in a
+   row. It holds the body's height so the disclaimer and footer do not ride
+   up under one line. */
+.rr-missing { min-height: 50vh; }
+.rr-missing .rr-head { padding-bottom: 0; }
+.rr-missing__acts { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2.25rem; }
+.rr-missing__acts .rr-cta { display: inline-flex; min-width: 15rem; margin-top: 0; background: none; line-height: 1.5; cursor: pointer; text-decoration: none; }
+@media (max-width: 560px) { .rr-missing__acts .rr-cta { flex: 1 1 100%; min-width: 0; } }
 
 /* Stance tallies, one dot and count per stance that has any. */
 .rr-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 1.5rem 0 0; font-size: 0.75rem; }
@@ -1745,16 +1757,15 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-list li::before { content: ""; position: absolute; left: 0; top: 0.8em; width: 0.375rem; height: 1px; background: var(--color-text-muted); }
 .rr-block ~ .rr-block { margin-top: 2.25rem; }
 
-/* A disagreement: a question row that opens onto each member's view. */
+/* A disagreement: a question row that opens onto its members, one table row
+   each (.rr-views-t): the stance and confidence their take filed and the one
+   way to it. */
 .rr-q .rr-disc__btn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; padding: 1rem 0; }
 .rr-q .rr-disc__btn b { display: block; font-weight: 500; font-size: 0.875rem; }
 .rr-q .rr-disc__btn::after { margin-left: 0; }
-.rr-views { display: grid; gap: 0; }
-.rr-view { display: grid; grid-template-columns: 10rem 11rem minmax(0, 1fr); gap: 0.5rem 1.5rem; padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border); font-size: 0.875rem; line-height: 1.6; }
-.rr-view > p { margin: 0; color: var(--color-text-soft); }
-.rr-settles { margin: 1rem 0 0; font-size: 0.875rem; color: var(--color-text-soft); }
-@media (max-width: 720px) { .rr-view { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
+.rr-views-t { min-width: 28rem; }
+.rr-views-t tbody th small { max-width: 36rem; white-space: normal; line-height: 1.5; }
+.rr-views-t .rr-dim { color: var(--color-text-muted); }
 
 /* A take: hairline-separated, body clamped, proposed weights aside. */
 .rr-take { padding: 1.5rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
@@ -1818,6 +1829,9 @@ a.sv__vfy { text-decoration: none; }
   .rr-recnav > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
   .rr-recnav a { white-space: nowrap; }
 }
+/* Where a reader goes next from a record (a take's receipt, a judgement):
+   links in a row, not a record's older / all / newer. */
+.rr .rr-recnav--flow { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; }
 
 /* The history table. */
 .rr-tablewrap { width: 100%; overflow-x: auto; }
@@ -2014,8 +2028,23 @@ a.sv__vfy { text-decoration: none; }
 .rr-pair { margin-top: 2.25rem; align-items: start; }
 .rr-disc--lead > .rr-disc__anim > .rr-disc__clip > .rr-disc__body { padding-top: 0.5rem; }
 .rr-disc--lead .rr-q:first-of-type { border-top: 0; }
-.rr-views--stack .rr-view { grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 1rem; }
-.rr-views--stack .rr-view > p { grid-column: 1 / -1; }
+/* A judge's opinion: its advice on release as a line of words, never a
+   status chip, then its own account of the takes. */
+.rr-advice { margin: 0 0 1rem; }
+.rr-advice__l { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text); }
+.rr-advice__k { font-size: 0.75rem; color: var(--color-text-muted); }
+/* The judge's call, in the stance badge's shape (.sv__stance-badge): Hold in
+   Beacon, the brand's point for attention; Update in no hue at all, since
+   green would read as money and a stance colour as a market view. */
+.rr-advice-badge--hold { border-color: color-mix(in srgb, var(--color-beacon) 40%, transparent); color: var(--color-beacon); }
+.rr-advice-badge--hold i { background: var(--color-beacon); }
+.rr-advice-badge--update { border-color: var(--color-border-light); color: var(--color-text-soft); }
+.rr-advice-badge--update i { background: var(--color-text-muted); }
+/* A record card's reason to hold, over the judge's own words. */
+.rr-advice__why { margin: 0 0 0.5rem; font-size: 0.875rem; color: var(--color-text); }
+.rr-advice .rr-list { margin-top: 0.5rem; }
+.rr-judge__differ { margin-top: 1.5rem; }
+
 @media (max-width: 860px) {
   .rr-pair { row-gap: 0; }
   .rr-pair > .rr-disc ~ .rr-disc { border-top: 0; }
