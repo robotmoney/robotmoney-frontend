@@ -282,14 +282,20 @@ describe("revalidateAfterAcquire — §2, the plan is re-checked against the loc
 
     const [identityRow] = await sql<{ kind: "production" | "rehearsal" }[]>`
       SELECT kind FROM deployment_identity LIMIT 1`;
-    const [ledgerRow] = await sql<{ filename: string }[]>`
-      SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1`;
+    // The ledger column is `name`, NOT `filename`. This test named a column
+    // that has never existed (`backend/src/db/migrate.ts:36` creates the table,
+    // and `:47` reads `SELECT name FROM schema_migrations`), so it threw before
+    // reaching `revalidateAfterAcquire` and no implementation could pass it.
+    // The value is still the migration's full filename — which is the point,
+    // since spec §8.1 makes the filename list, never the number, the identity.
+    const [ledgerRow] = await sql<{ name: string }[]>`
+      SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1`;
     const [manifestRow] = await sql<{ content_hash: string }[]>`
       SELECT content_hash FROM schema_manifest LIMIT 1`;
 
     const verdict = await revalidateAfterAcquire(result.lock, {
       identity: identityRow?.kind ?? "rehearsal",
-      ledgerHead: ledgerRow?.filename ?? null,
+      ledgerHead: ledgerRow?.name ?? null,
       manifestHash: manifestRow?.content_hash ?? null,
     });
     expect(verdict.ok).toBe(true);

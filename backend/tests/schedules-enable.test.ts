@@ -313,9 +313,28 @@ describe("applyEnablement — §6.3, one column, one transaction [integration ti
     const plan = await readEnablementPlan(heldLock());
     await applyEnablement(heldLock(), plan);
 
+    // SELECT THE ROW THIS TEST INSERTED, by its cron.
+    //
+    // This used to be `WHERE kind = 'wallet.sample_balances' LIMIT 1` with no
+    // ORDER BY, which could not work: seed.ts already seeds that kind ENABLED
+    // at two different crons (`* * * * *` and `3 * * * *`), and the unique index
+    // is on (kind, cron), so the `ON CONFLICT DO NOTHING` above inserts a THIRD
+    // row rather than being skipped. The unordered LIMIT 1 then returned
+    // whichever row Postgres felt like — usually a pre-seeded enabled one — and
+    // the assertion failed no matter how correct applyEnablement was.
+    //
+    // The guarantee under test is unchanged and now actually tested: a non-swarm
+    // row this test disabled stays disabled.
     const [other] = await sql<{ enabled: boolean }[]>`
-      SELECT enabled FROM job_schedules WHERE kind = 'wallet.sample_balances' LIMIT 1`;
+      SELECT enabled FROM job_schedules
+       WHERE kind = 'wallet.sample_balances' AND cron = '*/1 * * * *'`;
     expect(other?.enabled).toBe(false);
+    // And the pre-seeded siblings were not touched either — applyEnablement
+    // must not widen from "the five swarm.* kinds" to "this kind".
+    const untouched = await sql<{ enabled: boolean }[]>`
+      SELECT enabled FROM job_schedules
+       WHERE kind = 'wallet.sample_balances' AND cron <> '*/1 * * * *'`;
+    for (const row of untouched) expect(row.enabled).toBe(true);
   });
 
   test("an already-enabled row is a reported no-op and is not rewritten", async () => {

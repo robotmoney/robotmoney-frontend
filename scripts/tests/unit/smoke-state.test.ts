@@ -419,7 +419,26 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
     );
 
     const child = Bun.spawn(["bun", holderScript], { stdout: "pipe", stderr: "pipe" });
-    const stdout = await new Response(child.stdout).text();
+    // READ UNTIL THE MARKER, NEVER TO EOF.
+    //
+    // This used to be `await new Response(child.stdout).text()`, which waits for
+    // stdout to CLOSE. The holder deliberately never exits — that is the whole
+    // point, it has to be alive and holding the lock when SIGKILL arrives — so
+    // its stdout never closes and the drain never resolved. The test hung for
+    // every implementation, including one that does not import the module at
+    // all, so it could never have been made to pass by writing better code.
+    //
+    // Reading chunk by chunk until "locked" appears is what the test actually
+    // means: wait until the holder reports it HAS the lock, then kill it.
+    const decoder = new TextDecoder();
+    let stdout = "";
+    const reader = child.stdout.getReader();
+    while (!stdout.includes("locked")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      stdout += decoder.decode(value, { stream: true });
+    }
+    reader.releaseLock();
     expect(stdout).toContain("locked");
     child.kill("SIGKILL");
     await child.exited;
