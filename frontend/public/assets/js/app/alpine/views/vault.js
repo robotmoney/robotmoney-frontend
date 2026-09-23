@@ -233,6 +233,28 @@ export function registerVaultView(Alpine) {
     },
 
     // ── holdings ─────────────────────────────────────────────────────────────
+    // Every vault keeps Holdings and Activity, each part saying what it knows:
+    // what the vault holds when live, nothing when it is not deployed here,
+    // and unknown when its read failed.
+    holdingsValue() {
+      if (this.isLive()) return fmtUsd(this.record()?.tvlUsd);
+      return this.record()?.availability === "not_on_network" ? fmtUsd(0) : "—";
+    },
+    // Nothing it holds could be read: the overview could not read the vault,
+    // or the detail read failed.
+    holdingsUnread() {
+      return this.isUnreadable() || !!this.detailError;
+    },
+    // A chart's empty title: "No data available" where the data exists and
+    // was not read or is not served (a failed read, or a live vault whose
+    // source keeps no series, as the Base feed does); "No data yet" where
+    // there is none yet.
+    historyEmptyTitle() {
+      return this.holdingsUnread() || (this.isLive() && !this.hasHistory()) ? "No data available" : "No data yet";
+    },
+    positionsEmptyText() {
+      return this.holdingsUnread() ? this.detailError || "Holdings unavailable" : "No positions";
+    },
     holdings() {
       const h = this.record()?.holdings;
       return Array.isArray(h) ? h : [];
@@ -415,6 +437,9 @@ export function registerVaultView(Alpine) {
     hasActivity() {
       return Array.isArray(this.record()?.activity);
     },
+    activityEmptyText() {
+      return this.hasActivity() || this.record()?.availability === "not_on_network" ? "No activity yet" : "No data available";
+    },
     activityKind(a) {
       const k = String(a?.kind ?? "");
       return ACTIVITY_LABEL[k.toLowerCase()] || sentenceCase(k) || "—";
@@ -497,7 +522,14 @@ export function registerVaultView(Alpine) {
       const m = this.posModel();
       return m ? shareChartSvg({ xs: m.xs, series: m.series }) : "";
     },
-    posEmptyLabel() { return this.posRows().length === 1 ? "One reading so far" : "No position history yet"; },
+    // The chart's empty title alone: one reading is "Not enough data yet",
+    // and otherwise it reads as the TVL chart's does. Positions over time come
+    // only from the devnet fixture (posSnaps), so a live vault without it has
+    // a history this page does not read.
+    posEmptyTitle() {
+      if (this.posRows().length === 1) return "Not enough data yet";
+      return this.holdingsUnread() || (this.isLive() && !Array.isArray(this.posSnaps)) ? "No data available" : "No data yet";
+    },
     posTicks() {
       const m = this.posModel();
       if (!m) return [];

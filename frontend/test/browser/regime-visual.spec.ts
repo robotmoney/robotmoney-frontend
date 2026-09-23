@@ -105,6 +105,41 @@ test("regime dashboard matches its visual baseline", async ({ page }) => {
   });
 });
 
+// A chart with nothing to draw says so (.rm-nodata) over its own box. The
+// history line needs two readings: with one, Chart.js drew its axes around
+// nothing, and with none the canvas was left blank. It is not drawn at all now,
+// since an empty Chart.js still paints gridlines under the empty state.
+test("a history of one reading shows the empty chart, not axes around nothing", async ({ page }) => {
+  await stub(page);
+  const dto = regimeDto();
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...dto, history: dto.history.slice(-1) }) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const empty = page.locator(".rv__chart-card .rm-nodata");
+  await expect(empty.locator(".rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(empty.locator(".rm-nodata__d")).toHaveText("One reading so far");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drawn = await page.evaluate(() => !!(window as any).Chart.getChart(document.querySelector(".rv__chart canvas")));
+  expect(drawn).toBe(false);
+});
+
+// A failed read leaves no dashboard to render. Its place holds the empty
+// chart, under the outage line (api-unreachable.spec.ts), instead of the
+// methodology rising into a blank page.
+test("a failed read holds the dashboard's place with the empty chart", async ({ page }) => {
+  await stub(page);
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  await expect(page.locator(".rv__error")).toBeVisible();
+  await expect(page.locator(".rv__body > .rm-nodata .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".rv__dash")).toHaveCount(0);
+});
+
 // The baseline above is captured at ONE width and cannot see this: a panel
 // table wider than the card holding it. That had been true at every viewport
 // under about 1250px — the grid went three-across from 768px and the card's

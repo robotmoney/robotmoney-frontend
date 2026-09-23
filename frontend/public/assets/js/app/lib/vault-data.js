@@ -146,6 +146,19 @@ export const ADAPTER_DISPLAY = {
   compound: { label: "Compound III USDC", venueType: "Pooled market" },
 };
 
+// Whether a reading of the vault subject's book is rmUSDC's own: every
+// position one of its lending venues or its idle USDC, and something held.
+// The archive's readings (to Aug 4) are; the smoke fixture's basket written
+// to production at each cutover (ROBOT, ETH, USDC, rmUSDC, ROBOTMONEY) is not.
+/** @param {any} snap */
+export function isVaultBookReading(snap) {
+  const positions = Array.isArray(snap?.positions) ? snap.positions : [];
+  return positions.length > 0 && positions.every((/** @type {any} */ p) => {
+    const token = String(p?.token ?? p?.symbol ?? "").toLowerCase();
+    return !!ADAPTER_DISPLAY[token] || token === "usdc";
+  });
+}
+
 // A position in the vault swarm subject's book by the name its vault page
 // gives it: rmUSDC's adapters by their ADAPTER_DISPLAY label (the archive
 // reads them as MORPHO, AAVE, COMPOUND), a vault's USDC as "Idle USDC", and
@@ -528,6 +541,12 @@ export function legacyRaw(economics) {
             address: v.baseAddress,
             tvlUsd: tvl,
             sharePrice: numberOrNull(e.sharePrice),
+            // The feed's daily readings, once it serves them (the hourly
+            // samples it already keeps, one per UTC day); absent until then,
+            // so the page keeps its "no data available" frame.
+            ...(Array.isArray(e.history?.tvl)
+              ? { history: { tvl: e.history.tvl, sharePrice: Array.isArray(e.history.sharePrice) ? e.history.sharePrice : [] } }
+              : {}),
             // skill.md: redeem returns USDC minus a 0.25% exit fee.
             exitFeeBps: 25,
             // changelog.html launch terms: "No management fee, and no audit."

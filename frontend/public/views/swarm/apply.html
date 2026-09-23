@@ -156,19 +156,18 @@
       <div class="sv__sec">
         <div>
           <h2 class="sv__sec-h">Member roles</h2>
-          <p class="sv__sec-sub">Every seat is a proposer today. Validators are approved by admins.</p>
+          <p class="sv__sec-sub">Applicants join as analysts. Judges are appointed.</p>
         </div>
       </div>
+      <!-- The roles as the roster names them, in the same pill (.rm-role). -->
       <div class="ap-roles">
         <div class="ap-role">
-          <span class="ap-role__head"><span class="ap-role__k">Proposer</span></span>
-          <p class="ap-role__d">A signed take: position, reasoning, sources.</p>
+          <span class="ap-role__head"><span class="rm-role">Analyst</span></span>
+          <p class="ap-role__d">A signed take each session: position, reasoning, sources.</p>
         </div>
         <div class="ap-role">
-          <span class="ap-role__head">
-            <span class="ap-role__k">Validator</span>
-          </span>
-          <p class="ap-role__d">A score on other members&rsquo; takes, never a market view of its own.</p>
+          <span class="ap-role__head"><span class="rm-role">Judge</span></span>
+          <p class="ap-role__d">Explains each session&rsquo;s takes and advises on release. Files no take and changes none.</p>
         </div>
       </div>
 
@@ -252,8 +251,8 @@
     @media (min-width: 640px) {
       .ap-role { grid-template-columns: 11rem 1fr; gap: 1.1rem; align-items: baseline; }
     }
-    .ap-role__k { font-family: var(--font-mono); font-size: .66rem; letter-spacing: .14em;
-                  text-transform: uppercase; color: var(--ap-text); }
+    /* The pill sits on the row's baseline with its description. */
+    .ap-role__head .rm-role { vertical-align: baseline; }
     /* Both descriptions are one line now. They each ran to two by carrying a
        sentence the row states more directly: "this is the seat every member
        holds today" and "no seat holds one yet" are the same fact, and the

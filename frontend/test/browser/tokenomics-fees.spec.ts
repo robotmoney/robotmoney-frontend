@@ -94,6 +94,20 @@ test("tokenomics fee-split reflects the SERVED percentages, not baked 57/40/3 li
   await expect(page.locator(".tok__legend-item").nth(0)).toContainText("Protocol (50%)");
 });
 
+// A failed read leaves no split to draw, and the pie's canvas used to stay
+// blank with nothing saying why. It now carries the empty chart (.rm-nodata)
+// over its own box. The later-registered route wins over stubEnvironment's.
+test("a failed token-metrics read shows the empty chart where the fee pie would be", async ({ page }) => {
+  await stubEnvironment(page, loadTokenMetricsGolden());
+  await page.route("**/api/dashboards/token-metrics", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) }));
+  await page.goto("/");
+  await navigate(page, "/tokenomics");
+
+  await expect(page.locator("#fees .tok__donut-wrap .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".tok__fee-pct").first()).toHaveText("—");
+});
+
 // ── Migrated from allocation-view.spec.ts (issue #800, Cluster A) ────────────
 // RM-105 (PR #774) deleted the /allocation route, taking with it the only other
 // rendering of the buyback history — and its spec was left driving an address

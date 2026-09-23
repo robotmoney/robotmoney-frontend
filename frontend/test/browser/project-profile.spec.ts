@@ -182,13 +182,39 @@ test("renders history charts when the DTO carries a non-empty series, not the em
   await expect(page.locator('[data-chart-card="marketCapUsd"] canvas')).toBeVisible();
 });
 
-test("renders 'Not enough history yet.' when the DTO's history series is empty", async ({ page }) => {
+test("renders the empty chart for the section when the DTO's history series is empty", async ({ page }) => {
   mockProjectDetail(page, { project: { ...PROJECT_DETAIL.project, history: [] } });
   await page.goto("/");
   await navigate(page, `/projects/${SLUG}`);
   await expect(page.locator("[data-profile-name]")).toBeVisible();
 
-  await expect(page.locator("[data-profile-history-empty]")).toHaveText("Not enough history yet.");
+  await expect(page.locator("[data-profile-history-empty]")).toHaveText("No data yet");
+});
+
+test("one day of history is one empty chart for the section, not five blank axes", async ({ page }) => {
+  mockProjectDetail(page, { project: { ...PROJECT_DETAIL.project, history: PROJECT_DETAIL.project.history.slice(0, 1) } });
+  await page.goto("/");
+  await navigate(page, `/projects/${SLUG}`);
+  await expect(page.locator("[data-profile-name]")).toBeVisible();
+
+  await expect(page.locator("[data-profile-history-empty] .rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(page.locator("[data-profile-history-empty] .rm-nodata__d")).toHaveText("One reading so far");
+  await expect(page.locator("[data-chart-card]")).toHaveCount(0);
+});
+
+// A metric the backend never recorded is null on every day; its card alone
+// shows the empty chart while the others draw.
+test("a metric with no readings shows the empty chart on its own card only", async ({ page }) => {
+  const history = PROJECT_DETAIL.project.history.map((h) => ({ ...h, marketCapUsd: null }));
+  mockProjectDetail(page, { project: { ...PROJECT_DETAIL.project, history } });
+  await page.goto("/");
+  await navigate(page, `/projects/${SLUG}`);
+  await expect(page.locator("[data-profile-name]")).toBeVisible();
+
+  await expect(page.locator('[data-chart-card="marketCapUsd"] .rm-nodata__h')).toHaveText("No data yet");
+  await expect(page.locator('[data-chart-card="marketCapUsd"] canvas')).toHaveCount(0);
+  await expect(page.locator('[data-chart-card="tokenPriceUsd"] canvas')).toBeVisible();
+  await expect(page.locator("[data-chart-empty]")).toHaveCount(1);
 });
 
 test("renders 'Project not found.' on a 404 from the backend", async ({ page }) => {

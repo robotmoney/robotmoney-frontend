@@ -54,7 +54,8 @@
            indistinguishable from a wallet genuinely holding $0. Surfaced explicitly,
            same pattern as regime.html/swarm.html/projects.html. -->
       <p class="a2-status" x-show="loading">Loading wallet performance…</p>
-      <p class="a2-status a2-status--error" x-show="error" x-text="error" x-cloak></p>
+      <!-- A failed read is said by the charts and the table themselves ("No
+           data available"), not by the API's own error text above them. -->
 
       <!-- issue #614 AC5: discloses any unrecoverable gap window. seamMessage()
            is null (and this stays hidden) once no day in range is missing. -->
@@ -63,7 +64,10 @@
         <span x-text="seamMessage()"></span>
       </div>
 
-      <div class="a2-charts" x-show="!loading && !error">
+      <!-- Shown on a failed read too: each chart keeps its frame and says it
+           has no data available, over the canvas's own box (.rm-nodata--fill),
+           rather than the section vanishing. -->
+      <div class="a2-charts" x-show="!loading">
 
         <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
         <div class="a2-card">
@@ -71,7 +75,12 @@
             <h3 class="a2-card__title">Wallet Value Over Time</h3>
             <p class="a2-card__sub">Combined value of the protocol wallets, in USD</p>
           </div>
-          <div class="a2-chart"><canvas x-ref="aum"></canvas></div>
+          <div class="a2-chart">
+            <canvas x-ref="aum"></canvas>
+            <template x-if="chartEmpty()">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><p class="rm-nodata__d" x-show="chartEmptyDetail()" x-text="chartEmptyDetail()"></p></div>
+            </template>
+          </div>
         </div>
 
         <!-- Percentage allocation chart (Chart.js stacked area) -->
@@ -80,16 +89,24 @@
             <h3 class="a2-card__title">Allocation Over Time</h3>
             <p class="a2-card__sub">Asset composition as a percentage of the wallet total</p>
           </div>
-          <div class="a2-chart"><canvas x-ref="alloc"></canvas></div>
+          <div class="a2-chart">
+            <canvas x-ref="alloc"></canvas>
+            <template x-if="chartEmpty()">
+              <div class="rm-nodata rm-nodata--fill"><p class="rm-nodata__h" x-text="chartEmptyTitle()"></p><p class="rm-nodata__d" x-show="chartEmptyDetail()" x-text="chartEmptyDetail()"></p></div>
+            </template>
+          </div>
         </div>
 
       </div>
 
       <!-- Historical Data table (last 5 collapsed / all 99 via Show All) -->
-      <div class="a2-tablewrap" x-show="!loading && !error">
+      <!-- Kept on a failed read like the charts: the table holds its head and
+           one row saying what is not there. The toggle only shows once there
+           are rows beyond the last five for it to reveal. -->
+      <div class="a2-tablewrap" x-show="!loading">
         <div class="a2-table__head">
           <h3 class="a2-card__title">Historical Data</h3>
-          <button type="button" class="a2-table__toggle" @click="showAll = !showAll"
+          <button type="button" class="a2-table__toggle" x-show="rows.length > 5" @click="showAll = !showAll"
                   x-text="showAll ? 'Show Last 5' : 'Show All'"></button>
         </div>
         <div class="a2-table__scroll">
@@ -120,6 +137,9 @@
                   </template>
                   <td class="a2-r a2-total" x-text="fmtUsd(row.aum)"></td>
                 </tr>
+              </template>
+              <template x-if="!rows.length">
+                <tr><td class="a2-empty" :colspan="columns.length + 2"><span class="rr-empty__t" x-text="error ? 'No data available' : 'No data yet'"></span></td></tr>
               </template>
             </tbody>
           </table>
@@ -423,6 +443,12 @@
 .a2-table .a2-total {
   color: var(--color-accent);
   font-weight: 700;
+}
+/* The one row an empty table keeps (the site's .rr-table__empty, for this
+   page's own table). */
+.a2-table td.a2-empty {
+  padding: 2.25rem 1rem;
+  text-align: center;
 }
 
 .a2-table__note {

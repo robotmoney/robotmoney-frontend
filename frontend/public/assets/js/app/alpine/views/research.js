@@ -31,13 +31,34 @@ export function registerResearchView(Alpine) {
       return inds && typeof inds === "object" ? Object.keys(inds) : [];
     },
     prettify(k) { return String(k).replace(/_/g, " "); },
+    seriesPoints(key) {
+      const pts = this.payload?.indicators?.[key];
+      return Array.isArray(pts) ? pts.filter((p) => p && p.value != null).slice(-180) : [];
+    },
+    // The chart's empty state (.rm-nodata), or null while it can draw. Nothing
+    // is said while the read is in flight. A failed read is no data available;
+    // a series that is missing or all gaps is no data yet; one reading is not
+    // enough for a line (Chart.js draws a lone point as nothing at radius 0).
+    seriesEmpty(key) {
+      if (this.loading) return null;
+      if (this.error) return "No data available";
+      const n = this.seriesPoints(key).length;
+      return n === 0 ? "No data yet" : n === 1 ? "Not enough data yet" : null;
+    },
+    seriesEmptyDetail(key) {
+      return !this.loading && !this.error && this.seriesPoints(key).length === 1 ? "One reading so far" : "";
+    },
+    // The live panel's empty state: the same states, for the gauges.
+    gaugesEmpty() {
+      if (this.loading) return null;
+      if (this.error) return "No data available";
+      return this.payload?.gauges?.length ? null : "No data yet";
+    },
     drawSeriesCharts() {
-      const inds = this.payload?.indicators;
-      if (!inds || !window.Chart || !this.$root) return;
+      if (!this.payload?.indicators || !window.Chart || !this.$root) return;
       for (const canvas of this.$root.querySelectorAll("canvas[data-series]")) {
-        const key = canvas.getAttribute("data-series");
-        const pts = (inds[key] || []).filter((p) => p && p.value != null).slice(-180);
-        if (!pts.length) continue;
+        const pts = this.seriesPoints(canvas.getAttribute("data-series"));
+        if (pts.length < 2) continue;
         new window.Chart(canvas, {
           type: "line",
           data: {

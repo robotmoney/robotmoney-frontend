@@ -140,6 +140,12 @@ export function registerWalletPerfView(Alpine) {
       if (sp500) parts.push(sp500);
       return parts.length ? parts.join(" ") : null;
     },
+    // The charts' empty state (.rm-nodata). A stacked area needs two days to
+    // draw: with one, Chart.js draws its axes around nothing. A failed read
+    // has no days at all.
+    chartEmpty() { return !!this.error || this.rows.length < 2; },
+    chartEmptyTitle() { return this.error ? "No data available" : this.rows.length === 1 ? "Not enough data yet" : "No data yet"; },
+    chartEmptyDetail() { return !this.error && this.rows.length === 1 ? "One day so far" : ""; },
     // Collapsed = last 5 snapshots; "Show All" expands to the full series.
     visibleRows() { return this.showAll ? this.rows : this.rows.slice(-5); },
     fmtUsd(v) { return "$" + Number(v).toLocaleString("en-US"); },
@@ -193,6 +199,9 @@ export function registerWalletPerfView(Alpine) {
       this._charts.push(instance);
     },
     draw() {
+      // Not drawn at all when empty: an empty Chart.js still paints its axes
+      // and gridlines under the empty state laid over the canvas.
+      if (this.chartEmpty()) return;
       this._chart(this.$refs.aum, this._series("aum"), 140000, 20000, (v) => "$" + (v / 1000).toFixed(0) + "k",
         (c) => `${c.dataset.label}: $${(+c.parsed.y).toLocaleString("en-US", { maximumFractionDigits: 0 })}`);
       this._chart(this.$refs.alloc, this._series("pct"), 120, 20, (v) => v + "%",
