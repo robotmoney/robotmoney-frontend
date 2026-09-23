@@ -127,9 +127,12 @@
           <p>The Robot Money Vault has one page for all four vaults. It leads with the combined TVL, the time-weighted return since inception and how many vaults are live. Below, each sleeve's value and actual weight sit against its target with the drift between them, each sleeve's weight is charted over time with the target drawn over it, and every position is listed by sleeve or as one list.</p>
           <p>On Base today it holds one vault, Fixed Income, and its charts fill in as readings accumulate.</p>
           <div class="cl__links"><a class="cl__lnk" href="/swarm/subjects/robotmoney-vault">The Robot Money Vault</a></div>
-          <figure class="cl__media">
-            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/swarm/subjects/robotmoney-vault</div><img src="/assets/img/changelog/vault-portfolio.jpg" width="1536" height="833" loading="lazy" decoding="async" alt="A dark panel headed By sleeve: a donut ring reading 72% Fixed Income beside a table of four sleeves with Value, Actual, Target and Drift. Fixed Income (rmUSDC) $72,000, 72% against 70%, +2 pp; Small Cap Tokens (rmAGENT) $9,000, 9% against 10%, −1 pp; Protocol Tokens (rmPROTO) $14,000, 14% against 15%, −1 pp; Real World Assets (rmRWA) $5,000, 5% against 5%. Below it, a chart headed Sleeves over time stacks each sleeve's weight from Sep 3 to Sep 17, green Fixed Income at the bottom, then cyan Small Cap Tokens, orange Protocol Tokens and grey Real World Assets, with dashed lines marking the targets."></div></div>
-            <figcaption class="cl__cap">Four sleeves against their targets, and each sleeve over time, on our devnet with test data</figcaption>
+          <!-- The whole page, not a crop: a 1280px capture shown at the full
+               column and scrolled inside its window, so its tables stay
+               readable. -->
+          <figure class="cl__media cl__media--page">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/swarm/subjects/robotmoney-vault</div><div class="cl__scroll" tabindex="0" role="region" aria-label="The Robot Money Vault page"><img src="/assets/img/changelog/vault-page.jpg" width="1920" height="5700" loading="lazy" decoding="async" alt="The Robot Money Vault page. A strip reads TVL $100,000, return since inception +2.19%, 4 of 4 vaults live, regime risk-on. The latest recommendation holds 95% Fixed Income and 5% Small Cap Tokens, beside the reasoning of the session it came from. Holdings: $100,000 and a TVL chart rising from Sep 3 to Sep 17; By sleeve, a ring and a table of each sleeve's value, actual weight, target and drift (Fixed Income $72,000, 72% against 70%, +2 pp; Small Cap Tokens $9,000, 9% against 10%; Protocol Tokens $14,000, 14% against 15%; Real World Assets $5,000, 5% against 5%); Sleeves over time, each sleeve's weight stacked with the targets dashed over it; By position, every position grouped under its vault with amount, price, value and weight. Activity lists deposits and withdrawals by date, sleeve, account, shares and assets."></div></div></div>
+            <figcaption class="cl__cap">The Robot Money Vault page on our devnet. Holdings and activity are test data.</figcaption>
           </figure>
         </article>
 
@@ -143,6 +146,12 @@
             <li>A session's receipt returns its exact signed bytes, so a copy anchored on chain can be checked byte for byte. The verified view has its own address.</li>
             <li>The API reports the exact build it runs, for anyone checking a release.</li>
             <li>The sleeves have their new names across the site: Fixed Income, Small Cap Tokens, Protocol Tokens and Real World Assets.</li>
+            <li>The treasury's page reads its holdings from the live wallet valuation, and leads with its value and its 24-hour and 30-day change.</li>
+            <li>Woon carries the mark of peaq, which runs it, and Zyfai carries its own.</li>
+          </ul>
+          <h4 class="cl__also-k">Fixes</h4>
+          <ul>
+            <li>The Robot Money Vault, treasury and Woon pages no longer show test holdings written at the August launch as their own.</li>
           </ul>
         </div>
         <!-- /release:pending -->
@@ -697,6 +706,11 @@
   text-overflow: clip;
 }
 .cl__win img { display: block; width: 100%; height: auto; border: 0; }
+/* A whole page takes the full column and scrolls inside its window under a
+   fixed address bar, so the entry keeps its length. */
+.cl__media--page { max-width: none; }
+.cl__scroll { max-height: min(40rem, 70vh); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--color-border-light) transparent; }
+.cl__scroll:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 
 /* The receipt diagram is one Mermaid source rendered twice: left to right, and
    top to bottom for phones, where the wide one would shrink its labels too

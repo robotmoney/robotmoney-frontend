@@ -1709,6 +1709,14 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
   .rr-mix { grid-template-columns: minmax(0, 1fr); justify-items: center; }
   .rr-mix > .rr-legend { justify-self: stretch; }
 }
+/* Beside its ring, a table in half a column (the latest recommendation next
+   to its reasoning, on a laptop) leaves the names a word per line, so there
+   the ring stands above the table as it does on a phone. */
+.rr-x { container-type: inline-size; }
+@container (max-width: 37.5rem) {
+  .rr-mix { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .rr-mix > .rr-legend { justify-self: stretch; }
+}
 .rr-legend { list-style: none; margin: 0; padding: 0; }
 .rr-legend li { display: grid; grid-template-columns: 0.5rem minmax(0, 1fr) auto; align-items: baseline; column-gap: 0.75rem;
   padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
