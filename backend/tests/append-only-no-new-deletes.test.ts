@@ -58,6 +58,14 @@ const ALLOWED: Record<string, string> = {
     "asserts regime deletion is refused while allowed current-view deletes are captured",
   "backend/tests/database-role-taxonomy.test.ts":
     "asserts rm_app direct evidence DELETE and TRUNCATE are denied 42501",
+  // The offending statements are `GRANT TRUNCATE ON swarm_members TO rm_app`:
+  // the file GRANTS a destructive privilege precisely so preflight check 2's
+  // denylist can be proved to catch it, then revokes it in a `finally`. No row
+  // is ever deleted or truncated — the privilege is the subject, not the data
+  // (spec §7 check 2, issue #1026 W2). Once W2.2's grant-transition migration
+  // lands, this same grant is what production must NOT have.
+  "backend/tests/db-preflight-checks.test.ts":
+    "GRANTs TRUNCATE so the preflight denylist can be proved to refuse it; deletes nothing",
   // The statements here are DATA, not code: fixture migration bodies handed to
   // preflight's scanner as strings so it can be proved to turn red on them. The
   // file opens no writeable connection to a protected table at all — its only
