@@ -1,0 +1,36 @@
+---
+# The narrow (below 760px) render of deposits.mmd: the same flow in one column.
+# Baked in twice as inline SVG: this source (LR) above 760px, and below it
+# deposits-narrow.mmd, one column with the four vaults in one box, since four
+# boxes side by side do not read at phone width. Render with Mermaid 11 in a
+# page that has Space Grotesk loaded, so the boxes are sized to the site's font.
+config:
+  theme: base
+  htmlLabels: false
+  fontFamily: "'Space Grotesk', system-ui, sans-serif"
+  flowchart:
+    curve: linear
+    padding: 16
+    nodeSpacing: 24
+    rankSpacing: 40
+    diagramPadding: 2
+  themeVariables:
+    darkMode: true
+    background: transparent
+    fontFamily: "'Space Grotesk', system-ui, sans-serif"
+    fontSize: 15px
+    primaryColor: "#06080c"
+    primaryTextColor: "#f2f4f9"
+    primaryBorderColor: "#2e3a4e"
+    nodeBorder: "#2e3a4e"
+    mainBkg: "#06080c"
+    lineColor: "#00e5ff"
+    textColor: "#c2c9d8"
+---
+flowchart TD
+  accTitle: Where a deposit goes
+  accDescr: A USDC deposit goes to the router, which splits it across the four sleeve vaults by the weights in force: Conservative DeFi Yield, Agent Tokens, Protocol Tokens and Real World Assets. Each vault's page and the allocation page show what it holds.
+  deposit["A USDC deposit"] --> router["The router splits it by<br/>the weights in force"]
+  router --> vaults["The four sleeve vaults<br/>rmUSDC · rmAGENT<br/>rmPROTO · rmRWA"]
+  vaults --> shown["Each vault's page and the<br/>allocation page show it"]
+  linkStyle default stroke-width:1.5px
