@@ -84,7 +84,7 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(31);
+  await expect(frame.locator(".cl__entry")).toHaveCount(32);
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
@@ -149,7 +149,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
   const frame = await openChangelog(page);
 
   const swarm = frame.getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("31 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("32 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -166,7 +166,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("31 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("32 releases");
 });
 
 // Merged work that is not in production yet sits in one block on top of the
@@ -278,7 +278,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
     expect(seen.headings).toBe(0);
     await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
     await button.click();
-    await expect(frame.locator(".cl__count")).toHaveText("31 releases");
+    await expect(frame.locator(".cl__count")).toHaveText("32 releases");
   }
 });
 
@@ -287,7 +287,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
 
   const imgs = frame.locator(".cl__win img");
   const n = await imgs.count();
-  expect(n).toBe(8);
+  expect(n).toBe(9);
   for (let i = 0; i < n; i++) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await expect.poll(async () =>
@@ -314,7 +314,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
     .toBe("#2026-09-21-a-new-allocation-page");
 });
 
-test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ page }) => {
+test("the hero is full-bleed, and a phone swaps every diagram", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openChangelog(page);
 
@@ -323,21 +323,22 @@ test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ p
     const win = iframe.contentWindow!;
     const doc = iframe.contentDocument!;
     const hero = doc.querySelector(".cl__hero") as HTMLElement;
-    const wide = doc.querySelector(".cl__dg--wide") as HTMLElement;
-    const narrow = doc.querySelector(".cl__dg--narrow") as HTMLElement;
+    const shown = (sel: string) => [...doc.querySelectorAll(sel)].map((e) => win.getComputedStyle(e).display);
     const box = hero.getBoundingClientRect();
     return {
       heroW: box.width,
       heroX: box.x,
       clientW: doc.documentElement.clientWidth,
-      wideDisplay: win.getComputedStyle(wide).display,
-      narrowDisplay: win.getComputedStyle(narrow).display,
+      wideDisplay: shown(".cl__dg--wide"),
+      narrowDisplay: shown(".cl__dg--narrow"),
     };
   });
   expect(Math.abs(desktop.heroW - desktop.clientW)).toBeLessThanOrEqual(2);
   expect(desktop.heroX).toBeLessThanOrEqual(1);
-  expect(desktop.wideDisplay).not.toBe("none");
-  expect(desktop.narrowDisplay).toBe("none");
+  // Three diagrams: the receipt, the judge's role and where a deposit goes.
+  expect(desktop.wideDisplay).toHaveLength(3);
+  expect(desktop.wideDisplay.every((d) => d !== "none")).toBe(true);
+  expect(desktop.narrowDisplay.every((d) => d === "none")).toBe(true);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await openChangelog(page);
@@ -346,15 +347,14 @@ test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ p
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
     const win = iframe.contentWindow!;
     const doc = iframe.contentDocument!;
-    const wide = doc.querySelector(".cl__dg--wide") as HTMLElement;
-    const narrow = doc.querySelector(".cl__dg--narrow") as HTMLElement;
+    const shown = (sel: string) => [...doc.querySelectorAll(sel)].map((e) => win.getComputedStyle(e).display);
     const h1 = doc.querySelector("h1.cl__h1") as HTMLElement;
     // No entry runs past the screen: a capture's address bar is nowrap, and a
     // long one once widened its entry's grid track past a phone's width.
     const rights = [...doc.querySelectorAll(".cl__entry > *")].map((e) => e.getBoundingClientRect().right);
     return {
-      wideDisplay: win.getComputedStyle(wide).display,
-      narrowDisplay: win.getComputedStyle(narrow).display,
+      wideDisplay: shown(".cl__dg--wide"),
+      narrowDisplay: shown(".cl__dg--narrow"),
       h1Overflow: win.getComputedStyle(h1).overflow,
       h1Visible: h1.getBoundingClientRect().height > 0,
       clientW: doc.documentElement.clientWidth,
@@ -362,8 +362,9 @@ test("the hero is full-bleed, and a phone swaps the receipt diagram", async ({ p
       widestEntryRight: Math.max(...rights),
     };
   });
-  expect(mobile.wideDisplay).toBe("none");
-  expect(mobile.narrowDisplay).not.toBe("none");
+  expect(mobile.wideDisplay.every((d) => d === "none")).toBe(true);
+  expect(mobile.narrowDisplay).toHaveLength(3);
+  expect(mobile.narrowDisplay.every((d) => d !== "none")).toBe(true);
   expect(mobile.h1Visible).toBe(true);
   expect(mobile.widestEntryRight).toBeLessThanOrEqual(mobile.clientW);
   expect(mobile.scrollW).toBeLessThanOrEqual(mobile.clientW);
