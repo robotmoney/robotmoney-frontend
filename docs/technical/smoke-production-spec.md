@@ -86,11 +86,11 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **`rm_owner` is `LOGIN`.** Its password is typed at the terminal for the one run that needs it and never stored.
 
-**`~/.env`** holds the remote connection (host/port/dbname) and the runtime tokens only: `rm_app = …`, `rm_worker = …`, `rm_readonly = …`. It must not contain `rm_owner`, `doadmin`, or any superuser token; preflight enforces this (§7). Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
+**`~/.env`** holds the remote connection (host/port/dbname) and the runtime role passwords only: `rm_app = …`, `rm_worker = …`, `rm_readonly = …`. It must not contain `rm_owner`, `doadmin`, or any superuser token; preflight enforces this (§7). Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
 
 **Participant keys** live in `credential.json` (§6.1), never in `~/.env`.
 
-**Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime tokens are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
+**Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime role passwords are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
 
 **No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `worker-swarm` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that poll over HTTP (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
 
@@ -195,7 +195,7 @@ Boot order: config validation → plan and locks → database create/restore (lo
 
 **Checks, against any database including production:**
 
-1. Every role token smoke will hand to a container authenticates.
+1. Every role password smoke will hand to a container authenticates.
 2. Each role holds every privilege the registry (§7.1) says its programs need, and none from the denylist: superuser; `CREATEROLE`; membership in `rm_owner`; ownership of any application object; DDL; `DELETE`/`TRUNCATE` on append-only tables. Checked through catalog queries (`has_table_privilege`, `pg_has_role`, `pg_class.relowner`), never by executing application statements. A grant absent from the registry is not forbidden by that fact alone. Append-only protection is both absent privilege and the existing triggers.
 3. Schema, two questions against the installed version M:
    (a) **integrity** — live definitions of every object class in §8.1 match the manifest for M stored in the database (§8.3), excluding the provider list. Genuine drift fails here whatever code is booting.
