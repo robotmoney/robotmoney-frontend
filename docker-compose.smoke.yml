@@ -117,18 +117,6 @@ services:
 
   worker-research: *smoke-worker
 
-  # The one socket-holding service (issue #1012). It gets the same three labels
-  # every other smoke container carries so `bun run smoke:clean` / `smoke:reap`
-  # can find it — and, more importantly, so the short-lived JUDGE containers it
-  # starts are attributable: they are `member-agent` service containers launched
-  # into this same compose project, and the labels are what make one left behind
-  # by a killed CI job reapable without parsing its name.
-  agent-launcher:
-    labels:
-      robotmoney.smoke.project: ${SMOKE_PROJECT}
-      robotmoney.env: ${RM_STACK_ENV_CLASS}
-      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
-
   # The independent producer performs the heavy analytics HTTP fetches. Token
   # price caching is irrelevant to this service.
   analytics-producer:

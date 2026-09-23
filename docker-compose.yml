@@ -336,13 +336,6 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
-      # NOT hold the Docker socket and must never be given it: it asks the
-      # agent-launcher service below for one short-lived judge container and
-      # reads the answer back over the compose network. A launcher that cannot
-      # be reached is its own fail-closed reason (`launcher_unavailable`), never
-      # a model or credential verdict.
-      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
       # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
       # judge-fault-injection.ts). This service arms/disarms the row over
       # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and
@@ -456,13 +449,6 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
       SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # WHERE THE JUDGE'S CONTAINER IS STARTED (issue #1012). This process does
-      # NOT hold the Docker socket and must never be given it: it asks the
-      # agent-launcher service below for one short-lived judge container and
-      # reads the answer back over the compose network. A launcher that cannot
-      # be reached is its own fail-closed reason (`launcher_unavailable`), never
-      # a model or credential verdict.
-      SWARM_AGENT_LAUNCHER_URL: ${SWARM_AGENT_LAUNCHER_URL:-http://agent-launcher:8799}
       # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
       # judge-fault-injection.ts) — THIS LANE ONLY, same reasoning as the three
       # knobs above: `selectFaultInjection()` runs inside `swarm.judge`, which
@@ -540,74 +526,6 @@ services:
       # each catch-up loop (src/producer/index.ts). This window only has to
       # cover container start up to that first record.
       start_period: 300s
-
-  # ── The one service that holds the Docker socket (issue #1012) ─────────────
-  #
-  # THE JUDGE IS AN ACTOR LIKE ANY OTHER. A member agent gets its own
-  # short-lived container with its credential injected by one explicit `-e`
-  # (scripts/agent/member-agent.ts). The judge used to be the exception: a bare
-  # in-process fetch() from inside the long-running worker-swarm service, fed a
-  # credential only by this file's `${OPENCODE_API_KEY:-}` interpolation — which
-  # is precisely why one path's credential delivery drifted from the other's and
-  # CI judged every session `credential_unconfigured`. It now rides the same
-  # rail, and this service is what starts the container for it.
-  #
-  # WHY A SEPARATE SERVICE AT ALL. Starting a container needs the Docker socket,
-  # and the Docker socket IS root on the host — there is no read-only mode for
-  # it and no capability to drop that makes it safe. Mounting it into `api` or
-  # `worker-swarm` would put root behind every request handler and every piece
-  # of model-derived text those processes touch. So it is concentrated here,
-  # behind one internal route with one verb, and they ask over HTTP instead.
-  # scripts/tests/integration/agent-launcher-compose-config.test.ts asserts that
-  # exactly one service in every composition (base / smoke / stage) has this
-  # mount, so a future `- /var/run/docker.sock` added to any other service is a
-  # red gate rather than a quiet privilege escalation.
-  #
-  # NO `ports:`, EVER. This surface has no authentication of its own because it
-  # is reachable only from the compose network. Publishing it would hand
-  # anything that can reach the host's port a container-start primitive.
-  agent-launcher:
-    build:
-      context: .
-      dockerfile: scripts/lib/agent-launcher/Dockerfile
-    environment:
-      # ITS OWN COPY, not a per-request parameter. The launcher injects this
-      # into each judge container the way runMemberAgent() injects a member's;
-      # a key travelling in the request body would be logged by every hop
-      # between worker-swarm and here.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-      # Which compose project the judge containers join. Emitted for every
-      # service by scripts/stack/config.ts's buildComposeEnv(); the launcher
-      # refuses to start without it rather than guessing a project name.
-      SMOKE_PROJECT: ${SMOKE_PROJECT:-}
-      COMPOSE_FILE: ${COMPOSE_FILE:-}
-      # The labels docker-compose.smoke.yml stamps on every container it starts,
-      # so a judge container this service leaks is attributable to the run that
-      # leaked it by LABEL and reapable by `bun run smoke:reap`.
-      RM_STACK_ENV_CLASS: ${RM_STACK_ENV_CLASS:-}
-      RM_STACK_ENV_HASH: ${RM_STACK_ENV_HASH:-}
-      SWARM_LAUNCHER_SPOOL_DIR: ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
-    volumes:
-      # THE SOCKET. The only one in this file, and the reason for this service.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # The shared spool, bound at the SAME PATH on both sides. `-v` sources are
-      # resolved by the daemon against the HOST filesystem, so the judge-runner
-      # bundle and the prompt file this process writes have to live somewhere
-      # that means the same thing here and there — see
-      # scripts/agent/judge-agent.ts's header.
-      - ${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}:${SWARM_LAUNCHER_SPOOL_DIR:-/tmp/rm-agent-launcher}
-    restart: unless-stopped
-    logging: *default-logging
-    healthcheck:
-      # `bun -e`, not curl/wget: the oven/bun image is Debian-based and ships
-      # neither — the same constraint the api's own check works around.
-      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8799/internal/health'); process.exit(r.ok ? 0 : 1)"]
-      interval: 15s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
 
   # D21 retired the member-facing MCP server: swarm members reach the
   # swarm REST API on the `api` service directly (docs/decisions.md D21).

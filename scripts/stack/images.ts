@@ -23,17 +23,14 @@
 // outright rather than relying on the push never having happened.
 
 /**
- * The SEVEN images this repo builds, in the order `docker compose build` is
- * asked for them. Five come from `backend/Dockerfile` (api + the three worker
- * lanes + the independent analytics producer); `member-agent` is profile-gated
- * and built from `scripts/lib/member-agent/Dockerfile`, and it is a RUNTIME
+ * The SIX images this repo builds, in the order `docker compose build` is asked
+ * for them. Five come from `backend/Dockerfile` (api + the three worker lanes +
+ * the independent analytics producer); `member-agent` is profile-gated and
+ * built from `scripts/lib/member-agent/Dockerfile`, and it is a RUNTIME
  * prerequisite of a full stack even though it never appears in `servicesFor`
  * (see config.ts's buildServicesFor) — leaving it unshipped would make the
  * staging host cold-build it the first time a swarm session launched a member,
- * which is precisely the thing AC-ID-05 forbids. `agent-launcher` (issue #1012,
- * scripts/lib/agent-launcher/Dockerfile) is here for the same reason one layer
- * on: every judging now starts a `member-agent` container through it, so an
- * unshipped launcher is a staging host that cannot judge at all.
+ * which is precisely the thing AC-ID-05 forbids.
  *
  * `postgres` is deliberately absent: it is `postgres:17-alpine`, an upstream
  * image pulled from a registry, not an artifact this repo builds.
@@ -45,7 +42,6 @@ export const SHIPPED_IMAGE_SERVICES = [
   "worker-research",
   "analytics-producer",
   "member-agent",
-  "agent-launcher",
 ] as const;
 
 export type ShippedImageService = (typeof SHIPPED_IMAGE_SERVICES)[number];

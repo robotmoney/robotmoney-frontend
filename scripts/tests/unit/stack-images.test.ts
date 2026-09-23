@@ -38,7 +38,7 @@ import { createStack, type StackRuntime } from "../../stack/stack.ts";
 const TAG = "v0.5.0-rc.3";
 
 describe("shipped image plan (pure)", () => {
-  test("names exactly the seven services this repo builds", () => {
+  test("names exactly the six services this repo builds", () => {
     expect([...SHIPPED_IMAGE_SERVICES]).toEqual([
       "api",
       "worker-swarm",
@@ -46,9 +46,6 @@ describe("shipped image plan (pure)", () => {
       "worker-research",
       "analytics-producer",
       "member-agent",
-      // Issue #1012. Unshipped, a staging host cannot judge at all: every
-      // judging starts its container through this service.
-      "agent-launcher",
     ]);
   });
 

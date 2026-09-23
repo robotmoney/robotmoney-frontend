@@ -60,9 +60,6 @@ import {
   checkRationaleLadder, listRationaleLadderDrift, recentJudgeableSessions, replaySessionJudge,
 } from "../src/swarm/judge-replay.ts";
 import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
-import {
-  installJudgeStub, removeJudgeStub, STUB_JUDGE_ANSWER, STUB_JUDGE_MODEL,
-} from "./support/judge-stub.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -165,7 +162,7 @@ function goodAnswer(memberId: string, otherId: string, release: "safe" | "hold" 
 }
 
 /**
- * A REAL judge rail, served locally (issue #969, re-pointed by #1012).
+ * A REAL judge endpoint, served locally (issue #969).
  *
  * WHY THIS EXISTS NOW AND DID NOT BEFORE. Until #969 the whole queue- and
  * admin-driven half of this file leaned on `swarm_judge_config.model` being
@@ -176,16 +173,46 @@ function goodAnswer(memberId: string, otherId: string, release: "safe" | "hold" 
  * so a test that drives it through the job queue (where no transport can be
  * injected) has to give it something real to talk to.
  *
- * It is the SHARED helper now, not a second copy. This file used to carry its
- * own byte-identical stub beside tests/support/judge-stub.ts, which meant the
- * one seam the judge's rail is stubbed at was spelled twice — and #1012 moved
- * that seam (the judge asks the agent-launcher service for a container instead
- * of calling the vendor in-process). Two copies of a seam that moves is how one
- * gets re-pointed and the other silently starts serving 404s to a judge that
- * then fails closed on every test in the file.
+ * It answers every prompt with a valid, member-independent opinion: an empty
+ * `disagreements` array is legal and needs no knowledge of the take set.
  */
-beforeAll(() => { installJudgeStub(); });
-afterAll(() => { removeJudgeStub(); });
+const STUB_JUDGE_ANSWER = JSON.stringify({
+  rationale: "The submitted takes converge; this is the local stub judge's opinion.",
+  disagreements: [],
+  release_safety: { release: "safe", concerns: [] },
+});
+
+let judgeStub: ReturnType<typeof Bun.serve> | null = null;
+let savedJudgeEnv: { baseUrl?: string; apiKey?: string } = {};
+
+/** Model id the stub answers for. Every test that turns the judge ON uses it. */
+const STUB_JUDGE_MODEL = "test/judge-model";
+
+beforeAll(() => {
+  judgeStub = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      // The transport posts OpenAI-shaped chat completions; answer in kind.
+      if (!new URL(req.url).pathname.endsWith("/chat/completions")) {
+        return new Response("not found", { status: 404 });
+      }
+      return Response.json({ choices: [{ message: { content: STUB_JUDGE_ANSWER } }] });
+    },
+  });
+  savedJudgeEnv = { baseUrl: process.env.SWARM_JUDGE_BASE_URL, apiKey: process.env.OPENCODE_API_KEY };
+  process.env.SWARM_JUDGE_BASE_URL = `http://127.0.0.1:${judgeStub.port}`;
+  // resolveJudgeTransport() needs BOTH a credential and a model; the stub
+  // never checks the key, but its absence is one of the refusals under test.
+  process.env.OPENCODE_API_KEY = "test-key-not-a-real-credential";
+});
+
+afterAll(() => {
+  judgeStub?.stop(true);
+  if (savedJudgeEnv.baseUrl === undefined) delete process.env.SWARM_JUDGE_BASE_URL;
+  else process.env.SWARM_JUDGE_BASE_URL = savedJudgeEnv.baseUrl;
+  if (savedJudgeEnv.apiKey === undefined) delete process.env.OPENCODE_API_KEY;
+  else process.env.OPENCODE_API_KEY = savedJudgeEnv.apiKey;
+});
 
 // THE CANONICAL FOUR (T17). These sessions are `bucket_weights`, and a take
 // aimed at such a subject is refused at submission unless it names exactly the
@@ -984,19 +1011,10 @@ test("judgeTransportGap separates an account/id refusal from a model failure", (
 // The transport's own half of the contract: a non-2xx must arrive as the TYPED
 // error carrying the status, not as a bare `new Error(...)` that flattens 402
 // and 500 into one string. Driven against a stub `fetch`, so no network.
-//
-// #1012 moved WHERE that status comes from and nothing else: the judge asks the
-// agent-launcher for a container, and the container relays the vendor's status
-// and bounded body in the `model_status` arm of the launcher's answer. The stub
-// therefore answers as the LAUNCHER, and the assertion below is unchanged —
-// which is the property that matters, because the credit/credential taxonomy
-// this feeds is what keeps an exhausted account from manufacturing a receipt.
 test("resolveJudgeTransport reports a non-2xx as a typed, status-carrying error", async () => {
   const saved = globalThis.fetch;
   globalThis.fetch = (async () =>
-    Response.json({
-      ok: false, kind: "model_status", status: 402, body: '{"error":{"message":"Insufficient balance"}}',
-    })) as unknown as typeof fetch;
+    new Response('{"error":{"message":"Insufficient balance"}}', { status: 402 })) as unknown as typeof fetch;
   try {
     const transport = resolveJudgeTransport("deepseek-v4-flash", { OPENCODE_API_KEY: "sk-test" });
     expect(transport).not.toBeNull();
