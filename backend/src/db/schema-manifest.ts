@@ -434,8 +434,112 @@ export interface ResumePlan {
  * Serves spec §10 W2 "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state."
  */
-export function resumePlan(db: ManifestDb, filesOnDisk: readonly string[]): Promise<ResumePlan> {
-  void db;
-  void filesOnDisk;
-  throw new Error("NOT IMPLEMENTED: build the interrupted-run resume plan — spec §8.3, issue #1026 W2.6");
+export async function resumePlan(db: ManifestDb, filesOnDisk: readonly string[]): Promise<ResumePlan> {
+  const state = await detectManifestState(db);
+  if (state.kind === "inconsistent") {
+    throw new Error(
+      `refusing to resume: the manifest and the ledger are inconsistent — ${state.reasons.join("; ")}. ` +
+        "No ordinary sequence produces this; make a human look.",
+    );
+  }
+  if (state.kind === "unknown_format") {
+    throw new Error(
+      `refusing to resume: ${MANIFEST_TABLE} format version ${state.formatVersion} is not one this code understands`,
+    );
+  }
+
+  const ledger = await ledgerFilenames(db);
+  const onDisk = new Set(filesOnDisk);
+  const absent = ledger.filter((name) => !onDisk.has(name));
+  if (absent.length > 0) {
+    throw new Error(
+      `the ledger records ${absent.join(", ")}, which this checkout does not contain. ` +
+        "That is §8.4's compatibility question, not a resume.",
+    );
+  }
+
+  const embodied = new Set(state.kind === "absent" ? [] : state.manifest.filenames);
+  const committedToVerify = ledger.filter((name) => !embodied.has(name));
+
+  const recorded = new Set(ledger);
+  // Apply order, not discovery order: the filename IS the order (§8.1), which
+  // is also why two files numbered 0059 are two distinct steps rather than one.
+  const pending = [...filesOnDisk].filter((name) => !recorded.has(name)).sort();
+
+  await verifyCommittedPostState(db, committedToVerify);
+
+  return { committedToVerify, pending, reconcileGrants: true };
+}
+
+/**
+ * The "validates committed work against each migration's expected post-state"
+ * half of §8.3's resume.
+ *
+ * What a migration's post-state IS, generically, is not something this module
+ * can know for every file. What it can check is the part this repo already
+ * declares in a machine-readable form: the append-only and ledger-immutable
+ * triggers each guard migration installs (./append-only-guard.ts). Those are
+ * exactly the objects a partial `pg_restore` drops while the ledger keeps
+ * claiming the migration ran — the failure mode the manifest exists for — so a
+ * resume that accepted them would be accepting drift at the one moment it is
+ * most tempting to.
+ *
+ * Tables the migration has not created yet, or that a later migration dropped,
+ * are skipped: their absence is a version difference, not drift.
+ */
+async function verifyCommittedPostState(db: ManifestDb, migrations: readonly string[]): Promise<void> {
+  const committed = new Set(migrations);
+  const guards = APPEND_ONLY_MIGRATIONS.filter((migration) => committed.has(migration));
+  const families = LEDGER_IMMUTABLE_FAMILIES.filter((family) => committed.has(family.migration));
+  if (guards.length === 0 && families.length === 0) return;
+
+  const tableRows = (await db`
+    SELECT c.relname AS name
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r'`) as unknown as { name: string }[];
+  const tables = new Set(tableRows.map((row) => row.name));
+
+  const triggerRows = (await db`
+    SELECT c.relname AS table_name, t.tgname AS trigger_name
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND NOT t.tgisinternal`) as unknown as {
+    table_name: string;
+    trigger_name: string;
+  }[];
+  const installed = new Set(triggerRows.map((row) => `${row.table_name}.${row.trigger_name}`));
+
+  const problems: string[] = [];
+  const require = (migration: string, table: string, trigger: string): void => {
+    if (!installed.has(`${table}.${trigger}`)) {
+      problems.push(`${migration}: ${table} is missing trigger ${trigger}`);
+    }
+  };
+
+  for (const migration of guards) {
+    for (const table of APPEND_ONLY_TABLES) {
+      if (APPEND_ONLY_TABLE_MIGRATION[table] !== migration) continue;
+      if (!tables.has(table)) continue;
+      const names = triggerNames(table);
+      require(migration, table, names.statement);
+      require(migration, table, names.row);
+    }
+  }
+
+  for (const family of families) {
+    for (const table of family.tables) {
+      if (!tables.has(table)) continue;
+      const names = ledgerTriggerNames(family, table);
+      require(family.migration, table, names.statement);
+      require(family.migration, table, names.row);
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      `refusing to resume: committed migrations do not match their expected post-state — ${problems.join("; ")}. ` +
+        "§8.3 forbids accepting drift.",
+    );
+  }
 }

@@ -1,25 +1,16 @@
 #!/usr/bin/env bun
 // The JUDGE's one-shot runner (smoke-production-spec.md §6.2, issue #1026
-// W3.4). STEP 1 STUB: the functions throw NOT IMPLEMENTED; the answer union
-// and the contract in these comments are the deliverable of this step.
+// W3.4). The answer union and the contract in these comments are the design;
+// the bodies below are #1014's proven one-shot shim, salvaged.
 //
-// ── THIS STUB IS A PLACEHOLDER FOR SALVAGED, ALREADY-PROVEN CODE ────────────
-// Read this before writing a body here. This branch does NOT yet contain issue
-// #1014 — `main` has not been merged into it, so `scripts/agent/judge-runner.ts`
-// does not exist in this tree. #1014's transport (a short-lived judge container
-// started by an `agent-launcher` service mounting `/var/run/docker.sock`) is
-// REVERTED by Phase 0 of the deployment-refactor plan, because the spec forbids
-// the socket anywhere (§6.2). But its RUNNER is good and is being kept: the
-// one-shot shim that reads a prompt file, makes one POST, writes one tagged
-// line and always exits 0, together with its unit tests that run without a
-// container or a network.
-//
-// STEP 3 REPLACES THIS FILE with that salvaged implementation, moved here from
-// `scripts/agent/judge-runner.ts` and with the answer union's third arm renamed
-// from `launcher` to `runner` (there is no launcher any more). Do not write a
-// fresh implementation over this stub: the salvaged one is already proven, and
-// re-deriving it would lose the ordering rules below that were learned from
-// real failures.
+// ── THIS FILE IS SALVAGED, ALREADY-PROVEN CODE ──────────────────────────────
+// #1014's transport (a short-lived judge container started by an
+// `agent-launcher` service mounting `/var/run/docker.sock`) is REVERTED by
+// Phase 0 of the deployment-refactor plan, because the spec forbids the socket
+// anywhere (§6.2). But its RUNNER was good and is kept here: the one-shot shim
+// that reads a prompt file, makes one POST, writes one tagged line and always
+// exits 0. The answer union's third arm is renamed from `launcher` to `runner`
+// — there is no launcher any more — and everything launcher-specific is gone.
 //
 // ── THE JUDGE IS A KEYED PERSONA AND SIGNS ITS JUDGEMENT ────────────────────
 // #1014's premise was that the judge is not a persona, holds no key, and signs
@@ -76,6 +67,8 @@
 // one-shot per take; no socket), §10 W3 ("Judge runs as a participant; nothing
 // judges inline").
 
+import { readFileSync } from "node:fs";
+
 /** The single stdout tag the caller parses. Everything else is free-form log. */
 export const JUDGE_ANSWER_TAG = "RM_JUDGE_ANSWER";
 
@@ -123,9 +116,21 @@ export interface JudgeRunnerOptions {
  * what lets a full session's takes reach the judge at all.
  */
 export function readPromptFile(promptFile: string): string {
-  throw new Error(
-    "NOT IMPLEMENTED: read the judge prompt from its file — spec §6.2, issue #1026 W3.4",
-  );
+  let text: string;
+  try {
+    text = readFileSync(promptFile, "utf8");
+  } catch (err) {
+    throw new Error(`prompt file ${promptFile} is unreadable: ${message(err)}`);
+  }
+  if (text.trim() === "") throw new Error(`prompt file ${promptFile} was empty`);
+  return text;
+}
+
+/** A body is a label, not a payload: the same bound #1014 used host-side. */
+const BODY_LABEL_MAX = 400;
+
+function message(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, BODY_LABEL_MAX);
 }
 
 /**
@@ -138,9 +143,9 @@ export function readPromptFile(promptFile: string): string {
  * Refusals: none.
  */
 export function formatAnswerLine(answer: JudgeAnswer): string {
-  throw new Error(
-    "NOT IMPLEMENTED: render the tagged judge answer line — spec §6.2, issue #1026 W3.4",
-  );
+  // JSON encoding is what keeps a multi-line body — or a body that quotes the
+  // tag itself — on ONE line and unable to forge a second answer.
+  return `${JUDGE_ANSWER_TAG} ${JSON.stringify(answer)}`;
 }
 
 /**
@@ -154,9 +159,35 @@ export function formatAnswerLine(answer: JudgeAnswer): string {
  * which is a fault of this shim and must be reported as one.
  */
 export function parseAnswerLine(line: string): JudgeAnswer | null {
-  throw new Error(
-    "NOT IMPLEMENTED: parse the tagged judge answer line — spec §6.2, issue #1026 W3.4",
-  );
+  const trimmed = line.trim();
+  if (!trimmed.startsWith(`${JUDGE_ANSWER_TAG} `)) return null; // ordinary log output
+  const payload = trimmed.slice(JUDGE_ANSWER_TAG.length + 1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    // The runner did speak, and it spoke wrongly — a torn or malformed line is
+    // a fault of THIS SHIM, never a verdict about the model.
+    return { kind: "runner", message: `judge answer line was not JSON: ${payload.slice(0, BODY_LABEL_MAX)}` };
+  }
+  const answer = parsed as Partial<JudgeAnswer> | null;
+  if (answer && typeof answer === "object") {
+    if (answer.kind === "ok" && typeof (answer as { body?: unknown }).body === "string") {
+      return { kind: "ok", body: (answer as { body: string }).body };
+    }
+    if (
+      answer.kind === "model_status"
+      && typeof (answer as { status?: unknown }).status === "number"
+      && typeof (answer as { body?: unknown }).body === "string"
+    ) {
+      const m = answer as { status: number; body: string };
+      return { kind: "model_status", status: m.status, body: m.body };
+    }
+    if (answer.kind === "runner" && typeof (answer as { message?: unknown }).message === "string") {
+      return { kind: "runner", message: (answer as { message: string }).message };
+    }
+  }
+  return { kind: "runner", message: "judge answer line carried no recognizable answer" };
 }
 
 /**
@@ -175,16 +206,102 @@ export function parseAnswerLine(line: string): JudgeAnswer | null {
  * malformed response) becomes `runner`.
  */
 export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer> {
-  throw new Error(
-    "NOT IMPLEMENTED: make the single judge POST and produce the answer — spec §6.2, issue #1026 W3.4",
-  );
+  let prompt: string;
+  try {
+    prompt = readPromptFile(options.promptFile);
+  } catch (err) {
+    // No request was made, so this can never be a vendor verdict.
+    return { kind: "runner", message: message(err) };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${options.endpoint.replace(/\/+$/, "")}/chat/completions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(options.timeoutMs),
+      headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
+      body: JSON.stringify({
+        model: options.model,
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } catch (err) {
+    // The vendor was never reached: the RAIL, not a verdict about the model.
+    return { kind: "runner", message: `model endpoint unreachable: ${message(err)}` };
+  }
+  if (!res.ok) {
+    let body = "";
+    try {
+      body = (await res.text()).slice(0, BODY_LABEL_MAX);
+    } catch {
+      body = "";
+    }
+    return { kind: "model_status", status: res.status, body };
+  }
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (err) {
+    return { kind: "runner", message: `model answer was not JSON: ${message(err)}` };
+  }
+  const content = (parsed as { choices?: { message?: { content?: unknown } }[] } | null)
+    ?.choices?.[0]?.message?.content;
+  if (typeof content !== "string") {
+    // The shim must never invent a judgement.
+    return { kind: "runner", message: "model answer carried no assistant text" };
+  }
+  // Raw and uninterpreted: a shim that reshapes a judgement is a shim that
+  // could manufacture one.
+  return { kind: "ok", body: content };
 }
 
+/** Env names this shim reads. The credential's name is the registry's, not ours. */
+export const JUDGE_RUNNER_ENV = {
+  model: "RM_JUDGE_MODEL",
+  endpoint: "RM_JUDGE_BASE_URL",
+  promptFile: "RM_JUDGE_PROMPT_FILE",
+  apiKey: "OPENCODE_API_KEY",
+  timeoutMs: "RM_JUDGE_TIMEOUT_MS",
+} as const;
+
+const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
+
+/**
+ * The whole run, from the container environment to exactly one answer.
+ *
+ * Every missing injection is the caller having built the run wrong, which is
+ * the rail failing before the vendor was ever involved — never a model verdict.
+ */
+export async function main(env: Record<string, string | undefined> = process.env): Promise<JudgeAnswer> {
+  const model = (env[JUDGE_RUNNER_ENV.model] ?? "").trim();
+  const apiKey = (env[JUDGE_RUNNER_ENV.apiKey] ?? "").trim();
+  const promptFile = (env[JUDGE_RUNNER_ENV.promptFile] ?? "").trim();
+  const endpoint = (env[JUDGE_RUNNER_ENV.endpoint] ?? "").trim();
+  const timeoutMs = Number.parseInt(env[JUDGE_RUNNER_ENV.timeoutMs] ?? "", 10);
+  if (!model) return { kind: "runner", message: `${JUDGE_RUNNER_ENV.model} was not injected` };
+  if (!apiKey) return { kind: "runner", message: `${JUDGE_RUNNER_ENV.apiKey} was not injected` };
+  if (!promptFile) return { kind: "runner", message: `${JUDGE_RUNNER_ENV.promptFile} was not injected` };
+  if (!endpoint) return { kind: "runner", message: `${JUDGE_RUNNER_ENV.endpoint} was not injected` };
+  return runJudge({
+    promptFile,
+    endpoint,
+    model,
+    apiKey,
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_JUDGE_TIMEOUT_MS,
+  });
+}
+
+// `import.meta.main` is false when a test imports this file, so everything
+// above is unit-testable without a container and without a network.
 if (import.meta.main) {
-  // The real entrypoint prints exactly one tagged line and exits 0 on EVERY
-  // path, including its own internal failure. Step 3 replaces this with #1014's
-  // salvaged implementation.
-  throw new Error(
-    "NOT IMPLEMENTED: judge one-shot runner entrypoint — spec §6.2, issue #1026 W3.4",
-  );
+  // ALWAYS exit 0 with exactly one tagged line, including on this shim's own
+  // internal failure: a non-zero exit cannot distinguish "the vendor refused"
+  // from "the container died", which is what the two failure arms exist for.
+  let answer: JudgeAnswer;
+  try {
+    answer = await main();
+  } catch (err) {
+    answer = { kind: "runner", message: `judge runner failed: ${message(err)}` };
+  }
+  console.log(formatAnswerLine(answer));
 }
