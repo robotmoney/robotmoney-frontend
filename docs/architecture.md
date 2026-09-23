@@ -3746,6 +3746,11 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   evidence, and approval for future releases.
 - [Credential doctor](./runbooks/credential-doctor.md) — legacy GitHub secret
   utility, not the adopted deployment credential path.
+- [Bot-analytics UI port plan](./bot-analytics-ui-port-plan.md) — the canonical
+  spec for the Analytics Surface dashboard port (issues #379-#402 and
+  siblings), with its companion
+  [original-app](./bot-analytics-ui-port/inventory-original.md) and
+  [current-repo](./bot-analytics-ui-port/inventory-current.md) inventories.
 
 ## Reviews and investigations
 

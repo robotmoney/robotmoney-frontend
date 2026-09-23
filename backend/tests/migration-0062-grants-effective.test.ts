@@ -91,10 +91,17 @@ describe("after the full migration set, every reader role can read everything", 
        ORDER BY c.relname
     `) as unknown as { relname: string; ins: boolean; upd: boolean; del: boolean }[];
     expect(rows.map((r) => r.relname)).toEqual(["asset_price_floors", "asset_prices", "chain_address_floors"]);
+    // DELETE stays denied on the two SAMPLER tables — least privilege, and
+    // nothing deletes from them. `chain_address_floors` is the exception, and
+    // deliberately so: it is also one of the wallet-backfill driver's own
+    // tables, and migration 0061_rm_worker_wallet_backfill_grant grants
+    // INSERT/UPDATE/DELETE on all three of those. Enumerated per table rather
+    // than asserted uniformly, so a DELETE appearing on a table that has no
+    // business with one still fails here.
+    const deletable = new Set(["chain_address_floors"]);
     for (const r of rows) {
-      // DELETE stays denied — least privilege, and nothing deletes from these.
       expect({ t: r.relname, ins: r.ins, upd: r.upd, del: r.del })
-        .toEqual({ t: r.relname, ins: true, upd: true, del: false });
+        .toEqual({ t: r.relname, ins: true, upd: true, del: deletable.has(r.relname) });
     }
   });
 
@@ -120,6 +127,11 @@ describe("after the full migration set, every reader role can read everything", 
       "daily_wallet_snapshots", "daily_tvl_snapshots",
       // 0062's additions
       "asset_prices", "asset_price_floors", "chain_address_floors",
+      // 0061_rm_worker_wallet_backfill_grant's additions: the wallet-backfill
+      // repair driver (src/ops/wallet-backfill.ts) runs on the rm_worker
+      // connection and writes its own two tables, which 0054's allow-list
+      // missed. `chain_address_floors` is its third and is already above.
+      "chain_day_blocks", "wallet_backfill_state",
     ];
     expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
   });

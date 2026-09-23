@@ -281,7 +281,11 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
 
     const h = harnessWithJob([{ status: "running" }, { status: "succeeded" }]);
     const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77 });
+    // `source` is part of the outcome now (issue #969): WHO authored the
+    // opinion, read off the judgement row's provenance. This harness serves no
+    // provenance endpoint, so the read fails closed to null — reported as
+    // unreadable rather than assumed good, which is the documented behaviour.
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: true, recorded: null, judgeJobId: 77, source: null });
     expect(h.calls).toContain("readJob");
     expect(h.calls).not.toContain("countJudgements");
   });
@@ -294,7 +298,9 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
 
     const h = harnessWithJob([{ status: "dead", attempts: 5, maxAttempts: 5, lastError: "HTTP 401: unsupported model id" }]);
     const out = await runJudgeStep(SESSION_ID, "2026-08-31", "woon", "tok", h.deps);
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    // No judgement was recorded, so there is no provenance to read and no
+    // author to name: `source` is null (issue #969).
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
     expect(h.logs.join("\n")).toContain("went DEAD after 5/5 attempts");
     expect(h.logs.join("\n")).toContain("HTTP 401: unsupported model id");
     expect(h.logs.join("\n")).toContain("publishing anyway");
@@ -311,7 +317,8 @@ describe("runJudgeStep's default wait reads the judge job's terminal state", () 
       ...h.deps,
       judgeWaitCeilingMs: 50,
     });
-    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77 });
+    // Nothing recorded at the ceiling either, so `source` is null (issue #969).
+    expect(out).toEqual({ mode: "shadow", waitedForJudged: true, judged: false, recorded: 0, judgeJobId: 77, source: null });
     expect(h.logs.join("\n")).toContain("still running after the 0s backstop ceiling");
   });
 });

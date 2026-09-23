@@ -673,14 +673,15 @@ test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one 
 // session" — a fallback opinion still gets applyOpinion()'d onto an `enforce`
 // session, so before this fix a receipt over TEMPLATE PROSE published exactly
 // like one over a model's own words. `judgement_not_authored` closes that.
-test("BLOCKER 3: a FALLBACK judgement (template prose) never reaches a receipt, by name — a model-authored one is unaffected", async () => {
+test("BLOCKER 3: an unusable judge response never reaches a receipt — refused at the judging, and the historical fallback guard still holds", async () => {
   const fallback = await collectingSession("recfallback", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
   expect((await admin.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
   expect((await admin.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
 
-  // A body that is NOT valid judge JSON forces judge.ts's parse-failure
-  // fallback path (parseJudgeResponse throws, judge.ts:1280) — a real
-  // recorded outcome with `source: 'fallback'`, not a simulated field.
+  // A body that is NOT valid judge JSON. This used to reach judge.ts's
+  // parse-failure FALLBACK and record a `source: 'fallback'` row that the
+  // receipt layer then had to refuse. judge() has no fallback any more, so the
+  // same body is stopped one layer earlier — the judging itself refuses.
   setJudgeStubAnswer("this is not a judge response");
   let judgedFallback: any;
   try {
@@ -688,22 +689,43 @@ test("BLOCKER 3: a FALLBACK judgement (template prose) never reaches a receipt, 
   } finally {
     resetJudgeStubAnswer();
   }
-  expect(judgedFallback.ok).toBe(true);
-  expect(judgedFallback.judge.applied).toBe(true);
-  expect(judgedFallback.judge.source).toBe("fallback");
-  expect(judgedFallback.judge.fallbackReason).toBeTruthy();
-  expect((await admin.publishSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  expect(judgedFallback.ok).toBe(false);
+  expect(judgedFallback.status).toBe(503);
+  expect(judgedFallback.error).toBe("judge_unavailable");
+  expect(judgedFallback.judgeUnavailableReason).toBe("not_json");
 
-  // The session DID adopt it — this is not the judgement_not_adopted case.
+  // NO ROW, NO ADOPTION, NO RECEIPT — the strongest form of what this test
+  // protects. There is no template prose to keep out of a receipt because
+  // there is no judgement at all.
+  const [onFile] = (await sql`
+    SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${fallback.sessionId}`) as any[];
+  expect(onFile.n).toBe(0);
   const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${fallback.sessionId}`) as any[];
-  expect(sess.swarm_recommendation.judge).toBeDefined();
+  expect(sess.swarm_recommendation.judge ?? null).toBeNull();
+  const unjudged = await admin.publishConsensusReceiptAdmin(fallback.sessionId);
+  expect(unjudged.ok).toBe(false);
+  const [noneYet] = (await sql`
+    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${fallback.sessionId}`) as any[];
+  expect(noneYet.n).toBe(0);
 
-  const refused = await admin.publishConsensusReceiptAdmin(fallback.sessionId);
+  // THE HISTORICAL GUARD IS STILL LIVE. `swarm_session_judgements` is
+  // append-only (migration 0040) and holds real pre-#969 `source='fallback'`
+  // rows, some already embedded in signed receipts. Nothing writes a new one,
+  // so the only way to exercise the receipt layer's refusal is to age a
+  // model-authored row into one by hand — which is exactly the shape of the
+  // history the guard exists for. Without this half, deleting the guard would
+  // go unnoticed.
+  const historical = await judgedSession("rechistfb", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  await sql`
+    UPDATE swarm_session_judgements
+       SET source = 'fallback', fallback_reason = 'not_json'
+     WHERE session_id = ${historical.sessionId}`;
+  const refused = await admin.publishConsensusReceiptAdmin(historical.sessionId);
   expect(refused.ok).toBe(false);
   expect((refused as any).error).toBe("judgement_not_authored");
   expect((refused as any).message).toContain("source='fallback'");
   const [none] = (await sql`
-    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${fallback.sessionId}`) as any[];
+    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${historical.sessionId}`) as any[];
   expect(none.n).toBe(0);
 
   // A sibling session judged by the (stub) MODEL, over the same shape of

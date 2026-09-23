@@ -55,7 +55,16 @@ export interface ScenarioMember {
   present: boolean;
 }
 export interface ScenarioPlan {
-  kind: "smoke" | "smoke";
+  // C-26. This union WAS collapsed to `"smoke" | "smoke"` by the blind
+  // demo→smoke literal rename, which made `plan.kind === "smoke"` true for a
+  // plain simulation boot as well and ran the archive-continuity check against
+  // a roster nothing had restored. The two boots are genuinely different
+  // scenarios and the type has to say so: `"smoke"` is the production-shaped
+  // `--smoke` boot that restores a roster, `"simulation"` is the seeded demo
+  // boot that does not. Restored 2026-09-23 after the merge dropped the
+  // upstream fix (which spelled the same distinction
+  // `"simulation" | "archive-restore"`).
+  kind: "smoke" | "simulation";
   migrateEnv: Readonly<Record<string, string>>;
   migrateScriptArgs: readonly string[];
   subjects: readonly ScenarioSubject[];
@@ -146,7 +155,7 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
         runsNewcomerOnboarding: false,
       }
     : {
-        kind: "smoke",
+        kind: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
         migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
         subjects: DEMO_SUBJECTS,
@@ -325,7 +334,17 @@ export function adoptRestoredRoster(
     // API's `handle` field alongside the id it seats members with. seat-all
     // relents from "exactly these handles" to "these three ARE present": other
     // active restored members are legitimately seated and re-keyed too.
-    const expected = SMOKE_MEMBERS.map((m) => m.handle).sort().join(",");
+    //
+    // ADOPTABLE, not merely allowlisted. Without seat-all, adoptionFilter()
+    // refuses any persona with no committed key in
+    // scripts/lib/swarm/fixtures/persona-keys.json — `themis`, the judge
+    // persona added to the allowlist by issue #922, is one. Comparing the
+    // adopted handles against the WHOLE allowlist therefore asserted a set the
+    // filter can never produce, so every plain smoke restore threw. The
+    // seat-all branch keeps the full list: it seats everyone active, so all
+    // four committed personas really must be in the restore.
+    const adoptable = SMOKE_MEMBERS.filter((m) => Boolean(personaIdentity(m.name)));
+    const expected = adoptable.map((m) => m.handle).sort().join(",");
     const actualSet = new Set(result.adopt.map((m) => m.handle ?? m.id));
     const missing = SMOKE_MEMBERS.filter((m) => !actualSet.has(m.handle)).map((m) => m.handle);
     if (seatAll) {

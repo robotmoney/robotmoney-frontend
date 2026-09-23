@@ -7,18 +7,20 @@
 //      when an env var is merely absent — so the DEFAULT environment (no flag,
 //      and, under D13, an UNSET RM_ENV, which is acceptance/strict) is asserted
 //      to refuse, in both the classify and the throw form.
-//   2. AN ARMED LEVER PRODUCES A FALLBACK, NOT A MODEL OPINION. Broken by
-//      parsing the injected body — a body that happened to be well-formed would
-//      then be recorded as prose the model never wrote — so a WELL-FORMED body
-//      is injected and the outcome is still required to be a fallback.
+//   2. AN ARMED LEVER REFUSES; IT NEVER PRODUCES AN OPINION. Broken by parsing
+//      the injected body — a body that happened to be well-formed would then be
+//      recorded as prose the model never wrote — so a WELL-FORMED body is
+//      injected and judge() is still required to THROW.
 //   3. THE WEIGHTS ARE UNTOUCHED. Broken by any path that lets a response
 //      contribute a number — so a weight-smuggling body is injected and the
-//      whole opinion is scanned, at every depth, for a weight-like key.
+//      call is required to yield no opinion at all, only a bounded reason.
 //   4. THE LEVER CANNOT MANUFACTURE A JUDGEMENT ON AN UNCONFIGURED JUDGE.
 //      Broken by wrapping a null transport — so the D-A7 fail-closed refusal is
 //      asserted to survive an armed lever.
-//   5. THE SPEND IS RECORDED, AND NULL MEANS "NOT REPORTED". Broken by
-//      defaulting to zeroes, which would read as a free call.
+//   5. A MODEL JUDGEMENT'S SPEND IS RECORDED, AND NULL MEANS "NOT REPORTED".
+//      Broken by defaulting to zeroes, which would read as a free call. Note
+//      that a DISCARDED response's spend is now recorded nowhere — see the
+//      comment on that test.
 //
 // NO DATABASE AND NO NETWORK. Every gate here is a pure function of an env
 // record and a row shape, and judge()'s transport is injected — which is the
@@ -39,10 +41,26 @@ import {
   judge,
   JudgeUnavailableError,
   parseJudgeUsage,
-  templateOpinion,
   type JudgeInput,
   type JudgeTransport,
 } from "../src/swarm/judge.ts";
+
+/**
+ * Run judge() expecting a REFUSAL and hand back the error. Every former
+ * "…answers with template prose under source: fallback" assertion in this file
+ * became one of these: judge() now has exactly two outcomes, a model-authored
+ * opinion or a throw, so the thing to assert about a faulted judging is the
+ * reason it refused with — and that no opinion came back to be recorded.
+ */
+async function refusal(...args: Parameters<typeof judge>): Promise<JudgeUnavailableError> {
+  try {
+    await judge(...args);
+  } catch (e) {
+    expect(e).toBeInstanceOf(JudgeUnavailableError);
+    return e as JudgeUnavailableError;
+  }
+  throw new Error("judge() returned an opinion where a refusal was required");
+}
 
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const OTHER_SESSION = "99999999-8888-7777-6666-555555555555";
@@ -143,37 +161,33 @@ test("selectFaultInjection refuses an off, spent, empty or other-session lever",
   expect(selectFaultInjection(armed(), SESSION, OPEN_ENV)?.body).toBe("this is not json");
 });
 
-// ── 2. An armed lever yields the deterministic fallback ────────────────────
+// ── 2. An armed lever refuses ──────────────────────────────────────────────
 
-test("an injected body is answered with template prose and fallback_reason=malformed_output", async () => {
+test("an injected body is refused with reason=malformed_output and nothing is recorded", async () => {
   const transport = spyTransport();
-  const out = await judge(input(), {
+  const err = await refusal(input(), {
     transport,
     faultInjection: { body: "}{ this is not json at all", note: "AC-E2E-06" },
   });
-  expect(out.source).toBe("fallback");
-  expect(out.fallbackReason).toBe("malformed_output");
+  expect(err.reason).toBe("malformed_output");
   // The model that WOULD have been called is still named, so an operator can
   // see which judge the faulted session was configured with.
-  expect(out.model).toBe("deepseek-v4-flash");
+  expect(err.model).toBe("deepseek-v4-flash");
   // The transport did not reach the model at all.
   expect(transport.calls).toBe(0);
-  // The prose is EXACTLY the aggregator's own producers — not "similar prose".
-  expect(out.opinion).toEqual(templateOpinion(input()));
-  // An injected body never bills anything.
-  expect(out.usage ?? null).toBeNull();
 });
 
-test("a WELL-FORMED injected body is still a fallback — an injected body is never trusted", async () => {
+test("a WELL-FORMED injected body is still refused — an injected body is never trusted", async () => {
   const wellFormed = JSON.stringify({
     rationale: "The takes agree that the treasury is intact.",
     disagreements: [],
     release_safety: { release: "safe", concerns: [] },
   });
-  const out = await judge(input(), { transport: spyTransport(), faultInjection: { body: wellFormed } });
-  expect(out.source).toBe("fallback");
-  expect(out.fallbackReason).toBe("malformed_output");
-  expect(out.opinion.rationale).not.toContain("treasury is intact");
+  const err = await refusal(input(), { transport: spyTransport(), faultInjection: { body: wellFormed } });
+  expect(err.reason).toBe("malformed_output");
+  // The injected prose does not survive into anything a caller could record:
+  // the only thing that comes back is the bounded reason.
+  expect(err.message).not.toContain("treasury is intact");
 
   // THE CONTROL (C-21). The identical body, delivered by the MODEL rather than
   // the lever, IS trusted — so the assertion above is about the lever and not
@@ -184,45 +198,44 @@ test("a WELL-FORMED injected body is still a fallback — an injected body is ne
 });
 
 test("the fault reason is the lever's, not the parser's — the control", async () => {
-  // Delivered by the model, this same body is `not_json`; delivered by the
-  // lever it is `malformed_output`. Both are fallbacks; they are DIFFERENT
-  // fallbacks, which is what makes the provenance worth recording.
+  // Delivered by the model, this same body refuses with `not_json`; delivered
+  // by the lever it refuses with `malformed_output`. Both refuse; they refuse
+  // for DIFFERENT named reasons, which is what makes the provenance worth
+  // recording in `jobs.last_error`.
   const body = "}{ this is not json at all";
-  const viaModel = await judge(input(), { transport: spyTransport(body) });
-  expect(viaModel.source).toBe("fallback");
-  expect(viaModel.fallbackReason).toBe("not_json");
+  expect((await refusal(input(), { transport: spyTransport(body) })).reason).toBe("not_json");
+  expect(
+    (await refusal(input(), { transport: spyTransport(), faultInjection: { body } })).reason,
+  ).toBe("malformed_output");
 });
 
 // ── 3. The weights are untouched ───────────────────────────────────────────
 
-test("a weight-smuggling injected body changes nothing but the provenance", async () => {
+test("a weight-smuggling injected body yields no opinion at all, only a reason", async () => {
   const smuggled = JSON.stringify({
     rationale: "Rebalance now.",
     weights: [{ bucket: "majors", weight: 0.8 }, { bucket: "alts", weight: 0.2 }],
     disagreements: [],
     release_safety: { release: "safe", concerns: [] },
   });
-  const out = await judge(input(), { transport: spyTransport(), faultInjection: { body: smuggled } });
-  expect(out.source).toBe("fallback");
-  expect(out.fallbackReason).toBe("malformed_output");
-  // Not stripped, not merged: the opinion is the template's, and there is no
-  // weight-like key anywhere inside it at any depth.
-  expect(out.opinion).toEqual(templateOpinion(input()));
-  expect(findWeightLikeKey(out.opinion)).toBeNull();
-  expect(JSON.stringify(out.opinion)).not.toContain("0.8");
-  // The control: the scanner this assertion leans on really does find one.
+  const err = await refusal(input(), { transport: spyTransport(), faultInjection: { body: smuggled } });
+  // Not stripped, not merged, and not templated either: the call produces no
+  // opinion, so there is nothing for a smuggled number to ride into.
+  expect(err.reason).toBe("malformed_output");
+  expect(err.message).not.toContain("0.8");
+  // The control: the scanner this file leans on really does find one.
   expect(findWeightLikeKey(JSON.parse(smuggled))).toBe("weights");
 });
 
-test("a numeric-laden injected body invents no number in the opinion", async () => {
+test("a numeric-laden injected body invents no number anywhere", async () => {
   const numeric = JSON.stringify({
     rationale: "Allocate 73% to majors and 27% to alts, target vector 0.73/0.27.",
     disagreements: [],
     release_safety: { release: "safe", concerns: [] },
   });
-  const out = await judge(input(), { transport: spyTransport(), faultInjection: { body: numeric } });
-  expect(out.fallbackReason).toBe("malformed_output");
-  expect(JSON.stringify(out.opinion)).not.toContain("73");
+  const err = await refusal(input(), { transport: spyTransport(), faultInjection: { body: numeric } });
+  expect(err.reason).toBe("malformed_output");
+  expect(err.message).not.toContain("73");
 });
 
 // ── 4. The lever cannot manufacture a judgement on an unconfigured judge ───
@@ -296,17 +309,35 @@ test("a model judgement carries the spend the provider reported", async () => {
   expect(out.usage).toEqual({ inputTokens: 1820, outputTokens: 611, totalTokens: 2431, costUsd: 0.00042 });
 });
 
-test("a response that ARRIVED and was discarded still records what it cost", async () => {
-  const out = await judge(input(), {
-    transport: spyTransport({ text: "not json", usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6, costUsd: 0.000001 } }),
+// THE SPEND ON A DISCARDED RESPONSE IS NOT RECORDED ANYWHERE, BY DESIGN.
+//
+// This test used to read "a response that ARRIVED and was discarded still
+// records what it cost", and it was true while a discarded response still
+// produced a `source: "fallback"` judgement row to hang `usage` on. It cannot
+// be true now: a response the parser rejects makes judge() THROW, and a throw
+// writes no row, so the tokens that provider really billed are visible only in
+// the provider's own invoice. That is the accepted cost of refusing to record
+// an opinion no model authored (docs/architecture.md §9.7).
+//
+// What survives, and is asserted: the discard happens AFTER the response
+// arrived — so the refusal names what the model did (`not_json`) rather than a
+// transport or configuration gap, which is how an operator reading
+// `jobs.last_error` tells "we paid for an answer and could not use it" apart
+// from "we never got one".
+test("a response that ARRIVED and was discarded refuses by what the model did — its spend is recorded nowhere", async () => {
+  const transport = spyTransport({
+    text: "not json",
+    usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6, costUsd: 0.000001 },
   });
-  expect(out.source).toBe("fallback");
-  expect(out.fallbackReason).toBe("not_json");
-  expect(out.usage?.costUsd).toBe(0.000001);
+  const err = await refusal(input(), { transport });
+  expect(err.reason).toBe("not_json");
+  expect(err.model).toBe("deepseek-v4-flash");
+  // The model WAS asked — that is what makes this a billed, discarded response
+  // rather than an unreached one.
+  expect(transport.calls).toBe(1);
 });
 
-test("a transport that returns a bare string reports no spend, and still judges", async () => {
-  const out = await judge(input(), { transport: spyTransport("not json") });
-  expect(out.source).toBe("fallback");
-  expect(out.usage ?? null).toBeNull();
+test("a transport that returns a bare string is refused, not judged", async () => {
+  const err = await refusal(input(), { transport: spyTransport("not json") });
+  expect(err.reason).toBe("not_json");
 });

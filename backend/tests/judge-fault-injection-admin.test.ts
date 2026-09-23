@@ -9,9 +9,11 @@
 //   2. ARMING WRITES AN AUDIT ROW — the artifact an acceptance bundle cites to
 //      bound the window during which the stack was mutated — and that row does
 //      NOT carry the injected body.
-//   3. AN ARMED LEVER FAULTS A REAL JUDGING: the session's judgement row reads
-//      `source='fallback'`, `fallback_reason='malformed_output'`, and the
-//      SESSION'S WEIGHT VECTOR IS BYTE-FOR-BYTE WHAT IT WAS BEFORE.
+//   3. AN ARMED LEVER FAULTS A REAL JUDGING: the judging REFUSES with
+//      `malformed_output`, the session gets NO judgement row at all, and the
+//      SESSION'S WEIGHT VECTOR IS BYTE-FOR-BYTE WHAT IT WAS BEFORE. (It used to
+//      record a `source='fallback'` row; judge() has no fallback any more, so
+//      "no row" is what the same guarantee looks like now.)
 //   4. THE JUDGEMENT ROW RECORDS WHAT THE COMPLETION COST when the provider
 //      reports it, and NULL — not zero — when it does not.
 import { afterEach, beforeAll, afterAll, expect, test } from "bun:test";
@@ -171,7 +173,7 @@ test("consuming the lever disarms it at zero", async () => {
 
 // ── 3. A real judging, faulted ────────────────────────────────────────────
 
-test("an armed lever faults a real judging: fallback prose, named reason, weights untouched", async () => {
+test("an armed lever faults a real judging: refused, named reason, no row, weights untouched", async () => {
   const { session } = await aggregatedSession("fault-lever");
   const before = await recOf(session.id);
   expect(before.weights?.length).toBeGreaterThan(0);
@@ -191,13 +193,17 @@ test("an armed lever faults a real judging: fallback prose, named reason, weight
     }),
   };
   const result = await judgeSession(session.id, { transport: honest });
-  expect(result.ok).toBe(true);
-  expect(result.outcome?.source).toBe("fallback");
-  expect(result.outcome?.fallbackReason).toBe("malformed_output");
+  // A REFUSAL, NOT A FALLBACK ROW. The judging does not happen: a 503 the queue
+  // retries, carrying the lever's reason under its own name.
+  expect(result.ok).toBe(false);
+  expect(result.status).toBe(503);
+  expect(result.error).toBe("judge_unavailable");
+  expect(result.judgeUnavailableReason).toBe("malformed_output");
 
-  const row = await judgementOf(session.id);
-  expect(row.source).toBe("fallback");
-  expect(row.fallback_reason).toBe("malformed_output");
+  // NOTHING WAS WRITTEN. The faulted session has no judgement row at all —
+  // which is the stronger form of what this test used to assert about a row
+  // reading `source='fallback'`.
+  expect(await judgementOf(session.id)).toBeUndefined();
   // THE PROPERTY AC-E2E-06 IS ABOUT: the vector did not move.
   const after = await recOf(session.id);
   expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
@@ -221,7 +227,8 @@ test("a weight-smuggling injected body is ignored, vector unchanged — and the 
 
   const honest: JudgeTransport = { model: "test/judge-model", complete: async () => smuggled };
   const faulted = await judgeSession(session.id, { transport: honest });
-  expect(faulted.outcome?.fallbackReason).toBe("malformed_output");
+  expect(faulted.ok).toBe(false);
+  expect(faulted.judgeUnavailableReason).toBe("malformed_output");
   const after = await recOf(session.id);
   expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
   expect(JSON.stringify(after)).not.toContain("0.99");

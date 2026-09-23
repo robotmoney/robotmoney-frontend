@@ -117,7 +117,10 @@ test("closeWindow closes the window even when the absence record cannot be writt
   // settled `dead`, and the session stayed `collecting` forever — blocking
   // every later lifecycle step and every submission for its subject.
   const subj = rid("s3");
-  await ic.ensureSubject(subj, "S3");
+  // PROSE ONLY. This session is scenery for the telemetry path — it asserts
+  // nothing about an allocation — and since T17 a weightless take filed against
+  // an `ensureSubject()` (bucket_weights) subject is refused 400 at submission.
+  await ensureProseSubject(subj, "S3");
   const present = await activeMember();
   const absent = await activeMember();
   const session = await ic.openSession(subj);

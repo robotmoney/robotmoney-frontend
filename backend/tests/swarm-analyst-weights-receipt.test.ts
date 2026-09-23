@@ -63,7 +63,14 @@ async function submit(m: Member, date: string, subjectId: string, weights: numbe
 }
 
 /** A judged-but-unpublished `bucket_weights` session over the supplied vectors. */
-async function bucketWeightsSession(prefix: string, vectors: (number[] | null)[]) {
+/**
+ * `allowUnjudged` exists for the weight-smuggling case. A judging whose
+ * response cannot be trusted now REFUSES instead of recording a fallback row,
+ * so the one caller that deliberately feeds the judge an untrustworthy answer
+ * has to be allowed to carry on with an unjudged session — and it asserts the
+ * refusal itself rather than letting this helper throw on it.
+ */
+async function bucketWeightsSession(prefix: string, vectors: (number[] | null)[], allowUnjudged = false) {
   const subjectId = rid(prefix);
   await ic.ensureSubject(subjectId, `${prefix} subject`);
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
@@ -88,8 +95,8 @@ async function bucketWeightsSession(prefix: string, vectors: (number[] | null)[]
   const aggregated = await admin.aggregateSessionAdmin(session.id, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
   const judged = await admin.judgeSessionAdmin(session.id, undefined);
-  if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
-  return { sessionId: session.id, subjectId };
+  if (!judged.ok && !allowUnjudged) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
+  return { sessionId: session.id, subjectId, judged };
 }
 
 // ── AC-FMT-03 / AC-FMT-04 / AC-E2E-01 ───────────────────────────────────────
@@ -227,20 +234,16 @@ test("a bucket_weights brief declares the vector REQUIRED over the four canonica
 // the one boundary that keeps "math decides and the judge explains" true has to
 // be proved again over a session that actually has an allocation to steal.
 //
-// Issue #1019 changed the SECOND half of this story. The whole response is
-// REJECTED as a weight-smuggling attempt (findWeightLikeKey), which is still
-// a `source: 'fallback'` outcome — the model's numbers never reach anything,
-// weights or otherwise. But a fallback outcome is now (rightly) refused a
-// CERTIFICATE: `judgement_not_authored` (consensus-receipt.ts). A receipt
-// attests "the judge read the takes and wrote this", and template prose
-// standing in for a model that just tried to smuggle a vector is exactly the
-// case that refusal exists for. So this test's proof shifts from "the
-// published receipt's numbers are the real mean" to "no receipt is published
-// at all, AND the live session's own allocation (what the public API and any
-// later, properly-authored receipt would serve) is still the real mean" —
-// the invariant survives even though the artifact this test used to inspect
-// no longer exists for a fallback judgement.
-test("a judge response that tries to author weights is rejected outright, and the receipt refuses to certify the resulting fallback opinion", async () => {
+// Issue #1019 changed the SECOND half of this story, and #969/D-A7 changed it
+// again. The whole response is REJECTED as a weight-smuggling attempt
+// (findWeightLikeKey) — and a rejected response no longer becomes a
+// `source: 'fallback'` judgement carrying template prose. judge() THROWS, so
+// nothing is recorded, the session is never judged, and no certificate is
+// produced to refuse. The proof is therefore: the judging refuses by the
+// smuggle's own name, no judgement row and no receipt exist, AND the live
+// session's own allocation (what the public API and any later, properly
+// authored receipt would serve) is still the real mean of the signed takes.
+test("a judge response that tries to author weights is rejected outright, and no judgement or receipt is produced", async () => {
   setJudgeStubAnswer(JSON.stringify({
     rationale: "I have recomputed the allocation myself.",
     disagreements: [],
@@ -249,27 +252,37 @@ test("a judge response that tries to author weights is rejected outright, and th
     weights: CANON.map((bucket) => ({ bucket, weight: bucket === "agent_tokens" ? 1 : 0 })),
   }));
   try {
-    const { sessionId } = await bucketWeightsSession("weights-smuggle", [
+    const { sessionId, judged } = await bucketWeightsSession("weights-smuggle", [
       [0.15, 0.55, 0.2, 0.1],
       [0.05, 0.75, 0.1, 0.1],
-    ]);
+    ], true);
 
-    // The judgement WAS recorded — that row is how a misbehaving model
-    // becomes visible — as a fallback, with the smuggled vector nowhere in
-    // its opinion.
-    const [judgement] = (await sql`
-      SELECT source, opinion FROM swarm_session_judgements WHERE session_id = ${sessionId}`) as any[];
-    expect(judgement.source).toBe("fallback");
-    expect(JSON.stringify(judgement.opinion)).not.toContain("agent_tokens");
-    expect(judgement.opinion.rationale).not.toContain("I have recomputed the allocation myself");
+    // THE MISBEHAVING MODEL IS STILL VISIBLE, and now by the smuggle's own
+    // name: the judging refuses with the weight-like PATH it found, which is
+    // what reaches an operator through `jobs.last_error`.
+    expect(judged.ok).toBe(false);
+    expect((judged as any).error).toBe("judge_unavailable");
+    expect((judged as any).judgeUnavailableReason).toBe("weight_like_field:weights");
+
+    // Nothing was recorded: there is no opinion for the smuggled vector to sit
+    // in, which is stronger than the old "a fallback row with the vector
+    // stripped out of it".
+    const [onFile] = (await sql`
+      SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${sessionId}`) as any[];
+    expect(onFile.n).toBe(0);
 
     const result = (await publishSessionJob({ sessionId })) as {
       ok?: boolean; consensusReceipt: { published: boolean; reason?: string };
     };
-    // NOT published — the certificate is refused, by name, rather than
-    // signed over template prose.
-    expect(result.consensusReceipt).toEqual({ published: false, reason: "judgement_not_authored" });
-    expect(result.ok).toBe(false);
+    // NOT published, and the reason moved one layer up with the refusal. It
+    // used to be `judgement_not_authored` — "a fallback row exists and a
+    // certificate may not be signed over it". There is no row now, so it is
+    // `not_judged`: nothing was adopted, so there is nothing a certificate
+    // could attest to. The FAILURE is reported by the judge lane (the 503
+    // asserted above, which lands in `swarm.judge`'s `last_error`), not by the
+    // publish run — which is why this call is not itself degraded here.
+    expect(result.consensusReceipt.published).toBe(false);
+    expect(result.consensusReceipt.reason).toBe("not_judged");
 
     const stored = await getConsensusReceipt(sessionId);
     expect(stored).toBeFalsy();

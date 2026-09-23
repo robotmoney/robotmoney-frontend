@@ -23,8 +23,9 @@
 //     template prose under the judge's name on every session for as long as the
 //     launcher is down) and not `credential_rejected` (which would send an
 //     operator to rotate a key that is fine).
-//   - the CALLER's own deadline fired. Unchanged: `model_timeout`, the
-//     deterministic-fallback path.
+//   - the CALLER's own deadline fired. Unchanged in name: `model_timeout`. It
+//     refuses like every other unanswered judging (judge() has no fallback),
+//     but it must keep its own reason rather than being folded into the rail's.
 //
 // EVERY CASE HERE STUBS `fetch` — there is no launcher, no daemon and no
 // network in this file. The container-launch behaviour itself is exercised
@@ -170,9 +171,9 @@ test("judge() FAILS CLOSED on a launcher failure: no judgement, no prose, a name
 
 test("the CALLER's own deadline is still model_timeout, not a launcher fault", async () => {
   // The one failure that is neither the rail nor the vendor: judge() gave up
-  // waiting. It keeps the deterministic fallback (AC-FE-05) it has always had,
-  // so adding the launcher hop did not quietly turn every slow judging into a
-  // fail-closed refusal.
+  // waiting. It refuses like every other unanswered judging, but under its OWN
+  // reason — so adding the launcher hop did not quietly reclassify every slow
+  // judging as a broken rail and send an operator to debug the wrong thing.
   const input: JudgeInput = {
     sessionId: "s", date: "2026-09-18", subjectId: "subj", subjectLabel: "Subj",
     brief: null, minTakes: 1, byStance: { bullish: 1 }, meanConfidence: 0.6, regimeSummary: null,
@@ -182,9 +183,15 @@ test("the CALLER's own deadline is still model_timeout, not a launcher fault", a
     new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
     })) as unknown as typeof fetch;
-  const outcome = await judge(input, { transport: resolveJudgeTransport("test/judge-model", ENV), timeoutMs: 30 });
-  expect(outcome.source).toBe("fallback");
-  expect(outcome.fallbackReason).toBe("model_timeout");
+  let thrown: unknown;
+  try {
+    await judge(input, { transport: resolveJudgeTransport("test/judge-model", ENV), timeoutMs: 30 });
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(JudgeUnavailableError);
+  expect((thrown as JudgeUnavailableError).reason).toBe("model_timeout");
+  expect((thrown as JudgeUnavailableError).model).toBe("test/judge-model");
 });
 
 test("SWARM_AGENT_LAUNCHER_URL points the transport at a different launcher", async () => {

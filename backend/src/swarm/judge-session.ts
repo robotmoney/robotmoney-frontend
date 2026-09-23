@@ -507,6 +507,31 @@ export async function judgeSession(sessionId: string, opts: JudgeSessionOptions 
       };
     }
     if (err instanceof JudgeUnavailableError) {
+      // THE LEVER STILL SPENDS ITS CALL WHEN THE JUDGING IT FAULTED REFUSES.
+      //
+      // The success path below decrements `remaining` only once a row is
+      // `recorded`, which was right while a faulted judging still produced a
+      // `source: "fallback"` row. It no longer does: an armed lever makes
+      // judge() THROW, so on that path nothing is ever recorded and the counter
+      // would never move. An operator arming `remaining: 1` for one rehearsal
+      // would leave a lever that faults every retry of `swarm.judge`, and every
+      // later session, until someone noticed and disarmed it by hand — the
+      // opposite of the bounded acceptance-mutation window the counter exists
+      // to guarantee.
+      //
+      // So a refusal that the LEVER caused spends the call too. Non-fatal, and
+      // only when the lever was actually the cause: `faultInjection` resolved
+      // from the armed row (not passed in by a test), AND the reason is the one
+      // the lever alone produces. A config gap throws BEFORE the lever is
+      // reached, and spending the call on that would burn a rehearsal nobody
+      // got.
+      if (faultInjection && judgeOpts.faultInjection === undefined && err.reason === "malformed_output") {
+        try {
+          await consumeJudgeFaultInjection();
+        } catch (e) {
+          console.warn(`[judge] fault-injection counter not decremented for ${sessionId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       // A real outage or a response that could not be trusted whole. 503 so the
       // job queue retries it; the session stays unjudged and unpublished until
       // a judge actually answers.

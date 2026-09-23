@@ -9,7 +9,12 @@
 // and that the union matches what is actually on disk. That last one is the
 // load-bearing case — a code-only release's whole premise is "the schema is
 // already final", and the only way that premise goes stale is a migration
-// landing on this branch after the manifest was written.
+// landing on this branch that nobody accounted for.
+//
+// v0.5.1 HAS SHIPPED, so its manifest is a frozen record and migrations now
+// keep arriving for the NEXT release. See LANDED_AFTER_V051 below for how the
+// guard tells "missing from this release's manifest" apart from "not this
+// release's migration at all" without editing the frozen record.
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -88,6 +93,58 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     expect([...PRIOR_RELEASE_MIGRATIONS]).toEqual([...V050_PRIOR, ...V050_RELEASE]);
   });
 
+  // MIGRATIONS THAT LANDED AFTER v0.5.1 WAS CUT.
+  //
+  // v0.5.0 and v0.5.1 both SHIPPED, so their release directories are frozen
+  // artefacts: a record of what actually went out. Adding a migration to
+  // either manifest to quieten the guard below would not fix anything, it
+  // would falsify that record — it would assert those files were part of a
+  // rollout they were never in.
+  //
+  // But the guard still has to distinguish TWO very different things, and it
+  // could not tell them apart on file names alone, because this repo allows
+  // duplicate migration NUMBERS (0056, 0059, 0061 and 0062 each name two
+  // files) and the ones below interleave with v0.5.0's:
+  //
+  //   1. A migration that SHOULD have been in this release and is missing from
+  //      its manifest — the drift the guard exists to catch, because every
+  //      other gate is built on the manifest being the whole truth about the
+  //      schema the release ships.
+  //   2. A migration that arrived AFTERWARDS and belongs to a future release —
+  //      not drift, and nothing v0.5.1's frozen record should mention.
+  //
+  // So the distinction is DECLARED, here in the guard rather than in the frozen
+  // artefact. Each entry is a file that is on disk, is not part of v0.5.0 or
+  // v0.5.1, and is owed to the next release's manifest when that directory is
+  // cut. A migration that is in NEITHER the manifests nor this list still fails
+  // the test, which is the tooth that matters: this list is a statement someone
+  // had to write down and can be reviewed, not a hole.
+  const LANDED_AFTER_V051 = [
+    // From main, the in-house judge work (#969 / D-A7 and the AC-E2E-06 lever).
+    "0056_swarm_judge_requires_model.sql",
+    "0057_swarm_judge_policy_stamp.sql",
+    "0058_swarm_judge_fault_injection.sql",
+    "0059_swarm_judgement_completion_usage.sql",
+    // From main, two grant repairs found after v0.5.1 went out.
+    "0061_rm_worker_wallet_backfill_grant.sql",
+    "0062_rm_worker_analytics_ledger_read_grant.sql",
+  ];
+
+  test("nothing this release shipped is also claimed as a later arrival", () => {
+    // The list above must never be used to excuse a file the release really
+    // did ship — that would turn the escape hatch into the drift.
+    const shipped = new Set<string>([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS]);
+    expect(LANDED_AFTER_V051.filter((n) => shipped.has(n))).toEqual([]);
+    expect(new Set(LANDED_AFTER_V051).size).toBe(LANDED_AFTER_V051.length);
+  });
+
+  test("every later arrival is really on disk — the list cannot outlive its files", () => {
+    // Otherwise a migration deleted or renamed would leave a permanent
+    // exemption behind, and the next file to take that name would inherit it.
+    const onDisk = new Set(readdirSync(join(import.meta.dir, "..", "migrations")).filter((n) => n.endsWith(".sql")));
+    expect(LANDED_AFTER_V051.filter((n) => !onDisk.has(n))).toEqual([]);
+  });
+
   test("the on-disk migration set matches the manifest — nothing landed after it was written", () => {
     // THE case that can actually go red on a live branch: a migration merging
     // into releases-0.5.x that neither list names. The gates are built on the
@@ -96,7 +153,7 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
       .filter((n) => n.endsWith(".sql"))
       .sort();
     const newest = onDisk.filter((n) => n >= "0039");
-    expect(newest).toEqual([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS].sort());
+    expect(newest).toEqual([...PRIOR_RELEASE_MIGRATIONS, ...RELEASE_MIGRATIONS, ...LANDED_AFTER_V051].sort());
   });
 
   test("every preserved table is named by a v0.5.0 migration, and none is duplicated", () => {
