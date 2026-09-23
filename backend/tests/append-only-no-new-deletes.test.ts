@@ -84,6 +84,13 @@ const ALLOWED: Record<string, string> = {
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
 
+  // Same statements as 0032, for the same reason: the snapshot declaration
+  // (spec §8.1, issue #1026 W2) is the canonical description of the schema, so
+  // it carries every `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON <table>`
+  // the guard installs. Those are the protection, not a use of it — the file
+  // creates objects on a blank database and deletes no row anywhere.
+  "backend/schema/snapshot.sql": "the snapshot declaration installs the guard's triggers",
+
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",
