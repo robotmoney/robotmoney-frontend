@@ -105,6 +105,31 @@ import type { DbHandle } from "./client.ts";
 
 // Every catalog question below reassembles the key the way `pg_locks` splits
 // it: `classid` is the high 32 bits, `objid` the low 32.
+//
+// ── Why the two layers use the two SPELLINGS of one key ─────────────────────
+//
+// §2 puts the session lock and the fence on the same key, and a coordinator
+// holds the session lock for the whole run while its own mutations run on
+// OTHER connections (§2 is emphatic that the fence goes on the mutating
+// connection). Taken in the same form, those two would conflict: the tool's own
+// fence would block forever on the tool's own session lock, one connection
+// waiting on another connection of the same process. So the two layers use the
+// two argument forms Postgres offers for one 64-bit key — the session lock the
+// `(int4, int4)` form (`objsubid = 2`), the fence the `int8` form
+// (`objsubid = 1`). They are distinct lock objects, so the layers never block
+// each other, while session-vs-session and fence-vs-fence still serialize
+// exactly as the spec requires. `pg_locks` reports both under the same
+// classid/objid, which is the same key by the only reading that matters to an
+// operator reading the catalog.
+const OBJSUBID_SESSION = 2;
+const OBJSUBID_FENCE = 1;
+
+/** The key as the `(int4, int4)` form takes it: high half, then low half as a signed int4. */
+function keyHalves(key: TargetLockKey): { hi: number; lo: number } {
+  const hi = Number(key >> 32n);
+  const low = Number(key & 0xffffffffn);
+  return { hi, lo: low >= 0x80000000 ? low - 0x100000000 : low };
+}
 /**
  * How a session-lock holder publishes itself.
  *
@@ -287,6 +312,7 @@ function makeLock(key: TargetLockKey, holder: LockHolder, client: postgresTypes.
           SELECT count(*)::text AS count FROM pg_locks
            WHERE locktype = 'advisory' AND granted
              AND pid = pg_backend_pid()
+             AND objsubid = ${OBJSUBID_SESSION}
              AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
         return Number(rows[0]?.count ?? "0") > 0;
       } catch {
@@ -297,7 +323,8 @@ function makeLock(key: TargetLockKey, holder: LockHolder, client: postgresTypes.
       if (released) return;
       released = true;
       try {
-        await client`SELECT pg_advisory_unlock(${key.toString()}::bigint)`;
+        const { hi, lo } = keyHalves(key);
+        await client`SELECT pg_advisory_unlock(${hi}::int4, ${lo}::int4)`;
       } catch {
         // The connection is already gone, which released the lock for us.
       }
@@ -362,8 +389,9 @@ export async function acquireTargetLock(options: {
   let handedOver = false;
   try {
     for (;;) {
+      const { hi, lo } = keyHalves(options.key);
       const rows = await client<{ locked: boolean }[]>`
-        SELECT pg_try_advisory_lock(${options.key.toString()}::bigint) AS locked`;
+        SELECT pg_try_advisory_lock(${hi}::int4, ${lo}::int4) AS locked`;
       if (rows[0]?.locked === true) {
         handedOver = true;
         return { acquired: true, lock: makeLock(options.key, { ...options.holder, acquiredAt: new Date().toISOString() }, client) };
@@ -523,6 +551,7 @@ export async function withMutationFence<T>(
         SELECT count(*)::text AS count FROM pg_locks
          WHERE locktype = 'advisory' AND granted
            AND pid = pg_backend_pid()
+           AND objsubid = ${OBJSUBID_FENCE}
            AND ((classid::bigint << 32) | objid::bigint) = ${options.key.toString()}::bigint`;
       if (Number(rows[0]?.count ?? "0") === 0) {
         throw new Error(
@@ -584,15 +613,15 @@ export async function assertStillHeld(lock: TargetLock, phase: string): Promise<
  * force something.
  */
 export async function describeHolder(lock: DbHandle, key: TargetLockKey): Promise<LockHolder | null> {
-  // A session lock and a fence can both be granted on one key; the session
-  // holder is the one a contention refusal is about, so it sorts first.
+  // A session lock and a fence can both be granted on one key; a contention
+  // refusal is about the SESSION holder, which is the one that publishes itself.
   const rows = await lock<{ application_name: string | null; backend_start: Date | null }[]>`
     SELECT a.application_name, a.backend_start
       FROM pg_locks l
       JOIN pg_stat_activity a ON a.pid = l.pid
      WHERE l.locktype = 'advisory' AND l.granted
+       AND l.objsubid = ${OBJSUBID_SESSION}
        AND ((l.classid::bigint << 32) | l.objid::bigint) = ${key.toString()}::bigint
-     ORDER BY (a.application_name LIKE ${`${HOLDER_PREFIX}%`}) DESC
      LIMIT 1`;
   const row = rows[0];
   if (row === undefined) return null;
