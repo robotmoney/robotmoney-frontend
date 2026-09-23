@@ -933,6 +933,49 @@ test("the vault subject on the devnet: the router and four vaults, one book grou
   await expectNoBrowserErrors(errors);
 });
 
+test("the vault subject's TVL: the archive's own readings and the feed's history, never a fabricated basket", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const venue = (usd: number) => [
+    { token: "MORPHO", chain: "base", value_usd: usd / 3 },
+    { token: "AAVE", chain: "base", value_usd: usd / 3 },
+    { token: "COMPOUND", chain: "base", value_usd: usd / 3 },
+  ];
+  const snapshots = [
+    { subject_id: "robotmoney-vault", date: "2026-08-03", total_value_usd: 202.39, positions: venue(202.39), wallets: [{ label: "vault" }] },
+    { subject_id: "robotmoney-vault", date: "2026-08-04", total_value_usd: 202.85, positions: venue(202.85), wallets: [{ label: "vault" }] },
+    // The smoke fixture's basket, written to production at the cutover.
+    { subject_id: "robotmoney-vault", date: "2026-08-06", total_value_usd: 33601.3, wallets: [], positions: [
+      { token: "ROBOT", chain: "base", value_usd: 16800 }, { token: "ETH", chain: "base", value_usd: 9408 },
+      { token: "USDC", chain: "base", value_usd: 4704 }, { token: "rmUSDC", chain: "base", value_usd: 1680 },
+      { token: "ROBOTMONEY", chain: "base", value_usd: 1009 },
+    ] },
+  ];
+  const history = Array.from({ length: 7 }, (_, i) => ({ t: `2026-08-${String(6 + i).padStart(2, "0")}`, tvlUsd: 203.87 + i / 2 }));
+  const economics = { ...goldenVault(), asOf: "2026-08-13T11:00:00.000Z", tvlUsd: 207.4, history: { tvl: history, sharePrice: [] } };
+  await stubLive(page, economics);
+  await page.route("**/api/swarm/subjects/robotmoney-vault/snapshots**", (route) => route.fulfill(json({ snapshots })));
+  await openWithQuery(page, "/swarm/subjects/robotmoney-vault", "base");
+  await subjectLoaded(page);
+
+  // Aug 3 and 4 from the archive, Aug 6 to 12 from the feed's history (not
+  // the basket), and Aug 13 from the feed now: one line, no reading near $33.6k.
+  const plot = page.locator("#tvl .rr-area__plot");
+  await expect(plot).toHaveAttribute("aria-label", /Aug 3, 2026 to Aug 13, 2026: \$202 to \$207\./);
+  await expect(page.locator("#tvl polyline")).toHaveCount(1);
+  await expect(page.locator("#tvl .rr-area__y span").first()).not.toHaveText(/K/);
+  await expectNoBrowserErrors(errors);
+});
+
+test("rmUSDC's page draws the feed's daily TVL once the feed serves it", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const days = Array.from({ length: 10 }, (_, i) => ({ t: `2026-08-${String(6 + i).padStart(2, "0")}`, tvlUsd: 203.87 + i }));
+  await stubLive(page, { ...goldenVault(), history: { tvl: days, sharePrice: [] } });
+  await openVault(page, "rmusdc");
+  await expect(page.locator("#tvl polyline")).toHaveCount(1);
+  await expect(page.locator("#tvl .rm-nodata__h")).toHaveCount(0);
+  await expectNoBrowserErrors(errors);
+});
+
 test("the vault subject on Base: rmUSDC alone, against the weights in force", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
@@ -970,9 +1013,12 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
   await expect(hold).not.toContainText("Notable");
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
-  // A line needs two readings: both charts' frames say there is one.
+  // TVL draws the archive's readings of rmUSDC's own book up to the feed's
+  // reading now; the sleeves chart has one reading of the four vaults, so its
+  // frame says so.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
-  await expect(hold.locator(".rr-area .rm-nodata__h")).toHaveText(["Not enough data yet", "Not enough data yet"]);
+  await expect(hold.locator("#tvl polyline")).not.toHaveCount(0);
+  await expect(hold.locator(".rr-area .rm-nodata__h")).toHaveText(["Not enough data yet"]);
   await expect(hold.locator(".rr-area .rr-empty__t")).toHaveCount(0);
   await expect(hold.locator(".rr-area__legend")).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);

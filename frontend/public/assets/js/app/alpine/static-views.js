@@ -25,7 +25,7 @@ import { takeCard, takeWeightRows } from "../lib/take-card.js";
 import { canonicalUrlFor, setCanonicalUrl, citeTitle } from "../seo.js";
 import { VAULT_SUBJECT_ID } from "../lib/allocation-subject.js";
 import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "../lib/share-chart.js";
-import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
+import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import { tvlChart } from "./tvl-chart.js";
 import {
@@ -2312,10 +2312,11 @@ export function registerStaticViews(Alpine) {
     stackOnDevnet() { return this.isVaultStack() && !!this.vaultSnapshots; },
     // Off the devnet switch, Holdings is the vault feed: the read /allocation
     // and every /vault page make (lib/vault-source.js loadVaultOverview), one
-    // reading, now. Not the subject's own snapshots: on production those are
-    // the treasury's book scaled by 0.7234 (ROBOT and ETH in a USDC lending
-    // vault, $33.6k against a $250 vault) and stopped on Aug 6, so the page
-    // printed a book no vault holds. The sessions still show the book they
+    // reading, now. Not the subject's own snapshots for the book: on
+    // production the last of them is the smoke fixture's fabricated basket
+    // (ROBOT and ETH in a USDC lending vault, $33.6k against a $250 vault),
+    // written at the Aug 6 cutover, and nothing genuine follows it. Their
+    // genuine readings still draw the TVL line (tvlPoints). The sessions still show the book they
     // reviewed; this is what the vaults hold today. Until the feed answers,
     // nothing, rather than the snapshot and then the feed.
     stackSnapshots() {
@@ -2563,10 +2564,35 @@ export function registerStaticViews(Alpine) {
     vaultUsd(v) { return fmtVaultUsd(v); },
 
     // ── the vault stack's TVL over time ─────────────────────────────────────
-    // The combined value on every reading of the book: the devnet fixture's
-    // fifteen, one on Base (the feed reads one day). Neutral, not a vault's hue.
+    // The combined value by day. On the devnet, the fixture's fifteen readings.
+    // On Base, three sources, later ones winning a shared day: the archive's
+    // readings of rmUSDC's own book (to Aug 4; isVaultBookReading drops the
+    // fabricated rows after it), each live vault's daily readings once the
+    // feed serves them, summed, and the feed's reading now. Neutral, not a
+    // vault's hue.
     tvlPoints() {
-      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
+      if (!this.isVaultStack()) return [];
+      if (this.vaultSnapshots) return this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd }));
+      /** @type {Map<string, number>} */
+      const byDay = new Map();
+      for (const s of this.snapshots || []) {
+        const v = Number(s?.totalValueUsd ?? s?.total_value_usd);
+        if (s?.date && Number.isFinite(v) && isVaultBookReading(s)) byDay.set(String(s.date).slice(0, 10), v);
+      }
+      /** @type {Map<string, number>} */
+      const served = new Map();
+      for (const v of this.vaultStack?.overview?.vaults || []) {
+        if (v?.availability !== "live" || !Array.isArray(v?.history?.tvl)) continue;
+        for (const r of v.history.tvl) {
+          const day = String(r?.t ?? "").slice(0, 10);
+          const usd = Number(r?.tvlUsd);
+          if (day && Number.isFinite(usd)) served.set(day, (served.get(day) ?? 0) + usd);
+        }
+      }
+      for (const [day, usd] of served) byDay.set(day, usd);
+      const live = this.liveStackSnapshot();
+      if (live?.date && Number.isFinite(Number(live.totalValueUsd))) byDay.set(live.date, Number(live.totalValueUsd));
+      return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([t, tvlUsd]) => ({ t, tvlUsd }));
     },
     tvlAsOf() { return this.vaultStack?.overview?.asOf; },
     tvlColor() { return "var(--color-text-soft)"; },
