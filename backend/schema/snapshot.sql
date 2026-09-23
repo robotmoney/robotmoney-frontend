@@ -2174,26 +2174,6 @@ CREATE TABLE public.swarm_members (
 
 
 --
--- Name: swarm_notification_outbox; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.swarm_notification_outbox (
-    id uuid DEFAULT gen_random_uuid() CONSTRAINT committee_notification_outbox_id_not_null NOT NULL,
-    kind text CONSTRAINT committee_notification_outbox_kind_not_null NOT NULL,
-    member_id text,
-    from_email text CONSTRAINT committee_notification_outbox_from_email_not_null NOT NULL,
-    to_email text CONSTRAINT committee_notification_outbox_to_email_not_null NOT NULL,
-    payload jsonb CONSTRAINT committee_notification_outbox_payload_not_null NOT NULL,
-    attempts integer DEFAULT 0 CONSTRAINT committee_notification_outbox_attempts_not_null NOT NULL,
-    sent_at timestamp with time zone,
-    last_error text,
-    created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_notification_outbox_created_at_not_null NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() CONSTRAINT committee_notification_outbox_updated_at_not_null NOT NULL,
-    CONSTRAINT swarm_notification_outbox_kind_check CHECK ((kind = ANY (ARRAY['activation_approved'::text, 'seat_open'::text, 'application_received'::text])))
-);
-
-
---
 -- Name: swarm_recommendations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2377,7 +2357,6 @@ CREATE TABLE public.swarm_waitlist (
     email text CONSTRAINT committee_waitlist_email_not_null NOT NULL,
     email_norm text CONSTRAINT committee_waitlist_email_norm_not_null NOT NULL,
     created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_waitlist_created_at_not_null NOT NULL,
-    notified_at timestamp with time zone,
     source text
 );
 
@@ -3767,22 +3746,6 @@ ALTER TABLE ONLY public.swarm_memos
 
 
 --
--- Name: swarm_notification_outbox swarm_notification_outbox_kind_member_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_notification_outbox
-    ADD CONSTRAINT swarm_notification_outbox_kind_member_id_key UNIQUE (kind, member_id);
-
-
---
--- Name: swarm_notification_outbox swarm_notification_outbox_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_notification_outbox
-    ADD CONSTRAINT swarm_notification_outbox_pkey PRIMARY KEY (id);
-
-
---
 -- Name: swarm_recommendations swarm_recommendations_member_id_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4490,13 +4453,6 @@ CREATE UNIQUE INDEX swarm_member_keys_token_idx ON public.swarm_member_keys USIN
 --
 
 CREATE UNIQUE INDEX swarm_members_handle_key ON public.swarm_members USING btree (handle);
-
-
---
--- Name: swarm_notification_outbox_pending_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX swarm_notification_outbox_pending_idx ON public.swarm_notification_outbox USING btree (created_at) WHERE (sent_at IS NULL);
 
 
 --
@@ -5659,14 +5615,6 @@ ALTER TABLE ONLY public.swarm_memos
 
 ALTER TABLE ONLY public.swarm_memos
     ADD CONSTRAINT committee_memos_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.swarm_sessions(id);
-
-
---
--- Name: swarm_notification_outbox committee_notification_outbox_member_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.swarm_notification_outbox
-    ADD CONSTRAINT committee_notification_outbox_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.swarm_members(id) ON DELETE CASCADE;
 
 
 --

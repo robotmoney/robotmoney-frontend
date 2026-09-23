@@ -178,11 +178,6 @@ x-worker-env: &worker-env
   # the committed default stays in force. Asserted both ways in
   # scripts/tests/integration/demo-compose-config.test.ts.
   OPENCODE_TIMEOUT_MS:
-  # Activation notifications are persisted by the API and delivered by the
-  # reserved swarm worker through the deployment's HTTP mail adapter.
-  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
   postgres:
@@ -307,7 +302,6 @@ services:
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
       # Swarm session-lifecycle cron cadence (issue #208). Read at
       # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
       # the SINGLE-BOX/prod compose file, so it explicitly enables the daily

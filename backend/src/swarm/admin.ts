@@ -20,7 +20,6 @@ import {
   getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
-  countActiveMembersTx,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
@@ -39,7 +38,6 @@ import {
   writeJudgeFaultInjection,
   type JudgeFaultInjectionState,
 } from "./judge-fault-injection.ts";
-import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
 // there (issue #572).
@@ -446,8 +444,8 @@ export async function reviewApplicationAdmin(
 ): Promise<AdminResult> {
   if (decision === "approve") {
     // Reuse the SAME activation transaction the public path uses. Approval
-    // activates the pending key, queues the email, and flips status active;
-    // bearer plaintext is minted only by the member's first signed claim.
+    // activates the pending key and flips status active; bearer plaintext is
+    // minted only by the member's first signed claim.
     const res = await activateMember(memberId, role);
     if (!res.ok) return res as AdminResult;
     return {
@@ -457,7 +455,6 @@ export async function reviewApplicationAdmin(
       memberStatus: "active",
       role,
       claimRequired: true,
-      notificationQueued: res.notificationQueued,
     };
   }
   return sql.begin(async (tx) => {
@@ -647,19 +644,17 @@ export async function deactivateMemberAdmin(
     const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
-    const wasActive = row.status === "active";
     const upd = await tx`
       UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
     await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
-    if (wasActive) {
-      const activeCount = await countActiveMembersTx(tx);
-      if (activeCount < SWARM_ROSTER_CAP) {
-        await enqueueSeatOpenNotifications(tx);
-      }
-    }
+    // A seat opening used to mail the waitlist here (enqueueSeatOpenNotifications).
+    // Swarm email is removed — issue #1026 W5, decision D50 reversing D30 — so
+    // deactivation now just frees the seat. The waitlist itself is untouched:
+    // rows keep accumulating through POST /api/swarm/waitlist and an operator
+    // reads them directly when a seat opens.
     await audit(actor, "member_deactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });

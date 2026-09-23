@@ -1,6 +1,5 @@
 import * as ic from "../../swarm/domain.ts";
 import * as admin from "../../swarm/admin.ts";
-import { deliverSwarmNotification } from "../../swarm/notifications.ts";
 import { judgeLaneFailureFor } from "../../swarm/receipt-gap.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
@@ -325,22 +324,3 @@ export async function publishSession(payload: Record<string, unknown>): Promise<
         : ""),
   };
 }
-
-export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {
-  const outboxId = String(payload.outboxId ?? "");
-  if (!outboxId) throw new Error("swarm application received notification requires outboxId");
-  return deliverSwarmNotification(outboxId);
-}
-
-export async function sendActivationNotification(payload: Record<string, unknown>): Promise<unknown> {
-  const outboxId = String(payload.outboxId ?? "");
-  if (!outboxId) throw new Error("swarm activation notification requires outboxId");
-  return deliverSwarmNotification(outboxId);
-}
-
-export async function sendSeatOpenNotification(payload: Record<string, unknown>): Promise<unknown> {
-  const outboxId = String(payload.outboxId ?? "");
-  if (!outboxId) throw new Error("swarm seat open notification requires outboxId");
-  return deliverSwarmNotification(outboxId);
-}
-

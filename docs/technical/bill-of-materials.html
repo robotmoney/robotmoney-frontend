@@ -1278,8 +1278,7 @@ footer {
       <li><strong>swarm_memos</strong> — long-form memos. <em>There is no <code>swarm_submissions</code> table</em>
         either; <code>committee_submissions</code> was dropped in the same migration.</li>
       <li><strong>swarm_applications</strong>, <strong>swarm_claim_challenges</strong>,
-        <strong>swarm_waitlist</strong>, <strong>swarm_notification_outbox</strong>,
-        <strong>swarm_agent_health_events</strong></li>
+        <strong>swarm_waitlist</strong>, <strong>swarm_agent_health_events</strong></li>
     </ul>
   </div>
 
@@ -1664,20 +1663,15 @@ footer {
   </div>
 
   <h3>Notifications</h3>
-  <p>Exactly three outbox kinds exist in <code>swarm_notification_outbox</code> — there are no session-open or
-    session-results emails:</p>
-  <ul>
-    <li><strong>application_received</strong> — receipt for a public application</li>
-    <li><strong>activation_approved</strong> — sent when an admin approves and activates the applicant</li>
-    <li><strong>seat_open</strong> — sent to waitlist entries when a roster seat opens</li>
-  </ul>
-  <p>Each is written transactionally as a durable outbox row plus a matching swarm-lane delivery job
-    (<code>swarm.send_application_received_notification</code>, <code>…send_activation_notification</code>,
-    <code>…send_seat_open_notification</code>); a non-2xx transport response retries through the normal job backoff.</p>
-  <p>Transport: <strong>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</strong> — one JSON POST carrying
-    <code>{from,to,subject,text}</code> to a mail adapter (optionally
-    <code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN</code>). Links inside those emails are built from
-    <code>SWARM_PUBLIC_BASE_URL</code>, since a mail client has no origin of its own.</p>
+  <p><strong>The swarm sends no email.</strong> The onboarding email feature — the outbox table, the three delivery
+    job kinds, the mail adapter and its transport settings — was removed in full by issue #1026 W5
+    (<a href="../decisions.md">decision D50</a>, reversing D30). Migration
+    <span class="file-path">0066_drop_swarm_notifications.sql</span> drops the schema behind it.</p>
+  <p>What replaces it: an applicant receives their member id in the <code>POST /api/swarm/apply</code> response body,
+    which is where the onboarding skill reads it from and always was; <code>swarm_waitlist</code> keeps collecting
+    addresses and an operator reads the list by hand when a seat opens. Nothing in the repository holds a mail
+    credential, and <span class="file-path">scripts/tests/unit/no-swarm-email.test.ts</span> refuses the feature's
+    return.</p>
 </section>
 
 <!-- SCRIPTS & UTILITIES -->
@@ -1982,11 +1976,6 @@ footer {
         <td>≥1.2</td>
       </tr>
       <tr>
-        <td><strong>Email Transport</strong></td>
-        <td>Swarm member notifications</td>
-        <td><code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</code> (SMTP or HTTP)</td>
-      </tr>
-      <tr>
         <td><strong>Cloudflare Tunnel</strong></td>
         <td>Public smoke access (stage.robotmoney-labs.dev)</td>
         <td><code>cloudflared.config.example.yml</code>. 48787 is the tunnel's origin port and the ONLY sanctioned
@@ -2175,16 +2164,6 @@ footer {
     </thead>
     <tbody>
       <tr>
-        <td><code>SWARM_NOTIFICATION_EMAIL_FROM</code></td>
-        <td>Sender persisted with each outbox row. Unset → approval fails loudly, but a public application still
-          succeeds without its receipt (losing applicants is worse than losing an email).</td>
-      </tr>
-      <tr>
-        <td><code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</code> /<br><code>…_TRANSPORT_TOKEN</code></td>
-        <td>HTTP mail adapter accepting one JSON POST of <code>{from,to,subject,text}</code>; the token is optional on
-          a trusted private network</td>
-      </tr>
-      <tr>
         <td><code>SWARM_SEED_ROSTER</code></td>
         <td>Seat the live house roster from the committed member manifests, applied by one
           <code>bun run migrate</code>. Off by default; additive and idempotent; never writes a credential — a seeded
@@ -2273,8 +2252,7 @@ footer {
     <li>For production: set <code>ADMIN_TOKEN</code>, <code>ANALYTICS_TOKEN</code>, and
       <code>PROJECTS_SOURCE=live</code> (the projects pipelines refuse to serve fixtures in prod)</li>
     <li>No provider API keys are needed — the analytics fetchers are keyless</li>
-    <li>Set <code>SWARM_NOTIFICATION_EMAIL_FROM</code> + <code>…_TRANSPORT_URL</code> and
-      <code>SWARM_PUBLIC_BASE_URL</code> for member notifications</li>
+    <li>Set <code>SWARM_PUBLIC_BASE_URL</code> if the deployment is not the canonical production origin</li>
     <li>Run <code>bun run --cwd backend migrate</code> to apply the schema and seed</li>
     <li>Run <code>bun run smoke</code>, or <code>bun run api</code> plus one
       <code>WORKER_LANE=&lt;lane&gt; bun run worker</code> per lane (separate terminals)</li>

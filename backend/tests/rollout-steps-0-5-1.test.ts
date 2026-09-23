@@ -138,9 +138,13 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     //   0065 — §9.1 step 2's grant transition, revoking DELETE/TRUNCATE on the
     //          append-only tables from rm_app/rm_worker. Preflight check 2
     //          fails until it lands.
+    //   0066 — W5's removal of the swarm email feature (decision D50,
+    //          reversing D30): drops `swarm_notification_outbox` and
+    //          `swarm_waitlist.notified_at`.
     "0063_deployment_identity.sql",
     "0064_schema_manifest.sql",
     "0065_append_only_grant_transition.sql",
+    "0066_drop_swarm_notifications.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

@@ -54,9 +54,6 @@ x-worker-env: &worker-env
   # scripts/tests/integration/demo-compose-config.test.ts already asserts for
   # docker-compose.yml's identical declaration.
   OPENCODE_TIMEOUT_MS:
-  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
   worker-swarm:

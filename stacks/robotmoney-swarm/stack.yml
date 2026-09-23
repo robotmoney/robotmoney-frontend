@@ -65,7 +65,3 @@ secrets:
     external: true
   BASE_RPC_URL:
     external: true
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:
-    external: true
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:
-    external: true

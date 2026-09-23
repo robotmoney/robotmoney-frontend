@@ -109,7 +109,6 @@ process.env.RM_TEST_TEMPLATE_DB = "robotmoney_tmpl";
 // cannot dump from a newer server at all).
 process.env.RM_TEST_PG_CONTAINER = name;
 process.env.RM_ENV = "ephemeral";
-process.env.SWARM_NOTIFICATION_EMAIL_FROM = "swarm-test@robotmoney.invalid";
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,

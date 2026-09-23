@@ -669,32 +669,14 @@ export function resolveSwarmSchedules(
 // backend/Dockerfile sets no ENV, so the variable can never reach the
 // container. It is also absent from scripts/lib/smoke-main.ts's
 // DEMO_COMPOSE_PASSTHROUGH, so a `bun smoke` / `bun run smoke` operator cannot
-// inject it either. Whatever is written here is what every swarm notification
-// email links to. It is exported and pinned by
-// backend/tests/swarm-public-base-url.test.ts precisely because the tests that
-// exercise the emails assert against `config.swarmPublicBaseUrl` (the
-// variable), which stays green no matter what this string says.
+// inject it either. Whatever is written here is the canonical public origin.
+// It is exported and pinned by backend/tests/swarm-public-base-url.test.ts.
 export const SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network";
 
 export function resolveSwarmPublicBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
-}
-
-// --- Swarm notification sender (issue #322) ------------------------------
-// Resolved the same call-time way as resolveSwarmPublicBaseUrl above rather
-// than only baked into the `config` singleton below: applyMember's receipt is
-// the one caller (domain.ts::sendApplicationReceipt) that must observe an
-// unset sender WITHOUT throwing — every other notification path (activation,
-// seat-open) is fine treating the frozen-at-load `config.swarmNotificationEmailFrom`
-// as authoritative, since a real deployment's env does not change mid-process.
-// A call-time resolver is what lets a test flip this one input per-call, in the
-// same process, without reloading the config module.
-export function resolveSwarmNotificationEmailFrom(
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  return env.SWARM_NOTIFICATION_EMAIL_FROM || null;
 }
 
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
@@ -743,13 +725,8 @@ export const config = {
   // it is required (every env); if unset, the role is allowed only outside prod
   // (smoke/ephemeral convenience), mirroring adminToken.
   analyticsToken: envSecret("ANALYTICS_TOKEN"),
-  // Swarm activation email uses a durable outbox + swarm worker job.
-  // The sender is persisted with the message; the deployment transport is an
-  // HTTP email adapter invoked only by that worker (tests inject a fake).
-  swarmNotificationEmailFrom: resolveSwarmNotificationEmailFrom(),
-  swarmNotificationEmailTransportUrl: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
-  swarmNotificationEmailTransportToken: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
-  // Origin every link inside those emails is built from (see the resolver above).
+  // Canonical public origin for absolute links into the site. See the resolver
+  // above; it is pinned by backend/tests/swarm-public-base-url.test.ts.
   swarmPublicBaseUrl: resolveSwarmPublicBaseUrl(),
   // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
   // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,

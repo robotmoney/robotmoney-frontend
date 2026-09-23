@@ -1708,6 +1708,8 @@ changed either — deleting it removed dead request-time code, not a feature.
 
 ## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
 
+> **Superseded by [D50](#d50) on 2026-09-23.** Swarm onboarding email is removed outright, vendor and all. Kept for the history of the DNS delegation this entry authorised.
+
 **Decision.** Two questions, resolved together since the vendor choice drives
 the DNS shape.
 
@@ -3684,3 +3686,47 @@ for new sessions and make resubmission return the existing record; remove the
 cap and the revision write path; retire `swarm-take-revisions.test.ts` in
 favour of an idempotent-submission test. Tracked under the deployment refactor
 issue (#1026), W3.
+
+## D50 — Swarm onboarding email is removed; reverses D30 (Lucas, 2026-09-23)
+
+**Status.** Accepted 2026-09-23. Implemented in the same change as this entry
+(issue #1026, W5).
+
+**Decision.** The swarm sends no email, to anybody, ever. The whole feature is
+deleted rather than disabled: the notification module, the AgentMail worker
+adapter, the three `swarm.send_*_notification` job kinds, the triggers on apply,
+on activation and on a seat opening, the `SWARM_NOTIFICATION_EMAIL_FROM` /
+`_TRANSPORT_URL` / `_TRANSPORT_TOKEN` settings with their compose and stack
+passthroughs, the outbox table and the waitlist's "notified" stamp. There is no
+flag that turns it back on and no vendor left to bill. Migration
+`0066_drop_swarm_notifications.sql` drops the schema.
+
+**Why.** Three emails were ever sent — an application receipt, an approval
+notice and a seat-open notice to the waitlist — and none of them was the only
+way to learn what it said. The application receipt carried a member id the API
+already returns in the `POST /api/swarm/apply` response body, which is where the
+onboarding skill reads it from; the approval notice announced a `status` the
+applicant's own status page shows; the seat-open notice went to a waitlist an
+operator reads by hand anyway. Against that, the feature was carrying a
+third-party mail vendor, an API token, a Cloudflare Worker deployed outside this
+repository's build, a cross-account NS delegation for `notify.robotmoney.net`,
+a durable outbox holding contact addresses, and three worker job kinds with
+their own retry semantics. The cost was entirely in the parts nobody watches:
+deployment surface, a live credential, and PII at rest. Removing it is the
+larger simplification available to the onboarding path.
+
+**What this reverses.** All of [D30](#d30): the AgentMail vendor selection, the
+isolated-subdomain sending design, and the one-time cross-account NS
+delegation's purpose. The delegation itself is a DNS fact this repository does
+not control and this entry does not undo; D30 stays readable for that history.
+D30's rejected alternatives are moot — there is no sender to choose.
+
+**What stays.** `swarm_waitlist` keeps collecting addresses through
+`POST /api/swarm/waitlist`; the table is not dropped, because an address given
+on purpose is still worth having and an operator invites from it by hand.
+`SWARM_PUBLIC_BASE_URL` and `resolveSwarmPublicBaseUrl()` stay: the applicant
+status page is now the only channel an applicant has, and the origin its links
+are built from matters more, not less.
+
+**Enforcement.** `scripts/tests/unit/no-swarm-email.test.ts` fails if the
+feature returns under any of its old names.

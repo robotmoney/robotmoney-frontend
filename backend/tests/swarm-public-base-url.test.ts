@@ -6,18 +6,17 @@
 // docker-compose.smoke.yml's, not the x-worker-env anchor), there is no
 // `env_file:` anywhere and backend/Dockerfile sets no ENV, and it is absent
 // from scripts/lib/smoke-main.ts's DEMO_COMPOSE_PASSTHROUGH. So the fallback in
-// resolveSwarmPublicBaseUrl IS the value every real deployment computes, and
-// every swarm notification email links to it — the applicant claim link at
-// src/swarm/notifications.ts:26 most of all, which is the ONLY durable copy of
-// a status page reachable by nothing but its opaque member id.
+// resolveSwarmPublicBaseUrl IS the value every real deployment computes, and it
+// is the origin every absolute link into the swarm surface is built from — the
+// applicant status page most of all, reachable by nothing but its opaque member
+// id.
 //
-// The existing email tests (swarm-waitlist.test.ts, swarm-claim.test.ts) assert
-// against `config.swarmPublicBaseUrl` — the VARIABLE — so they stay green no
-// matter which host that variable holds. They prove the link is built from the
-// configured origin; they prove nothing about the origin being the live one.
-// That gap let the default sit at the retired `robotmoney.net` after #603
-// moved the site to `robotmoney.network`. This file is the missing pin: it
-// fails if the default regresses to any non-canonical host.
+// This pin matters MORE, not less, since the swarm email feature was removed
+// (issue #1026 W5, decision D50). The cases that used to exercise the origin
+// end-to-end lived in the email tests, and they are gone with the emails. This
+// file is now the only thing standing between the default and a silent
+// regression to the retired `robotmoney.net`, which is exactly what happened
+// after #603 moved the site to `robotmoney.network`.
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -57,9 +56,9 @@ test("the default names no .net origin at all", () => {
   expect(resolveSwarmPublicBaseUrl({})).not.toMatch(/robotmoney\.net\b/i);
 });
 
-test("the applicant claim link built on the default points at the live site", () => {
-  // Same construction as src/swarm/notifications.ts:26 — the artifact the
-  // applicant actually receives, not just the origin string in isolation.
+test("the applicant status link built on the default points at the live site", () => {
+  // The whole artifact, not just the origin string in isolation: this is the
+  // URL an applicant is handed for a page nothing else links to.
   const memberId = "abc-123";
   const claimUrl = `${resolveSwarmPublicBaseUrl({})}/swarm/apply/${encodeURIComponent(memberId)}`;
   expect(claimUrl).toBe("https://robotmoney.network/swarm/apply/abc-123");

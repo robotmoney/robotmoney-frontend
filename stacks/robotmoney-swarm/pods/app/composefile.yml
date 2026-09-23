@@ -60,9 +60,6 @@ services:
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
-      SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-      SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
       # Swarm session-lifecycle cron cadence (issue #208). docker-compose.yml
       # inline-defaults these to the daily 06:00-08:00 UTC sequence; here they
       # are forwarded only, per this file's no-inline-default rule above — an

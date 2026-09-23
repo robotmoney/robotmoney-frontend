@@ -143,8 +143,8 @@
           </template>
         </ol>
 
-        <!-- Where an operator goes from here. Same links the approval email
-             carries, so the two agree. -->
+        <!-- Where an operator goes from here. This page is the ONLY place they
+             are told: no approval email is sent (decision D50). -->
         <nav class="rm-actions" x-show="statusPhase() === 'approved'" x-cloak aria-label="Member links">
           <a :href="profileUrl()" class="rm-actions__do"
              x-text="record.length ? 'See the full record →' : 'See the public profile →'"></a>

@@ -278,7 +278,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/judge-replay",
     "src/swarm/judge-session",
     "src/swarm/judgements",
-    "src/swarm/notifications",
     "src/swarm/receipt-gap",
     "src/swarm/roster-seed",
     "src/worker/handlers/projects",

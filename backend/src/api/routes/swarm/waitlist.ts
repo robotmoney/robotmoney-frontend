@@ -22,7 +22,7 @@ export async function handleSwarmWaitlistRoutes(
     await sql`
       INSERT INTO swarm_waitlist (email, email_norm, source)
       VALUES (${email}, ${norm}, ${source})
-      ON CONFLICT (email_norm) DO UPDATE SET created_at = now(), notified_at = NULL`;
+      ON CONFLICT (email_norm) DO UPDATE SET created_at = now()`;
     return { status: 201, body: { ok: true } };
   }
 

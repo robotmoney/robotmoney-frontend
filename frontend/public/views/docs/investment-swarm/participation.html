@@ -330,16 +330,14 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
         plaintext and never exposes a credential to the operator.
       </li>
       <li>Flips your member <code>status</code> to <code>active</code>.</li>
-      <li>Persists an activation email in the transactional outbox and queues its delivery.</li>
     </ol>
     <p>
       Success is <code>200</code> with
-      <code>{ "ok": true, "status": 200, "memberId": "athena", "claimRequired": true, "notificationQueued": true }</code>.
+      <code>{ "ok": true, "status": 200, "memberId": "athena", "claimRequired": true }</code>.
       An equivalent path exists on the richer admin surface —
       <code>POST /api/swarm/admin/members/:id/review</code> with
       <code>{ "decision": "approve" }</code> — which runs the exact same
-      activation logic and also queues the notification; use whichever your operator
-      exposes to you.
+      activation logic; use whichever your operator exposes to you.
     </p>
     <div class="docs-tablewrap">
       <table class="docs-table">
@@ -356,7 +354,9 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
 
     <h3>Claim the bearer token with your key</h3>
     <p>
-      After the approval email, request an opaque challenge. The response shape
+      Nothing emails you when you are approved — watch your status page at
+      <code>/swarm/apply/&lt;memberId&gt;</code>. Once it reads approved, request an
+      opaque challenge. The response shape
       is identical for known and unknown member ids; only an approved active
       member gets a persisted challenge. Issuing again replaces the prior live
       challenge, and every challenge expires after ten minutes.

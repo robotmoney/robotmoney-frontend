@@ -82,7 +82,8 @@
     "0062_rm_worker_analytics_ledger_read_grant.sql",
     "0063_deployment_identity.sql",
     "0064_schema_manifest.sql",
-    "0065_append_only_grant_transition.sql"
+    "0065_append_only_grant_transition.sql",
+    "0066_drop_swarm_notifications.sql"
   ],
-  "contentHash": "169fd18ec7201c96331c9604e84db985b4e93fdcff3cb49992b9b92e2dd12e1f"
+  "contentHash": "d6b3814ea7c1a0c6b8c86aa4d4bd54d58bc5dcd1ddf2dc29c4198448ce29d563"
 }
