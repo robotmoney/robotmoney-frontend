@@ -33,9 +33,11 @@ import {
   CANONICAL_ROSTER_URL,
   copyablePrompt,
   registerApplyForm,
+  seatsFrom,
 } from "../../../frontend/public/assets/js/app/alpine/views/apply-form.js";
 import { registerStaticViews } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
-import { ONBOARDING_PROMPT } from "@robotmoney/contract";
+import { ONBOARDING_PROMPT, SWARM_ROSTER_CAP } from "@robotmoney/contract";
+import { SWARM_ROSTER_CAP as MIRRORED_CAP } from "../../../frontend/public/assets/js/app/contract/index.js";
 
 // A stub Alpine that captures Alpine.data(name, factory) registrations and
 // answers any other accessed method with a no-op — registerApplyForm /
@@ -113,6 +115,26 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
     } finally {
       (globalThis as any).window = savedWindow;
     }
+  });
+});
+
+// RM-126: the page reads the cap the server enforces, so a cap change on the
+// backend cannot leave the apply page advertising seats it refuses (or a full
+// roster it no longer has). The frontend's hand-kept mirror is only a fallback,
+// and it must still equal the contract.
+describe("seatsFrom: the apply page's seat count follows the members API (RM-126)", () => {
+  test("rosterCap and seatsFilled from the server win over the members list and the constant", () => {
+    expect(seatsFrom({ members: [{}, {}], rosterCap: 20, seatsFilled: 10 })).toEqual({ filled: 10, cap: 20 });
+  });
+
+  test("a response without them falls back to the member count and the contract's cap", () => {
+    expect(seatsFrom({ members: [{}, {}, {}] })).toEqual({ filled: 3, cap: SWARM_ROSTER_CAP });
+    expect(seatsFrom(null)).toEqual({ filled: 0, cap: SWARM_ROSTER_CAP });
+  });
+
+  test("the frontend's mirrored cap equals the contract's", () => {
+    expect(MIRRORED_CAP).toBe(SWARM_ROSTER_CAP);
+    expect(SWARM_ROSTER_CAP).toBe(20);
   });
 });
 

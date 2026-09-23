@@ -15,7 +15,7 @@
 // time, which is unsafe to mutate when other test files in the same run also
 // touch it (a real cross-file race was observed before this change).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { ROUTES } from "@robotmoney/contract";
+import { ROUTES, SWARM_ROSTER_CAP } from "@robotmoney/contract";
 import { activeMemberCount } from "../../lib/swarm/session.ts";
 
 let fixtureBackend: ReturnType<typeof Bun.serve>;
@@ -60,7 +60,7 @@ describe("activeMemberCount() — fails CONSERVATIVELY (assume full), never assu
     fixtureMode = "error";
     const count = await activeMemberCount(backendUrl);
     expect(count).toBe(Number.POSITIVE_INFINITY);
-    expect(count).toBeGreaterThanOrEqual(10); // >= any plausible SWARM_ROSTER_CAP
+    expect(count).toBeGreaterThanOrEqual(SWARM_ROSTER_CAP); // a failed read must never admit
   });
 
   test("a malformed response (no members array) ALSO reports Infinity, not 0", async () => {

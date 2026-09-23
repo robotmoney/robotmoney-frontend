@@ -11,8 +11,8 @@ export {
   APPLY_HOW_TO_STEPS,
 } from "./swarm-application.js";
 
-// Mirrors contract/src/swarm.js SWARM_ROSTER_CAP. Interim: the apply
-// page derives seats-open from members.length vs this constant. The durable
-// fix is the members API returning { rosterCap, seatsAvailable } so the client
-// need not hardcode the cap (backend lane).
-export const SWARM_ROSTER_CAP = 10;
+// Mirrors contract/src/swarm.js SWARM_ROSTER_CAP by hand: sync-contract does
+// not copy that file. A fallback only: the apply page reads rosterCap and
+// seatsFilled from the members API (#236) and uses this when a response lacks
+// them, as the local preview's goldens do.
+export const SWARM_ROSTER_CAP = 20;

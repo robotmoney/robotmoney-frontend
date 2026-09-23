@@ -224,8 +224,8 @@ test("the lookback window decides: just inside is reported, just outside is not"
 test("21 receiptless sessions: 21 counted, 20 named, ONE aggregate alert naming both", async () => {
   await setJudgeConfig({ mode: "enforce", minTakes: 1, model: STUB_JUDGE_MODEL });
   const total = MISSING_RECEIPT_REPORT_LIMIT + 1;
-  // The roster caps at 10 members; one analyst filing one take against each of
-  // 21 subjects is the same shape and stays inside it.
+  // The roster is capped (SWARM_ROSTER_CAP); one analyst filing one take against
+  // each of 21 subjects is the same shape and stays inside it.
   const analyst = [await member()];
   for (let i = 0; i < total; i++) {
     const id = await aggregatedSession(`cap${i}`, 1, analyst);

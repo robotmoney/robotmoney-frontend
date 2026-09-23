@@ -2075,9 +2075,9 @@ test("a positions[] the model can ask for cheaply cannot be persisted expensivel
     release_safety: { release: "safe", concerns: [] },
   });
 
-  // 1. Over-long array. 21 entries is one past the bound; every id is real, so
-  //    nothing but the LENGTH is wrong with this response.
-  const long = Array.from({ length: 21 }, (_, i) => ({
+  // 1. Over-long array. One past the bound (MAX_POSITIONS is the roster cap);
+  //    every id is real, so nothing but the LENGTH is wrong with this response.
+  const long = Array.from({ length: ic.SWARM_ROSTER_CAP + 1 }, (_, i) => ({
     member_id: members[i % members.length]!.id, view: "v",
   }));
   const overLong = await judgeSession(session.id, { transport: fixedTransport(answerWith(long)) });

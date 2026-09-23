@@ -185,8 +185,8 @@ test("members: manual add mints a one-time credential; deactivate revokes keys; 
   // Free the roster slot this test claimed: the reactivate above (version 2 ->
   // 3) left `memberId` ACTIVE, and rotate (version 3 -> 4) doesn't touch
   // status, so nothing later deactivates it. Left active, it silently eats
-  // one seat of SWARM_ROSTER_CAP (10) for the rest of this file's 10
-  // activeMember() admissions — see the matching comment in "members:
+  // one seat of SWARM_ROSTER_CAP for the rest of this file's activeMember()
+  // admissions — see the matching comment in "members:
   // application review approve/reject" above for the full 409 story that a
   // non-null-asserted `r.token!` was masking before issue #454.
   expect((await admin.deactivateMemberAdmin(memberId, 4)).status).toBe(200);
@@ -274,8 +274,8 @@ test("members: application review approve/reject", async () => {
   // Free the roster slot this test claimed: `memberId` is left ACTIVE by the
   // approve above (version bumped 1 -> 2 by activateMember) with nothing later
   // depending on it staying active. Left active, it silently eats one seat of
-  // SWARM_ROSTER_CAP (10) for the rest of this file's 10 activeMember()
-  // admissions — exactly enough to 409 the very last one. That 409 was masked
+  // SWARM_ROSTER_CAP for the rest of this file's activeMember() admissions,
+  // which at a ten-seat cap was exactly enough to 409 the last one. That 409 was masked
   // for a long time by `activeMember()`'s non-null-asserted `r.token!`
   // (undefined, not thrown) until the typecheck widening (issue #454) forced a
   // real `"token" in r` narrowing that fails loudly instead.

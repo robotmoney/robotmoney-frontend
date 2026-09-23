@@ -1610,6 +1610,10 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* A row of facts that opens a section, above a figure: clear of it. */
 .rr-meta--lead { margin-bottom: 1.5rem; }
 .rr-meta__i { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+/* A list of names in the strip (a session's absent members) wraps within the
+   column; one row of them ran past a phone's edge. */
+.rr-meta__i--list { flex-wrap: wrap; row-gap: 0.25rem; white-space: normal; }
+.rr-meta__i--list > a { white-space: nowrap; }
 .rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 /* The live mark stays square beside the round regime dot it would inherit. */
