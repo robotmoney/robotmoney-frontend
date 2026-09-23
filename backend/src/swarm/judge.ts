@@ -69,7 +69,7 @@
 // — which is what makes the prose attributable rather than merely plausible.
 // See canonicalizeDigestInputs() for the decision and its reasoning.
 import { createHash } from "node:crypto";
-import { buildDisagreements, buildRationale } from "./domain.ts";
+import { buildDisagreements, buildRationale, SWARM_ROSTER_CAP } from "./domain.ts";
 import { DEFAULT_JUDGE_TIMEOUT_MS } from "./judge-budget.ts";
 import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 
@@ -579,14 +579,16 @@ const MAX_FIELD_CHARS = 2000;
  * migration 0040: a bloated row can never be deleted. Every other collection
  * here is bounded; this one was not (#771).
  *
- * WHY 20. A legitimate disagreement names at most one position per member of
- * the frozen take set, and the roster is single-digit, so 20 leaves better than
- * 2x headroom and can never truncate a real answer. It is the same order as
- * MAX_DISAGREEMENTS and MAX_CONCERNS, and it caps the worst case at
- * 10 x 20 x 10,000 chars instead of unbounded. The de-duplication below is
- * what makes the REAL bound the roster size rather than this number.
+ * WHY THE ROSTER CAP. A legitimate disagreement names at most one position per
+ * member of the frozen take set, and takers are at most SWARM_ROSTER_CAP (one
+ * fewer while a judge holds a seat, since a judge files no take), so this can
+ * never truncate a real answer, and it follows the roster if the cap moves. It
+ * caps the worst case at MAX_DISAGREEMENTS x SWARM_ROSTER_CAP x 10,000 chars
+ * instead of unbounded. The de-duplication below is what makes the REAL bound
+ * the number of takers rather than this number. It was a literal 20, with 2x
+ * headroom over a ten-seat roster, until RM-126 made the roster 20.
  */
-const MAX_POSITIONS = 20;
+const MAX_POSITIONS = SWARM_ROSTER_CAP;
 
 function boundedString(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
