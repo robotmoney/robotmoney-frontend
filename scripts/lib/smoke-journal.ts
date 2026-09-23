@@ -784,7 +784,46 @@ export function readReceipt(paths: InstancePaths): Receipt | null {
  * longer running is reported as gone, never as still serving.
  */
 export function summarizeProgress(journal: Journal | null, receipt: Receipt | null): string {
-  void journal;
-  void receipt;
-  throw new Error("NOT IMPLEMENTED: journal/receipt progress summary — spec §1.4, issue #1026 W1.6");
+  if (receipt !== null) {
+    return [
+      `instance ${receipt.instance} reached readiness under plan ${receipt.planId} at ${receipt.writtenAt}.`,
+      `schema: manifest ${receipt.schema.manifestHash}, migrations ${receipt.schema.migrations.join(", ")}`,
+      ...receipt.preflight.map((check) => `preflight ${check.check}: ${check.pass ? "pass" : "fail"} (${check.detail})`),
+      ...receipt.readiness.map((check) => `readiness ${check.check}: ${check.pass ? "pass" : "fail"} (${check.detail})`),
+    ].join("\n");
+  }
+  if (journal === null) {
+    return "No receipt and no journal: this instance has no recorded run.";
+  }
+
+  const last = journal.phases.at(-1);
+  const lines = [
+    `instance ${journal.instance} under plan ${journal.planId}, opened ${journal.openedAt}.`,
+    last === undefined
+      ? "no phase has begun."
+      : `phase ${last.phase}${last.step === null ? "" : ` (${last.step})`}: ${last.status}${last.reason === null ? "" : ` — ${last.reason}`}`,
+  ];
+
+  const migrations = journal.phases.flatMap((record) => record.outcome?.migrationsApplied ?? []);
+  lines.push(
+    migrations.length === 0
+      ? "committed preparation: none"
+      : `committed preparation: migrations ${migrations.join(", ")}`,
+  );
+
+  const before = journal.phases[0]?.expectations.services ?? {};
+  const replaced: Record<string, string> = {};
+  for (const record of journal.phases) {
+    for (const [service, digest] of Object.entries(record.outcome?.servicesReplaced ?? {})) {
+      replaced[service] = digest;
+    }
+  }
+  for (const [service, digest] of Object.entries(replaced)) {
+    lines.push(`service ${service}: new, on ${digest}`);
+  }
+  for (const [service, digest] of Object.entries(before)) {
+    if (replaced[service] !== undefined) continue;
+    lines.push(`service ${service}: not replaced, last seen on ${digest}, with no guarantee it survived`);
+  }
+  return lines.join("\n");
 }
