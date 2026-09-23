@@ -473,9 +473,20 @@ export async function revalidateAfterAcquire(
   // which is the only reading that lets a caller revalidate one input.
   if (expected.ledgerHead !== null) {
     try {
-      const rows = await conn<{ filename: string }[]>`
-        SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1`;
-      const actual = rows[0]?.filename ?? null;
+      // The column is `name`. It is the migration's FULL FILENAME, which is the
+      // point — spec §8.1 makes the filename list, never the number, the schema
+      // identity, and this repo really does carry several duplicate numbers.
+      //
+      // This read said `filename` until 2026-09-23 and therefore always threw.
+      // The `catch` below then recorded it as "the ledger could not be re-read
+      // — an unreadable ledger is a mismatch", so a plain coding mistake wore
+      // the costume of a legitimate refusal and revalidation simply always
+      // failed. Worth remembering when reading the catch: it cannot tell a
+      // broken query from a genuinely unreadable ledger, so anything it reports
+      // deserves to be read as a possible bug and not only as a mismatch.
+      const rows = await conn<{ name: string }[]>`
+        SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1`;
+      const actual = rows[0]?.name ?? null;
       if (actual !== expected.ledgerHead) {
         reasons.push(`the migration ledger head is ${actual ?? "empty"}, but the plan was built against ${expected.ledgerHead}`);
       }
