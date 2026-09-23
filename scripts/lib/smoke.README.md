@@ -72,8 +72,9 @@ fewer than are currently running stops the rest. An explicit empty file
 unreadable configured file refuses the boot rather than silently emptying
 the roster.
 
-Sessions run on their normal schedule whether or not this host runs any
-participant — third parties may run every one of them. The credential file
+Sessions run in epochs, timed per subject by `system-scheduler`
+(`docs/technical/system-scheduler-spec.md`), whether or not this host runs
+any participant — third parties may run every one of them. The credential file
 selects in-house participant containers; `--seed` adds demo data only to an
 eligible blank rehearsal database. Neither controls session cadence.
 
@@ -109,8 +110,9 @@ are present and denied privileges absent (no superuser, `CREATEROLE`, membership
 in `rm_owner`, application-object ownership, DDL, or delete/truncate on an
 append-only table). An unregistered grant is not forbidden merely by omission.
 Preflight also checks the live schema against the installed version's manifest,
-code compatibility, and the environment's credential restrictions. The same check runs inside `api`/`worker`/`worker-swarm` at their
-own startup, against their own credential.
+code compatibility, and the environment's credential restrictions. The same check runs inside `api` at its own startup, against its own
+credential; `system-scheduler` holds no database credential and runs an
+HTTP check instead.
 
 ## Supporting commands
 

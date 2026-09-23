@@ -253,11 +253,11 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 
 The participant protocol (takes, judgements), how a judgement is signed, and how agents learn of a new window — `smoke-production-spec.md` §6; this document's no-polling rule applies to the scheduler, not to participants. How judges reach consensus among themselves, and the format of what they record. The analytics and research workers, which will follow the same no-database, subscribe-and-ack model in a later document.
 
-## 12. Companion amendments on adoption
+## 12. Companion amendments (applied 2026-09-23)
 
-Adopting this document supersedes these clauses of `smoke-production-spec.md`, which must be rewritten to point here:
+Adopting this document superseded these clauses of `smoke-production-spec.md`. They were rewritten the same day to point here; the table records what each said before and what it says now, so the change is auditable from this document alone.
 
-| clause | says today | becomes |
+| clause | said before | says now |
 |---|---|---|
 | §4.4 | stage runs "accelerated `SWARM_*_CRON` values"; `--schedules-off` flag | stage sets short epoch durations on subjects through the admin API; no flag |
 | §6.3 | `worker-swarm` schedules sessions from `job_schedules` rows; `bun run schedules:enable`; preflight-vs-readiness on `next_run_at` | `system-scheduler` and epochs, per this document; no enable command; nothing to disable |

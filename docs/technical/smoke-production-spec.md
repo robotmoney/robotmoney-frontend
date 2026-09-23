@@ -67,7 +67,7 @@ At readiness smoke writes a durable **receipt** (resolved plan, schema identity,
 
 ## 2. Target-lock protocol
 
-One protocol for every tool that mutates or deploys against a database: `bun smoke`, `bun run migrate`, `bun run schedules:enable`, `--spoof-keys`, and the production-initialization commands (§9).
+One protocol for every tool that mutates or deploys against a database: `bun smoke`, `bun run migrate`, `--spoof-keys`, and the production-initialization commands (§9).
 
 **Invariant.** Loss of the coordinating lock never lets a competing tool overlap a mutation still executing. A cancellation request is not evidence the mutation stopped.
 
@@ -90,9 +90,11 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **Participant keys** live in `credential.json` (§6.1), never in `~/.env`.
 
+**API automation token.** `system-scheduler` calls the API and nothing else, so it holds one API credential and no other kind (scheduler spec §7). That token is provisioned at production initialization (§9.1) and handed to the container the way a participant's key is handed to its container — a file the boot places, named per instance, never in `~/.env` and never in the image. Rotation is a re-provision and a container restart.
+
 **Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime role passwords are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
 
-**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `worker-swarm` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that poll over HTTP (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
+**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that poll over HTTP (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
 
 **What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
 
@@ -130,7 +132,7 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 
 ### 4.4 No smoke overlay
 
-There is no `docker-compose.smoke.yml`. Each former overlay knob is an explicit flag (`--allow-insecure`, `--schedules-off`) that is a refusal when `RM_ENV=prod`. Stage runs the real scheduler with accelerated `SWARM_*_CRON` values. Parity with production is a tested property.
+There is no `docker-compose.smoke.yml`. Its one surviving knob is an explicit flag, `--allow-insecure`, that is a refusal when `RM_ENV=prod`. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). Parity with production is a tested property.
 
 ## 5. Local Postgres (stage override)
 
@@ -173,11 +175,11 @@ Each roster entry is one long-lived container (`restart: unless-stopped`) that b
 
 ### 6.3 Sessions are independent
 
-`worker-swarm` schedules sessions from `job_schedules` rows on their cadence whether or not this host runs any participant. Third parties may supply every participant.
+Sessions are timed by `system-scheduler`, per subject, in epochs — [`system-scheduler-spec.md`](./system-scheduler-spec.md) owns that entirely. They run whether or not this host runs any participant; third parties may supply every participant.
 
-**Schedule enablement** is a production-initialization command (`bun run schedules:enable`, §9.1), not a restart side-effect. It sets the five `swarm.*` rows enabled and never touches `next_run_at`. A plain restart never rewrites operator state.
+**There is nothing to enable.** A subject's epoch duration is the whole schedule: set by bootstrap data on a blank database, changed afterwards only through the admin API, and never disabled. There are no schedule rows, no cron strings, no `next_run_at`, and no enable command. A plain restart never rewrites operator state, and `system-scheduler` rebuilds its timers from the API on every start.
 
-**Preflight vs readiness.** Preflight verifies the rows are enabled and their cron strings parse. It does not require a future `next_run_at`: `NULL` and overdue rows are the scheduler's to initialize or drain per `catchup_policy`, and refusing to start the worker that advances them would block recovery after downtime. Readiness, after `worker` is up, checks every enabled row has been initialized or advanced per its policy.
+**Preflight vs readiness.** Preflight has nothing to check about scheduling. Readiness, once `system-scheduler` is up, checks that every active subject has a session in `collecting` (scheduler spec §2.1, §3).
 
 ### 6.4 Spoofed keys
 
@@ -202,7 +204,7 @@ Boot order: config validation → plan and locks → database create/restore (lo
    (b) **compatibility** — the booting code supports M (§8.4). An additive change to an existing table passes: (a) compares against M's manifest, which includes it; (b) reads the migration's declaration.
 4. `~/.env` holds no dangerous credential (`rm_owner`, `doadmin`, superuser): warn on `stage`, refuse on `prod`.
 5. `RM_ENV` × `deployment_identity` resolve per §4.3.
-6. On `prod`: the five `swarm.*` schedule rows are enabled and their cron strings parse.
+6. Every active subject has an epoch duration. (Whether it has an open epoch is a readiness check, not a preflight one — §6.3.)
 
 ### 7.1 Registry, enforced structurally
 
@@ -211,7 +213,7 @@ All database access goes through one registered query interface that declares `(
 ### 7.2 One library, three callers
 
 - **Smoke** runs the full preflight and refuses the cluster.
-- **Database-holding containers** (`api`, `worker`, `worker-swarm`) run checks 1–3 at startup against their own credential, log, and refuse to serve on failure.
+- **The database-holding container** — `api` — runs checks 1–3 at startup against its own credential, logs, and refuses to serve on failure. `system-scheduler` holds no database credential (scheduler spec §7). The analytics and research workers keep theirs until their own specification moves them; they run the same checks meanwhile.
 - **Participants** hold no database credential. Their startup diagnostic is HTTP: API reachable, token valid, identity matches the roster entry.
 
 ### 7.3 CI isomorphism
@@ -225,7 +227,7 @@ CI end-to-end runs use the production roles and the production preflight. There 
 A hand-maintained file in three parts, carrying the exact filename list of the migrations it embodies (a number alone is not an identity) and an explicit exclusion list for provider-managed objects.
 
 - **Schema declaration** — tables, constraints, indexes, functions, triggers, policies, ownership, default privileges. Canonical description and blank-database bootstrap. Never applied to a populated database.
-- **Bootstrap data** — the operational rows the application needs to run (singletons, seed schedules). Distinct from `--seed` demo data.
+- **Bootstrap data** — the operational rows the application needs to run: singletons, and each subject's epoch duration (scheduler spec §2.3). There are no schedule rows. Distinct from `--seed` demo data.
 - **Roles and grants** — idempotent grant reconciliation for objects `rm_owner` owns. Applied only inside the migrate step, against the snapshot's own version. Role creation is not part of it.
 
 ### 8.2 Migrations
@@ -259,7 +261,7 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 1. `rm_owner LOGIN` — via `doadmin`: `ALTER ROLE rm_owner LOGIN PASSWORD …`, then a verification login. Migration 0053's `NOLOGIN` lines change for fresh databases; existing databases need this step because the runner skips recorded files.
 2. Grant transition — a migration revoking `DELETE`/`TRUNCATE` on append-only tables from `rm_app`/`rm_worker` (0053 granted `DELETE` on all tables). Check 2 fails until it lands.
 3. `deployment_identity = production` — via `rm_owner`.
-4. `bun run schedules:enable` (§6.3).
+4. Provision `system-scheduler`'s API automation token (§3).
 
 ### 9.2 Every boot
 
@@ -270,7 +272,7 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 
 ### 9.3 Transition from the current host
 
-The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard has ever been armed, the three seated agents hold the committed fixture keys, and `job_schedules` rows are disabled. Cutover: set `RM_ENV=prod`, provision the credential file (the first boot rotates the three members fixture → real by member id), run §9.1, then §9.2.
+The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard has ever been armed, the three seated agents hold the committed fixture keys, and sessions are driven by an in-process smoke driver rather than a scheduler. Cutover: set `RM_ENV=prod`, provision the credential file (the first boot rotates the three members fixture → real by member id), run §9.1, then §9.2.
 
 ## 10. Acceptance gates
 
@@ -286,10 +288,10 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Ctrl-C before replace: services not replaced, committed preparation journaled not undone. Ctrl-C after: journal reported, rerun resumes.
 - Resume after committed preparation under the same plan id succeeds; changed roster/image/target does not reuse completed phases.
 - Sessions and participants survive the invoking terminal's exit.
-- Restart after schedules become overdue.
+- Restart after a subject's window instant has passed: the boundary fires once on rebuild (scheduler spec §3.2).
 - `volume` reuse after restart.
 - Receipt read by `smoke:status`.
-- Overlay-free stage boots with the real scheduler.
+- Overlay-free stage boots with the real `system-scheduler` against short epoch durations.
 
 **W2 schema and privilege verification**
 - `RM_ENV=stage` + typed owner password against `deployment_identity = production` refuses; plain stage boot incl. `--allow-insecure` against production identity refuses.

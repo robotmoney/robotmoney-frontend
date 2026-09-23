@@ -1120,12 +1120,16 @@ so a deployment with the consensus judge off never enters it — §9.7.)
   the takes actually posted**; absences recorded as absent. **No host-authored takes.**
 - `swarm.publish` — mark the session visible via API + frontend.
 
-The five `swarm.*` rows schedule sessions independently of whether this host
-runs any in-house participants; third parties may supply the entire roster. The
-adopted deployment design enables these rows through an explicit production
-initialization step. A normal boot or restart does not change schedule state.
-The older `SWARM_SCHEDULES_ENABLED` environment switch and host-driven enqueue
-path describe legacy implementation and are not the target mechanism. See
+The five `swarm.*` job kinds above are the lifecycle steps as they exist in the
+current worker. They are not how the adopted design times sessions. Under
+[system-scheduler-spec](./technical/system-scheduler-spec.md), each subject runs
+back-to-back epochs of one fixed submission window; `system-scheduler` fires
+each subject's epoch boundary and drives settlement through the API; there are
+no recurring schedule rows for the swarm lifecycle, nothing to enable, and no
+host-driven enqueue path. Sessions run independently of whether this host runs
+any in-house participants; third parties may supply the entire roster. The
+`SWARM_SCHEDULES_ENABLED` switch and the host driver describe legacy
+implementation only. See also
 [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
 
 #### 9.4.1 Agent health
@@ -1227,9 +1231,12 @@ and credential delivery are defined only by
 and [§6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
 The admin API remains the sole writer of `swarm_judge_config`.
 
-Session creation and the five `swarm.*` schedules are independent of whether
-this host runs an in-house judge. Production initialization explicitly enables
-those schedules; a restart does not change schedule state. See
+Sessions run in epochs, timed per subject by `system-scheduler`, independent
+of whether this host runs an in-house judge. There are no schedule rows and
+nothing to enable: a subject's epoch duration is set at bootstrap and changed
+only through the admin API. See
+[system-scheduler-spec](./technical/system-scheduler-spec.md) for the
+scheduling architecture and
 [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)
 for deployment behavior; D48 records the separate judge-mode product decision.
 ### 9.8 Testing and deployment
@@ -2761,8 +2768,9 @@ Acceptance:
   clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
   run.
 - This is the manually scheduled admin path. The adopted production design
-  uses the recurring `job_schedules` rows and `worker-swarm`; no host session
-  driver enqueues the lifecycle. See [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
+  runs sessions in per-subject epochs driven by `system-scheduler` through the
+  API; there are no recurring schedule rows for the swarm lifecycle and no host
+  session driver. See [system-scheduler-spec](./technical/system-scheduler-spec.md).
 - Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
   dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.
