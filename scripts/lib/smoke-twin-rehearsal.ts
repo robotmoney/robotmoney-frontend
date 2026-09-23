@@ -34,8 +34,8 @@
 // inside this function's try block — the finally below tears it down. Telling an
 // operator to "run postflight against the smoke-twin afterwards" is therefore an
 // instruction to race a watcher against teardown from a second terminal, which
-// is not a procedure. G8 (docs/runbooks/rollout-procedure.md) makes that window
-// part of the contract instead, and `onReady` is where a release plugs into it.
+// is not a procedure. The historical G8 procedure required checks to run
+// before teardown, and `onReady` is where a release plugs into that window.
 //
 // WHAT REPLACED THE ISOLATED WORKTREE. This used to `git worktree add` a
 // throwaway checkout, symlink node_modules into it and write a throwaway `.env`,

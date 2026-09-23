@@ -43,7 +43,7 @@ const migrationsDir = join(dir, "..", "..", "..", "migrations");
 /** The four roles 0053_database_role_taxonomy.sql creates (issue #692). */
 const TAXONOMY_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
 
-/** The role the API boots as (docs/runbooks/deployment.md §4.3). */
+/** The role the API boots as under the legacy v0.5.x deployment. */
 const API_BOOT_ROLE = "rm_app";
 
 /** 0054_rm_worker_allowlist.sql's INSERT/UPDATE/DELETE allow-list. */
@@ -79,7 +79,7 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
   if (missing.length > 0) {
     fail(`role(s) absent from pg_roles: ${missing.join(", ")}`);
     fail(
-      "for v0.5.1 this is a CONTRADICTION, not a pending pre-step: 0053 creates these roles, and a target at v0.5.0 has applied 0053 by definition. An absent role means the target is NOT at v0.5.0 and v0.5.1 is the wrong release for it -- reconcile against docs/runbooks/v0-5-0-rollout.md §4.1 before going further.",
+      "for v0.5.1 this is a CONTRADICTION, not a pending pre-step: 0053 creates these roles, and a target at v0.5.0 has applied 0053 by definition. An absent role means the target is NOT at v0.5.0 and v0.5.1 is the wrong release for it. The historical v0.5.0 rollout guide was removed from the docs tree; recover it from Git only for this legacy transition.",
     );
   } else {
     const owner = roleByName.get("rm_owner")!;
@@ -162,7 +162,7 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
       "role-readiness",
       "FAIL",
       lines,
-      "The target is not at the v0.5.0 role taxonomy. Complete the v0.5.0 cutover (docs/runbooks/v0-5-0-rollout.md §4.1, scripts/ops/provision-db-role-taxonomy.sh) before treating this target as a v0.5.1 candidate.",
+      "The target is not at the v0.5.0 role taxonomy. Complete the legacy v0.5.0 cutover and run scripts/ops/provision-db-role-taxonomy.sh before treating this target as a v0.5.1 candidate. Recover the retired v0.5.0 rollout guide from Git if this historical transition is still in scope.",
     );
     return;
   }
@@ -173,7 +173,7 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
     [
       "taxonomy roles exist with 0053's attributes; a LOGIN role holds rm_owner membership and neither runtime role does; rm_worker holds the 0054 allow-list grants",
       `rm_owner members: ${memberNames.join(", ") || "none"}`,
-      `API boot role derived from documented conventions (deployment.md §4.3): ${API_BOOT_ROLE} — NOT VERIFIED READ-ONLY, confirm on the cutover host: DATABASE_URL names rm_app, never doadmin (config.ts:710-712); WORKER_DATABASE_URL names rm_worker (worker-client.ts:20-22).`,
+      `API boot role derived from legacy v0.5.x conventions: ${API_BOOT_ROLE} — NOT VERIFIED READ-ONLY, confirm on the cutover host: DATABASE_URL names rm_app, never doadmin (config.ts:710-712); WORKER_DATABASE_URL names rm_worker (worker-client.ts:20-22).`,
     ],
   );
 }
@@ -210,7 +210,7 @@ export async function runChecks(
           "v0.5.1 carries NO migration, so a boot cannot close this gap. The target has not completed the v0.5.0 rollout.",
         ]
       : `all ${PRIOR_RELEASE_MIGRATIONS.length} v0.4.0+v0.5.0 migrations are recorded`,
-    "Run the v0.5.0 rollout to completion first (docs/runbooks/v0-5-0-rollout.md); v0.5.1 is a code-only patch on top of it and cannot substitute for it.",
+    "Complete the v0.5.0 rollout first; v0.5.1 is a code-only patch on top of it and cannot substitute for it. The v0.5.0 guide was retired from the docs tree; recover it from Git only for this legacy transition.",
   );
 
   // (2) The pending set must be EXACTLY this release's migration. v0.5.1

@@ -8,9 +8,8 @@
 # checked-in template the only description of what `robotmoney.network` points
 # at lives on one droplet's filesystem, where no agent or reviewer can see it.
 #
-# NOT THE DEFAULT DESIGN. docs/runbooks/deployment.md §1 states there is "no
-# reverse proxy, and no tunnel by default", and docs/architecture.md §4 lists the
-# tunnel as OPTIONAL HARDENING that replaces proxied-DNS + DO Cloud Firewall with
+# NOT THE DEFAULT DESIGN. docs/architecture.md §8 records the tunnel as optional
+# hardening that replaces proxied-DNS + DO Cloud Firewall with
 # zero public ingress. Committing this template does not make it the default: it
 # documents the one host that opted in. The documented prod topology is still
 # apex/`www` (marketing → DO Spaces CDN), `swarm.`, and `app.`.
@@ -28,13 +27,14 @@ credentials-file: /root/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
 # ── Ingress ─────────────────────────────────────────────────────────────────
 # Rules are evaluated top-down; the first hostname match wins.
 ingress:
-  # robotmoney.network → the STAGE demo stack.
+  # robotmoney.network → the legacy STAGE smoke stack (not the adopted production
+  # design; see docs/technical/smoke-production-spec.md, approved but unshipped).
   #
   # WHY 48787 AND NOTHING ELSE. This is the single fixed host port in the whole
   # system (scripts/stack/ports.ts:39). Every other published port — including
   # postgres — is drawn free at boot on every run. `bun run smoke -- --static-port` is
   # the one sanctioned pin, and it FAILS rather than falling back when something
-  # already holds the port (scripts/lib/demo-main.ts:135), precisely because
+  # already holds the port (scripts/lib/smoke-main.ts), precisely because
   # cloudflared routes 48787 and nothing else: a fallback would boot green and
   # serve a tunnel that reaches nothing.
   #
@@ -51,14 +51,15 @@ ingress:
 # ── Operational notes ───────────────────────────────────────────────────────
 #
 # WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
-# boot runs docker-compose.demo.yml, which pins RM_ALLOW_INSECURE=1 (privileged
+# boot runs docker-compose.smoke.yml, which pins RM_ALLOW_INSECURE=1 (privileged
 # admin / onboarding / analytics endpoints answer with NO token — .env.example
 # says of that flag: "NEVER on a reachable box"), applies quota-safe schedules
 # and one-hour capability cache TTLs explicitly, and leaves PROJECTS_SOURCE unset, so /projects serves the
 # vendored offline FIXTURE directory rather than live provider data. A real
 # production deployment is docker-compose.yml with RM_ENV=prod, an explicit
 # ADMIN_TOKEN + ANALYTICS_TOKEN, PROJECTS_SOURCE=live, and a managed
-# DATABASE_URL (docs/runbooks/deployment.md §5).
+# DATABASE_URL and runtime-role configuration must be checked against the
+# current host. The adopted target credential model is in smoke-production-spec §3.
 #
 # THE TUNNEL DOES NOT CLOSE THE DIRECT PATH. Compose publishes 48787 on
 # 0.0.0.0, so the droplet's public IP still answers on :48787 alongside the

@@ -1,6 +1,6 @@
 # Release process — foundational runbook policy
 
-> **Agent Note:** To find info quickly, see the TOC below. If you are starting to document or create tooling for an upcoming upgrade that doesn't have a version number yet, jump immediately to **§9. Tracking Unnumbered Upcoming Upgrades**.
+> **Agent Note:** To find info quickly, see the TOC below. §9 explains when to create a release-specific runbook. There is no active unnumbered deployment plan in this document.
 >
 > **Table of Contents:**
 > - [1. Scope and authority](#1-scope-and-authority)
@@ -10,16 +10,15 @@
 > - [5. Per-release runbook format](#5-per-release-runbook-format)
 > - [6. Per-release GitHub tracking issue](#6-per-release-github-tracking-issue)
 > - [7. Backporting](#7-backporting)
-> - [8. Compatibility contract](#8-compatibility-contract--how-the-components-are-allowed-to-drift)
-> - [9. Tracking Unnumbered Upcoming Upgrades](#9-tracking-unnumbered-upcoming-upgrades)
+> - [8. Compatibility contract](#8-compatibility-contract)
+> - [9. Tracking upcoming releases](#9-tracking-upcoming-releases)
 
 > **Status: in effect.** This document defines the foundational release-runbook
-> policy that every per-release runbook must follow. It is not itself a
-> runnable checklist; concrete rollouts are executed from per-release runbooks
-> committed under `docs/runbooks/` (see §5). An example is
-> [`docs/archive/v0-2-2-rollout.md`](../archive/v0-2-2-rollout.md) (archived after
-> that release shipped), written
-> against the `releases-0.2.x` branch.
+> policy for future per-release runbooks. It is not itself a runnable checklist.
+> Historical per-release procedures were retired during the 2026-09-23 docs
+> cleanup; recover them from Git if an audit requires the exact record. Create a
+> new runbook only when a release is scheduled and the tools exist at its target
+> commit (see §§5, 9).
 
 This is not the process for landing ordinary feature work — that is PR review
 against `main`, covered by [CONTRIBUTING.md](../../CONTRIBUTING.md) and the CI
@@ -181,155 +180,77 @@ Save this baseline artifact next to the pre-upgrade backup with a clear
 filename and timestamp. It must be available for comparison during postflight
 and for use during rollback if needed.
 
-### 4.3. Backup/restore smoke test
+### 4.3. Backup and restore proof
 
-On a staging host inside the production database's private network, test
-backup and restore of the production read-only database. The test must prove
-that the backup tooling produces a restorable artifact and that the restore
-procedure completes without error. Do not proceed to the digital-smoke-twin
-rehearsal until this smoke test passes.
+Before rehearsal, create a fresh backup from the approved read-only source and
+restore it to an isolated rehearsal target. The release runbook must name the
+exact command and tool versions verified at the release commit. The proof must
+record source identity, replica/read-only confirmation, backup checksum, server
+and client versions, and successful restore. Never point rehearsal preparation
+at the production database.
 
-The repo ships both halves, and a runbook names them rather than restating
-them:
+The adopted [smoke production spec](./smoke-production-spec.md) defines
+`bun smoke:capture` as the read-only replica capture path. A future runbook may
+use it only after confirming that the release code implements that interface.
 
-```bash
-bun run smoke:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
-```
+### 4.4. Isolated release rehearsal
 
-Every command in this family reads its credentials from the single file at the
-**root of `$HOME`** (`$HOME/.env`; see `.env.example`) — discrete tokens plus
-the `rm_readonly` role line, never a repo-root file, and these commands are
-defined by needing nothing else.
+Rehearse the release on an isolated copy of production data using the adopted
+[local dump](./smoke-production-spec.md#5-local-postgres-stage-override) path
+when that implementation is available. The runbook must identify the exact
+release commit, target identity, operator actions, migration and initialization
+steps, and all checks exercised. It must cover:
 
-`smoke:capture` refuses to run against the primary (`pg_is_in_recovery()` must be
-true), refuses the application's writer credential, refuses a `pg_dump` older
-than the server, and refuses to write inside the checkout. It emits a
-`manifest.json` recording what it captured and from where — §4.5 cites that file
-instead of transcribing its contents.
+- the W1 lifecycle, target-lock and interruption gates relevant to the release;
+- W2 schema integrity, compatibility, migration recovery and privilege checks;
+- W3 participant roster and submission behavior when the release affects
+  participants;
+- product verification and evidence of any approved exceptions.
 
-### 4.4. Digital-smoke-twin rehearsal
+A restored rehearsal target is disposable by explicit operator action; the
+smoke boot itself exits after readiness and leaves services running. Capture
+service evidence for the rehearsal window where available, and report missing
+coverage plainly. A green check run under broader database privileges than
+production does not prove the release's production grant path.
 
-Set up a digital smoke-twin by restoring the backup from §4.3 to a local Postgres
-container (**not** a remote database) on a staging machine. Run the full upgrade
-on the smoke-twin, including:
-
-- preflight checks,
-- the cutover step that applies the upgrade,
-- postflight verification,
-- **capture of every service's logs for the whole rehearsal window**, and the
-  standard assertion that no privilege or authentication failure appeared in
-  any of them. This evidence requirement remains standing policy even though
-  the old D46 mechanism is deprecated. A rehearsal
-  whose checks read only the database cannot see the failure shape that
-  dead-lettered 1,968 production jobs behind green healthchecks on
-  2026-09-21; the logs could.
-
-The smoke-twin must use the same release candidate that is planned for production.
-Any failure, warning, or unexpected state change discovered on the smoke-twin is a
-blocking issue.
-
-**The rehearsal must account for the whole restored active roster.** A missing
-participant and a silent participant must not be mistaken for one another, and a
-subset cannot be reported as full-roster coverage. The release report must name
-which members participated and identify gaps as blocking or explicitly excepted
-under §1. Under the adopted design, smoke runs only the in-house credential-file
-roster and third parties may supply other participants; it does not implicitly
-mint keys or adopt every restored member. Follow
-[smoke production spec §6](./smoke-production-spec.md#6-participants-agents-and-judges)
-for participant lifecycle and explicit rehearsal-only spoofing. Legacy seat checks
-remain evidence about their original harness, not a replacement deployment model.
-
-**The rehearsal must migrate under production's privilege model, not as the
-container's superuser** (added 2026-09-18, after this went wrong). A smoke-twin
-restores with `pg_restore --no-owner --no-privileges` and its container
-superuser holds *more* Postgres privilege than the production primary's
-bootstrap login does — `doadmin` is `rolsuper=false`. A superuser bypasses the
-ACL checks a real cutover faces, so a rehearsal run that way cannot see an
-ownership or grant defect **at all**: it grades the migration's logic while
-silently excusing its permissions.
-
-This is not hypothetical. `0053_database_role_taxonomy.sql` reached a
-production runbook carrying three separate defects — an `ALTER ROLE` clause
-that requires superuser even to set a default, an ownership sweep ordered
-before the schema transfer it depends on, and a sweep that tried to re-own an
-extension's functions. Every one was green in CI and green on the twin, and
-every one failed immediately under a real bootstrap login. The live preflight
-could not have caught them either: it audits role *state* read-only and never
-executes migration SQL.
-
-A release that touches roles, ownership, or grants must rehearse using the
-privileges the actual production migration step will hold. Under the adopted
-[smoke production spec](./smoke-production-spec.md), that is `rm_owner LOGIN`,
-not `rm_migrator` and not the container superuser. A release still using legacy
-code must identify and reproduce that release's actual privileges, separately
-from testing the new design. **A gate that runs with more privilege than
-production proves less than it appears to.** Disclose missing coverage in the
-release runbook rather than implying it from a green result.
-
-The adopted local rehearsal path is `--local dump`, with explicit preparation
-and participant credentials under the smoke spec. Historical `--db smoke-twin`
-and `smoke:twin:*` entry points describe legacy tooling only. No target-design
-command may be substituted into a release whose code does not implement it.
-The local restored-database rehearsal requirement above remains a release gate;
-the design's support for remote rehearsals does not itself waive that gate.
-
-**Which command satisfies the gate.** A generic smoke boot does not replace
-release-specific checks. The gate is satisfied by the release's own verified
-entry point, which adds its checks and receipts. The existing entry-point shape is:
-
-```bash
-bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
-```
-
-**Postflight runs INSIDE the rehearsal, and cannot be a step after it.** The
-smoke-twin exists only for the duration of the boot — the driver tears it down on
-every exit path — so "run postflight against the smoke-twin afterwards" is an
-instruction to race teardown from a second terminal. The release's
-`stage-rehearsal.ts` therefore hands its postflight to the driver's `onReady`
-window, between the frontend checks and teardown, and that run is what emits
-`P5.postflight-smoke-twin`. A rehearsal that cannot reach the smoke-twin to run those checks
-FAILS; it never reports a clean boot as a clean gate.
-
-Preflight stays a separate, earlier command, because it grades the dump and the
-live replica before anything is booted at all (§4.3, and the per-release
-runbook's own preflight section).
+Legacy `--db smoke-twin`, host-driven agents, and teardown-on-exit behavior are
+historical implementation details. Do not copy them into a new release runbook.
+No adopted-design command may be used before its implementation exists at the
+release commit. The future per-release runbook must use the tool interfaces
+actually implemented at its exact SHA.
 
 ### 4.5. Stage rehearsal report
 
-After the digital-smoke-twin rehearsal, produce a written stage rehearsal report
-that includes at least:
+The report must include the release commit, source backup and restore evidence,
+resolved plan and plan id, deployment identity, migration/initialization
+receipts, preflight and readiness results, participant roster and results,
+product verification, service evidence, any issues and their resolution, and a
+go/no-go decision with operator sign-off.
 
-- smoke-twin setup summary (source backup, container details, RC used),
-- preflight results,
-- cutover steps executed and their results,
-- postflight results,
-- acceptance-criteria pass/fail status against the release objective,
-- any issues found and how they were resolved,
-- a go/no-go decision with operator sign-off.
-
-The stage rehearsal gate passes only when this report exists, all acceptance
-criteria pass, and the operator has signed off.
-
-The smoke-twin setup summary should CITE the artifacts rather than restate them:
-`manifest.json` in the backup directory records the source, role, replica proof
-and server/client versions, and the boot banner records the container, the volume
-and the backup stamp.
-
+The gate passes only when required checks pass and the operator has signed off.
+Missing, unimplemented, or unverified checks are blocking unless the operator
+records a specific written exception under §1. Reference generated artifacts
+instead of restating their values.
 ### 4.6. Fix loop
 
-If the digital-smoke-twin rehearsal or stage report finds any issue that affects
+If the isolated rehearsal or stage report finds an issue that affects
 production safety or acceptance criteria, do not proceed to production
-execution. Instead:
+execution. Apply the fix and follow §3's tag sequence:
 
 1. Open PRs with fixes against `main`.
 2. Merge the fixes to `main`.
 3. Cherry-pick the merged fixes to the release branch (`releases-A.B.x`).
-4. Cut a new release candidate (`vA.B.C-rc.(N+1)`) at the updated branch tip.
-5. Restart the runbook from §4.1.
+4. If no candidate has yet been deployed to production, leave the corrected
+   branch tip untagged and repeat stage preflight and rehearsal. A stage failure
+   does not consume an rc number. If a deployed candidate failed postflight,
+   cut the next rc only after the corrected tip passes stage.
+5. Resume the sequence in §3 at the applicable step.
 
-Runbook corrections that do not change deployed code (e.g., wording, command
-corrections) may be committed directly to the release branch, but they still
-cost a new rc and a fresh pass through §4.
+Runbook corrections that change release instructions must be committed and
+reviewed on the release branch. Re-run any gate whose evidence or operator
+action the correction affects. Rc numbering follows §3: stage-only retries and
+documentation fixes do not consume an rc; a corrected candidate consumes the
+next rc only after a deployed candidate fails postflight.
 
 ### 4.7. Production execution
 
@@ -348,8 +269,8 @@ deprecated and must not guide new implementation. A legacy release procedure mus
 state its exact code identity and limitations; it is not a second target design.
 
 Preflight must be re-run or re-confirmed on production before the cutover
-begins, even if the smoke-twin rehearsal passed, to ensure the production
-environment matches the smoke-twin assumptions.
+begins, even if the isolated rehearsal passed, to ensure the production
+environment matches the rehearsal assumptions.
 
 The upgrade is agent-executed through the verified runbook, with operator
 release authorization and receipt review. The adopted design explicitly requires
@@ -390,16 +311,18 @@ invariants a given target cannot yet exercise. And "the product is wrong"
 (exit 1) must stay distinguishable from "nothing was asserted" (exit 2);
 collapsing them lets an unreachable stack read as a product failure.
 
-### 4.8. Rollback
+### 4.8. Recovery and rollback
 
-A postflight failure on production defaults to a full rollback by restoring
-the pre-upgrade dump from §4.2. The operator may override the default
-rollback only by recording the override reason, the alternate remediation
-plan, and a second sign-off in the production rollout report (§4.9).
+The release runbook must define recovery for each destructive or partially
+committed phase. It must distinguish resuming a journaled operation, restoring
+database state from a verified backup, and recovering service availability.
+Do not assume the previous services remain available after replacement begins,
+or that the deployment tool automatically rolls back.
 
-The rollback procedure must be written into the per-release runbook and
-rehearsed on the digital smoke-twin at least once before production execution.
-
+Rehearse the named recovery path on the isolated target. Production recovery
+requires the operator's recorded decision and sign-off, including any deviation
+from the rehearsed path. Report the final database and service state, evidence
+used, and remaining risk.
 ### 4.9. Production rollout report
 
 After a successful cutover (or after rollback), produce a final production
@@ -486,302 +409,60 @@ back to `main` outside this runbook's flow, by whoever picks up work on
 
 ---
 
-## 8. Compatibility contract — how the components are allowed to drift
+## 8. Compatibility contract
 
-> **Migrated here 2026-08-21** from `docs/technical/release-cycle.md` §5, which
-> was archived as
-> [`docs/archive/release-cycle.md`](../archive/release-cycle.md). That document
-> mixed two things: this compatibility contract, which is **live policy**, and a
-> proposed k3s/GitOps production topology, which is a future-infrastructure
-> proposal alongside the `stack-*` documents. Only the contract is normative, so
-> only the contract moved.
->
-> These rules are what make a rollback survivable. `rollout-procedure.md` §10
-> asks each release whether its outgoing code is safe against the incoming
-> schema; **R1 is the reason the answer is normally yes.**
+Database schema identity, manifest integrity, migration metadata and code/schema
+compatibility are defined by [smoke production spec §§8–9](./smoke-production-spec.md#8-schema).
+This policy preserves release gates and the evidence needed to judge a change; it
+does not define a second migration runner or deployment order.
 
+### 8.1 Database compatibility
 
-### 8.1 The four rules
+Every migration declares compatibility metadata that the deployed code
+understands. “Additive” means older supported code preserves its query behavior,
+data meaning, bootstrap assumptions and required grants. Adding a column alone
+does not establish compatibility. The adopted spec's manifest and migration
+ledger are the source for schema identity and compatibility checks.
 
-The minimal approach, chosen in discussion. The governing insight is that
-**ordering discipline makes runtime detection unnecessary — you don't need
-to detect a mismatch you have made impossible.** These four rules are *the*
-operational contract; everything else in §8 is either the pattern that
-implements them (§8.2) or an option deliberately deferred because they hold
-(§8.4).
+A breaking migration needs an explicit release plan that identifies affected
+code, data and privileges, the order of changes, verification, and a rehearsed
+recovery path. Do not assume the database may safely run ahead of every code
+version. Do not use ordering discipline as a replacement for runtime integrity
+or compatibility checks. Migrations run transactionally as specified in §8.3;
+the old `-- no-transaction` proposal is retired.
 
-- **R1 — Every migration is additive.** New tables, columns, and indexes
-  only. Nullable or defaulted, never `NOT NULL` without a default. No
-  renames, no drops, no type narrowing. *Consequence: the DB can always be
-  safely ahead of the code.* Schema-additive is not automatically
-  *semantics*-safe, though: until every **writer** has rolled, rows keep
-  arriving with the new column NULL/absent — so readers must treat
-  NULL/missing as the legacy state for the whole transition. That is not
-  an extra rule; it is the dual-read phase of expand/contract (§8.2),
-  stated explicitly.
-- **R2 — Destructive changes wait until provably safe.** A drop or rename
-  ships in a **later PR** than the code that stopped using the old shape,
-  never the same one. "Later" is defined operationally, not by calendar
-  feel — a destructive migration may merge only when **both** hold:
-  1. the drift check (the drift check described in the archived release-cycle proposal) confirms all five Deployments **and** the Pages
-     deploy are on SHAs at or past the commit that removed the last use of
-     the old shape;
-  2. a browser-tab grace window has elapsed since that deploy — proposed
-     default **7 days**; the exact number is the one parameter left open
-     (left open in that proposal).
-- **R3 — API responses only gain fields, and consumers don't lead with
-  requests.** Never remove, rename, or change the type or meaning of a
-  response field: JSON clients ignore unknown fields natively, so an old
-  SPA calling a new API just works. The corollary in the request
-  direction: a consumer (SPA, producer, worker) must not **send** a new
-  request field until the API that accepts it is deployed — R3 makes old
-  clients safe against new servers, and this corollary keeps new clients
-  from outrunning old servers.
-- **R4 — Deploy provider before consumer.** The DB deploys before its
-  readers (API, worker lanes); the API deploys before its callers (SPA,
-  analytics-producer). "DB → backend → frontend" is the common case, but
-  the rule is the dependency direction, not the list. Combined with R1 and
-  R3, the only skew that can arise is "the provider is ahead," which is
-  safe by construction.
+The release runbook must cite the CI evidence required by the adopted spec:
+snapshot/migration equivalence, supported populated upgrades, and compatibility
+of older supported code with additive changes. It must not claim those checks
+passed unless the corresponding implementation and evidence exist at the release
+commit.
 
-**What this covers**, without a line of detection code: rolling API
-replicas (both versions work against an additive DB — R1); a worker
-mid-rollout (same reason); a lagging writer against a new reader (R1's
-dual-read clause); an edge-cached SPA against a newer API (R3); a
-rolled-ahead producer (R3's request corollary plus R4); and rollback,
-since old code still works against a forward DB (R1 again). Within the
-backend itself, §6's bump-all-five policy means api/worker/producer skew
-exists only inside a single rolling window, not as a persistent state.
+### 8.2 API and consumer compatibility
 
-**Enforcement**, kept as light as the rules themselves:
+Keep API response changes additive where possible. A consumer must not send a
+new request field until the accepting API is deployed. If a breaking route or
+field change is necessary, the release plan must identify affected clients and
+workers, the replacement contract, and how old consumers are handled. These are
+release compatibility principles; they do not authorize the Kubernetes/Pages
+topology or deployment sequencer described in retired proposals.
 
-- **R1** — a CI grep over changed files under `backend/migrations/` for
-  `DROP` / `RENAME` / `ALTER ... TYPE`, failing the PR unless it carries an
-  explicit contract-migration label. The same gate flags a bare
-  `CREATE INDEX`: on a live database a non-concurrent index build blocks
-  writes for its duration while being perfectly "additive," so an index
-  migration must use `CREATE INDEX CONCURRENTLY` (with the
-  `-- no-transaction` runner support, §8.3) or carry an explicit
-  small-table override label. Roughly ten lines either way; not built yet
-  (§6.1).
-- **R3** — **not enforced today, and the existing gate is narrower than it
-  looks.** The goldens-drift gate (D14) is
-  `scripts/tests/unit/goldens-drift.test.ts`, and what it actually asserts
-  is that the committed `goldens/api-goldens.json` is non-empty, that its
-  route set is populated, and that a few key routes have plausible shapes.
-  The goldens themselves are *captured* from a running backend by
-  `scripts/update-goldens.ts`, so they do track real response shapes — but
-  the gate compares goldens to the current code, not a new response shape
-  to the **previous** one. It is a freshness check on the preview mock
-  layer, not an additive-only check on the API contract. Enforcing R3
-  mechanically would mean diffing response shapes across versions; that
-  gate does not exist.
-- **R4** — enforced by making one sequencer own the whole order. §6's
-  reconciler runs migration Job → backend rollout → static publish as one
-  sequence on one machine, so "provider before consumer" is the only order
-  that can happen. (An earlier draft called this "already free" with the
-  SPA on its own CI-triggered deploy — wrong: nothing would have stopped a
-  new SPA going live seconds after merge against a backend that converges
-  minutes later. The fix is that the reconciler deploys the static tier
-  too; see §6.)
+### 8.3 Authority
 
-**The explicit limit.** All four rules rest on being able to guarantee
-deploy order. If you ever need to ship API code *before* its migration, R4
-breaks and nothing here protects you — you would need real feature
-detection (§8.4). Plainly: don't do that.
+[Smoke production spec](./smoke-production-spec.md) owns deployment, migration,
+target identity and schema-preflight mechanics. This document owns release gates,
+phases, reports, approval and compatibility evidence. The exact implementation
+and its status are determined by the code at the release commit.
 
-### 8.2 Expand/contract for DB migrations
+## 9. Tracking upcoming releases
 
-Expand/contract is the pattern R1 and R2 implement; it is spelled out here
-because the middle step is the part the rules don't state. Adopt the
-standard **expand/contract** (a.k.a. parallel-change) pattern for
-every schema change that a running API/worker depends on:
+The GitHub Plan issue is the canonical execution queue; this document does not
+create a parallel `next` deployment plan. Adoption of the smoke production
+specification does not schedule implementation or establish that its interfaces
+exist.
 
-1. **Expand** — add the new column/table/index additively; nothing reads it
-   yet, nothing existing breaks.
-2. **Migrate readers** — ship API/worker code that can read *both* old and
-   new shapes, then code that writes the new shape (backfilling old rows as
-   needed). "Both shapes" explicitly includes rows a not-yet-rolled writer
-   is still producing with the new column NULL/absent — a reader must
-   treat NULL/missing as the legacy state until *every* writer (API and
-   all lanes) is confirmed on the new code, not merely until its own
-   deploy lands.
-3. **Contract** — once every consumer (API instances, all three worker
-   lanes, the analytics-producer) is confirmed on code that no longer
-   reads/writes the old shape, drop the old column/table in its own
-   migration.
-
-Concretely for this repo: because `migrate.ts` has no down-migration and no
-rollback, the "contract" step is the *only* place a schema change is allowed
-to be destructive — every other migration in a feature's rollout should be
-additive by construction. This also means a migration file should never be
-required to land in the same deploy as the API code that depends on it;
-today they usually do (§4), and that's the main thing this pattern would
-change in practice — §3.2's pre-deploy migration Job is the mechanism that
-makes the split real, and §6 the rollout gate that enforces the ordering.
-
-### 8.3 Migration hygiene gaps against a live database
-
-Every environment we run today migrates a **fresh or short-lived** database
-(§1). Three properties of `backend/migrations/` + `backend/src/db/migrate.ts`
-are benign under that assumption and stop being benign the moment migrations
-are a gated pre-deploy step (§3.2) against a live Managed Postgres with real
-data and real concurrent traffic. The first remains an open gap; the second
-and third are now **resolved by prescribed runner changes** (collected in
-§6.1).
-
-- **Numeric prefixes are not unique, and nothing checks.** Two collisions
-  already exist on main: `0014_projects_pipelines.sql` /
-  `0014_wallet_balance_samples.sql`, and `0021_chain_indexer_samples.sql` /
-  `0021_committee_waitlist.sql` (the historical filename — issue #263 renamed
-  the live schema in `0025_swarm_rename.sql`, but migration files themselves
-  are an immutable record of what actually ran and are never renamed).
-  `migrate.ts` sorts by *filename*, so
-  ordering is deterministic (the suffix breaks the tie) — but the prefixes
-  are not unique and not truly sequential, and nothing catches a collision
-  at merge time. Harmless when a single boot applies everything to a fresh
-  DB; a real ordering hazard once expand/contract sequencing has to hold
-  across branches that merge concurrently.
-- **`migrate()` calls `seed()` — resolved: split them.** The runner ends
-  with `await seed()` — inserting `job_schedules` rows and similar
-  required state. Left alone, §3.2's pre-deploy migration Job would
-  **re-seed production on every deploy**; `seed()` is idempotent, and
-  re-seeding a fresh smoke DB is exactly what it is for, but a live
-  production DB is a different risk posture. Decided: **the production
-  migration Job runs schema-only** — seeding is split out of `migrate()`
-  behind a flag or separate entrypoint, smoke/CI keep today's combined
-  behavior, and production seeds deliberately (at bootstrap, or on
-  explicit operator action), never implicitly per deploy (§6.1).
-- **No lock or timeout discipline — resolved: runner defaults plus a
-  transaction carve-out.** There is no `lock_timeout`, no
-  `statement_timeout`, and no `CREATE INDEX CONCURRENTLY` anywhere in
-  `backend/migrations/`. Against a live database, an `ALTER TABLE` that
-  takes an ACCESS EXCLUSIVE lock behind a long-running query queues — and
-  everything behind *it* queues too, stalling traffic on a table that was
-  never being altered. That risk simply does not exist against the fresh
-  DBs every current environment uses. And there is a structural conflict:
-  `CONCURRENTLY` cannot run inside a transaction, while `migrate.ts` wraps
-  each file in `sql.begin(...)`. Prescribed (§6.1): the runner sets
-  `lock_timeout` and `statement_timeout` defaults for every migration, and
-  honors a `-- no-transaction` header comment that runs that file outside
-  `sql.begin`, making `CREATE INDEX CONCURRENTLY` expressible; §8.1's R1
-  gate then rejects bare `CREATE INDEX` so the safe form is the default
-  form.
-
-### 8.4 API/DB version skew: why runtime detection is deferred
-
-R1–R4 (§8.1) make runtime version detection unnecessary: if the DB is only
-ever additive and only ever ahead, there is no mismatch left to detect. So
-the API does **not** need to negotiate capabilities today, and this doc does
-not propose that it should.
-
-Worth recording precisely because it constrains any future attempt: there is
-no schema version to pin to. `schema_migrations` (see
-`backend/src/db/migrate.ts`) is `name text PRIMARY KEY` — a **set of applied
-migration filenames**, not an ordered version counter. "The DB is at version
-N" is not a value anything can read; hard version pinning isn't merely
-undesirable here, it isn't implementable without inventing a new version
-concept.
-
-**Considered and deferred: a published schema-version / capability
-descriptor** — recorded the same way as Flux (the drift check described in the archived release-cycle proposal) and Kustomize (the drift check described in the archived release-cycle proposal):
-
-- A version **integer** was rejected outright. The filename set is strictly
-  richer information, and collapsing it to an ordinal is lossy — especially
-  given that the prefixes are not linearly ordered (§8.3).
-- If adopted, the shape would be **two layers**: fine-grained *schema*
-  capabilities internal to the API and workers (probed with `to_regclass` /
-  `information_schema` and cached at boot), and coarse *feature*
-  capabilities published to clients (the AND of schema-supports-it,
-  flag-is-on, config-present). The split matters: DB shape never leaks into
-  the client contract.
-- **Adoption trigger**: when deploy ordering can no longer be guaranteed —
-  multiple independent operators, or customer-managed deployments. One
-  operator and one cluster (§3.2) is not that.
-
-The degraded-state instinct this repo already has stays relevant regardless:
-the regime DTO's explicit staleness block
-(`{ asof, serverDate, ageDays, stale, thresholdDays }`,
-[architecture.md §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline))
-declares a degraded state in the payload instead of failing opaquely — the
-right shape for any mismatch that does reach a client.
-
-### 8.5 API versioning for the frontend and workers as consumers
-
-There is no versioning scheme in the API today — routes are flat paths in
-`contract/src/routes.js`, shared as literal source between frontend and
-backend, not as a semver'd artifact. That's fine as long as frontend and API
-are deployed together (today's reality per §2), but §3.1 commits the SPA to
-an independent edge deploy path — so an edge-cached SPA (or a stale browser
-tab) calling an API that has moved on is the normal state between deploys,
-not a corner case. The lightest-weight approach consistent with this
-project's minimalism: keep endpoint **shapes** additive-only (new optional
-fields, never repurposing or removing a field in place — the same discipline
-the goldens-drift gate already enforces for the preview mock layer,
-[decisions.md D14](../decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file)),
-and reserve an actual path-prefix version (`/api/v2/...`) for the rare
-breaking change, with the old prefix kept alive for a declared deprecation
-window (§8.7) rather than deleted the day the new one ships. Workers/producer
-should follow the same additive-fields discipline since the producer is
-already an API consumer over authenticated HTTP (§2c).
-
-### 8.6 Feature flags
-
-No feature-flag infrastructure exists in this codebase today (confirmed —
-no `FEATURE_*` env convention, no flag service, no flag table). For a
-feature that spans schema + API + frontend + workers, a flag needs to be
-readable by whichever of those components guards the user-visible or
-data-mutating behavior — realistically that's **the API**, since it's the
-one component every write and read passes through, and it already has a
-precedent for environment-driven feature gating: the swarm cron
-sequence is gated by `SWARM_SCHEDULES_ENABLED` plus per-kind cron env
-vars ([architecture.md
-§9.4](../architecture.md#94-data-model--session-lifecycle)). The frontend
-would read flag state from the API (a field on an existing response, or a
-small dedicated endpoint) rather than maintaining its own flag source, to
-avoid a second source of truth. Workers reading flags would need the same
-API-mediated (or DB-row-mediated) source rather than their own env-var copy,
-to avoid a lane running stale flag state after a flip. None of this is
-built; §8 flags the storage/source-of-truth question as explicitly open.
-If the two-layer capability descriptor of §8.4 is ever adopted, its coarse
-*feature* layer — the AND of schema-supports-it, flag-is-on,
-config-present — is the natural home for exactly this: one published
-answer to "is X available," with the flag as one input. Noted as a
-connection, not a commitment; both remain deferred.
-
-### 8.7 Deprecation policy
-
-No deprecation policy exists today because nothing has ever needed to
-outlive a replacement — every environment redeploys everything at once. Once
-components decouple, an old endpoint/field shape needs to stay live for
-**at least as long as the slowest consumer can realistically still be
-running it** — for the frontend that means "at least until a browser tab
-open at deploy time would have naturally reloaded," for a worker lane that
-means "until every worker container has been redeployed," and for the DB
-that means the expand/contract window (§8.2). Communicating a deprecation
-today has no established channel — no changelog, no deprecation-header
-convention in the API responses. The concrete window length and the
-communication mechanism are both left open (left open in that proposal).
-
-## 9. Tracking Unnumbered Upcoming Upgrades
-
-Currently, migrations and runbook steps shouldn't be added directly to a target version directory (e.g. `0.4.0`) when the next version number is undecided. To prevent test drift and version guessing, we use a rolling `next` target.
-
-### 9.1 The `next` Directory and Runbook
-
-All upcoming migrations, upgrades, and runbook instructions go into a generic "next" placeholder:
-- **Runbook:** `docs/runbooks/<next>-rollout.md`
-- **Release Manifest:** `backend/scripts/upgrades/<next>/release.ts`
-- **Rollout Tests:** `backend/tests/rollout-steps-<next>.test.ts`
-
-### 9.2 Migration Accumulation
-
-As features merge into `main`, their migrations must be declared in the `<next>/release.ts` manifest and any operational steps added to `<next>-rollout.md`. The `rollout-steps-<next>.test.ts` suite is the **only** test that performs the `onDisk` drift check against `backend/migrations/`. 
-
-### 9.3 The Numbering Step (Cutting a Release)
-
-When it is time to cut a release (e.g. `v0.5.0`), the release PR executes the versioning:
-1. Rename `docs/runbooks/next-rollout.md` to `docs/runbooks/v0-5-0-rollout.md`.
-2. Rename `backend/scripts/upgrades/next/` to `backend/scripts/upgrades/0.4.0-to-0.5.0/` (or applicable versions).
-3. Rename `rollout-steps-<next>.test.ts` to `rollout-steps-0-5-0.test.ts` and **remove its `onDisk` drift check** (the test is frozen to only assert the static manifest).
-4. Re-create a fresh, empty `next/` directory and test files to track the subsequent cycle.
+Create a release-specific runbook when a release is scheduled and its tools are
+implemented. It must name the exact code commit and commands it verifies, follow
+this policy's gates, and agree with the adopted specification. Do not copy
+commands, migration procedures, or runbook templates from retired release
+runbooks. If a required tool or gate is not implemented, record that gap and
+keep the production cutover blocked.

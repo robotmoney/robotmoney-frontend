@@ -66,9 +66,13 @@ nothing** — so every session publishes **unjudged** (honest, but no judge bloc
   refuse("model_unconfigured")`. `OPENCODE_API_KEY` **is** present in
   `rm_prod-worker-swarm-1` and `rm_prod-api-1` (67 chars). **⟳ verify** the live
   config row.
-- **Next:** to enable — `POST /api/swarm/admin/judge` with `mode:"enforce"` +
-  a valid `model` id. Requires P-03. Note `third_party_enabled=false` is the
-  *correct* default and does **not** gate the built-in worker judge.
+- **Next:** after confirming admin credentials under P-03 and satisfying the
+  replay prerequisite in P-04, configure the judge through
+  `POST /api/swarm/admin/judge` with `mode:"enforce"` + a valid `model` id.
+  The API is the only writer of judge configuration. The adopted deployment
+  runs the judge as a roster participant; no worker judges inline. Verify
+  configuration and model availability at the release commit. The default for
+  third-party judging remains off.
 
 ### P-03 — No confirmed operator path to change judge config (S4)
 Operator reports being unsure any admin change to the judge is possible via API
@@ -80,9 +84,11 @@ or UI. The admin surface (`isPrivileged`/`hasAutomationRole`) needs an
   the unknown is whether a valid credential is provisioned for `rm_prod`, not
   whether a login path exists.
 - **Next:** confirm whether `ADMIN_TOKEN`/`AUTOMATION_TOKEN` (or an
-  `admin_credential` row / passkey) is set for `rm_prod-api-1`. If none, and
-  insecure mode is off, there is **no** authorized path to flip the judge — by
-  design — and one must be provisioned before P-02 and the P-15 UI are usable.
+  `admin_credential` row / passkey) is set for `rm_prod-api-1`. The adopted
+  smoke spec does not yet state how this application/admin credential is
+  provisioned for the target deployment. If none exists and insecure mode is
+  off, there is **no** authorized path to flip the judge; settle provisioning
+  before P-02 and P-15 can be completed.
 
 ### P-04 — `shadow` still a selectable judge mode (S4)
 `shadow` computes a real model opinion and withholds it — the same
@@ -99,22 +105,23 @@ intent is a binary `off | enforce` judge.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst**, plus the judge Themis —
-should be the in-house committee this host runs. After P-06 the wrong driver
-was killed and no correct driver was started; the three agents are seated but
-no session-lifecycle loop is driving them.
-- **`smoke:archive` is not the answer.** `docs/technical/smoke-production-spec.md`
-  (adopted 2026-09-22) retires the `--smoke`/`--seed` archive-scenario driver
-  entirely; under it, running anything that seeds/adopts against a populated
-  production database is refused by construction, not by operator care.
+should be the in-house participants this host runs. After P-06 the wrong legacy
+driver was killed; the three agents remain seated, but the target standing
+participant containers have not shipped. Session cadence is independent of
+this host's roster under the adopted design.
+- **`smoke:archive` is not the answer.** The adopted
+  [smoke production spec](./smoke-production-spec.md) retires the legacy
+  archive-scenario driver and refuses demo seeding on populated production
+  data. The specification is approved but not yet shipped.
 - **Next (blocked on the engineering, not yet built):** the target invocation
   is `bun smoke --static-port` with `RM_CREDENTIALS` on the host naming the
   three agents and the judge (spec §6, §9.2) — participants become standing
   containers smoke reconciles to, not a scenario driver's session loop. The
-  three currently-seated members hold the committed fixture key
-  (`persona-keys.json`); cutover is a key rotation by member id, which the
-  spec's `--spoof-keys`/roster mechanism does not itself perform for real
-  keys — provisioning `credential.json` with real keys and re-running smoke
-  is what rebinds them (spec §9.3). This is independent of P-02/P-04, and it
+  three currently-seated members hold committed fixture keys
+  (`persona-keys.json`). The adopted transition says the first production boot
+  rotates those keys by member ID, but the mechanism for rebinding real keys
+  from the credential roster is not fully specified alongside `--spoof-keys`
+  (§6.4); resolve this before implementation. This is independent of P-02/P-04, and it
   requires all W1/W2/W3 cutover gates (spec §10), not runnable today.
 
 ### P-15 — No admin UX to control judge parameters (S4)
@@ -188,16 +195,17 @@ visible from this branch.
   is `a9f2008b` (#1014), i.e. it branched off `main`, and it is 83 commits
   behind `releases-0.5.x`.
 - **Two conflicts:**
-  1. **Duplicated effort.** Its divergence analysis and judge-design docs
-     overlap `consensus-judge-findings.md` and `judge-shadow-removal-spec.md`.
-     Two doc sets describing one judge is how they drift.
+  1. **Potential duplicated effort.** Its divergence analysis and judge-design
+     docs overlap the dated incident register and `judge-shadow-removal-spec.md`.
+     The findings summary was removed in the 2026-09-23 cleanup; do not restore
+     it as a second current authority.
   2. **Opposite stance on shadow.** Its tip ships a filter *"in shadow first"*,
      while P-04 records shadow's removal as accepted. One of the two is wrong.
   Also note `65b099b5` records a **target judge design ("as evaluator")** that
   may supersede assumptions in our docs.
-- **Next:** read those 7 docs **before** writing more of ours; reconcile the
-  shadow stance with their author; decide which doc set is canonical rather than
-  maintaining both.
+- **Next:** if that branch is proposed for merge, reconcile its design with
+  D47 and the accepted judge-removal decision before taking the code. The branch
+  is not present in this tree, and its contents are not current authority here.
 
 ---
 

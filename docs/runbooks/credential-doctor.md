@@ -1,16 +1,17 @@
 # Credential Doctor
 
-> **Scope: existing credential utility, not the adopted deployment credential model.**
+> **Legacy GitHub secret utility; not the adopted deployment credential path.**
 > [Smoke production spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)
-> governs the adopted role and secret-handling design. GitHub Environment inventory
-> and vault behavior below describe this utility; they do not authorize storing
-> `rm_owner`, adding `rm_migrator`, or routing participant keys through the old flow.
-> Verify utility behavior at the release SHA. This reference does not establish that
-> the new deployment design has shipped.
+> governs roles and secrets for the adopted design. This utility's vault and
+> GitHub Environment inventory describe its own older GitOps workflow. They do
+> not authorize storing PostgreSQL owner credentials, adding `rm_migrator`, or
+> routing participant keys through GitHub secrets. Check the script at the exact
+> commit before using its commands; this document does not establish that any
+> deployment consumes the published values.
 
-Audits, configures, and revokes credentials for the Robot Money GitOps deployment
-across **staging** and **production** environments. Implements the credential
-inventory defined in [deployment.md](./deployment.md).
+Audits, configures, and revokes credentials in GitHub Environments for the
+legacy Robot Money GitOps workflow. It is a credential utility, not a deployment
+runbook or a source of credentials for the adopted smoke design.
 
 ## Problem
 
@@ -93,24 +94,16 @@ Credentials flow through three layers:
 | `DO_SPACES_KEY` | Created via DO API from `DO_API_TOKEN` or manual | ≥16 chars |
 | `DO_SPACES_SECRET` | Created alongside `DO_SPACES_KEY` or manual | ≥32 chars |
 | `DATABASE_URL` | Manual entry | `rm_app` Postgres URL + `sslmode=require` |
-| `WORKER_DATABASE_URL` | Manual entry | `rm_worker` Postgres URL + `sslmode=require` |
-| `MIGRATE_DATABASE_URL` | Manual entry | short-lived bootstrap URL; never droplet-resident |
 | `DO_DB_CA_CERT` (optional) | File | PEM certificate |
 | `FRED_API_KEY` (optional) | Manual entry | 32-char format + live FRED API check |
 
 `FRED_API_KEY` is an application/data secret needed only for live macro
 analytics series; the app runs seeded without it.
 
-`ANALYTICS_TOKEN` is the analytics-provider bearer (issue #106): the **api**
-process verifies it on `POST /api/swarm/regime` and every `/api/analytics/*`
-route, and the **worker** presents the same value when its updater jobs submit
-computed outputs through that boundary (`ANALYTICS_API_URL` points the worker at
-the api; docker-compose defaults it to `http://api:8787`). The worker refuses to
-boot in smoke/prod without it. It is never a substitute for `ADMIN_TOKEN` and
-vice versa. Optionally, `WORKER_DATABASE_URL` points the worker's pool at the
-restricted `rm_worker` role (migration `0016_worker_role.sql`; password set by
-the operator, never baked in a migration) so database permissions also deny the
-worker any analytics-table write.
+`ANALYTICS_TOKEN` is the analytics-provider bearer (issue #106). It belongs to
+the independent producer and API verification boundary described in
+[architecture.md](../architecture.md#96-rm-analytics-provider-the-data-utility).
+It is not a PostgreSQL credential or a participant key.
 
 ### Deployment variables (pushed to GitHub, readable)
 

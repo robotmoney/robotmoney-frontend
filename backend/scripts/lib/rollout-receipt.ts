@@ -51,7 +51,7 @@ import { allowedSignersPath, committedReceiptsDir, resolveSigner, signDetached }
  * kept ONLY so that release's scripts behave exactly as they did when they were
  * executed — a shared lib must not silently repoint a past release's evidence.
  * Every release from v0.3.0 on exports RM_BACKUP_DIR instead; the runbook
- * (docs/runbooks/rollout-procedure.md, "Conventions") makes that the first step.
+ * (the historical release-independent rollout procedure) makes that the first step.
  */
 export const DEFAULT_BACKUP_DIR = process.env.RM_BACKUP_DIR?.trim()
   ? process.env.RM_BACKUP_DIR.trim()
@@ -553,7 +553,7 @@ export function summarise(results: { name: string; status: string }[]): CheckSum
  * that credential lives in $HOME/.env as the rm_app role line (§6.5), read by
  * loadEnvFile — not in the environment. A box without a writer role line
  * cannot run them at all, which is precisely the staging host's design
- * (docs/archive/v0-2-2-rollout.md §2). The staging host's $HOME/.env carries
+ * (the historical v0.2.2 rollout procedure). The staging host's $HOME/.env carries
  * only rm_readonly; a cutover host's carries rm_app (and rm_worker).
  */
 export function deriveHostRole(repoRoot: string): { role: "stage" | "cutover"; why: string } {

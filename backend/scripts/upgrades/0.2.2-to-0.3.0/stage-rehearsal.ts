@@ -1,7 +1,6 @@
 // ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST.
 // This does a real Docker image build plus a full app boot — genuine compute
-// and disk load that a machine serving live production traffic cannot spare
-// (docs/runbooks/rollout-procedure.md §4, added after exactly this mistake).
+// and disk load that a machine serving live production traffic cannot spare.
 //
 // The v0.3.0 entry point for the heavy rehearsal, and the step that emits
 // P5.rehearsal-boot. What it grades: the Gate C backup restores, this release's

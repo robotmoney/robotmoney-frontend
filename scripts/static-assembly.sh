@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assemble the api process's STATIC_DIR — the cutover host for robotmoney.network
-# (docs/decisions.md D29, docs/runbooks/deployment.md §5.1).
+# (docs/decisions.md D29; docs/architecture.md §8 owns deployment authority).
 #
 # The api co-serves the marketing SPA straight from STATIC_DIR, so whatever
 # sits in this directory IS what a link unfurler reads. `frontend/public` alone

@@ -489,7 +489,7 @@ function printState(ctx: Ctx, rows: Evaluated[]): void {
   // from the manifest — the trick that resolves the P9.tag literals — is wrong
   // here: v0.2.2's P2.rc-tag is filed at §7.2, but v0.3.0's is filed at §1, the
   // "read this first" section, which never cut a tag. So the neutral wording
-  // wins, and v0.2.2's probe loses a pointer into docs/archive/v0-2-2-rollout.md
+  // wins, and v0.2.2's probe loses a pointer into its retired historical guide
   // — a section reference in a runbook that has already been archived.
   // The tag's signer is REPORTED, not enforced: "who cut this rc" stops being an
   // assumption. An unsigned tag or an unlisted key reads as "unverified signer",
