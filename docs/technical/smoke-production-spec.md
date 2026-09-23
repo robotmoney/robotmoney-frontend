@@ -264,7 +264,7 @@ In production an upgrade is an operator intervention: `bun run migrate`, prompti
 
 ### 9.3 Transition from the current host
 
-The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard has ever been armed, the three seated agents hold the committed fixture keys, and `job_schedules` rows are disabled. Cutover: set `RM_ENV=prod`, provision the credential file (the first boot rotates the three members fixture → real by member id), run §9.1, then §9.2. The authoritative mapping from roster entries to existing member IDs and the recoverable production key-rotation protocol remain to be specified in §12.2; §6.4's `--spoof-keys` path is rehearsal-only.
+The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard has ever been armed, the three seated agents hold the committed fixture keys, and `job_schedules` rows are disabled. Cutover: set `RM_ENV=prod`, provision the credential file (the first boot rotates the three members fixture → real by member id), run §9.1, then §9.2.
 
 ## 10. Acceptance gates
 
@@ -306,32 +306,3 @@ Each is an executable release gate. Cutover requires all three workstreams green
 ## 11. Out of scope
 
 The design does not specify an admin UI for judge settings. D48 owns the accepted judge-mode decision and its replay prerequisite; only the admin route writes `swarm_judge_config`.
-
-## 12. Implementation blockers to resolve before production cutover
-
-These gaps do not reopen the adopted deployment mechanism. Resolve them in the
-design and add executable acceptance coverage before production cutover.
-
-### 12.1 Provisioning production admin access
-
-The API requires authenticated admin access for privileged configuration, but
-the production provisioning path is not defined. Specify the supported
-production credential mechanism (token, persisted admin credential, or
-passkey-backed credential), how the initial credential becomes available before
-operators need it, and its rotation and recovery path. Keep this distinct from
-the database runtime roles in `~/.env` and participant keys in
-`RM_CREDENTIALS`; do not infer the path from the legacy GitHub credential tool.
-Acceptance must prove an authorized operator can authenticate against the
-production API without exposing the credential to database roles or
-participants.
-
-### 12.2 Rebinding the production roster to real member keys
-
-The first production boot must replace the currently seated fixture keys with
-the public keys supplied for the real participant roster. Specify the
-authoritative mapping from each credential-file entry to an existing member ID,
-the production-safe rebinding operation, and its behavior on missing or
-ambiguous matches and interruption/retry. Preserve historical verification
-keys. This is separate from `--spoof-keys`, which is rehearsal-only and refuses
-`RM_ENV=prod`. Add W3 coverage for the first transition, refused ambiguous
-input, and recovery after an interrupted rebind before starting participants.
