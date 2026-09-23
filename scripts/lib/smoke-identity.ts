@@ -3,9 +3,10 @@
 // typed into `RM_ENV`. This module reads it, writes it, and implements the
 // rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
 //
-// STUB (issue #1026, W1 step 1). Signatures and types are real; every body
-// throws. Nothing imports this module yet, and nothing may import it until the
-// implementation lands — it is additive and behaviour-neutral by construction.
+// Implemented for issue #1026, W1 step 2. The table itself is created by
+// backend/migrations/0063_deployment_identity.sql. Nothing imports this module
+// yet, so it remains additive and behaviour-neutral until the tools of §2 wire
+// it in.
 //
 // ── Why a row in the database, and not a file or a flag ─────────────────────
 //
@@ -162,8 +163,100 @@ export function openDeploymentIdentityStore(options: {
   readonly role: string;
   readonly writable: boolean;
 }): DeploymentIdentityStore {
-  void options;
-  throw new Error("NOT IMPLEMENTED: deployment_identity store — spec §4.2, issue #1026 W1.2");
+  if (options.databaseUrl.trim() === "") {
+    throw new Error("deployment_identity: the connection URL is empty — a configuration error, not a database error.");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(options.databaseUrl);
+  } catch {
+    throw new Error(`deployment_identity: the connection URL is unparseable ("${options.databaseUrl}").`);
+  }
+  if (options.writable && options.role !== "rm_owner") {
+    throw new Error(
+      `deployment_identity: a writable store requires rm_owner (§4.2); the role given is "${options.role}".`,
+    );
+  }
+
+  const databaseUrl = options.databaseUrl;
+  let client: Bun.SQL | null = null;
+  const connection = (): Bun.SQL => (client ??= new Bun.SQL(databaseUrl));
+
+  const store: DeploymentIdentityStore = {
+    async read(): Promise<DeploymentIdentityRead> {
+      try {
+        const rows = (await connection()`
+          SELECT kind, written_at, written_by, note FROM deployment_identity
+        `) as IdentityRowShape[];
+        const row = rows[0];
+        return row === undefined ? { state: "absent" } : { state: "enrolled", row: toRow(row) };
+      } catch (error) {
+        return { state: "unreadable", reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async write(kind: DeploymentIdentityKind, note: string | null): Promise<DeploymentIdentityRow> {
+      const rows = (await connection()`
+        INSERT INTO deployment_identity (id, kind, written_at, written_by, note)
+        VALUES (true, ${kind}, now(), current_user, ${note})
+        ON CONFLICT (id) DO UPDATE
+          SET kind = EXCLUDED.kind,
+              written_at = EXCLUDED.written_at,
+              written_by = EXCLUDED.written_by,
+              note = EXCLUDED.note
+        RETURNING kind, written_at, written_by, note
+      `) as IdentityRowShape[];
+      const row = rows[0];
+      if (row === undefined) throw new Error("deployment_identity: the write returned no row.");
+      return toRow(row);
+    },
+    async close(): Promise<void> {
+      await client?.close();
+      client = null;
+    },
+  };
+
+  contexts.set(store, {
+    writable: options.writable,
+    role: options.role,
+    remote: !LOCAL_HOSTS.has(parsed.hostname),
+  });
+  return store;
+}
+
+/** The column shape of the one row, as the driver returns it. */
+interface IdentityRowShape {
+  readonly kind: DeploymentIdentityKind;
+  readonly written_at: string | Date;
+  readonly written_by: string;
+  readonly note: string | null;
+}
+
+function toRow(row: IdentityRowShape): DeploymentIdentityRow {
+  return {
+    kind: row.kind,
+    writtenAt: new Date(row.written_at).toISOString(),
+    writtenBy: row.written_by,
+    note: row.note,
+  };
+}
+
+/** Hosts that are not a remote target for the acknowledgement rule below. */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(["", "localhost", "127.0.0.1", "::1"]);
+
+/**
+ * How a store was opened. A store this module did not open (a test double, or
+ * the backend's own implementation) has no entry, and the enrollment functions
+ * then rely on the database's own grant — which §4.2 says is the real boundary.
+ */
+const contexts = new WeakMap<DeploymentIdentityStore, { writable: boolean; role: string; remote: boolean }>();
+
+function requireWritable(store: DeploymentIdentityStore): void {
+  const context = contexts.get(store);
+  if (context !== undefined && !context.writable) {
+    throw new Error(
+      `deployment_identity: writing requires a store opened writable as rm_owner (§4.2); this one is read-only as "${context.role}".`,
+    );
+  }
 }
 
 /**
@@ -181,11 +274,18 @@ export function openDeploymentIdentityStore(options: {
  *
  * Serves spec §10 W1 by being the single input path to the matrix.
  */
-export function readIdentityForPolicy(
+export async function readIdentityForPolicy(
   store: DeploymentIdentityStore,
 ): Promise<DeploymentIdentityKind | null | "unreadable"> {
-  void store;
-  throw new Error("NOT IMPLEMENTED: identity read for the policy matrix — spec §4.2/§4.3, issue #1026 W1.2");
+  const read = await store.read();
+  switch (read.state) {
+    case "enrolled":
+      return read.row.kind;
+    case "absent":
+      return null;
+    case "unreadable":
+      return "unreadable";
+  }
 }
 
 /**
@@ -213,13 +313,20 @@ export function readIdentityForPolicy(
  * `deployment_identity = production` refuses" from the other side: that gate is
  * only meaningful if the rehearsal enrollment path is the one that can flip it.
  */
-export function enrollAsRehearsal(
+export async function enrollAsRehearsal(
   store: DeploymentIdentityStore,
   options: { readonly note: string | null; readonly remoteAcknowledged: boolean },
 ): Promise<DeploymentIdentityRow> {
-  void store;
-  void options;
-  throw new Error("NOT IMPLEMENTED: write deployment_identity = rehearsal — spec §4.2/§5, issue #1026 W1.2");
+  if (process.env.RM_ENV === "prod") {
+    throw new Error("deployment_identity: a run under RM_ENV=prod never writes `rehearsal` (§4.2).");
+  }
+  requireWritable(store);
+  if (contexts.get(store)?.remote === true && !options.remoteAcknowledged) {
+    throw new Error(
+      "deployment_identity: writing `rehearsal` onto a REMOTE database disarms a protection; the remote-twin procedure's explicit acknowledgement is required (§4.2).",
+    );
+  }
+  return await store.write("rehearsal", options.note);
 }
 
 /**
@@ -245,13 +352,29 @@ export function enrollAsRehearsal(
  *    never a step in §9.1 and is far more likely to be the wrong connection
  *    string than a real intent. It refuses and names both kinds.
  */
-export function enrollAsProduction(
+export async function enrollAsProduction(
   store: DeploymentIdentityStore,
   options: { readonly rmEnv: string | undefined; readonly confirmed: boolean; readonly note: string | null },
 ): Promise<DeploymentIdentityRow> {
-  void store;
-  void options;
-  throw new Error("NOT IMPLEMENTED: write deployment_identity = production — spec §4.2/§9.1, issue #1026 W1.2");
+  if (options.rmEnv !== "prod") {
+    const observed = options.rmEnv === undefined ? "RM_ENV is unset" : `RM_ENV is "${options.rmEnv}"`;
+    throw new Error(`deployment_identity: production enrollment requires RM_ENV=prod (§9.1); ${observed}.`);
+  }
+  if (!options.confirmed) {
+    throw new Error(
+      "deployment_identity: production enrollment requires the operator's typed y/n confirmation (§9.1); an unconfirmed invocation refuses.",
+    );
+  }
+  requireWritable(store);
+
+  const current = await store.read();
+  if (current.state === "enrolled") {
+    if (current.row.kind === "production") return current.row;
+    throw new Error(
+      "deployment_identity: this database is enrolled as `rehearsal`; promoting a rehearsal database to `production` is not a step of §9.1.",
+    );
+  }
+  return await store.write("production", options.note);
 }
 
 /**
@@ -296,6 +419,42 @@ export function requireRehearsalTarget(request: {
   readonly identity: DeploymentIdentityKind | null | "unreadable";
   readonly explicitlyRequested: boolean;
 }): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
-  void request;
-  throw new Error("NOT IMPLEMENTED: rehearsal-only preparation gate — spec §4.3, issue #1026 W1.2");
+  const what = `--${request.preparation}`;
+  if (request.rmEnv === "prod") {
+    return {
+      allow: false,
+      reason: `${what} is refused under RM_ENV=prod: a production-policy run never prepares a database (§4.3, §8.5).`,
+    };
+  }
+  if (request.rmEnv !== undefined && request.rmEnv !== "stage") {
+    return {
+      allow: false,
+      reason: `${what} is refused: RM_ENV="${request.rmEnv}" is not a policy value (§4.1 allows prod or stage only).`,
+    };
+  }
+  if (!request.explicitlyRequested) {
+    return {
+      allow: false,
+      reason: `${what} is refused because it was not explicitly requested: no mode may imply a preparation (§5, §6.4).`,
+    };
+  }
+  if (request.identity === "production") {
+    return {
+      allow: false,
+      reason: `${what} is refused: this target is enrolled as production, and rehearsal-only preparation requires rehearsal (§4.3).`,
+    };
+  }
+  if (request.identity === null) {
+    return {
+      allow: false,
+      reason: `${what} is refused: this target is not enrolled at all, and an un-enrolled database is not a rehearsal database (§4.3). Enroll it as rehearsal first.`,
+    };
+  }
+  if (request.identity === "unreadable") {
+    return {
+      allow: false,
+      reason: `${what} is refused: deployment_identity is unreadable, so there is no evidence this target is a rehearsal database (§4.3). Check that the credential can read the table.`,
+    };
+  }
+  return { allow: true };
 }
