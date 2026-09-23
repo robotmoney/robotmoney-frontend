@@ -3,9 +3,9 @@
 > **Status: adopted design, approved for implementation, not yet shipped.**
 > Adopted 2026-09-22 after adversarial review; recorded in
 > [D47](../decisions.md#d47). This is the **sole deployment-design authority**.
-> The former upgrade-deployment specification and its engineering plan are
-> deprecated in full as implementation authority. External `bozemanpass/stack`
-> and Kubernetes proposals were not adopted and are not current deployment tooling.
+> The former upgrade-deployment specification, its engineering plan, historical
+> release procedures, and unadopted external-stack proposals were removed from
+> the documentation tree on 2026-09-23. Recover historical versions from Git.
 >
 > Three workstreams, each landable alone, each with its own gates (§10): **W1
 > deployment lifecycle** (§§1, 2, 4, 5, 9), **W2 schema and privilege
@@ -20,11 +20,10 @@
 | **This specification** | Adopted deployment mechanism, credentials, lifecycle, participants and acceptance gates. |
 | [Release-runbook policy](./release-runbooks.md) | Standing release gates, phases, evidence and approval; it does not select a competing deployment mechanism. |
 | [Smoke summary](../../scripts/lib/smoke.README.md) | Non-authoritative summary of this adopted design, not a claim that it has shipped. |
-| [Deployment reference](../runbooks/deployment.md), [rollout procedure](../runbooks/rollout-procedure.md), per-release runbooks | Legacy or release-specific topology and commands. Validate operations against an exact commit; these are not new-design templates. |
-| [Production issues register](./production-issues-register.md) | Incident evidence and follow-up, not an alternative deployment design or proof of implementation. |
-| [Judge shadow-removal spec](./judge-shadow-removal-spec.md) | Separate accepted product behavior and replay requirements; deployment lifecycle follows this spec. |
-| [Old upgrade design](./upgrade-deployment-spec.md), [old engineering plan](../plans/deploy-separation-engineering-plan.md) | Deprecated pointers to archived history. No remaining phase is approved for implementation by those documents. |
-| [Stack reconciliation](./stack-runbook-reconciliation.md), [Kubernetes staging plan](../plans/stack-k8s-staging-deployment.md), [stack field guide](./stack-orchestrator.md) | Archived, unadopted external-tool proposals/research; not current tooling or a scheduled next step. |
+| Historical deployment and per-release runbooks | Removed from the documentation tree. Recover from Git for audit only; they are not new-design templates. |
+| [Decision ledger D48](../decisions.md#d48) | Accepted judge-mode product behavior; this specification owns the deployment lifecycle and participant boundary. |
+| Old upgrade design and engineering plan | Removed from the documentation tree. D47 and this specification replace them in full; no old phase is approved for implementation. |
+| External stack and Kubernetes proposals | Not adopted and removed from the documentation tree. Recover from Git for historical research; they are not current tooling or a scheduled next step. |
 
 Where an older document conflicts on deployment design, this specification wins.
 The implemented behavior still comes from the exact code being run; no legacy
@@ -306,4 +305,4 @@ Each is an executable release gate. Cutover requires all three workstreams green
 
 ## 11. Out of scope
 
-Judge mode narrowing beyond "nothing but the admin route writes `swarm_judge_config`" (P-04); the admin judge UI (P-15); cleanup of stray sessions (P-01).
+The design does not specify an admin UI for judge settings. D48 owns the accepted judge-mode decision and its replay prerequisite; only the admin route writes `swarm_judge_config`.

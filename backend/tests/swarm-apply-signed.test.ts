@@ -1,6 +1,5 @@
-// Stage 1 (docs/plans/onboarding-ic-workflow.md Phase 1 / docs/architecture.md
-// §11 R1-R6) — signed apply + the public applyStatus route. This is the
-// setup-gated onboarding contract: an application can only complete if it
+// Signed apply + the public applyStatus route. This is the setup-gated
+// onboarding contract: an application can only complete if it
 // carries an rmpc signature over the canonical application payload
 // (@robotmoney/contract) that verifies against the submitted key. The server
 // mints the member id; the client never supplies one. Runs the REAL ed25519

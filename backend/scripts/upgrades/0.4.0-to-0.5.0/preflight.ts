@@ -30,8 +30,8 @@ const migrationsDir = join(dir, "..", "..", "..", "migrations");
 /** The four roles 0053_database_role_taxonomy.sql creates (issue #692). */
 const TAXONOMY_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
 
-/** The role the API boots as, per the documented convention
- *  (docs/runbooks/deployment.md §4.3: DATABASE_URL = rm_app,
+/** The role the API boots as, per this legacy release's convention
+ *  (DATABASE_URL = rm_app,
  *  WORKER_DATABASE_URL = rm_worker). config.ts resolves DATABASE_URL from the
  *  deployment's OWN process env (backend/src/config.ts:709) — the preflight
  *  deliberately connects from $HOME/.env (rm_readonly) and cannot read the deployed
@@ -85,7 +85,7 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
   if (missing.length > 0) {
     fail(`role(s) absent from pg_roles: ${missing.join(", ")}`);
     fail(
-      "a v0.5.0 boot cannot migrate without the taxonomy: 0045-0053 create tables/roles, and 0054+ run SET LOCAL ROLE rm_owner. Provision it FIRST (runbook §4.1): scripts/ops/provision-db-role-taxonomy.sh against the primary (docs/runbooks/deployment.md §4.3.1).",
+      "a v0.5.0 boot cannot migrate without the taxonomy: 0045-0053 create tables/roles, and 0054+ run SET LOCAL ROLE rm_owner. Provision it FIRST with scripts/ops/provision-db-role-taxonomy.sh against the primary. The v0.5.0 runbook was retired from the docs tree; recover it from Git only for this legacy transition.",
     );
   } else {
     const owner = roleByName.get("rm_owner")!;
@@ -179,7 +179,7 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
       "role-readiness",
       "FAIL",
       lines,
-      "Provision the taxonomy and point the deployment at it per runbook §4.1 (scripts/ops/provision-db-role-taxonomy.sh; docs/runbooks/deployment.md §4.3/§4.3.1), then re-run this preflight.",
+      "Provision the taxonomy with scripts/ops/provision-db-role-taxonomy.sh, point the legacy deployment at it, then re-run this preflight. Recover the retired v0.5.0 guide from Git only for this historical transition.",
     );
     return;
   }

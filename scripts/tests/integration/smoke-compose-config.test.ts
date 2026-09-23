@@ -737,8 +737,8 @@ describe("every long-running service reports its own health", () => {
 // an `env_file:` and backend/Dockerfile sets no ENV — so a variable that block
 // does not name is never delivered to the container, and the failure is
 // perfectly silent: an override that was never delivered and one that was never
-// set produce byte-identical output, while docs/runbooks/deployment.md §2.1
-// tells a paged operator to set it and redeploy. That is the gap these cases
+// set produce byte-identical output, while the then-current deployment runbook
+// told a paged operator to set it and redeploy. That is the gap these cases
 // close, and they close it the only way it can be closed — against the RENDERED
 // compose configuration, over every composition the repo actually boots.
 describe("boot-guard operator controls reach the api container (issue #602)", () => {

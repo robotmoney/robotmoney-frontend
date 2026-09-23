@@ -1,6 +1,5 @@
 // Inference-OFF rails check for the real-inference onboarding eval
-// (scripts/lib/onboarding-eval.ts, docs/architecture.md §11 R8, Stage 5 of
-// docs/plans/onboarding-ic-workflow.md). This is a rails check, NOT a
+// (scripts/lib/onboarding-eval.ts and docs/architecture.md §11 R8). This is a rails check, NOT a
 // substitute for the eval: it proves every piece the eval rides on works — the
 // member-agent image builds and starts, it can reach the swarm REST API
 // over the compose network, and a signed apply built with the real `rmpc`

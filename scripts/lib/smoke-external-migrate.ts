@@ -1,9 +1,11 @@
 // Interactive, fail-closed doadmin credential for an opt-in `--db external
 // --migrate` boot (scripts/lib/smoke-db-mode.ts's MIGRATE_FLAG).
 //
-// WHY INTERACTIVE, NEVER STORED. D46/docs/plans/deploy-separation-engineering-plan.md
-// treats doadmin as bootstrap-only: it must never live in an env var, a file, or
-// a container. `--db external` alone never needs it — migrate() is skipped
+// WHY INTERACTIVE, NEVER STORED. The adopted deployment contract in
+// docs/technical/smoke-production-spec.md §3 makes doadmin cluster-provisioning
+// only: it must never live in an env var, a file, or a container. This module
+// documents the legacy runner and is not the adopted production migration
+// mechanism. `--db external` alone never needs it — migrate() is skipped
 // entirely, and the boot runs on rm_app exactly as every other external step
 // already does. `--migrate` is the one deliberate exception: an operator who
 // wants THIS run to catch the target database up types the doadmin password at

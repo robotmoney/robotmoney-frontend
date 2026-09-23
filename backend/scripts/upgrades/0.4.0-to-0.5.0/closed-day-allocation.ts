@@ -1,4 +1,4 @@
-// Rehearsal criterion #9 (docs/runbooks/v0-5-0-rollout.md §5): a closed-day
+// Historical rehearsal criterion #9: a closed-day
 // allocation total must not move when the D41 read path switches. The
 // smoke-twin boot applies 0046, which seeds `asset_prices` from the fused
 // live/seed price rows; after migration BOTH sides of the switch are still

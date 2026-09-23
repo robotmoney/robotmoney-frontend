@@ -3,12 +3,7 @@
 // job and cannot be skipped for being slow, matching
 // rollout-steps-0-3-0.test.ts's own stated reason for the same property.
 //
-// Deliberately NOT the full runbook<->manifest ```yaml step block matcher
-// 0.2.2-to-0.3.0/0.3.0-to-0.4.0's sibling tests use: v0.4.0 dropped that
-// heavyweight format in favor of prose cross-referencing release-runbooks.md's
-// generic §4 gates (docs/runbooks/v0-4-0-rollout.md has no yaml step blocks
-// at all), and v0-5-0-rollout.md follows that same, more recent convention.
-// What this file DOES pin — `requires` pointing backwards and resolving to
+// These checks pin `requires` pointing backwards and resolving to
 // real steps — is exactly the invariant rollout-where.ts's propagateBlocked()
 // depends on (its own header: "ONE FORWARD PASS SUFFICES because `requires`
 // always point BACKWARDS in manifest order"), and the one this release
@@ -18,8 +13,6 @@
 // (release-runbooks.md §3, revised 2026-09-11), reversing every prior
 // release's tag-first order.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { STEPS } from "../scripts/upgrades/0.4.0-to-0.5.0/steps.ts";
 
 describe("0.4.0-to-0.5.0 rollout manifest", () => {
@@ -69,24 +62,6 @@ describe("0.4.0-to-0.5.0 rollout manifest", () => {
     // spends inference) and would manufacture the very history the readonly
     // legs exist to audit.
     expect(verify.verify).toContain("--tier readonly");
-  });
-
-  test("every step's section pointer names a real section of the runbook", () => {
-    // The probe prints `section` next to NEXT, so a wrong pointer sends an
-    // operator to the wrong page. P3.backup/P3.gate-c pointed at §3
-    // ("Preconditions") when the backup and restore proof live at §4.2.
-    const runbook = readFileSync(join(import.meta.dir, "..", "..", "docs", "runbooks", "v0-5-0-rollout.md"), "utf8");
-    for (const step of STEPS) {
-      // The runbook spells sections three ways, and all three are legitimate:
-      //   `## 4. Baseline…`      chapter heading, number then a dot
-      //   `### 5.1 Cut the RC…`  sub-heading, number then a SPACE (no dot)
-      //   `**4.2 — Backup…`      bolded subsection, number then an em dash
-      // The section number itself contains dots, so escape it rather than
-      // letting `.` match any character.
-      const n = step.section.replace("§", "").replace(/\./g, "\\.");
-      const found = new RegExp(`^#{2,3} ${n}[.\\s]|^\\*\\*${n} —`, "m").test(runbook);
-      expect({ step: step.id, section: step.section, found }).toEqual({ step: step.id, section: step.section, found: true });
-    }
   });
 
   test("P8.postflight-prod requires the RC tag in addition to preflight and rehearsal", () => {

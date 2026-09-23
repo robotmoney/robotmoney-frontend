@@ -232,8 +232,8 @@ export function adoptionFilter(
   // the smoke invented would be a real member re-keyed by us, and a per-boot
   // container key cannot sign again after a restart. A `--twin` boot has
   // neither hazard. Its database is a throwaway copy of production, restored
-  // fresh for this boot and thrown away with it (docs/runbooks/v0-5-0-rollout.md
-  // §5), so nothing we re-key here outlives the boot and nothing we write can
+  // fresh for this boot and thrown away with it (legacy boot behavior), so
+  // nothing we re-key here outlives the boot and nothing we write can
   // reach the real member. What the old rules bought there was a session with 3
   // seats on a roster of 7 — the twin silently exercising less than half the
   // swarm it exists to rehearse.

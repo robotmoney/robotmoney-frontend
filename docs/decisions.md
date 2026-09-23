@@ -117,13 +117,17 @@ no import map are needed. Keeps the runtime dependency to plain static files.
 
 ## D8 — One Postgres, run in Docker (not Supabase)
 
-> **Prod mode refined by D13:** production is a DigitalOcean Managed Postgres HA
-> cluster; the ephemeral (CI) and smoke (Docker) modes are unchanged.
+> **Environment selection superseded by D47.** The one-Postgres principle
+> remains. The old `ephemeral`/`smoke`/`prod` mode selection and volume rules
+> below describe the earlier implementation; use the adopted
+> [smoke production spec](technical/smoke-production-spec.md) for target
+> policy, identity, and local database modes.
 
 **Decision.** Consolidate comments (was Upstash), committee (was GitHub-as-DB),
-and dashboard data (was committed CSV/JSON) into a single self-hosted Postgres in
-Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), smoke
-(persistent volume), prod (external/managed URL).
+and dashboard data (was committed CSV/JSON) into a single Postgres owned by the
+backend. CI and local rehearsal may use Docker; production uses a managed
+Postgres cluster. The adopted deployment design defines target selection and
+identity checks.
 
 **Why.** One datastore, owned by the backend, portable across environments. Self-
 hosted fits the single-box deployment (D11). Supabase was rejected to avoid a
@@ -155,21 +159,18 @@ single versioned seam (the contract) that makes the eventual split mechanical.
 
 ## D11 — Single box, no reverse proxy
 
-> **Superseded for production by D13** (vendor-split tiered topology: Cloudflare
-> DNS+observability, DO compute+storage, surfaces on subdomains). The single-box
-> `docker-compose` remains the **CI and smoke** deployment; same-origin/no-CORS is
-> preserved *within* each surface because the Bun `api` co-serves its SPA assets at
-> the subdomain root.
+> **Deployment lifecycle superseded by D47.** D13 records production's
+> vendor-split topology; D29 records the static `website-server` boundary.
+> This entry preserves the no-reverse-proxy decision, not smoke commands or
+> service boot behavior.
 
-**Decision.** Deploy on one box (e.g. a DigitalOcean droplet). The Bun `api`
-process serves both the JSON API and the static frontend (`STATIC_DIR`).
+**Decision.** The application services can run on one host with host-based DNS
+routing and no application-level reverse proxy. API and static frontend assets
+may be separate services while remaining same-origin within each surface.
 
-**Why.** Same origin → no CORS, nothing to run in front of the app. No
-Caddy/nginx, no third-party hosting platform. TLS, if wanted, is terminated on the
-box however preferred.
-
----
-
+**Why.** Avoid adding routing software where the DNS/service boundaries already
+provide the required separation. Production placement is described by D13 and
+current deployment requirements by the [smoke production spec](technical/smoke-production-spec.md).
 ## D12 — Bun for the backend (not Node + a framework)
 
 **Decision.** Run the backend on **Bun** with `Bun.serve` — no HTTP framework. Bun
@@ -482,6 +483,11 @@ a docs-only, config-value decision.
 
 ## D19 — Hosted preview URLs on Cloudflare Pages (revises D14 and D13)
 
+> Superseded by D20 before activation. No hosted preview deployment was
+> established; the current preview is local-only under
+> [architecture §4](./architecture.md#4-preview-mode-goldens-backed-no-backend).
+> The mechanism below is retained as decision history, not operating guidance.
+
 **Decision.** Ship a **hosted, per-branch preview URL** on Cloudflare Pages
 (via `wrangler pages deploy --branch`) for every push to `preview/**` branches.
 Retire the `scripts/serve-preview.ts` server and `docs/preview-server-spec.md`
@@ -724,8 +730,8 @@ secure.
   nothing requires it.
 - **Wait and see — leave MCP deployed but stop building on it.** Rejected: an
   undeprecated surface with a live subdomain, port, and OAuth server invites
-  new work to target it by default (as the onboarding-ic-workflow plan was
-  about to do in Phase 3) and keeps paying the CI/ops cost with no offsetting
+  new work to target it by default (as the former onboarding plan proposed in
+  Phase 3) and keeps paying the CI/ops cost with no offsetting
   signal that waiting produces a different answer.
 - **Retire the code in the same change as this decision.** Rejected for scope
   control: this entry and the architecture.md/spec edits are reviewable as a
@@ -737,6 +743,10 @@ secure.
 ---
 
 ## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the smoke's stack
+
+> The eval's reuse of local test-stack code is eval architecture only. D47
+> retires the smoke-host onboarding/session driver as a production mechanism;
+> nothing in this decision defines deployment participants or their lifecycle.
 
 **Local suite refinement (2026-07-29).** Development evals are registered as
 native Bun tests under `evals/` and run through the separate `bun run eval`
@@ -1605,7 +1615,7 @@ correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 
 ## D29 — The api process (`STATIC_DIR`) is the cutover host for `robotmoney.net`, and its deploy path prerenders per-route HTML (issue #480)
 
-*(Runbook: [deployment.md](./runbooks/deployment.md) §2.1.)*
+*(Deployment authority: [smoke production spec](./technical/smoke-production-spec.md); network topology: [architecture §8](./architecture.md#8-deployment).)*
 
 **Decision.** Two questions, answered together because the first determines the
 second.
@@ -1613,16 +1623,13 @@ second.
 **1. Which host serves `robotmoney.net` after cutover? The `api` process,
 serving an assembled `STATIC_DIR`.** It is what the cutover origin already
 does — `robotmoney.network` is a `cloudflared` connector onto the single-box
-stack (`docs/runbooks/deployment.md` §3.3), and `docker-compose.yml` sets
+stack (see [`cloudflared.config.example.yml`](../cloudflared.config.example.yml)), and `docker-compose.yml` sets
 `STATIC_DIR: /srv/frontend` so the api co-serves the marketing SPA with no
 reverse proxy (D11, D13). **Cloudflare Pages is not a candidate for
 production**: D13 confines Cloudflare to DNS + observability with no software
-to deploy, `docs/runbooks/deployment.md` §1 disables Cloudflare git integration
-outright, `CF_API_TOKEN` carries no Pages permission, and the one Pages project
-(`robotmoney-preview`, D20) has automatic production deploys **disabled** with
-previews limited to `preview/*`. Pointing production at Pages would reverse
-three decisions to obtain a prerenderer that can equally be run on the host we
-already have.
+to deploy, and D20's hosted-preview proposal was never activated. Pointing
+production at Pages would reverse the vendor split to obtain a prerenderer
+that can equally be run on the host we already have.
 
 **2. The prerender runs in that host's deploy path.** `STATIC_DIR` is now an
 **assembled** directory, not the raw source tree: `scripts/static-assembly.sh`
@@ -1659,16 +1666,17 @@ cannot disagree with the JS path.
 
 **Relationship.** Refines D13's static tier for the cutover: D13 assigns
 marketing on the apex/`www` to a **DO Spaces CDN**, which remains the intended
-end-state tier and is unimplemented in this repo (no upload path, no workflow,
-no credential wiring beyond the inventory in `docs/runbooks/deployment.md` §4).
+end-state tier and is unimplemented in this repo (no upload path or workflow;
+verify current host state at the release commit).
 This decision does not foreclose it — `_static/` is a plain static assembly, so
 the Spaces migration, when it happens, uploads exactly this directory and
-inherits the prerender for free. Supersedes nothing; D20 keeps Cloudflare Pages
-for `preview/*` hosting, unchanged.
+inherits the prerender for free. Supersedes nothing. D20's proposed Pages Git
+hosting was never activated; preview is local-only under
+[architecture §4](./architecture.md#4-preview-mode-goldens-backed-no-backend).
 
 **Alternatives rejected.**
-- **Enable production deploys on the Cloudflare Pages project** — reverses D13
-  (Cloudflare = DNS + observability), D20 (`preview/*` only) and the GitOps
+- **Enable production deploys on Cloudflare Pages** — reverses D13
+  (Cloudflare = DNS + observability), the unactivated D20 proposal, and the GitOps
   principle that no vendor watches the repo, and would still leave
   `robotmoney.network`'s api-served origin unfixed.
 - **Prerender into `frontend/public/` in place** — build output in the source
@@ -1858,58 +1866,28 @@ and still survives. No credential column and neither `applied_at` nor
 
 ---
 
-## D32 — One-time claim makes the admin credential durable; the per-boot token is superseded, not revoked (issue #553)
+## D32 — One-time claim makes the admin credential durable (issue #553)
 
-**Decision.** The admin credential can be claimed exactly once:
-`POST /api/admin/claim`, authorized by the *current* admin credential (on a
-first-ever boot, the per-boot token the interactive TUI displays), persists
-the sha256 hex of an operator-chosen password (≥ 12 characters) into the new
-one-row `admin_credential` table (migration
-`backend/migrations/0028_admin_credential.sql`). While that row exists,
-`backend/src/api/auth.ts`'s `isPrivileged()` treats the stored hash as the
-durable operator credential: it survives every restart, so `bun run smoke` /
-`bun run smoke:stage` re-boots stop rotating the operator out — the lockout
-this issue is about. A public boolean probe, `GET /api/admin/is-claimed`,
-lets the smoke boot decide whether the TUI may display the per-boot token.
+> **Product/API behavior only.** The old per-boot token display, TUI, and
+> smoke-driver details are implementation history superseded by D47 and the
+> [smoke production spec](technical/smoke-production-spec.md). This entry does
+> not define how a future deployment provisions an admin credential.
 
-**Superseded, not revoked.** After a claim, the per-boot `ADMIN_TOKEN` env
-mint *remains valid* — but only as the stack-internal automation credential,
-and it is never displayed again (the TUI shows the `Admin pass` line only
-once the post-ready probe confirms *unclaimed*). This is deliberate, and is
-the refinement of the issue's "stop minting" sketch: the smoke's own drivers
-(swarm session runner, onboarding driver, e2e children) authenticate against
-`X-Admin-Token`-guarded routes with the per-boot token threaded through
-in-process, and the server holds only a *hash* of the claimed password, so it
-cannot hand the claimed secret to that automation. Revoking the env token on
-claim would kill the standing smoke's core loops on the next boot. The issue's
-test plan anticipates exactly this shape ("or is superseded, per the chosen
-design").
+**Decision.** An admin credential can be claimed once through
+`POST /api/admin/claim`. The API stores a SHA-256 hash in the one-row
+`admin_credential` table (migration `0028_admin_credential.sql`); subsequent
+privileged requests compare credentials against that durable hash. The credential
+is never stored in plaintext in the database. Failure to read the credential
+state fails closed.
 
-**`RM_ALLOW_INSECURE` stops opening the gate once claimed.** A claim is an
-explicit security opt-in; after it, only the claimed password or the current
-boot's own token authorizes — never the insecure-mode bypass.
+The login credential is an application/admin concern, separate from PostgreSQL
+roles and participant keys. The adopted smoke spec governs deployment credentials
+and does not specify the admin credential's provisioning flow. Any future
+provisioning mechanism must be documented in that design before production use.
 
-**Hashing scheme.** sha256 hex via the existing `hashKey()`
-(`backend/src/lib/keys.ts`) — the same never-plaintext posture already used
-for swarm member access keys — compared constant-time (`timingSafeEqual`),
-like every other credential in `auth.ts`. Not argon2/bcrypt: `isPrivileged()`
-runs on every admin/swarm-admin request (the dashboard polls), a KDF per
-request is a hot-path cost, and the credential is bearer-token-shaped
-(`X-Admin-Token`), with the 12-character minimum bounding the offline-crack
-exposure. The migration also `REVOKE`s the queue worker role's default grant
-on the table so a worker-role compromise cannot read the hash at all.
-
-**Fail closed and loud.** A database failure inside `isPrivileged()`
-propagates to the router's sanitized 500 — it never silently falls back to
-the env token while a claim might exist.
-
-**Recovery path.** There is no self-serve reset for the single smoke admin. A
-forgotten claimed password is an explicit operator action against the
-database — `DELETE FROM admin_credential;` (or `bun run smoke:clean` for a
-full wipe) — which re-arms the first-boot one-time-claim state, restoring
-today's "restart shows a fresh TUI token" behaviour.
-
----
+**Scope.** This decision preserves the one-time durable claim and API
+authorization behavior. It does not authorize a TUI, automatic token display,
+a host-side session driver, or direct SQL as a recovery procedure.
 
 ## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
 
@@ -2138,14 +2116,13 @@ leaves it on.
 
 **Consequences.**
 
-- `docs/runbooks/deployment.md` §2.1 carries the operator surface: the exact
-  repair statement (one per refusal line, always the holder's handle), how to
-  get a `psql` session in both topologies, the override, the rollback pointer,
-  and the `/health` field.
+- [D34](#d34--the-apis-handleid-namespace-boot-gate-is-fail-closed-bounded-observable-and-overridable-issue-602)
+  records this guard's behavior and controls; implementation is in
+  `backend/src/db/handle-namespace.ts`. The adopted smoke specification owns
+  future deployment preflight and recovery behavior.
 - The guard is a **boot-time snapshot**. There is no periodic re-check, so a
   `pg_restore` into a live database is not re-validated until the api restarts;
-  the runbook and `src/db/handle-namespace.ts` both say so rather than leaving
-  the limit implied.
+  D34 and `src/db/handle-namespace.ts` record that limit.
 
 **Rejected alternatives.**
 
@@ -2187,10 +2164,9 @@ split between them is deliberate rather than unfinished work:
   already locked out or already hitting an API error.
 - **Deploy and ingress subdomains stay `.net`.** `site.`, `swarm.`, `app.` and
   `staging.` are on the `.net` zone under D13's host-based routing, with D29's
-  api process serving the cutover host. The Cloudflare API token is scoped to
-  the `robotmoney.net` zone (`docs/runbooks/deployment.md`). Rewriting these in
-  a runbook produces hostnames that do not resolve, so the runbook and
-  `cloudflared.config.example.yml` keep them.
+  api process serving the cutover host. The tunnel hostname mappings remain in
+  `cloudflared.config.example.yml`; changing the canonical web domain does not
+  rename those ingress hosts.
 
 **Why this needs writing down.** `robotmoney.net` is a strict substring of
 `robotmoney.network`. Two consequences, both of which have already bitten:
@@ -3586,73 +3562,20 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 
 <a id="d46"></a>
 
-## D46 — Smoke stands environments up and never migrates data it does not own; migrations are a runbook-sequenced step run as `rm_migrator`; `doadmin` is bootstrap-only (Lucas, 2026-09-21)
+## D46 — Prior smoke migration design (superseded by D47)
 
-> **SUPERSEDED for deployment design by [D47](#d47), adopted 2026-09-22.**
-> This entry preserves the 2026-09-21 decision and its rationale, not current
-> instructions. Do not create `rm_migrator`, implement the old phase plan, or
-> infer shipped behavior from its original present-tense wording. The sole
-> adopted mechanism is [Smoke production spec](technical/smoke-production-spec.md).
+> **Historical decision, not current instruction.** D47 supersedes D46's
+> deployment mechanism in full, including its `rm_migrator` credential,
+> external-migration step, phase plan, and smoke environment model.
 
+On 2026-09-21, D46 proposed separating application startup from production
+migration and limiting each tool to one credentialed job. Those goals motivated
+the subsequent design review. Its detailed mechanism and rationale are retained
+in Git history; do not implement any part of D46 as an independent phase.
 
-**Decision.** Three rules, adopted together because each is what makes the
-others enforceable. The mechanism contract is
-[`technical/upgrade-deployment-spec.md`](./technical/upgrade-deployment-spec.md);
-the work is
-[`plans/deploy-separation-engineering-plan.md`](./plans/deploy-separation-engineering-plan.md).
-
-**1. A tool does one job and holds only the credential that job needs; runbooks
-sequence tools, tools never sequence each other.** The smoke tool stands an
-environment up and proves it serves. It migrates and seeds **only** a database
-it created — `ephemeral` or `smoke-twin`, which `scripts/lib/smoke-db-mode.ts`'s
-`ownsData()` already distinguishes from `external` and which `up()` never
-consulted. Against an `external` server it asserts the schema is current and
-refuses to start services if it is not. Applying migrations is a separate tool
-(`migrate:external`), a separate receipted step (`P7.migrate`), and the only
-step in a runbook that names a migration credential.
-
-**2. `rm_migrator` is the migration login. `doadmin` is deprecated below the
-provisioning script.** `0053_database_role_taxonomy.sql:56`'s `GRANT rm_owner
-TO current_user` welded whoever bootstraps the taxonomy into the permanent
-migration login — on DigitalOcean, the cluster admin. `0053` now also creates
-`rm_migrator` (`LOGIN NOINHERIT NOCREATEROLE NOCREATEDB`, member of `rm_owner`
-and nothing else) and that is what `MIGRATE_DATABASE_URL` names. `migrate.ts`
-refuses `doadmin` and both runtime roles; `config.ts` refuses a `doadmin`
-`DATABASE_URL` under every `RM_ENV`, not only `prod`.
-
-**3. The cutover is receipted steps, not one irreversible command.**
-`P7.schema-current`, `P7.migrate` (skipped with a receipt when nothing is
-pending), `P7.deploy`, `P7.initialize`. A redeploy is `P7.deploy` alone, and
-needs `rm_app` and `rm_worker` — nothing else. Rehearsals capture every
-service's logs for the whole window and fail on any privilege or
-authentication failure line (G9), and migrate as `rm_migrator` (G10).
-
-**Why now.** On 2026-09-21, every consequence of the coupling was observed at
-once: a routine redeploy required the cluster admin credential; that credential
-sat unread in five production containers for 19 hours; rotating it made
-production un-restartable with no schema change pending; and a grant defect
-that dead-lettered 1,968 jobs was invisible to every gate because the only
-evidence was a log line. `0053`'s own header describes the model this decision
-implements — *"Runtime processes authenticate only as `rm_app` or
-`rm_worker`"* — and the tooling had never implemented its first sentence.
-
-**Consequences.** A `--db external` boot against a server with pending
-migrations stops and names them; that is the feature. A code-only release's
-manifest records that no migration was needed as evidence, not as an absent
-step. `rollout-procedure.md` §8.2's "writes to production three times before you
-can inspect anything" becomes history. The rehearsal driver gains log capture
-that every release inherits. Production's composition (`RM_ENV=smoke`,
-`RM_ALLOW_INSECURE=1` via the always-appended smoke overlay) is the one row the
-spec leaves for its own decision — plan phase 5 — because untangling it changes
-what production *is*.
-
-**Relationship.** Does not amend D8 (one Postgres), D11 (single box) or D29
-(the api process is the cutover host). Sharpens `deployment.md` §1's "CI is the
-only actor that mutates infrastructure" into "and a migration is a named step
-that actor runs, not a side effect of starting a container". Does not adopt
-`stack-runbook-reconciliation.md`; every step here maps onto that document's
-gate table if it is adopted later. Sequenced per policy §4.6: phases 1–4 land
-on `main` for the release line after v0.5.1.
+Recover the original entry with
+`git show 74b22147ddd5cf1bad1db13ca80a8d45f2a53c3c:docs/decisions.md`.
+D47 is the current decision record.
 
 
 <a id="d47"></a>
@@ -3666,9 +3589,10 @@ accepted design and does not authorize a production cutover.
 **Decision.** [Smoke production spec](technical/smoke-production-spec.md) is the
 single source of deployment-design requirements. It replaces D46's credential
 model and tool mechanics, the former upgrade-deployment specification, and its
-engineering plan in full as implementation authority. Their historical rationale
-is retained in the archive; no residual phase remains an active implementation
-instruction merely because it was not individually marked superseded.
+engineering plan in full as implementation authority. Their full bodies were
+removed from the documentation tree on 2026-09-23; use Git history when their
+historical rationale is needed. No residual phase remains an active
+implementation instruction.
 
 The adopted design uses `rm_owner LOGIN` for prompted migration access, never a
 new `rm_migrator` role. Production migration and initialization are separate from
@@ -3681,17 +3605,40 @@ The specification owns the exact interfaces, transition and W1/W2/W3 gates.
 **Authority.** [Release-runbook policy](technical/release-runbooks.md) remains in
 force for gates, phases, evidence and approval. Standing and per-release runbooks
 retain dated operational evidence but must not override the adopted mechanism or
-be reused as new-design templates. Judge-mode narrowing remains a separate
-accepted product decision; the production issues register remains an evidence
-and follow-up record.
+be reused as new-design templates. No historical per-release runbook remains in
+the documentation tree; a future one is created only after a release is
+scheduled and its tools exist at the target commit. D48 records the separate
+accepted judge-mode decision and replay prerequisite.
 
 **Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
-and associated reconciliation/field guide are archived proposals, not current
-deployment tooling or a scheduled successor. They are distinct from this repo's
-`scripts/stack/` Compose library.
+and associated reconciliation/field guide were not adopted. Their proposal
+bodies were removed from the documentation tree and can be recovered from Git.
+They are distinct from this repo's `scripts/stack/` Compose library.
 
 **Implementation boundary.** Existing code can still implement the old flags and
 credential paths. Adoption does not mean the replacement has shipped. Any
 operation on legacy code must be checked at the exact release SHA. Implementation
 and production cutover must satisfy the adopted specification and standing
 release gates; the deprecated engineering plan does not schedule that work.
+
+
+<a id="d48"></a>
+
+## D48 — Judge mode is `off | enforce`; `shadow` is not a go-forward mode (Lucas, 2026-09-22)
+
+**Status.** Accepted 2026-09-22; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** The go-forward operator choices are only `off` or `enforce`. The
+system must not create new `shadow` judgements. This product decision does not
+change the deployment lifecycle or participant boundary owned by D47 and the
+[smoke production spec](technical/smoke-production-spec.md).
+
+**Historical data.** Existing judgement rows and signed receipts containing
+`shadow` remain readable; history is not rewritten.
+
+**Implementation prerequisite.** Before removing `shadow` from the write path,
+verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
+the observe-before-enforce soak. The decision remains unimplemented until that
+prerequisite is met. The former long-form specification was removed from the
+documentation tree; recover it from Git only for historical context.

@@ -1,5 +1,6 @@
 -- rm_readonly must be able to read sequence state, because it is the role the
--- BACKUP runs as (issue #699; docs/runbooks/rollout-procedure.md §5.1).
+-- BACKUP runs as (issue #699; current release evidence policy is in
+-- docs/technical/release-runbooks.md §4.3).
 --
 -- WHAT WENT WRONG. `pg_dump` reads every sequence's `last_value` to reproduce
 -- it in the dump. Running as rm_readonly against production it failed:

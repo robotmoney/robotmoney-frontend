@@ -1,5 +1,4 @@
-// Real-inference onboarding eval harness (docs/architecture.md §11 R8, Stage 5
-// of docs/plans/onboarding-ic-workflow.md). Launches ONE vanilla member-agent
+// Real-inference onboarding eval harness (docs/architecture.md §11 R8). Launches ONE vanilla member-agent
 // container (docker-compose.smoke.yml's `member-agent` service,
 // scripts/lib/member-agent/Dockerfile) per admission, injects the canonical
 // copy-paste prompt (contract's ONBOARDING_PROMPT text, with only its skill URL

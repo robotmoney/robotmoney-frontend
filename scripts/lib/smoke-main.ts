@@ -1326,8 +1326,8 @@ async function main(): Promise<void> {
       { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, AUTOMATION_TOKEN: automationToken } as Record<string, string>, "rmpc release e2e");
     }
 
-    // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
-    // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
+    // Additive, env-gated legacy onboarding evaluation: the REAL-INFERENCE
+    // onboarding admission sweep reuses this EXACT
     // already-booted stack instead of standing up a parallel one — same
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
     // Which CI runs set it (issue #289, #373, #803): e2e.yml's NIGHTLY

@@ -1,3 +1,6 @@
+# Experimental configuration for the unadopted external-stack proposal. This
+# mechanism is not in use today and is not part of the adopted smoke deployment
+# design (docs/technical/smoke-production-spec.md, approved but unshipped).
 name: robotmoney-swarm
 description: "Robot Money — member-facing swarm: api, website, worker lanes"
 
@@ -20,8 +23,8 @@ pods:
 # robotmoney/devops). DATABASE_URL is an external secret below, exactly like
 # every other credential whose counterpart lives outside the deployment.
 
-# A secret declared here has NO per-container ACL
-# (docs/technical/stack-orchestrator.md §6), and it is WORSE than "opt-in via
+# A secret declared here has NO per-container ACL in the external tool version
+# described below, and it is WORSE than "opt-in via
 # ${STACK_SECRET_<NAME>:-}" — verified empirically against stack 2.0.0-47a4772
 # by inspecting a real `stack deploy` deployment directory's generated
 # composefiles: `stack deploy` itself writes an `environment:` entry for
@@ -41,8 +44,8 @@ pods:
 # composefile-authoring level only — every worker lane and website still
 # receive OPENCODE_API_KEY (and every other declared secret) in their actual
 # process environment once deployed via `stack`, regardless of this file's
-# choices. Accepted as a conscious tradeoff of adopting stack
-# (scaffold-stack.md §1.1), not a bug to work around in this issue.
+# choices. This was accepted as a conscious tradeoff in the unadopted proposal,
+# not a current deployment invariant.
 # ADMIN_TOKEN / AUTOMATION_TOKEN /
 # ANALYTICS_TOKEN are intentionally NOT declared here: their generation
 # ownership (stack `generate` vs. the credential doctor) is an open decision

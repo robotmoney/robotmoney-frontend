@@ -409,7 +409,7 @@ function warnOverrideArmedWithoutViolation(): void {
   console.error(
     `[api] ${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 is set but this boot found no violation to ` +
       `override — the guard is DISARMED and the next database that carries one will be SERVED. ` +
-      `Unset ${HANDLE_NAMESPACE_OVERRIDE_ENV} and restart; see docs/runbooks/deployment.md.`,
+      `Unset ${HANDLE_NAMESPACE_OVERRIDE_ENV} and restart; see D34 in docs/decisions.md.`,
   );
 }
 
@@ -457,7 +457,7 @@ function warnOverrideArmedWithoutViolation(): void {
  *      reconnects transparently, so a violation loaded underneath a running api
  *      is served indefinitely with no refusal and no log line. After any
  *      restore into a running stack, restart the api (`docker compose restart
- *      api`); docs/runbooks/deployment.md says so too.
+ *      api`); D34 in docs/decisions.md records this boot-time limitation.
  *   3. IT CAN BE TURNED OFF. With RM_ALLOW_HANDLE_NAMESPACE_VIOLATION=1 a
  *      violating database serves anyway, loudly (see below). A boot that finds
  *      nothing to override says so too (warnOverrideArmedWithoutViolation), so
@@ -493,7 +493,7 @@ export async function assertHandleNamespaceClean(db?: NamespaceDb): Promise<void
       console.error(`[api] The api will NOT start: nothing is being served from this database.`);
       console.error(
         `[api] To start anyway (accepting the wrong-member attribution above), set ` +
-          `${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 — see docs/runbooks/deployment.md.`,
+          `${HANDLE_NAMESPACE_OVERRIDE_ENV}=1 — see D34 in docs/decisions.md.`,
       );
       process.exit(1);
     }

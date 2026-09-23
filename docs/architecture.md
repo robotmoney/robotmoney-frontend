@@ -438,7 +438,7 @@ described above; there is no hosted equivalent.
 **Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
 pathname → response body, covering every route the frontend calls. It is a *mock*:
 **field shapes are real, values are point-in-time.** Goldens are **captured from a
-real running system** (a deployed test cluster or a local `bun run smoke` stack)
+real running system** (a deployed test cluster or a local backend/test stack)
 via `bun run goldens:update` — never hand-authored and never derived from other
 fixtures, so the shapes stay faithful to what the backend actually returns.
 
@@ -470,8 +470,9 @@ tests or the contract).
 
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
-For realistic, evolving data (real analytics + simulations) run the full stack
-with `bun run smoke` (see the [Smoke Specification](#smoke-specification)).
+For realistic, evolving data (real analytics + simulations), use the live data
+source in the current development harness. Consult the adopted smoke spec before
+treating any smoke invocation as a production procedure.
 
 ---
 
@@ -637,9 +638,10 @@ All four are PRIVILEGED with the same guard the swarm/projects admin routes
 use: `ADMIN_TOKEN` presented as `X-Admin-Token` (constant-time compared), or —
 only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
 403 check runs before any DB work. The `/admin` view is intentionally NOT in the
-public nav; the token is kept in `sessionStorage` for the tab. The `bun run smoke`
-launcher generates a fresh random password each run and prints it to the
-interactive TUI ONLY (never logged, never written to `smoke-state.json`).
+public nav; the token is kept in `sessionStorage` for the tab. The old smoke
+TUI's per-boot token display is a legacy implementation detail and is not part
+of the adopted deployment design. Use the adopted credential model for future
+deployment provisioning.
 
 The frontend shell also renders `/admin/research` and `/admin/queue` sections
 (stage timeline, bounded artifact previews, filtered queue jobs, and
@@ -672,8 +674,7 @@ into six independently testable stages — **access → extract → transform �
   the orchestrator degrades to the persisted-real floor via `mergeSeries` (never to
   seeded data). `hermetic-source.ts` is the deterministic, offline
   **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
-  the CI backend unit tests and available as an explicit local-debug override — never
-  a smoke default (the smoke default is `live`; see §7a of the Smoke Specification).
+  the CI backend unit tests and available as an explicit local-debug override.
   **`ANALYTICS_SOURCE`**, resolved by
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
@@ -968,71 +969,39 @@ renders `/regime` (including the backtest + predictive-correlations panels) and 
 carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,
 thresholdDays }`, computed in `backend/src/analytics/report/regime-projection.ts`
 (zero snapshots counts as stale, #124) — which `/regime` surfaces as a loud
-staleness banner (`frontend/public/views/regime.html`); the smoke boot self-heals
-with loud logging if the boot classify leaves a frozen snapshot
-(`scripts/lib/smoke-main.ts`). Adding an analytic =
+staleness banner (`frontend/public/views/regime.html`). The existing legacy
+smoke harness logs and repairs a frozen snapshot after boot classify; that
+behavior is implementation detail, not a deployment preflight guarantee.
+Adding an analytic =
 write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
 
 ## 8. Deployment
 
-Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
-the [network topology section](#network-topology--dns-origins--vendors) (decision D13); the GitOps pipeline and the Cloudflare
-/ DO credentials CI needs are in [deployment.md](./runbooks/deployment.md). This section
-covers what *this repo* ships.
+The [smoke production spec](./technical/smoke-production-spec.md) is the sole
+adopted deployment design and is not yet shipped. This section records component
+boundaries and the separate D13 network-topology decision; it does not provide
+deployment commands, credential setup, or an alternative smoke lifecycle.
+Use [release policy](./technical/release-runbooks.md) for release gates and
+create an exact-SHA runbook when a release is scheduled and the required tools
+exist.
 
-**CI & smoke — single box**, `docker-compose.yml`:
+The repository's Compose topology contains Postgres, API, static web server,
+and worker services (§7). The adopted design owns how those services are
+prepared, checked, replaced and kept running. Its credentials and target
+identity rules are in smoke-production-spec §§3–5.
 
-- `postgres` + `api` + `website-server` + the three worker lanes (`worker-swarm`
-  / `worker-analytics` / `worker-research`, §7). `website-server` (a plain
-  `nginx:alpine`, issue #892) serves the static frontend and proxies `/api/` +
-  `/health` to `api`, so the pair still present as **one origin, no app-level
-  proxy needed by the client**. Its bind mount (`/srv/frontend`) is `_static/`,
-  an **assembled** directory (`scripts/static-assembly.sh`: `frontend/public`
-  plus the per-route `<route>/index.html` `scripts/prerender.ts` writes from
-  `seo.js`'s table), not the raw source tree — so a plain `curl` of any sitemap
-  route returns that route's own `<title>`/`og:*` and link unfurlers stop
-  reading every URL as the home page (D29). `scripts/stack/stack.ts`'s `up()`
-  runs the assembly before `docker compose up`; a hand-run `docker compose up`
-  needs `bun run static:assemble` first.
-- **DB modes** are driven by `DATABASE_URL` + the postgres volume:
-  - *ephemeral* (CI): throwaway, `docker compose down -v`.
-  - *smoke*: named `pgdata` volume persists across restarts.
+The production DNS, vendor and service placement recorded by D13 is described
+under [Network topology](#network-topology--dns-origins--vendors). That decision
+does not change the adopted deployment mechanism. D13 is the accepted target
+topology, not evidence that the current host matches it; verify deployed state at
+the release commit.
 
-**Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
-credentials in [deployment.md](./runbooks/deployment.md)):
-
-- **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
-  (`swarm.robotmoney.net`); `website-server` co-serves this surface's SPA
-  assets at the subdomain root (issue #892), proxying `/api/` through to `api`.
-  Cloudflare-proxied; a DO Cloud Firewall limits ingress to Cloudflare IPs.
-- **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
-  (no `postgres` container).
-- **Static tier** — marketing's intended end-state is a **DO Spaces CDN** on the
-  apex/`www`, served separately from `api` (D13). It is not wired yet, so the
-  **cutover host for `robotmoney.net` is the assembled `STATIC_DIR`**, now
-  served by `website-server` rather than the `api` process itself (D29,
-  [deployment.md](./runbooks/deployment.md) §2.1); the Spaces migration
-  uploads that same assembly and inherits its prerender.
-- **Config**: the only required env var is `DATABASE_URL`. The frontend's only
-  input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
-  Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;
-  Anthropic/FRED API keys are reserved — not currently consumed by any code.
-- **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
-  CA cert).
-
-**Preview mode — no-backend static hosting for development.** Independent of both
-hosted shapes, preview is pure static files (D19): pushes to `preview/**`
-branches deploy a per-branch URL on Cloudflare Pages, and `bun run preview`
-serves the same composed deploy directory locally on a random free port. In both
-cases the client-side wrapper (`preview/preview.html`) runs the live SPA in an
-iframe and answers every `/api/*` call from committed goldens
-(`goldens/api-goldens.json`) — no backend, no server-side mocking. Mechanism in
-§4 "Preview mode (goldens-backed, no backend)"; workflow + fidelity caveats in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md).
-
----
+**Preview mode** is a development surface backed by checked-in API goldens. Use
+the local preview instructions in §4 and [CONTRIBUTING.md](../CONTRIBUTING.md)
+for the current workflow. Preview hosting does not determine production
+deployment behavior.
 
 ## 9. Investment Swarm (feature architecture)
 
@@ -1151,14 +1120,13 @@ so a deployment with the consensus judge off never enters it — §9.7.)
   the takes actually posted**; absences recorded as absent. **No host-authored takes.**
 - `swarm.publish` — mark the session visible via API + frontend.
 
-The five `swarm.*` cron rows are **environment-configurable** (issue #208):
-`SWARM_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
-sequence, plus a `SWARM_*_CRON` variable per kind and `SWARM_WINDOW_MINUTES`
-for the submission-window length. Production explicitly enables the daily
-06:00–10:00 UTC sequence; staging may accelerate the cadence; repo smoke/e2e stays
-disabled (the smoke drives lifecycle jobs itself via the admin enqueue-job endpoint,
-unaffected). Re-running the migrate/seed step applies a changed value to the
-existing `job_schedules` rows, not just a fresh database.
+The five `swarm.*` rows schedule sessions independently of whether this host
+runs any in-house participants; third parties may supply the entire roster. The
+adopted deployment design enables these rows through an explicit production
+initialization step. A normal boot or restart does not change schedule state.
+The older `SWARM_SCHEDULES_ENABLED` environment switch and host-driven enqueue
+path describe legacy implementation and are not the target mechanism. See
+[smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
 
 #### 9.4.1 Agent health
 
@@ -1230,1178 +1198,51 @@ members do not receive it. Consumer schedules are disabled and legacy queued
 analytics jobs are dead-lettered. Admin retry/toggle/rerun/enqueue operations and
 the retired research-eligibility endpoint fail closed, so no supported consumer
 path can substitute for the producer. Remaining legacy handler/lane code and the
-smoke TUI's queue-based analytics display are compatibility/observability debt,
-not active producer paths.
-
-### 9.7 The consensus judge — math decides, the judge explains
-
-A session's allocation vector is computed by `meanTakeWeights()`
-(`backend/src/swarm/domain.ts`) from the frozen latest-revision-per-member take
-set, and by nothing else. The consensus judge (`backend/src/swarm/judge.ts`,
-issue #752) reads that same frozen set plus the session brief and authors three
-things — a rationale, the disagreements it finds in the takes, and a
-release-safety opinion. **It authors no number.** A model response carrying a
-weight-like field at any depth is rejected whole rather than merged, and the
-`swarm_session_judgements.opinion` column carries a recursive
-`jsonb_path_exists` CHECK constraint that would refuse one — at any depth, not
-merely at the top level — even if the code that writes it were wrong. The
-constraint matches the key names exactly and case-sensitively; the code's scan
-additionally lowercases and folds separators, so the code is the broader of the
-two. That is what keeps the signed vector reproducible by anyone holding the
-take set.
-
-| Concern | Where it lives |
-|---|---|
-| The derivation | `meanTakeWeights()` — the one place a bucket weight may be authored |
-| The opinion | `judge()` — pure, transport injected, never throws |
-| The session seam | `judgeSession()` — takes the config the caller read, records the judgement, applies it only in `enforce`; everything after the model call is one transaction under a per-session advisory lock |
-| The switch | `swarm_judge_config` (migration 0039), over `POST /api/swarm/admin/judge` — mode, `min_takes`, and the model |
-| The record | `swarm_session_judgements` — one append-only row per run, shadow runs included |
-
-**The deleted `position_actions` literals.** Aggregation used to emit two
-hardcoded USDC/rmUSDC entries derived from no member input; #752 deletes them, so
-no session aggregated from now on carries an `actions` array. Sessions PUBLISHED
-BEFORE that still carry them in their stored `swarm_recommendation.actions`, and
-that history is append-only and is not rewritten — recomputing a published
-recommendation is a worse defect than the one being fixed. The consequence is a
-hard constraint on the receipt assembler: **a receipt must never read
-`swarm_recommendation.actions`.** The field is legacy data on old rows and absent
-on new ones (`contract/src/swarm.d.ts` marks it as such in prose and
-declaration). The public session page renders any legacy array with an explicit
-pre-#752 label — "not swarm-derived" — rather than as current swarm output
-(D42, `frontend/public/views/swarm/session.html` +
-`frontend/public/assets/js/app/alpine/static-views.js:recommendationActions()`).
-
-**The switch is a database row, not an environment variable.** The swarm is live
-and producing real takes on a cadence, so an operator must be able to take the
-judge off published sessions without restarting the api and the swarm lane. So
-is the MODEL: D22 rule 1 keeps model selection to a single reviewable signal, so
-there is deliberately no `SWARM_JUDGE_MODEL` beside `AGENT_MODEL` — only the
-shared OpenCode Zen credential, the endpoint and the per-call bound come from
-the environment.
-Three modes: `off` (shipped default — pre-#752 behaviour to the byte, and the
-`judged` state never appears), `shadow` (the opinion is computed and recorded and
-reaches no session), `enforce` (the opinion replaces the template
-rationale/disagreements on the session it judged).
-
-**The switch needs something to switch: `swarm.judge` is on the session cadence**
-(issue #767). #752 shipped the handler, the per-session enqueue endpoint and the
-admin button, but nothing SCHEDULED a judging — so a session was judged only when
-a human asked for one, and moving the mode row to `shadow` changed nothing about
-what the swarm did on its own.
-
-**BOTH session-creation paths schedule it, because they are genuinely different
-schedulers.** This is the trap the first attempt fell into: fixing one of them
-looks complete and leaves production untouched.
-
-| Path | Who takes it | How the judging gets queued |
-|---|---|---|
-| `createSessionAdmin` (`POST /api/swarm/admin/sessions`) | the admin form | all five jobs enqueued up front, at `run_after` instants derived from the session's own timestamps |
-| `scripts/lib/swarm/session.ts` — the HOST DRIVER | production, whenever `SWARM_SCHEDULES_ENABLED = "0"` (see `scripts/lib/smoke-schedule.ts`) | `runJudgeStep()` enqueues `judge` over `POST /api/swarm/admin/enqueue-job`, between the `aggregate` it just watched land and the `publish` it is about to queue |
-
-On the admin path, `createSessionAdmin` now enqueues FIVE session-scoped jobs,
-not four: `swarm.judge` sits between `swarm.aggregate` and `swarm.publish`,
-dedupe key `swarm:<session-id>:judge` like every other. Ordering is carried by
-`run_after` and the queue's `ORDER BY priority DESC, run_after`, not by a guess
-at how long aggregation takes. BOTH intermediate instants are clamped downward
-from `publish_at`, not just the judge's: validation guarantees only
-`windowClosesAt < publishAt`, so on a window narrower than the one-second offsets
-assume, clamping the judge alone pulled it BELOW the aggregate and inverted the
-one pair whose order is the point.
-
-The host driver has no such instants to order — it opens a session with
-`open_session` (and `domain.openSession` enqueues NO jobs at all; it only INSERTs
-the row) and then enqueues each step by hand as the previous one lands. So
-`runJudgeStep()` orders the judging the way that driver orders everything else:
-by WAITING. In `shadow`/`enforce` it blocks on the session reaching `judged`
-before the publish is queued, because `publishSession` is an unconditional
-`UPDATE ... SET state='published'` while the judge needs `aggregated -> judged`
-to still be legal when its model call returns up to a minute later — queue both
-back to back and the publish wins, the transition is refused, the whole judging
-transaction rolls back, and the soak records nothing. At the shipped `off` it
-waits for nothing (a disabled judge never produces `judged`), and an expired wait
-publishes anyway and says so: publishing is that driver's job, and a slow judge
-must not wedge the cadence behind it. That log line names the judge job id and
-whether a judgement row exists, because on this topology an expiry is more often
-a refused or still-queued judging than a slow one, and a message that asserts
-"slow" is usually asserting the wrong thing.
-
-**REQUIREMENT: exactly one `swarm`-lane worker** (issue #806). Everything above
-about ordering is a CLAIM-order property, not an execution-order one.
-`FOR UPDATE SKIP LOCKED` hands `swarm.judge` to one worker and `swarm.publish` to
-another the instant both are due, and the judge holds its worker for up to 60s
-on the model call — so with two `worker-swarm` containers the publish overtakes
-the judging on the ADMIN cadence, and the host driver's wait is the only thing
-still ordering it. Today this holds by construction: `docker-compose.yml`
-declares one `worker-swarm` with no `deploy.replicas`, and no `--scale` appears
-anywhere in the repo. It is stated here as a requirement rather than left as an
-accident of the compose file. Scaling the swarm lane requires making the
-judge/publish ordering independent of worker count first.
-
-**With the mode `off`, the scheduled judging is a SKIP, not a degradation.**
-`judgeSessionAdmin` answers `{ ok:false, error:"judge_disabled" }`, and that is
-exactly the shape `worker/loop.ts`'s `isDegradedResult()` matches — so putting the
-judge on every session's cadence would, at the SHIPPED DEFAULT, have written a
-`degraded` job_run and retried with exponential backoff on every session before
-settling. `backend/src/worker/handlers/swarm.ts` therefore translates that one
-error into a truthy `{ skipped: "judge_disabled" }`, which the loop records as a
-single clean `succeeded` run naming the reason. `off` is an operator's answer, not
-a transient blip a retry can fix. The HTTP path keeps its 409: there a caller
-asked for a judging and must be told it cannot have one.
-
-**And so is every other benign terminal — but ONLY the terminal ones** (issue
-#806). #767 translated exactly one error; measured against a real Postgres
-driving the real claim loop, `terminal_state:cancelled` and
-`terminal_state:published` each wrote FIVE `degraded` runs before `max_attempts`
-settled the job. Cancelling needs no race at all — `cancelSessionAdmin` is a
-bare `guardedTransition` and nothing dequeues a session's remaining lifecycle
-jobs, so cancelling during a soak reliably produced five red rows for a control
-working as designed.
-
-The test is **"can a retry change the answer"**, not "is it an error", and it is
-the only test applied. So the judge's seam translates `judge_disabled` and
-`terminal_state:*` and **no `illegal_transition` at all**, while the rollup's
-translates `terminal_state:*` plus `illegal_transition:judged->aggregated` — the
-one source state from which a re-delivered aggregation is a step already taken.
-
-**A non-terminal source state must keep retrying, and this was got wrong once.**
-An earlier cut translated `illegal_transition:*->judged`, which is wrong for
-`window_closed`, `collecting` and `scheduled` alike. The sequence it lost needs
-no race: `aggregate` is due one second before `judge`, fails ONCE (the rollup is
-~6 statements), and backs off past the judge's instant; the judge then finds the
-session still `window_closed` and settles `succeeded` on attempt 1 with zero
-degraded runs. The aggregate retries and succeeds, the session publishes, and
-there is no judgement row and nothing to re-enqueue — `dedupe_key` is unique
-across all time and that job is terminal. Untranslated it self-heals and stays
-visible while it does. Retrying a recoverable misordering is not queue noise; it
-is the mechanism that makes the lifecycle self-heal, and translating it away
-converts a loud, temporary failure into a silent, permanent one.
-
-`isDegradedResult()` itself is untouched — the translation lives at the seam
-that knows nobody asked.
-
-**Flipping the mode off `off` returns the residual hazards, and only those**
-(issue #806). `POST /api/swarm/admin/judge` answers with a `warnings` array,
-audited alongside the change, naming what is STILL true once the judge is on:
-that ordering assumes exactly one `swarm`-lane worker, and — in `enforce` only —
-that an applied opinion is not permanent, because the sanctioned
-`judged -> window_closed -> aggregated` re-run discards it. Both are design
-trade-offs rather than defects, and the list is deliberately short: everything
-else #806 found is fixed, and a warning that lists fixed problems trains an
-operator to skip warnings. A later change that closes one of the two deletes the
-line rather than leaving it standing.
-
-**The driver's JUDGE enqueue is deduplicated — and only that one** (issue #806).
-`POST /api/swarm/admin/enqueue-job` inserts `swarm:<session-id>:judge`,
-answering a suppressed insert with the job that already exists (`deduped: true`)
-rather than with `undefined`. Two `judge` enqueues for one session — what a
-driver restart that re-adopts an in-flight session produces — therefore leave one
-job and one judgement row; the advisory lock serializes concurrent judgings but
-does not deduplicate them, and `judged -> judged` is idempotent success. Manual
-re-judging is `force: true`, which enqueues with no key, and the key is
-deliberately STICKY across terminal states: treating a `succeeded` judge job as
-re-enqueueable would hand a re-adopting driver a second judging of a session
-already judged.
-
-The other four lifecycle actions carry **no** key from this endpoint, and must
-not. `jobs_dedupe_key_idx` is `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL`
-across the whole table **including terminal rows**, so a key makes a job that
-once died permanently un-re-enqueueable — `worker/handlers/repair.ts` documents
-the same hazard and carries no key for the same reason. On `close_window` that
-wedges the subject rather than merely losing a step: the job goes `dead`,
-`openSession` keeps returning the same still-`collecting` session, every later
-re-enqueue is suppressed, and `waitForSessionState` times out on every pass. The
-judge is the one action that can carry a key safely, because it is the one step
-whose absence the driver tolerates by design.
-
-**The soak has a read path** (issue #767, folded from #768).
-`GET /api/swarm/admin/sessions/:id/judgements` returns every judge run for one
-session, newest first, plus `inForce` — the opinion currently on the session,
-decided by `latestJudgement()` and its `ORDER BY id` and by nothing else. Each
-row carries mode, source, `fallback_reason`, model, `prompt_hash`,
-`inputs_digest`, `take_count`/`min_takes`, the drop counts, the opinion, and
-`applied`. The admin session page renders it for EVERY session, not only
-`judged` ones: a `shadow` run records an opinion and deliberately never moves
-the state, so gating the panel on `judged` would hide the entire soak. The route
-is privileged like the rest of `/api/swarm/admin/*` — a shadow opinion is
-model-authored prose about named members that the mode exists to keep OFF the
-public session page, and serving it unauthenticated would publish through the
-read path exactly what the mode withholds.
-
-**`applied` is a fact on the row, not an inference from the mode.** In `enforce`
-the write onto the session is conditional (see above). `applyOpinion()` runs
-BEFORE the INSERT — same transaction, same advisory lock, so atomicity is
-unchanged — and the row records `applied` and, when false,
-`applied_skipped_reason`. Migration 0041's CHECK refuses a `shadow` row that
-claims either.
-
-**A REFUSED ENFORCE JUDGING LEAVES NO ROW AT ALL** (issue #806, correcting the
-#767 text that stood here). It is a rollback, not a row saying so.
-`judgeSessionAdmin` — `judgeSession()`'s only production caller — always passes
-`beforeRecord = transitionWithin(…, "judged", …)`, which runs first inside the
-judge's transaction, under its advisory lock, holding the session row `FOR
-UPDATE`. Its admitted set `{aggregated, judged}` is a strict SUBSET of
-`OPINION_WRITABLE_STATES`, so a session that published mid-flight is refused by
-the GATE; the refusal throws `JudgeRollback`, the transition does not survive,
-no judgement row is inserted, and the soak records nothing.
-
-**`applied` IS READ BACK, NOT COUNTED** (issue #806). Left as a row count,
-`applied` restated `mode` for every producible row — the UPDATE's `WHERE` clause
-repeats a state test the gate above already made unfailable, so
-`applied ≡ mode === 'enforce'`, `applied_skipped_reason` was never non-null, and
-the admin panel's `"recorded, NOT applied (…)"` branch was unreachable. It is
-now established the way the read path establishes it: after the UPDATE,
-`applyOpinion()` SELECTs `swarm_recommendation->'judge'` straight back inside the
-same transaction and compares its `prompt_hash`/`inputs_digest` against this
-outcome's. `applied = true` therefore means "the session row carries THIS
-opinion", which is what the panel has always claimed it means. One definition
-(`sessionJudgeFingerprint()`) serves both the writer and the read path, so the
-two cannot drift.
-
-**`inForce` reconciles against the session, and reports SUPERSEDED** (issue
-#806). `latestJudgement()` still decides which ROW is newest, but newest-row is
-not "what the session carries": the append-only record and
-`swarm_sessions.swarm_recommendation` are two stores, and the sanctioned
-`judged -> window_closed -> aggregated` re-run rewrites the second without
-touching the first — `domain.aggregateSession` replaces the recommendation
-wholesale, taking the judge's `rationale`, `disagreements`, `release_safety` and
-fingerprint with it. `GET …/judgements` therefore reads the session's own
-fingerprint once and returns it as `sessionJudge`, and stamps every row with
-`carriedBySession` plus a `supersededReason`
-(`recommendation_overwritten` | `session_carries_a_different_opinion`). The panel
-renders "applied, then SUPERSEDED — the session no longer carries it" instead of
-"applied to the session".
-
-**`swarm.aggregate` is state-guarded like every other transition** (issue #806).
-`domain.aggregateSession` is the rollup and has no state opinion; it used to be
-reachable straight from the `swarm.aggregate` handler and from the admin
-dispatcher's `aggregate` action, so a re-delivered job overwrote a judged or
-published session's prose from ANY state, outside the judge's advisory lock.
-Both now go through `aggregateSessionAdmin`, i.e. `guardedTransition`, which
-refuses `judged -> aggregated` and anything out of a terminal state. The
-deliberate two-step re-aggregation is unchanged and still drops the judge's
-prose — that loss is by design, and it is the one the read path reports.
-`applied_skipped_reason` is NOT a `fallback_reason`: the opinion is intact and
-was formed from the model, it simply arrived after the door closed.
-
-**Turning it on needs no redeploy and no re-scheduling.** The mode is a database
-row and the judging is queued unconditionally on both paths above — the admin
-path puts the job in the queue at creation, and the host driver enqueues it on
-every session it runs regardless of the mode — so flipping `off` → `shadow` is
-one UPDATE and changes the next session's behaviour with nothing restarted and
-the driver not even reloaded.
-
-**What #767 left behind is a PATH gap, not a temporal one.** Sessions the admin
-form created BEFORE #767 shipped carry only the original four jobs; that set is
-frozen, so those specific sessions will never be judged on their own. The remedy
-is the existing idempotent one — re-run session creation while the session is
-still `scheduled`, which inserts the missing `swarm.judge` row and no others
-(`ON CONFLICT (dedupe_key) DO NOTHING`) — or judge them over the admin POST.
-Driver-created sessions have no such backlog: the driver enqueues the judging
-inside the run, so every session it starts from now on has one, and no session it
-started before has one no matter how long anyone waits.
-
-**Failure is a REFUSAL, and records nothing.** (Changed 2026-09-19, issue #969.
-This paragraph used to read "Failure is an outcome, never an error", and
-described every failure below falling back to the SAME template producers the
-aggregator uses, recording the reason on the judgement row, and letting the
-session carry on. That kept a flaky model from blocking a live session — and
-bought it by recording the aggregator's own sentences AS THE JUDGE'S, which a
-consensus receipt then signed as an opinion the session adopted. The only thing
-telling such a row from a real judgement was one column nothing read. A judge
-that cannot reach a model has not judged.) There is NOTHING TO JUDGE —
-`JudgeNothingToJudgeError`, not a failure, nothing to retry — for a session with
-no takes at all (`no_takes`) and one where **every** take is stance-only so
-there is no member-authored sentence to quote (`no_take_bodies`); neither
-records a judgement. EVERY other path throws `JudgeUnavailable` carrying a
-bounded reason, in four groups an operator fixes in four different places.
-CONFIGURATION, i.e. no model was called at all: no model on the judge config row
-(`model_unconfigured`), no OpenCode Zen credential in the process that must call
-it (`credential_unconfigured` — an absent or empty `OPENCODE_API_KEY`), a model
-id THIS ENVIRONMENT MAY NOT USE (`model_disallowed`) — the free family anywhere,
-or anything but the pinned acceptance model on an acceptance path (AC-MODEL-01,
-`backend/src/swarm/judge-model-policy.ts`), asserted at the point of USE and not
-only where the config row is written, because `setJudgeConfig()` is not the only
-writer that row has ever had and a restored backup or a psql session must not be
-able to point a production judge at a keyless model — and **a malformed
-`SWARM_JUDGE_TIMEOUT_MS` in the environment** (`invalid_timeout_config:…`), an
-operator error on a value the documented boot passes into the swarm lane. THE
-ACCOUNT OR THE RAIL, i.e. something answered but no model was reached: an
-unfunded workspace, a `402` or any body naming credit/balance/quota
-(`credit_exhausted`), a revoked or wrong key, a `401`/`403` that does not
-complain about the model (`credential_rejected`), an id this endpoint does not
-serve, e.g. the `opencode/`-prefixed selector Zen answers with `401 ModelError`
-(`model_not_supported`), and the RAIL that carries the call rather than the
-model or the key (`launcher_unavailable`, issue #1012) — the `agent-launcher`
-service was unreachable, answered non-2xx or unreadably, or reported that the
-judge container never launched, hung past its ceiling, or exited without one
-well-formed answer line; it is its own reason because its operator fix is
-neither "re-issue the key" nor "wait for the vendor" but "look at the one
-service in the stack that holds the Docker socket". THE MODEL WAS ASKED AND DID
-NOT ANSWER USABLY: the request timed out (`model_timeout`), the transport
-refused for a reason that is NOT credit, credential, model id or launcher — a
-5xx, a network error, an unreadable answer (`model_unavailable:…`), an empty
-answer (`empty_response`), prose instead of JSON (`not_json`), JSON of the wrong
-shape (`malformed_json`, `not_an_object`, `missing_rationale`,
-`missing_disagreements`, `too_many_disagreements`, `malformed_disagreement`,
-`malformed_position`, `missing_release_safety`, `malformed_release`,
-`malformed_concerns`), more than `MAX_POSITIONS` = 20 positions inside one
-disagreement (`too_many_positions`), the same member named twice inside one
-disagreement (`duplicate_position:<id>`), a disagreement attributed to a member
-who did not submit (`unknown_member:<id>`), a weight-like field anywhere in the
-response (`weight_like_field:<path>`), and anything else thrown while parsing
-(`unparsable:…`) — the response is discarded WHOLE, never stripped and never
-merged, and nothing replaces it. And TEST-ONLY, a body supplied by the
-fault-injection lever described below (`malformed_output`), which is never
-parsed and never trusted whatever it contains. `swarm.judge` fails, retries, and
-an exhausted job leaves the session unjudged: no judgement row, and therefore no
-consensus receipt, which is the honest state. Every reason is still capped at
-120 characters, the two built out of the model's own text included — it matters
-more now, not less, because the reason travels through an exception message into
-`jobs.last_error` and the admin API's error JSON.
-
-No session is BLOCKED on the judge — an unjudged session still publishes, it
-simply publishes without a judge block — and no partially-trusted model response
-ever reaches one. The durable record names WHICH refusal fired rather than the
-bare word: `judgeSessionAdmin` answers `{ error: "judge_unavailable",
-judgeUnavailableReason }`, `worker/loop.ts` persists only `error`, and
-`qualifyJudgeUnavailable()` (`backend/src/worker/handlers/swarm.ts`) folds the
-two into `judge_unavailable:<reason>` at that seam, so `jobs.last_error` and
-`job_runs` carry the class and `admin/overview.ts` raises the degraded
-`swarm.judge` run as an alert. Anything matching on the old bare word still
-matches, and `judgeSkipReason` is untouched.
-
-**THE BUDGET IS PART OF THE CONTRACT, AND THE SHARE IS THE ALARM.**
-`model_timeout` above is a runtime failure by classification and, far more
-often, a MISCONFIGURATION by cause: the per-call budget was 60 s against a
-pinned model measured at 58-175 s on a real three-take prompt, so every judging
-timed out — and under the contract that then stood, published deterministic
-prose under the judge's name with every documented check green. Two things
-follow. `DEFAULT_JUDGE_TIMEOUT_MS` (`backend/src/swarm/judge-budget.ts`) is now
-sized against the WORST measured latency — 300 s — rather than a round number,
-and `SWARM_JUDGE_TIMEOUT_MS` reaches a compose stack through the documented boot
-(`scripts/lib/smoke-compose-passthrough.ts`) rather than being interpolated from
-a variable nothing forwarded. And the FALLBACK SHARE over a 7-day window
-(`JUDGE_FALLBACK_LOOKBACK_DAYS`) is still reported, by `postflight.ts`'s
-`judge-source` check and by `admin/overview.ts`'s `swarm.judge_fallback` alert,
-both through the one rule in `summarizeJudgeSources()`: report always, fail only
-at 100 % (the fusion QA plan's D15, which is a different decision from
-[decisions.md §D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
-cited elsewhere in this document). Read it as HISTORY, not as a live rate: under
-the refusal contract nothing writes a `source = 'fallback'` row any more, the
-judgement table is append-only, and the rows that remain are the pre-#969 ones.
-A window that is 100 % fallback is a stack that has never once reached the model
-and is therefore not producing acceptance evidence, whatever else is green. The
-LIVE signal for a judge that cannot reach a model is the degraded `swarm.judge`
-run and its `judge_unavailable:<reason>`, which is what the stage rehearsal
-reads when it fails fast on the judge lane.
-
-**The TEST-ONLY fault-injection lever (R13, AC-E2E-06's malformed-output
-clause).** AC-E2E-06 requires an EXECUTED demonstration of what a malformed
-judge response does — that it is recorded as a named refusal with the weight
-vector untouched — and until the lever existed the only ways to stage one were
-to hope a real model misbehaved or to edit `judge.ts`, i.e. to demonstrate a
-build nobody ships. `swarm_judge_fault_injection` (migration 0058) holds one
-row: a body, a remaining-call count, and an optional session id. When it
-applies, `faultInjectedTransport()` returns that body INSTEAD of calling the
-model, and `judge()` neither parses nor trusts it: every injected call refuses
-with `malformed_output`, no usage, no judgement row, and — the property the
-criterion is actually about — no weights, because `meanTakeWeights()` in
-`domain.ts` is their only author and a refusal writes nothing at all. A
-weight-smuggling body therefore changes nothing. Running an injected body
-through `parseJudgeResponse` would instead make the lever's outcome a function
-of which body an operator happened to paste, and a body that happened to be
-well-formed would be recorded as MODEL prose the model never wrote — precisely
-the forgery this section exists to make impossible. THREE GATES, ALL REQUIRED:
-the row is writable only through `POST
-/api/swarm/admin/judge/fault-injection`, which writes an `audit_log`
-`judge_fault_injection` row in the same transaction; the judging process must
-carry `SWARM_JUDGE_FAULT_INJECTION`, so an armed row is inert in any process
-that was not started for it; and on an ACCEPTANCE path — `RM_ENV=prod`, which
-staging and production both run and which an unset `RM_ENV` resolves to under
-D13 — arming is REFUSED (403 `fault_injection_refused`) unless the second
-explicit opt-in `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` is also present.
-Disarming is never refused. Arming it on staging is a RECORDED ACCEPTANCE
-MUTATION: while it is armed the judge is not exercising its model, so nothing it
-writes is evidence about the model, and the pair of audit rows (armed, then
-disarmed) is what bounds that window in an acceptance bundle.
-
-**What a judging COST (R19).** The provider's `usage` object — prompt,
-completion and total tokens, and the cost figure Zen reports — travels back with
-the completion text and is written to `swarm_session_judgements`'
-`usage_input_tokens` / `usage_output_tokens` / `usage_total_tokens` /
-`usage_cost_usd` (migration 0059), so a rollout can report its judge spend from
-its own rows rather than from a vendor dashboard. Every column is NULLABLE
-forever and NULL means NOT RECORDED, never zero: a provider that reports no
-usage must not be able to read as a free call. Only a model-authored judgement
-has a row to carry these at all — a refusal writes nothing, so the spend of a
-call that was made and then discarded is NOT in this table, and a spend report
-built from it is a report of judgements produced, not of money spent. Nothing
-here recomputes a price from a rate card — a spend report that quotes the
-provider is auditable, one that recomputes is a second source of truth. The
-analyst half records the same figures per member run:
-`scripts/agent/transcript.ts`'s `transcriptSpend()` reads the `step_finish`
-events out of the `opencode run --format json` stream, the authored take carries
-them as `AuthoredTake.spend`, and the per-run `manifest.json` under
-`.agents/swarm-sessions/` carries them as `spend`.
-
-**HISTORY: the one rule replaced two earlier ones.** Until #969 every path above
-fell back to the same template producers the aggregator uses (`buildRationale`,
-`buildDisagreements`), recorded a `source: 'fallback'` reason, and let the
-session carry on — bought so that a live cadence could never be blocked on the
-judge. #969 refused all of them. A later ruling (D-A7) split them in two,
-keeping the refusal for the configuration class and restoring the deterministic
-fallback for the runtime class; that split is NO LONGER the contract. Commit
-`a42d6c5a` removed the fallback producer outright, so `judge()` now has exactly
-two outcomes — a model-authored opinion, or a throw — and the enumeration above
-is a single list of refusals. The cost the split was trying to recover was never
-recoverable: a fallback opinion travelled the ordinary write path, so it reached
-the same row, the same `judged` transition and the same **signed** consensus
-receipt as a real one, attributed to the judge, and nothing downstream could
-tell the two apart. In production nothing did — `swarm_judge_config` sat at
-`mode = 'enforce'` with `model = NULL`, a transport could never be built, and
-every enforce-mode opinion the system published was a template wearing the
-judge's name. A judge outage now stalls sessions unpublished, which is visible
-and recoverable, instead of publishing signed attestations of prose no judge
-authored, which is neither.
-
-`source = 'fallback'` survives in the `swarm_session_judgements` CHECK and in
-the receipt schema, and nothing writes it. The table is append-only, so the
-pre-#969 rows stay readable and some of them remain embedded in receipts already
-signed and served; the read paths must keep understanding the value even though
-no new row can carry it. Migration
-`0056_swarm_judge_requires_model.sql` closes the state that produced them —
-`shadow`/`enforce` now require a model in the schema and in `setJudgeConfig()`,
-and the migration switches an already-misconfigured judge **off** on deploy
-rather than leaving it nominally on.
-
-The refusal-reason list in the "Failure is a REFUSAL" paragraph above is
-EXHAUSTIVE, and it is pinned to the source rather than
-maintained by hand: `scripts/tests/unit/judge-refusal-reasons-documented.test.ts`
-extracts every reason `backend/src/swarm/judge.ts` can produce, extracts the
-literals enumerated here, and fails if either side has one the other does not.
-It was written because this list drifted within a day of being authored.
-
-**A member cannot speak for another member.** `disagreements[].positions[].view`
-is filled VERBATIM from the frozen take set, never authored by the model — the
-model chooses who disagreed and about what, not what either of them said. Take
-bodies are member-authored text of up to 10,000 characters that the model reads,
-so a body instructing it to attribute a fabricated position to a named member
-would otherwise pass every structural defence and reach
-`swarm_sessions.swarm_recommendation`, which `GET /api/swarm/sessions/:id`
-serves unauthenticated.
-
-**A stance-only take degrades one position, not the whole opinion (#773).** A
-take `body` is OPTIONAL at submission (`backend/src/api/validation.ts`) and
-stores as NULL, so a stance-only take is ordinary member behaviour. Because
-`view` is filled from the frozen body and from nowhere else, such a member has
-nothing quotable — so `parseJudgeResponse()` DROPS that `positions[]` entry (and
-the disagreement, if it was that entry's only one) and keeps the rest of the
-response. It used to throw `member_without_take_body:<id>`, which discarded the
-rationale, every other disagreement and the release-safety opinion with it: one
-stance-only take silently reverted an `enforce` swarm to template prose for that
-session, with the only signal a `fallback_reason` on a table with no product
-read path. Dropping is not a weakening of the rule — a bodyless member still
-never appears over model-authored text; the model is simply no longer able to
-disable the judge by citing one. The one whole-response case that remains is a
-session where EVERY take is stance-only, which never reaches the model at all
-and refuses with `no_take_bodies`.
-
-**And the drop is COUNTED** (issue #767). `swarm_session_judgements` carries
-`dropped_positions` and `dropped_disagreements` (migration 0041), filled by
-`parseJudgeResponse()` through an out-parameter. They are counts and NOT a
-reason: `source` stays `'model'` and `fallback_reason` stays NULL, because the
-response was used. Without them a model that named few disagreements and a model
-whose output was trimmed produce identical rows, and an operator grading a
-shadow soak has to re-read the take set by hand to tell them apart. The dedupe
-slot that refuses `duplicate_position:<id>` is claimed AFTER the drop, not
-before: it exists to bound the write amplifier (#771), a dropped position stores
-no bytes, and claiming it first made the two rules order-dependent on each other
-while making `duplicate_position` unreachable for exactly the ids that cost
-nothing.
-
-**One judge at a time, and `judged` never outruns its evidence.** The model call
-happens outside any transaction; everything after it — the state transition, the
-judgement row, and (in `enforce`) the opinion's effect on the session — is a
-single transaction under `pg_advisory_xact_lock` on the session id. The admin
-POST runs in the api process while `swarm.judge` runs in worker-swarm, so
-concurrent judging of one session is a real case, not a theoretical one. The
-write onto the session is conditional on it not being terminal, so an opinion
-formed while a session was publishing is recorded and reported rather than
-landing on a published session.
-
-**The take window is frozen from `aggregated` onward.** `TAKES_AMENDABLE_STATES`
-in `swarm/domain.ts` is an allowlist, so `judged` — and any state added after it
-— freezes amendment by default. The alternative, a list of states to refuse, is
-what let `judged` silently reopen a window over a take set the published weight
-vector had already been derived from.
-
-**Thin support is arithmetic, not opinion.** A session with fewer than
-`swarm_judge_config.min_takes` takes is flagged `thinly_supported` by
-`releaseSafety()` regardless of what the model said, and the threshold in force
-is recorded on the judgement so a historical opinion can be read against it.
-
-**Pinned inputs.** `prompt_hash` digests the instruction template (which judge
-wrote this) and `inputs_digest` digests what the recorded opinion was derived
-from (what it read). Together they reproduce the rendered prompt byte-for-byte.
-
-**`inputs_digest` is a claim about everything the recorded opinion was derived
-from — not about the model prompt's bytes** (issue #765). The two readings give
-different digests and the choice is recorded here because it is a design
-decision, not an implementation detail. The prompt-bytes reading is what
-`canonicalizeJudgeInputs()` implemented through #757: the brief and the frozen
-take set, which is the model path's input set exactly. It loses on the **shipped
-default**. `swarm_judge_config.model` defaults NULL (migration 0039) and
-`resolveJudgeTransport()` returns null without a model, so every judgement a
-default deployment wrote was `source='fallback'` (a default deployment now
-writes no judgement at all — it refuses with `model_unconfigured`; the digest
-still has to cover the derivation, because the pre-#969 rows are append-only and
-`templateOpinion()` still authors the aggregator's own prose), and
-`templateOpinion()` derives
-that opinion from `subjectLabel`, `byStance`, `meanConfidence`, the regime
-composite and `min_takes` — none of which the prompt-bytes digest covered. Two
-rows could carry an identical `prompt_hash` and an identical `inputs_digest` and
-still legitimately carry different `opinion` prose. The digest exists so an
-auditor can say "given exactly these inputs, this recorded opinion follows"; a
-digest whose meaning on the default path is "nothing" does not let anyone say
-that, so `canonicalizeDigestInputs()` covers the derivation on **both** paths and
-`canonicalizeJudgeInputs()` is now only the prompt payload — a subset, embedded
-verbatim, built from the same function, so the prompt's field list exists once
-and the two forms cannot drift.
-
-Three consequences, each deliberate. **The prompt did not widen with the
-digest**: the model is still shown the brief and the takes and nothing else,
-because handing it `min_takes` invites it to reason about a threshold "thin
-support is arithmetic, not opinion" keeps out of its hands. **`min_takes` now
-moves the digest**, reversing the pre-#765 assertion that it must not — that
-assertion was the prompt-bytes reading in miniature ("not an input the model
-reads"), and under the derivation reading it plainly is one, since `release`,
-`thinly_supported` and `concerns[0]` are computed from it. **The digest still
-binds no more than the derivation**: `regime_summary` is digested as the single
-`composite_percentile` the templates read rather than whole, and `member_name`
-is read from the frozen `swarm_session_members` snapshot rather than live from
-`swarm_members.name`, so a member rename — which migration 0032's header names
-as normal permitted operation — no longer moves the digest of an unchanged take
-set. `swarm_session_judgements` is append-only (migration 0032/0040) and nothing
-rewrites rows: a judgement written under the old canonical form is verifiable
-only under the rule in force when it was made. Because `mode` ships `off` and
-`judgeSession()` refuses with `judge_disabled` in that mode, no such row exists
-on a deployment that has not deliberately turned the judge on.
-
-**The replay audits published history; it does not re-state its own
-preconditions** (issue #766). `replaySessionJudge()` runs over an
-already-published session and writes nothing — no judgement row, no session
-update, no repair — so real history (absences, thin quorums, superseded
-revisions, rotated keys) can be audited against the properties the receipt
-rests on. `bun run --cwd backend swarm-judge:replay [--limit N] [--session
-<uuid>] [--json]` is that, as a command an operator can point at a production
-database with a read-only role.
-
-Until #766 it checked one thing and it was worthless: it read
-`swarm_recommendation.weights`, called `judge()` — which writes nothing — then
-re-read the SAME COLUMN and compared the two. A value compared against itself
-across a call that cannot write is TRUE BY CONSTRUCTION; the only defect it
-could ever report was `judge()` starting to write, and this section presented it
-as the evidence that judging never moves a vector against real history. It was
-not evidence of anything. What the tool proves now, four assertions kept
-separate because they fail for different reasons:
-
-| Assertion | What it establishes | Effect on the exit code |
-|---|---|---|
-| **Reproducibility** — stored `weights` vs `meanTakeWeights()` over the session's CURRENT frozen take set | D4 puts the signed number on `meanTakeWeights`, so this is "anyone holding the take set can recompute the vector" — the property the receipt rests on, and the one nothing asserted against real history before. It is the check that would have surfaced the `judged`-state amendment defect PR #757 fixed | `MISMATCH` → non-zero |
-| **The judge wrote nothing** — the column, byte-identical either side of the `judge()` call | Kept, and named for what it is: a guard on THIS path, not a fact about history. Worth having, not the headline | written → non-zero |
-| **D42 tie-break drift** — published sessions whose stored TEMPLATE rationale names a majority the fixed ladder would not elect | The enumeration D42 promises (see below). Deliberately reported and not repaired | none — reporting only |
-| **inputs_digest reproducibility** (issue #829) — the session's latest judgement's stored `inputs_digest` vs a fresh recomputation over the same frozen set | The claim `inputs_digest` exists to let anyone check: "given exactly these inputs, this recorded opinion follows". Until #829 the tool printed the recomputed value and never compared it to the stored one at all — a printed column that reads as a check that ran. See D44 for the `digest_scheme` discriminator this needs | `mismatch` (current scheme) → non-zero; `historical_divergence` (an earlier scheme) → none, reporting only |
-
-A session carrying no vector legitimately — a `position_actions` subject, or a
-`bucket_weights` session in which no member filed one — reports `n/a`, not a
-mismatch. The two vectors are compared CANONICALLY (sorted by bucket) rather
-than bytewise, because `jsonb` does not preserve key order and a bytewise
-comparison would be asserting a Postgres storage detail alongside the property;
-the weights themselves are still compared exactly, so a rounding change fails as
-loudly as a missing bucket.
-
-**D42's affected set is enumerated by the same command.** D42 says the published
-sessions affected by the `majorityStance()` tie-break fix are "identified and
-reported" rather than rewritten; `listRationaleLadderDrift()` is the reporting
-half, and it prints session id, date, subject and BOTH rationale strings.
-Read-only by design: append-only history is not rewritten to make a later rule
-look retroactive. It scans every published session rather than the `--limit N`
-replay window, because "the affected set" is not "the affected set among the ten
-most recent sessions", and it prints its denominators (sessions scanned, ties
-found, how many still carry the template rationale) so an empty list is legibly
-"nothing to report" rather than indistinguishable from a scan that could not
-report. Only a TEMPLATE-shaped rationale is in scope: D42's defect lives in
-`buildRationale()`, the judge never calls `majorityStance()` at all, and scoring
-model-authored prose by which stance word it mentions first would list every
-`enforce` session — a report an operator learns to ignore.
-
-Both halves are pinned by paired tests in `backend/tests/swarm-judge.test.ts`
-(§9b) — a constructed defect the tool must name AND a healthy session it must
-leave alone, for each half — because a tool that reports nothing on healthy data
-is indistinguishable from a tool that cannot report.
-
-**The replay now COMPARES `inputs_digest`, and a discriminator says what a
-divergence means** (issue #829, D44; §9c). Before #829, the script printed the
-freshly computed `inputsDigest` on every row and never once read
-`swarm_session_judgements.inputs_digest` to compare against it — the third
-instance of the shape #766 fixed, and the worst: a printed digest column reads
-as a check that ran, next to a session, in a tool whose whole purpose is
-verifying reproducibility. #808 made a divergence genuinely ambiguous on top of
-that: it widened what the digest commits to, so a judgement written before that
-change is EXPECTED to fail a raw comparison against today's formula, and one
-written after it is not. `swarm_session_judgements.digest_scheme` (migration
-0052) is the discriminator — every row is stamped, at write time, with
-`judge.ts`'s `DIGEST_SCHEME` constant — so the replay can tell them apart
-without guessing from a timestamp:
-
-- the row's own stored `inputs_digest` reproduces exactly → `reproduced`
-- it does not, and the row is stamped with the scheme this code implements
-  right now → `mismatch`, a real finding, fails the run
-- it does not, and the row is stamped with anything else (an older scheme, or
-  one this deployment has never written) → `historical_divergence`, expected
-  history, reports and exits 0 — the same split D42's drift uses, for the same
-  reason: a run permanently red on history it may not repair is a report
-  nobody reads
-
-A session never judged reports `not_applicable`, not a false mismatch. The
-recomputation uses the judgement's OWN recorded `min_takes`, not the caller's
-current config, because `inputsDigest()` covers `minTakes` (issue #765) and an
-operator changing the threshold is a different fact from a take set moving
-under a published opinion.
-
-**The consensus receipt carries the opinion, not a paraphrase of it** (issue
-#775). The receipt is the signed, publicly-anchored artifact — the thing
-`robotmoney-core` anchors and issue #754 assembles — and it is pinned by
-`contract/src/__fixtures__/consensus-receipt.*` plus the reference
-canonicalizer in `contract/src/consensus-receipt.js`, which
-`contract/tests/unit/consensus-receipt-fixture.test.ts` holds the published spec
-JSON to. The canonicalizer is **shipped code, not a test helper**, for one
-reason: a cross-repo pin whose only executable form lives inside a test file
-cannot be imported by the assembler that has to reproduce it. Its `judge` block
-is **`JudgeOpinion` field for field** — `{rationale, disagreements,
-release_safety}` — plus `source`, so "the receipt says what the judge said" is
-checkable rather than asserted. The 1.0 draft was written before #752 shipped
-and disagreed with the judge in three places; all three are resolved
-deliberately.
-
-- **`judge.consensus` is dropped.** No judge produces it. Its only producer is
-  `buildConsensus()` in `swarm/domain.ts`, which restates
-  quorum/stances/mean-confidence/regime in English — and `quorum` and `stances`
-  are already carried structurally, and signed, in the receipt. Keeping it
-  would put a lossy prose copy of already-signed numbers *into* the signed
-  bytes, where it can contradict them, and would make the anchored digest
-  depend on the wording of an aggregator template. `SwarmRecommendation.consensus`
-  is unaffected; it stays on the session API surface, it just does not ride in
-  the receipt.
-- **`release_safety` is carried whole**, in the shipped `JudgeReleaseSafety`
-  shape, rather than reduced to the draft's `{safe_to_release, opinion}`.
-  `release` is member-steerable: `releaseSafety()` returns `"hold"` when
-  support is thin **or** any concern is present, and a model may add concerns
-  drawn from member-written take bodies (#767). Carrying `take_count` and
-  `min_takes` alongside the flags is what lets a verifier **recompute** instead
-  of trust — `thinly_supported` must equal `take_count < min_takes`, and
-  `release` must be `"safe"` exactly when neither thin support nor a concern is
-  present. Both recomputations are asserted on the fixtures. A later-phase
-  signer reads this field, so the receipt has to carry what that signer read,
-  in the shape it read it.
-- **`judge.disagreements[].positions` requires ONE, not two** — verbatim what
-  `parseJudgeResponse()` enforces, which refuses only an *empty* array. The
-  draft required two. A model answer naming a single member under a topic is a
-  routine parseable response: it parses, it is persisted into
-  `swarm_session_judgements.opinion`, and migration 0032 makes that table
-  append-only, so the row can never be removed. Under the draft schema that
-  session became permanently un-anchorable, and the assembler's only alternative
-  was to pad or drop the disagreement and sign bytes that no longer said what
-  the judge said. Reconciled toward the **producer** rather than the other way
-  round: a schema-side bound covers rows already in the append-only table as
-  well as future ones, whereas tightening the parser would not, and refusing a
-  whole model answer over a one-member disagreement would discard a good
-  rationale with it. `backend/tests/consensus-receipt-judge-roundtrip.test.ts`
-  runs a real one-position answer through the real parser and then through the
-  real validator, at both bounds, so the two cannot drift apart again.
-- **`judge.source` IS carried**, and the rest of the `JudgeOutcome` envelope is
-  not. `prompt_hash` and `inputs_digest` ride at the receipt's top level (they
-  pin the whole session, not just the prose) and `take_count` / `min_takes` ride
-  inside `release_safety` where a verifier needs them. `source` was omitted in
-  the draft, and that omission was wrong: `runJudge()` spreads **one** `base`
-  object — same `promptHash`, same `inputsDigest` — into both the model return
-  and the template-fallback return, and `templateOpinion()` calls the same
-  `buildRationale()` / `buildDisagreements()` the aggregator uses, so *nothing
-  else in a published receipt* separates "a model read the takes and wrote this"
-  from "the model timed out and a template produced this". The phase exists so
-  an artifact is attributable to exactly what produced it; a receipt that cannot
-  say which of two producers wrote its prose does not do that. `"fallback"` is
-  not a defect — it is the fail-closed path, and a fallback receipt is a
-  complete, valid, anchorable receipt. `fallbackReason` and `model` stay out:
-  the first interpolates model-controlled text and is operator debugging rather
-  than a public commitment, the second is deployment configuration that would
-  make the anchored bytes depend on a vendor string. Both remain appendable
-  after `source` under the minor-bump rule.
-
-**The canonical bytes are a function of the session, and of nothing else.** A
-receipt whose payload admits two spellings admits two digests, and `receipt_id`
-uniqueness is enforced on `session_id` + `subject_id` rather than on the payload
-— so a second, differently-spelled assembly is rejected while the first digest
-stands, and a verifier re-deriving the receipt from the database cannot
-reproduce the anchored bytes. Four representations that were open in the draft
-are now pinned to exactly one form each, and
-`consensus-receipt.refused-variants.json` proves each near-miss is refused:
-
-- **`created_at` is seconds-precision UTC with a literal trailing `Z`**, pinned
-  by an explicit pattern rather than `format: date-time` — which accepted the
-  millisecond form, the microsecond form and a `+02:00` offset alike. The
-  obvious producer path does *not* emit the pinned form: a pg `timestamptz`
-  read into a JS `Date` and passed through `toISOString()` gives milliseconds,
-  so the assembler must convert to UTC and **truncate** (never round) to whole
-  seconds rather than pass the driver's string through.
-- **Hex is lowercase everywhere.** `hash32` and `session_id` admitted uppercase
-  while `subject_id` was already case-pinned, so the document contradicted
-  itself. The assembler lowercases before validating.
-- **`member_id` carries `subject_id`'s pattern**, which is also what makes the
-  signature ordering unambiguous. The draft said "UTF-8 byte order" while the
-  reference used JavaScript's default `.sort()` (UTF-16 code units); the two
-  disagree for every code point above U+FFFF. The rule is now **ascending by
-  Unicode code point** — identical to UTF-8 byte order — the reference sorts
-  with `compareCodePoints()`, and over the ids the pattern admits all three
-  orders coincide anyway.
-- **String escaping is stated normatively**, not by naming a JavaScript
-  function: only U+0022, U+005C and the C0 control range are escaped; every
-  other code point, including U+2028/U+2029 and every astral-plane character,
-  is raw UTF-8, and no `\uXXXX` form appears otherwise. This matters because
-  the original golden was entirely ASCII, and the two most likely cross-repo
-  implementations diverge **by default** while still reproducing an ASCII golden
-  byte-for-byte — Go's `encoding/json` escapes `<`, `>`, `&`, U+2028 and U+2029
-  unless `SetEscapeHTML(false)` is called, and Python's `json.dumps` escapes
-  every non-ASCII code point unless `ensure_ascii=False` is passed. Every text
-  field in the payload is model- or member-authored free text, so an em-dash or
-  an accented name is near-certain. `consensus-receipt.escaping.json` and its
-  committed bytes carry an em-dash, CJK, Cyrillic, an ampersand, angle brackets,
-  an escaped newline and tab, a backslash, U+2028, and an astral-plane emoji;
-  the test asserts the golden contains **no** `\u` sequence at all, so every
-  escaping dialect fails there rather than in production.
-
-**Three obligations the assembler (#754) carries**, recorded in
-`consensus-receipt.canonicalization.json#assembler_obligations` because none of
-them is expressible in JSON Schema:
-
-- **Validate, then canonicalize — always.** `canonicalizeReceipt()` **throws**
-  on any undefined required field instead of emitting bytes with the key
-  missing, which a plain `JSON.stringify` would do silently. Without that, an
-  assembler that canonicalized first would anchor a digest over bytes that would
-  have failed validation. The same rule applies to the **spec** argument, which
-  is all-or-nothing (issue #784): omit it and the canonicalizer uses this
-  package's pinned constants; supply it and you are the authority for every
-  field. A complete-but-different spec is honoured verbatim — that is how a
-  consumer holding another version's spec discovers the bytes disagree — while a
-  spec missing a field is refused by name rather than completed from the pin,
-  which would otherwise emit bytes under *our* domain separator while judging
-  bucket order by *theirs*. For the same reason the fixtures subpath exports
-  only `./fixtures/consensus-receipt.*`, the conformance corpus, rather than
-  wildcarding the whole test-fixture directory into public API.
-- **`stances` is a fixed five-key set, explicitly zero-filled.**
-  `aggregateSession()` builds its rollup **sparsely** — it starts from `{}` and
-  only sets a key for a stance that actually appears — so a session with two
-  neutral takes hands the assembler a one-key object.
-- **`weights` is exactly the four canonical buckets, or absent.** The producer
-  is looser: `optionalWeights()` accepts any bucket string with no enum and no
-  count, and `meanTakeWeights()` unions whatever appears across the takes, so a
-  three-bucket vector is producible *and publicly served*. The assembler omits
-  `weights` **only** when `meanTakeWeights()` returned `undefined`, and
-  **refuses to assemble** when a vector exists but is not the canonical four —
-  so the mismatch is an operator-visible refusal rather than a signed artifact
-  asserting that a session produced no allocation while
-  `GET /api/swarm/sessions/:id` serves one for the same session.
-- **`participation_bps` is round-half-up** over the exact `submitted / active`
-  ratio — `floor(ratio * 10000 + 0.5)`, from the two integers rather than the
-  stored `participation` float. Half-up and half-even differ at exact `.5`
-  boundaries, and the rule previously existed only inside a test.
-
-**Schema `$id` and version policy.** The schema is
-`https://robotmoney.net/schemas/consensus-receipt/1.0`, and `schema_version`
-always equals the trailing segment of that `$id`. A verifier selects the schema
-by the receipt's own `schema_version`, never by "latest". **Within** a version
-the field order is immutable at every nesting level and new fields are optional
-and appended after every existing field of the object they join, so bytes
-producible under that version stay reproducible forever. A **bump is never
-retroactive**: it publishes a new `$id` and a new document, and an
-already-published receipt keeps its own `schema_version`, keeps validating under
-that version's schema, and never changes its canonical bytes or its digest. The
-anchored digest is a commitment to those exact bytes, so a receipt "fixed" by a
-bump is a different receipt at a different digest. A minor bump appends an
-optional trailing field; a major bump is anything that changes bytes already
-producible — reordering, renaming, removing or retyping a field, or changing a
-serialization, ordering, or rounding rule.
-
-**This repo pins bytes, not digests.** The golden
-`consensus-receipt.valid.canonical.txt` is the cross-repo target: the
-`robotmoney:consensus-receipt:v1\n` domain prefix, then RFC 8259 compact JSON in
-the pinned order, then a trailing newline. `keccak256` — the digest the chain
-side takes over those bytes — is not available to a zero-dependency Bun test
-(`sha3-256` is NIST-padded and different), so a digest constant committed beside
-the bytes could only ever be an unverified claim. The draft carried one, no test
-asserted it, and this reconciliation invalidated it silently; it is removed, and
-`digest_algorithm` alone records which function the consumer applies. That makes
-asserting the digest a **consumer obligation** and says so in `digest_note`:
-`robotmoney-core` (or #754, wherever a keccak256 implementation is available)
-must commit the digest of the golden beside its own code and assert it, or the
-on-chain anchor is never checked against this pin in CI.
-
-### 9.7.1 Assembling and publishing the receipt
-
-§9.7 pins the *format*; this is the code that produces one (issue #754).
-`backend/src/swarm/consensus-receipt.ts` turns one judged session into the
-payload, stores it once, and re-verifies it on every read.
-
-| Concern | Where it lives |
-|---|---|
-| The bytes, the schema, the arithmetic | **Imported** from `@robotmoney/contract/consensus-receipt` — `canonicalizeReceipt`, `validateReceipt`, `receiptSemanticErrors`, `participationBps`, `compareCodePoints`. Nothing about the format is restated in the backend. |
-| The assembly | `assembleConsensusReceipt()` — pure: no database, no clock, no configuration |
-| The database seam | `publishConsensusReceipt()` — idempotent, immutable, writes `swarm_consensus_receipts` |
-| The read | `GET /api/swarm/sessions/:id/consensus-receipt` — public, the **anchored** path: the bare canonical JSON, byte-stable, `keccak256(domain separator + body) == payloadDigest` (decision D10) |
-| The verified read | `GET /api/swarm/sessions/:id/consensus-receipt/verified` — public, the same receipt in a verification envelope re-verified per request; never anchored |
-| The trigger | `POST /api/swarm/admin/sessions/:id/consensus-receipt` — privileged, idempotent |
-| The store | `swarm_consensus_receipts` (migration 0042) — append-only **and** UPDATE-refusing |
-
-**The reference canonicalizer is imported, never re-derived.** A cross-repo pin
-whose executable form lives in two places is two pins. Everything the assembler
-adds is a *normalization the producer needs and the format does not describe*:
-`0x`-prefixing the bare sha256 hex `judge.ts` emits, truncating a `timestamptz`
-to whole seconds, zero-filling the sparse stance rollup to its fixed five keys,
-converting the float weight vector to bps, and sorting the signatures by
-`compareCodePoints`. Each is published in
-`consensus-receipt.canonicalization.json#assembler_obligations`, and the order —
-validate, recompute, **then** canonicalize — is normative, because
-`canonicalizeReceipt()` throws on an undefined required field rather than
-emitting bytes with the key missing.
-
-**A refusal, never a quietly incomplete receipt.** `ConsensusReceiptRefusal`
-carries a stable reason code that the admin route returns. The one that matters
-is `weights_not_canonical_four`: `optionalWeights()` accepts any bucket set and
-`meanTakeWeights()` unions whatever appears, so a session where every member
-submitted three buckets has a valid, publicly-served
-`swarm_recommendation.weights` schema 1.0 cannot carry. Omitting `weights` there
-would publish a signed artifact asserting the session produced no allocation
-while `GET /api/swarm/sessions/:id` serves a concrete one for the same session.
-`weights` is omitted **only** when `meanTakeWeights()` returned nothing at all.
-The vector itself is **read**, never re-derived — `meanTakeWeights()` still has
-exactly one caller — so the receipt and the public API cannot disagree.
-
-**Key rotation: the receipt embeds the key that SIGNED, not the roster's current
-one.** Every other read path in this repo resolves a take's key as
-`WHERE k.member_id = … AND k.active`, which is not necessarily the key that
-signed it — issue #697 is that defect at the per-take level and it is still
-open. The aggregate must not inherit it: a receipt is anchored on chain and
-re-verified by strangers who cannot ask what the roster looked like at the time.
-So assembly tries every one of the member's registered keys against that take's
-own signature and embeds the one that verifies; read-time verification then uses
-the embedded key and **never consults the roster**. A member may rotate,
-re-register or leave and the receipt keeps verifying exactly as it did on the
-day it was published. A signing key that is no longer registered at all is a
-refusal, not a receipt carrying an unverifiable signature.
-
-**What `verified: true` therefore means, and what it does not.** It means *each
-carried `canonical_submission` was signed by the key carried beside it* — not
-"member X endorses this". That is the deliberate consequence of never consulting
-the roster: the receipt attests to a **key**, and binding that key to a person
-was the roster's job at signing time rather than the receipt's forever after.
-
-**And it is why a key compromise has to be handled BEFORE publication.** There
-is no post-publication remedy in this design and that is worth stating plainly:
-revoking a key changes nothing a reader can see, because verification reads the
-embedded key; the row is append-only and UPDATE-refusing; and the anchored
-digest commits to those exact bytes, so a receipt cannot even be annotated.
-**If a member key is believed compromised, receipts for the affected sessions
-must not be published at all.** Adding a revocation list later would change what
-`verified` MEANS for receipts already anchored under schema 1.0, which is a
-major bump rather than an amendment. Published as
-`assembler_obligations.key_compromise_has_no_remedy`.
-
-**The embedded key must not be a low-order Ed25519 point, and that rule is in
-the PUBLISHED pin rather than only in this repo.** For the fourteen low-order
-encodings the single constant `0x01 || 0x00*63` verifies over any message, so an
-entry carrying one satisfies every structural, binding and arithmetic rule in
-the receipt while proving nothing about its member. This repo has refused such
-keys at decode time since issue #789 — but that gate is
-`backend/src/lib/signing.ts`, which `robotmoney-core` cannot import and does not
-run, so a verifier written to the pin with a stock ed25519 library would have
-accepted one. The blacklist therefore **lives in the contract**
-(`LOW_ORDER_ED25519_POINT_ENCODINGS`, seven masked encodings standing for the
-fourteen), `signing.ts` reads it from there so the two can never drift, and
-`receiptSemanticErrors()` — the one verifier function a cross-repo consumer
-imports — applies it. Stated in `verifier_invariants` and in the schema's
-`public_key` description, both naming libsodium's `ge25519_has_small_order` as
-the check a consumer needs.
-
-**These invariants only mean anything against the anchored digest.**
-`canonicalizeSubmission` covers a submission's own fields — not `session_id`,
-`created_at`, `prompt_hash`, `inputs_digest`, or the judge block — so **no
-analyst signature cryptographically binds the receipt it sits in**. A document
-that reuses published signatures under a fabricated session passes every
-invariant the pin lists. Only the keccak256 digest `robotmoney-core` anchors
-distinguishes the real receipt from that forgery, which makes checking it a
-consumer obligation rather than a nicety. Published as the two `SCOPE, NOT AN
-INVARIANT` entries in `verifier_invariants` so a cross-repo implementer cannot
-read the list as a self-contained procedure.
-
-**Read-time verification is three checks, and one failure fails the whole
-receipt.** Mirroring `toVerifiedTake()`, which recomputes rather than trusting a
-stored `verified` column, and extending it to what an aggregate adds: (1) every
-embedded signature verifies against the key embedded beside it, over the
-`canonical_submission` string **as carried** — never re-parsed, because whether
-`0.15` survives a JSON round trip is a property of one serializer rather than of
-the signed bytes; (2) the payload still canonicalizes to the bytes published for
-it — an analyst signature covers only that analyst's own submission, so the
-rationale, the quorum and the weights are outside all of them and signatures
-alone cannot detect a tampered payload; (3) the payload still validates and its
-invariants still recompute. A receipt that fails any of them is served `200`
-with `verified: false` and the reasons stated — never withheld, and never passed
-off as valid.
-
-**Immutable once published, at the database.** `swarm_consensus_receipts` joins
-the append-only set and additionally refuses `UPDATE`
-(`rm_consensus_receipt_immutable()`, migration 0042). For every other protected
-table erasure is the boundary and modification is legitimate; here it is not,
-because the anchored digest commits to those exact bytes — an `UPDATE` does not
-amend the receipt, it orphans the anchor. `publishConsensusReceipt()` re-reads
-before it assembles, so a second call returns the row already on file even if
-the session's prose has since been rewritten by a later judge run.
-
-**Four gates before anything is assembled, and every one of them was reachable
-through documented admin operations.** `loadAssemblyInput()` reads three
-independently-timed sources — the frozen take set, the judgement row, and the
-aggregation-time `swarm_recommendation` — and nothing used to hold them
-together, so two supported operator paths produced a signed, immutable,
-chain-anchored artifact that contradicted the session it was about, served as
-`verified: true`.
-
-1. **The session must be terminal (`published`).** There was no state predicate
-   at all. Every non-terminal state can still be moved: `aggregated ->
-   window_closed -> collecting` reopens the window, a member amends, aggregation
-   re-runs, and `GET /api/swarm/sessions/:id` now serves a different allocation
-   — while the receipt's bytes are immutable and anchored. Refusing until the
-   session can no longer move makes that unreachable rather than unlikely. **The
-   operator order is therefore: publish the session, then publish its receipt.**
-   A session anyone may still want to reopen must be reopened *before* the
-   receipt exists. Refusal: `session_not_published`.
-2. **The rollup must describe the takes that exist now.** A member may file a
-   *first* take right up to the advertised `window_closes_at` whatever state the
-   session is in — the timestamp is the timing contract, not the state — so the
-   rollup can legitimately be one member short. Refusal:
-   `session_not_reaggregated`, whose message names the remedy (re-aggregate and
-   re-judge) rather than surfacing as two arithmetic errors that read like
-   corruption.
-3. **The judgement must be the one the session adopted.** The judge block used
-   to be copied from the newest `swarm_session_judgements` row with no filter on
-   mode and no check that the opinion ever reached the session. In `shadow` —
-   *the documented rollout mode* — `applyOpinion()` is never called and the
-   session keeps its aggregator-authored prose, so by the design of the rollout
-   the first receipts ever published would have carried model prose the session
-   never showed. A `mode = 'enforce'` filter alone is insufficient (an enforce
-   run whose `applyOpinion()` returned false leaves an unadopted enforce row),
-   so the selection is an equality in three parts: the digests the session's own
-   `swarm_recommendation.judge` names, `mode = 'enforce'`, and finally the
-   `{rationale, disagreements, release_safety}` the session actually carries.
-   Refusal: `judgement_not_adopted`.
-4. **That judgement must have been formed over this take set.** The judge input
-   is rebuilt from the frozen set just loaded and `inputsDigest()` compared
-   against the row. One comparison closes stances, weights, the judge's prose,
-   its *verbatim quotation of a named analyst* in
-   `disagreements[].positions[].view`, and `prompt_hash` divergence at once.
-   Refusal: `judgement_stale`.
-
-**Disclosed in the signed bytes, not only enforced by the producer.** `judge`
-carries `mode`, so a verifier holding nothing but the receipt can tell an
-adopted opinion from a withheld one, and `receiptSemanticErrors` refuses
-anything but `enforce`. Each `analyst_signatures[]` entry carries `revision`,
-because takes have been amendable since migration 0028 and "member X's take"
-does not otherwise name a unique object. `swarm_consensus_receipts` records the
-session's `version` beside the row so a later divergence would be a detectable
-fact; the per-member revisions live *inside* the payload, which is stronger,
-because the anchor covers them.
-
-**The shipped verifier recomputes rather than counts.** `receiptSemanticErrors`
-— the function robotmoney-core and any third party runs — used to check only
-cardinality, so any change preserving the member count while changing content
-passed silently. It now parses each carried `canonical_submission` and requires
-its `memberId` to equal the entry's `member_id` and its `subjectId` the
-receipt's (otherwise member B's genuinely-signed submission filed under member
-A's entry verifies clean), recomputes `stances` as the histogram of those
-submissions, and recomputes `weights` as their deterministic mean in bps.
-**The signature is still verified over the raw carried string, never over a
-re-serialization** — whether `0.15` survives a JSON round trip is a property of
-one serializer rather than of the signed bytes. Every one of these is published
-in `consensus-receipt.canonicalization.json#verifier_invariants`, so a
-cross-repo verifier inherits them rather than reimplementing a weaker check.
-
-**The conformance vector.** `consensus-receipt.assembler-input.json` is a
-committed assembler input; feeding it to `assembleConsensusReceipt()` reproduces
-`consensus-receipt.valid.json` and, byte for byte,
-`consensus-receipt.valid.canonical.txt`. So the pinned golden is *regenerated by
-the shipped assembler* rather than transcribed, which is what makes it a fixed
-target for robotmoney-core#1280 rather than a claim about a hand-written file.
-The keccak256 digest over those bytes remains the consumer obligation §9.7
-describes; nothing in this repository can compute it.
-
-### 9.7.2 Judge identity and the third-party rollout gate (issues #812, #796)
-
-§9.7 describes ONE judge. This section is about MORE THAN ONE — who else may
-be one, and the switch that decides whether that is allowed at all.
-
-**Identity is a role on an existing member, never a second credential**
-(issue #812). `swarm_members.role` (`member` | `judge`, migration 0043) is a
-graduation, not an onboarding: an admin grants or revokes it through the
-existing `/api/swarm/admin/members/*` surface, and the member keeps its
-Ed25519 key, its bearer token, and its rotation/revocation path unchanged.
-A judge is excluded from take rosters and `submitRecommendation()` refuses
-its bearer token (`judge_role_cannot_submit_takes`) — separation of duties as
-a standing property of the role, not a per-session check — and a member who
-already holds a take in a session is refused if it attempts to judge that
-same session (`judge_member_has_take_in_session`). Every
-`swarm_session_judgements` row names its judging party in `judged_by`: the
-literal `robotmoney-in-house` for the built-in worker, or the immutable
-member id, foreign-keyed so the column can never name an identity that never
-existed.
-
-**The gate is a second, independent switch — not a third value on `mode`**
-(issue #796). `swarm_judge_config.third_party_enabled` (migration 0048) is a
-plain boolean beside `mode`/`min_takes`/`model`, defaulting `false` on the
-same "off by default, opt-in on a live swarm" shipped posture `mode` already
-has. It answers a different question than `mode` does: `mode` decides *whether
-the judge runs at all and whether its opinion reaches a session*; this flag
-decides *who is allowed to be the judge that runs*. The two compose rather
-than nest — `mode=off` refuses every judging regardless of this flag, and
-`third_party_enabled=false` refuses only a `judgeMemberId` judging, never the
-built-in worker's.
-
-**Global, not per-party — decided and recorded in `docs/decisions.md`'s
-issue #796 amendment.** The confirmed rollout plan is a single in-house judge
-first, "with a feature flag, activated by an admin, before third-party judges
-are allowed at all" — one switch admitting the class, not a per-member
-allow-list. A per-party table is deferred until a second rollout stage
-actually needs to distinguish one third party from another; today there is
-exactly one identity mechanism (#812's graduated-member role) and nothing yet
-calls it over an authenticated transport, so a table keyed on a party that
-does not yet exist would be speculative schema.
-
-**Enforcement is fail-closed and read fresh inside the write transaction,**
-the same shape #812 built for role revocation: `judgeSession()`
-(`backend/src/swarm/judge-session.ts`) checks `third_party_enabled` before
-its `judgeMemberId` role/status checks whenever `judgeMemberId` is supplied,
-refusing with the named reason `third_party_judging_disabled` and writing no
-row — a bare 403, not the `judge_disabled` 409 `mode=off` produces, so a
-caller can tell "the judge itself is off" from "the judge is on, but not for
-you" without parsing prose. The built-in worker's call (no `judgeMemberId`)
-never reaches this check.
-
-**Rollout states, and what changes at each:**
-
-| State | `mode` | `third_party_enabled` | What a graduated judge member can do | What the built-in worker does |
-|---|---|---|---|---|
-| Judge off | `off` | either | Refused `judge_disabled`, same as everyone | Refused `judge_disabled` |
-| In-house only (today's shipped default) | `shadow` or `enforce` | `false` | Refused `third_party_judging_disabled`; the role exists and take-roster exclusion already applies, but judging itself is not yet permitted | Judges normally |
-| Third-party enabled | `shadow` or `enforce` | `true` | Judges normally, subject to #812's role/status/no-take-in-session checks | Judges normally, unaffected |
-
-Turning `third_party_enabled` on or off is `POST /api/swarm/admin/judge`
-(the same route `mode` already uses), takes effect on the next judging with
-no redeploy, and is audited on the same `judge_config` row `mode` already
-is — "who allowed third-party judging, and when" is exactly the question
-`mode`'s audit trail already answers for the judge switch itself.
-
-**What #796 deliberately does not build.** No route yet lets a third party
-submit a judgement over an authenticated transport — `judgeMemberId` is
-accepted by `judgeSession()` today only from a same-process caller (tests,
-and any future admin/worker path), never from a bearer-token-authenticated
-HTTP request. That transport is a separate, larger piece of work; this gate
-is what it will have to satisfy on arrival, decided and built now so it is
-not designed in a hurry once a real third party is ready to onboard.
-
-**Judge identity is NOT in consensus receipt schema 1.0.** §9.7's `judge`
-block ships `{rationale, disagreements, release_safety, source, mode}` and
-nothing naming who judged. #796 flagged this as the cheap moment to add it —
-inside PR #788's fix round, before schema 1.0 anchors anything — but #788
-merged without it. Reopening the question now means a 2.0 bump: `schema_version`
-is immutable within a version (§9.7), so adding `judged_by` to an
-already-published `judge` block is not an option Schema 1.0 has. This is
-recorded here as the outcome instead of left as an open question with no
-disposition: judge identity in the receipt is deferred to a future
-schema 2.0, tracked separately, and is independent of the rollout gate
-above — a receipt from a third-party-judged session is exactly as
-attributable, or as anonymous, as one from the in-house worker today.
-
-### 9.8 Testing & smoke
-
-Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)
-defines the required topology for every actor the smoke or an eval presents as
-independent.
-
-**Implemented member/eval topology.** E2E runs the real single-box stack
-(Postgres + API + worker), but each onboarding candidate and each present
-swarm member runs in its **own disposable member-agent container** through
-`scripts/agent/member-agent.ts`'s shared `runMemberAgent()` primitive.
-Containers inherit no host environment. Each gets only enumerated
-connection/session facts, its scoped model credential when inference requires
-one, and explicit owner-held secrets; a member never receives the stack's
-`ADMIN_TOKEN` or `ANALYTICS_TOKEN`.
-
-Member state is not centralized in the harness. Each actor has a private
-persistent home volume containing its own keystore and member credential, so the
-key generated during admission is the key used in later sessions. Inside the
-container, `scripts/agent/member-session-client.ts` fetches regime and brief data
-over REST, performs the member's live inference, builds and signs the canonical
-payload, posts its memo, and submits its recommendation. The harness-side
-`scripts/lib/swarm/agent.ts` only launches/observes the container and may
-register a fixed smoke member's public key once; `scripts/lib/swarm/session.ts`
-owns session orchestration. Neither harness module holds a member private key or
-authors, signs, repairs, or submits a take.
-
-**Implemented producer topology.** Analytics/research computation and cadence
-live in the dedicated producer service; provider output crosses only the REST
-ingestion gate under the file-mounted provider credential. The consumer API
-validates/persists but cannot compute, schedule, retry, or enqueue producer work.
-The required tests assert both positive submission and negative authority: API,
-admin, shared-worker, member, and smoke-host paths cannot obtain the bearer or
-reactivate a legacy consumer job.
-
-**No mocks of the submit path; no host-authored takes.** The required execution
-asserts: provider data lands and reads back; member signatures verify; a no-show
-renders **absent**, not fabricated; out-of-window POSTs are rejected; cross-role
-writes are denied; and a published session renders the *real* takes. Every
-present member authors a live OpenCode take — a missing dependency, malformed
-stance, timeout, or failed container is loud and renders that member absent
-rather than silently skipping or emitting a template. `AGENT_MODEL` resolves
-against `scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` when the
-selected model requires it (§11.3 E1). Inference is time-bounded
-(`OPENCODE_TIMEOUT_MS`, default 120s), container runs have an outer deadline and
-bracketed cleanup, and member outcomes are settled independently so one failure
-does not sink the session (#122).
-
-The required `e2e` smoke boot therefore executes and asserts live swarm-take
-authorship on every run. The nightly workflow additionally measures
-real-inference **onboarding** (§11.3), a distinct surface.
-
-### 9.9 Phase-5 build order & reconciliation
-
-Build order: (1) swarm migration (§9.4 tables + key registry); (2) finalize the
-`SwarmSubmission`/`SwarmTake` DTOs; (3) API `swarm.ts` (reads, `apply`,
-`submit` with access-key + signature verification + window enforcement);
-(4) orchestration handlers + `job_schedules` rows; (5) role-gated analytics regime
-write; (6) E2E harness (REST-only, D21); (7) frontend pages; (8) stubbed
-on-chain anchor adapter. Steps 1–6 are the irreducible core.
-
-Reconciliation with the current scaffolding (the migration written in §6 reflects an
-earlier prototype): the canonical store becomes append-only
-`swarm_recommendations` (reconcile `swarm_takes`/`swarm_submissions`
-into it); `SwarmTake.model`/`generatedAt` become **optional member-declared
-provenance** (a take is member-submitted and signed, not host/LLM-generated);
-add **signature verification + a member public-key registry** (today `keys.ts`
-covers access-key hashing only); add the **role/authz layer** (member /
-analytics-provider / host), ideally with Postgres row-level security as
-defense-in-depth; and add the **role-gated regime write** endpoint. The worker's
-swarm handlers are **orchestration** (open/brief/close/aggregate/publish), never
-generation of member takes.
-
----
+old smoke TUI's queue-based analytics display are compatibility/observability
+debt, not active producer paths.
+
+### 9.7 The consensus judge
+
+The portfolio allocation remains the deterministic output of
+`meanTakeWeights()`; a judge may explain the result but does not choose or
+rewrite weights. A valid model-authored judgement is a separate, attributable
+record. If judging is unavailable, the session may publish without a judgement;
+the system must never manufacture a template opinion.
+
+The accepted go-forward mode is `off | enforce` ([D48](./decisions.md#d48)).
+Existing code may still expose `shadow` until that accepted change ships;
+D48 records the replay prerequisite for removing it.
+
+For deployment, the judge is a roster participant like an agent: it uses its
+own container and credential, communicates through the API, and no worker judges
+inline or receives a Docker socket. The participant roster and lifecycle are
+defined only by [smoke-production-spec §6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
+The admin API remains the sole writer of `swarm_judge_config`; configuration
+and secrets must follow the adopted credential design.
+
+Session creation and the five `swarm.*` schedules are independent of whether
+this host runs an in-house judge. Production initialization explicitly enables
+those schedules; a restart does not change schedule state. See
+[smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)
+for deployment behavior; D48 records the separate judge-mode product decision.
+### 9.8 Testing and deployment
+
+The E2E suite verifies signed submissions, session publication and visible product
+behavior against its test stack. That test harness is not the production
+participant supervisor or roster source.
+
+The adopted deployment design defines standing participant containers,
+HTTP-only interaction, isolated per-take processes and credentials, and the
+production roster in [smoke-production-spec §6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
+CI database setup and role checks are specified in §7.3. These are cutover
+requirements, not a claim that the current smoke implementation or every CI job
+already satisfies them.
+### 9.9 Implementation history
+
+The Phase 5 build order and prototype reconciliation are historical. The feature
+is implemented; current product behavior is described in §§9.1–9.8 and its
+current contracts. Recover the original plan from Git when investigating the
+implementation history.
 
 ## 10. Vault economics & wallet balances (live chain data)
 
@@ -3127,742 +1968,26 @@ interface AllocationFramework {
 
 ---
 
-## Smoke Specification
-
-What `bun run smoke` must smokenstrate to exercise the full Investment Swarm lifecycle —
-a single command that provisions everything, runs the session lifecycle end-to-end, and
-keeps the stack live as a **standing smoke** (see §0). Ctrl-C / SIGTERM tears the stack
-down **but keeps the postgres data** (see §0(c)); a startup failure leaves it up for
-inspection; `bun run smoke:down` tears down an already-running (e.g. backgrounded) smoke,
-also keeping its data. `bun run smoke -- --pg-data <host-dir>` bind-mounts postgres to a
-host directory so a reboot resumes from it; `bun run smoke:clean` is the only command that
-deletes smoke data volumes.
-
-> **One swarm, not many.** Everything below exercises the *single* Investment
-> Swarm. The harness drives it through **two sessions** (session 1 = today's
-> subject; session 2 = a different subject the next day, referencing session 1's
-> outcome), with N **members** submitting signed takes and one deliberate no-show
-> (recorded absent). These plurals — members / subjects / sessions / takes — are the
-> moving parts of the one swarm, **not** separate swarms.
-
-> **D21 migration note.** MCP is retired (see [decisions.md
-> D21](./decisions.md)); the normative sections below (§1, §§3–6, §11) already
-> describe the target REST-only smoke. The runtime/TUI mechanics elsewhere in
-> this spec (docker-compose bring-up in §0, tuning notes in §7a, TUI panels in
-> §10) still name the `mcp` compose service, its `/health` check, and
-> `mcp/src/e2e.ts::runSession` as currently shipped — that code moves to a
-> REST-only equivalent as D21's follow-up implementation work, not as part of
-> this docs change.
-
-```mermaid
-flowchart TB
-    subgraph Producer["⏱ Independent analytics-producer"]
-        PC["producer-owned cron timers<br/>no consumer DB/admin credential"]
-        PC -->|regime timer| R["compute regime<br/>POST authenticated snapshot"]
-        PC -->|research timer| A["compute research<br/>POST authenticated signals"]
-        R -->|"public output observed"| TP
-        A -->|"public output observed"| TP
-    end
-
-    subgraph Core["👥 Core Members (seated at start)"]
-        M1["Athena<br/>lens: macro risk"]
-        M2["Boreas<br/>lens: on-chain flows"]
-        M3["Cygnus<br/>lens: momentum"]
-        M4["Draco — ABSENT"]
-    end
-
-    subgraph Prospects["🧑‍🚀 Prospective Members (join progressively)"]
-        N1["Helios → ~1min"]
-        N2["Selene → ~6min"]
-        N3["Rhea → ~11min"]
-        NX["… every 5min fast / every 6h pinned"]
-    end
-
-    subgraph Session["📋 Swarm Session (per subject, cadence profile: ~2min fast / 6h pinned)"]
-        direction LR
-        S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["judged (optional)"] --> S6["published"]
-        S4 --> S6
-    end
-
-    subgraph Onboarding["📝 Onboarding Gates"]
-        direction LR
-        O1["connect"] --> O2["discover"] --> O3["toolchain"] --> O4["apply"] --> O5["approve"] --> O6["claim"]
-    end
-
-    subgraph TUI["🖥 TUI Panels"]
-        TP["Research Queue"]
-        TP2["Swarm Status"]
-        TP3["Onboarding Strip"]
-    end
-
-    Core -->|"sign → submit"| S3
-    Prospects -->|walk through| Onboarding
-    O6 -->|"admitted → joins roster"| S3
-    Producer -.->|visible in| TP
-    Session -.->|visible in| TP2
-    Onboarding -.->|visible in| TP3
-
-    style Producer fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
-    style Core fill:#3b076433,stroke:#7c3aed,stroke-width:2px
-    style Prospects fill:#3b076433,stroke:#a855f7,stroke-width:2px,stroke-dasharray:5 5
-    style Session fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
-    style Onboarding fill:#064e3b33,stroke:#059669,stroke-width:2px
-    style TUI fill:#78350f33,stroke:#d97706,stroke-width:2px
-```
-
----
-
-## 0. Standing smoke mode (`bun run smoke`, local)
-
-> **LEGACY IMPLEMENTATION DESCRIPTION — superseded as a target design.**
-> The long-lived driver, TUI, `--db` modes, automatic twin seating and overlay
-> described in this section belong to older smoke code. They must not guide the
-> refactor. [Smoke production spec](technical/smoke-production-spec.md) owns the
-> adopted instance, database, participant and shutdown behavior. Verify any
-> operational use of the old mechanics against its exact release commit.
-
-Locally, `bun run smoke` is a **long-lived standing smoke**, not a one-shot. It runs in
-three phases and stays up until you stop it (Ctrl-C / SIGTERM):
-
-**(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
-start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
-run state file at `.agents/smoke-state.json` (compose project name + this run's random
-ports + compose env + the postgres data location, so teardown/status can find the run)
-and prints the READY route table.
-
-**Host ports — always random, one sanctioned exception.** Every published host port
-(api and postgres) is drawn free at boot on **every** run (`scripts/stack/ports.ts`).
-There is no fixed default anywhere: `docker-compose.yml`'s two port lines are
-`${WEB_PORT:?…}` / `${POSTGRES_PORT:?…}` (compose refuses to start rather than fall
-back), `.env.example` ships neither, and the env-pin **input** path is gone — a
-`WEB_PORT`/`POSTGRES_PORT` left in a shell or `.env` influences nothing and produces a
-loud warning at boot. The names survive only as compose interpolation **outputs**, set
-from the allocated values by `buildComposeEnv`. This is the fix for a real outage: the
-api port used to *prefer* 48787, so a CI boot (no `.env`) raced the standing stage smoke
-for the exact port `cloudflared` routes `stage.robotmoney-labs.dev` to, while the
-operator's `.env` pinned both ports and meant nothing was random locally at all.
-
-The one exception is `bun run smoke -- --static-port`, a CLI **argument** (never an env var —
-same rule as `--pg-data`), which pins **only** the web/api port to 48787, the tunnel
-origin, warns prominently that it has done so, and — when the port is held — **fails
-without starting**, naming the holder from `docker ps`/`ss -tlnp`. It never falls back:
-`cloudflared` routes 48787 and nothing else, so a fallback would boot green and serve a
-502. Postgres stays random even when pinned. The flag is recorded in
-`.agents/smoke-state.json` so `smoke:down`/`smoke:status` reconstruct the same env.
-
-**Container naming and labels — environment-scoped.** Four families spawn containers on
-this host (the smoke, the local onboarding eval, the inference-off rails check, and the
-backend suite's ephemeral postgres), and the host is simultaneously the self-hosted
-Actions runner and the stage smoke box. `scripts/stack/naming.ts` gives all four ONE
-scheme: `<prefix>_<role>_<hash>`, where the prefix is `rm_ci` under GitHub Actions
-(`GITHUB_ACTIONS === "true"`) and `rm_smoke` otherwise, the role is
-`stack`/`eval`/`infra`/`pgtest`, and the hash is a short digest of the ENVIRONMENT —
-`GITHUB_WORKFLOW`+`GITHUB_RUN_ID`+`GITHUB_RUN_ATTEMPT`+`GITHUB_JOB` under Actions
-(stable across every step of one job, distinct across runs/attempts/workflows), a
-per-boot random value locally. The same facts are also attached as **labels** —
-`robotmoney.env=ci|local` and `robotmoney.env.hash=<hash>` alongside the existing
-`robotmoney.smoke.project` — on every service in `docker-compose.smoke.yml`, on the
-pgdata volume, and (via explicit `--label` flags, since it is a raw `docker run`) on
-`backend/tests/preload.ts`'s postgres. Names are the human channel; **labels are the
-channel tooling must select on**, because on a host that also serves the live site a
-wrong name-substring match is an outage.
-
-**Which database a boot runs against — `--db`.** One enum flag with three named data
-paths, replacing the former `--external-pg` boolean (still accepted, deprecated):
-
-| Mode | Postgres lives | Who owns the data | Teardown |
-|---|---|---|---|
-| `--db ephemeral` *(default)* | a compose `postgres` service | this boot | container removed, **data kept** (`<project>_pgdata`, or the `--pg-data` dir) |
-| `--db external` | a managed server addressed from `.env` | somebody else | nothing kept, because nothing here was ever this boot's |
-| `--db smoke-twin` | a local container restored from an encrypted production dump | this boot | container removed, **copy kept** in a labelled volume |
-
-They are one flag rather than several booleans because *where postgres lives* and *who
-owns the data* are different questions, and the smoke-twin is the case that separates them: it
-dials a URL like `external` does, but every write lands in a copy this boot may reclaim.
-`scripts/lib/smoke-db-mode.ts` carries both as the exported predicates `usesComposePostgres()`
-and `ownsData()`; the state file records the mode as `db`, which `smoke:down`, `smoke:status`
-and `smoke:clean` branch on.
-
-Unknown flags are refused at parse time rather than ignored — an enum makes a typo'd value
-dangerous in a way a boolean was not, so the argv allowlist ships with it.
-
-The smoke-twin's tooling is version-agnostic and lives outside any release directory:
-`bun run smoke:capture` produces the encrypted backup (read-only role, replica only),
-`bun smoke -- --db smoke-twin` restores and boots against it, `bun run smoke:twin:once` does that
-unattended with the frontend checks, and `bun run smoke:twin` is the standing variant on the
-pinned tunnel port. See [release-runbooks.md §4.3–§4.4](./technical/release-runbooks.md).
-
-**Who sits in a twin's sessions — the whole restored roster.** A `--db smoke-twin`
-boot seats EVERY active member the dump restored, not only the personas whose signing keys
-are committed in `scripts/lib/swarm/fixtures/persona-keys.json`. A member without a committed
-key signs with a keypair its own container generates for that boot, which the harness registers
-against the restored member id through the same privileged shortcut adoption already uses — so
-its takes carry a real member's name over a signature this stack minted. The boot says so, by
-name (`N seat(s) sign with a SIMULATED per-boot key: …`).
-
-This is deliberately twin-ONLY (`adoptionFilter`'s `twin` branch in
-`scripts/lib/smoke-mode.ts`). The two rules it relaxes exist to protect a database that
-OUTLIVES the boot: inventing a key for somebody's real member re-keys that member, and a
-per-boot container key cannot sign again after a restart. A twin has neither property — it is
-a throwaway copy restored fresh per boot and discarded with it — so neither rule buys anything
-there, while the cost was concrete: the standing stage twin rehearsed 3 of 7 members, and a
-session missing four members is indistinguishable, on the page, from a session where four
-members had nothing to say. Two things now enforce attendance rather than describing it:
-`unseatedActiveCharacters()` throws at boot if any active character is left unseated, and
-`verify-live --tier full` records `twin-roster:every-active-member-seated` against the live
-stack. The leg is `full`-tier because the same assertion would be WRONG against production,
-where an absent member is an honest state the swarm is built to tolerate. One consequence is
-visible at cutover: the harness records a leg it did not run rather than hiding it, so a
-readonly run now reports `twin-roster:skipped` as a WARN. That is scope, not a defect — it
-says this invariant was not verified against this target, which is exactly true.
-
-A release's own rehearsal (`backend/scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts`)
-drives the same shared driver and adds the half that *is* version-specific: it passes an
-`onReady` hook, so that release's postflight runs against the migrated smoke-twin between the
-frontend checks and teardown. That window has to be inside the run — the driver tears the
-smoke-twin down on every exit path — so the checks cannot be a command issued afterwards.
-
-**Postgres data location.** By default each run uses a fresh anonymous named volume
-`<project>_pgdata`, labeled `robotmoney.smoke=1` (so `smoke:clean` can find it). Passing
-`bun run smoke -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
-`<host-dir>` (created if absent), so the SAME value on a later boot resumes the SAME
-data — this is a CLI **argument**, never an env var, and is recorded in the state file.
-`--pg-data` applies only to `--db ephemeral`: it binds the data directory *of* the compose
-postgres container, so pairing it with a mode that starts no such container is
-unrepresentable rather than merely rejected. A `--db smoke-twin` boot keeps its restored copy in
-its own labelled volume under the same contract — teardown keeps it, `smoke:clean` reclaims
-it — and every smoke-twin boot restores FRESH, because the previous boot migrated that copy.
-Reuse constraints: the same postgres major (17) and the same baked-in smoke credentials;
-migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
-so re-booting on old data converges rather than duplicating rows. (Bind mounts were
-verified working on the Linux CI host — postgres:17-alpine chowns the bind dir to its own
-container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
-
-**(b) Staggered scheduled actions.** The smoke continuously produces
-fresh activity, driven two ways (hybrid).
-
-**Cadence is a PROFILE, selected by the `--static-port` argument** (never an env var —
-same hard rule as `--pg-data` and the port pin), and every value for every
-profile is stated once in `scripts/lib/smoke-schedule.ts`:
-
-| | `bun run smoke` / CI (**fast**) | `bun run smoke -- --static-port` (**realistic**) |
-|---|---|---|
-| Swarm session, per subject | ~2 min | 6 h |
-| Subjects (2) phase offset → a session lands | ~1 min | ~3 h |
-| Research (`PRODUCER_RESEARCH_CRON`) | `0 23 * * *` | `0 */3 * * *` |
-| Regime (`PRODUCER_REGIME_CRON`) | `30 22 * * *` | `30 */3 * * *` |
-| Newcomer admissions | first ~1 min, then every 5 min | first ~1 min, then every 6 h |
-
-A real investment swarm does not sit every two minutes, so the standing
-public smoke reads as a plausibly-paced record rather than a toy — and it stops
-burning ~30 sessions/hour/subject of provider quota on a host that shares its
-per-IP limits with CI. **Bring-up is prompt under both profiles**: every
-subject's first session is scheduled within 120 s of boot (`planSubjectSchedules`
-in `scripts/lib/smoke-schedule.ts`, executed in
-`scripts/tests/unit/smoke-schedule.test.ts`), so the site is never empty on first
-load; the slow profile governs only steady state. The fast profile is what CI
-runs and is pinned to today's values — the nightly LIVE smoke derives its poll
-deadline from the **fast** profile explicitly (`scripts/smoke-live-smoke.ts`), so
-a 6 h swarm interval can never become a 12 h poll budget. A `--static-port` boot is
-the only thing that injects `PRODUCER_*_CRON` into compose (through
-`resolveSmokeEnv`'s `composeEnv`); every other boot resolves the committed
-`docker-compose.yml` defaults untouched.
-
-- **Regime + research** — driven by `analytics-producer`'s own
-  `PRODUCER_REGIME_CRON` / `PRODUCER_RESEARCH_CRON` timers, never the consumer
-  queue; their values come from the cadence profile above. On boot its finite
-  `seed` command ingests the EDGAR floor and performs
-  an immediate producer-owned research refresh before readiness checks. Legacy
-  `regime.classify` / `research.refresh` rows (including the old fast-smoke
-  cadences) are forced disabled and pending/running jobs dead-lettered; no
-  supported endpoint can revive them.
-  The smoke CLI's explicit schedule step also slows the wallet sampler: it seeds an hourly
-  `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
-  sample) and disables the per-minute baseline — the standing smoke and the
-  self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
-  sampling exhausts the per-IP quotas (hourly token prices are an accepted smoke
-  tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
-- **Swarm opinions** — driven by a loop inside `scripts/smoke.ts`, because a
-  swarm session needs live member agents to sign + submit takes. After a
-  one-time setup it runs one full session (open → brief → collect → agents →
-  close → aggregate → publish) on the profile's swarm interval, so sessions
-  accumulate. The timetable is the pure `planSubjectSchedules` / `plannedRunAt`
-  pair in `scripts/lib/smoke-schedule.ts` — the driver keeps only the I/O. It
-  reuses the `runSession` runner exported from
-  `scripts/lib/swarm/session.ts` (whose entry-point `main()` is guarded so
-  importing it does not trigger the standalone flow).
-
-  **THE DATABASE DATES A SESSION. Nothing wipes.** Both of those were once
-  otherwise, and they were the same mistake wearing two hats. The driver used to
-  compute a synthetic date — today plus one calendar day per completed run for
-  that subject — so repeat sessions could not collide on the old
-  `UNIQUE(date, subject_id)`, and each boot began by TRUNCATE-ing all session
-  history so "today" was free again. Invisible while every boot got a throwaway
-  postgres volume; against a persistent database (`--db external`) it destroyed
-  published memos on every restart and handed their ids to different memos.
-
-  Migration `0022` makes `convened_at timestamptz DEFAULT now()` a session's
-  identity and derives `date` from it as a generated column, and drops
-  `UNIQUE(date, subject_id)`. No caller supplies a date: `openSession` takes only
-  a subject, the driver opens first and reads the date back, and `sessionDateFor`
-  is gone. A subject may convene as often as its cadence says; each sitting is
-  its own row. The wiping admin endpoint and `resetSessions()` are removed
-  outright — an ephemeral database is dropped or inspected as a whole, and no
-  bring-up may TRUNCATE rows it did not create.
-
-  Two consequences worth knowing. `(date, subject)` no longer identifies one
-  session, so `/api/swarm/sessions/:date/:subject` resolves to the LATEST
-  sitting that day and `/api/swarm/sessions/:id` is the exact handle the
-  session lists link by. And the member-facing signed payload is UNCHANGED — it
-  still carries `date`; submissions resolve to the subject's open session and
-  then assert the signed date agrees, so no `rmpc` build, onboarding doc or
-  already-onboarded member had to change.
-
-  `regimeAsof` (issue #382) remains a separate knob from the session date: a
-  regime snapshot classifies real market indicators, so `date <= today` is
-  enforced on it. It was introduced when a session could be LABELLED with a
-  future date; it can no longer be, but the knob still lets a sitting just after
-  midnight UTC read the previous day's classification.
-
-One immediate tick of each runs at startup so the site has data on first load; the
-one-shot frontend check (`scripts/smoke-frontend-check.ts`) also runs once,
-non-fatally.
-
-**(c) Teardown — keeps data by default.** The stack stays up until you stop it. **Ctrl-C
-/ SIGTERM tears it down** (`docker compose down`, **no `-v`**), printing the log-file path
-first (the log persists for post-mortem). Containers + network are removed but the
-**postgres data volume (or `--pg-data` host dir) is KEPT**, so a later `bun run smoke`
-resumes from it. The state file is **kept too** — the data it points to survives, so the
-pointer must survive; it is overwritten by the next boot and only cleared when
-`smoke:clean` deletes the volume it names. A **startup failure** is the exception: it dumps
-diagnostics and leaves the containers up for inspection. For a smoke that is already
-running (e.g. started in the background, or its process was killed with SIGKILL):
-
-- `bun run smoke:down` — `docker compose down` (no `-v`) for the recorded run; keeps the
-  data volume/dir and the state file.
-- `bun run smoke:status` — `docker compose ps` for the recorded run (also prints the log
-  path and the postgres data location). A stopped-but-preserved smoke shows no running
-  containers while the state file still points at the kept data.
-- `bun run smoke:clean` — the **only** command that deletes smoke data. It removes every
-  volume labeled `robotmoney.smoke=1` (with `--project <name>` it scopes to one run),
-  listing what it removed and **loudly skipping** any in-use volume (a smoke still running
-  on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
-  Its exit code is **role-dependent**: with `--project` (the CI-backstop role) any
-  surviving resource is a **leak** and exits non-zero; without it (the operator role) an
-  in-use volume just means your smoke is up, so it is reported and exits 0. See "Teardown
-  leaks" below.
-- `bun run smoke:reap` — the cross-run **reaper**. Removes errant containers left by any of
-  the four spawner families, selected by the `robotmoney.env` / `robotmoney.env.hash`
-  **labels** (never a name substring), older than `--older-than` (default `6h`), then
-  their compose networks and now-unreferenced labeled volumes. `--dry-run` first is the
-  safe posture: it performs every read and no mutation, so what it prints is exactly what
-  a real run would remove. `--env-class ci|local|all` scopes the sweep. Three guards make
-  it safe (`scripts/lib/smoke-reap.ts`; assertions in
-  `scripts/tests/unit/smoke-reap.test.ts`):
-  **G1** never touches the project named in `.agents/smoke-state.json`; **G2** never
-  touches a non-CI project with a running container that is healthcheck-healthy or
-  publishing a host port (belt-and-braces, because that state file *has been observed
-  stale* — pointing at a dead project while a different stack served `:48787`); **G3**
-  under Actions, never touches this job's own env hash. G2 deliberately does **not**
-  exempt `robotmoney.env=ci`: no CI job outlives the threshold, so a still-healthy CI
-  stack past it *is* the leak.
-
-**Teardown leaks — the shared self-hosted runner.** CI (`process.env.CI`) runs the checks
-once and then tears down. Because keep-by-default would leak a volume on a runner shared
-with the standing stage smoke, the CI path also reclaims **its own run's** volume (scoped
-by the `robotmoney.smoke.project` label) on success and failure, and both
-`.github/workflows/e2e.yml` carries an `if: always()`
-backstop for a killed/cancelled/timed-out boot. That backstop has **three parts, in this
-order**, and the order is the fix:
-
-1. `docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans` — scoped to this run's
-   project only (never a bare `compose down`, never `docker system prune`, never a name
-   glob). `--remove-orphans` is what clears the dynamically spawned member-agent eval
-   containers the compose model does not declare.
-2. `bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"` — reclaims the volume and,
-   in this role, **exits non-zero** if anything survived.
-3. `bun run scripts/smoke-reap.ts --env-class ci --older-than 6h` — sweeps leftovers from
-   **prior** runs, non-blocking (someone else's leak must not fail this PR).
-
-> Why the order and the exit code changed: e2e run **30406428674** was cancelled
-> mid-boot, so its in-process teardown never ran and the stack survived. The backstop of
-> the day ran `smoke:clean` **alone** — which removes volumes only — found the pgdata
-> volume still referenced by a live container, printed `SKIPPED 1 volume(s)` and **exited
-> 0**. The step reported success over a live leak, and the surviving api container held
-> host port `48787` (the `cloudflared` origin for `stage.robotmoney-labs.dev`) for over an
-> hour. Nothing reaped prior runs' orphans either, so the leak was permanent; the host had
-> accumulated containers up to four days old. All three gaps — no `compose down`, a
-> silent-skip exit 0, no cross-run reaper — are closed above.
-
-## 1. Lifecycle stages
-
-Every stage of the session state machine must be exercised with the real domain code:
-
-```
-scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
-```
-
-(The smoke does not enter `judged`: the consensus judge ships off, and a session
-that never judges is exactly the session the smoke has always run. Since #767 the
-driver does ENQUEUE the judging on every session — see §9.7 — but at `mode = off`
-that job drains as one clean `{ skipped: "judge_disabled" }` and the state never
-moves. The step is on the cadence; the switch is what decides whether it does
-anything.)
-
-| Stage | What the smoke must exercise |
-|---|---|
-| **Research pipeline** | At least one research signal tool runs (channel-divergence, late-cycle, or future tool) and its output lands in `research_signals`. The brief that members read must include research signal data alongside regime. |
-| **Regime classification** | A regime snapshot is written and readable. If the live provider (`FetcherProvider`) is unavailable, the seeded provider (`seededProvider`) is acceptable for hermetic runs — but the write path (same tables, same domain logic) must match production. |
-| **Open session** | A new session is created with `scheduled` state, assigned a subject from the rotation. |
-| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline equal to ONE FULL CADENCE INTERVAL (`scripts/lib/smoke-schedule.ts` `swarmWindowMs` = `swarmIntervalMs`; 6 h per subject in production), so this session's cutoff is the next session's convene and there is no interval in which a subject accepts nothing. The host driver waits that deadline out before it enqueues `close_window` (issue #570). |
-| **Collecting (submission window)** | Multiple autonomous agents call the REST API, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
-| **Close window** | Window transitions to `window_closed`, at the advertised deadline rather than when the driver's own in-process agents settle. Submissions are rejected once `window_closes_at` has passed — the TIMESTAMP is the only timing gate; a session's `state` never refuses a take on its own (issue #570). |
-| **Aggregate** | Deterministic rollup: stance counts, mean confidence, absence list, synthesis string. No host-authored takes. |
-| **Publish** | Session is marked publicly visible. |
-
-## 2. Worker orchestration
-
-Transitions must go through the **worker job pipeline**, not direct domain calls:
-
-- Each lifecycle transition is a job kind (`swarm.open_session`,
-  `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
-  `swarm.judge`, `swarm.publish`) enqueued via the scheduler or explicitly by
-  the host driver.
-- Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
-- Job schedules are seeded so a no-intervention run would also progress through the
-  lifecycle (even if the smoke also triggers them explicitly for determinism).
-  *(As shipped: the `swarm.*` schedule rows are seeded disabled by default —
-  `SWARM_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the smoke pins them
-  disabled, driving the lifecycle transitions explicitly via the admin
-  enqueue-job endpoint.)*
-
-## 3. Surfaces
-
-### 3.1 REST API
-
-REST is the only transport (D21 retired the MCP server); the routes below
-must be smokenstrated exercising the same domain code:
-
-- `POST /api/swarm/admin/open`
-- `POST /api/swarm/admin/brief`
-- `POST /api/swarm/admin/close`
-- `POST /api/swarm/admin/aggregate`
-- `POST /api/swarm/admin/publish`
-- `POST /api/swarm/submit`
-- `POST /api/swarm/regime` (role-gated analytics write)
-- `GET /api/swarm/members`
-- `GET /api/swarm/sessions` / `GET /api/swarm/sessions/:date/:subject`
-- `GET /api/swarm/brief?session=` / `GET /api/swarm/brief?date=&subject=`
-- `GET /api/dashboards/regime-snapshots`
-- `GET /api/dashboards/research-signals/:key`
-
-### 3.2 Frontend
-
-At least one headless assertion must verify that the published session renders
-correctly in the SPA:
-
-- Signed takes display with verification badges (green check / red mismatch).
-- Absent members are listed as absent.
-- Regime chart and research signal views render.
-- The `/swarm` view shows the published session.
-- `memoUrl` values (if any) render as outbound links.
-
-## 4. Actors and roles
-
-Every actor role must be exercised and cross-role write denial asserted:
-
-| Actor | What the smoke must do |
-|---|---|
-| **Swarm member** (× N agents) | Call the REST API, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
-| **RM analytics provider** | Write a regime snapshot (and optionally research signals) under a scoped credential. Must NOT be able to submit recommendations or mutate sessions. |
-| **Protocol host (worker)** | Drive lifecycle transitions through the job queue. Must NOT generate member takes. |
-| **Public reader** | Anonymous reads: published sessions, regime, research signals, member list. Must NOT write anything. |
-
-## 5. Security invariants
-
-Each invariant must be asserted (either via E2E assertions or hermetic tests that the
-smoke also runs):
-
-| Invariant | Assertion |
-|---|---|
-| No fabricated takes | Absent members are absent in the published aggregate; their count matches registered members minus submitters. |
-| Signature verification | A tampered payload (mutation of stance, confidence, memoUrl, nonce) invalidates the submission. |
-| Nonce uniqueness | Replay of the same nonce is rejected. |
-| Window enforcement | Submissions before the window opens (the brief-publication `scheduled → collecting` transition) or after `window_closed` are rejected. |
-| Cross-role denial | Member cannot write regime; analytics provider cannot submit; neither can close/aggregate/publish. |
-| TOCTOU safety | Concurrent submissions for the same session from different members both succeed (different nonces, different members). |
-| No plaintext secrets | Access keys are stored as sha256 hashes; private keys are never transmitted. |
-| memoUrl covered by signature | Tampering with memoUrl after submission invalidates the signature (`backend/tests/signing.test.ts` already covers this — the smoke must also exercise it). |
-
-## 6. Agent autonomy
-
-Each agent must:
-
-1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
-   (never server-side — see §11 R3).
-2. Register via the member onboarding flow (§11): after installing the
-   `swarm-onboarding` skill and `rmpc`, and local keygen, the agent submits
-   a signed application (username, contact, public key, `rmpc` signature) via
-   the REST API; the server verifies it and issues the member UUID.
-3. Identify itself to the REST API with its access-key hash (or bearer token
-   in dev mode).
-4. Read regime + brief + research signals via the REST API (autonomously — no
-   hardcoded stance based on agent identity).
-5. Decide a stance using a deterministic but non-trivial policy (weighted composite of
-   regime signals + per-agent bias).
-6. Fetch the canonical signing payload via `ROUTES.swarm.signingPayload`.
-7. Sign with its own private key (managed by `rmpc`).
-8. Submit via `ROUTES.swarm.submit`.
-9. Optionally publish a memo via `ROUTES.swarm.memos` (or via `memoUrl` in the
-   submission).
-
-RM never holds the private key at any point.
-
-## 7. Hermeticity and cleanup
-
-- **Production parity, always (issues #50, #147).** `bun run smoke` — local or CI,
-  including the required per-PR `e2e` gate — runs the **live** data path
-  end-to-end: the real keyless analytics pipeline (FRED/Yahoo/DeFiLlama/EDGAR/…)
-  and a real Base mainnet JSON-RPC read for the `/allocation` vault-economics
-  slice (§10 below). There is no hermetic/offline smoke mode: issue #147 removed
-  `DEMO_HERMETIC`, the in-compose `base-rpc-stub` fixture service, and
-  `scripts/smoke-rpc-guard.ts` entirely (decision: issue #163 — every PR's merge
-  gate now depends on live external providers). A required credential or
-  provider that is unavailable must fail the boot loudly (non-zero exit,
-  actionable message naming the missing dependency) — never a silent fallback
-  to a fixture or stub.
-- The resolver (`scripts/lib/smoke-env.ts::resolveSmokeEnv`, re-exported by
-  `scripts/smoke.ts`) is the single source of truth for the live data path;
-  `docker-compose.smoke.yml` mirrors its defaults so the two layers can never
-  disagree (asserted by `scripts/tests/integration/smoke-compose-config.test.ts`).
-
-### 7b. Smoke readiness gate
-
-The **smoke readiness gate** is the LIVE boot-and-check step block in the required
-`e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack smoke (smoke
-readiness gate)"; job id `e2e`, unchanged so branch protection's required-status-check
-mapping stays intact). On every PR targeting main it boots the full LIVE smoke stack
-and runs the loud-failure guards that keep broken smokes off main:
-
-- `scripts/smoke-frontend-check.ts` — the **core-surface-missing detector**: fetches
-  each route fragment from the live backend and exits non-zero if a core surface marker
-  (e.g. `x-data="swarmView()"`) is absent. Its wallet-balances provenance
-  assertion (issue #134) always expects `live` (`stale`/`seed` are allowed
-  degrades, loudly logged) now that there is only one supported smoke mode.
-- `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
-- `scripts/smoke-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
-  ≥2 published swarm sessions (the #101 starvation guard), a fresh regime
-  snapshot, wallet + vault-economics provenance `live` (only the documented
-  #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
-  landed. The required gate, the push-to-`main` run and the nightly `schedule`
-  mirror all run this one script off the same boot, so they cannot drift apart.
-  Issue #373 retired the separate `smoke-live-smoke-nightly.yml`: it booted the
-  same stack and ran these same assertions, and once `e2e.yml` carried the
-  nightly schedule it was pure duplication.
-
-The core-surface detector's own loud-failure path is **self-tested**, not assumed:
-`scripts/tests/integration/smoke-frontend-check.test.ts` (run in the required `integration` job via
-`bun run test`) spawns the real `scripts/smoke-frontend-check.ts` against an in-process
-stub backend and proves both directions — it exits non-zero when the
-`x-data="swarmView()"` marker is stripped from the served `/views/swarm.html`,
-and exits 0 against the correct, unmodified content — so a change that silently weakened
-the detector's assertions is caught. The `smoke-live-smoke.ts` assertions are likewise
-self-tested by `scripts/tests/integration/smoke-live-smoke.test.ts`.
-
-Because every PR's required gate now depends on live external providers (public
-Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
-slower and is occasionally flakier against those upstreams than the retired
-hermetic boot was — an accepted, deliberate consequence of issue #147/#163. A
-genuinely-unreachable external provider after real retries is a legitimate
-external blocker to file, not a bug in the workflow.
-
-### 7a. Tuning the live path
-
-The live path (the only path) can still be tuned via env before `bun run smoke`.
-
-- **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
-  orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
-  - unset / `live` → real keyless fetchers (the only value the smoke default
-    selects),
-  - `hermetic` → the deterministic offline seeded source backend unit tests
-    depend on directly (`backend/src/analytics/access/hermetic-source.ts`);
-    still a valid explicit override for local debugging, but no smoke default
-    ever selects it,
-  - any other value is **refused loudly** (fail-closed — a typo never silently hits
-    the network).
-  The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
-  selection and no longer influences the live/smoke path; do not use it to opt in.
-- **`ANALYTICS_FLOOR_SEED`** — one-time cold-DB raw floor seed: load a vendored real
-  `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
-  history (esp. ~200 SEC-EDGAR requests; live EDGAR fetches are themselves
-  bounded since #103 — per-request timeouts, a cheap preflight probe, and a hard
-  ~90s aggregate sweep ceiling in `analytics/extract/edgar.ts` — so a slow SEC
-  upstream can't pin the run) before the first classify. Idempotent
-  (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
-  on every smoke boot (`scripts/lib/smoke-env.ts`); set `0` explicitly to disable it.
-  `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
-- Cache TTLs are capability-specific. `HTTP_FETCH_CACHE_TTL_MS` defaults off
-  and `TOKEN_PRICE_CACHE_TTL_MS` defaults to 30 seconds in production; shared
-  smoke/smoke orchestration supplies one hour for both. Optional
-  `FETCH_CACHE_DIR` overrides only the HTTP cache directory.
-- **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
-  backend `config.ts` falls through to its production default
-  (`https://mainnet.base.org`); set explicitly to point at a private RPC.
-
-The live path preserves the honesty model: empty fetch → persisted real floor; a
-no-history indicator is excluded + logged (never synthetic).
-- Random ports (Postgres, API) on every run, with no fixed default and no env-pin path
-  — `bun run smoke -- --static-port` is the sole exception and pins only the api port to the
-  cloudflared origin — plus an environment-scoped compose project name
-  (`rm_ci_stack_<hash>` / `rm_smoke_stack_<hash>`): concurrent runs do not collide, and a
-  leaked container is attributable to the environment that made it. The run identity
-  (project + environment class/hash + ports + compose env) is written to
-  `.agents/smoke-state.json` so the explicit teardown command can find it.
-- **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
-  (`docker compose down`, **no `-v`** — containers + network removed, postgres data
-  **kept**, state file **kept**) and prints the log-file path first. A **startup failure**
-  is the exception — it leaves the stack RUNNING so it can be inspected. `bun run
-  smoke:down` tears down an already-running smoke the same way (keeps data); `bun run
-  smoke:status` shows the containers, the log path, and the postgres data location; `bun
-  run smoke:clean` is the only command that deletes smoke data volumes (by
-  `robotmoney.smoke=1` label; loud skip on in-use; never a `--pg-data` host dir).
-- **CI reclaims its own volume:** when `process.env.CI` is set the smoke runs its checks
-  once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
-  volume (scoped by the `robotmoney.smoke.project` label) so the shared self-hosted runner
-  leaks nothing while a co-tenant standing smoke is untouched.
-- **A killed boot cannot leak silently.** The in-process teardown above dies with the
-  process, so both CI workflows carry an `if: always()` backstop that runs
-  `docker compose -p "$SMOKE_PROJECT" down -v --remove-orphans` **before** `smoke:clean
-  --project`, and `smoke:clean` in that role **exits non-zero** on any surviving resource.
-  A separate always() step reaps `robotmoney.env=ci` leftovers older than 6h from prior
-  runs (`bun run smoke:reap`). Full rationale — and the incident that produced it, e2e run
-  30406428674 — under §"Smoke Specification" (c).
-- A missing Docker dependency (Postgres image, build failure) must fail the run
-  loudly, never silently skip.
-
-## 8. Agent memo workflow (`memoUrl` + `post_memo`)
-
-The smoke must smokenstrate the full agent memo lifecycle:
-
-1. At least one agent publishes a long-form memo at a member-hosted URL (or a
-   simulated URL within the smoke).
-2. The `memoUrl` is included in the submission payload and covered by the signature.
-3. `ROUTES.swarm.memos` writes the memo to the member's own storage and
-   returns the URL.
-4. The published session frontend renders the `memoUrl` as a link.
-5. Tampering with the `memoUrl` after submission invalidates the signature (asserted
-   in `signing.test.ts`).
-
-## 9. Multi-session awareness
-
-The smoke should smokenstrate at least two sessions (or the concept of rotation):
-
-- Session N completes the full lifecycle.
-- The brief for session N+1 references the outcome of session N.
-- The session list view (`list_sessions`) shows both.
-
-## 10. Smoke output
-
-### 10.1 TUI (default, interactive terminal)
-
-In an interactive terminal the smoke takes over the screen with a zero-dependency ANSI
-TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
-the TUI shows only distilled state. Layout:
-
-- **Services** — the run's URLs (Site / Regime / Swarm / Research per key / MCP /
-  Admin), on `127.0.0.1:<random port>`. The **Admin** entry is the `/admin`
-  task-queue jobs dashboard (#117); its password (`ADMIN_TOKEN`) is a fresh
-  random value generated per run and rendered **only** here, on the pane's
-  `Admin pass` line — never logged, never written to `smoke-state.json`
-  (`scripts/lib/smoke-main.ts`).
-- **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
-  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
-  bring-up the icons are kept live by polling the **real docker container state**
-  (`docker compose ps` every ~3 s), so a post-startup crash / restart-loop / `unhealthy`
-  Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
-  `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
-- **Onboarding** (full-width strip) — each prospective member's join checklist:
-  `connect → discover → toolchain → apply → approve → claim → session → memo →
-  admitted`, each pending / spinner / ✓ / ✗ — tracking §11.2 exactly. Steps 1–6
-  (`connect`…`claim`) render straight from the real-inference eval harness's
-  observed step-state record (`scripts/lib/onboarding-eval.ts`): each admission
-  launches a vanilla OpenCode member-agent container and hands it the canonical
-  copy-paste prompt with a generated identity, and the agent works out skill
-  install, `rmpc` install, keygen, and the signed application entirely on its
-  own via real inference — the smoke only observes the public application-status
-  API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
-  way as before: when the newly-admitted member is separately observed
-  submitting a signed take + posting a memo in a live swarm session. A
-  failed or timed-out admission renders red — a real eval result, never
-  retried — and, whether the prospect is admitted, fails, or is still
-  in-progress, its secret-redacted transcript is retained in a discoverable,
-  tailable per-prospect artifact directory that survives the member-agent
-  container's own teardown (§11.3 E8). Admitted members **retain their
-  checklist** in the pane (most recent shown, with a `(+N earlier admitted)`
-  note), and an `upcoming → Name in m:ss …` line **counts down** to the next
-  scheduled admissions. See §11.
-- **Activity** (largest region) — Research plus **one pane per swarm subject**, laid
-  out as responsive columns (side by side when they fit, stacking when the terminal is
-  narrow):
-  - **Research** — currently a **legacy observability view** over historical
-    `regime.classify` / `research.refresh` queue rows and
-    `job_schedules.next_run_at`. It does not control execution and must not be
-    read as producer-native run/cadence telemetry. Repointing this pane and its
-    countdown at producer telemetry is the remaining UI observability gap.
-  - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
-    (independent interval + stagger offset, serialized execution) and gets its own pane
-    showing its session lifecycle state, each member's real stage (connect → fetch →
-    thinking → reporting → waiting; no-shows absent), and a per-subject **countdown** to
-    its next session (`running…` while in progress).
-- **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
-  stack (containers + network; postgres data kept)`.
-
-Full verbose output from every process (api, worker, mcp, migrations, the swarm
-driver, and the orchestrator's own narration) is written to
-`.agents/smoke-<project>.log` (path shown in the TUI header, recorded in the state file,
-and shown by `bun run smoke:status`). On Ctrl-C / SIGTERM the terminal is restored first,
-the log path is printed, the stack is torn down (data kept), and a resume/reclaim hint is
-printed. A startup failure instead restores the terminal and leaves the containers up for
-inspection (with the log path).
-
-### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
-
-When stdout is not a TTY, in CI, or when the TUI is disabled, the smoke keeps the plain
-line-logging behavior: once healthy it prints a READY route table, then logs each
-scheduled action as it fires.
-
-```
-── Robot Money smoke ── READY ────────────────────────────
-  Site:       http://127.0.0.1:<api>/
-  Regime:     http://127.0.0.1:<api>/regime
-  Swarm:  http://127.0.0.1:<api>/swarm
-  Research:   http://127.0.0.1:<api>/research/<key>
-  MCP:        http://127.0.0.1:<mcp>/health
-  Admin:      http://127.0.0.1:<api>/admin  (password shown in the interactive TUI only)
-
-  State file: .agents/smoke-state.json
-  Log file:   .agents/smoke-<project>.log
-  PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
-  Demo actions: a swarm session per subject every ~2 min (2 subjects staggered → one lands about every ~1 min); research daily at 23:00, regime daily at 22:30.
-  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
-  Reclaim stopped smokes' data volumes with: bun run smoke:clean
-```
-
-The cadence line is **rendered from the resolved profile** (`renderCadenceLine`
-in `scripts/lib/smoke-schedule.ts`), never hardcoded, so it always states the
-cadence actually in force. The same boot with `--static-port` prints:
-
-```
-  Demo actions: a swarm session per subject every ~6 h (2 subjects staggered → one lands about every ~3 h); research every 3h at :00, regime every 3h at :30.
-```
+## Smoke deployment
+
+[Smoke production spec](./technical/smoke-production-spec.md) is the sole adopted
+deployment design. It is approved for implementation and has not shipped; the
+runtime implementation remains determined by the exact code being run.
+[Release policy](./technical/release-runbooks.md) owns release gates, phases,
+evidence and approval. This architecture document does not restate deployment
+commands or mechanisms.
+
+Product behavior for sessions, judging, analytics, and member onboarding is
+specified in §§9 and 11 and their linked contracts. Do not infer participant
+or scheduler deployment behavior from those product descriptions; use the
+adopted smoke spec.
 
 ## 11. Member onboarding (normative spec)
 
-Status: target sequence. This section is the plan of record for how a prospective
-swarm member joins; the smoke (§10.1), e2e suite, and user-facing docs are aligned to
-it (`scripts/lib/onboarding-eval.ts` drives the smoke and e2e admission path;
-`scripts/rmpc-release-e2e.ts` is the no-inference proof of the same signed-apply chain).
-Where any other code differs, this section wins.
+Status: target product sequence. This section describes how a prospective swarm
+member joins; it is separate from deployment participant provisioning. The
+isolated onboarding eval and e2e suite exercise this signed-apply flow. The
+credential-file roster in the adopted smoke spec is not populated by this flow.
 
 ### 11.1 Requirements
 
@@ -3941,12 +2066,13 @@ Where any other code differs, this section wins.
   (`ROUTES.swarm.apply`), and the review queue only ever contains
   applications whose toolchain is already proven; no separate setup-proof step
   exists.
-- **R7 — Approval.** In production, the application then waits for a human admin to
-  approve it. In `bun run smoke`, approval is automatic after 10 seconds — invoked
-  through the same admin API, not a different code path.
-- **R8 — Isomorphism, no mocks: onboarding is an eval.** The whole process is
-  isomorphic across (a) manual testing, (b) the `bun run smoke` simulation,
-  (c) production, and (d) e2e tests. All four use the real skill, the real
+- **R7 — Approval.** In production, the application waits for a human admin to
+  approve it. An isolated onboarding evaluation may trigger approval through
+  the same admin API; that is test-harness behavior, never production admission
+  policy or participant-roster provisioning.
+- **R8 — Isomorphism, no mocks: onboarding is an eval.** The application flow is
+  exercised through (a) manual testing, (b) the isolated onboarding eval,
+  (c) production, and (d) e2e tests. These use the real skill, the real
   `rmpc` binary, the real REST API, and real signature verification. In the smoke and
   e2e, the member's side is not a script: each new member is a **vanilla OpenCode
   agent container** handed the same canonical copy-paste prompt (R4) a human would
@@ -4011,30 +2137,18 @@ in a blank profile never needs. It is versioned (`expectedVersion`, 409
 that changed plus the operator's optional `reason`. It changes no status (that
 is deactivate/reactivate) and no credential (that is rotate-key).
 
-The smoke's Onboarding strip (§10.1) renders exactly this checklist — its step names
-track this sequence, and each step is driven by the real flow (R8): for every
-admission the smoke launches a vanilla OpenCode agent container, pastes the canonical
-prompt with a generated identity, and the agent onboards **itself** with real
-inference — skill install, `rmpc` install, keygen, signed apply, claim,
-participation. The smoke only observes, deriving the strip's step states from the
-public application-status API, with the 10 s auto-approval as the only scripted
-divergence. A member that fails to onboard is a red eval result — evidence the
-instructions or tooling regressed, not something the smoke papers over. The smoke
-admits its first member ~1 min after start and attempts the next ~5 minutes after
-the previous admission finishes (real eval duration is additive, so a 30-minute
-timeout pushes the next attempt out by that much). The newcomer roster is
-**fixed and finite** — the five names in `scripts/lib/smoke-newcomers.ts`, in
-order, with no generated fallback once the list is exhausted (#260). The driver
-then stops; the roster cap (`SWARM_ROSTER_CAP`) is defence in depth and is
-never reached by the standing smoke. A failed admission is not retried and is not
-replaced, so the smoke can finish with fewer than five newcomers seated — that is
-the eval result, reported rather than hidden.
+The adopted deployment design does not run an onboarding admission loop or
+derive its participant roster from smoke. Deployment participants come from the
+explicit credential file in [smoke-production-spec §6](./technical/smoke-production-spec.md#6-participants-agents-and-judges).
+The isolated onboarding eval observes the public application-status API and
+reports an unsuccessful candidate as an eval result; it is not a production
+deployment step.
 
 ### 11.3 Onboarding eval (normative)
 
-Status: target design (D22). R8 makes onboarding an eval; this section specifies
-what that eval is, how it is scored, and which components it shares with
-`bun run smoke`. Where any other code differs, this section wins.
+Status: target design (D22). This section specifies the isolated onboarding
+evaluation and its scoring. It is not a production deployment procedure or a
+definition of the standing participant roster in the adopted smoke spec.
 
 The local entrypoint is an eval-only native Bun test suite: `bun run eval`
 discovers files under `evals/`, and Bun's normal path and
@@ -4213,7 +2327,7 @@ scorecard. The accepted tradeoff is time-to-detection: a shift in the admission
 rate surfaces over about a week rather than in one night.
 
 **Reporting rides on the admission that already runs.** No sampling loop, no
-scorecard module, no second stack bring-up. `scripts/lib/smoke-main.ts`
+scorecard module, no second stack bring-up. The isolated eval harness
 classifies the run with the existing `scripts/agent/classify-outcome.ts` and
 renders a small structured record — outcome, resolved model id, duration, member
 id, agent-liveness counts, and whether the sample belongs in the admission-rate
@@ -4302,8 +2416,8 @@ per prospect:
 Every file is appended to synchronously as events arrive, so it is
 **tail-able while the prospect's container is still running** and **remains
 inspectable after the container is removed** — both live on the host, not
-inside the container. `<composeProject>` is the smoke's own project name
-(shown in the TUI header and `bun run smoke:status`); `<runId>` is the
+inside the container. `<composeProject>` is the isolated evaluation stack's
+project name recorded in its manifest; `<runId>` is the
 candidate's slug, printed in the log line `onboarding <name> transcript: …`
 the driver emits the moment it starts an attempt. **Operator workflow:**
 
@@ -4381,12 +2495,11 @@ These decisions are not open implementation questions:
   upserted by a rerun. The new run/stage records preserve who ran what, the
   before/after checksums, warnings, and outcome; this phase does not introduce
   versioned copies of every raw time-series row.
-- The seeded recurring swarm schedules remain disabled. Product swarm
-  scheduling uses one-off queue jobs scoped to a specific session. Empty-payload
-  recurring rows cannot identify a subject or session and must not be enabled by
-  this UI. *(Superseded by issue #208 / PR #229: schedules are
-  environment-configurable via `SWARM_SCHEDULES_ENABLED` — see §9.4 of the
-  main document.)*
+- Schedule toggles in this UI do not manage the five recurring `swarm.*` rows.
+  The adopted deployment design enables them explicitly during production
+  initialization; ordinary boot and restart preserve their state. Their
+  initialization is an operator/deployment action, not an admin-panel control.
+  See [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
 
 ## 3. Current product baseline
 
@@ -4551,10 +2664,9 @@ Acceptance:
   and new job ids. It never changes the dead row.
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
-- The five disabled recurring `swarm.*` rows are labelled “legacy/smoke —
-  not product scheduling” and cannot be enabled from the UI. *(Superseded by
-  issue #208 / PR #229: schedules are environment-configurable via
-  `SWARM_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
+- The five recurring `swarm.*` rows are managed by the explicit production
+  initialization step in [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent),
+  not by this UI. Boot and restart preserve their operator-set state.
 
 ### US-C1 — Create and edit a swarm topic
 
@@ -4641,11 +2753,9 @@ Acceptance:
   `swarm_judge_config.mode = off` — the shipped default — it drains as a single
   clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
   run.
-- This is the ADMIN path. Production's sessions are opened by the host driver
-  (`scripts/lib/swarm/session.ts`), which takes none of it: it enqueues each step
-  by hand, including the judging, and orders the judging against the publish by
-  waiting rather than by `run_after` (§9.7). Both paths schedule a judge; neither
-  covers the other.
+- This is the manually scheduled admin path. The adopted production design
+  uses the recurring `job_schedules` rows and `worker-swarm`; no host session
+  driver enqueues the lifecycle. See [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
 - Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
   dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.
@@ -5427,9 +3537,11 @@ daemon must stay synced to chain head — a scale-to-zero model is wrong for it.
 
 Durable state is a **DigitalOcean Managed Postgres high-availability cluster**:
 primary + standby with automated failover, daily backups, and point-in-time
-recovery. Only the API tier connects, via `DATABASE_URL`. This refines D8's
-production mode (one Postgres) to a managed HA cluster; the single-box Dockerized
-Postgres remains the CI and smoke mode (D8).
+recovery. Application services connect under separate scoped roles; participants
+and the analytics producer have no database credential. See
+[smoke-production-spec §3](./technical/smoke-production-spec.md#3-roles-and-credentials).
+This refines D8's one-Postgres principle. CI and local stage database modes are
+defined by the adopted spec, not D8's retired environment flags.
 
 ---
 
@@ -5470,8 +3582,7 @@ own same-host API) use CORS.
   timeout (10s by default, coarsely enforced — measured 8–12s) before it answers
   at all. That is a pre-existing property of `/health`
   rather than anything D34 introduced — a database that *rejects* connections
-  answers immediately — and in that state the container log is the only signal
-  (`docs/runbooks/deployment.md` §2.1 says so).
+  answers immediately — and in that state the container log is the only signal.
 - **Fail-open** keeps a single failed tier from cascading; the static marketing
   tier in particular stays up independently.
 
@@ -5484,12 +3595,11 @@ own same-host API) use CORS.
   subdomain-routed surface (D18); D21 retired the MCP transport entirely, so
   the surface map is back to three subdomains — `swarm.` serves REST to
   every client, member and browser alike.
-- **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
-  Production splits across subdomains on DO with Cloudflare for DNS+observability;
-  there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
-  single-box `docker-compose` remains the **CI and smoke** deployment.
-- **D8 (one Postgres in Docker)** — **prod mode refined by D13:** production is a
-  **DO Managed Postgres HA cluster**; ephemeral (CI) and smoke modes unchanged.
+- **D11 (single box, no reverse proxy)** — D13 records production's vendor-split
+  topology; D47 owns deployment lifecycle. D11's old service and smoke details
+  are historical.
+- **D8 (one Postgres)** — D13 records the production managed cluster; D47
+  supersedes D8's old environment-mode selection.
 - **D10 (split-ready repos)** — reinforced: each surface is already an independent
   host, so a repo split stays mechanical.
 - **D4 (SPA history router)** — works **unmodified at the subdomain root**; the
@@ -5626,32 +3736,16 @@ roadmaps, task checklists, or phase ordering to `docs/`.
 
 ## Canonical documents
 
-These documents describe current product and system commitments:
-
-- Architecture (this document) — system boundaries, runtime components,
-  data flows, and deployment shape.
-- [Decisions](./decisions.md) — accepted architecture decision records (ADRs).
-- [Markets and asset pricing](./technical/markets-asset-pricing-ingest.md) — how
-  chain balances and asset prices are loaded, audited, and repaired. Replaces
-  the retired `data-self-healing.md`, whose analytics half is
-  [regime-engine.md](./technical/regime-engine.md) §11.
-- [Bot-analytics UI port plan](./bot-analytics-ui-port-plan.md) — the
-  canonical spec for the Analytics Surface dashboard port (issues #379-#402
-  and siblings), with its companion
-  [original-app](./bot-analytics-ui-port/inventory-original.md) and
-  [current-repo](./bot-analytics-ui-port/inventory-current.md) inventories.
-  A working plan, not a decision record — status markers reflect the point
-  it was written, not necessarily current state.
-- [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
-  operational setup.
-- The smoke, live-data, admin-surface, and topology specifications are
-  incorporated in this document under their dedicated sections above. (The
-  former preview-server spec was retired by decision D19 — preview mode is
-  now described in §4 "Preview mode (goldens-backed, no backend)".)
-- [Credential doctor](./runbooks/credential-doctor.md)
-- [Demo/CI container leaks](./runbooks/smoke-container-leaks.md) — reading the
-  `robotmoney.env` labels, clearing one project, and running the reaper on the
-  host that also serves `stage.robotmoney-labs.dev`.
+- [Architecture](./architecture.md) — product and system boundaries, runtime
+  components, data flow, and the D13 network topology.
+- [Decisions](./decisions.md) — accepted decision records; D47 owns deployment
+  mechanism authority and D48 records the judge-mode product decision.
+- [Smoke production spec](./technical/smoke-production-spec.md) — sole adopted
+  deployment design, approved for implementation but not yet shipped.
+- [Release-runbook policy](./technical/release-runbooks.md) — gates, phases,
+  evidence, and approval for future releases.
+- [Credential doctor](./runbooks/credential-doctor.md) — legacy GitHub secret
+  utility, not the adopted deployment credential path.
 
 ## Reviews and investigations
 
