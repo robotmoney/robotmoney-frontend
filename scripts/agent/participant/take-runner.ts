@@ -351,28 +351,45 @@ async function readJson(res: Response): Promise<unknown> {
 }
 
 /**
- * Sign the canonical bytes with THIS participant's own key.
+ * Sign the canonical bytes with THIS participant's own key, or THROW.
  *
- * A key this container cannot import is never replaced with an invented one:
- * the submission goes out with an empty signature, the server's verification
- * refuses it, and the operator reads the refusal. That is the same property
- * that makes a superseded spoof-keys generation harmless (spec §6.4) — a key
- * that is not the member's current one simply never verifies.
+ * A KEY THIS CONTAINER CANNOT IMPORT IS A REFUSAL, NOT AN EMPTY SIGNATURE.
+ *
+ * An earlier version of this function returned `""` on an unusable key and let
+ * the submission go out unsigned, on the reasoning that the server's
+ * verification would refuse it anyway. That reasoning is wrong in the same way
+ * the judge's removed fallback was wrong. Nothing bad reached the database
+ * either way — but the participant reported the take as `submitted`, which
+ * claims an authorship it could not produce. `a42d6c5a` settled this one layer
+ * up ("a judgement is a model's opinion or it does not exist"); the same rule
+ * holds here: A TAKE IS SIGNED BY ITS MEMBER, OR IT DOES NOT EXIST.
+ *
+ * So an unusable key fails the attempt BEFORE the POST, with a reason naming
+ * the key rather than a server-side signature complaint the operator would have
+ * to work backwards from. The distinct case this must not be confused with is a
+ * key that imports fine and simply is not the member's current one — a
+ * superseded --spoof-keys generation (spec §6.4). That one DOES go out, the
+ * server refuses it, and `refused` is the honest outcome, because the
+ * participant really did sign what it sent.
  */
 async function signCanonical(canonical: string, config: ParticipantConfig): Promise<string> {
+  let key: CryptoKey;
   try {
-    const key = await crypto.subtle.importKey(
+    key = await crypto.subtle.importKey(
       "jwk",
       config.identity.privateJwk as JsonWebKey,
       { name: "Ed25519" },
       false,
       ["sign"],
     );
-    const signature = await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(canonical));
-    return Buffer.from(new Uint8Array(signature)).toString("base64");
-  } catch {
-    return "";
+  } catch (err) {
+    throw new Error(
+      `participant ${config.kind} "${config.name}" cannot import its own signing key from credential.json — ` +
+        `a take is signed by its member or it is not submitted at all: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(canonical));
+  return Buffer.from(new Uint8Array(signature)).toString("base64");
 }
 
 /** What one take attempt reports back to the poll loop. */

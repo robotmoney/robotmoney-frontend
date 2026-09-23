@@ -28,6 +28,7 @@
 // which is exactly why this runs at the unit tier at all.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
@@ -46,13 +47,37 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "rm-take-runner-"));
 }
 
+// A REAL Ed25519 keypair, generated once for this file.
+//
+// This fixture used to be a placeholder — `{kty:"OKP", crv:"Ed25519", x:"pub",
+// d:"priv"}` — whose `d` is not valid base64url and which no WebCrypto import
+// accepts. That made the signature assertions below vacuous and, worse, it
+// forced the implementation to be dishonest: to keep "the submit carries a
+// signature" true it had to catch the import failure and send an EMPTY
+// signature, then report the take as `submitted`. The server rejects such a
+// submission, so nothing bad reached the database — but the participant was
+// claiming to have authored something it could not sign.
+//
+// That is the same failure the judge doctrine already forbids ("a judgement is
+// a model's opinion or it does not exist"), one layer down: a take is signed by
+// its member, or it does not exist. With a real key the assertions mean what
+// they say, and `signCanonical` is now free to REFUSE an unusable key instead
+// of papering over it — pinned by "an identity whose key cannot be imported
+// refuses the submission" below.
+const REAL_KEYPAIR = generateKeyPairSync("ed25519");
+const REAL_PRIVATE_JWK = REAL_KEYPAIR.privateKey.export({ format: "jwk" }) as Record<string, unknown>;
+const REAL_PUBLIC_B64 = Buffer.from(
+  (REAL_KEYPAIR.publicKey.export({ format: "jwk" }) as { x: string }).x,
+  "base64url",
+).toString("base64");
+
 const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   apiUrl: "http://website-server:8080",
   name: "athena",
   kind: "agent",
   memberId: MEMBER_ID,
   token: "member-bearer-token",
-  identity: { publicKeyB64: "pub-athena", privateJwk: { kty: "OKP", crv: "Ed25519", x: "pub", d: "priv" } },
+  identity: { publicKeyB64: REAL_PUBLIC_B64, privateJwk: REAL_PRIVATE_JWK },
   pollIntervalMs: 5_000,
   takeTimeoutMs: 60_000,
   workspaceRoot: "/tmp/rm-participant-workspaces",
@@ -320,7 +345,27 @@ describe("submitTake — canonical bytes fetched, one POST, idempotent on (sessi
     const api = fakeApi();
     await submitTake(config(), work, draft);
     const submit = api.requests.find((r) => r.url.includes(ROUTES.swarm.submit));
-    expect(typeof (submit?.body as { signature?: unknown })?.signature).toBe("string");
+    const signature = (submit?.body as { signature?: unknown })?.signature;
+    expect(typeof signature).toBe("string");
+    // Non-empty, and real: the fixture key is a genuine Ed25519 pair, so an
+    // empty or placeholder signature cannot satisfy this.
+    expect((signature as string).length).toBeGreaterThan(0);
+  });
+
+  test("an identity whose key cannot be imported REFUSES before the POST — a take is signed by its member or it does not exist", async () => {
+    const api = fakeApi();
+    const broken = config({
+      // Well-formed JWK shape, unusable `d`. This is what the fixture used to
+      // be for every test in this file, which is precisely why the old
+      // implementation shipped an empty signature and still reported success.
+      identity: { publicKeyB64: "pub-athena", privateJwk: { kty: "OKP", crv: "Ed25519", x: "pub", d: "priv" } },
+    });
+    await expect(submitTake(broken, work, draft)).rejects.toThrow(/cannot import its own signing key/);
+    // The REFUSAL IS BEFORE THE WIRE. Nothing was submitted, so no half-authored
+    // record exists for an operator to reconcile, and the reason names the key
+    // rather than a server-side signature complaint to work backwards from.
+    expect(api.requests.some((r) => r.url.includes(ROUTES.swarm.submit))).toBe(false);
+    expect(api.takes.size).toBe(0);
   });
 
   test("GATE 'crash after submit: ONE take' — the resubmission returns the EXISTING record as SUCCESS", async () => {
