@@ -590,11 +590,11 @@ test("a stub vault feed is labelled on the Vaults section, not presented as a ch
   await expectNoBrowserErrors(errors);
 });
 
-test("a stale vault feed says so beside the time it was read", async ({ page }) => {
+test("a stale vault feed states the time it was read, and no label beside it", async ({ page }) => {
   await stubEnvironment(page, { vault: { ...goldenVault(), stale: true } });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
-  await expect(vaultFact(page, "As of")).toContainText("Jul 30, 2026 16:20 UTC · delayed");
+  await expect(vaultFact(page, "As of").locator("b")).toHaveText("Jul 30, 2026 16:20 UTC");
 });
 
 // This spec's host is a local one, so a Base feed that is down falls back to

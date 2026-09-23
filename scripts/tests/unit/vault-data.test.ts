@@ -350,7 +350,7 @@ describe("formatters", () => {
     expect(fmtDate("not a date")).toBe("—");
     const o = normalizeOverview(DEVNET);
     expect(freshnessLabel(o)).toBe("Sep 17, 2026 10:00 UTC");
-    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026 10:00 UTC · delayed");
+    expect(freshnessLabel(normalizeOverview(applyReviewState(DEVNET, "stale")))).toBe("Sep 17, 2026 10:00 UTC");
     expect(freshnessLabel(null)).toBe("—");
   });
 

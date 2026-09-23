@@ -1628,12 +1628,6 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-sec__h { margin: 0; font-family: var(--font-display); font-weight: 700;
   font-size: 1.6875rem; line-height: 1.15; letter-spacing: -0.015em; text-transform: uppercase; color: var(--color-text); }
 .rr-sec__aside { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
-/* A note the reader must not miss (a vault's risk): the live strip's surface
-   and hairline, a mono-caps label, and no hue, since colour would read as an
-   error state rather than a standing fact. */
-.rr-callout { margin: 0 0 1.5rem; padding: 1rem 1.15rem; border: 1px solid var(--color-border); background: var(--color-surface); }
-.rr-callout__k { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); }
-.rr-callout__b { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
 /* A block's title inside a section (Wallets, Positions, the chart): the
    section heading's face a size down, so it reads as a subtitle and not as
    the mono label a figure carries. Its fact sits on the right, in the
@@ -1955,7 +1949,7 @@ a.sv__vfy { text-decoration: none; }
   opacity: 0; transition: opacity 200ms var(--ease-out-expo); }
 .rr-x__drawer.is-open .rr-x__panel { opacity: 1; }
 /* Between two sleeves: out in SWAP_MS (lib/sleeve-explorer.js), then in. */
-.rr-x[data-swap] .rr-x__drawer.is-open .rr-x__panel { opacity: 0; transition-duration: 120ms; }
+.rr-x[data-swap] .rr-x__drawer.is-open .rr-x__panel { opacity: 0; transition-duration: 80ms; }
 .rr-x__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
 .rr-x__head p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; font-size: 0.875rem; }
 .rr-x__head p i { width: 0.5rem; height: 0.5rem; align-self: center; }
@@ -1984,6 +1978,9 @@ a.sv__vfy { text-decoration: none; }
    stretches to the column; every label is HTML over it, at its true size. */
 .rr-area { margin: 0; }
 .rr-area__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin-bottom: 1rem; }
+/* A chart under a block title (TVL, Sleeves over time) sits further from it than
+   one under a minor one, so the top axis label is not crowded against the title. */
+.rr-area__head:has(.rr-subhead__h:not(.rr-subhead__h--minor)) { margin-bottom: 1.75rem; }
 .rr-area__frame { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); grid-template-rows: 16rem 1.75rem; }
 .rr-area__y { position: relative; grid-row: 1; grid-column: 1; }
 .rr-area__y span { position: absolute; right: 0.625rem; transform: translateY(-50%); font-family: var(--font-mono); font-size: 0.625rem;
@@ -2161,6 +2158,7 @@ a.sv__vfy { text-decoration: none; }
 .rr-vaults td small { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); }
 /* A vault's activity with no transaction to link has no Transaction column. */
 .rr-activity:not(.has-tx) .rr-activity__tx { display: none; }
+.rr-activity:not(.has-account) .rr-activity__acct { display: none; }
 /* The Robot Money Vault's positions, grouped by vault: the vault's row reads
    as the group's head, and its positions sit indented under it. */
 .rr-positions .rr-group th, .rr-positions .rr-group td { font-weight: 500; color: var(--color-text); }

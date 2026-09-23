@@ -1202,3 +1202,51 @@ test("on the server path, only a portfolio row with no stance tally is read in f
 
   await expectNoBrowserErrors(errors);
 });
+
+// The treasury's book, live: when every wallet the portfolio declares is one
+// the site values live (the prop wallets behind /performance), that valuation
+// is its Holdings and its facts. The recorded readings stopped at the Aug 6
+// cutover, and the cutover's smoke basket is never the book (#1030).
+test("a portfolio of live-valued wallets reads its book and its facts live", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  const wallets = [
+    { label: "primary", address: "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", chain: "base" },
+    { label: "stablecoin-strategy-1", address: "0x422c906083ca40b7e055b811d517f03bbbef8eee", chain: "base" },
+  ];
+  const today = new Date();
+  const day = (ago: number) => new Date(today.getTime() - ago * 86400000).toISOString().slice(0, 10);
+  // 40 days of readings: 60,000 thirty days ago, 64,000 yesterday, 64,920 now.
+  const history = Array.from({ length: 40 }, (_, i) => {
+    const ago = 40 - i;
+    const total = ago === 1 ? 64000 : ago === 30 ? 60000 : 62000;
+    return { date: day(ago), byAsset: { WETH: total * 0.5, ROBOTMONEY: total * 0.5 }, totalUsd: total, provenance: "live" };
+  });
+  await page.route("**/api/**", (route) => {
+    const u = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (u.pathname === "/api/swarm/subjects/robotmoney-treasury") {
+      return json({ id: "robotmoney-treasury", name: "Robot Money Treasury", source: { type: "rpc" }, wallets, structural_notes: [] });
+    }
+    if (u.pathname === "/api/swarm/subjects/robotmoney-treasury/snapshots") {
+      // The cutover's basket: no wallets, a token no treasury holds.
+      return json({ snapshots: [{ subject_id: "robotmoney-treasury", date: "2026-08-06", total_value_usd: 46447.86, wallets: [], positions: [{ token: "ROBOT", chain: "base", value_usd: 23223 }] }] });
+    }
+    if (u.pathname === "/api/dashboards/wallet-sleeves") return json({ wallets: wallets.map((w) => ({ label: w.label, address: w.address })) });
+    if (u.pathname === "/api/dashboards/wallet-balances") {
+      return json({ asOf: `${day(0)}T11:00:00.000Z`, totalUsd: 64920, source: "live", history,
+        holdings: [{ symbol: "WETH", chain: "base", amount: 12.3, priceUsd: 2639, valueUsd: 32460 }, { symbol: "ROBOTMONEY", chain: "base", amount: 1000000, priceUsd: 0.03246, valueUsd: 32460 }] });
+    }
+    if (u.pathname === "/api/swarm/sessions") return json({ sessions: [], nextCursor: null, nextSessionAt: null });
+    return json({}, 503);
+  });
+  await page.goto("/swarm/subjects/robotmoney-treasury");
+
+  const meta = page.locator(".rr-meta").first();
+  await expect(meta.locator(".rr-meta__i").first().locator("b")).toHaveText("$64,920");
+  await expect(meta.locator(".rr-meta__i", { hasText: "24h" }).locator("b")).toHaveText("+$920 (+1.4%)");
+  await expect(meta.locator(".rr-meta__i", { hasText: "30d" }).locator("b")).toHaveText("+$4,920 (+8.2%)");
+  await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$64,920");
+  await expect(page.locator("#holdings .rr-positions tbody th")).toHaveText(["WETH", "ROBOTMONEY"]);
+  await expect(page.locator("#holdings")).not.toContainText("46,448");
+  await expectNoBrowserErrors(errors);
+});

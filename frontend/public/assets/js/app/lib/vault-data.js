@@ -850,5 +850,5 @@ export function gapParts(v) {
 export function freshnessLabel(overview) {
   const when = fmtDateTime(overview?.freshness?.indexedAt ?? overview?.asOf);
   if (when === "—") return "—";
-  return overview?.freshness?.stale === true ? `${when} · delayed` : when;
+  return when;
 }

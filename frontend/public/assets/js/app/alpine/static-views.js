@@ -264,6 +264,17 @@ export function camelMember(raw) {
 // endpoint has always returned that field, but nothing mapped it before the
 // public subject profile, so every consumer saw `undefined` and rendered
 // nothing.
+// A portfolio's recorded readings without the smoke fixture's baskets. The
+// fixture (ensureSmokeSubjectFixtures) always writes a reading with no
+// wallets, and a release cutover ran it against production (#1030), while a
+// genuine reading lists the wallets it read. A subject whose readings never
+// list wallets keeps them all.
+/** @param {any[]} list */
+export function withoutFixtureReadings(list) {
+  const hasWallets = (/** @type {any} */ s) => Array.isArray(s?.wallets) && s.wallets.length > 0;
+  return list.some(hasWallets) ? list.filter(hasWallets) : list.slice();
+}
+
 // The house moved to robotmoney.network, and robotmoney.net is a domain
 // someone else once ran: a subject row still carrying the old host links to
 // the new one until its data is corrected.
@@ -1456,6 +1467,10 @@ export function registerStaticViews(Alpine) {
         // Whatever is in that table, this page is the wrong place to find out:
         // the subject declares it holds nothing.
         this.snapshots = this.isFramework() ? [] : await this.loadSnapshots(id);
+        if (!this.isFramework() && !this.isVaultStack()) {
+          const live = await this.loadLiveWalletBook();
+          if (live) this.snapshots = live;
+        }
         this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
         if (this.isVaultStack() && vaultMode().mode === "devnet") {
           const fixture = await loadVaultSubjectFixture({ hostname: location.hostname });
@@ -1513,9 +1528,48 @@ export function registerStaticViews(Alpine) {
       try {
         const res = await api.get(path(ROUTES.swarm.subjectSnapshots, { id }));
         const list = (Array.isArray(res) ? res : res.snapshots || []).filter(Boolean);
-        if (list.length) return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+        if (list.length) return withoutFixtureReadings(list).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
       } catch (_) { /* fall through to the archive */ }
       return this.archiveSnapshots(id);
+    },
+    // The treasury's book, live. When every wallet a portfolio declares is one
+    // the site values live (the prop wallets behind /performance), their
+    // valuation is its book: today's holdings and a reading per day back,
+    // rather than recorded readings that stopped at the Aug 6 cutover (#1030).
+    // null for any other portfolio, which keeps its recorded readings.
+    async loadLiveWalletBook() {
+      const declared = (this.subject?.wallets || []).map((w) => String(w?.address || "").toLowerCase()).filter(Boolean);
+      if (!declared.length) return null;
+      try {
+        const sleeves = await api.get(ROUTES.dashboards.walletSleeves);
+        const valued = new Set((sleeves?.wallets || []).map((w) => String(w?.address || "").toLowerCase()));
+        if (!declared.every((a) => valued.has(a))) return null;
+        const wb = await api.get(ROUTES.dashboards.walletBalances);
+        const total = Number(wb?.totalUsd);
+        const asOf = String(wb?.asOf ?? "").slice(0, 10);
+        if (!Number.isFinite(total) || !asOf) return null;
+        const wallets = this.subject.wallets;
+        const days = (Array.isArray(wb.history) ? wb.history : [])
+          .filter((r) => r?.date && Number.isFinite(Number(r?.totalUsd)))
+          .map((r) => ({
+            date: String(r.date).slice(0, 10),
+            totalValueUsd: Number(r.totalUsd),
+            positions: Object.entries(r.byAsset || {}).filter(([, v]) => Number(v) > 0).map(([token, v]) => ({ token, chain: "base", value_usd: Number(v) })),
+            wallets,
+          }))
+          .filter((r) => r.date !== asOf);
+        const today = {
+          date: asOf,
+          totalValueUsd: total,
+          positions: (Array.isArray(wb.holdings) ? wb.holdings : []).map((h) => ({
+            token: h.symbol, chain: h.chain || "base", balance: h.amount, price_usd: h.priceUsd, value_usd: h.valueUsd,
+          })),
+          wallets,
+        };
+        return [...days, today].sort((a, b) => a.date.localeCompare(b.date));
+      } catch (_) {
+        return null;
+      }
     },
     // Static-archive fallback, the same path every other swarm surface has.
     // Without it this page renders a subject with an empty chart and a dashed
@@ -2229,7 +2283,7 @@ export function registerStaticViews(Alpine) {
       const span = `${m.rows[0].date} to ${m.rows[m.rows.length - 1].date}`;
       if (this.isVaultStack()) {
         const t = this.stackTargetAt(m.rows[m.rows.length - 1].date);
-        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.symbol} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
+        const target = t ? ` ${this.stackTargetName()}: ${VAULTS.map((v) => `${v.name} ${this.fmtPctTrim(t[v.slug] / 100)}`).join(", ")}.` : "";
         const dated = `${this.formatDate(m.rows[0].date, "short")} to ${this.formatDate(m.rows[m.rows.length - 1].date, "short")}`;
         return `Each sleeve's weight, stacked to 100%, ${dated}. Latest reading, top band first: ${named}.${target} Use the arrow keys to step through the readings.`;
       }
@@ -2322,7 +2376,34 @@ export function registerStaticViews(Alpine) {
     stackSnapshots() {
       if (this.vaultSnapshots) return this.vaultSnapshots;
       const live = this.liveStackSnapshot();
-      return live ? [live] : [];
+      if (!live) return [];
+      // By day, later sources winning a shared day: the archive's readings of
+      // rmUSDC's own book (to Aug 4; isVaultBookReading keeps the fabricated
+      // rows out), each live vault's daily readings once the feed serves
+      // them, and the feed's reading now. TVL and Sleeves over time both draw
+      // from this, so the two charts cover the same days.
+      /** @type {Map<string, any>} */
+      const byDay = new Map();
+      for (const s of this.snapshots || []) {
+        if (s?.date && isVaultBookReading(s)) byDay.set(String(s.date).slice(0, 10), s);
+      }
+      /** @type {Map<string, any>} */
+      const served = new Map();
+      for (const v of this.vaultStack?.overview?.vaults || []) {
+        if (v?.availability !== "live" || !Array.isArray(v?.history?.tvl)) continue;
+        for (const r of v.history.tvl) {
+          const day = String(r?.t ?? "").slice(0, 10);
+          const usd = Number(r?.tvlUsd);
+          if (!day || !Number.isFinite(usd)) continue;
+          const e = served.get(day) ?? { date: day, totalValueUsd: 0, positions: [] };
+          e.totalValueUsd += usd;
+          e.positions.push({ token: v.symbol, chain: "base", vault: v.slug, value_usd: usd });
+          served.set(day, e);
+        }
+      }
+      for (const [day, e] of served) byDay.set(day, e);
+      if (live.date) byDay.set(live.date, live);
+      return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, snap]) => snap);
     },
     stackSnapshot() {
       if (!this.vaultSnapshots) return this.liveStackSnapshot();
@@ -2564,35 +2645,11 @@ export function registerStaticViews(Alpine) {
     vaultUsd(v) { return fmtVaultUsd(v); },
 
     // ── the vault stack's TVL over time ─────────────────────────────────────
-    // The combined value by day. On the devnet, the fixture's fifteen readings.
-    // On Base, three sources, later ones winning a shared day: the archive's
-    // readings of rmUSDC's own book (to Aug 4; isVaultBookReading drops the
-    // fabricated rows after it), each live vault's daily readings once the
-    // feed serves them, summed, and the feed's reading now. Neutral, not a
-    // vault's hue.
+    // The combined value on every reading of the book (stackSnapshots): the
+    // devnet fixture's fifteen, or on Base the archive's own readings, the
+    // feed's daily history and its reading now. Neutral, not a vault's hue.
     tvlPoints() {
-      if (!this.isVaultStack()) return [];
-      if (this.vaultSnapshots) return this.stackSnapshots().map((s) => ({ t: s?.date, tvlUsd: s?.totalValueUsd ?? s?.total_value_usd }));
-      /** @type {Map<string, number>} */
-      const byDay = new Map();
-      for (const s of this.snapshots || []) {
-        const v = Number(s?.totalValueUsd ?? s?.total_value_usd);
-        if (s?.date && Number.isFinite(v) && isVaultBookReading(s)) byDay.set(String(s.date).slice(0, 10), v);
-      }
-      /** @type {Map<string, number>} */
-      const served = new Map();
-      for (const v of this.vaultStack?.overview?.vaults || []) {
-        if (v?.availability !== "live" || !Array.isArray(v?.history?.tvl)) continue;
-        for (const r of v.history.tvl) {
-          const day = String(r?.t ?? "").slice(0, 10);
-          const usd = Number(r?.tvlUsd);
-          if (day && Number.isFinite(usd)) served.set(day, (served.get(day) ?? 0) + usd);
-        }
-      }
-      for (const [day, usd] of served) byDay.set(day, usd);
-      const live = this.liveStackSnapshot();
-      if (live?.date && Number.isFinite(Number(live.totalValueUsd))) byDay.set(live.date, Number(live.totalValueUsd));
-      return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([t, tvlUsd]) => ({ t, tvlUsd }));
+      return this.isVaultStack() ? this.stackSnapshots().map((s) => ({ t: String(s?.date ?? "").slice(0, 10), tvlUsd: s?.totalValueUsd ?? s?.total_value_usd })) : [];
     },
     tvlAsOf() { return this.vaultStack?.overview?.asOf; },
     tvlColor() { return "var(--color-text-soft)"; },
@@ -2627,6 +2684,37 @@ export function registerStaticViews(Alpine) {
       return facts;
     },
 
+    // The facts row's figures: the vault stack's (stackFacts), or a wallet
+    // portfolio's: its value and how it moved over a day and over 30 days,
+    // deposits and withdrawals included, so a change and not a return. Only
+    // from a reading at most two days old: a stale book is not a headline.
+    metaFacts() {
+      return this.isVaultStack() ? this.stackFacts() : this.portfolioFacts();
+    },
+    portfolioFacts() {
+      if (this.isFramework()) return [];
+      const list = this.snapshots || [];
+      const last = list[list.length - 1];
+      const at = (/** @type {any} */ snap) => Date.parse(`${String(snap?.date ?? "").slice(0, 10)}T00:00:00Z`);
+      const val = (/** @type {any} */ snap) => Number(snap?.totalValueUsd ?? snap?.total_value_usd);
+      const lastMs = at(last);
+      const now = val(last);
+      if (!last || !Number.isFinite(lastMs) || !Number.isFinite(now) || Date.now() - lastMs > 2 * 86400000) return [];
+      const facts = [{ key: "value", label: "Value", value: this.fmtUsd(now) }];
+      for (const [key, days, label] of /** @type {Array<[string, number, string]>} */ ([["d1", 1, "24h"], ["d30", 30, "30d"]])) {
+        let then = null;
+        for (const snap of list) if (at(snap) <= lastMs - days * 86400000) then = snap;
+        const was = val(then);
+        if (!then || !Number.isFinite(was) || was <= 0) continue;
+        const d = now - was;
+        const pct = Math.round((d / was) * 1000) / 10;
+        const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+        facts.push({ key, label, value: `${sign}${this.fmtUsd(Math.abs(d))} (${sign}${Math.abs(pct).toFixed(1)}%)`, cls: this.changeClass(pct),
+          tip: key === "d30" ? "The change in value over 30 days, deposits and withdrawals included." : undefined });
+      }
+      return facts;
+    },
+
     // ── the vault stack's activity ──────────────────────────────────────────
     async loadStackActivity(load) {
       const ov = load?.overview;
@@ -2655,6 +2743,12 @@ export function registerStaticViews(Alpine) {
       return `${from}–${Math.min(n, from + 9)} of ${n}`;
     },
     stackActivityHasTx() { return (this.stackActivity || []).some((a) => !!a?.tx); },
+    // Who: the account the shares were minted to or burned from (ERC-4626's
+    // owner), linked on Base; the devnet has no explorer.
+    stackActivityHasAccount() { return (this.stackActivity || []).some((a) => !!a?.account); },
+    stackAccountHref(a) {
+      return a?.account && this.vaultStack?.overview?.network?.chainId === 8453 ? this.explorerHref("base", a.account) : null;
+    },
     activityEvent(a) {
       const k = String(a?.kind ?? "").toLowerCase();
       return k === "withdraw" || k === "withdrawal" ? "Withdrawal" : k === "deposit" ? "Deposit" : (k ? k[0].toUpperCase() + k.slice(1) : "—");

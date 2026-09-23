@@ -240,84 +240,96 @@
       "kind": "Withdrawal",
       "assets": 1946.04,
       "shares": 1828.98,
-      "tx": null
+      "tx": null,
+      "account": "0x4781b654f93ebc1106d3cd87b368777f7b37455d"
     },
     {
       "t": "2026-09-15T12:25:00Z",
       "kind": "Withdrawal",
       "assets": 2820.19,
       "shares": 2650.55,
-      "tx": null
+      "tx": null,
+      "account": "0xc99a93d3d3d532f13049c8e537fced0a56edc02d"
     },
     {
       "t": "2026-09-15T03:14:00Z",
       "kind": "Deposit",
       "assets": 1577.86,
       "shares": 1482.95,
-      "tx": null
+      "tx": null,
+      "account": "0x40c1e3addb7084f5f87f73c037a4fb3511faec93"
     },
     {
       "t": "2026-09-14T09:20:00Z",
       "kind": "Deposit",
       "assets": 2582.76,
       "shares": 2427.41,
-      "tx": null
+      "tx": null,
+      "account": "0xfdeebf1910bb686b961c29e772c7eb44d1641e27"
     },
     {
       "t": "2026-09-14T00:13:00Z",
       "kind": "Deposit",
       "assets": 2926.08,
       "shares": 2750.08,
-      "tx": null
+      "tx": null,
+      "account": "0x4781b654f93ebc1106d3cd87b368777f7b37455d"
     },
     {
       "t": "2026-09-13T09:01:00Z",
       "kind": "Deposit",
       "assets": 1255.33,
       "shares": 1179.82,
-      "tx": null
+      "tx": null,
+      "account": "0xc99a93d3d3d532f13049c8e537fced0a56edc02d"
     },
     {
       "t": "2026-09-13T07:52:00Z",
       "kind": "Deposit",
       "assets": 1608.81,
       "shares": 1512.04,
-      "tx": null
+      "tx": null,
+      "account": "0x40c1e3addb7084f5f87f73c037a4fb3511faec93"
     },
     {
       "t": "2026-09-12T09:54:00Z",
       "kind": "Deposit",
       "assets": 2154.59,
       "shares": 2024.99,
-      "tx": null
+      "tx": null,
+      "account": "0xfdeebf1910bb686b961c29e772c7eb44d1641e27"
     },
     {
       "t": "2026-09-12T07:35:00Z",
       "kind": "Withdrawal",
       "assets": 2737.09,
       "shares": 2572.45,
-      "tx": null
+      "tx": null,
+      "account": "0x4781b654f93ebc1106d3cd87b368777f7b37455d"
     },
     {
       "t": "2026-09-11T02:17:00Z",
       "kind": "Deposit",
       "assets": 2607.64,
       "shares": 2450.79,
-      "tx": null
+      "tx": null,
+      "account": "0xc99a93d3d3d532f13049c8e537fced0a56edc02d"
     },
     {
       "t": "2026-09-09T21:52:00Z",
       "kind": "Deposit",
       "assets": 1423.1,
       "shares": 1337.5,
-      "tx": null
+      "tx": null,
+      "account": "0x40c1e3addb7084f5f87f73c037a4fb3511faec93"
     },
     {
       "t": "2026-09-04T01:46:00Z",
       "kind": "Deposit",
       "assets": 1209.66,
       "shares": 1136.9,
-      "tx": null
+      "tx": null,
+      "account": "0xfdeebf1910bb686b961c29e772c7eb44d1641e27"
     }
   ]
 }

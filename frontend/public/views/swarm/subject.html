@@ -51,8 +51,8 @@
              way into it, below; the book's total is the Holdings figure; and
              with no session the history says so where the list would be. The
              row itself goes when none of its items would draw. -->
-        <div class="rr-meta" x-show="stackFacts().length || sessionCount() || backdrop?.regime || isFramework()">
-          <template x-for="f in stackFacts()" :key="f.key">
+        <div class="rr-meta" x-show="metaFacts().length || sessionCount() || backdrop?.regime || isFramework()">
+          <template x-for="f in metaFacts()" :key="f.key">
             <span class="rr-meta__i"><span x-text="f.label"></span><template x-if="f.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></template>
               <b :class="f.cls ? `alp__mv ${f.cls}` : ''" x-text="f.value"></b></span>
           </template>
@@ -391,8 +391,10 @@
                  opens with a title like the Wallets table beside the figure,
                  which is why .rr-positions wraps the scroller rather than
                  being it. -->
-            <!-- The vault stack: each vault's weight of the book against the
-                 weights in force; a vault opens onto its positions. -->
+            <!-- The vault stack: each sleeve's weight of the book against the
+                 weights in force. A row or an arc brings its sleeve forward in
+                 the ring and the table and nothing opens, so nothing below
+                 moves: what each sleeve holds is By position, under it. -->
             <template x-if="isVaultStack() && vaultGroups().length">
               <div class="rr-block" style="margin-top:2.25rem">
                 <div class="rr-subhead"><h3 class="rr-subhead__h">By sleeve</h3></div>
@@ -415,7 +417,7 @@
                       <template x-for="r in explorerRows()" :key="r.key">
                         <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
                                 :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
-                                :aria-expanded="pinned === r.key ? 'true' : 'false'" :aria-controls="`vault-${r.key}`"
+                                :aria-pressed="pinned === r.key ? 'true' : 'false'"
                                 @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
                           <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
                           <span><span class="rr-legend__l" x-text="r.label"></span><span class="rr-legend__s" aria-hidden="true" x-text="r.short"></span><small class="rr-legend__tk" x-text="r.symbol"></small></span>
@@ -424,34 +426,6 @@
                           <span class="rr-legend__was rr-legend__t"><span class="rr-sr">Target </span><span x-text="r.was == null ? '—' : fmtPctTrim(r.was)"></span></span>
                           <span class="rr-legend__d"><span class="rr-sr" x-show="r.d">Drift </span><template x-if="r.d"><span class="alp__mv" :class="changeClass(r.d)" x-text="changeLabel(r.d)"></span></template></span>
                         </button>
-                      </template>
-                    </div>
-                  </div>
-                  <div class="rr-x__drawer" :class="activeRow() ? 'is-open' : ''" :inert="!activeRow()">
-                    <div class="rr-x__clip">
-                      <template x-if="panelRow()">
-                        <div class="rr-x__panel" :id="`vault-${panelRow().key}`" role="region" :aria-label="`${panelRow().label} breakdown`">
-                          <div class="rr-x__head">
-                            <p><i data-mark="series" :style="`background:${panelRow().hue}`" aria-hidden="true"></i><b><a class="rr-lnk" :href="`/vault/${panelRow().key}`" x-text="panelRow().label"></a></b></p>
-                          </div>
-                          <template x-if="panelRow().assets.length">
-                            <table class="rr-table rr-x__assets">
-                              <thead><tr><th scope="col">Constituent</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of total</th></tr></thead>
-                              <tbody>
-                                <template x-for="a in panelRow().assets" :key="a.key">
-                                  <tr>
-                                    <th scope="row"><span x-text="a.label"></span></th>
-                                    <td class="q" x-text="a.ofSleeve == null ? '—' : fmtPctTrim(a.ofSleeve)"></td>
-                                    <td class="q" x-text="a.ofTotal == null ? '—' : fmtPctTrim(a.ofTotal)"></td>
-                                  </tr>
-                                </template>
-                              </tbody>
-                            </table>
-                          </template>
-                          <template x-if="!panelRow().assets.length">
-                            <p class="rr-note" style="margin:0">No holdings reported</p>
-                          </template>
-                        </div>
                       </template>
                     </div>
                   </div>
@@ -550,10 +524,10 @@
             <template x-if="isVaultStack() && vaultGroups().length">
               <div class="rr-positions rr-positions--stack">
                 <div class="rr-subhead">
-                  <h3 class="rr-subhead__h">By constituent</h3>
+                  <h3 class="rr-subhead__h">By position</h3>
                   <div class="rr-subhead__tools">
                     <template x-if="stackSnapshot()?.date"><span class="rr-sec__aside" x-text="`As of ${formatDate(stackSnapshot().date, 'short')}`"></span></template>
-                    <div class="rm-chips" role="group" aria-label="Constituents view">
+                    <div class="rm-chips" role="group" aria-label="Positions view">
                       <button type="button" class="rm-chip" :aria-pressed="posView === 'vault' ? 'true' : 'false'" @click="posView = 'vault'">By sleeve</button>
                       <button type="button" class="rm-chip" :aria-pressed="posView === 'all' ? 'true' : 'false'" @click="posView = 'all'">All</button>
                     </div>
@@ -562,7 +536,7 @@
                 <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-postable">
                   <colgroup><col class="rr-postable__name"><col x-show="stackMultiChain()" class="rr-postable__chain"><col class="rr-postable__n"><col class="rr-postable__n"><col class="rr-postable__n"><col class="rr-postable__share"></colgroup>
                   <thead>
-                    <tr><th scope="col">Constituent</th><th scope="col" x-show="stackMultiChain()">Chain</th>
+                    <tr><th scope="col">Position</th><th scope="col" x-show="stackMultiChain()">Chain</th>
                       <template x-for="c in [['amount', 'Amount'], ['price', 'Price'], ['value', 'Value'], ['share', 'Weight']]" :key="c[0]">
                         <th scope="col" class="q" :aria-sort="posSortState(c[0])"><button type="button" class="rr-sort" @click="sortPositions(c[0])" x-text="c[1]"></button></th>
                       </template>
@@ -573,7 +547,7 @@
                       <tbody :class="posClosed[g.slug] ? 'is-closed' : ''">
                         <tr class="rr-group">
                           <th scope="rowgroup">
-                            <button type="button" class="rr-fold" :aria-expanded="posClosed[g.slug] ? 'false' : 'true'" :aria-label="`${posClosed[g.slug] ? 'Show' : 'Hide'} ${g.name} constituents`" @click="togglePosGroup(g.slug)"><span aria-hidden="true"></span></button>
+                            <button type="button" class="rr-fold" :aria-expanded="posClosed[g.slug] ? 'false' : 'true'" :aria-label="`${posClosed[g.slug] ? 'Show' : 'Hide'} ${g.name} positions`" @click="togglePosGroup(g.slug)"><span aria-hidden="true"></span></button>
                             <template x-if="g.color">
                               <span class="rr-group__id"><i class="rr-dot" data-mark="series" :style="`background:${g.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="`/vault/${g.slug}`" x-text="g.name || g.symbol"></a><small x-text="g.name ? g.symbol : ''"></small></span>
                             </template>
@@ -660,9 +634,9 @@
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="sact-h">Activity</h2>
             </div>
-            <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="stackActivityHasTx() ? 'has-tx' : ''">
+            <div class="rr-tablewrap"><table class="rr-table rr-table--compact rr-activity" :class="{ 'has-tx': stackActivityHasTx(), 'has-account': stackActivityHasAccount() }">
               <thead>
-                <tr><th scope="col">Date</th><th scope="col">Sleeve</th><th scope="col">Event</th><th scope="col" class="q">Shares</th><th scope="col" class="q">Assets</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
+                <tr><th scope="col">Date</th><th scope="col">Sleeve</th><th scope="col">Event</th><th scope="col" class="rr-activity__acct">Account</th><th scope="col" class="q">Shares</th><th scope="col" class="q">Assets</th><th scope="col" class="q rr-activity__tx">Transaction</th></tr>
               </thead>
               <tbody>
                 <template x-for="(a, i) in stackActivityRows()" :key="`${stackActivityPage}-${i}-${a.vault}-${a.t}`">
@@ -670,6 +644,10 @@
                     <th scope="row" x-text="formatDate(a.t, 'short')"></th>
                     <td><i class="rr-dot" data-mark="series" :style="`background:${a.color}`" aria-hidden="true"></i><a class="rr-lnk" :href="`/vault/${a.vault}`" x-text="a.name || a.symbol"></a></td>
                     <td x-text="activityEvent(a)"></td>
+                    <td class="rr-activity__acct">
+                      <template x-if="stackAccountHref(a)"><a class="rr-lnk" :href="stackAccountHref(a)" target="_blank" rel="noopener noreferrer" x-text="truncAddress(a.account)"></a></template>
+                      <template x-if="!stackAccountHref(a)"><span class="sp-addr" x-text="a.account ? truncAddress(a.account) : '—'"></span></template>
+                    </td>
                     <td class="q" x-text="activityAmount(a)"></td>
                     <td class="q" x-text="activityValue(a)"></td>
                     <td class="q rr-activity__tx">
@@ -679,7 +657,7 @@
                   </tr>
                 </template>
                 <template x-if="!stackActivity.length">
-                  <tr><td class="rr-table__empty" colspan="6"><span class="rr-empty__t">No activity yet</span></td></tr>
+                  <tr><td class="rr-table__empty" colspan="7"><span class="rr-empty__t">No activity yet</span></td></tr>
                 </template>
               </tbody>
             </table></div>
