@@ -91,6 +91,13 @@ const ALLOWED: Record<string, string> = {
   // creates objects on a blank database and deletes no row anywhere.
   "backend/schema/snapshot.sql": "the snapshot declaration installs the guard's triggers",
 
+  // Same statements again, for the same reason, in the fixture snapshot the
+  // snapshot tests build on disk: its declaration carries
+  // `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON schema_migrations` so the
+  // fixture is honest about embodying 0032 and preflight check 3a can be run
+  // against it. Installing the guard is not using it — the file deletes no row.
+  "backend/tests/schema-snapshot.test.ts": "its fixture declaration installs the guard's triggers",
+
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",

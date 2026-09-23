@@ -446,18 +446,45 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
     expect(result.status).toBe("armed");
   });
 
-  test("the probe is still LIVE from that role — skipping the ungranted tables is not skipping the probe", async () => {
-    // The filter must not have quietly converted the production check into an
-    // inventory, which the header of this module spends forty lines explaining
-    // is worthless. rm_app DOES hold DELETE on 0032's own tables, so the
-    // one-statement disarm has to be caught from this connection too.
+  test("a replaced guard function is UNREACHABLE from this role, because the privilege is gone too", async () => {
+    // THIS CASE CHANGED WHEN MIGRATION 0065 LANDED, and the change is a
+    // narrowing of what rm_app can do, not of what is checked.
+    //
+    // It used to assert that the live probe catches a one-statement disarm from
+    // the rm_app connection, and its premise was stated in as many words: "rm_app
+    // DOES hold DELETE on 0032's own tables". Migration 0065 is spec §9.1 step 2
+    // and removes exactly that — `REVOKE DELETE, TRUNCATE` on every append-only
+    // table from rm_app and rm_worker — because preflight check 2's denylist
+    // refuses a runtime role that holds it. So the premise is now false by
+    // design, and the probe has nothing it may execute from here.
+    //
+    // WHAT WAS LOST AND WHY IT IS NOT A HOLE. The probe exists because a replaced
+    // `rm_append_only_guard()` body is invisible to the catalog: the triggers are
+    // all present and all `tgenabled = 'A'`, and only an actual DELETE reveals
+    // that they no longer refuse. That attack is still real — and it is no longer
+    // reachable from rm_app, because the executor refuses a DELETE at 42501
+    // before any trigger runs. Spec §7 check 2 is explicit that this is the
+    // design: "Append-only protection is both absent privilege and the existing
+    // triggers." Under 0065 the first half carries the production role, and the
+    // probe still runs in full under rm_owner — the describe above this one.
     await sql.unsafe(DISARM);
+
+    // The premise, asserted rather than assumed, because everything below rests
+    // on it: the disarmed function cannot be exploited from this connection.
+    let raised: { code?: string } | null = null;
+    try {
+      await app.unsafe("DELETE FROM public.audit_log WHERE false");
+    } catch (e) {
+      raised = e as { code?: string };
+    }
+    expect(raised?.code, "0065 revoked DELETE on every append-only table from rm_app").toBe("42501");
+
+    // And the check does not pretend otherwise: an unreachable table is reported
+    // as neither armed-by-probe nor broken, never as "inconclusive" (which would
+    // retire the whole check).
     const result = await checkAppendOnlyGuard(app);
-    expect(result.status).toBe("disarmed");
-    expect(result.problems.some((p) => p.startsWith("audit_log: a DELETE was ACCEPTED"))).toBe(true);
-    // ...and only the tables it can actually reach are probed: the ungranted
-    // ones are absent from the probe's findings, covered by the catalog half.
-    expect(result.problems.some((p) => p.startsWith("analytics_overwrite_events: a DELETE was"))).toBe(false);
+    expect(result.status).not.toBe("unavailable");
+    expect(result.problems.some((p) => p.includes("a DELETE was ACCEPTED"))).toBe(false);
   });
 
   test("and it still catches a dropped ledger trigger from that role, via the catalog half", async () => {

@@ -128,6 +128,19 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     // From main, two grant repairs found after v0.5.1 went out.
     "0061_rm_worker_wallet_backfill_grant.sql",
     "0062_rm_worker_analytics_ledger_read_grant.sql",
+    // The deployment refactor (#1026 / D47, smoke-production-spec.md). All
+    // three are owed to the next release's manifest, and none of them can be
+    // added to v0.5.0's or v0.5.1's: those releases shipped before the spec was
+    // adopted, and their directories are a record of what actually went out.
+    //   0063 — §4.2's one-row `deployment_identity` target enrollment.
+    //   0064 — §8.3's `schema_manifest` plus §8.2's `compat` /
+    //          `metadata_version` columns on the ledger.
+    //   0065 — §9.1 step 2's grant transition, revoking DELETE/TRUNCATE on the
+    //          append-only tables from rm_app/rm_worker. Preflight check 2
+    //          fails until it lands.
+    "0063_deployment_identity.sql",
+    "0064_schema_manifest.sql",
+    "0065_append_only_grant_transition.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

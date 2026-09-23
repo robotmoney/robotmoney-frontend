@@ -169,6 +169,11 @@ describe("readManifest / writeManifest — round trip", () => {
   });
 
   test("refuses more than one row — no choice between two manifests is defensible", async () => {
+    // Migration 0064 creates `schema_manifest` with the singleton constraint,
+    // so this builds the unconstrained shape on its own clone: what is under
+    // test is readManifest's refusal to choose between two rows, not who
+    // created the table, and the two-row state has to be constructible at all.
+    await sql.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
     await sql.unsafe(`
       CREATE TABLE ${MANIFEST_TABLE} (
         format_version integer NOT NULL, declaration text NOT NULL,

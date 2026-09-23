@@ -80,7 +80,9 @@
     "0061_source_value_provenance.sql",
     "0062_rm_readonly_sequence_select.sql",
     "0062_rm_worker_analytics_ledger_read_grant.sql",
-    "0063_deployment_identity.sql"
+    "0063_deployment_identity.sql",
+    "0064_schema_manifest.sql",
+    "0065_append_only_grant_transition.sql"
   ],
-  "contentHash": "862cb3ba85688ced29cee0cb59d52495e49b3492f258a06189bde9ae55c1d9f2"
+  "contentHash": "169fd18ec7201c96331c9604e84db985b4e93fdcff3cb49992b9b92e2dd12e1f"
 }

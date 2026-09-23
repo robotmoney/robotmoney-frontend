@@ -16,13 +16,16 @@
 -- is itself a check-2 denylist violation (§7 check 2), so reconciliation must not
 -- quietly succeed around it.
 --
--- THE APPEND-ONLY REVOCATION IS §9.1 STEP 2. Migration 0053 granted rm_app
--- `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public` -- append-only tables
--- included -- and preflight check 2 fails until that is undone. The REVOKE below is
--- the transition, carried by reconciliation rather than by a numbered migration so
--- that it is re-asserted on every run: a hand-run GRANT that re-widens rm_app is
--- exactly the drift a one-shot migration cannot catch. Absent privilege is one half
--- of the protection; migration 0032's triggers are the other (src/db/append-only-guard.ts).
+-- THE APPEND-ONLY REVOCATION IS §9.1 STEP 2, and it is MIGRATION 0065. Migration
+-- 0053 granted rm_app `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public`
+-- -- append-only tables included -- and preflight check 2 fails until that is undone.
+-- §9.1 calls the transition "a migration" and 0065 is it: reconciliation only runs
+-- inside a migrate run, and §8.5 keeps a production migrate run out of the boot, so a
+-- transition carried by reconciliation alone would leave production unable to pass
+-- check 2 until an operator happened to migrate. The REVOKE below RE-ASSERTS 0065 on
+-- every run rather than replacing it, because a hand-run GRANT that re-widens rm_app
+-- is drift a one-shot migration cannot catch. Absent privilege is one half of the
+-- protection; migration 0032's triggers are the other (src/db/append-only-guard.ts).
 
 DO $$
 DECLARE
@@ -39,7 +42,13 @@ DECLARE
   -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;
   -- 0063 left the runtime roles SELECT only on `deployment_identity`, which §4.2
   -- makes "writable only by rm_owner".
-  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity'];
+  -- 0064 added `schema_manifest`, which §8.3 makes "a trusted input to boot
+  -- decisions" writable only by rm_owner. It is listed here rather than left to the
+  -- ordinary sweep because the sweep would hand rm_app INSERT and UPDATE on it on
+  -- every single run -- that is, it would grant the application the ability to forge
+  -- the answer preflight check 3a trusts. SELECT is restored below, because §7.2
+  -- has every database-holding container run check 3a under its own credential.
+  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity', 'schema_manifest'];
   rel record;
   usurped text;
 BEGIN
@@ -74,13 +83,13 @@ BEGIN
   LOOP
     IF rel.name = ANY(read_only_for_runtime) THEN
       -- A later migration deliberately narrowed these to SELECT (0063 on
-      -- `deployment_identity`) or to nothing at all for the writing roles (0056 on
-      -- `analytics_overwrite_events`). Reconciliation must RE-ASSERT that narrowing,
-      -- not undo it: a sweep that hands every table back to rm_app would quietly
-      -- widen the two tables whose whole point is that the application cannot write
-      -- them, and it would do so on every run.
+      -- `deployment_identity`, 0064 on `schema_manifest`) or to nothing at all for
+      -- the writing roles (0056 on `analytics_overwrite_events`). Reconciliation
+      -- must RE-ASSERT that narrowing, not undo it: a sweep that hands every table
+      -- back to rm_app would quietly widen the tables whose whole point is that the
+      -- application cannot write them, and it would do so on every run.
       EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
-      IF rel.name = 'deployment_identity' THEN
+      IF rel.name IN ('deployment_identity', 'schema_manifest') THEN
         EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
       END IF;
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);

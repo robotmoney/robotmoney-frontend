@@ -17,7 +17,7 @@
 // `finally` — a leaked `rm_app SUPERUSER` would make every later file in the
 // run meaningless rather than red.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -40,9 +40,19 @@ import {
 } from "../src/db/preflight.ts";
 import type { RmRole } from "../src/db/registry.ts";
 import { SWARM_SCHEDULE_KINDS } from "../scripts/schedules-enable.ts";
-import { useCleanDatabase } from "./support/clean-db.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
-useCleanDatabase(import.meta.file);
+// PER TEST, not per file. Several cases here are deliberately destructive to
+// DATABASE state rather than to cluster state: check 6 deletes a `swarm.*`
+// schedule row and breaks another's cron string, and check 3a drops an
+// append-only trigger. None of that is reversible by a fixture — this repo's
+// rule is a clean database per test via a template copy, never delete-to-reset
+// (tests/support/clean-db.ts) — so a later test asserting the healthy shape
+// could never pass behind them. A template copy is a file-level copy, measured
+// in tens of milliseconds, so the isolation is cheap enough to be the default
+// here. The `beforeAll` below only touches CLUSTER state (role passwords),
+// which a clone does not reset and therefore still holds for every test.
+useCleanDatabasePerTest(import.meta.file);
 
 const PASSWORDS: Record<"rm_app" | "rm_worker" | "rm_readonly", string> = {
   rm_app: "rm_app_preflight_password",
@@ -51,6 +61,8 @@ const PASSWORDS: Record<"rm_app" | "rm_worker" | "rm_readonly", string> = {
 };
 
 const RUNTIME_ROLES: readonly RmRole[] = ["rm_app", "rm_worker", "rm_readonly"];
+
+const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 
 let tmpDir = "";
 
@@ -249,12 +261,31 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
   });
 
   test("DELETE on an append-only table is a denylist violation, one per table", async () => {
-    // This is TODAY's production state: 0053 line 129 is
-    // `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
-    // rm_app` — append-only tables included.
-    const violations = await findDenylistViolations(sql, ["rm_app"]);
-    const appendOnly = violations.filter((v) => v.rule === "append_only_write");
-    expect(appendOnly.map((v) => v.object).sort()).toEqual([...APPEND_ONLY_TABLES].sort());
+    // THE VIOLATION IS CONSTRUCTED, not borrowed from the ambient schema.
+    //
+    // This case used to read the state 0053 line 129 left behind
+    // (`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
+    // rm_app`, append-only tables included) and assert the denylist reported
+    // every one of them. Migration 0065 is §9.1 step 2 — it revokes exactly
+    // that grant — so an assertion resting on the grant's presence would be
+    // ERASED by the fix rather than kept honest by it, and two later migrations
+    // (0056 on `analytics_overwrite_events`, 0065 on the rest) already made the
+    // ambient set a moving target no literal could track.
+    //
+    // The property under test is "the denylist detects a DELETE grant on an
+    // append-only table", one finding per table. That property has to survive
+    // 0065, so the grant is made here and revoked in `finally`, which is what
+    // every other case in this describe already does.
+    const tables = [...APPEND_ONLY_TABLES].sort();
+    const relations = tables.map((t) => `"${t}"`).join(", ");
+    await sql.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
+    try {
+      const violations = await findDenylistViolations(sql, ["rm_app"]);
+      const appendOnly = violations.filter((v) => v.rule === "append_only_write");
+      expect(appendOnly.map((v) => v.object).sort()).toEqual(tables);
+    } finally {
+      await sql.unsafe(`REVOKE DELETE ON ${relations} FROM rm_app`);
+    }
   });
 
   test("TRUNCATE on an append-only table is the same violation as DELETE", async () => {
@@ -300,16 +331,24 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
     expect(undeclared).toEqual([]);
   });
 
-  test("today's 0053 grant — rm_app DELETE on ALL tables — FAILS check 2, which is what W2.2's migration must fix", async () => {
-    // Spec §9.1 step 2: "Check 2 fails until it lands." A preflight that passed
-    // on today's production would be measuring nothing.
-    const result = await checkPrivileges(sql, context({ roles: ["rm_app"] }));
-    const refused = refusals(result.findings);
-    expect(refused.length).toBeGreaterThan(0);
-    const text = refused.map((f) => f.message).join("\n");
-    expect(text).toContain("rm_app");
-    expect(text).toContain("swarm_members");
-    expect(text).toMatch(/DELETE/);
+  test("rm_app holding DELETE on an append-only table FAILS check 2 — the grant §9.1 step 2 exists to remove", async () => {
+    // Spec §9.1 step 2: "Check 2 fails until it lands." Migration 0065 IS that
+    // step, so the grant 0053 left behind is gone from this database and this
+    // case constructs it instead of reading it. The thing being proved is
+    // unchanged and is the reason the step exists: while a runtime role holds
+    // DELETE on an append-only table, check 2 refuses the boot and names both.
+    await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+    try {
+      const result = await checkPrivileges(sql, context({ roles: ["rm_app"] }));
+      const refused = refusals(result.findings);
+      expect(refused.length).toBeGreaterThan(0);
+      const text = refused.map((f) => f.message).join("\n");
+      expect(text).toContain("rm_app");
+      expect(text).toContain("swarm_members");
+      expect(text).toMatch(/DELETE/);
+    } finally {
+      await sql.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
+    }
   });
 
   test("check 2 refuses at `refuse` severity on stage too — a denylist first armed in production is untested", async () => {
@@ -339,6 +378,11 @@ describe("check 3a — integrity against the manifest stored in the database", (
   });
 
   test("refuses an in-progress database — ledger ahead of manifest means nothing verified where it got to", async () => {
+    // Migration 0064 creates `schema_manifest` (§8.3 makes it a real one-row
+    // TABLE), so this builds the shape it needs on its own clone rather than
+    // assuming the table is absent. What is under test is manifest BEHAVIOUR,
+    // not who created the table.
+    await sql.unsafe("DROP TABLE IF EXISTS schema_manifest");
     await sql.unsafe(`
       CREATE TABLE schema_manifest (
         format_version integer NOT NULL,
@@ -410,22 +454,29 @@ describe("check 3b — does the booting code support the installed version", () 
     expect(text).toContain("0063_not_applied_here.sql");
   });
 
-  test("the two 0059 migrations are distinguished by filename, never by number", async () => {
-    // `backend/migrations/` holds 0059_analytics_output_and_report_snapshots.sql
-    // AND 0059_swarm_framework_subject_snapshot_cleanup.sql, so "at 0059" names
-    // two different schemas (§8.1).
+  test("the 0059 migrations are distinguished by filename, never by number", async () => {
+    // `backend/migrations/` holds SEVERAL files numbered 0059, so "at 0059"
+    // names several different schemas (§8.1). The set is read from disk rather
+    // than written down here: this test's own subject is that the FILENAME LIST
+    // is the identity and the number is not, so a hardcoded count would
+    // contradict it the next time a fourth 0059 lands — which is exactly what
+    // happened when 0059_swarm_judgement_completion_usage.sql arrived from main.
+    const onDisk = readdirSync(MIGRATIONS_DIR)
+      .filter((n) => n.startsWith("0059_") && n.endsWith(".sql"))
+      .sort();
     const ledger = await sql<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
     const names = ledger.map((r) => r.name);
-    const theTwo = names.filter((n) => n.startsWith("0059_"));
-    expect(theTwo).toHaveLength(2);
+    expect(names.filter((n) => n.startsWith("0059_")).sort()).toEqual(onDisk);
+    expect(onDisk.length).toBeGreaterThan(1);
 
-    // Code shipping only ONE of them is not "at 0059 and therefore current":
-    // the other is surplus and must be evaluated.
-    const codeFilenames = names.filter((n) => n !== "0059_swarm_framework_subject_snapshot_cleanup.sql");
+    // Code shipping only SOME of them is not "at 0059 and therefore current":
+    // each of the others is surplus and must be evaluated on its own name.
+    const [omitted, ...shipped] = onDisk;
+    const codeFilenames = names.filter((n) => n !== omitted);
     const result = await checkSchemaCompatibility(sql, context({ codeFilenames }));
     const text = refusals(result.findings).map((f) => f.message).join("\n");
-    expect(text).toContain("0059_swarm_framework_subject_snapshot_cleanup.sql");
-    expect(text).not.toContain("0059_analytics_output_and_report_snapshots.sql");
+    expect(text).toContain(omitted);
+    for (const sibling of shipped) expect(text).not.toContain(sibling);
   });
 });
 
@@ -502,14 +553,19 @@ describe("check 4 — ~/.env holds no dangerous credential", () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix", () => {
+  // The enrollment column is `kind` — spec §4.2 ("`deployment_identity.kind ∈
+  // {production, rehearsal}`") and migration 0063, which is what the template
+  // database this test runs against actually holds. The fixture replaces the
+  // table rather than reusing 0063's so that the zero-row and two-row cases
+  // below are expressible at all: 0063 pins one row with a boolean primary key.
   async function withIdentity(value: "production" | "rehearsal" | null, body: () => Promise<void>): Promise<void> {
+    await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
     await sql.unsafe(`
-      CREATE TABLE IF NOT EXISTS deployment_identity (
-        identity text NOT NULL,
+      CREATE TABLE deployment_identity (
+        kind text NOT NULL,
         singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
       )`);
-    await sql.unsafe("DELETE FROM deployment_identity");
-    if (value) await sql`INSERT INTO deployment_identity (identity) VALUES (${value})`;
+    if (value) await sql`INSERT INTO deployment_identity (kind) VALUES (${value})`;
     try {
       await body();
     } finally {
@@ -583,9 +639,9 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
   });
 
   test("more than one deployment_identity row refuses", async () => {
-    await sql.unsafe("CREATE TABLE IF NOT EXISTS deployment_identity (identity text NOT NULL)");
-    await sql.unsafe("DELETE FROM deployment_identity");
-    await sql.unsafe("INSERT INTO deployment_identity (identity) VALUES ('rehearsal'), ('production')");
+    await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
+    await sql.unsafe("CREATE TABLE deployment_identity (kind text NOT NULL)");
+    await sql.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal'), ('production')");
     try {
       const result = await checkEnvIdentity(sql, context({ env: "stage", connection: "remote" }));
       expect(refusals(result.findings).length).toBeGreaterThan(0);
@@ -680,12 +736,23 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
   });
 
   test("runs every check before deciding — a database failing 2, 3 and 5 says so in one boot", async () => {
-    const report = await runPreflight(sql, context({ env: "prod", connection: "remote" }), "full", tokens());
-    const failed = report.results.filter((r) => r.findings.some((f) => f.severity === "refuse")).map((r) => r.check);
-    expect(failed).toContain("privileges");
-    expect(failed).toContain("schema_integrity");
-    expect(failed).toContain("env_identity");
-    expect(report.passed).toBe(false);
+    // Check 2's failure is CONSTRUCTED. It used to come for free from 0053's
+    // ambient `DELETE ON ALL TABLES` grant, but migration 0065 is §9.1 step 2
+    // and removes it — so borrowing it here would quietly reduce this case to
+    // "3 and 5" the day the transition landed, which is the opposite of what it
+    // is for. What is under test is that one boot reports EVERY failing check
+    // rather than stopping at the first.
+    await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+    try {
+      const report = await runPreflight(sql, context({ env: "prod", connection: "remote" }), "full", tokens());
+      const failed = report.results.filter((r) => r.findings.some((f) => f.severity === "refuse")).map((r) => r.check);
+      expect(failed).toContain("privileges");
+      expect(failed).toContain("schema_integrity");
+      expect(failed).toContain("env_identity");
+      expect(report.passed).toBe(false);
+    } finally {
+      await sql.unsafe("REVOKE DELETE ON swarm_members FROM rm_app");
+    }
   });
 
   test("warnings neither clear nor set `passed`", async () => {

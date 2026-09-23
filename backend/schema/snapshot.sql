@@ -1853,7 +1853,24 @@ ALTER SEQUENCE public.research_signals_id_seq OWNED BY public.research_signals.i
 
 CREATE TABLE public.schema_migrations (
     name text NOT NULL,
-    applied_at timestamp with time zone DEFAULT now() NOT NULL
+    applied_at timestamp with time zone DEFAULT now() NOT NULL,
+    compat text,
+    metadata_version integer,
+    CONSTRAINT schema_migrations_compat_check CHECK (((compat IS NULL) OR (compat = ANY (ARRAY['additive'::text, 'breaking'::text]))))
+);
+
+
+--
+-- Name: schema_manifest; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_manifest (
+    singleton boolean DEFAULT true NOT NULL,
+    format_version integer NOT NULL,
+    declaration text NOT NULL,
+    filenames text[] NOT NULL,
+    content_hash text NOT NULL,
+    CONSTRAINT schema_manifest_singleton_check CHECK (singleton)
 );
 
 
@@ -3563,6 +3580,14 @@ ALTER TABLE ONLY public.research_signals
 
 ALTER TABLE ONLY public.research_signals
     ADD CONSTRAINT research_signals_signal_key_date_key UNIQUE (signal_key, date);
+
+
+--
+-- Name: schema_manifest schema_manifest_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.schema_manifest
+    ADD CONSTRAINT schema_manifest_pkey PRIMARY KEY (singleton);
 
 
 --

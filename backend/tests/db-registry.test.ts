@@ -215,10 +215,87 @@ describe("structural enforcement — a raw sql call outside the interface is det
       .map((rel) => join(dir, rel));
   }
 
-  test("every module issuing a raw statement is either the db layer or a registry declarant", () => {
-    const declarants = new Set(registeredSites().map((d) => d.site.split(":")[0]));
-    const offenders: string[] = [];
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE ALLOWLIST IS A RATCHET, AND IT MUST ONLY EVER SHRINK.
+  //
+  // Recorded 2026-09-23 (#1026 W2.3). These are every module under `src/`
+  // outside the db layer that issued a raw tagged template on that date. Moving
+  // all 54 onto `registerQuery` is a refactor of its own and is tracked
+  // separately; enforcing the rule only after that refactor would mean the rule
+  // does not exist until then, and a new call site landing in the meantime
+  // would be indistinguishable from the backlog.
+  //
+  // So the gate ships now, with the backlog RECORDED rather than hidden. A
+  // module not on this list may not issue a raw statement — that case fails
+  // below and is the tooth. A module on this list that has been converted must
+  // be REMOVED from it, which the second test enforces, so the list cannot be
+  // used to re-admit a module that already left.
+  //
+  // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
+  // written down instead of fixed, which is the one thing a ratchet exists to
+  // prevent. The only legal edit is a deletion.
+  const RAW_SQL_ALLOWLIST: readonly string[] = [
+    "src/admin/audit",
+    "src/admin/overview",
+    "src/analytics/cutover/gate",
+    "src/analytics/cutover/ledger-current",
+    "src/analytics/cutover/parity",
+    "src/analytics/cutover/read-mode",
+    "src/analytics/report/projections",
+    "src/analytics/store/output-snapshot-store",
+    "src/analytics/store/raw-history-store",
+    "src/analytics/store/regime-store",
+    "src/analytics/store/research-store",
+    "src/analytics/store/run-ledger-store",
+    "src/analytics/store/source-ledger-store",
+    "src/analytics/store/telemetry-store",
+    "src/api/auth",
+    "src/api/index",
+    "src/api/routes/admin",
+    "src/api/routes/admin-webauthn",
+    "src/api/routes/projects",
+    "src/api/routes/swarm",
+    "src/api/routes/swarm/waitlist",
+    "src/chain/buyback-logs",
+    "src/ops/asset-prices",
+    "src/ops/gap-detector",
+    "src/ops/wallet-backfill",
+    "src/ops/wallet-snapshot-manifest",
+    "src/projects/agent-detail-projections",
+    "src/projects/agents-projections",
+    "src/projects/coins-vaults-wallets-projections",
+    "src/projects/dossier-projections",
+    "src/projects/entities-projections",
+    "src/projects/leaderboard-projections",
+    "src/projects/list2-projections",
+    "src/projects/profile-projections",
+    "src/projects/projections",
+    "src/projects/smoke-seed",
+    "src/swarm/admin",
+    "src/swarm/consensus-receipt",
+    "src/swarm/domain",
+    "src/swarm/judge-fault-injection",
+    "src/swarm/judge-replay",
+    "src/swarm/judge-session",
+    "src/swarm/judgements",
+    "src/swarm/notifications",
+    "src/swarm/receipt-gap",
+    "src/swarm/roster-seed",
+    "src/worker/handlers/projects",
+    "src/worker/handlers/repair",
+    "src/worker/handlers/vault",
+    "src/worker/handlers/wallet",
+    "src/worker/loop",
+    "src/worker/reaper",
+    "src/worker/runtime",
+    "src/worker/scheduler",
+  ];
 
+  /** Every module under `src/` outside the db layer that issues a raw statement
+   *  and does not declare itself to the registry. */
+  function rawStatementModules(): string[] {
+    const declarants = new Set(registeredSites().map((d) => d.site.split(":")[0]));
+    const found: string[] = [];
     for (const file of tsFilesUnder(SRC)) {
       const relative = file.slice(SRC.length + 1);
       // The db layer itself constructs pools and owns the interface.
@@ -226,17 +303,33 @@ describe("structural enforcement — a raw sql call outside the interface is det
       const text = readFileSync(file, "utf8");
       if (!text.split("\n").some((line) => RAW_SQL.test(line))) continue;
       const moduleId = `src/${relative.replace(/\.ts$/, "")}`;
-      if (!declarants.has(moduleId)) offenders.push(moduleId);
+      if (!declarants.has(moduleId)) found.push(moduleId);
     }
+    return found.sort();
+  }
 
+  test("every module issuing a raw statement is the db layer, a registry declarant, or a dated allowlist entry", () => {
     // The detector is not vacuous: it fires on a planted raw statement and
     // stays silent on a registered call site, whose statement is a template
     // handed to `run` rather than a bare tagged template.
     expect(RAW_SQL.test("export async function leak(db) { return db`SELECT 1`; }")).toBe(true);
     expect(RAW_SQL.test("await query.run(db, ...['SELECT 1']);")).toBe(false);
 
+    const allowed = new Set(RAW_SQL_ALLOWLIST);
+    const offenders = rawStatementModules().filter((m) => !allowed.has(m));
+
     // The message is the deliverable: an operator or a reviewer has to be able
     // to read which file broke the property, not just that something did.
     expect(offenders).toEqual([]);
+  });
+
+  test("the allowlist only shrinks — a converted module must be removed from it", () => {
+    // Without this, the list would be a floor rather than a ceiling: a module
+    // moved onto registerQuery would keep its exemption, and the next raw
+    // statement added to that same file would land inside it unnoticed.
+    const stillRaw = new Set(rawStatementModules());
+    const stale = RAW_SQL_ALLOWLIST.filter((m) => !stillRaw.has(m));
+    expect(stale).toEqual([]);
+    expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
   });
 });

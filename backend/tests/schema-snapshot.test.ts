@@ -40,7 +40,27 @@ const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).so
 const DECLARATION_SQL = [
   "CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
   "CREATE TABLE job_schedules (kind text PRIMARY KEY, cron text NOT NULL, enabled boolean NOT NULL DEFAULT false);",
-  "CREATE TABLE deployment_identity (identity text NOT NULL, singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton));",
+  // `kind`, per spec §4.2 and migration 0063 — the fixture declares the same
+  // column the real declaration does.
+  "CREATE TABLE deployment_identity (kind text NOT NULL, singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton));",
+  // 0032's append-only guard, on the one table this fixture declares that is in
+  // APPEND_ONLY_TABLES. The fixture's filename list claims to embody every
+  // migration on disk, 0032 included, so a declaration WITHOUT these triggers
+  // is a snapshot that lies about its own version — and preflight check 3a is
+  // right to call that drift. Declaring them is the honest fix; deleting the
+  // check's subject from the fixture would not be.
+  "CREATE FUNCTION rm_append_only_guard() RETURNS trigger LANGUAGE plpgsql AS $guard$\n" +
+    "BEGIN\n" +
+    "  RAISE EXCEPTION 'table \"%\" is append-only: row deletion is not permitted (%).', TG_TABLE_NAME, TG_OP\n" +
+    "    USING ERRCODE = '0A000';\n" +
+    "END;\n" +
+    "$guard$;",
+  "CREATE TRIGGER schema_migrations_append_only BEFORE DELETE OR TRUNCATE ON schema_migrations" +
+    " FOR EACH STATEMENT EXECUTE FUNCTION rm_append_only_guard();",
+  "ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only;",
+  "CREATE TRIGGER schema_migrations_append_only_row BEFORE DELETE ON schema_migrations" +
+    " FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard();",
+  "ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row;",
 ].join("\n");
 const BOOTSTRAP_DATA_SQL = "INSERT INTO job_schedules (kind, cron, enabled) VALUES ('swarm.open_session', '0 13 * * 1-5', false);";
 const GRANTS_SQL = "GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly;";
@@ -90,12 +110,23 @@ function writeSnapshot(
   return dir;
 }
 
-/** A genuinely empty database on the suite's Postgres instance. */
+/**
+ * A genuinely empty database on the suite's Postgres instance.
+ *
+ * OWNED BY `rm_owner`, which is not a detail. Since Postgres 15 the `public`
+ * schema is owned by `pg_database_owner` and carries CREATE for that role
+ * alone, so a database created under the suite's superuser leaves `rm_owner`
+ * with no CREATE on `public` at all: every `SET ROLE rm_owner` bootstrap below
+ * would fail on its first `CREATE TABLE`, and the failure would read as a
+ * defect in the snapshot rather than in the fixture. `OWNER rm_owner` makes
+ * the fixture match what §5's `--local blank` actually hands the bootstrap —
+ * a database the schema owner owns.
+ */
 async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => Promise<void>): Promise<void> {
   const base = new URL(config.databaseUrl);
   const name = `rm_snapshot_blank_${crypto.randomUUID().slice(0, 8)}`;
   const admin = postgres(base.toString(), { max: 1, onnotice: () => {} });
-  await admin.unsafe(`CREATE DATABASE ${name}`);
+  await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
   await admin.end({ timeout: 5 });
 
   const url = new URL(base.toString());
@@ -111,8 +142,17 @@ async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => P
   }
 }
 
-beforeAll(() => {
+/** The password the preflight case below hands `checkRoleTokens`. Preflight
+ *  check 1 is "Every role token smoke will hand to a container authenticates"
+ *  (§7), which it answers by actually logging in — so the fixture has to make
+ *  the credential real rather than assert about a password nobody set. Role
+ *  attributes are a property of the CLUSTER, not of any one database, so this
+ *  holds for the blank databases created below. */
+const RM_APP_PASSWORD = "rm_app_snapshot_password";
+
+beforeAll(async () => {
   fixtures = mkdtempSync(join(tmpdir(), "rm-snapshot-fixtures-"));
+  await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
 });
 
 afterAll(() => {
@@ -148,13 +188,15 @@ describe("loadSnapshot — three parts, three application rules, one identity", 
     expect(snapshot.manifest.formatVersion).toBe(MANIFEST_FORMAT_VERSION);
   });
 
-  test("the list names BOTH 0059 migrations — a number alone is not an identity", async () => {
-    const snapshot = await loadSnapshot(writeSnapshot("two-0059s"));
-    const theTwo = snapshot.filenames.filter((f) => f.startsWith("0059_"));
-    expect(theTwo.sort()).toEqual([
-      "0059_analytics_output_and_report_snapshots.sql",
-      "0059_swarm_framework_subject_snapshot_cleanup.sql",
-    ]);
+  test("the list names EVERY 0059 migration — a number alone is not an identity", async () => {
+    // Derived from disk, never written down: the subject of this case is that
+    // the filename list is the identity and the number is not, so a literal
+    // pair here would be the very mistake it is testing against. Three files
+    // are numbered 0059 today; a fourth must not need this test edited.
+    const snapshot = await loadSnapshot(writeSnapshot("many-0059s"));
+    const expected = ON_DISK.filter((f) => f.startsWith("0059_")).sort();
+    expect(expected.length).toBeGreaterThan(1);
+    expect(snapshot.filenames.filter((f) => f.startsWith("0059_")).sort()).toEqual(expected);
   });
 
   test("the manifest it publishes is already hashed over the declaration and the list", async () => {
@@ -268,9 +310,9 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
     await withBlankDatabase(async (db) => {
       await db.unsafe("SET ROLE rm_owner");
       await bootstrapBlankDatabase(db, snapshot);
-      const rows = await db<{ identity: string }[]>`SELECT identity FROM deployment_identity`;
+      const rows = await db<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.identity).toBe("rehearsal");
+      expect(rows[0]?.kind).toBe("rehearsal");
     });
   });
 
@@ -302,8 +344,8 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
         codeFilenames: snapshot.filenames,
         envFilePath: join(fixtures, "bootstrap-preflight.env"),
       };
-      writeFileSync(context.envFilePath, "rm_app=token\n", "utf8");
-      const report = await runPreflight(db, context, "container", new Map([["rm_app", "token"]]));
+      writeFileSync(context.envFilePath, `rm_app=${RM_APP_PASSWORD}\n`, "utf8");
+      const report = await runPreflight(db, context, "container", new Map([["rm_app", RM_APP_PASSWORD]]));
       expect(report.passed).toBe(true);
     });
   });
@@ -341,9 +383,9 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
     const snapshot = await loadSnapshot(writeSnapshot("bootstrap-production"));
     await withBlankDatabase(async (db) => {
       await db.unsafe(`
-        CREATE TABLE deployment_identity (identity text NOT NULL,
+        CREATE TABLE deployment_identity (kind text NOT NULL,
           singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton))`);
-      await db.unsafe("INSERT INTO deployment_identity (identity) VALUES ('production')");
+      await db.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
       await db.unsafe("SET ROLE rm_owner");
       await expect(bootstrapBlankDatabase(db, snapshot)).rejects.toThrow("production");
     });
@@ -361,16 +403,19 @@ describe("baselineLedger — so `--migrate` never replays history", () => {
     });
   });
 
-  test("baselines BOTH 0059s — a high-water number would baseline neither correctly", async () => {
+  test("baselines EVERY 0059 — a high-water number would baseline none of them correctly", async () => {
+    // The expectation comes from disk for the same reason the assertion exists:
+    // "0059" is not a version, the filenames are. A literal list here would go
+    // stale the next time a migration reuses the number, which is exactly the
+    // event this case is supposed to survive.
+    const expected = ON_DISK.filter((f) => f.startsWith("0059_")).sort();
+    expect(expected.length).toBeGreaterThan(1);
     await withBlankDatabase(async (db) => {
       await db.unsafe("CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())");
       await baselineLedger(db, ON_DISK);
       const rows = await db<{ name: string }[]>`
         SELECT name FROM schema_migrations WHERE name LIKE '0059\\_%' ORDER BY name`;
-      expect(rows.map((r) => r.name)).toEqual([
-        "0059_analytics_output_and_report_snapshots.sql",
-        "0059_swarm_framework_subject_snapshot_cleanup.sql",
-      ]);
+      expect(rows.map((r) => r.name)).toEqual(expected);
     });
   });
 

@@ -51,13 +51,17 @@ function options(over: Partial<MigrateRunOptions> = {}): MigrateRunOptions {
   };
 }
 
+// The enrollment column is `kind` — spec §4.2 and migration 0063, which is what
+// the template database this file clones actually holds. The fixture replaces
+// the table rather than reusing 0063's, because the missing-row case needs a
+// shape that can hold zero rows and 0063 pins exactly one.
 async function setIdentity(value: "production" | "rehearsal" | null): Promise<void> {
+  await sql.unsafe("DROP TABLE IF EXISTS deployment_identity");
   await sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS deployment_identity (
-      identity text NOT NULL,
+    CREATE TABLE deployment_identity (
+      kind text NOT NULL,
       singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton))`);
-  await sql.unsafe("DELETE FROM deployment_identity");
-  if (value) await sql`INSERT INTO deployment_identity (identity) VALUES (${value})`;
+  if (value) await sql`INSERT INTO deployment_identity (kind) VALUES (${value})`;
 }
 
 async function createManifestTable(): Promise<void> {
@@ -253,9 +257,34 @@ describe("confirmRemoteTarget — the y/n in front of a remote run", () => {
 
 describe("runMigrate — fence, per-migration transactions, always reconcile, publish in that transaction", () => {
   test("refuses when the effective role is not rm_owner", async () => {
+    // THE FIXTURE IS THE SESSION, not the database state.
+    //
+    // This case and "failure DURING GRANT RECONCILIATION…" below used to build
+    // byte-identical databases and demand opposite outcomes, which made one of
+    // them unpassable whatever the implementation did. They are not testing the
+    // same thing: that one is §8.3's recoverable in-progress state (every
+    // migration committed, no manifest published, rerun finishes it), while
+    // this one is §8.3's rule that "Only `rm_owner` may write it or the
+    // ledger's `compat`/`metadata_version` columns". The distinguishing input
+    // is WHO IS CONNECTED, and the suite's own handle is the container
+    // superuser, which can act as rm_owner and must therefore be allowed
+    // through. So this case connects as a role that genuinely cannot.
     await setIdentity("rehearsal");
     await createManifestTable();
-    await expect(runMigrate(sql, options())).rejects.toThrow("rm_owner");
+
+    const role = `rm_not_owner_${Date.now().toString(36)}`;
+    const password = "not-the-owner";
+    await sql.unsafe(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEROLE`);
+    const url = new URL(config.databaseUrl);
+    url.username = role;
+    url.password = password;
+    const stranger = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    try {
+      await expect(runMigrate(stranger, options())).rejects.toThrow("rm_owner");
+    } finally {
+      await stranger.end({ timeout: 5 });
+      await sql.unsafe(`DROP ROLE IF EXISTS ${role}`);
+    }
   });
 
   test("refuses when the fence cannot be taken, naming the holder", async () => {
@@ -325,7 +354,7 @@ describe("runMigrate — fence, per-migration transactions, always reconcile, pu
     await setIdentity("rehearsal");
     await createManifestTable();
     await publishManifestFor(await ledgerNames());
-    await sql.unsafe("UPDATE deployment_identity SET identity = 'production'");
+    await sql.unsafe("UPDATE deployment_identity SET kind = 'production'");
     await expect(runMigrate(sql, options({ caller: "smoke_flag" }))).rejects.toThrow("production");
   });
 
@@ -379,7 +408,10 @@ describe("runMigrate — recovery from an interrupted run", () => {
   test("failure DURING GRANT RECONCILIATION leaves no manifest, and a rerun publishes one", async () => {
     // The manifest publishes inside the reconciliation transaction, so a
     // failure there means neither committed. Every migration is already
-    // applied; the rerun's only job is to finish.
+    // applied; the rerun's only job is to finish. The database state below is
+    // the whole fixture: the session is the suite's own, which CAN act as
+    // rm_owner — that is what separates this case from "refuses when the
+    // effective role is not rm_owner" above.
     await setIdentity("rehearsal");
     await createManifestTable();
     const names = await ledgerNames();
