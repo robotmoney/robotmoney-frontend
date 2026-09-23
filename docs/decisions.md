@@ -3608,8 +3608,7 @@ retain dated operational evidence but must not override the adopted mechanism or
 be reused as new-design templates. No historical per-release runbook remains in
 the documentation tree; a future one is created only after a release is
 scheduled and its tools exist at the target commit. D48 records the separate
-accepted judge-mode decision; P-04 tracks its replay prerequisite and
-implementation status.
+accepted judge-mode decision and replay prerequisite.
 
 **Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
 and associated reconciliation/field guide were not adopted. Their proposal
@@ -3640,7 +3639,6 @@ change the deployment lifecycle or participant boundary owned by D47 and the
 
 **Implementation prerequisite.** Before removing `shadow` from the write path,
 verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
-the observe-before-enforce soak. [P-04](technical/production-issues-register.md#p-04-shadow-still-a-selectable-judge-mode-s4)
-tracks that prerequisite and the unshipped implementation. The former long-form
-specification was removed from the documentation tree; recover it from Git only
-for historical context.
+the observe-before-enforce soak. The decision remains unimplemented until that
+prerequisite is met. The former long-form specification was removed from the
+documentation tree; recover it from Git only for historical context.

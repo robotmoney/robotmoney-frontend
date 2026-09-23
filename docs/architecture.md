@@ -994,9 +994,9 @@ identity rules are in smoke-production-spec §§3–5.
 
 The production DNS, vendor and service placement recorded by D13 is described
 under [Network topology](#network-topology--dns-origins--vendors). That decision
-does not change the adopted deployment mechanism. Treat statements there about
-intended future infrastructure as proposals and verify present host state at the
-release commit.
+does not change the adopted deployment mechanism. D13 is the accepted target
+topology, not evidence that the current host matches it; verify deployed state at
+the release commit.
 
 **Preview mode** is a development surface backed by checked-in API goldens. Use
 the local preview instructions in §4 and [CONTRIBUTING.md](../CONTRIBUTING.md)
@@ -1211,8 +1211,7 @@ the system must never manufacture a template opinion.
 
 The accepted go-forward mode is `off | enforce` ([D48](./decisions.md#d48)).
 Existing code may still expose `shadow` until that accepted change ships;
-[P-04](./technical/production-issues-register.md#p-04-shadow-still-a-selectable-judge-mode-s4)
-tracks its implementation prerequisite.
+D48 records the replay prerequisite for removing it.
 
 For deployment, the judge is a roster participant like an agent: it uses its
 own container and credential, communicates through the API, and no worker judges
@@ -3747,8 +3746,6 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   evidence, and approval for future releases.
 - [Credential doctor](./runbooks/credential-doctor.md) — legacy GitHub secret
   utility, not the adopted deployment credential path.
-- [Production issues register](./technical/production-issues-register.md) —
-  dated incident evidence and follow-up.
 
 ## Reviews and investigations
 
