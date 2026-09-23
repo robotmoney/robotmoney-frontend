@@ -3,9 +3,9 @@
 // matrix of smoke-production-spec.md §4.3, as a single function returning an
 // allow/refuse verdict with a human-readable reason.
 //
-// STUB (issue #1026, W1 step 1). Signatures and types are real; every body
-// throws. Nothing imports this module yet, and nothing may import it until the
-// implementation lands — it is additive and behaviour-neutral by construction.
+// Implemented for issue #1026, W1.1. The module is pure: it reads no
+// environment and opens no connection, so it is additive and behaviour-neutral
+// until a caller wires it into the boot path.
 //
 // ── Why this module exists ──────────────────────────────────────────────────
 //
@@ -169,8 +169,22 @@ export type PolicyVerdict =
 export function resolveRmEnv(
   env: Record<string, string | undefined>,
 ): { ok: true; env: RmEnv; source: RmEnvSource } | { ok: false; reason: string } {
-  void env;
-  throw new Error("NOT IMPLEMENTED: RM_ENV policy validation — spec §4.1, issue #1026 W1.1");
+  const raw = env.RM_ENV;
+  if (raw === undefined || raw.trim() === "") return { ok: true, env: "stage", source: "unset" };
+  if (raw === "prod" || raw === "stage") return { ok: true, env: raw, source: "explicit" };
+  return {
+    ok: false,
+    reason:
+      `RM_ENV="${raw}" is not a policy value: refusing — RM_ENV must be exactly ` +
+      `prod or stage (spec §4.1). It is not downgraded to stage.`,
+  };
+}
+
+/** How an identity value reads in a refusal or a plan line. */
+function describeIdentity(identity: DeploymentIdentityKind | null | "unreadable"): string {
+  if (identity === null) return "no identity row";
+  if (identity === "unreadable") return "unreadable identity table";
+  return identity;
 }
 
 /**
@@ -233,8 +247,73 @@ export function resolveRmEnv(
  * `--allow-insecure` against production identity refuses").
  */
 export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
-  void input;
-  throw new Error("NOT IMPLEMENTED: RM_ENV × deployment_identity matrix — spec §4.3, issue #1026 W1.1");
+  const resolved = resolveRmEnv({ RM_ENV: input.rmEnv });
+  // Row: other × any × any.
+  if (!resolved.ok) return { allow: false, reason: resolved.reason };
+
+  const { connection, identity } = input;
+  const seen = describeIdentity(identity);
+  const isLocal = connection !== "remote";
+
+  // Row: unset × remote × any.
+  if (resolved.source === "unset" && !isLocal) {
+    return {
+      allow: false,
+      reason:
+        `RM_ENV is not set and the target is reached as a remote connection: refusing ` +
+        `(spec §4.3). Export RM_ENV=prod or RM_ENV=stage explicitly; a forgotten export ` +
+        `never reaches a real database.`,
+    };
+  }
+
+  if (resolved.env === "prod") {
+    // Row: prod × --local × any.
+    if (isLocal) {
+      return {
+        allow: false,
+        reason:
+          `RM_ENV=prod with connection ${connection}: refusing — production never runs on a ` +
+          `database smoke owns (spec §4.3). Observed identity: ${seen}.`,
+      };
+    }
+    // Row: prod × remote × production, else refuse.
+    if (identity !== "production") {
+      return {
+        allow: false,
+        reason:
+          `RM_ENV=prod against a remote target whose deployment_identity is ${seen}: refusing ` +
+          `— prod policy requires an identity of production (spec §4.3). The absence of ` +
+          `evidence is never evidence of production.`,
+      };
+    }
+    return { allow: true, env: "prod", posture: "production", warnings: [] };
+  }
+
+  // Row: stage × remote × rehearsal, else refuse.
+  if (!isLocal && identity !== "rehearsal") {
+    return {
+      allow: false,
+      reason:
+        `RM_ENV=stage against a remote target whose deployment_identity is ${seen}: refusing ` +
+        `— stage policy (incl. --allow-insecure) never touches production data (spec §4.3). ` +
+        `No flag relaxes this row.`,
+    };
+  }
+
+  // Row: stage × --local volume × rehearsal, else refuse.
+  if (connection === "local-volume" && identity !== "rehearsal") {
+    return {
+      allow: false,
+      reason:
+        `RM_ENV=stage with connection local-volume whose deployment_identity is ${seen}: ` +
+        `refusing — a reattached volume gets no weaker policy than a remote (spec §4.3).`,
+    };
+  }
+
+  // Rows: stage × --local blank/dump, stage × remote × rehearsal, stage × volume × rehearsal,
+  // and unset × --local (which warns).
+  const warnings = resolved.source === "unset" ? ["RM_ENV not set, running as stage"] : [];
+  return { allow: true, env: "stage", posture: "stage", warnings };
 }
 
 /**
@@ -258,9 +337,17 @@ export function refuseWeakeningFlagsOnProd(
   env: RmEnv,
   flags: { readonly allowInsecure: boolean; readonly schedulesOff: boolean },
 ): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
-  void env;
-  void flags;
-  throw new Error("NOT IMPLEMENTED: --allow-insecure/--schedules-off refusal on prod — spec §4.4, issue #1026 W1.1");
+  if (env !== "prod") return { allow: true };
+  const named: string[] = [];
+  if (flags.allowInsecure) named.push("--allow-insecure");
+  if (flags.schedulesOff) named.push("--schedules-off");
+  if (named.length === 0) return { allow: true };
+  return {
+    allow: false,
+    reason:
+      `${named.join(" and ")} refused under RM_ENV=prod: parity with production is a tested ` +
+      `property, not an overlay (spec §4.4).`,
+  };
 }
 
 /**
@@ -278,7 +365,13 @@ export function refuseWeakeningFlagsOnProd(
  * plan is explicitly "redacted" (§1.2), and this line is part of it.
  */
 export function describePolicyVerdict(input: PolicyInput, verdict: PolicyVerdict): string {
-  void input;
-  void verdict;
-  throw new Error("NOT IMPLEMENTED: redacted policy description — spec §1.2/§4.3, issue #1026 W1.1");
+  const declared = input.rmEnv === undefined || input.rmEnv.trim() === "" ? "(not set)" : input.rmEnv;
+  const lines = [
+    `declared policy: RM_ENV=${declared}`,
+    `connection: ${input.connection}`,
+    `target identity: ${describeIdentity(input.identity)}`,
+    verdict.allow ? `posture: ${verdict.posture}` : `posture: refused — ${verdict.reason}`,
+  ];
+  if (verdict.allow) for (const warning of verdict.warnings) lines.push(`warning: ${warning}`);
+  return lines.join("\n");
 }
