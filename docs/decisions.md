@@ -3607,9 +3607,9 @@ force for gates, phases, evidence and approval. Standing and per-release runbook
 retain dated operational evidence but must not override the adopted mechanism or
 be reused as new-design templates. No historical per-release runbook remains in
 the documentation tree; a future one is created only after a release is
-scheduled and its tools exist at the target commit. Judge-mode narrowing remains a separate
-accepted product decision; the production issues register remains an evidence
-and follow-up record.
+scheduled and its tools exist at the target commit. D48 records the separate
+accepted judge-mode decision; P-04 tracks its replay prerequisite and
+implementation status.
 
 **Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
 and associated reconciliation/field guide were not adopted. Their proposal
@@ -3621,3 +3621,26 @@ credential paths. Adoption does not mean the replacement has shipped. Any
 operation on legacy code must be checked at the exact release SHA. Implementation
 and production cutover must satisfy the adopted specification and standing
 release gates; the deprecated engineering plan does not schedule that work.
+
+
+<a id="d48"></a>
+
+## D48 — Judge mode is `off | enforce`; `shadow` is not a go-forward mode (Lucas, 2026-09-22)
+
+**Status.** Accepted 2026-09-22; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** The go-forward operator choices are only `off` or `enforce`. The
+system must not create new `shadow` judgements. This product decision does not
+change the deployment lifecycle or participant boundary owned by D47 and the
+[smoke production spec](technical/smoke-production-spec.md).
+
+**Historical data.** Existing judgement rows and signed receipts containing
+`shadow` remain readable; history is not rewritten.
+
+**Implementation prerequisite.** Before removing `shadow` from the write path,
+verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
+the observe-before-enforce soak. [P-04](technical/production-issues-register.md#p-04-shadow-still-a-selectable-judge-mode-s4)
+tracks that prerequisite and the unshipped implementation. The former long-form
+specification was removed from the documentation tree; recover it from Git only
+for historical context.

@@ -92,16 +92,18 @@ or UI. The admin surface (`isPrivileged`/`hasAutomationRole`) needs an
 
 ### P-04 — `shadow` still a selectable judge mode (S4)
 `shadow` computes a real model opinion and withholds it — the same
-compute-and-hide half-measure `a42d6c5a` removed on the fallback side. Design
-intent is a binary `off | enforce` judge.
-- **Evidence / plan:** see `docs/technical/judge-shadow-removal-spec.md`
-  (status: **accepted** 2026-09-22 — the judge is binary `off | enforce`).
+compute-and-hide half-measure `a42d6c5a` removed on the fallback side. The
+accepted go-forward mode is `off | enforce` ([D48](../decisions.md#d48)); the
+change is accepted but not yet implemented.
+- **Evidence / decision:** D48 records the product decision. Historical rows
+  and signed receipts containing `shadow` remain readable and are not rewritten.
 - **Branch target: `releases-0.5.x`** (decided 2026-09-22) — the branch
   production runs. No backport scope.
-- **Next:** logistics only — verify replay covers the soak (hard prerequisite),
-  reconcile with the in-flight work in **P-16** (which builds *on* shadow), loop
-  David on the reversal, remove any surviving per-session mode flip, then implement.
-  The adopted smoke design retires the host driver; this is not a plan to extend it.
+- **Next:** verify `swarm-judge-replay.ts` covers the real recorded inputs needed
+  for an observe-before-enforce soak before removing `shadow` from the write
+  path. Reconcile the in-flight work in **P-16**, then implement the accepted
+  mode change. The adopted [smoke design](./smoke-production-spec.md) owns the
+  deployment lifecycle: no host-driver extension or inline judge is implied.
 
 ### P-05 — Correct roster driver not running on prod (S3)
 Target roster — **Athena, Noop, Robot Money Analyst**, plus the judge Themis —
@@ -179,8 +181,8 @@ pick its model currently cannot do so through any screen.
 ### P-16 — Parallel unmerged judge docs duplicate ours and keep `shadow` (S4)
 The branch `chore/reconcile-judge-swarm-releases-0-5-x` carries **7 commits,
 all documentation** (`docs(swarm): …`), covering the **same subject matter as
-our findings doc and shadow spec** — written by someone else, unmerged, and not
-visible from this branch.
+the dated judge findings and mode decision now recorded in D48** — written by
+someone else, unmerged, and not visible from this branch.
 
 - **What's on it:**
   - `54f49b56` judge divergence between `main` and `releases-0.5.x` — *the same
@@ -196,15 +198,15 @@ visible from this branch.
   behind `releases-0.5.x`.
 - **Two conflicts:**
   1. **Potential duplicated effort.** Its divergence analysis and judge-design
-     docs overlap the dated incident register and `judge-shadow-removal-spec.md`.
-     The findings summary was removed in the 2026-09-23 cleanup; do not restore
-     it as a second current authority.
+     docs overlap the dated incident register and D48. The findings summary was
+     removed in the 2026-09-23 cleanup; do not restore it as a second current
+     authority.
   2. **Opposite stance on shadow.** Its tip ships a filter *"in shadow first"*,
      while P-04 records shadow's removal as accepted. One of the two is wrong.
   Also note `65b099b5` records a **target judge design ("as evaluator")** that
   may supersede assumptions in our docs.
 - **Next:** if that branch is proposed for merge, reconcile its design with
-  D47 and the accepted judge-removal decision before taking the code. The branch
+  D47's deployment boundary and D48 before taking the code. The branch
   is not present in this tree, and its contents are not current authority here.
 
 ---

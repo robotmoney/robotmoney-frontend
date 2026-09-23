@@ -1209,10 +1209,10 @@ rewrite weights. A valid model-authored judgement is a separate, attributable
 record. If judging is unavailable, the session may publish without a judgement;
 the system must never manufacture a template opinion.
 
-The accepted go-forward mode is `off | enforce`; removing `shadow` is a
-separate accepted product change whose implementation status is recorded in
-[judge-shadow-removal-spec.md](./technical/judge-shadow-removal-spec.md).
-Existing code may still expose the older mode until that work ships.
+The accepted go-forward mode is `off | enforce` ([D48](./decisions.md#d48)).
+Existing code may still expose `shadow` until that accepted change ships;
+[P-04](./technical/production-issues-register.md#p-04-shadow-still-a-selectable-judge-mode-s4)
+tracks its implementation prerequisite.
 
 For deployment, the judge is a roster participant like an agent: it uses its
 own container and credential, communicates through the API, and no worker judges
@@ -1225,7 +1225,7 @@ Session creation and the five `swarm.*` schedules are independent of whether
 this host runs an in-house judge. Production initialization explicitly enables
 those schedules; a restart does not change schedule state. See
 [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)
-for deployment behavior and the judge-removal spec for the product-mode change.
+for deployment behavior; D48 records the separate judge-mode product decision.
 ### 9.8 Testing and deployment
 
 The E2E suite verifies signed submissions, session publication and visible product
@@ -3740,7 +3740,7 @@ roadmaps, task checklists, or phase ordering to `docs/`.
 - [Architecture](./architecture.md) — product and system boundaries, runtime
   components, data flow, and the D13 network topology.
 - [Decisions](./decisions.md) — accepted decision records; D47 owns deployment
-  mechanism authority.
+  mechanism authority and D48 records the judge-mode product decision.
 - [Smoke production spec](./technical/smoke-production-spec.md) — sole adopted
   deployment design, approved for implementation but not yet shipped.
 - [Release-runbook policy](./technical/release-runbooks.md) — gates, phases,
@@ -3749,8 +3749,6 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   utility, not the adopted deployment credential path.
 - [Production issues register](./technical/production-issues-register.md) —
   dated incident evidence and follow-up.
-- [Judge shadow-removal spec](./technical/judge-shadow-removal-spec.md) —
-  accepted product change and replay prerequisite.
 
 ## Reviews and investigations
 

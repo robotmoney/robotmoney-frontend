@@ -22,7 +22,7 @@
 | [Smoke summary](../../scripts/lib/smoke.README.md) | Non-authoritative summary of this adopted design, not a claim that it has shipped. |
 | Historical deployment and per-release runbooks | Removed from the documentation tree. Recover from Git for audit only; they are not new-design templates. |
 | [Production issues register](./production-issues-register.md) | Incident evidence and follow-up, not an alternative deployment design or proof of implementation. |
-| [Judge shadow-removal spec](./judge-shadow-removal-spec.md) | Separate accepted product behavior and replay requirements; deployment lifecycle follows this spec. |
+| [Decision ledger D48](../decisions.md#d48) | Accepted judge-mode product behavior; this specification owns the deployment lifecycle and participant boundary. |
 | Old upgrade design and engineering plan | Removed from the documentation tree. D47 and this specification replace them in full; no old phase is approved for implementation. |
 | External stack and Kubernetes proposals | Not adopted and removed from the documentation tree. Recover from Git for historical research; they are not current tooling or a scheduled next step. |
 
