@@ -19,7 +19,7 @@
 // scripts/tests/unit/smoke-onboarding-driver.test.ts uses, so a grader that has
 // stopped matching is red rather than vacuously green.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   assertProductionConstants,
@@ -314,7 +314,10 @@ describe("the READY banner cadence line is RENDERED from the resolved profile", 
 // ---------------------------------------------------------------------------
 const smokeMain = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
 const liveSmoke = readFileSync(join(repoRoot, "scripts", "smoke-live-smoke.ts"), "utf8");
-const architecture = readFileSync(join(repoRoot, "docs", "architecture.md"), "utf8");
+const architecture = readdirSync(join(repoRoot, "docs", "architecture"))
+  .filter((f) => f.endsWith(".md"))
+  .map((f) => readFileSync(join(repoRoot, "docs", "architecture", f), "utf8"))
+  .join("\n");
 
 /** Every cadence magic number that must now live ONLY in smoke-schedule.ts. */
 const CADENCE_LITERALS = [

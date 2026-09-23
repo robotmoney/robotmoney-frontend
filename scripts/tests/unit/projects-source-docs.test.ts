@@ -25,7 +25,7 @@ const OPERATOR_SURFACES = [
   ".env.example",
   "docker-compose.yml",
   "docker-compose.smoke.yml",
-  "docs/architecture.md",
+  "docs/architecture/projects-directory.md",
 ] as const;
 
 describe("PROJECTS_SOURCE is documented on every operator surface", () => {
@@ -40,8 +40,8 @@ describe("PROJECTS_SOURCE is documented on every operator surface", () => {
     expect(read(".env.example")).toContain("PROJECTS_SOURCE=live");
   });
 
-  test("docs/architecture.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
-    expect(read("docs/architecture.md")).toContain("PROJECTS_SOURCE=live");
+  test("docs/architecture/projects-directory.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
+    expect(read("docs/architecture/projects-directory.md")).toContain("PROJECTS_SOURCE=live");
   });
 
   test("both compose files pass PROJECTS_SOURCE through to the containers", () => {

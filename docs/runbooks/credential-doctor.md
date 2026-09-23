@@ -102,7 +102,7 @@ analytics series; the app runs seeded without it.
 
 `ANALYTICS_TOKEN` is the analytics-provider bearer (issue #106). It belongs to
 the independent producer and API verification boundary described in
-[architecture.md](../architecture.md#96-rm-analytics-provider-the-data-utility).
+[architecture.md](../architecture/investment-swarm.md#96-rm-analytics-provider-the-data-utility).
 It is not a PostgreSQL credential or a participant key.
 
 ### Deployment variables (pushed to GitHub, readable)

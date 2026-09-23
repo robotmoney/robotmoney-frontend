@@ -33,7 +33,7 @@ describe("bot-analytics UI port plan doc is present and discoverable on main", (
   }
 
   test("architecture.md or decisions.md references the merged doc's filename", () => {
-    const architecture = read("docs/architecture.md");
+    const architecture = read("docs/architecture/README.md");
     const decisions = read("docs/decisions.md");
     const referenced =
       architecture.includes("bot-analytics-ui-port-plan.md") ||

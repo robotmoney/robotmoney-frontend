@@ -187,7 +187,7 @@ static server are unnecessary. Fewer dependencies, one runtime.
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
 anywhere**. The full map is
-[architecture.md § Network topology](architecture.md#network-topology--dns-origins--vendors):
+[architecture.md § Network topology](architecture/network-topology.md#network-topology--dns-origins--vendors):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -268,8 +268,8 @@ important check is that the **fields** are correct, not the numbers.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run smoke` (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
-See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
+See [architecture.md § Preview mode](architecture/frontend.md#preview-mode-goldens-backed-no-backend)
 for the full design (revised by D19: the replay engine is now the client-side
 wrapper, not a server).
 
@@ -395,7 +395,7 @@ placeholder-form env override still flips an adapter back to
 `configured: false`), and `base-rpc-client.ts` becomes the **single RPC
 transport** for every chain read. The shared endpoint contract the feeds were
 built against (DTOs, provenance fields, degrade rules) is
-[architecture.md § Live-data contract](architecture.md#live-data-contract--4-new-dashboard-endpoints);
+[architecture.md § Live-data contract](architecture/dashboards-live-data.md#live-data-contract--4-new-dashboard-endpoints);
 the frontend binds via
 boot-registered factories in `alpine/views.js` (e.g. `buybackSummary`).
 
@@ -434,11 +434,11 @@ fixed constant — both flagged in #112 for a later pass.
 instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
 (staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
 `committee.`/`app.`
-([architecture.md topology §3.1](architecture.md#31-mcp-hostname-and-port-d18)).
+([architecture.md topology §3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)).
 It is deployed to the **same DO
 droplet** as `committee.` (it is this repo's surface, and the `/health`
 contract already couples IC health to MCP reachability —
-[architecture.md topology §9](architecture.md#9-seamless-without-a-single-origin-and-observability)), but
+[architecture.md topology §9](architecture/network-topology.md#9-seamless-without-a-single-origin-and-observability)), but
 runs as its **own container** (`mcp` service in `docker-compose.yml`) on its
 **own port**, so it cannot share `committee.`'s proxied port `443`. It uses
 Cloudflare's alternate proxied-HTTPS port **`8443`** (one of Cloudflare's
@@ -458,7 +458,7 @@ Worker, no reverse proxy, no new vendor permission" property intact instead
 of reaching for Cloudflare Origin Rules or a second droplet.
 
 **Relationship.** Refines D13 (architecture.md topology
-[§3](architecture.md#3-the-surfaces--subdomain-map)/[§3.1](architecture.md#31-mcp-hostname-and-port-d18)):
+[§3](architecture/network-topology.md#3-the-surfaces--subdomain-map)/[§3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)):
 the surface table gains a
 fourth row; the "no reverse proxy" and "no routing software" properties are
 unchanged. No code change — `mcp/src/server.ts` and `docker-compose.yml`
@@ -485,7 +485,7 @@ a docs-only, config-value decision.
 
 > Superseded by D20 before activation. No hosted preview deployment was
 > established; the current preview is local-only under
-> [architecture §4](./architecture.md#4-preview-mode-goldens-backed-no-backend).
+> [architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
 > The mechanism below is retained as decision history, not operating guidance.
 
 **Decision.** Ship a **hosted, per-branch preview URL** on Cloudflare Pages
@@ -568,7 +568,7 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run smoke` for realistic
 data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -627,7 +627,7 @@ same PR.
 **Fidelity caveat.** Unchanged from D14/D19: preview is for
 layout/copy/components/navigation; values are mock/point-in-time. Run
 `bun run smoke` for realistic data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -636,7 +636,7 @@ layout/copy/components/navigation; values are mock/point-in-time. Run
 **Decision.** Abandon the hosted MCP transport (`mcp/`) as a member-facing
 surface. Committee members participate over **REST/JSON only**
 (`ROUTES.committee`, already the "REST sibling" of every MCP tool — see
-[architecture.md §9.5](architecture.md#95-surfaces--one-core-one-transport)).
+[architecture.md §9.5](architecture/investment-swarm.md#95-surfaces--one-core-one-transport)).
 Everywhere the architecture previously described "MCP or REST" as parallel
 transports, REST is now the only one. The new flow has three steps, each
 already backed by something this project maintains or already ships:
@@ -687,7 +687,7 @@ secure.
 
 **Relationship.**
 - **Supersedes D18** in full: the `mcp.` subdomain row leaves the surface map
-  ([architecture.md §3](architecture.md#3-the-surfaces--subdomain-map)); §3.1
+  ([architecture.md §3](architecture/network-topology.md#3-the-surfaces--subdomain-map)); §3.1
   is retired.
 - **Revises architecture.md §9** (IC feature architecture): §9.1 drops the
   `mcp/` layer row and repo-layout entry; §9.2's actor identity mechanism is
@@ -791,7 +791,7 @@ selector.
    A single sample is a coin flip reported as a verdict.
 
 Rules 3 and 4 are specified normatively in
-[architecture.md §11.3](architecture.md#113-onboarding-eval-normative) (E3, E4) —
+[architecture.md §11.3](architecture/member-onboarding.md#113-onboarding-eval-normative) (E3, E4) —
 the layer table, the observation mechanism, the outcome classes, and the CI
 placement live there, not here.
 
@@ -1056,7 +1056,7 @@ default, opt-in per PR, nightly for the trend.
 
 Dependency direction is fixed and enforced: tests and evals may import runtime
 and shared code; **runtime must never import test or eval code**. The full target
-layout is [architecture.md §3](architecture.md#test-eval-and-tooling-layout).
+layout is [architecture.md §3](architecture/repository-layout.md#test-eval-and-tooling-layout).
 
 **Migration is incremental and bounded to three moves:** create `evals/`; land
 D22's extractions directly in `stack/` and `agent/` rather than as more flat
@@ -1615,7 +1615,7 @@ correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 
 ## D29 — The api process (`STATIC_DIR`) is the cutover host for `robotmoney.net`, and its deploy path prerenders per-route HTML (issue #480)
 
-*(Deployment authority: [smoke production spec](./technical/smoke-production-spec.md); network topology: [architecture §8](./architecture.md#8-deployment).)*
+*(Deployment authority: [smoke production spec](./technical/smoke-production-spec.md); network topology: [architecture §8](./architecture/deployment.md#8-deployment).)*
 
 **Decision.** Two questions, answered together because the first determines the
 second.
@@ -1672,7 +1672,7 @@ This decision does not foreclose it — `_static/` is a plain static assembly, s
 the Spaces migration, when it happens, uploads exactly this directory and
 inherits the prerender for free. Supersedes nothing. D20's proposed Pages Git
 hosting was never activated; preview is local-only under
-[architecture §4](./architecture.md#4-preview-mode-goldens-backed-no-backend).
+[architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
 
 **Alternatives rejected.**
 - **Enable production deploys on Cloudflare Pages** — reverses D13
