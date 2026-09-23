@@ -159,9 +159,66 @@ export interface LedgerCompatRow {
  * and refuses unknown `metadata_version`."
  */
 export function parseMigrationHeader(filename: string, text: string): MigrationHeader {
-  void filename;
-  void text;
-  throw new Error("NOT IMPLEMENTED: parse a migration's compat header — spec §8.2, issue #1026 W2.6");
+  const declared = readHeaderBlock(text);
+
+  const compat = singleDeclaration(filename, declared, "compat");
+  if (compat !== "additive" && compat !== "breaking") {
+    throw new Error(
+      `${filename}: compat must be 'additive' or 'breaking', not '${compat}' — spec §8.2 allows no third value.`,
+    );
+  }
+
+  const rawVersion = singleDeclaration(filename, declared, "metadata_version");
+  if (!/^\d+$/.test(rawVersion) || Number(rawVersion) < 1) {
+    throw new Error(
+      `${filename}: metadata_version must be a positive integer, not '${rawVersion}'.`,
+    );
+  }
+  const metadataVersion = Number(rawVersion);
+  if (metadataVersion > COMPAT_METADATA_VERSION) {
+    throw new Error(
+      `${filename}: metadata_version ${metadataVersion} is greater than this checkout's ${COMPAT_METADATA_VERSION} — ` +
+        "a file in this repository cannot have been written under a metadata version the repository does not have.",
+    );
+  }
+
+  return { filename, compat, metadataVersion };
+}
+
+/** The leading comment block: every `--` line from the top, stopping at the
+ *  first line that is not one. Later comments are prose, never a second
+ *  declaration (§8.2's header is the FIRST block). */
+function readHeaderBlock(text: string): readonly string[] {
+  const block: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (block.length === 0 && trimmed === "") continue; // leading blank lines
+    if (!trimmed.startsWith("--")) break;
+    block.push(trimmed);
+  }
+  return block;
+}
+
+/** Exactly one `-- <key>: <value>` line in the header block, or a refusal.
+ *  Absent and duplicated are both refusals: §8.2 forbids a default in either
+ *  direction, and two declarations are not a declaration. */
+function singleDeclaration(filename: string, block: readonly string[], key: string): string {
+  const pattern = new RegExp(`^--\\s*${key}\\s*:\\s*(.*)$`, "i");
+  const values: string[] = [];
+  for (const line of block) {
+    const match = pattern.exec(line);
+    if (match) values.push((match[1] ?? "").trim().split(/\s+/)[0] ?? "");
+  }
+  if (values.length === 0) {
+    throw new Error(
+      `${filename}: no '${key}' declaration in the header block — spec §8.2 requires every migration to declare ` +
+        "itself, and defaulting either way is wrong.",
+    );
+  }
+  if (values.length > 1) {
+    throw new Error(`${filename}: more than one '${key}' declaration in the header block (${values.join(", ")}).`);
+  }
+  return values[0] ?? "";
 }
 
 /**

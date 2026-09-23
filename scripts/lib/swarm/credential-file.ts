@@ -1,7 +1,6 @@
 // The credential file IS the roster (smoke-production-spec.md §6.1, issue
-// #1026 W3.1). STEP 1 STUB: every function here throws NOT IMPLEMENTED. The
-// types, the refusal taxonomy, and the contract written in these comments are
-// the real deliverable of this step; step 3 fills in the bodies against them.
+// #1026 W3.1). The types, the refusal taxonomy, and the contract written in
+// these comments are the design; the bodies below implement it.
 //
 // ── WHY THIS MODULE EXISTS ──────────────────────────────────────────────────
 // Until now the in-house roster was assembled from three places that could
@@ -51,6 +50,7 @@
 // plan and hands it to the caller (`smoke-main.ts`). It holds no database
 // credential. It never writes the credential file — provisioning is an
 // operator act (spec §9.2), not a side effect of a boot.
+import { readFileSync, statSync } from "node:fs";
 import type { PersonaIdentity } from "./persona-keys.ts";
 
 /**
@@ -217,9 +217,19 @@ export function resolveCredentialPath(
   env: Record<string, string | undefined>,
   flagValue?: string,
 ): CredentialPathResolution {
-  throw new Error(
-    "NOT IMPLEMENTED: resolve credential-file path from --credentials/RM_CREDENTIALS — spec §6.1, issue #1026 W3.1",
-  );
+  if (flagValue !== undefined) {
+    const flag = flagValue.trim();
+    if (flag === "") {
+      throw new CredentialFileRefusal(
+        "malformed",
+        "--credentials was given an empty value; an operator who typed the flag meant to point somewhere",
+      );
+    }
+    return { configured: true, path: flag, origin: "flag" };
+  }
+  const fromEnv = (env.RM_CREDENTIALS ?? "").trim();
+  if (fromEnv === "") return { configured: false };
+  return { configured: true, path: fromEnv, origin: "env" };
 }
 
 /**
@@ -242,9 +252,189 @@ export function resolveCredentialPath(
  * `malformed` to be distinguishable at the call site, which starts here.
  */
 export function parseCredentialFile(text: string, path: string): CredentialFile {
-  throw new Error(
-    "NOT IMPLEMENTED: parse and validate credential.json — spec §6.1, issue #1026 W3.1",
-  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new CredentialFileRefusal(
+      "malformed",
+      `${path} is not JSON: ${err instanceof Error ? err.message : String(err)}`,
+      { path },
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new CredentialFileRefusal("malformed", `${path} must be a JSON object`, { path });
+  }
+  const top = parsed as Record<string, unknown>;
+  for (const key of Object.keys(top)) {
+    if (key !== "agents" && key !== "judges") {
+      // Silently dropping an invented namespace would run the host with fewer
+      // participants than its own file says it has.
+      throw new CredentialFileRefusal(
+        "malformed",
+        `${path} carries an unknown top-level key "${key}"; the only namespaces are agents and judges`,
+        { path },
+      );
+    }
+  }
+  const namespaces: Record<ParticipantKind, Record<string, PersonaIdentity>> = {
+    agent: {},
+    judge: {},
+  };
+  for (const [namespace, kind] of [["agents", "agent"], ["judges", "judge"]] as const) {
+    const raw = top[namespace];
+    if (raw === undefined) {
+      throw new CredentialFileRefusal(
+        "malformed",
+        `${path} is missing the required "${namespace}" namespace`,
+        { path },
+      );
+    }
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new CredentialFileRefusal(
+        "malformed",
+        `${path}: "${namespace}" must be an object`,
+        { path },
+      );
+    }
+    for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+      const entry = value as Partial<PersonaIdentity> | null;
+      if (entry === null || typeof entry !== "object") {
+        throw new CredentialFileRefusal(
+          "malformed",
+          `${path}: ${namespace} entry "${name}" is not an object`,
+          { path },
+        );
+      }
+      if (typeof entry.publicKeyB64 !== "string" || entry.publicKeyB64.trim() === "") {
+        throw new CredentialFileRefusal(
+          "malformed",
+          `${path}: ${namespace} entry "${name}" has no usable publicKeyB64`,
+          { path },
+        );
+      }
+      if (
+        entry.privateJwk === null
+        || typeof entry.privateJwk !== "object"
+        || Array.isArray(entry.privateJwk)
+      ) {
+        throw new CredentialFileRefusal(
+          "malformed",
+          `${path}: ${namespace} entry "${name}" has no privateJwk; a container cannot sign with a public key`,
+          { path },
+        );
+      }
+      namespaces[kind][name] = { publicKeyB64: entry.publicKeyB64, privateJwk: entry.privateJwk };
+    }
+  }
+  // JSON.parse collapses a repeated key to the last value, so the file's TEXT
+  // is the authority for "the same name twice in one namespace".
+  const duplicate = firstDuplicateName(text);
+  if (duplicate) {
+    throw new CredentialFileRefusal(
+      "duplicate-name",
+      `${path}: "${duplicate.name}" appears twice in the ${duplicate.namespace} namespace`,
+      { path },
+    );
+  }
+  return { agents: namespaces.agent, judges: namespaces.judge };
+}
+
+/**
+ * The first name repeated within ONE namespace, read off the file's text.
+ *
+ * `JSON.parse` keeps only the last value for a repeated key, and two spellings
+ * of one name ("Athena" and "athena") are two keys it keeps both of. Either
+ * would hand a container a key its operator did not intend, so both are found
+ * here: a minimal scanner that tracks object nesting and normalizes each key
+ * the way the roster does.
+ */
+function firstDuplicateName(text: string): { namespace: string; name: string } | undefined {
+  interface Frame {
+    isObject: boolean;
+    /** The key this frame's value was stored under, in its parent. */
+    key: string | undefined;
+    depth: number;
+    expectKey: boolean;
+    seen: Set<string>;
+    pendingKey: string | undefined;
+  }
+  const stack: Frame[] = [];
+  const top = (): Frame | undefined => stack[stack.length - 1];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "{" || ch === "[") {
+      const parent = top();
+      stack.push({
+        isObject: ch === "{",
+        key: parent?.pendingKey,
+        depth: stack.length,
+        expectKey: ch === "{",
+        seen: new Set(),
+        pendingKey: undefined,
+      });
+      i += 1;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      stack.pop();
+      i += 1;
+      continue;
+    }
+    if (ch === ",") {
+      const frame = top();
+      if (frame?.isObject) frame.expectKey = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      const { value, next } = readJsonString(text, i);
+      i = next;
+      const frame = top();
+      if (frame?.isObject && frame.expectKey) {
+        frame.pendingKey = value;
+        frame.expectKey = false;
+        // A namespace frame sits one level under the root object.
+        const isNamespace = frame.depth === 1 && (frame.key === "agents" || frame.key === "judges");
+        if (isNamespace) {
+          const normalized = value.trim().toLowerCase();
+          if (frame.seen.has(normalized)) {
+            return { namespace: frame.key === "judges" ? "judges" : "agents", name: normalized };
+          }
+          frame.seen.add(normalized);
+        }
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return undefined;
+}
+
+/** Read one JSON string starting at the opening quote; returns its value. */
+function readJsonString(text: string, start: number): { value: string; next: number } {
+  let out = "";
+  let i = start + 1;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\\") {
+      const escaped = text[i + 1] ?? "";
+      if (escaped === "u") {
+        out += String.fromCharCode(Number.parseInt(text.slice(i + 2, i + 6), 16) || 0);
+        i += 6;
+        continue;
+      }
+      const simple: Record<string, string> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" };
+      out += simple[escaped] ?? escaped;
+      i += 2;
+      continue;
+    }
+    if (ch === '"') return { value: out, next: i + 1 };
+    out += ch;
+    i += 1;
+  }
+  return { value: out, next: i };
 }
 
 /**
@@ -265,9 +455,28 @@ export function parseCredentialFile(text: string, path: string): CredentialFile 
  * participants run: refuse, participants untouched."
  */
 export function loadCredentialFile(path: string): CredentialFile {
-  throw new Error(
-    "NOT IMPLEMENTED: read credential.json from disk — spec §6.1, issue #1026 W3.1",
-  );
+  try {
+    statSync(path);
+  } catch {
+    // Missing is NOT an empty roster: it refuses, and the caller has stopped
+    // nothing by the time it does.
+    throw new CredentialFileRefusal(
+      "missing",
+      `credential file ${path} does not exist; a missing file is never an instruction to stop participants`,
+      { path },
+    );
+  }
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    throw new CredentialFileRefusal(
+      "unreadable",
+      `credential file ${path} exists but could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      { path },
+    );
+  }
+  return parseCredentialFile(text, path);
 }
 
 /**
@@ -286,9 +495,14 @@ export function loadCredentialFile(path: string): CredentialFile {
  * list exactly like an agent, which is what makes W3.4 possible at all.
  */
 export function rosterEntries(file: CredentialFile): RosterEntry[] {
-  throw new Error(
-    "NOT IMPLEMENTED: flatten credential.json into roster entries — spec §6.1, issue #1026 W3.1",
-  );
+  const entries: RosterEntry[] = [];
+  for (const [kind, namespace] of [["agent", file.agents], ["judge", file.judges]] as const) {
+    for (const name of Object.keys(namespace).sort()) {
+      const identity = namespace[name];
+      if (identity) entries.push({ name, kind, identity });
+    }
+  }
+  return entries;
 }
 
 /**
@@ -320,9 +534,47 @@ export function reconcileRoster(
   running: readonly RunningParticipant[],
   currentGeneration?: string,
 ): ReconciliationPlan {
-  throw new Error(
-    "NOT IMPLEMENTED: reconcile roster against running participants — spec §6.1, issue #1026 W3.1",
-  );
+  if (desired === null) {
+    if (running.length === 0) return { start: [], keep: [], stop: [] };
+    // Absent configuration is never read as "stop everyone": no plan is
+    // produced at all, and the refusal names who was left alone.
+    const named = running.map((p) => `${p.kind}:${p.name} (${p.containerName})`).join(", ");
+    throw new CredentialFileRefusal(
+      "unconfigured-with-running",
+      `no credential file is configured while these participants are running and were left untouched: ${named}`,
+      { running: [...running] },
+    );
+  }
+  const key = (p: { name: string; kind: ParticipantKind }) => `${p.kind}:${p.name.trim().toLowerCase()}`;
+  const byKey = new Map<string, RunningParticipant>();
+  for (const p of running) byKey.set(key(p), p);
+
+  const start: RosterEntry[] = [];
+  const keep: RosterEntry[] = [];
+  const stop: RunningParticipant[] = [];
+  const claimed = new Set<string>();
+
+  for (const entry of desired) {
+    const k = key(entry);
+    claimed.add(k);
+    const live = byKey.get(k);
+    if (!live) {
+      start.push(entry);
+      continue;
+    }
+    // Spec §6.4 step (3): a container holding a superseded generation is
+    // replaced even though its name is on the roster.
+    if (currentGeneration !== undefined && live.generation !== currentGeneration) {
+      stop.push(live);
+      start.push(entry);
+      continue;
+    }
+    keep.push(entry);
+  }
+  for (const live of running) {
+    if (!claimed.has(key(live))) stop.push(live);
+  }
+  return { start, keep, stop };
 }
 
 /**
@@ -339,7 +591,7 @@ export function reconcileRoster(
  * change must close the journal rather than resume it.
  */
 export function rosterPlanLines(entries: readonly RosterEntry[]): string[] {
-  throw new Error(
-    "NOT IMPLEMENTED: render redacted roster lines for the plan — spec §1.2/§6.1, issue #1026 W3.1",
-  );
+  // Name and kind only. A plan is pasted into issues and chat logs, and a
+  // public key is still an identity an onlooker can correlate.
+  return entries.map((e) => `${e.kind} ${e.name}`);
 }

@@ -69,7 +69,17 @@
 // re-acquiring the deployment; and "Receipt read by `smoke:status`", whose
 // reading path this shares.
 
-import type { InstancePaths } from "./lib/smoke-state.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
+import { instancePaths, listInstances, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
+import { readJournal, readReceipt, type DeploymentPlan } from "./lib/smoke-journal.ts";
+
+/** Flags §1 retires "with no alias"; naming one in a refusal is the point. */
+const RETIRED_FLAGS = ["--no-tui", "--agents", "--smoke", "--db", "--pg-data", "--twin"];
+
+/** A redraw faster than the docker queries behind it is a load source. */
+const MIN_INTERVAL_MS = 1000;
+const DEFAULT_INTERVAL_MS = 2000;
 
 /**
  * Parsed argv for the observer. Read-only by construction: there is no field
@@ -109,8 +119,46 @@ export interface TuiOptions {
  *    observing.
  */
 export function parseTuiArgs(argv: readonly string[]): TuiOptions {
-  void argv;
-  throw new Error("NOT IMPLEMENTED: smoke:tui argv parsing — spec §1, issue #1026 W1.8");
+  let instance: string | undefined;
+  let intervalMs = DEFAULT_INTERVAL_MS;
+  let once = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--instance") {
+      const value = argv[++i];
+      if (value === undefined) throw new Error("Refusing: `--instance` needs a name.");
+      instance = value;
+      continue;
+    }
+    if (arg === "--once") {
+      once = true;
+      continue;
+    }
+    if (arg === "--interval") {
+      const value = argv[++i];
+      const parsed = value === undefined ? Number.NaN : Number(value);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`Refusing: \`--interval ${value ?? ""}\` is not a number of milliseconds.`);
+      }
+      if (parsed < MIN_INTERVAL_MS) {
+        throw new Error(
+          `Refusing: an interval of ${parsed}ms turns the observer into a load source; the minimum is ${MIN_INTERVAL_MS}ms.`,
+        );
+      }
+      intervalMs = parsed;
+      continue;
+    }
+    if (arg === "--no-tui") {
+      throw new Error("Refusing: `--no-tui` is retired with no alias. Use `bun smoke:status` for a one-shot report.");
+    }
+    if (RETIRED_FLAGS.includes(arg)) {
+      throw new Error(`Refusing: \`${arg}\` is retired with no alias.`);
+    }
+    throw new Error(`Refusing: unknown flag \`${arg}\`.`);
+  }
+
+  return { instance, intervalMs, once };
 }
 
 /**

@@ -98,7 +98,71 @@
 //   - "Standalone `bun run migrate` and `bun smoke` contend on the target lock,
 //      including connection loss mid-phase."
 
+import { createHash } from "node:crypto";
+import postgres from "postgres";
+import type postgresTypes from "postgres";
 import type { DbHandle } from "./client.ts";
+
+/**
+ * The advisory-lock key as `pg_locks` reports it: the 64-bit key is split into
+ * `classid` (high 32 bits) and `objid` (low 32), so every catalog question in
+ * this module reassembles it the same way. Written once, because two spellings
+ * of this expression is two namespaces again.
+ */
+const KEY_FROM_CATALOG = "((classid::bigint << 32) | objid::bigint)";
+
+/**
+ * How a session-lock holder publishes itself.
+ *
+ * `application_name` is the only per-connection string another session can read
+ * (through `pg_stat_activity`) without a table, and a table would need a
+ * migration to exist before the lock that protects migrations can be taken.
+ * Postgres truncates it to 63 bytes, so the fields are ordered by how much a
+ * contention refusal needs them and `acquiredAt` is not in it at all — the
+ * server already knows when that connection opened (`backend_start`), which is
+ * the same instant.
+ */
+const HOLDER_PREFIX = "rm-tl:";
+const APP_NAME_MAX = 63;
+
+function encodeHolder(holder: Omit<LockHolder, "acquiredAt">): string {
+  return `${HOLDER_PREFIX}${holder.tool}|${holder.instance ?? ""}|${holder.host}|${holder.pid}`.slice(0, APP_NAME_MAX);
+}
+
+function decodeHolder(applicationName: string | null, backendStart: Date | string | null): LockHolder | null {
+  if (applicationName === null || !applicationName.startsWith(HOLDER_PREFIX)) return null;
+  const [tool, instance, host, pid] = applicationName.slice(HOLDER_PREFIX.length).split("|");
+  if (tool === undefined || host === undefined || pid === undefined) return null;
+  return {
+    tool,
+    instance: instance === undefined || instance === "" ? null : instance,
+    host,
+    pid: Number(pid),
+    acquiredAt: backendStart instanceof Date ? backendStart.toISOString() : String(backendStart ?? ""),
+  };
+}
+
+/**
+ * A connection of this module's own, never the pool of `db/client.ts`.
+ *
+ * `max: 1` because a session lock belongs to one backend; `idle_timeout` and
+ * `max_lifetime` disabled because postgres.js would otherwise recycle the
+ * backend out from under a lock that is supposed to last the whole run, which
+ * is the pooled-connection failure the spec rules out.
+ */
+function dedicatedClient(databaseUrl: string, applicationName: string): postgresTypes.Sql<{}> {
+  return postgres(databaseUrl, {
+    max: 1,
+    idle_timeout: 0,
+    max_lifetime: 0,
+    onnotice: () => {},
+    connection: { application_name: applicationName },
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * The advisory-lock key, derived from database identity.
@@ -140,8 +204,27 @@ export function targetLockKey(identity: {
   readonly systemIdentifier: string;
   readonly databaseName: string;
 }): TargetLockKey {
-  void identity;
-  throw new Error("NOT IMPLEMENTED: derive the target-lock key from database identity — spec §2, issue #1026 W1.7");
+  const systemIdentifier = identity.systemIdentifier.trim();
+  const databaseName = identity.databaseName.trim();
+  if (systemIdentifier === "") {
+    throw new Error(
+      "target lock: the system identifier is empty — a key derived from a partial database identity collides with " +
+        "every other partial derivation. Read it from the server (`pg_control_system().system_identifier`).",
+    );
+  }
+  if (databaseName === "") {
+    throw new Error(
+      "target lock: the database name is empty — a key derived from a partial database identity collides with " +
+        "every other partial derivation. Read it from the server (`current_database()`).",
+    );
+  }
+  // SHA-256 over the two server-reported facts, NUL-separated so no pair of
+  // inputs can be re-split into another pair. The top bit is cleared to keep the
+  // key non-negative, which is what makes the catalog's classid/objid split
+  // reassemble to exactly this number.
+  const digest = createHash("sha256").update(`${systemIdentifier}\u0000${databaseName}`).digest();
+  const key = digest.readBigUInt64BE(0) & ((1n << 63n) - 1n);
+  return key as TargetLockKey;
 }
 
 /** Which tool holds (or wants) the lock, recorded so a contention refusal can name the holder. */
@@ -234,14 +317,46 @@ export type AcquireResult =
  * Serves spec §10 W1: "Standalone `bun run migrate` and `bun smoke` contend on
  * the target lock."
  */
-export function acquireTargetLock(options: {
+export async function acquireTargetLock(options: {
   readonly databaseUrl: string;
   readonly key: TargetLockKey;
   readonly holder: Omit<LockHolder, "acquiredAt">;
   readonly timeoutMs: number;
 }): Promise<AcquireResult> {
-  void options;
-  throw new Error("NOT IMPLEMENTED: acquire the session-level target lock — spec §2, issue #1026 W1.7");
+  const client = dedicatedClient(options.databaseUrl, encodeHolder(options.holder));
+  const started = Date.now();
+  const deadline = started + options.timeoutMs;
+  let handedOver = false;
+  try {
+    for (;;) {
+      const rows = await client<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_lock(${options.key.toString()}::bigint) AS locked`;
+      if (rows[0]?.locked === true) {
+        handedOver = true;
+        return { acquired: true, lock: makeLock(options.key, { ...options.holder, acquiredAt: new Date().toISOString() }, client) };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(50, remaining));
+    }
+    // The wait is over and the lock is still someone else's. Name them if the
+    // server can, and refuse either way: an unidentifiable holder is not an
+    // absent one.
+    const holder = await describeHolder(client, options.key).catch(() => null);
+    const waitedMs = Date.now() - started;
+    const who =
+      holder === null
+        ? "an unidentified tool"
+        : `${holder.tool}${holder.instance === null ? "" : ` (instance ${holder.instance})`} on ${holder.host} pid ${holder.pid}, since ${holder.acquiredAt}`;
+    return {
+      acquired: false,
+      holder,
+      waitedMs,
+      reason: `target lock ${options.key} is held by ${who}; waited ${waitedMs}ms and gave up.`,
+    };
+  } finally {
+    if (!handedOver) await client.end({ timeout: 5 });
+  }
 }
 
 /**

@@ -158,9 +158,89 @@ export interface RegisteredQuery {
  * Serves spec §10 W2 "Registry structurally enforced; execution under each role
  * on a disposable database" — this half is the structural one.
  */
+/** Registration order, which is the order `registeredSites()` reports. */
+const order: QueryDeclaration[] = [];
+/** Site id → its runner, so a re-registration is resolved rather than duplicated. */
+const bySite = new Map<string, RegisteredQuery>();
+
 export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
-  void declaration;
-  throw new Error("NOT IMPLEMENTED: register a declared query call site — spec §7.1, issue #1026 W2.3");
+  assertValidObject(declaration);
+  if (declaration.privileges.length === 0) {
+    throw new Error(
+      `registry: call site ${declaration.site} declared an empty privileges list on ${declaration.object} — ` +
+        "a statement that needs no privilege is a statement that does not touch the object it named (spec §7.1).",
+    );
+  }
+
+  const frozen = freezeDeclaration(declaration);
+  const existing = bySite.get(frozen.site);
+  if (existing) {
+    if (!sameDeclaration(existing.declaration, frozen)) {
+      throw new Error(
+        `registry: site id ${frozen.site} is already registered with a different declaration ` +
+          `(${describe(existing.declaration)} vs ${describe(frozen)}) — duplicate ids make a check-2 failure ` +
+          "unattributable (spec §7.1).",
+      );
+    }
+    return existing;
+  }
+
+  const query: RegisteredQuery = {
+    declaration: frozen,
+    run<T = unknown>(db: RegistryDb, strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> {
+      // postgres.js's tagged template, called with the caller's own strings and
+      // values, so a registered site costs nothing but the declaration. The
+      // handle is never exposed back to the call site.
+      return (db as unknown as (s: TemplateStringsArray, ...v: readonly unknown[]) => Promise<T[]>)(
+        strings,
+        ...values,
+      );
+    },
+  };
+
+  bySite.set(frozen.site, query);
+  order.push(frozen);
+  return query;
+}
+
+/** An unqualified relation name exactly as `pg_class.relname` spells it: no
+ *  schema qualifier, no quoting, no whitespace. Check 2 resolves the name
+ *  through `to_regclass` in `public`, where anything else silently resolves
+ *  elsewhere or not at all. */
+const UNQUALIFIED_RELATION = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+function assertValidObject(declaration: QueryDeclaration): void {
+  if (UNQUALIFIED_RELATION.test(declaration.object)) return;
+  throw new Error(
+    `registry: call site ${declaration.site} declared object ${JSON.stringify(declaration.object)} ` +
+      `(${declaration.object}) — an object must be an unqualified relation name in \`public\`, with no schema ` +
+      "qualifier, quoting or whitespace (spec §7.1).",
+  );
+}
+
+function freezeDeclaration(declaration: QueryDeclaration): QueryDeclaration {
+  return Object.freeze({
+    role: declaration.role,
+    object: declaration.object,
+    privileges: Object.freeze([...declaration.privileges]),
+    site: declaration.site,
+    purpose: declaration.purpose,
+  });
+}
+
+function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
+  return (
+    a.role === b.role &&
+    a.object === b.object &&
+    a.site === b.site &&
+    a.purpose === b.purpose &&
+    a.privileges.length === b.privileges.length &&
+    a.privileges.every((privilege, index) => privilege === b.privileges[index])
+  );
+}
+
+function describe(declaration: QueryDeclaration): string {
+  return `${declaration.role} ${declaration.privileges.join(",")} ON ${declaration.object}`;
 }
 
 /**
@@ -177,7 +257,9 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
  * Serves spec §10 W2 "Registry structurally enforced".
  */
 export function registeredSites(): readonly QueryDeclaration[] {
-  throw new Error("NOT IMPLEMENTED: enumerate registered call sites — spec §7.1, issue #1026 W2.3");
+  // A frozen COPY: the array the module appends to must not be reachable from a
+  // caller, or the evidence check 2 reads could be edited by the code it judges.
+  return Object.freeze([...order]);
 }
 
 /**
@@ -198,5 +280,21 @@ export function registeredSites(): readonly QueryDeclaration[] {
  * the required-privileges side that failure is reported against.
  */
 export function requiredPrivileges(): ReadonlyMap<RmRole, ReadonlyMap<string, ReadonlySet<TablePrivilege>>> {
-  throw new Error("NOT IMPLEMENTED: fold declarations into required privileges — spec §7.1, issue #1026 W2.3");
+  const byRole = new Map<RmRole, Map<string, Set<TablePrivilege>>>();
+  for (const declaration of order) {
+    let byObject = byRole.get(declaration.role);
+    if (!byObject) {
+      byObject = new Map<string, Set<TablePrivilege>>();
+      byRole.set(declaration.role, byObject);
+    }
+    let privileges = byObject.get(declaration.object);
+    if (!privileges) {
+      privileges = new Set<TablePrivilege>();
+      byObject.set(declaration.object, privileges);
+    }
+    // A UNION, never last-writer-wins: the site that only reads and the site
+    // that writes are both real requirements on the same relation.
+    for (const privilege of declaration.privileges) privileges.add(privilege);
+  }
+  return byRole;
 }
