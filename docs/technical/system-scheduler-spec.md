@@ -57,7 +57,7 @@ There is no on/off state for scheduling. Activating a subject opens its first ep
 
 1. Every active subject, with its epoch duration.
 2. Every session in `collecting`, with its `window_closes_at`.
-3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated` or `judging` — with its state, and for `judging` its recorded deadline. This includes sessions whose subject has since been deactivated; deactivation closes an epoch but settlement still has to finish.
+3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated`, `judging` or `judged` — with its state, and for `judging` its recorded deadline. A recovered `judged` session proceeds straight to finalize. This includes sessions whose subject has since been deactivated; deactivation closes an epoch but settlement still has to finish.
 4. The stream cursor the API returns with the read (§6.3).
 
 Then it sets a boundary timer per collecting session, a deadline timer per judging session, resumes every unfinished settlement from its recorded state, opens an epoch for every active subject that has none, and waits until the earliest timer. Fire it. Recompute. Repeat.
@@ -116,7 +116,7 @@ Closing an epoch starts its settlement, and settlement is **not scheduled**. It 
 1. **Aggregate** — roll the signed takes up into the recommendation. `window_closed → aggregated`. Deterministic; the allocation arithmetic and the signed member history are the same whatever judging later produces.
 2. **Judge** — branches on the captured mode:
    - **`off`:** no judging is requested and nothing waits. `aggregated → publish` directly, with judging outcome `not_judged`. This is not a failure and is never presented as one.
-   - **`enforce`:** the scheduler requests judging. The API records the request instant and the **absolute deadline** (request instant plus the hardcoded judging duration), moves the session to `judging`, returns the deadline, and pushes the request to the judge participants (`smoke-production-spec.md` §6). The scheduler holds a timer for that deadline. When the judges' consensus lands, the API records it with its acceptance instant, moves the session to `judged`, and publishes `session.judged`.
+   - **`enforce`:** the scheduler requests judging. The API records the request instant and the **absolute deadline** (request instant plus the hardcoded judging duration), moves the session to `judging`, returns the deadline, and pushes the request to the judge participants (`smoke-production-spec.md` §6). The scheduler holds a timer for that deadline. When the judges' consensus lands, the API records it with its acceptance instant, advances the session to `judged` if its state guard permits (§5), and publishes `session.judged`. A consensus that lands after the session is already `published` is recorded as late evidence and changes neither the lifecycle state nor the published outcome.
 3. **Publish** — the session goes public, with its consensus certificate when one exists. `→ published`.
 
 The scheduler waits for **either** `session.judged` **or** its deadline timer, whichever first, and then calls **finalize**. It never polls for the judgement.
@@ -131,9 +131,11 @@ The scheduler waits for **either** `session.judged` **or** its deadline timer, w
 
 Then it publishes. A repeated finalize returns the outcome already decided; it never re-decides. A consensus recorded after the deadline is kept as a record but does not change a `no_consensus` outcome.
 
+**Finalize is time-guarded as well as state-guarded.** Under `enforce`, the API accepts finalize before the deadline only if an eligible consensus is already recorded, in which case it publishes `judged` at once. With no eligible consensus it refuses finalize as a reasoned no-op until the deadline has passed by the API's own clock, because absence of a consensus before the deadline proves nothing. At the exact deadline instant: a consensus recorded *at or before* it is eligible, and finalize is accepted *at or after* it. This is request validation, not an API timer; the scheduler still holds the deadline and issues the call.
+
 **No consensus.** A session finalized as `no_consensus` is published in that state with no consensus certificate. Nothing is fabricated: no template opinion, no placeholder certificate, no default verdict. A session with no consensus says so. Its aggregate and its signed takes are published unchanged.
 
-**`no_consensus`, `not_judged` and `judged` are outcomes recorded on the published session, not lifecycle states.** The lifecycle ends at `published` in every case.
+**`no_consensus`, `not_judged` and `judged` are outcomes recorded on the published session.** The lifecycle ends at `published` in every case. Note that `judged` is used in two senses and both are intended: as the **lifecycle state** a session holds between consensus being recorded and finalize (§3 recovers it), and as the **outcome** finalize records when that consensus was eligible. `no_consensus` and `not_judged` are outcomes only and never lifecycle states.
 
 ### 4.5 Deactivating a subject
 
@@ -144,7 +146,9 @@ Deactivating a subject through the admin API closes its open epoch (recording ab
 A transition call from the scheduler can fail three ways, and they are handled differently:
 
 - **A refusal with a reason** (the state guard, a bound epoch that is no longer current, a permanent validation error) is final. The scheduler records it, does not retry, and moves on. If the refusal means the work is already done — the original result is returned — the scheduler continues the chain from there.
-- **A transient error or a lost response** is retried by the scheduler with bounded exponential backoff. Retrying is safe because every transition is state-guarded and turnover is epoch-bound. After the retry budget is exhausted the scheduler leaves the settlement in its recorded state and reports it; the next rebuild resumes it.
+- **A transient error or a lost response** is retried by the scheduler with bounded exponential backoff. Retrying is safe because every transition is state-guarded and turnover is epoch-bound. This applies to every call the scheduler makes — first opening, turnover, and each settlement step alike.
+
+  **After the retry budget is exhausted, the work waits.** The scheduler leaves it in its recorded state, marks itself degraded on its health surface naming the subject or session and the last error, and stops retrying that item. It does not retry indefinitely and it does not reconcile on a timer. The work resumes on the next rebuild (§3), and the supported way to force one is to restart `system-scheduler`; any later downtime event also triggers it. This is deliberate: a dependency that has been failing for the whole retry budget is an operator's problem to see, not something to paper over with an infinite loop. A subject whose turnover is exhausted keeps its collecting session past `window_closes_at`; that is harmless, because §4.2 refuses submissions by instant, not by state, and the boundary fires once on rebuild.
 - **A stream problem** is not a transition failure and is handled by §3.1, not here.
 
 These retries are triggered by a failure and are bounded. They are not polling.
@@ -181,6 +185,7 @@ A duration change takes effect at the **next** boundary: the current window keep
 - **A gap** — a sequence number that is not the last applied plus one — means the copy is no longer provably current. Stop, full read, rebuild.
 - **Resync.** If the API cannot serve from the requested cursor — its retained log does not reach that far, or its buffer for this subscriber overflowed — it says so, and the scheduler treats that as downtime (§3.2): full read, rebuild. The API never silently skips.
 - **Silent failure detection.** The connection carries a transport-level keepalive (a WebSocket ping/pong or equivalent). A missed keepalive is a dropped connection under §3.1. This is a transport frame, not an API call, and not a read of business state; §10's no-API-call gate is stated accordingly.
+- **The keepalive carries the head sequence.** Each keepalive from the API includes the sequence number of the last event it committed. A scheduler whose last-applied number is below that head has missed an event with no later event to expose the gap; it treats this exactly like a gap — stop, full read, rebuild. This closes the one loss sequence numbers alone cannot detect: the final event before a quiet period. It costs nothing beyond a number on a frame the protocol already requires, and it is not a read of business state.
 - **A dropped connection** is reconnected with backoff and followed by a full read. The scheduler does not replay from its last cursor after a drop; it rebuilds. Rebuilding is cheap and provably correct; replay would have to be proven complete.
 - **Job pushes.** An ad-hoc job the API pushes carries kind, target, and an idempotency key. The scheduler acks it through the API when done. Timed redelivery of an unacked job on a live connection is part of the API's serving of that subscription — it is not autonomous orchestration and does not need a background worker. On reconnect the API re-pushes anything unacked.
 
@@ -199,7 +204,7 @@ There are four kinds of credential in this system, and they must not be confused
 
 `system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
-How that automation token is provisioned to the container is not defined here or in `smoke-production-spec.md` §3 yet; §3 covers database and signing credentials only. That provisioning is one of the companion amendments listed in §12.
+How that automation token is provisioned is defined in `smoke-production-spec.md` §3: issued at production initialization, placed by the boot as a per-instance file, never in `~/.env` and never in the image, rotated by re-provisioning and restarting the container.
 
 ## 8. Environments
 
@@ -245,7 +250,11 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
 - Deactivating a subject closes and settles its open epoch and opens no new one.
 - **Handoff:** a turnover committed by an operator between the scheduler's full read and its subscription is delivered on the stream above the cursor, not lost.
-- **Final-event loss and silent stall:** stall the connection without closing it — the keepalive detects it, the scheduler rebuilds, and no stale timer fires. Drop the last event before a quiet period — the next full read reflects it.
+- **Silent stall:** stall the connection without closing it — the missed keepalive is detected, the scheduler rebuilds, and no stale timer fires.
+- **Final-event loss:** drop one application event at the API-to-scheduler hop while keepalives keep flowing, with no later event to follow it. The next keepalive's head sequence exceeds the scheduler's last-applied number; that alone triggers the rebuild, and the rebuilt state reflects the dropped change. The test asserts the trigger was the head-sequence mismatch, not a manually induced rebuild.
+- **Early finalize:** under `enforce`, calling finalize before the deadline with no eligible consensus is refused with a reason and changes nothing; calling it before the deadline with an eligible consensus publishes `judged`; calling it at the deadline instant with a consensus recorded at that instant publishes `judged`.
+- **Late consensus after publish:** a consensus arriving after the session is `published` is recorded and changes neither state nor outcome.
+- **Retry exhaustion:** with a dependency failing for the whole retry budget, the scheduler marks itself degraded naming the item and stops retrying; restarting it after the dependency recovers resumes the item exactly once. A subject whose turnover exhausted refuses submissions after `window_closes_at` throughout.
 - Dropping one event from the stream (a sequence gap) causes a full read and rebuild before any further fire. An API resync notice does the same.
 - Between instants, with a live stream and no events, `system-scheduler` makes no API call; transport keepalive frames are not API calls.
 
