@@ -1891,6 +1891,8 @@ a host-side session driver, or direct SQL as a recovery procedure.
 
 ## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
 
+> **Superseded by [D49](#d49) on 2026-09-23.** New sessions take one immutable take per member. Kept for the history of the revision rows that exist.
+
 **Decision.** A seated swarm member may amend and resubmit its take inside a
 session. Amendment is **append-only**: each revision is its own immutable row in
 `swarm_recommendations`, with its own `gen_random_uuid()` permalink, its own
@@ -3642,3 +3644,43 @@ verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
 the observe-before-enforce soak. The decision remains unimplemented until that
 prerequisite is met. The former long-form specification was removed from the
 documentation tree; recover it from Git only for historical context.
+
+## D49 — One immutable take per member per epoch; supersedes D33's amendments (Lucas, 2026-09-23)
+
+**Status.** Accepted 2026-09-23; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** A member submits exactly one take per session (epoch). Take
+identity is `(session, member)`, unique server-side. A second submission on
+that key returns the existing record and is treated by the participant as
+success; it never creates a second row and never replaces the first. There is
+no amendment, no revision, no cap, and no latest-per-member read. What a
+member said in an epoch is what it said. This is the wording already adopted
+in the [smoke production spec](technical/smoke-production-spec.md) §6.2 under
+"Idempotent submission"; this entry makes it a product decision rather than a
+side effect of that spec.
+
+**Why.** Epochs are short and continuous (scheduler spec §2). A member that
+changes its mind states the new view in the next epoch, on the record, with a
+timestamp. Amendments inside a window bought little once windows became short
+and gave up the simplest possible story for a signed track record: one
+signature, one take, one epoch. The retry story the amendment machinery was
+also serving (a crash after submit, an old/new container overlap) is fully
+served by idempotent `(session, member)` submission.
+
+**What this supersedes.** D33's append-only revisions, the
+`SWARM_TAKE_REVISION_CAP`, and the `UNIQUE (session_id, member_id, revision)`
+key from migration 0028. D33's other statements stand: an accepted take's
+content is never `UPDATE`d, nothing is deleted, no admin endpoint writes
+`swarm_recommendations`.
+
+**Historical data.** Existing rows with `revision > 1` remain readable and
+their permalinks stay valid; history is not rewritten. Reads of a legacy
+session with several revisions for one member keep resolving latest-per-member
+for that session only. New sessions never have more than one row per member.
+
+**Implementation.** Restore server-side `(session_id, member_id)` uniqueness
+for new sessions and make resubmission return the existing record; remove the
+cap and the revision write path; retire `swarm-take-revisions.test.ts` in
+favour of an idempotent-submission test. Tracked under the deployment refactor
+issue (#1026), W3.

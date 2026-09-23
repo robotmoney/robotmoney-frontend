@@ -1,9 +1,21 @@
 # Architecture
 
-> **Deployment authority:** [Smoke production spec](technical/smoke-production-spec.md)
-> is the sole adopted deployment design (2026-09-22; not yet shipped).
-> Deployment/tooling passages here describe legacy implementation or dated topology
-> unless explicitly linked to that spec. They do not define a competing target.
+> **Document authority.** This document summarizes the system and its product
+> invariants. Two reviewed specifications govern the details and win where this
+> document conflicts with them:
+>
+> - [System scheduler spec](technical/system-scheduler-spec.md) — session
+>   lifecycle, timing, epochs, event stream, recovery, and scheduler acceptance
+>   gates (its §10).
+> - [Smoke production spec](technical/smoke-production-spec.md) — deployment,
+>   credentials, participants, readiness, and deployment acceptance gates (its
+>   §10). Adopted 2026-09-22 under [D47](./decisions.md#d47); not yet shipped.
+>
+> Passages here that describe scheduling, deployment, credentials or
+> participants are short summaries with a link to the governing section. Where
+> a passage describes the worker or smoke code as it exists, it is marked as
+> legacy implementation. Adoption of either spec is not evidence that the
+> implementation has shipped.
 > [Release policy](technical/release-runbooks.md) continues to govern release gates.
 
 Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
@@ -501,7 +513,18 @@ them — this repo's own local dev/smoke/e2e harness included.
   `0016_worker_role.sql`) and the migration runner (`migrate.ts`).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
 - `migrations/` — forward-only numbered `*.sql`, applied once each, tracked in
-  `schema_migrations`. Safe to run on every boot.
+  `schema_migrations`. In production a migration is its own operator step
+  (`bun run migrate`, with the `rm_owner` password typed at the terminal and
+  receipted), never part of a boot; the `--migrate` flag is a rehearsal-only
+  convenience for stage, test and CI. See
+  [smoke-production-spec §8.5](./technical/smoke-production-spec.md#85---migrate-and-production-upgrades)
+  and [§9](./technical/smoke-production-spec.md#9-production).
+  All database access under the adopted design goes through one registered
+  query interface that declares `(role, object, privilege)` at the call site
+  ([smoke-production-spec §7.1](./technical/smoke-production-spec.md#71-registry-enforced-structurally));
+  the roles are `rm_owner` (schema owner, `LOGIN`, migration only), `rm_app`,
+  `rm_worker` and `rm_readonly`, and there is no `rm_migrator`
+  ([§3](./technical/smoke-production-spec.md#3-roles-and-credentials)).
 
 ### Authentication & authorization
 
@@ -516,8 +539,18 @@ Four distinctions, kept deliberately separate:
   (`keys.ts`). Public reads need neither.
 - **Authorship = member signature.** Recommendations carry a signature the member
   produces **on their own side**; the backend only **verifies** it against the
-  member's registered public key. RM never holds member private keys. (This is the
-  on-chain seam: later only the signature is anchored.)
+  member's registered public key. The API never holds a member's signing key.
+  (This is the on-chain seam: later only the signature is anchored.)
+- **Four credential kinds, four holders.** Signing keys (Ed25519) are held by
+  participants only, in `credential.json`; the API automation token is held by
+  `system-scheduler`; database role passwords are held by the `api` process at
+  runtime; model keys are held by the agents and judges that call a model.
+  `system-scheduler` holds no signing key, no database password and no model
+  key. See
+  [system-scheduler-spec §7](./technical/system-scheduler-spec.md#7-credentials)
+  and [smoke-production-spec §3](./technical/smoke-production-spec.md#3-roles-and-credentials).
+  The analytics and research workers keep their database credentials until
+  their own specification moves them (smoke spec §7.2; scheduler spec §11).
 - **Credential exchange and membership are separate.** Active members exchange
   their member ID and bearer credential by signing a server-issued key-proof
   challenge (`token-claim/challenge` → `token-claim`, issue #205). Swarm
@@ -526,8 +559,9 @@ Four distinctions, kept deliberately separate:
 - **Scoped roles.** Every write is authorized to a role: members write only their
   own recommendations, the analytics provider only analytics data (the regime
   recompute + the typed `/api/analytics/*` ingestion routes, `ANALYTICS_TOKEN`
-  bearer — `ADMIN_TOKEN` and member bearers are never substitutes), the host only
-  session lifecycle, the public reads only — enforced in the API layer
+  bearer — `ADMIN_TOKEN` and member bearers are never substitutes),
+  `system-scheduler` only session lifecycle transitions under its automation
+  token (scheduler spec §7), the public reads only — enforced in the API layer
   (`src/api/auth.ts` holds the shared constant-time credential checks). The
   worker's own database role is restricted too: migration `0016_worker_role.sql`
   provisions `rm_worker`, which can run the queue lifecycle and the non-analytics
@@ -557,22 +591,43 @@ CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (swarm). Full schema in
   keys (e.g. `(ts, …)`, `(date)`) so reruns overwrite rather than duplicate; the
   API reads these.
 - **Task queue** (`0003_task_queue.sql`): `jobs`, `job_schedules`, `job_runs`.
+  These serve the vault, wallet, buyback and project pipelines (§7). Under the
+  adopted design the swarm session lifecycle has no rows here: a subject's
+  epoch duration is a column on `swarm_subjects`, set by bootstrap data and
+  changed only through the admin API
+  ([system-scheduler-spec §2.3](./technical/system-scheduler-spec.md#23-where-it-lives-and-who-sets-it);
+  [smoke-production-spec §8.1](./technical/smoke-production-spec.md#81-snapshot)).
 
 ---
 
 ## 7. Task queue & workers
 
-A Postgres-backed queue replaces the old GitHub Actions cron + `scripts/`. Each
-worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`) runs
-three loops:
+A Postgres-backed queue replaces the old GitHub Actions cron + `scripts/` for
+the vault, wallet, buyback and project pipelines. It is **not** the target
+driver of the swarm session lifecycle. That driver is `system-scheduler`: one
+long-running container that holds an API automation token only (no database
+credential, no Docker socket), keeps one boundary timer per active subject,
+and drives each epoch by calling authenticated API endpoints and subscribing
+to the API's event stream. The API performs state-guarded transactions and
+serves subscriptions and runs no background orchestration. Participants
+(agents poll, judges subscribe) do the model work. See
+[system-scheduler-spec §§1–4](./technical/system-scheduler-spec.md#1-roles)
+and §9.4 below. The `swarm` lane, `worker-swarm` container and `swarm.*` job
+kinds described in this section are the legacy implementation as of
+2026-09-23, kept here because that code still runs; they are not target
+requirements.
+
+Each worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`)
+runs three loops:
 
 - **Claim order**: `ORDER BY priority DESC, run_after, id`. The `id` tiebreak is
   required, not cosmetic (issue #806): `run_after` is a millisecond instant that
-  same-priority jobs routinely share — `createSessionAdmin`'s clamp collapses
-  `swarm.aggregate` and `swarm.judge` onto an identical one for any window under
-  ~2s — and without it the judge could lose the tie, drain after the publish, and
-  burn every attempt on `terminal_state:published`. It does not self-heal, so it
-  is ordered rather than retried.
+  same-priority jobs routinely share, and without it a later step could lose
+  the tie to an earlier one and burn every attempt on a terminal state. It
+  does not self-heal, so it is ordered rather than retried. (The original
+  trigger was the legacy admin session path's clamp, which collapsed
+  `swarm.aggregate` and `swarm.judge` onto one instant; that path is not part
+  of the target, but the ordering rule stands for every kind.)
 - **Claim loop** (`loop.ts`): claims one due job **within its lane's kind
   allowlist** with `FOR UPDATE SKIP LOCKED` (safe across N workers), runs its
   handler by `kind`, and records the outcome in `job_runs`. On failure it retries
@@ -594,14 +649,17 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 
 | Lane | Claims | Purpose |
 |------|--------|---------|
-| `swarm` | `swarm.%` only | **Reserved** interactive session-lifecycle capacity — no other lane may claim these kinds. |
+| `swarm` | `swarm.%` only | **Legacy (2026-09-23).** Session-lifecycle capacity for the old job-chain driver. The target has no swarm lane and no `swarm.*` job kinds; `system-scheduler` replaces `worker-swarm` ([scheduler spec §1](./technical/system-scheduler-spec.md#1-roles)). |
 | `analytics` | everything except `swarm.%`/`research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
 | `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. |
 | `generic` | everything except `swarm.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
 
-The production/default topology is one container per lane
+The current Compose topology (legacy, 2026-09-23) is one container per lane
 (`worker-swarm`/`worker-analytics`/`worker-research` in
-`docker-compose.yml`), plus the non-queue `analytics-producer`. Worker lanes
+`docker-compose.yml`), plus the non-queue `analytics-producer`. The target
+topology replaces `worker-swarm` with `system-scheduler`; the analytics and
+research workers keep their lanes and database credentials until a later
+specification moves them (smoke spec §7.2; scheduler spec §11). Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
 dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a
@@ -987,10 +1045,18 @@ Use [release policy](./technical/release-runbooks.md) for release gates and
 create an exact-SHA runbook when a release is scheduled and the required tools
 exist.
 
-The repository's Compose topology contains Postgres, API, static web server,
-and worker services (§7). The adopted design owns how those services are
-prepared, checked, replaced and kept running. Its credentials and target
-identity rules are in smoke-production-spec §§3–5.
+The repository's Compose topology today contains Postgres, API, static web
+server, and worker services (§7). The target adds `system-scheduler` (API
+credential only) in place of `worker-swarm`, and standing participant
+containers defined by the credential file. The adopted design owns how those
+services are prepared, checked, replaced and kept running. Its credentials and
+target identity rules are in smoke-production-spec §§3–5; participants and
+readiness are in §6 (scheduler health in
+[§6.3](./technical/smoke-production-spec.md#63-sessions-are-independent));
+preflight is §7; production initialization, boot and migration are
+[§8.5](./technical/smoke-production-spec.md#85---migrate-and-production-upgrades)
+and [§9](./technical/smoke-production-spec.md#9-production). Production
+migration is a separate operator step, never part of a boot.
 
 The production DNS, vendor and service placement recorded by D13 is described
 under [Network topology](#network-topology--dns-origins--vendors). That decision
@@ -1007,8 +1073,12 @@ deployment behavior.
 
 > Status: design reference for the IC feature (built in Phase 5). It reuses the
 > shared infrastructure above — the boundary (§3), the buildless frontend (§4), the
-> Bun server (§5), Postgres (§6), and the task queue (§7) — and adds a
-> signed-submission protocol over the REST API.
+> Bun server (§5) and Postgres (§6) — and adds a signed-submission protocol
+> over the REST API. Session timing and lifecycle are owned by
+> [system-scheduler-spec](./technical/system-scheduler-spec.md); deployment,
+> credentials and participants by
+> [smoke-production-spec](./technical/smoke-production-spec.md). Neither is
+> shipped yet; where this section names the legacy worker path it says so.
 
 The IC's value is the **structured, signed, attributable recommendation record** —
 not the reasoning. Swarm members are **autonomous third parties** who run their
@@ -1024,9 +1094,13 @@ is a stubbed seam, §9.3).
 above, each with an analytical lens — macro risk, on-chain flows, momentum,
 contrarian); it reviews many **subjects** (the portfolios/wallets under review,
 e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
-one per `(date, subject)` pair — each advancing through the lifecycle
-`scheduled → collecting → window_closed → aggregated → [judged] → published`
-(plus the terminal `cancelled`; §9.4). `judged` is optional — see §9.7. Each member posts at most one signed **recommendation** (a "take") per
+one per **epoch** of a subject, back to back, so a subject can run several
+sessions on one date. A session is identified by its id, not by a date; the
+only uniqueness the database enforces is at most one `collecting` session per
+subject ([scheduler spec §2.1](./technical/system-scheduler-spec.md#21-the-model)).
+Each session advances through
+`collecting → window_closed → aggregated → [judging → judged] → published`
+(§9.4). `judged` is optional — see §9.7. Each member posts at most one signed **recommendation** (a "take") per
 session; a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple swarms.
@@ -1038,7 +1112,8 @@ It spans the layers but only through the contract (§3).
 | Layer | IC responsibility |
 |---|---|
 | `contract/` | `ROUTES.swarm` + `swarm.d.ts` DTOs — the only thing crossing boundaries. |
-| `backend/` | API routes (`src/api/routes/swarm.ts`), swarm Postgres tables, and the worker handlers that own the session lifecycle (§9.4). Owns the DB. |
+| `backend/` | API routes (`src/api/routes/swarm.ts`), swarm Postgres tables, and the state-guarded lifecycle transition endpoints that `system-scheduler` calls (§9.4). The `api` process is the only service in the swarm scope that holds a database credential. |
+| `system-scheduler` | One container. Holds an API automation token only. Fires each subject's epoch boundary and drives settlement through the API; subscribes to the API's event stream. Not in `contract/`: it is an API client ([scheduler spec §1](./technical/system-scheduler-spec.md#1-roles)). |
 | `frontend/` | Read-only swarm views (members/subjects/sessions/apply) reaching the API via `app/lib/api.js`. |
 
 All three depend only on `contract`; `frontend/` reaches `backend/` solely over
@@ -1053,13 +1128,18 @@ the earlier MCP-server surface).
 |---|---|---|---|
 | **Swarm member** | access-key hash for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
 | **RM analytics provider** | service credential / role | **regime snapshots** (+ RM-run subject snapshots) | — |
-| **Protocol host** (the worker) | the worker process | sessions, briefs, lifecycle state, aggregation | all |
+| **`system-scheduler`** (the clock) | API automation token; no signing key, no database password, no model key | lifecycle transitions only: open, turn over, aggregate, request judging, finalize — each a state-guarded API call | subjects, sessions, the event stream |
+| **Consensus judge** (a participant) | access key + its own signing key from `credential.json`; its own model key | its **own signed judgement** for a `judging` session | pending judging requests via its subscription |
+| **API** | the only swarm-scope service with a database role password | performs every transition as one guarded transaction; serves subscriptions; no background orchestration | all |
 | **Public reader** | anonymous | nothing | published sessions, regime, memo links |
 
 **Core invariant:** every write is an authenticated, authorized, *scoped* action —
 a member cannot write regime data; the analytics provider cannot post a
-recommendation; neither can mutate sessions. Member and analytics-provider are
-*roles*; either can later be a genuine third party with no architectural change.
+recommendation; neither can mutate sessions; the scheduler can move a session
+between states but signs nothing and reads no table directly. Member,
+judge and analytics-provider are *roles*; any can be a genuine third party
+with no architectural change. Credential kinds and holders are in
+[scheduler spec §7](./technical/system-scheduler-spec.md#7-credentials).
 
 ### 9.3 The protocol = two contracts
 
@@ -1086,51 +1166,68 @@ A swarm migration extends §6 with append-only, audit-flavored tables:
 `swarm_members`, `swarm_member_keys` (public-key + access-key-hash
 registry), `swarm_subjects`, `swarm_sessions`, `swarm_briefs`,
 **`swarm_recommendations`** (append-only — payload + signature + nonce +
-`revision` + `verified`; the canonical store behind a take/submission. A member
-may file several REVISIONS of its take in one session and reads resolve
-latest-per-member, but nothing is ever edited in place: each revision is its own
-immutable signed row with its own permalink — see
-[D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)),
+`revision` + `verified`; the canonical store behind a take/submission. Target:
+one immutable take per member per epoch, identity `(session, member)`, a
+resubmission returns the existing row ([D49](./decisions.md#d49)). Legacy rows
+with `revision > 1` exist from the D33 era and stay readable; nothing is ever
+edited in place),
 `swarm_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
 data is written by the analytics provider (§9.6).
 
-The **task queue (§7) is the orchestrator** — there is no GitHub-Actions cron. The
-session lifecycle is a chain of idempotent job kinds:
+**`system-scheduler` is the orchestrator** — there is no GitHub-Actions cron
+and, in the target, no queue job for the swarm lifecycle. The full contract
+is [system-scheduler-spec §§2–4](./technical/system-scheduler-spec.md#2-epochs);
+this is the summary, not a second copy:
 
 ```
-scheduled → collecting → window_closed → aggregated → [judged] → published   (+ cancelled)
+collecting → window_closed → aggregated → [judging → judged] → published
 ```
 
-(Brief publication is the `scheduled → collecting` transition, not a persisted
-state; `cancelled` is the terminal escape hatch. `judged` is the
-judged-but-unsigned state and is OPTIONAL: `aggregated → published` stays legal,
-so a deployment with the consensus judge off never enters it — §9.7.)
+- **Epochs.** A subject's sessions run back to back. Its one scheduling
+  parameter is its **epoch duration**, a column on the subject set by bootstrap
+  data and changed afterwards only through the admin API. There is no
+  `scheduled` state, no "brief opens later," no on/off switch and no idle gap
+  (§§2.1–2.4).
+- **Open is atomic.** Opening an epoch creates the session, publishes its
+  brief and sets `window_closes_at = now + duration` in one API call. The
+  session is `collecting` from its first instant (§4.1). A brief is keyed on
+  its **session** (migration 0028), not on the day.
+- **Window.** Members submit via the REST `submit` endpoint, which calls the
+  domain handler. A submission after `window_closes_at` is refused regardless
+  of state (§4.2).
+- **Turnover.** At the boundary the scheduler calls **turn over** naming
+  `expected_session_id`. In one transaction the API closes N (recording one
+  durable `absent` agent-health event per seated member with no take, §9.4.1),
+  opens N+1, and records the turnover. Turnover is bound to the named epoch;
+  a retry or a stale timer never closes the successor (§4.3). An operator
+  ending a window early uses the same endpoint. Deactivating a subject closes
+  and settles its open epoch and opens no successor (§4.5).
+- **Settlement** of N is independent of N+1's window and of every other
+  subject (§4.4): **aggregate** (deterministic rollup **over the takes
+  actually posted**; absences stay absent; **no host-authored takes**) →
+  **judge** under the mode captured at turnover (`off` or `enforce`, D48;
+  under `enforce` the API stores an absolute deadline and pushes the request
+  to the judge participants) → **finalize** → **publish**.
+- **Judging outcome** is decided once by finalize from stored instants and is
+  one of `judged`, `no_consensus`, `not_judged`. It is recorded on the session
+  separately from the lifecycle state, which ends at `published` in every case.
+  Nothing is fabricated for a missing consensus.
+- **Recovery.** The scheduler is either provably current (live stream, no
+  sequence gap) or rebuilding from a full read; a missed boundary fires once
+  on rebuild, never replayed into the past (§§3, 6).
 
-- `swarm.open_session` (cron) — pick the rotation subject, create the session.
-- `swarm.publish_brief` — assemble the brief (regime + subject snapshot + recent
-  sessions); open the submission window. A brief is keyed on its **session**
-  (migration 0028), not on the day: a subject convening several times a day
-  keeps one brief — and one advertised `windowClosesAt` — per session.
-- *window:* members submit via the REST `submit` endpoint, calling the same
-  **domain handler**, not the worker.
-- `swarm.close_window` (cron at deadline) — stop accepting submissions. For a
-  session with a frozen expected roster (§9.4.1), this also materializes one durable
-  `absent` agent-health event per non-excused member who never submitted.
-- `swarm.aggregate` — deterministic rollup + optional editorial synthesis **over
-  the takes actually posted**; absences recorded as absent. **No host-authored takes.**
-- `swarm.publish` — mark the session visible via API + frontend.
+Sessions run whether or not this host runs any in-house participant; third
+parties may supply the entire roster
+([smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)).
 
-The five `swarm.*` job kinds above are the lifecycle steps as they exist in the
-current worker. They are not how the adopted design times sessions. Under
-[system-scheduler-spec](./technical/system-scheduler-spec.md), each subject runs
-back-to-back epochs of one fixed submission window; `system-scheduler` fires
-each subject's epoch boundary and drives settlement through the API; there are
-no recurring schedule rows for the swarm lifecycle, nothing to enable, and no
-host-driven enqueue path. Sessions run independently of whether this host runs
-any in-house participants; third parties may supply the entire roster. The
-`SWARM_SCHEDULES_ENABLED` switch and the host driver describe legacy
-implementation only. See also
-[smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
+**Legacy implementation (as of 2026-09-23).** The running worker still drives
+sessions through five `swarm.*` job kinds (`open_session`, `publish_brief`,
+`close_window`, `aggregate`, `publish`, plus `judge`) on `job_schedules` cron
+rows behind a `SWARM_SCHEDULES_ENABLED` switch, with a `scheduled` state and a
+terminal `cancelled`. That path, the host session driver, and the `swarm`
+worker lane are what the scheduler spec replaces; they are not target
+requirements, and this document does not define how legacy in-flight sessions
+convert.
 
 #### 9.4.1 Agent health
 
@@ -2455,7 +2552,10 @@ the local eval's own artifacts (docs/reports/2026-07-29-local-onboarding-eval-as
 
 ## Admin Surface: Research and Investment Swarm
 
-Status: implementation specification
+Status: implementation specification, realigned 2026-09-23 to the epoch model
+of [system-scheduler-spec](./technical/system-scheduler-spec.md). The
+session-lifecycle parts below describe the target; the shipped admin surface
+still follows the older scheduled-session path until the scheduler ships.
 Audience: engineering agents implementing the next admin phase
 Route: `/admin` and `/admin/*` (not linked from public navigation)
 
@@ -2466,9 +2566,12 @@ Build one authenticated operator surface that lets a Robot Money administrator:
 1. diagnose every run of the research pipeline from source access through the
    public report;
 2. inspect and safely rerun queue work;
-3. create and manage Investment Swarm topics;
+3. create and manage Investment Swarm topics, including each topic's epoch
+   duration;
 4. add, activate, deactivate, and review swarm members;
-5. schedule a swarm session and observe its lifecycle;
+5. observe each topic's current epoch (its `collecting` session and
+   `window_closes_at`) and every session's lifecycle state, judging outcome
+   and judging deadline, plus the scheduler's health;
 6. inspect the exact roster, brief inputs, signed member recommendations,
    absences, aggregate, and publication for a session; and
 7. see an immutable audit trail for every admin mutation.
@@ -2477,30 +2580,41 @@ An implementation is complete only when an admin can perform these workflows
 without SQL access, shell access, or manual calls to the existing swarm
 admin dispatcher.
 
-## 2. Decisions fixed by this specification
+## 2. Settled scope for this surface
 
-These decisions are not open implementation questions:
+These points are settled for this surface. Where one touches session timing or
+lifecycle, the scheduler spec governs and this list only summarizes it:
 
 - Keep the existing `ADMIN_TOKEN` and `X-Admin-Token` authentication model.
   Role-based admin accounts are out of scope for this phase.
 - Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
-- Keep the Postgres queue as the executor. Admin requests enqueue lifecycle and
-  research work; the browser never runs domain operations itself.
+- Research and queue admin requests still go through the Postgres queue. Swarm
+  lifecycle actions do not: an admin action calls the same state-guarded API
+  transition that `system-scheduler` calls (turn over with
+  `expected_session_id`, aggregate, request judging, finalize), and the API
+  performs it as one transaction
+  ([scheduler spec §5](./technical/system-scheduler-spec.md#5-transitions-are-state-guarded)).
+  The browser never runs domain operations itself.
 - Preserve accepted swarm recommendations as append-only signed records.
-  Admins cannot edit or delete them. This survives
-  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)
-  unchanged: a member amending its take appends a new signed row, it does not
-  rewrite the one on file.
+  Admins cannot edit or delete them. Under [D49](./decisions.md#d49) a member
+  files one take per epoch and cannot amend it; a changed view goes into the
+  next epoch's take.
 - “Remove member” means deactivate. No swarm member is hard-deleted.
 - “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
-- The persisted swarm states are exactly `scheduled`, `collecting`,
-  `window_closed`, `aggregated`, `judged`, `published`, and the terminal state
-  `cancelled`. There is no persisted `brief_published` state in the product.
-  `judged` (issue #752) is the judged-but-unsigned state and is never required:
-  `aggregated → published` remains legal, so it appears only where the consensus
-  judge has been switched on.
-- A swarm session snapshots its expected roster when it is created.
+- The target lifecycle states for a new session are `collecting`,
+  `window_closed`, `aggregated`, `judging`, `judged` and `published`
+  ([scheduler spec §4](./technical/system-scheduler-spec.md#4-the-session-lifecycle)).
+  A session is `collecting` from the instant it opens; there is no
+  `scheduled` state, no `brief_published` state, and no `cancelled` state for
+  new epochs. `judging` and `judged` appear only under judge mode `enforce`;
+  `aggregated → published` remains legal under `off`. The judging **outcome**
+  (`judged`, `no_consensus`, `not_judged`) is a separate field on the
+  published session, not a lifecycle state. Historical rows in `scheduled` or
+  `cancelled` remain readable; how legacy in-flight sessions convert is a
+  migration/release concern outside this document.
+- A swarm session snapshots its expected roster when it opens, and the roster
+  is frozen from that instant because the session is already `collecting`.
   Later global member changes do not rewrite that roster or historical quorum.
 - Research recovery reruns a complete tool. Individual stages are not retried
   because the current stages share in-memory data and are not independently
@@ -2509,11 +2623,12 @@ These decisions are not open implementation questions:
   upserted by a rerun. The new run/stage records preserve who ran what, the
   before/after checksums, warnings, and outcome; this phase does not introduce
   versioned copies of every raw time-series row.
-- Schedule toggles in this UI do not manage the five recurring `swarm.*` rows.
-  The adopted deployment design enables them explicitly during production
-  initialization; ordinary boot and restart preserve their state. Their
-  initialization is an operator/deployment action, not an admin-panel control.
-  See [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent).
+- There are no swarm schedule rows, cron strings or enable switches in the
+  target. A topic's epoch duration is its whole schedule: set by bootstrap data
+  on a blank database, changed afterwards only through the admin API (US-C1),
+  and never disabled. Schedule toggles in this UI concern analytics rows only.
+  See [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)
+  and [scheduler spec §2](./technical/system-scheduler-spec.md#2-epochs).
 
 ## 3. Current product baseline
 
@@ -2537,17 +2652,18 @@ The implementation must extend, not replace, these pieces:
   `/api/analytics/*` boundary and has no database credential. Migration `0016`
   continues denying the shared worker role writes to analytics tables. New
   analytics telemetry writes must respect the same boundary.
-- The current swarm domain supports public reads, applications, activation,
-  signed submissions, memos, subject creation, and the five-state lifecycle.
-  Several lifecycle functions currently lack state guards; this plan adds them.
-- Canonical accepted takes live in `swarm_recommendations`. **Superseded by
-  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573)**:
-  they are no longer one per `(session_id, member_id)`. A member may amend
-  inside the session's open, pre-aggregation window, capped at
-  `SWARM_TAKE_REVISION_CAP` rows per member per session; uniqueness is now
-  `(session_id, member_id, revision)`, and every read that means "the session's
-  takes" resolves latest-per-member. Replay protection on `(member_id, nonce)`
-  is unchanged and is what makes each revision a distinct signed artifact.
+- The current swarm domain (legacy, 2026-09-23) supports public reads,
+  applications, activation, signed submissions, memos, subject creation, and a
+  scheduled-session lifecycle driven by queue jobs. Every target transition is
+  state-guarded and returns the original result when repeated
+  ([scheduler spec §5](./technical/system-scheduler-spec.md#5-transitions-are-state-guarded));
+  this plan adds those guards where they are missing.
+- Canonical accepted takes live in `swarm_recommendations`, one per
+  `(session_id, member_id)` ([D49](./decisions.md#d49), which supersedes
+  D33's capped revisions). A resubmission on that key returns the existing
+  row. Legacy sessions may hold several `revision` rows per member; reads of
+  those sessions still resolve latest-per-member. Replay protection on
+  `(member_id, nonce)` is unchanged.
   Invalid signatures are rejected before insert and are not retained. The admin
   UI therefore shows accepted submissions only; rejected submission-attempt
   forensics are out of scope.
@@ -2573,14 +2689,23 @@ Acceptance:
 ### US-A2 — See operational health
 
 As an admin, I can see current failures, stale research, active swarm work,
-and the next scheduled events on one page.
+each topic's current epoch, and scheduler health on one page.
 
 Acceptance:
 
 - Overview cards show queue counts, stale analytics outputs, historical retired
-  consumer-job health, any accidentally enabled legacy analytics schedule, and
-  the next swarm session event. Producer-native cadence/run health remains
-  an observability follow-up.
+  consumer-job health, any accidentally enabled legacy analytics schedule,
+  each active topic's `collecting` session with its `window_closes_at`, every
+  session still settling with its state (and judging deadline when
+  `judging`), and the scheduler's health. Producer-native cadence/run health
+  remains an observability follow-up.
+- Scheduler health comes from `system-scheduler`'s health endpoint as defined
+  in [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent):
+  authenticated, stream synchronized, initial rebuild complete, and no
+  exhausted work. A degradation is shown with its subject or session and last
+  error. A session waiting on its judging deadline, or published
+  `no_consensus`, is not a health failure. The UI offers no restart control;
+  recovery is an operator restart of the scheduler container.
 - Alerts distinguish `not_run`, `running`, `degraded`, `failed`, `dead`,
   `stale`, and `healthy`.
 - A “running too long” alert means `jobs.status = 'running'` and
@@ -2678,28 +2803,41 @@ Acceptance:
   and new job ids. It never changes the dead row.
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
-- The five recurring `swarm.*` rows are managed by the explicit production
-  initialization step in [smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent),
-  not by this UI. Boot and restart preserve their operator-set state.
+- No swarm lifecycle work appears in this queue in the target: sessions are
+  driven by `system-scheduler` through the API, and a topic's epoch duration
+  (US-C1) is the only schedule
+  ([smoke-production-spec §6.3](./technical/smoke-production-spec.md#63-sessions-are-independent)).
+  Legacy `swarm.*` rows from the pre-scheduler worker are history only.
 
 ### US-C1 — Create and edit a swarm topic
 
-As a swarm manager, I can add a topic and make it eligible for future
-sessions.
+As a swarm manager, I can add a topic, set its epoch duration, and make it
+eligible for sessions.
 
 Acceptance:
 
-- Create and edit support every durable `swarm_subjects` field.
+- Create and edit support every durable `swarm_subjects` field, including the
+  **epoch duration**. That duration is the topic's whole schedule
+  ([scheduler spec §2.2](./technical/system-scheduler-spec.md#22-the-one-duration)).
+- Changing the duration is an ordinary authenticated update. It publishes
+  `subject.changed`; the current window keeps the `window_closes_at` it was
+  opened with, and the epoch opened at the next boundary uses the new value
+  (scheduler spec §6.2). No restart is needed.
+- Activating a topic causes the scheduler to open its first epoch; the admin
+  surface does not open sessions itself (scheduler spec §3).
 - New topic ids match `^[a-z0-9][a-z0-9-]{1,63}$` and are immutable after create.
-- Required fields are id, name, operator, thesis, source type, and
-  recommendation type.
+- Required fields are id, name, operator, thesis, source type,
+  recommendation type, and epoch duration.
 - Source type is `rpc`, `manual`, `vault_tvl`, or `framework`.
 - Recommendation type is `position_actions` or `bucket_weights`.
 - Wallet and NFT entries have `address`, `chain`, and optional `label` strings.
   `framework` requires an empty wallet array; `rpc` requires at least one wallet.
 - `linkedMemberId`, when present, must reference an existing member.
-- Deactivation sets `status = 'inactive'`. It prevents new sessions but leaves
-  old sessions, briefs, snapshots, and recommendations unchanged.
+- Deactivation sets `status = 'inactive'`, closes the topic's open epoch
+  (recording absences as a boundary would), opens no successor, and lets
+  settlement of that closed epoch run to `published`
+  ([scheduler spec §4.5](./technical/system-scheduler-spec.md#45-deactivating-a-subject)).
+  Old sessions, briefs, snapshots, and recommendations are unchanged.
 - Edits require the current `version`; a stale version returns 409.
 
 ### US-C2 — Review and manage swarm members
@@ -2740,74 +2878,67 @@ Acceptance:
   so two concurrent activations cannot both slip past the last free seat).
 - All writes require the current member `version`; stale writes return 409.
 
-### US-C3 — Schedule and observe a swarm session
+### US-C3 — Observe a topic's current epoch and its sessions
 
-As a swarm manager, I can select a topic and schedule its collection and
-publication times.
+As a swarm manager, I can see which session each topic is collecting now, when
+its window closes, and where every earlier session stands in settlement.
 
 Acceptance:
 
-- The create form requires an active topic, session date, brief-open timestamp,
-  window-close timestamp, publish timestamp, and reason.
-- Times are ISO 8601 instants. Validation is
-  `briefOpensAt < windowClosesAt < publishAt` and session date equals the UTC date
-  of `briefOpensAt`. Ordering alone is not enough: each gap must also be at least
-  `MIN_SESSION_STEP_MS` (3s, issue #806), because the lifecycle needs three
-  distinct instants between `windowClosesAt` and `publishAt` to order aggregate,
-  judge and publish at all, and strict `<` on millisecond timestamps admits a
-  one-millisecond window that can only collapse them onto each other.
-- `(date, subject_id)` remains unique.
-- Creation inserts the session in `scheduled`, snapshots all currently active
-  members into `swarm_session_members`, and enqueues five one-off jobs:
-  `publish_brief` at brief open, `close_window` at window close, `aggregate` one
-  second after close, `judge` one second after that, and `publish` at publish
-  time. The two intermediate instants are clamped downward from publish time, so
-  a window too narrow to hold them stays monotonic instead of inverting. `judge` is what puts the
-  consensus judge on this path's cadence (issue #767, §9.7); with
-  `swarm_judge_config.mode = off` — the shipped default — it drains as a single
-  clean success recording `{ skipped: "judge_disabled" }`, never a `degraded`
-  run.
-- This is the manually scheduled admin path. The adopted production design
-  runs sessions in per-subject epochs driven by `system-scheduler` through the
-  API; there are no recurring schedule rows for the swarm lifecycle and no host
-  session driver. See [system-scheduler-spec](./technical/system-scheduler-spec.md).
-- Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
-  dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
-  not duplicate jobs.
-- Session detail presents the timeline in UTC and browser-local time, linked job
-  states, countdown, expected roster, response count, and next legal action.
-- Members activated after creation are not automatically added. Before the
-  session reaches `collecting`, an admin may explicitly add or excuse a roster
-  member. Once collecting starts, the roster is immutable.
+- There is no session create form. Sessions are opened by `system-scheduler`
+  (first epoch on activation or rebuild, every later one at turnover) through
+  the API's atomic open, which creates the session, publishes its brief and
+  sets `window_closes_at = open instant + epoch duration`
+  ([scheduler spec §4.1](./technical/system-scheduler-spec.md#41-epoch-open)).
+  The admin surface reads the result; it does not choose instants.
+- The topic detail shows the current `collecting` session (at most one per
+  topic, enforced by the database) with its `window_closes_at` in UTC and
+  browser-local time, a countdown, and the epoch duration the next window will
+  use.
+- Session identity is the session id. Several sessions per topic on one date
+  are normal; the display date is derived from the open instant and is not a
+  key.
+- Session detail presents the lifecycle state, the transition history from
+  `swarm_session_events`, the judge mode captured at turnover, the judging
+  deadline while `judging`, the judging outcome once `published`
+  (`judged`, `no_consensus`, `not_judged`), expected roster, response count,
+  and the next legal transition.
+- The expected roster is snapshotted into `swarm_session_members` when the
+  session opens and is immutable from that instant, because the session is
+  already `collecting`. Members activated afterwards join the next epoch.
+  There is no pre-collection roster-edit step.
+- The legacy scheduled-session path (brief-open, window-close and publish
+  timestamps; five one-off `swarm.*` jobs; `MIN_SESSION_STEP_MS` clamps) is
+  what shipped before the scheduler and is not a target requirement.
 
 ### US-C4 — Operate guarded swarm transitions
 
-As a swarm manager, I can run or recover a session lifecycle without
-creating impossible state.
+As a swarm manager, I can fire a lifecycle step by hand without creating
+impossible state.
 
-The transition matrix is authoritative:
+The transition contract lives in
+[scheduler spec §§4–5](./technical/system-scheduler-spec.md#4-the-session-lifecycle);
+this surface exposes those same endpoints and adds nothing to them. Summary:
 
-| From | Action | To | Conditions |
-|---|---|---|---|
-| `scheduled` | publish brief | `collecting` | topic active; expected roster non-empty; brief is upserted; absolute close time is in the future |
-| `scheduled` | cancel | `cancelled` | reason required; pending scoped lifecycle jobs become cancelled |
-| `collecting` | close window | `window_closed` | normal schedule or manual early close with reason |
-| `window_closed` | reopen | `collecting` | exceptional reason and new future close time required; aggregate/publish jobs are rescheduled |
-| `window_closed` | aggregate | `aggregated` | roster snapshot exists; aggregate only accepted verified recommendations |
-| `aggregated` | judge | `judged` | consensus-judge mode is `shadow` or `enforce`; 409 `judge_disabled` when it is `off` (the shipped default) |
-| `aggregated` | publish | `published` | aggregate and synthesis are present |
-| `judged` | publish | `published` | as `aggregated → published`; the judge's opinion is advice, never a lock |
-| `judged` | close window | `window_closed` | reopen path, identical to `aggregated → window_closed` |
+| Action | Effect | Guard |
+|---|---|---|
+| turn over (`expected_session_id`) | closes the named `collecting` session (absences recorded), opens the next epoch, records the turnover — one transaction | the named session must be the topic's current `collecting` one; otherwise the original result or a reasoned no-op (§4.3) |
+| aggregate | `window_closed → aggregated`, deterministic, over accepted takes only | state guard (§5) |
+| request judging | `aggregated → judging`; stores the absolute deadline | mode captured at turnover is `enforce`; under `off` finalize is called directly (§4.4) |
+| finalize | decides the outcome from stored instants and publishes: `→ published` | state-guarded and time-guarded: under `enforce` with no eligible consensus it refuses until the deadline (§4.4) |
 
-All other transitions return 409. Repeating an action already reflected in state
-returns 200 with `{ idempotent: true }` only when the target state and associated
-artifact already exist; it must not rewrite timestamps or enqueue duplicate jobs.
-`published` and `cancelled` are terminal in this phase.
+An operator ending a window early is a turnover with the same
+`expected_session_id`; it is not a distinct "early close" and never targets
+the successor. There is no reopen, no cancel and no `shadow` mode in the
+target ([D48](./decisions.md#d48)). Every other call returns 409 with a
+reason. A repeated call for a transition that already happened returns the
+original result; it must not rewrite timestamps.
+`published` is terminal.
 
-Manual actions enqueue the same worker kind used by scheduled actions and return
-202 with a job id. `cancel` and `reopen` add `swarm.cancel` and
-`swarm.reopen_window` worker kinds so every transition remains observable in
-the swarm lane.
+Manual actions are synchronous calls to the same state-guarded API endpoints
+the scheduler uses; they return the transition's result, not a job id. The
+scheduler learns of them by event (`epoch.turned_over`, `session.judged`) and
+continues the chain (scheduler spec §6.2).
 
 ### US-C5 — Inspect member datapoints and aggregation
 
@@ -2817,7 +2948,8 @@ how the aggregate was derived.
 Acceptance:
 
 - The roster matrix derives one row per `swarm_session_members` row and
-  reports `expected`, `excused`, `submitted`, or `absent`.
+  reports `expected`, `submitted`, or `absent` (`excused` appears only on
+  legacy sessions that had a pre-collection roster edit; the target has none).
 - `submitted` includes recommendation id, stance, confidence, received time,
   verification state, body, memo URL, nonce, signature, and canonical payload.
   Signature and payload are admin-only and rendered in a collapsed disclosure.
@@ -2828,11 +2960,8 @@ Acceptance:
 - The aggregate view shows stance counts, mean confidence, expected/submitted/
   absent counts, consensus, disagreements, actions or weights, and the source
   recommendation ids used.
-- No admin endpoint can update `swarm_recommendations`. Unchanged by
-  [D32](./decisions.md#d32--a-member-may-amend-its-take-append-only-revisions-latest-wins-capped-per-session-issue-573):
-  amendment is a member-authenticated INSERT on the ordinary submit route, not
-  an admin edit, and no code path anywhere UPDATEs an accepted take's
-  content.
+- No admin endpoint can update `swarm_recommendations`, and no code path
+  anywhere UPDATEs an accepted take's content ([D49](./decisions.md#d49)).
 
 ### US-A3 — Inspect audit history
 
@@ -2943,16 +3072,23 @@ analytics-provider endpoints, never the worker SQL connection.
 Add `version int NOT NULL DEFAULT 1` and `updated_at timestamptz NOT NULL DEFAULT
 now()` to `swarm_members`, `swarm_subjects`, and `swarm_sessions`.
 
-Add to `swarm_sessions`:
+**Shipped history (migration `0017`, before the scheduler spec).** That
+migration added `brief_opens_at`, `publish_at` and `cancelled_at` to
+`swarm_sessions`. They served the scheduled-session path and are not target
+schema guidance: the target session carries `window_closes_at`, the judge
+mode captured at turnover, the judging request instant and deadline, the
+consensus acceptance instant, the judging outcome, and `published_at`. The
+subject carries its epoch duration. The enforced uniqueness is at most one
+`collecting` session per subject; there is no `(date, subject_id)`
+uniqueness, because a subject runs many epochs per day and a session's
+display date is not its identity
+([scheduler spec §2.1](./technical/system-scheduler-spec.md#21-the-model)).
+The exact migration that lands these, and what happens to legacy columns and
+in-flight rows, is release work outside this document.
 
-```text
-brief_opens_at timestamptz
-publish_at timestamptz
-cancelled_at timestamptz
-```
-
-Keep existing `window_closes_at` and `published_at`. Add a state check allowing
-the six states in section 2. Validate existing values before validating the
+Keep existing `window_closes_at` and `published_at`. Add a state check for the
+target states in section 2 while still admitting the legacy values present in
+existing rows. Validate existing values before validating the
 constraint. Add foreign keys from sessions/recommendations/snapshots/briefs to
 subjects only after a migration query proves there are no orphan subject ids;
 otherwise insert placeholder inactive subjects for the orphan ids first.
@@ -3095,8 +3231,8 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `POST /api/admin/research/rerun` | retired producer control; returns `409` without enqueue |
 | `GET /api/admin/swarm/overview` | session/member/topic summary |
 | `GET/POST /api/admin/swarm/subjects` | list/create topics |
-| `GET/PATCH /api/admin/swarm/subjects/:id` | topic detail/edit |
-| `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic |
+| `GET/PATCH /api/admin/swarm/subjects/:id` | topic detail/edit, including the epoch duration; detail carries the current `collecting` session and its `window_closes_at` |
+| `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic: closes and settles its open epoch, opens no successor |
 | `GET /api/admin/swarm/members` | all statuses/applications |
 | `GET /api/admin/swarm/members/:id` | private admin member projection |
 | `POST /api/admin/swarm/members` | manual active member add — `{ name, publicKey, lens?, contact? }`; the id is GENERATED (`crypto.randomUUID()`) and returned as `member.id`, and a body carrying `memberId` is refused with 400 (issue #690) |
@@ -3106,10 +3242,9 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `POST /api/admin/swarm/members/:id/reactivate` | new key/token and activate |
 | `POST /api/admin/swarm/members/:id/rotate-key` | rotate active key/token |
 | `POST /api/admin/swarm/members/:id/reject` | reject application |
-| `GET/POST /api/admin/swarm/sessions` | list/create scheduled session |
-| `GET /api/admin/swarm/sessions/:id` | complete operational session DTO |
-| `PATCH /api/admin/swarm/sessions/:id/roster` | add/excuse before collecting |
-| `POST /api/admin/swarm/sessions/:id/actions/:action` | enqueue transition |
+| `GET /api/admin/swarm/sessions` | list sessions (no create: the scheduler opens sessions) |
+| `GET /api/admin/swarm/sessions/:id` | complete operational session DTO: state, events, captured judge mode, judging deadline, judging outcome |
+| `POST /api/admin/swarm/sessions/:id/actions/:action` | fire one state-guarded transition synchronously (`turn_over`, `aggregate`, `request_judging`, `finalize`) |
 | `GET /api/admin/audit` | filtered append-only audit list |
 
 Mutation request and response shapes are fixed as follows. Unknown fields are
@@ -3141,6 +3276,7 @@ type TopicWriteRequest = {
   linkedMemberId?: string | null;
   structuralNotes: string[];
   lastReviewed?: string | null; // YYYY-MM-DD
+  epochDurationSeconds: number; // the topic's whole schedule (scheduler spec §2.2)
   reason: AdminReason;
 };
 
@@ -3170,26 +3306,14 @@ type MemberStatusRequest = {
   reason: AdminReason;
 };
 
-type SessionCreateRequest = {
-  subjectId: string;
-  date: string; // YYYY-MM-DD
-  briefOpensAt: string; // ISO instant
-  windowClosesAt: string; // ISO instant
-  publishAt: string; // ISO instant
-  reason: AdminReason;
-};
-
-type RosterPatchRequest = {
-  version: number;
-  operation: "add" | "excuse" | "restore";
-  memberId: string;
-  reason: AdminReason;
-};
+// No SessionCreateRequest and no RosterPatchRequest: sessions are opened by
+// system-scheduler and the roster is frozen at open (US-C3).
 
 type SessionActionRequest = {
   version: number;
-  reason?: AdminReason; // required for cancel, early close, reopen, manual retry
-  windowClosesAt?: string; // required for reopen
+  action: "turn_over" | "aggregate" | "request_judging" | "finalize";
+  expectedSessionId?: string; // required for turn_over; the epoch being closed
+  reason?: AdminReason; // required for a manual turn_over before window_closes_at
 };
 
 type TopicDeactivateRequest = { version: number; reason: AdminReason };
@@ -3205,18 +3329,14 @@ an API response table. Enqueued operations return
 `{ jobId, auditRequestId, existing: boolean }` with status 202. A 409 response is
 `{ error, code: "stale_version" | "invalid_transition" | "duplicate", current? }`.
 
-For a manual lifecycle action, first locate the scoped job with the canonical
-dedupe key. If it is pending, atomically move `run_after` to `now()` and return
-that job with `existing: true`. If it is running, return it unchanged with
-`existing: true`. If it is terminal or absent, enqueue a recovery job with
-dedupe key `swarm:<session-id>:<action>:manual:<audit-request-id>`. This is
-how “run now” coexists with the four jobs created at scheduling time.
-
-Reopen atomically changes the session to `collecting`, sets the new close time,
-marks any pending canonical aggregate/publish jobs `cancelled`, and creates new
-close/aggregate/publish jobs suffixed with the reopen event id. Cancel atomically
-changes the session to `cancelled` and marks all pending scoped jobs cancelled.
-Neither operation touches running or terminal queue rows.
+A manual lifecycle action calls the same state-guarded transition endpoint
+that `system-scheduler` calls and returns its result synchronously with
+status 200. A transition that already happened returns the original result
+(the API distinguishes "already done" from "not allowed"); an invalid one is
+409 `invalid_transition` with a reason. No queue job is created. The scheduler
+receives the change on the event stream and continues settlement; the
+operator does not drive later steps by hand unless a step is stuck
+([scheduler spec §§4.6, 5, 6.2](./technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
 
 The generic existing `/api/swarm/admin/:action` endpoints remain for smoke
 compatibility but the new browser must not call them. Mark `reset` and
@@ -3224,23 +3344,30 @@ compatibility but the new browser must not call them. Mark `reset` and
 
 ### 6.4 Required domain corrections
 
-Before wiring UI controls, correct these current behaviors:
+Before wiring UI controls, bring the domain in line with
+[scheduler spec §§4–5](./technical/system-scheduler-spec.md#4-the-session-lifecycle):
 
-- `openSession` must not reset an existing non-scheduled session to `scheduled`.
-  On conflict return the existing row idempotently only when it is already
-  scheduled; otherwise return 409.
-- `publishBrief` must require `scheduled`, a real active subject, a non-empty
-  roster snapshot, and an absolute future close timestamp.
-- Brief regime data and research signals must be the latest rows at or before the
-  session date; do not require an exact signal date and do not read future data.
-- `closeWindow` must detect a zero-row guarded update and return 409 instead of
-  reporting a transition that did not occur.
+- Opening an epoch is one transaction: create the session in `collecting`,
+  snapshot the roster, publish the brief, set `window_closes_at`. Two
+  concurrent first-openings for one subject yield one session; the second
+  call returns it. Nothing resets an existing session to an earlier state.
+- Brief regime data and research signals must be the latest rows at or before
+  the open instant; do not require an exact signal date and do not read
+  future data.
+- Turnover must check `expected_session_id` against the subject's current
+  `collecting` session, close it, record absences, open the successor and
+  record the turnover in one transaction; a zero-row guarded update is a
+  reasoned no-op (or the original result), never a reported transition that
+  did not occur.
+- `submitRecommendation` must refuse after `window_closes_at` regardless of
+  state, and must require an `expected` roster row for the member.
 - `aggregateSession` must require `window_closed`, read expected members from
   `swarm_session_members`, and use the latest subject snapshot at or before
-  the session date.
-- `publishSession` must require `aggregated` and non-null recommendation and
-  synthesis.
-- `submitRecommendation` must require an `expected` roster row for the member.
+  the open instant.
+- Request-judging must store the request instant and the absolute deadline;
+  finalize must decide `judged` / `no_consensus` / `not_judged` from stored
+  instants only, be time-guarded under `enforce`, and never re-decide.
+- Every transition must return the original result when repeated.
 - `registerMember` remains a smoke helper and is not used for production admin
   workflows. It is idempotent by member id (`ON CONFLICT (id) DO UPDATE`,
   rebinding the key and minting a token, with the roster cap exempting an
@@ -3286,7 +3413,8 @@ scripts in the injected HTML fragment will not execute.
   is false. Lists and historical detail do not continuously poll.
 - Preserve list filters in query parameters and record selection in the path.
 - Every empty, loading, error, stale, and unauthorized state has visible text.
-- Show UTC first for swarm schedules, with browser-local time secondary.
+- Show UTC first for epoch windows and judging deadlines, with browser-local
+  time secondary.
 - Render JSON in collapsed, copyable `<pre>` blocks. Never inject payload HTML.
 - Mutation buttons disable while pending. Success links to the created job or
   record; errors remain beside the form.
@@ -3309,10 +3437,20 @@ Add tests proving:
 - topic validation, uniqueness, optimistic concurrency, and deactivation;
 - member activate/manual-add/deactivate/reactivate/rotate/reject transactions,
   including one-time token behavior and key revocation;
-- session creation snapshots the roster and creates exactly five deduped jobs
-  (`publish_brief`, `close_window`, `aggregate`, `judge`, `publish` — #767);
-- each legal state transition, every illegal transition, idempotent repeats,
-  cancel, and reopen;
+- opening an epoch snapshots the roster, publishes the brief and sets
+  `window_closes_at` in one transaction, and creates no queue job;
+- changing a topic's epoch duration leaves the current window's
+  `window_closes_at` unchanged and applies at the next boundary;
+- turnover with a stale `expected_session_id` returns the original result or
+  a reasoned no-op and never closes the successor;
+- each legal state transition, every illegal transition (including reopen,
+  cancel and `shadow`, which return 409), and repeated calls returning the
+  original result;
+- finalize decides `judged` / `no_consensus` / `not_judged` from stored
+  instants and is refused early under `enforce` with no eligible consensus;
+- deactivating a topic closes and settles its open epoch and opens none;
+  the scheduler-side gates themselves are
+  [scheduler spec §10](./technical/system-scheduler-spec.md#10-acceptance-gates);
 - member changes after session creation do not alter historical quorum;
 - submissions from members outside the session roster are rejected;
 - aggregation uses the roster snapshot and at-or-before data only;
@@ -3335,8 +3473,10 @@ Expand `frontend/test/browser/admin-view.spec.ts` into focused cases for:
 - topic create/edit/deactivate validation;
 - member application activation, manual add, one-time token modal,
   deactivation, and participation history;
-- session create, UTC/local schedule, roster snapshot, transition controls,
-  invalid-action disabled states, and linked jobs;
+- topic epoch-duration edit, current-epoch card with UTC/local
+  `window_closes_at` and countdown, roster snapshot, transition controls,
+  invalid-action disabled states, judging deadline and outcome, and scheduler
+  degradation display;
 - recommendation matrix, signature/payload disclosure, aggregate derivation,
   and absences; and
 - audit filters and redaction.
@@ -3370,7 +3510,7 @@ Implement in this order so every phase leaves a usable product:
 4. analytics telemetry tables, authenticated write client, observer, and stage
    instrumentation;
 5. admin shell, routing, overview, queue, and research read-only views;
-6. topic, member, roster, scheduling, and lifecycle mutation UI;
+6. topic (including epoch duration), member, and lifecycle mutation UI;
 7. audit UI, all browser tests, integration tests, and documentation updates.
 
 The first production deployment must run the migration before API or worker code
@@ -3382,9 +3522,10 @@ analytics telemetry endpoints exist, and the frontend last.
 The phase is done when all user stories in section 4 pass, no existing public
 swarm/research route regresses, production admin and telemetry routes fail
 closed, a research job can be traced through all six stages, and a swarm
-manager can create a topic, manage members, schedule a roster-snapshotted
-session, inspect every accepted member datapoint, operate guarded lifecycle
-transitions, and explain every mutation from the audit log.
+manager can create a topic and set its epoch duration, manage members,
+observe the current epoch and each session's state and judging outcome,
+inspect every accepted member datapoint, fire guarded lifecycle transitions,
+and explain every mutation from the audit log.
 
 ---
 
@@ -3414,8 +3555,14 @@ flowchart LR
     end
 
     subgraph Backend["Backend"]
-        Worker["Task Queue<br/>& Analytics Pipeline"]
+        Scheduler["system-scheduler<br/>epoch clock, API token only<br/>(target; scheduler spec §1)"]
+        Worker["Task Queue<br/>& Analytics Pipeline<br/>(vault / wallet / buybacks / projects)"]
         DB["Data<br/>Postgres"]
+    end
+
+    subgraph Participants["Participants (standing containers)"]
+        Agents["Agents<br/>poll for collecting sessions"]
+        Judges["Judges<br/>subscribe for judging requests"]
     end
 
     subgraph External["External Data Sources"]
@@ -3429,6 +3576,9 @@ flowchart LR
     Visitors -->|browser| Static
     Static -->|HTTP JSON| API
     Members -->|HTTP JSON| API
+    Scheduler -->|"authenticated API calls<br/>+ event-stream subscription"| API
+    Agents -->|HTTP JSON| API
+    Judges -->|HTTP + subscription| API
     API <--> DB
     Worker <--> DB
     Worker -.->|fetch raw series| External
@@ -3436,8 +3586,15 @@ flowchart LR
     style Users fill:#7c3aed1a,stroke:#7c3aed,stroke-width:2px
     style Frontend fill:#2563eb1a,stroke:#2563eb,stroke-width:2px
     style Backend fill:#0596691a,stroke:#059669,stroke-width:2px
+    style Participants fill:#d977061a,stroke:#d97706,stroke-width:2px
     style External fill:#dc26261a,stroke:#dc2626,stroke-width:2px
 ```
+
+Only `api` (and, until their own specification moves them, the analytics and
+research workers) hold a database credential; `system-scheduler` and every
+participant reach the stack over HTTP only, and no container holds a Docker
+socket ([smoke-production-spec §3](./technical/smoke-production-spec.md#3-roles-and-credentials),
+[scheduler spec §7](./technical/system-scheduler-spec.md#7-credentials)).
 
 ---
 
@@ -3537,9 +3694,12 @@ must **degrade gracefully**; the page never hard-depends on the API.
 Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
-- **`swarm.`** — this repo's Bun `api` + `worker`; `website-server` (issue
-  #892) co-serves this surface's SPA assets (`STATIC_DIR`) same-origin at the
-  subdomain root, proxying `/api/` through to `api`.
+- **`swarm.`** — this repo's Bun `api`, the analytics/research `worker`
+  lanes, `system-scheduler` (target; API credential only, replaces
+  `worker-swarm`), and the standing participant containers from the credential
+  file; `website-server` (issue #892) co-serves this surface's SPA assets
+  (`STATIC_DIR`) same-origin at the subdomain root, proxying `/api/` through
+  to `api`.
 - **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
 Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall
@@ -3625,12 +3785,17 @@ own same-host API) use CORS.
 
 ## 11. Task queue topology
 
-The Postgres-backed task queue replaces the old GitHub Actions cron. Three
-concurrent loops run inside the `worker` process for internal product work.
-Analytics/research producer cadence is outside this topology. The registered
-legacy analytics handlers shown below are unreachable compatibility debt:
-their rows are disabled/dead-lettered, no supported endpoint enqueues them, and
-shared workers have no producer credential.
+The Postgres-backed task queue replaces the old GitHub Actions cron for the
+vault, wallet, buyback and project pipelines. Three concurrent loops run
+inside the `worker` process for that work. Analytics/research producer cadence
+is outside this topology. The swarm session lifecycle is also outside it in
+the target: `system-scheduler` drives epochs through the API and no `swarm.*`
+job kind or `job_schedules` row exists for it
+([scheduler spec §§1–4](./technical/system-scheduler-spec.md#1-roles);
+summary in §9.4 above). The registered legacy analytics handlers shown below
+are unreachable compatibility debt: their rows are disabled/dead-lettered, no
+supported endpoint enqueues them, and shared workers have no producer
+credential.
 
 ```mermaid
 flowchart TB
@@ -3662,7 +3827,8 @@ flowchart TB
 
     subgraph Handlers["Registered Handlers"]
         H1["legacy regime.classify / research.refresh<br/>unreachable compatibility handlers<br/>(cleanup debt)"]
-        H2["swarm.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
+        H2["vault.* / wallet.* / buybacks.* / projects.*<br/>scheduled product pipelines"]
+        H3["legacy swarm.* (2026-09-23)<br/>replaced by system-scheduler<br/>in the target; not a schedule row"]
     end
 
     Pending -->|"claimed"| Running
@@ -3755,8 +3921,13 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   components, data flow, and the D13 network topology.
 - [Decisions](./decisions.md) — accepted decision records; D47 owns deployment
   mechanism authority and D48 records the judge-mode product decision.
+- [System scheduler spec](./technical/system-scheduler-spec.md) — session
+  lifecycle, epoch timing, the API event stream, recovery after downtime, and
+  the scheduler acceptance gates. Prescriptive; not yet shipped.
 - [Smoke production spec](./technical/smoke-production-spec.md) — sole adopted
-  deployment design, approved for implementation but not yet shipped.
+  deployment design: deployment lifecycle, credentials, participants,
+  readiness, and the deployment acceptance gates. Approved for implementation
+  but not yet shipped.
 - [Release-runbook policy](./technical/release-runbooks.md) — gates, phases,
   evidence, and approval for future releases.
 - [Credential doctor](./runbooks/credential-doctor.md) — legacy GitHub secret
