@@ -33,6 +33,7 @@ import {
   fmtUsd,
   freshnessLabel,
   gapParts,
+  pendingBps,
   hasTargetLayer,
   holdingsComplete,
   numberOrNull,
@@ -358,13 +359,13 @@ export function registerVaultView(Alpine) {
     changeClass(d) { return weightChange.changeClass(d); },
     changeLabel(d) { return weightChange.changeLabel(d); },
     // What the legend does not carry, once there is a target: this vault's
-    // recommended weight and the governance gap between it and the target.
+    // recommended weight and what is pending, recommended minus target.
     pipelineFacts() {
       if (!this.threeLayers()) return [];
       const r = this.row();
       return [
         { key: "recommended", name: "Recommended", value: fmtBps(r?.recommendedBps) },
-        { key: "governance", name: "Governance gap", part: gapParts(r?.gaps?.governance) },
+        { key: "pending", name: "Pending", part: gapParts(pendingBps(r?.gaps?.governance)) },
       ];
     },
     recommendation() {
@@ -389,21 +390,6 @@ export function registerVaultView(Alpine) {
     released() {
       const v = this.recommendation()?.releasedOnChain;
       return typeof v === "boolean" ? (v ? "Yes" : "No") : null;
-    },
-    routerLive() {
-      return this.overview()?.router?.availability === "live";
-    },
-    // null when the source reports no router weights at all (the Base feed,
-    // where no router exists), so the disclosure is left out; [] when it
-    // answered with none.
-    routerWeights() {
-      const w = this.record()?.history?.weights;
-      return Array.isArray(w) ? [...w].sort(newestFirst) : null;
-    },
-    // Only with a live router, and only when the source serves the field (or
-    // the detail failed, which the disclosure then says).
-    showRouterWeights() {
-      return this.routerLive() && (this.routerWeights() !== null || !!this.detailError);
     },
     // null when the source reports no receipts at all (the Base feed), so the
     // disclosure is left out rather than contradicting the Recommendation row.
@@ -590,6 +576,15 @@ export function registerVaultView(Alpine) {
     // The Transaction column goes when no row has one to link.
     activityHasTx() {
       return this.activity().some((a) => this.txHref(a));
+    },
+    // Who: the account the shares were minted to or burned from (ERC-4626's
+    // owner), linked where the network has an explorer. The column goes when
+    // no event names one.
+    accountHref(a) {
+      return a?.account ? explorerLink(this.network(), a.account) : null;
+    },
+    activityHasAccount() {
+      return this.activity().some((a) => !!a?.account);
     },
     shortHash(v) {
       return shortAddress(v);

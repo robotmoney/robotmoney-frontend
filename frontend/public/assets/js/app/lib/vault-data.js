@@ -23,6 +23,7 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * @property {string} slug        URL slug, never an address (staging addresses reset).
  * @property {string} symbol      The receipt token.
  * @property {string} name        The sleeve the vault implements.
+ * @property {string} [legacyName] The sleeve's first framework name, still what the API sends; matched, never printed.
  * @property {string} bucket      The framework's bucket id.
  * @property {string} key         The allocation DTO's bucket key.
  * @property {string} color       CATEGORICAL by published position: one hue everywhere.
@@ -78,7 +79,9 @@ export const VAULTS = [
   {
     slug: "rmusdc",
     symbol: "rmUSDC",
-    name: "Conservative DeFi Yield",
+    name: "Fixed Income",
+    // The framework's first name for the sleeve, still what the API sends.
+    legacyName: "Conservative DeFi Yield",
     bucket: "conservative_defi_yield",
     key: "defi-yield",
     color: CATEGORICAL[0],
@@ -89,7 +92,8 @@ export const VAULTS = [
   {
     slug: "rmagent",
     symbol: "rmAGENT",
-    name: "Agent Tokens",
+    name: "Small Cap Tokens",
+    legacyName: "Agent Tokens",
     bucket: "agent_tokens",
     key: "agent-tokens",
     color: CATEGORICAL[1],
@@ -146,6 +150,80 @@ export const ADAPTER_DISPLAY = {
   compound: { label: "Compound III USDC", venueType: "Pooled market" },
 };
 
+// The vaults' time-weighted return since inception: each day's return is
+// the vaults' share-price change weighted by what each held the day before,
+// compounded; the first day starts from the 1.00 each vault opened at, and
+// the last step runs to each vault's share price now. Flows (deposits and
+// withdrawals) do not move it, which is what makes it the fund's return
+// rather than its growth.
+//
+// With one vault and no daily history it is that vault's share price against
+// 1.00, exactly. With several vaults live and any of them without a history,
+// null: a blend without the weights is not the portfolio's return.
+/**
+ * @param {Array<{ sharePrice?: unknown, tvlUsd?: unknown, history?: { tvl?: Array<{ t?: unknown, tvlUsd?: unknown }>, sharePrice?: Array<{ t?: unknown, value?: unknown }> } }>} vaults
+ * @returns {number | null}
+ */
+export function portfolioTwr(vaults) {
+  const live = (vaults || []).filter((v) => (numberOrNull(v?.sharePrice) ?? 0) > 0);
+  if (!live.length) return null;
+  const series = live.map((v) => {
+    /** @type {Map<string, { sp: number, tvl: number | null }>} */
+    const m = new Map();
+    for (const r of v.history?.sharePrice || []) {
+      const d = String(r?.t ?? "").slice(0, 10);
+      const sp = numberOrNull(r?.value);
+      if (d && sp !== null && sp > 0) m.set(d, { sp, tvl: null });
+    }
+    for (const r of v.history?.tvl || []) {
+      const e = m.get(String(r?.t ?? "").slice(0, 10));
+      if (e) e.tvl = numberOrNull(r?.tvlUsd);
+    }
+    return m;
+  });
+  if (series.every((m) => m.size === 0)) {
+    return live.length === 1 ? /** @type {number} */ (numberOrNull(live[0].sharePrice)) - 1 : null;
+  }
+  if (series.some((m) => m.size === 0)) return null;
+  const days = [...new Set(series.flatMap((m) => [...m.keys()]))].sort();
+  /** @param {Array<{ w: number, r: number }>} parts */
+  const weighted = (parts) => {
+    const total = parts.reduce((n, p) => n + p.w, 0);
+    return total > 0 ? parts.reduce((n, p) => n + (p.w / total) * p.r, 0) : null;
+  };
+  // From 1.00 to the first recorded day, for the vaults recorded on it.
+  const first = series.map((m) => m.get(days[0])).filter((e) => e && e.tvl !== null && e.tvl > 0);
+  const base = weighted(first.map((e) => ({ w: /** @type {number} */ (e?.tvl), r: /** @type {number} */ (e?.sp) - 1 })));
+  if (base === null) return null;
+  let growth = 1 + base;
+  for (let i = 1; i < days.length; i++) {
+    const r = weighted(series.flatMap((m) => {
+      const a = m.get(days[i - 1]);
+      const b = m.get(days[i]);
+      return a && b && a.tvl !== null && a.tvl > 0 ? [{ w: a.tvl, r: b.sp / a.sp - 1 }] : [];
+    }));
+    if (r !== null) growth *= 1 + r;
+  }
+  // From the last recorded day to now.
+  const last = days[days.length - 1];
+  const now = weighted(live.flatMap((v, i) => {
+    const e = series[i].get(last);
+    const sp = numberOrNull(v.sharePrice);
+    return e && sp !== null && e.tvl !== null && e.tvl > 0 ? [{ w: e.tvl, r: sp / e.sp - 1 }] : [];
+  }));
+  if (now !== null) growth *= 1 + now;
+  return growth - 1;
+}
+
+// Pending: recommended minus target, the change the latest recommendation
+// would make if it were applied (RM-97). The DTO carries the governance gap,
+// target minus recommended, so Pending is its negation.
+/** @param {unknown} governanceBps @returns {number | null} */
+export function pendingBps(governanceBps) {
+  const n = numberOrNull(governanceBps);
+  return n === null ? null : n === 0 ? 0 : -n;
+}
+
 // Whether a reading of the vault subject's book is rmUSDC's own: every
 // position one of its lending venues or its idle USDC, and something held.
 // The archive's readings (to Aug 4) are; the smoke fixture's basket written
@@ -193,7 +271,7 @@ export function vaultBySlug(slug) {
 export function vaultForBucket(idKeyOrName) {
   const n = normKey(idKeyOrName);
   if (!n) return null;
-  return VAULTS.find((v) => normKey(v.bucket) === n || normKey(v.key) === n || normKey(v.name) === n) ?? null;
+  return VAULTS.find((v) => normKey(v.bucket) === n || normKey(v.key) === n || normKey(v.name) === n || normKey(v.legacyName) === n) ?? null;
 }
 
 /** @param {unknown} key */
@@ -772,5 +850,5 @@ export function gapParts(v) {
 export function freshnessLabel(overview) {
   const when = fmtDateTime(overview?.freshness?.indexedAt ?? overview?.asOf);
   if (when === "—") return "—";
-  return overview?.freshness?.stale === true ? `${when} · stale` : when;
+  return when;
 }
