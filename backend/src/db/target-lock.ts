@@ -1,9 +1,9 @@
 // The target-lock protocol — smoke-production-spec.md §2, in full.
 //
-// STUB (issue #1026, W1 step 1 / plan row W1.7). Signatures and types are real;
-// every body throws. Nothing imports this module yet, and nothing may import it
-// until the implementation lands — it is additive and behaviour-neutral by
-// construction.
+// STATUS. Implemented and proved against a live Postgres by
+// backend/tests/target-lock.test.ts. It is a library: the tools in §2's caller
+// list are moved onto it by later #1026 work, and until each is, that tool
+// takes no target lock of its own.
 //
 // ── The invariant, quoted verbatim from spec §2 ─────────────────────────────
 //
@@ -55,7 +55,7 @@
 //
 // XACT FENCE (`pg_advisory_xact_lock`) — the SAFETY layer, and the answer to
 // it. "Every mutation (migration, grant reconciliation, seed, key rebind,
-// schedule write) runs in a transaction that first takes
+// token provisioning, identity write) runs in a transaction that first takes
 // `pg_advisory_xact_lock` on the same key, ON THE CONNECTION PERFORMING IT. A
 // competitor that wins the session lock after the coordinator's connection died
 // still blocks on the xact lock until the in-flight mutation commits or
@@ -70,15 +70,32 @@
 // mutating one is released when the coordinating connection dies, which is the
 // exact scenario it exists for.
 //
-// ── Keyed on the database, not the project ─────────────────────────────────
+// ── One constant key, and why that is enough ────────────────────────────────
 //
-// §2: "keyed on the database identity (not the compose project)". Two compose
-// projects — a CI job and a standing stage, or two operators' instances — can
-// legitimately point at one database, and a project-keyed lock would let them
-// mutate it simultaneously while each believed it held the lock. The key must
-// be derived from what the DATABASE is, and it must be derived identically by
-// every tool in §2's list, or the whole protocol degrades to several private
-// mutexes that never contend.
+// §2 as amended by D52: "takes a session-level `pg_advisory_lock` on one
+// constant key. Postgres already scopes advisory locks to a single database, so
+// every tool that reaches the same database contends, whatever hostname it
+// used." An advisory lock is identified by (database, key): `pg_locks` carries
+// the database oid beside classid/objid, and two databases on one cluster never
+// see each other's advisory locks. So the database IS already part of the key,
+// supplied by the server, and every tool on one database contends the moment
+// they share any constant at all.
+//
+// The key used to be DERIVED instead — SHA-256 over `pg_control_system()`'s
+// system identifier and `current_database()`. That derivation bought nothing
+// the server does not already do, and it could fail in the worst way: the
+// system identifier is readable only by superusers and `pg_monitor` by
+// default, so a tool connected as a least-privilege role could not compute the
+// key another tool computed, and two tools in two namespaces never contend. A
+// constant cannot drift between tools, roles, hosts or releases.
+//
+// What the constant does NOT protect against is a connection that is not a
+// session: a transaction-mode pooler hands each statement to whichever server
+// backend is free, so a session lock taken in one statement belongs to a
+// backend the next statement may never see again. §2: "The connection is
+// direct, never through a transaction-mode pooler, which silently breaks
+// session locks." {@link acquireTargetLock} refuses one — see
+// {@link refusePoolerUrl} and {@link judgeSessionProbe}.
 //
 // ── Governing spec sections ─────────────────────────────────────────────────
 //
@@ -93,19 +110,22 @@
 //
 // Acceptance gates served (spec §10, W1):
 //   - "Two instances preparing the same remote database serialize on the target
-//      lock."
+//      lock." (Two hostnames for one database contend: the key is constant.)
 //   - "Kill the lock connection mid-migration, start a second mutation tool: no
 //      overlap."
 //   - "Standalone `bun run migrate` and `bun smoke` contend on the target lock,
 //      including connection loss mid-phase."
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import type { DbHandle } from "./client.ts";
 
 // Every catalog question below reassembles the key the way `pg_locks` splits
-// it: `classid` is the high 32 bits, `objid` the low 32.
+// it: `classid` is the high 32 bits, `objid` the low 32. Every question that
+// could see ANOTHER backend's lock also filters on `database`: the key is one
+// constant, so the same key held on a sibling database of the same cluster is a
+// different lock and must never be reported as this one.
 //
 // ── Why the two layers use the two SPELLINGS of one key ─────────────────────
 //
@@ -125,12 +145,36 @@ import type { DbHandle } from "./client.ts";
 const OBJSUBID_SESSION = 2;
 const OBJSUBID_FENCE = 1;
 
+/**
+ * The advisory-lock key of §2.
+ *
+ * Branded so "some number I had lying around" is untypeable at a call site: the
+ * only value of this type is {@link TARGET_LOCK_KEY}, and no function in this
+ * module takes a key from its caller. A second key would be a second namespace,
+ * and two tools in two namespaces never contend — which looks exactly like a
+ * working system until the day it matters.
+ */
+export type TargetLockKey = bigint & { readonly __brand: "TargetLockKey" };
+
+/**
+ * THE key: one constant, for every tool and every database (D52; see the
+ * header's "One constant key"). Postgres scopes an advisory lock to the
+ * database it was taken in, so this one value already means "this database".
+ *
+ * The number is the literal `backend/tests/migrate-run.test.ts` has always
+ * passed as its lock key, so the migrate runner moving onto this constant
+ * changes no value that runner's tests already pin. It is non-negative, which
+ * is what makes the catalog's classid/objid split reassemble to exactly it.
+ */
+export const TARGET_LOCK_KEY = 7726322199513601n as TargetLockKey;
+
 /** The key as the `(int4, int4)` form takes it: high half, then low half as a signed int4. */
 function keyHalves(key: TargetLockKey): { hi: number; lo: number } {
   const hi = Number(key >> 32n);
   const low = Number(key & 0xffffffffn);
   return { hi, lo: low >= 0x80000000 ? low - 0x100000000 : low };
 }
+
 /**
  * How a session-lock holder publishes itself.
  *
@@ -138,28 +182,134 @@ function keyHalves(key: TargetLockKey): { hi: number; lo: number } {
  * (through `pg_stat_activity`) without a table, and a table would need a
  * migration to exist before the lock that protects migrations can be taken.
  * Postgres truncates it to 63 bytes, so the fields are ordered by how much a
- * contention refusal needs them and `acquiredAt` is not in it at all — the
- * server already knows when that connection opened (`backend_start`), which is
- * the same instant.
+ * contention refusal needs them — tool, plan id, pid, instance, host — and
+ * `acquiredAt` is not in it at all: the server already knows when that
+ * connection opened (`backend_start`), which is the same instant.
+ *
+ * THE PLAN ID IS ABBREVIATED to {@link PLAN_ID_SHOWN} hex characters, the way
+ * `git` abbreviates a commit. The full id is 64 characters and would leave no
+ * room for anything else; 48 bits are ample to tell an operator WHICH printed
+ * plan (§1.2, whose last line is the full id) the holder is running. A tool
+ * with no plan (a standalone `bun run migrate`) publishes `-`.
  */
 const HOLDER_PREFIX = "rm-tl:";
 const APP_NAME_MAX = 63;
+export const PLAN_ID_SHOWN = 12;
+/** The instance gets at most this much, so the host is never squeezed out entirely. */
+const INSTANCE_SHOWN = 24;
+
+/** A field must not contain the separator; anything else is Postgres's to sanitize. */
+function field(value: string): string {
+  return value.replaceAll("|", "_");
+}
 
 function encodeHolder(holder: Omit<LockHolder, "acquiredAt">): string {
-  return `${HOLDER_PREFIX}${holder.tool}|${holder.instance ?? ""}|${holder.host}|${holder.pid}`.slice(0, APP_NAME_MAX);
+  const plan = holder.planId === null ? "-" : field(holder.planId.slice(0, PLAN_ID_SHOWN));
+  const instance = field((holder.instance ?? "").slice(0, INSTANCE_SHOWN));
+  return `${HOLDER_PREFIX}${field(holder.tool)}|${plan}|${holder.pid}|${instance}|${field(holder.host)}`.slice(
+    0,
+    APP_NAME_MAX,
+  );
 }
 
 function decodeHolder(applicationName: string | null, backendStart: Date | string | null): LockHolder | null {
   if (applicationName === null || !applicationName.startsWith(HOLDER_PREFIX)) return null;
-  const [tool, instance, host, pid] = applicationName.slice(HOLDER_PREFIX.length).split("|");
-  if (tool === undefined || host === undefined || pid === undefined) return null;
+  const [tool, plan, pid, instance, host] = applicationName.slice(HOLDER_PREFIX.length).split("|");
+  if (tool === undefined || plan === undefined || pid === undefined) return null;
   return {
     tool,
+    planId: plan === "-" || plan === "" ? null : plan,
     instance: instance === undefined || instance === "" ? null : instance,
-    host,
+    host: host ?? "",
     pid: Number(pid),
     acquiredAt: backendStart instanceof Date ? backendStart.toISOString() : String(backendStart ?? ""),
   };
+}
+
+/** The operator-facing name of a holder, used by every refusal that names one. */
+export function describeHolderText(holder: LockHolder | null): string {
+  if (holder === null) return "an unidentified tool";
+  const instance = holder.instance === null ? "" : ` (instance ${holder.instance})`;
+  const plan = holder.planId === null ? "with no plan id (a standalone tool)" : `under plan ${holder.planId}`;
+  return `${holder.tool}${instance} ${plan}, on ${holder.host || "an unnamed host"} pid ${holder.pid}, since ${holder.acquiredAt}`;
+}
+
+/**
+ * Ports on which the providers this repository deploys to serve a
+ * TRANSACTION-MODE pooler instead of Postgres. A URL on one of these is refused
+ * before a connection is opened: nothing the probe below learns can make a
+ * session lock through a transaction pooler safe.
+ */
+export const KNOWN_POOLER_PORTS: ReadonlyMap<number, string> = new Map([
+  [25061, "the DigitalOcean managed pooler (PgBouncer) port; the direct port is 25060"],
+  [6432, "PgBouncer's default port"],
+]);
+
+/**
+ * Refuse a connection URL that names a pooler. Throws; returns nothing.
+ *
+ * Refusal cases: an unparseable URL (a target this module cannot vet is not a
+ * target it may lock); a port in {@link KNOWN_POOLER_PORTS}; a `pgbouncer`
+ * query parameter set to anything but `false`.
+ */
+export function refusePoolerUrl(databaseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(databaseUrl);
+  } catch {
+    throw new Error("target lock: the connection URL cannot be parsed, so it cannot be shown to be a direct connection.");
+  }
+  const port = url.port === "" ? 5432 : Number(url.port);
+  const pooler = KNOWN_POOLER_PORTS.get(port);
+  if (pooler !== undefined) {
+    throw new Error(
+      `target lock: refusing ${url.hostname}:${port}, which is ${pooler}. A transaction-mode pooler hands each ` +
+        "statement to whichever backend is free, so a session lock taken through it is not held by this tool. " +
+        "Connect to the database's direct port.",
+    );
+  }
+  const flag = url.searchParams.get("pgbouncer");
+  if (flag !== null && flag !== "false") {
+    throw new Error(
+      `target lock: refusing a URL marked pgbouncer=${flag}. A session lock through a transaction-mode pooler is ` +
+        "not held by this tool. Connect to the database's direct port.",
+    );
+  }
+}
+
+/** Two statements' view of their own session, for {@link judgeSessionProbe}. */
+export interface SessionProbeReading {
+  readonly pid: number;
+  /** The session-level setting the first statement wrote, as the second statement reads it. */
+  readonly probe: string | null;
+}
+
+/**
+ * Decide whether two consecutive statements ran in ONE server session.
+ *
+ * The first statement writes a random value into a session-level setting and
+ * reports its backend pid; the second reads the setting back and reports its
+ * pid. On a direct connection both match. Through a transaction-mode pooler the
+ * second statement may land on another backend, which reports a different pid
+ * and has never heard of the setting.
+ *
+ * Output: `null` for one session, else the refusal text naming what was
+ * expected and what was observed.
+ *
+ * What it cannot catch: a pooler that happens to hand back the same backend
+ * while nothing else is using it. That is why {@link refusePoolerUrl} refuses
+ * the known pooler ports outright rather than trusting this probe to.
+ */
+export function judgeSessionProbe(nonce: string, first: SessionProbeReading, second: SessionProbeReading): string | null {
+  if (second.pid !== first.pid || second.probe !== nonce) {
+    return (
+      `target lock: two consecutive statements did not run in one session (backend pid ${first.pid} then ` +
+      `${second.pid}; a session setting written as ${nonce} read back as ${second.probe ?? "unset"}). ` +
+      "A transaction-mode pooler is in the path, and a session lock through it is not held by this tool. " +
+      "Connect to the database's direct port."
+    );
+  }
+  return null;
 }
 
 /**
@@ -184,73 +334,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * The advisory-lock key, derived from database identity.
- *
- * Postgres advisory locks are a global 64-bit namespace shared by every user of
- * the cluster, so the key is branded here to make "some number I had lying
- * around" untypeable at every call site. Everything in §2's caller list must
- * derive it through {@link targetLockKey} and nothing may construct one
- * directly — a second derivation is a second namespace, and two tools in two
- * namespaces never contend, which looks exactly like a working system until the
- * day it matters.
- */
-export type TargetLockKey = bigint & { readonly __brand: "TargetLockKey" };
-
-/**
- * Derive the lock key from the identity of the database being mutated.
- *
- * Input: the facts that identify the DATABASE — not the compose project, not
- * the instance, not the connection string (which varies by role, by host
- * spelling, by whether a pooler is in the path, and by whether `sslmode` was
- * appended, all while naming one database).
- *
- * The derivation must be stable across tools, hosts, roles and releases: a key
- * that changes when `migrate.ts` connects as `rm_owner` and smoke connects as
- * `rm_app` would put the two in different namespaces at the moment they most
- * need to contend. Prefer facts the SERVER reports (`current_database()` and
- * the cluster's system identifier) over anything the client typed.
- *
- * Refusal cases:
- *  - any identifying component missing or empty: a key derived from partial
- *    identity silently collides with every other partial derivation.
- *  - a caller supplying a raw number: there is no such overload, by design.
- *
- * Serves spec §10 W1: "Two instances preparing the same remote database
- * serialize on the target lock" — which is only true if both instances compute
- * this same value.
- */
-export function targetLockKey(identity: {
-  readonly systemIdentifier: string;
-  readonly databaseName: string;
-}): TargetLockKey {
-  const systemIdentifier = identity.systemIdentifier.trim();
-  const databaseName = identity.databaseName.trim();
-  if (systemIdentifier === "") {
-    throw new Error(
-      "target lock: the system identifier is empty — a key derived from a partial database identity collides with " +
-        "every other partial derivation. Read it from the server (`pg_control_system().system_identifier`).",
-    );
-  }
-  if (databaseName === "") {
-    throw new Error(
-      "target lock: the database name is empty — a key derived from a partial database identity collides with " +
-        "every other partial derivation. Read it from the server (`current_database()`).",
-    );
-  }
-  // SHA-256 over the two server-reported facts, NUL-separated so no pair of
-  // inputs can be re-split into another pair. The top bit is cleared to keep the
-  // key non-negative, which is what makes the catalog's classid/objid split
-  // reassemble to exactly this number.
-  const digest = createHash("sha256").update(`${systemIdentifier}\u0000${databaseName}`).digest();
-  const key = digest.readBigUInt64BE(0) & ((1n << 63n) - 1n);
-  return key as TargetLockKey;
-}
-
 /** Which tool holds (or wants) the lock, recorded so a contention refusal can name the holder. */
 export interface LockHolder {
   /** `smoke` | `migrate` | `spoof-keys` | a §9.1 command name. */
   readonly tool: string;
+  /**
+   * The plan id (§1.2) the tool is executing, or `null` for a tool that has no
+   * plan. Explicit rather than optional, so every caller decides. A holder read
+   * back from the catalog carries the {@link PLAN_ID_SHOWN}-character prefix.
+   */
+  readonly planId: string | null;
   /** The deployment instance (§1.1), when the tool has one. */
   readonly instance: string | null;
   /** Host and PID, so an operator can go find it. */
@@ -288,7 +381,8 @@ export interface TargetLock {
    * Release explicitly. §2: "It is released explicitly on exit." Explicit
    * because relying on connection teardown makes the release happen at an
    * unspecified time, and a lock that lingers after a tool exits is a
-   * contention refusal for the next operator with no holder to name.
+   * contention refusal for the next operator with no holder to name. See
+   * {@link releaseTargetLockOnExit} for the exit and signal paths.
    */
   release(): Promise<void>;
 }
@@ -301,7 +395,8 @@ export interface TargetLock {
  * connection is gone. A question that cannot be answered is answered `false`:
  * §2 gives "not held", "connection dead" and "cannot tell" the same verdict.
  */
-function makeLock(key: TargetLockKey, holder: LockHolder, client: postgresTypes.Sql<{}>): TargetLock {
+function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>): TargetLock {
+  const key = TARGET_LOCK_KEY;
   let released = false;
   return {
     key,
@@ -342,11 +437,23 @@ export type AcquireResult =
    * refuses naming the holder." `holder` may be `null` when the holder's
    * identity could not be read — the refusal still stands; an unidentifiable
    * holder is not an absent one.
+   *
+   * §2, Revalidation: the lock was acquired, but the target moved while the
+   * tool waited. The lock has already been released; `holder` is `null`
+   * because nobody else holds it, and `reason` names each expectation and the
+   * value observed.
    */
-  | { readonly acquired: false; readonly holder: LockHolder | null; readonly waitedMs: number; readonly reason: string };
+  | {
+      readonly acquired: false;
+      readonly refusal: "contention" | "revalidation";
+      readonly holder: LockHolder | null;
+      readonly waitedMs: number;
+      readonly reason: string;
+    };
 
 /**
- * Acquire the session-level target lock on a dedicated connection.
+ * Acquire the session-level target lock on a dedicated connection, then
+ * revalidate the plan against the locked target.
  *
  * ACQUISITION POINT, from §2 verbatim: "After any local database is created or
  * restored, before the first read used for a decision."
@@ -358,73 +465,195 @@ export type AcquireResult =
  * made on state that can move before it is acted on — and the whole protocol
  * exists to close exactly that window.
  *
- * Inputs: a connection URL for the dedicated connection, the derived key, the
- * holder identity to publish, and a contention timeout. Output:
+ * Inputs: a connection URL for the dedicated connection, the holder identity to
+ * publish, a contention timeout, and `expected` — the {@link TargetState} the
+ * plan was built from, read before the lock existed. Output:
  * {@link AcquireResult}.
  *
  * Refusal cases:
+ *  - the URL names a pooler ({@link refusePoolerUrl}), or two consecutive
+ *    statements do not share one session ({@link judgeSessionProbe}), or the
+ *    lock just taken is not visible to the next statement: throws. A session
+ *    lock through a transaction-mode pooler is not held by this tool.
  *  - the lock is held and stays held past `timeoutMs`: refuse, naming the
- *    holder (tool, instance, host, pid, how long). Do NOT retry forever: an
- *    unbounded wait inside a deployment is indistinguishable from a hang, and
- *    an operator who cannot tell those apart eventually kills the process
- *    holding a fence.
- *  - `pg_try_advisory_lock` succeeds but the revalidation of
- *    {@link revalidateAfterAcquire} fails: release and refuse. Holding a lock
- *    on a database that is not the one the plan was built against is worse than
- *    not holding one, because it blocks the tool that IS right about the
- *    target.
- *  - the dedicated connection cannot be opened, or is a pooled handle.
+ *    holder (tool, plan id, instance, host, pid, since when). Do NOT retry
+ *    forever: an unbounded wait inside a deployment is indistinguishable from
+ *    a hang, and an operator who cannot tell those apart eventually kills the
+ *    process holding a fence.
+ *  - `pg_try_advisory_lock` succeeds but {@link revalidateAfterAcquire} fails:
+ *    release and refuse. Holding a lock on a database that is not the one the
+ *    plan was built against is worse than not holding one, because it blocks
+ *    the tool that IS right about the target.
+ *  - the dedicated connection cannot be opened: throws.
  *
  * Serves spec §10 W1: "Standalone `bun run migrate` and `bun smoke` contend on
  * the target lock."
  */
 export async function acquireTargetLock(options: {
   readonly databaseUrl: string;
-  readonly key: TargetLockKey;
   readonly holder: Omit<LockHolder, "acquiredAt">;
   readonly timeoutMs: number;
+  readonly expected: TargetState;
 }): Promise<AcquireResult> {
+  refusePoolerUrl(options.databaseUrl);
+  const key = TARGET_LOCK_KEY;
   const client = dedicatedClient(options.databaseUrl, encodeHolder(options.holder));
   const started = Date.now();
   const deadline = started + options.timeoutMs;
   let handedOver = false;
   try {
+    const nonce = randomUUID();
+    const [first] = await client<{ pid: number; probe: string }[]>`
+      SELECT pg_backend_pid() AS pid, set_config('rm_tl.session_probe', ${nonce}, false) AS probe`;
+    const [second] = await client<{ pid: number; probe: string | null }[]>`
+      SELECT pg_backend_pid() AS pid, current_setting('rm_tl.session_probe', true) AS probe`;
+    const pooled = judgeSessionProbe(
+      nonce,
+      { pid: first?.pid ?? -1, probe: first?.probe ?? null },
+      { pid: second?.pid ?? -2, probe: second?.probe ?? null },
+    );
+    if (pooled !== null) throw new Error(pooled);
+
+    const { hi, lo } = keyHalves(key);
     for (;;) {
-      const { hi, lo } = keyHalves(options.key);
       const rows = await client<{ locked: boolean }[]>`
         SELECT pg_try_advisory_lock(${hi}::int4, ${lo}::int4) AS locked`;
-      if (rows[0]?.locked === true) {
-        handedOver = true;
-        return { acquired: true, lock: makeLock(options.key, { ...options.holder, acquiredAt: new Date().toISOString() }, client) };
-      }
+      if (rows[0]?.locked === true) break;
       const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
+      if (remaining <= 0) {
+        // The wait is over and the lock is still someone else's. Name them if
+        // the server can, and refuse either way: an unidentifiable holder is
+        // not an absent one.
+        const holder = await describeHolder(client).catch(() => null);
+        const waitedMs = Date.now() - started;
+        return {
+          acquired: false,
+          refusal: "contention",
+          holder,
+          waitedMs,
+          reason: `target lock ${key} is held by ${describeHolderText(holder)}; waited ${waitedMs}ms and gave up.`,
+        };
+      }
       await sleep(Math.min(50, remaining));
     }
-    // The wait is over and the lock is still someone else's. Name them if the
-    // server can, and refuse either way: an unidentifiable holder is not an
-    // absent one.
-    const holder = await describeHolder(client, options.key).catch(() => null);
-    const waitedMs = Date.now() - started;
-    const who =
-      holder === null
-        ? "an unidentified tool"
-        : `${holder.tool}${holder.instance === null ? "" : ` (instance ${holder.instance})`} on ${holder.host} pid ${holder.pid}, since ${holder.acquiredAt}`;
-    return {
-      acquired: false,
-      holder,
-      waitedMs,
-      reason: `target lock ${options.key} is held by ${who}; waited ${waitedMs}ms and gave up.`,
-    };
+
+    const lock = makeLock({ ...options.holder, acquiredAt: new Date().toISOString() }, client);
+    // The lock was taken by one statement; prove the NEXT statement's session
+    // holds it. A pooler that moved us between the two fails here even when
+    // the probe above was lucky.
+    if (!(await lock.stillHeld())) {
+      await lock.release();
+      handedOver = true;
+      throw new Error(
+        `target lock ${key}: the session lock just taken is not held by the session serving the next statement. ` +
+          "A transaction-mode pooler is in the path. Connect to the database's direct port.",
+      );
+    }
+    const verdict = await revalidateAfterAcquire(lock, options.expected);
+    if (!verdict.ok) {
+      await lock.release();
+      handedOver = true;
+      return {
+        acquired: false,
+        refusal: "revalidation",
+        holder: null,
+        waitedMs: Date.now() - started,
+        reason: `target lock ${key} was acquired and released again: the target moved while this tool waited. ${verdict.reason}`,
+      };
+    }
+    handedOver = true;
+    return { acquired: true, lock };
   } finally {
     if (!handedOver) await client.end({ timeout: 5 });
   }
 }
 
 /**
+ * What a plan believed about its target, read before the lock existed, and
+ * re-read after acquiring it. §2: "the tool re-reads `deployment_identity`, the
+ * ledger, and the schema manifest".
+ */
+export interface TargetState {
+  /** `deployment_identity.kind`. No row reads as `rehearsal` (§4.2). */
+  readonly identity: "production" | "rehearsal";
+  /**
+   * EVERY applied migration filename, in filename order; `[]` when the ledger
+   * is absent or empty. The whole list, never the head: spec §8.1 makes the
+   * filename list the schema identity, and a migration with a LOWER filename
+   * than the head can land while the tool waits and leave the head unchanged.
+   */
+  readonly ledger: readonly string[];
+  /** `schema_manifest.content_hash`, or `null` when the target has no manifest. */
+  readonly manifestHash: string | null;
+}
+
+type Reading<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
+
+async function readIdentity(conn: DbHandle): Promise<Reading<"production" | "rehearsal">> {
+  try {
+    const rows = await conn<{ kind: string }[]>`SELECT kind FROM deployment_identity LIMIT 1`;
+    const kind = rows[0]?.kind ?? "rehearsal";
+    if (kind !== "production" && kind !== "rehearsal") return { ok: false, error: `unknown kind ${kind}` };
+    return { ok: true, value: kind };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+async function readLedger(conn: DbHandle): Promise<Reading<readonly string[]>> {
+  try {
+    // An ABSENT table is an answer ("no ledger"); an unreadable one is not.
+    const [exists] = await conn<{ present: boolean }[]>`
+      SELECT to_regclass('schema_migrations') IS NOT NULL AS present`;
+    if (exists?.present !== true) return { ok: true, value: [] };
+    // The column is `name`: the migration's FULL FILENAME (spec §8.1).
+    const rows = await conn<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
+    return { ok: true, value: rows.map((row) => row.name) };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+async function readManifest(conn: DbHandle): Promise<Reading<string | null>> {
+  try {
+    const [exists] = await conn<{ present: boolean }[]>`
+      SELECT to_regclass('schema_manifest') IS NOT NULL AS present`;
+    if (exists?.present !== true) return { ok: true, value: null };
+    const rows = await conn<{ content_hash: string }[]>`SELECT content_hash FROM schema_manifest LIMIT 1`;
+    return { ok: true, value: rows[0]?.content_hash ?? null };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Read the target's {@link TargetState} — what a plan is built from, and what
+ * {@link revalidateAfterAcquire} compares against. Throws when any part cannot
+ * be read: a plan cannot be built on an answer nobody got.
+ */
+export async function readTargetState(conn: DbHandle): Promise<TargetState> {
+  const [identity, ledger, manifest] = [await readIdentity(conn), await readLedger(conn), await readManifest(conn)];
+  if (!identity.ok) throw new Error(`deployment_identity could not be read: ${identity.error}`);
+  if (!ledger.ok) throw new Error(`the migration ledger could not be read: ${ledger.error}`);
+  if (!manifest.ok) throw new Error(`the schema manifest could not be read: ${manifest.error}`);
+  return { identity: identity.value, ledger: ledger.value, manifestHash: manifest.value };
+}
+
+/** A short, stable name for a ledger list, so two lists can be compared by eye in a refusal. */
+export function ledgerDigest(ledger: readonly string[]): string {
+  return createHash("sha256").update(ledger.join("\n")).digest("hex").slice(0, 12);
+}
+
+function describeLedger(ledger: readonly string[]): string {
+  const tail = ledger.at(-1);
+  return `${ledger.length} file(s)${tail === undefined ? "" : ` ending ${tail}`} (list ${ledgerDigest(ledger)})`;
+}
+
+/**
  * §2, Revalidation: "After acquiring, the tool re-reads `deployment_identity`,
  * the ledger, and the schema manifest and re-runs the plan against them. A
- * mismatch refuses."
+ * mismatch refuses." {@link acquireTargetLock} calls this itself; it is
+ * exported for tools that must re-check again later under the same lock.
  *
  * The reason is a race that is easy to miss: everything the plan was built from
  * was read BEFORE the lock existed, so any of it may have changed while the
@@ -433,92 +662,118 @@ export async function acquireTargetLock(options: {
  * true when I wrote it" into "the plan is true now, and nothing can change it
  * while I hold this".
  *
- * All three must be re-read, and a mismatch in any one refuses:
+ * All three are re-read on every call, and a mismatch in any one refuses:
  *  - `deployment_identity` (§4.2): the target was re-enrolled, so every policy
  *    decision in the plan (§4.3) was taken against a different answer.
- *  - the migration ledger: migrations landed while waiting, so the schema the
- *    plan expects is not the schema present.
- *  - the schema manifest (§8.3): the declared schema moved, or the database is
- *    in the in-progress state of §8.3 (ledger ahead of manifest), which "boot
- *    refuses".
+ *  - the migration ledger, compared as the WHOLE filename list: migrations
+ *    landed while waiting, so the schema the plan expects is not the schema
+ *    present. `[]` is a claim ("there was no ledger"), not an absence of one.
+ *  - the schema manifest (§8.3): the declared schema moved, or appeared. A
+ *    `null` expectation is the claim "there was no manifest", so a manifest
+ *    that appeared while the tool waited refuses too.
  *
- * Refusal cases are exactly those three mismatches plus an unreadable input —
- * a manifest or identity that cannot be read is a mismatch, not a pass.
+ * Every reason names the plan's value and the value observed. An unreadable
+ * input is a mismatch, not a pass. Note that the catch cannot tell a broken
+ * query from a genuinely unreadable table, so anything it reports deserves to
+ * be read as a possible bug and not only as a mismatch: the ledger read once
+ * named a column that does not exist and "refused" every run for that reason.
  */
 export async function revalidateAfterAcquire(
   lock: TargetLock,
-  expected: {
-    readonly identity: "production" | "rehearsal";
-    readonly ledgerHead: string | null;
-    readonly manifestHash: string | null;
-  },
+  expected: TargetState,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const conn = lock.connection;
   const reasons: string[] = [];
 
-  // deployment_identity (§4.2). No row is "rehearsal": production identity is
-  // something a target is explicitly enrolled into, so an unenrolled database
-  // can never revalidate as production. A table that cannot be READ is a
-  // different thing entirely and refuses.
-  try {
-    const rows = await conn<{ kind: string }[]>`SELECT kind FROM deployment_identity LIMIT 1`;
-    const actual = rows[0]?.kind ?? "rehearsal";
-    if (actual !== expected.identity) {
-      reasons.push(`deployment_identity is ${actual}, but the plan was built against ${expected.identity}`);
-    }
-  } catch (err) {
-    reasons.push(`deployment_identity could not be re-read (${(err as Error).message}) — an unreadable identity is a mismatch`);
+  const identity = await readIdentity(conn);
+  if (!identity.ok) {
+    reasons.push(
+      `deployment_identity could not be re-read (${identity.error}); the plan was built against ${expected.identity}, ` +
+        "and an unreadable identity is a mismatch",
+    );
+  } else if (identity.value !== expected.identity) {
+    reasons.push(`deployment_identity is ${identity.value}, but the plan was built against ${expected.identity}`);
   }
 
-  // The migration ledger. A null expectation is "the plan made no claim here",
-  // which is the only reading that lets a caller revalidate one input.
-  if (expected.ledgerHead !== null) {
-    try {
-      // The column is `name`. It is the migration's FULL FILENAME, which is the
-      // point — spec §8.1 makes the filename list, never the number, the schema
-      // identity, and this repo really does carry several duplicate numbers.
-      //
-      // This read said `filename` until 2026-09-23 and therefore always threw.
-      // The `catch` below then recorded it as "the ledger could not be re-read
-      // — an unreadable ledger is a mismatch", so a plain coding mistake wore
-      // the costume of a legitimate refusal and revalidation simply always
-      // failed. Worth remembering when reading the catch: it cannot tell a
-      // broken query from a genuinely unreadable ledger, so anything it reports
-      // deserves to be read as a possible bug and not only as a mismatch.
-      const rows = await conn<{ name: string }[]>`
-        SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1`;
-      const actual = rows[0]?.name ?? null;
-      if (actual !== expected.ledgerHead) {
-        reasons.push(`the migration ledger head is ${actual ?? "empty"}, but the plan was built against ${expected.ledgerHead}`);
-      }
-    } catch (err) {
-      reasons.push(`the migration ledger could not be re-read (${(err as Error).message}) — an unreadable ledger is a mismatch`);
+  const ledger = await readLedger(conn);
+  if (!ledger.ok) {
+    reasons.push(
+      `the migration ledger could not be re-read (${ledger.error}); the plan was built against ` +
+        `${describeLedger(expected.ledger)}, and an unreadable ledger is a mismatch`,
+    );
+  } else {
+    const actual = ledger.value;
+    const same = actual.length === expected.ledger.length && actual.every((name, index) => name === expected.ledger[index]);
+    if (!same) {
+      let index = 0;
+      while (index < actual.length && actual[index] === expected.ledger[index]) index += 1;
+      reasons.push(
+        `the migration ledger holds ${describeLedger(actual)}, but the plan was built against ` +
+          `${describeLedger(expected.ledger)}; the first difference is at position ${index + 1}: ` +
+          `${actual[index] ?? "nothing"} where the plan had ${expected.ledger[index] ?? "nothing"}`,
+      );
     }
   }
 
-  // The schema manifest (§8.3).
-  if (expected.manifestHash !== null) {
-    try {
-      const rows = await conn<{ content_hash: string }[]>`SELECT content_hash FROM schema_manifest LIMIT 1`;
-      const actual = rows[0]?.content_hash ?? null;
-      if (actual !== expected.manifestHash) {
-        reasons.push(`the schema manifest hash is ${actual ?? "absent"}, but the plan was built against ${expected.manifestHash}`);
-      }
-    } catch (err) {
-      reasons.push(`the schema manifest could not be re-read (${(err as Error).message}) — an unreadable manifest is a mismatch`);
-    }
+  const manifest = await readManifest(conn);
+  if (!manifest.ok) {
+    reasons.push(
+      `the schema manifest could not be re-read (${manifest.error}); the plan was built against ` +
+        `${expected.manifestHash ?? "no manifest"}, and an unreadable manifest is a mismatch`,
+    );
+  } else if (manifest.value !== expected.manifestHash) {
+    reasons.push(
+      `the schema manifest hash is ${manifest.value ?? "absent"}, but the plan was built against ` +
+        `${expected.manifestHash ?? "no manifest"}`,
+    );
   }
 
   return reasons.length === 0 ? { ok: true } : { ok: false, reason: reasons.join("; ") };
 }
 
 /**
+ * §2: "It is released explicitly on exit." Install the exit paths for a held
+ * lock and return a disposer that removes them.
+ *
+ *  - SIGINT / SIGTERM: release, then exit non-zero (130 / 143). The release is
+ *    bounded, so a dead network cannot turn a signal into a hang.
+ *  - `beforeExit` (the event loop drained): release.
+ *  - `exit` and SIGKILL: no code can run a round trip there. The kernel closes
+ *    the socket when the process dies and Postgres drops the session and its
+ *    lock with it. The explicit paths above exist so the ordinary endings do
+ *    not depend on that.
+ *
+ * A tool that stops at phase boundaries on a signal (smoke, through
+ * `watchForInterrupt` in scripts/lib/smoke-journal.ts) must not install this:
+ * it would exit mid-phase. Such a tool releases at the boundary itself.
+ */
+export function releaseTargetLockOnExit(
+  lock: TargetLock,
+  options: { readonly exit?: (code: number) => void; readonly releaseTimeoutMs?: number } = {},
+): () => void {
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const bound = options.releaseTimeoutMs ?? 5000;
+  const releaseBounded = (): Promise<void> => Promise.race([lock.release(), sleep(bound)]).catch(() => undefined);
+  const onSigint = (): void => void releaseBounded().then(() => exit(130));
+  const onSigterm = (): void => void releaseBounded().then(() => exit(143));
+  const onBeforeExit = (): void => void releaseBounded();
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  process.once("beforeExit", onBeforeExit);
+  return () => {
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
+    process.removeListener("beforeExit", onBeforeExit);
+  };
+}
+
+/**
  * Run one mutation inside the xact fence. THE safety primitive of §2, and the
  * only supported way for any tool in the caller list to write.
  *
- * "Every mutation (migration, grant reconciliation, seed, key rebind, schedule
- * write) runs in a transaction that first takes `pg_advisory_xact_lock` on the
- * same key, on the connection performing it."
+ * "Every mutation (migration, grant reconciliation, seed, key rebind, token
+ * provisioning, identity write) runs in a transaction that first takes
+ * `pg_advisory_xact_lock` on the same key, on the connection performing it."
  *
  * Implementation requirements that the sentence above makes non-negotiable:
  *  1. BEGIN, then `pg_advisory_xact_lock(key)` as the FIRST statement, then the
@@ -535,10 +790,13 @@ export async function revalidateAfterAcquire(
  *     unlock would reopen the window at exactly the wrong moment.
  *
  * Refusal cases:
+ *  - the URL names a pooler ({@link refusePoolerUrl}): a fence is transaction
+ *    scoped and would survive a transaction pooler, but the same URL would not
+ *    survive {@link acquireTargetLock}, and a tool whose two layers reach the
+ *    database by two routes is a tool whose layers can disagree.
  *  - `body` opens its own nested transaction or commits internally: the fence's
  *    scope is this transaction, and work that escapes it is unfenced work.
- *  - the fence wait exceeds a caller-supplied bound: report which key and how
- *    long, and do NOT cancel the holder. Per the invariant, "a cancellation
+ *  - the fence wait is never cancelled. Per the invariant, "a cancellation
  *    request is not evidence the mutation stopped" — cancelling here would
  *    trade a wait for exactly the overlap this module forbids.
  *
@@ -546,15 +804,17 @@ export async function revalidateAfterAcquire(
  * mutation tool: no overlap."
  */
 export async function withMutationFence<T>(
-  options: { readonly databaseUrl: string; readonly key: TargetLockKey; readonly label: string },
+  options: { readonly databaseUrl: string; readonly label: string },
   body: (tx: DbHandle) => Promise<T>,
 ): Promise<T> {
+  refusePoolerUrl(options.databaseUrl);
+  const key = TARGET_LOCK_KEY;
   const client = dedicatedClient(options.databaseUrl, `rm-tl-fence:${options.label}`.slice(0, APP_NAME_MAX));
   try {
     const result = await client.begin(async (tx) => {
       // FIRST statement in the transaction, and the blocking form: a competitor
       // waits for the in-flight mutation to end rather than concluding it ended.
-      await tx`SELECT pg_advisory_xact_lock(${options.key.toString()}::bigint)`;
+      await tx`SELECT pg_advisory_xact_lock(${key.toString()}::bigint)`;
       const value = await body(tx);
       // The fence is released by commit and by nothing else, so if it is gone
       // here the body ended this transaction itself and whatever it did after
@@ -564,7 +824,7 @@ export async function withMutationFence<T>(
          WHERE locktype = 'advisory' AND granted
            AND pid = pg_backend_pid()
            AND objsubid = ${OBJSUBID_FENCE}
-           AND ((classid::bigint << 32) | objid::bigint) = ${options.key.toString()}::bigint`;
+           AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
       if (Number(rows[0]?.count ?? "0") === 0) {
         throw new Error(
           `the mutation fence for ${options.label} was lost before commit: the body committed or rolled back its own ` +
@@ -608,30 +868,34 @@ export async function assertStillHeld(lock: TargetLock, phase: string): Promise<
   if (await lock.stillHeld()) return;
   throw new Error(
     `target lock ${lock.key} cannot be proven held, so the phase "${phase}" does not start. ` +
-      `It was taken by ${lock.holder.tool} on ${lock.holder.host} pid ${lock.holder.pid} at ${lock.holder.acquiredAt}. ` +
+      `It was taken by ${describeHolderText(lock.holder)}. ` +
       "The lock is not re-acquired: another tool may have run in the gap.",
   );
 }
 
 /**
- * Read the current holder of the key, for a contention refusal.
+ * Read the current holder of the target lock on the database `conn` is
+ * connected to, for a contention refusal.
  *
- * Output: the holder, or `null` when the key is free or the holder published no
- * identity.
+ * Output: the holder, or `null` when the lock is free or the holder published
+ * no identity.
  *
  * `null` must be rendered by the caller as "held by an unidentified tool", not
  * as "free": the caller only asks this question after failing to acquire, so
  * the lock IS held, and printing "not held" there would send an operator to
  * force something.
  */
-export async function describeHolder(lock: DbHandle, key: TargetLockKey): Promise<LockHolder | null> {
+export async function describeHolder(conn: DbHandle): Promise<LockHolder | null> {
+  const key = TARGET_LOCK_KEY;
   // A session lock and a fence can both be granted on one key; a contention
   // refusal is about the SESSION holder, which is the one that publishes itself.
-  const rows = await lock<{ application_name: string | null; backend_start: Date | null }[]>`
+  // The same key on a sibling database is a different lock: filter it out.
+  const rows = await conn<{ application_name: string | null; backend_start: Date | null }[]>`
     SELECT a.application_name, a.backend_start
       FROM pg_locks l
       JOIN pg_stat_activity a ON a.pid = l.pid
      WHERE l.locktype = 'advisory' AND l.granted
+       AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
        AND l.objsubid = ${OBJSUBID_SESSION}
        AND ((l.classid::bigint << 32) | l.objid::bigint) = ${key.toString()}::bigint
      LIMIT 1`;
