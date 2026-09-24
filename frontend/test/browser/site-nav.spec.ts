@@ -130,6 +130,21 @@ test.describe("desktop", () => {
     await expect(panel(page, "vaults")).toBeHidden();
   });
 
+  // On staging's tunnel the first fragment landed after a click had opened a
+  // panel, and the router's view-change event shut it: only a new page may.
+  test("a panel opened before the first page lands stays open", async ({ page }) => {
+    await page.route("**/views/regime.html", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue();
+    });
+    await page.goto("/regime", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("nav.nav--js")).toBeAttached();
+    await top(page, "vaults").click();
+    await expect(panel(page, "vaults")).toBeVisible();
+    await expect(page.locator("#view h1")).toBeVisible();
+    await expect(panel(page, "vaults")).toBeVisible();
+  });
+
   test("following a link closes the panel, a link to a section of this page too", async ({ page }) => {
     await page.goto("/");
     await navigate(page, "/swarm");
