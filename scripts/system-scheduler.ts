@@ -174,12 +174,17 @@ export async function main(): Promise<number> {
         log(`rebuild (${trigger}) at cursor ${snapshot.cursor}`);
         await clock.rebuild(snapshot as unknown as SchedulerFullRead);
       },
-      runJob: async (job) => {
-        // §6.3's ad-hoc pushes. The scheduler acks through the API when done;
-        // an unknown kind is left UNACKED on purpose, so the API redelivers it
-        // to a build that understands it rather than this one swallowing it.
-        throw new Error(`unknown pushed job kind: ${job.kind}`);
-      },
+      // NO `runJob` HOOK, and its absence is the design. §6.3 (amended
+      // 2026-09-24, D52): "The stream carries change events only. Every piece
+      // of work the scheduler does follows from an event or a timer; there is
+      // no ad-hoc job kind for the API to push, ack or redeliver."
+      //
+      // `SchedulerStreamConsumer` still HANDLES a job frame — it was built
+      // before the amendment and is a sibling's committed work, not this
+      // part's to rewrite — but nothing here supplies a driver for one, so a
+      // frame that arrived would be a no-op rather than silently executed
+      // work. The consumer's route, its migration and its ack endpoint need
+      // reconciling against the amended §6.3; that is recorded, not done here.
     },
     { keepaliveBudgetMs: env.keepaliveBudgetMs },
   );

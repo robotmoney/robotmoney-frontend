@@ -34,7 +34,13 @@ const REPO = join(import.meta.dir, "..", "..", "..");
 
 /** The trees the criterion names. */
 const SWEEP_GLOBS = [
+  "backend/*.{ts,sql,json}",
   "backend/**/*.{ts,sql,json}",
+  // BOTH forms, because Bun's `**` does not match a path with no directory
+  // component: `scripts/**/*.ts` misses `scripts/system-scheduler.ts`,
+  // `scripts/smoke-live-smoke.ts` and `scripts/swarm-eval-local.ts` — three
+  // top-level files that are exactly where a driver would keep a retired call.
+  "scripts/*.{ts,sh,json}",
   "scripts/**/*.{ts,sh,json}",
   "docker-compose*.yml",
   ".env.example",
@@ -52,6 +58,8 @@ const PINNED: Record<string, string> = {
   "backend/migrations/0072_drop_swarm_schedules.sql":
     "the migration that DELETES the rows has to name them",
   "scripts/tests/unit/no-swarm-cron.test.ts": "this gate",
+  "scripts/tests/unit/swarm-session-window.test.ts":
+    "it asserts the ABSENCE of `SWARM_WINDOW_MINUTES` from the session driver, so it has to name it",
 };
 
 /**
@@ -107,6 +115,12 @@ describe("the sweep covers what it claims to", () => {
     for (const prefix of ["backend/", "scripts/", "docker-compose", ".env.example", ".github/", "stacks/"]) {
       expect({ prefix, found: FILES.some((f) => f.file.startsWith(prefix)) }).toEqual({ prefix, found: true });
     }
+    // The top-level files the `**` form alone would miss. Named, because the
+    // sweep silently missing a directory is the one failure a grep gate cannot
+    // report on itself.
+    for (const file of ["scripts/system-scheduler.ts", "scripts/smoke-live-smoke.ts", "scripts/swarm-eval-local.ts"]) {
+      expect({ file, swept: FILES.some((f) => f.file === file) }).toEqual({ file, swept: true });
+    }
   });
 });
 
@@ -130,7 +144,20 @@ describe("the five swarm.* schedule kinds are gone", () => {
   test("nothing seeds a swarm schedule row", () => {
     expect(hits("seedSwarmSchedules")).toEqual([]);
     expect(hits("resolveSwarmSchedules")).toEqual([]);
-    expect(hits(/job_schedules[\s\S]{0,120}swarm/)).toEqual([]);
+    // The two places a row can be seeded, named rather than pattern-matched.
+    // A proximity regex over `job_schedules` and `swarm` was tried first and
+    // was worse than useless: it matched migration FILENAME lists
+    // (`0034_job_schedules_catchup_policy.sql` beside
+    // `0035_swarm_member_avatar_bytes.sql`) and protected-table lists, neither
+    // of which seeds anything. A gate that fires on a filename teaches its
+    // reader to ignore it.
+    for (const file of ["backend/src/db/seed.ts", "backend/schema/bootstrap-data.sql"]) {
+      const text = FILES.find((f) => f.file === file)?.text ?? "";
+      expect({ file, swarmKinds: [...text.matchAll(/'swarm\.[a-z_]+'/g)].map((m) => m[0]) }).toEqual({
+        file,
+        swarmKinds: [],
+      });
+    }
   });
 });
 
@@ -170,7 +197,12 @@ describe("the swarm lane and the worker-swarm service are gone", () => {
   });
 
   test("scripts/lib/smoke-schedule.ts is gone", () => {
-    expect(hits("smoke-schedule")).toEqual([]);
+    // The MODULE, by its path. Not the bare word: `--smoke-schedules` is a
+    // surviving seed flag for the non-swarm fast-demo overlays, and a needle
+    // that swept it up would be pressure to rename a thing that is fine.
+    expect(hits("smoke-schedule.ts")).toEqual([]);
+    expect(hits("lib/smoke-schedule")).toEqual([]);
+    expect(hits('from "./smoke-schedule')).toEqual([]);
   });
 });
 

@@ -471,6 +471,90 @@ describe("an operator's turnover, learned of only by the event (§4.3, §6.2, §
   });
 });
 
+describe("the two clocks are not the same clock (§4.2)", () => {
+  // §4.2: "Every comparison against a stored instant … reads the database clock
+  // with `clock_timestamp()` inside the deciding transaction. Never the
+  // application's clock."
+  //
+  // So the scheduler's timer firing is NOT the same event as the API agreeing
+  // the deadline has arrived, and a client that assumed it was would strand
+  // every session whose API clock lags by even a second. The fake runs its
+  // database clock behind the timer host to produce exactly that.
+  test("a deadline timer that fires before the API's clock agrees is re-armed, not abandoned", async () => {
+    const timers = new FakeTimers(T0);
+    const api = new FakeSchedulerApi({
+      now: () => timers.now(),
+      judgingDurationSeconds: 900,
+      apiClockSkewMs: 3_000, // the database is three seconds behind
+    });
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: T0 });
+    api.addSession({
+      sessionId: "old",
+      subjectId: "sub-a",
+      state: "judging",
+      judgeMode: "enforce",
+      judgingDeadlineAt: T0 + 900_000,
+    });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
+
+    const clock = new SchedulerClock(api, { timers, sleep: async () => {} });
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+    expect(clock.deadlineAt("old")).toBe(T0 + 900_000);
+
+    // The scheduler's timer fires at the stored instant. The API, three seconds
+    // behind, refuses: `judging_deadline_not_reached`.
+    await timers.advanceTo(T0 + 900_000);
+    await clock.idle();
+    expect(api.sessions.get("old")!.state).toBe("judging");
+    // NOT abandoned, and not recorded as a permanent refusal — the clock went
+    // back to waiting on a re-armed timer.
+    expect(clock.refusals.map((r) => r.error)).not.toContain("judging_deadline_not_reached");
+    expect(clock.deadlineAt("old")).not.toBeNull();
+    expect(clock.health.exhausted).toHaveLength(0);
+
+    // Once the API's clock passes the instant too, it finalizes.
+    await timers.advanceTo(T0 + 910_000);
+    await clock.idle();
+    expect(api.sessions.get("old")!.state).toBe("published");
+    expect(api.sessions.get("old")!.outcome).toBe("no_consensus");
+  });
+
+  test("a permanently disagreeing clock degrades within the budget rather than spinning", async () => {
+    const timers = new FakeTimers(T0);
+    // A skew larger than anything the deadline can outrun inside this test.
+    const api = new FakeSchedulerApi({ now: () => timers.now(), apiClockSkewMs: 10_000_000 });
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: T0 });
+    api.addSession({
+      sessionId: "old",
+      subjectId: "sub-a",
+      state: "judging",
+      judgeMode: "enforce",
+      judgingDeadlineAt: T0 + 900_000,
+    });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 50_000_000 });
+
+    const clock = new SchedulerClock(api, { timers, maxAttempts: 3, sleep: async () => {} });
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+    // Reach the stored deadline first — the scheduler's clock passes it, the
+    // API's (ten thousand seconds behind) does not — then let the re-arms run.
+    await timers.advanceTo(T0 + 900_000);
+    await clock.idle();
+    for (let i = 0; i < 6; i += 1) {
+      await timers.advanceBy(1_000);
+      await clock.idle();
+    }
+
+    const [item] = clock.health.exhausted;
+    expect(item).toBeDefined();
+    expect(item.sessionId).toBe("old");
+    expect(item.lastError).toBe("judging_deadline_not_reached");
+    expect(clock.deadlineAt("old")).toBeNull();
+    expect(clock.health.healthy).toBe(false);
+  });
+});
+
 describe("the judged event is a wake-up and nothing more (§4.4)", () => {
   test("`session.judged` finalizes at once instead of waiting out the deadline", async () => {
     const { timers, api, boot } = world();

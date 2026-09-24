@@ -5,22 +5,23 @@
 //   §1: the API is "the only running service in this document's scope" that
 //    holds a database connection. `system-scheduler`: "**No.** Never."
 //
-//   §9: "Among the running services this document covers, only the API connects
-//    to the database. (The analytics and research workers are outside this
-//    document; their move to the same model is a later document, and until then
-//    they keep the credentials they have. This invariant is not silently
-//    extended to them.)"
+//   §9 (as amended 2026-09-24, D52): "Among the running services this document
+//    covers, only the API connects to the database. (The pipeline worker, which
+//    runs the vault, wallet, buyback and project jobs, also holds a database
+//    role; `smoke-production-spec.md` §7.2 governs it. This invariant is not
+//    silently extended to it.)"
 //
-//   §10: "No service other than `api` carries a database credential in any
-//    composition in this document's scope, asserted by rendering the compose
-//    config."
+//   §10: "No service other than `api` and the pipeline worker carries a
+//    database credential in any composition, asserted by rendering the compose
+//    config; `system-scheduler` carries none."
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHAT THIS REPLACES
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// `worker-swarm` held a database credential AND a model key, and ran the
-// consensus judge on a cron. Both are gone: the clock is `system-scheduler`,
+// The removed swarm worker lane held a database credential AND a model key,
+// and ran the consensus judge on a cron. Both are gone: the clock is
+// `system-scheduler`,
 // which holds one API token, and the judge is a participant container holding
 // its own model key. This file is what stops either coming back — not as a
 // one-off check at the end of the removal, but permanently.
@@ -29,12 +30,20 @@
 // WHY THE EXCEPTION LIST IS NAMED, AND WHY IT IS SHORT
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// §9 carves out the analytics and research workers explicitly, and adds "This
-// invariant is not silently extended to them." A test with a wildcard for
-// `worker-*` would be that silent extension: a new worker lane would inherit
-// the exception without anyone deciding to grant it. So each exempt service is
-// named, with its reason, and `EXEMPT` is asserted to contain nothing that is
-// not in the rendered configuration — a stale exemption is itself a finding.
+// §9 carves out ONE worker — the pipeline worker — and adds "This invariant is
+// not silently extended to it." A wildcard for `worker-*` would be that silent
+// extension: a new lane would inherit the exception without anyone deciding to
+// grant it. So each exempt service is named, with its reason, and `EXEMPT` is
+// asserted to contain nothing that is not in the rendered configuration — a
+// stale exemption is itself a finding.
+//
+// ONE EXEMPTION HERE IS NOT A SPEC EXCEPTION BUT AN UNLANDED REMOVAL, and it is
+// labelled as such. `smoke-production-spec.md` §7.2 now says in as many words:
+// "The research worker lane serves only retired rows and is removed." It is not
+// removed yet — that lane and its rows are a different workstream's scope, not
+// W4's — so it is carried here with that sentence as its reason rather than
+// with a clause that blesses it. When the lane goes, this entry goes with it,
+// and the "stale exemption" test below is what will say so.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THE DECLARATION IS THE FINDING, NOT THE VALUE
@@ -149,10 +158,21 @@ export function findDatabaseCredentials(cfg: ComposeConfigLike): CredentialFindi
  */
 export const EXEMPT: Record<string, string> = {
   api: "§1: the API is the only service in scope that holds a database connection",
-  "worker-analytics": "§9's named exception: outside this document, keeps its credential until a later one",
-  "worker-research": "§9's named exception: outside this document, keeps its credential until a later one",
+  "worker-analytics":
+    "§9's ONE named exception: the pipeline worker running the vault, wallet, buyback and project jobs as rm_worker, governed by smoke-production-spec.md §7.2",
+  "worker-research":
+    "NOT a spec exception. smoke-production-spec.md §7.2: 'The research worker lane serves only retired rows and is removed.' The removal has not landed and is outside W4; this entry is the record of that, and it must go when the lane does",
   migrate: "a one-shot migration runner, not a running service; it exists to hold rm_owner for one command",
 };
+
+/**
+ * Exemptions that exist only because a removal has not happened yet.
+ *
+ * Kept apart from the spec-blessed ones so the two can never be confused, and
+ * asserted to be a set that SHRINKS: a reader can see at a glance how much of
+ * §9 is actually true today.
+ */
+export const UNLANDED_REMOVALS = ["worker-research"] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Rendering
@@ -255,14 +275,24 @@ describe("only the named services carry a database credential (§9, §10)", () =
     }
   });
 
-  test("no `worker-swarm` service exists in any composition", () => {
+  test("no composition declares a session/swarm worker lane at all", () => {
+    // Stated as "no service whose name mentions the lane", not as one literal
+    // name: a reintroduction under any spelling is the thing being forbidden,
+    // and the literal itself is what scripts/tests/unit/no-swarm-cron.test.ts
+    // sweeps the shipping trees for.
     for (const { label, files, profiles } of COMPOSITIONS) {
-      const names = Object.keys(composeConfig(files, profiles).services ?? {});
-      expect({ label, hasWorkerSwarm: names.includes("worker-swarm") }).toEqual({
-        label,
-        hasWorkerSwarm: false,
-      });
+      const offenders = Object.keys(composeConfig(files, profiles).services ?? {})
+        .filter((n) => /swarm/i.test(n));
+      expect({ label, offenders }).toEqual({ label, offenders: [] });
     }
+  });
+
+  test("only ONE worker is a spec exception, and the other is flagged as an unlanded removal", () => {
+    const workers = Object.keys(EXEMPT).filter((s) => s.startsWith("worker-"));
+    const blessed = workers.filter((s) => !(UNLANDED_REMOVALS as readonly string[]).includes(s));
+    // §9 carves out the pipeline worker and nothing else. If this ever names
+    // two, someone widened the invariant without amending the spec.
+    expect(blessed).toEqual(["worker-analytics"]);
   });
 
   test("every exemption is still a real service — a stale exemption is itself a finding", () => {

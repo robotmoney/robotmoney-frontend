@@ -15,8 +15,13 @@
 // Three things live here and nothing else:
 //
 //   1. THE TIMER SET. One boundary timer per subject, one deadline timer per
-//      judging session. Set from instants the API supplied; never computed from
-//      "now plus a duration" except where §4.1 says the API does that itself.
+//      judging session, each set from an instant THE API SUPPLIED. This module
+//      computes no close instant at all, which is what makes §2.2's grid
+//      (amended 2026-09-24, D52) a property it cannot break: `window_closes_at`
+//      is `epoch_anchor + k × epoch_duration`, decided by the API inside the
+//      transaction that opens the epoch, and the clock's only job is to wait
+//      for the instant it was handed. A client that computed "now plus a
+//      duration" would reintroduce exactly the drift the grid exists to remove.
 //
 //   2. THE SETTLEMENT CHAIN. A state machine over §4.4's steps, driven step by
 //      step as each call returns, parking at the judging wait and woken by
@@ -136,8 +141,6 @@ export class SchedulerClock {
   #published = new Set<string>();
   /** §4.6's degradation surface, keyed by item so a repeat replaces rather than piles up. */
   #exhausted = new Map<string, ExhaustedItem>();
-  /** Subject durations, learned from the full read and from `subject.changed`. */
-  #durations = new Map<string, number>();
 
   #authenticated = false;
   #streamSynchronized = false;
@@ -244,8 +247,6 @@ export class SchedulerClock {
     this.#deadlines.clear();
     this.#driving.clear();
 
-    for (const s of snapshot.subjects) this.#durations.set(s.subjectId, s.epochDurationSeconds);
-
     // 1. A boundary timer per collecting session. One whose instant already
     //    passed is §3.2's missed boundary: fire ONCE, now, never replayed and
     //    never backdated — the API computes the successor's instant from its own
@@ -320,12 +321,11 @@ export class SchedulerClock {
     if (!subjectId) return;
     const payload = (event.payload ?? {}) as {
       reason?: string;
-      epochDurationSeconds?: number;
       closedEpochId?: string | null;
     };
-    if (typeof payload.epochDurationSeconds === "number") {
-      this.#durations.set(subjectId, payload.epochDurationSeconds);
-    }
+    // The event's `epochDurationSeconds` is DELIBERATELY not recorded. Under
+    // §2.2's grid the clock never computes a close instant, so a duration it
+    // held would be state it could only use to be wrong with.
 
     if (payload.reason === "deactivated") {
       this.#clearBoundary(subjectId);
@@ -351,7 +351,9 @@ export class SchedulerClock {
     // `updated`: §6.2's "A duration change takes effect at the NEXT boundary:
     // the current window keeps the `window_closes_at` it was opened with." So
     // there is deliberately nothing to do to the timer. Resetting it here would
-    // be the bug this clause exists to forbid.
+    // be the bug this clause exists to forbid. §2.2 adds that the admin API
+    // re-anchors the grid at the current close in the same transaction, which
+    // is likewise the API's business and not a fact this clock has to hold.
   }
 
   /**

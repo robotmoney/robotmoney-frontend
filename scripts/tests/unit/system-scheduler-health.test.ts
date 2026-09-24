@@ -290,6 +290,34 @@ describe("the scheduler holds exactly one kind of credential (§7)", () => {
     }
   });
 
+  test("the image actually carries the entrypoint and its library", () => {
+    // Caught during the removal: `backend/Dockerfile` copies only `backend/`,
+    // so `command: ["bun","run","scripts/system-scheduler.ts"]` would have
+    // exited immediately on a real `up`. Every compose test RENDERS config
+    // rather than booting, so nothing else in the suite can see this.
+    const dockerfile = readFileSync(join(REPO, "backend/Dockerfile"), "utf8");
+    expect(dockerfile).toContain("COPY scripts/system-scheduler.ts /app/scripts/");
+    expect(dockerfile).toContain("COPY scripts/lib/system-scheduler/ /app/scripts/lib/system-scheduler/");
+  });
+
+  test("it copies those two paths and NOT scripts/ wholesale", () => {
+    // The rest of `scripts/` is operator tooling: it reaches Docker, reads
+    // `~/.env`, and holds the smoke driver. A blanket copy would put the
+    // deployment tooling inside the image it deploys.
+    const dockerfile = readFileSync(join(REPO, "backend/Dockerfile"), "utf8");
+    const code = dockerfile.replace(/(^|\n)\s*#.*/g, "$1");
+    expect(code).not.toMatch(/COPY\s+scripts\/?\s+\/app/);
+  });
+
+  test("every path the entrypoint imports relatively is inside what the image copies", () => {
+    // A new module under `scripts/lib/` that is NOT under `system-scheduler/`
+    // would typecheck, pass every unit test, and be absent from the image.
+    const text = readFileSync(join(REPO, "scripts/system-scheduler.ts"), "utf8");
+    const relative = importsOf(text).filter((spec) => spec.startsWith("."));
+    const outside = relative.filter((spec) => !spec.startsWith("./lib/system-scheduler/"));
+    expect({ relative, outside }).toEqual({ relative, outside: [] });
+  });
+
   test("the entrypoint reads its token from a file path, not from the environment directly", () => {
     // smoke §3: "a file the boot places in the instance's state directory, named
     // per instance, never in `~/.env` and never in the image."

@@ -58,12 +58,15 @@ describe("a missed boundary fires once, on rebuild (§3.2, §10)", () => {
     expect(api.callsOf("turnover")[0].args.expectedSessionId).toBe("sa");
   });
 
-  test("three missed boundaries yield ONE turnover, and the successor is not backdated", async () => {
+  test("GRID AFTER DOWNTIME: three missed slots yield ONE turnover, landing on the first FUTURE grid instant", async () => {
+    // §10: "restart after two missed slots; the one turnover on rebuild gives
+    // N+1 the first future grid instant, never a past one and never
+    // `now + duration`."
     const { timers, api, boot } = world();
-    api.addSubject("sub-a", 600);
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: T0 });
     api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 600_000 });
 
-    // Down for three and a half windows.
+    // Down for three and a half windows. Slots at +1200s, +1800s are missed.
     const restartAt = T0 + 600_000 * 3.5;
     await timers.advanceTo(restartAt);
 
@@ -72,20 +75,67 @@ describe("a missed boundary fires once, on rebuild (§3.2, §10)", () => {
     await clock.idle();
 
     expect(api.countCalls("turnover")).toBe(1);
-    // Two sessions exist: the one that was open, and its one successor.
+    // Two sessions exist: the one that was open, and its one successor. The
+    // skipped slots were not opened (§3.2: "Epochs are not opened into the past").
     expect(api.sessionsOf("sub-a")).toHaveLength(2);
     const successor = api.sessionsOf("sub-a").find((s) => s.state === "collecting")!;
-    // NOT BACKDATED: the successor's window closes one duration after the
-    // RESTART, not one duration after the instant it "should" have opened.
-    expect(successor.windowClosesAt).toBe(restartAt + 600_000);
+
+    // THE FIRST FUTURE GRID INSTANT, which for an anchor at T0 and a 600s
+    // spacing is T0 + 2400s — NOT `restart + 600s` (T0 + 2700s), which is what
+    // `now + duration` would have produced and what this test asserted before
+    // the 2026-09-24 amendment.
+    expect(successor.windowClosesAt).toBe(T0 + 2_400_000);
     expect(successor.windowClosesAt).toBeGreaterThan(timers.now());
-    expect(clock.boundaryAt("sub-a")).toBe(restartAt + 600_000);
+    expect((successor.windowClosesAt - T0) % 600_000).toBe(0);
+    expect(successor.windowClosesAt).not.toBe(restartAt + 600_000);
+    expect(clock.boundaryAt("sub-a")).toBe(T0 + 2_400_000);
+  });
+
+  test("NO DRIFT: ten epochs of late turnovers still close exactly on the grid", async () => {
+    // §10: "a turnover dispatched late still gives N+1 a close on the grid;
+    // after ten epochs each close equals `epoch_anchor + k × epoch_duration`
+    // exactly."
+    //
+    // Lateness is produced by making every turnover fail transiently once, so
+    // the retry's backoff puts real clock distance between the close instant
+    // and the call that acts on it. Under `now + duration` that distance
+    // accumulates; on a grid it cannot.
+    const { timers, api } = world();
+    const ANCHOR = T0;
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: ANCHOR });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: ANCHOR + 600_000 });
+    const clock = new SchedulerClock(api, {
+      timers,
+      // A real sleep, so the retry genuinely lands after the instant.
+      sleep: async (ms) => {
+        await timers.advanceBy(Math.min(ms, 30_000));
+      },
+    });
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+
+    const closes: number[] = [];
+    for (let k = 1; k <= 10; k += 1) {
+      api.failNext("turnover", 1);
+      await timers.advanceTo(ANCHOR + 600_000 * k);
+      await clock.idle();
+      const open = api.sessionsOf("sub-a").find((s) => s.state === "collecting");
+      if (open) closes.push(open.windowClosesAt);
+    }
+
+    expect(closes.length).toBeGreaterThanOrEqual(10);
+    for (const close of closes) {
+      expect({ close, onGrid: (close - ANCHOR) % 600_000 === 0 }).toEqual({ close, onGrid: true });
+    }
+    // And the last one is exactly the grid instant it should be, not one
+    // duration past whenever the tenth retry happened to succeed.
+    expect(closes[closes.length - 1]).toBe(ANCHOR + 600_000 * 11);
   });
 
   test("activation during downtime yields one fresh epoch on rebuild, never backdated", async () => {
     const { timers, api, boot } = world();
     // Activated while the scheduler was down: an active subject, no session.
-    api.addSubject("late", 300);
+    api.addSubject("late", 300, true, { epochAnchorMs: T0 });
     await timers.advanceTo(T0 + 5_000_000);
 
     const clock = boot();
@@ -95,7 +145,12 @@ describe("a missed boundary fires once, on rebuild (§3.2, §10)", () => {
     expect(api.countCalls("openEpoch")).toBe(1);
     const sessions = api.sessionsOf("late");
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].windowClosesAt).toBe(T0 + 5_000_000 + 300_000);
+    // §2.2: "An epoch opened with no predecessor … closes at the first grid
+    // instant after now. Its window can therefore be shorter than one
+    // duration." The anchor is T0 and the spacing 300s, so the first slot after
+    // T0 + 5_000_000 is T0 + 5_100_000 — a window of 100s, not 300s.
+    expect(sessions[0].windowClosesAt).toBe(T0 + 5_100_000);
+    expect(sessions[0].windowClosesAt - timers.now()).toBeLessThan(300_000);
     expect(sessions[0].windowClosesAt).toBeGreaterThan(timers.now());
   });
 

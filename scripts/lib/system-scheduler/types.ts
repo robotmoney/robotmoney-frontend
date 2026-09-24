@@ -35,7 +35,18 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
 // §3's full read
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** §3 part 1: an active subject and its one scheduling parameter (§2.2). */
+/**
+ * §3 part 1: an active subject and its schedule.
+ *
+ * §2.2 was amended on 2026-09-24 (D52) from one parameter to three:
+ * `epoch_duration` (the grid spacing), `epoch_anchor` (one instant on the grid)
+ * and `judging_duration`. The CLIENT reads none of them to compute anything —
+ * every close instant arrives already decided, and the clock's whole job is to
+ * wait for it — so this type carries the duration only because the full read
+ * serves it, and carries no anchor because nothing here could correctly use one.
+ * The API's declaration is the authority; `system-scheduler-wire-parity.test.ts`
+ * compares the two as text.
+ */
 export interface SchedulerSubject {
   subjectId: string;
   name: string;

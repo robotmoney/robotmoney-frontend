@@ -127,7 +127,12 @@ export interface RecordedCall {
 interface FakeSubject {
   subjectId: string;
   name: string;
+  /** §2.2: the spacing of the grid, and the length of every full window. */
   epochDurationSeconds: number;
+  /** §2.2: one instant on the grid. Every close is `anchor + k × duration`. */
+  epochAnchorMs: number;
+  /** §2.2: how long judging waits after it is requested. Not part of the grid. */
+  judgingDurationSeconds: number;
   active: boolean;
 }
 
@@ -141,13 +146,28 @@ interface FakeSession {
   consensusAt: number | null;
   outcome: "judged" | "no_consensus" | "not_judged" | null;
   successorId: string | null;
+  /** §4.4: captured at turnover beside the judge mode, never read live. */
+  capturedJudgingSeconds: number;
 }
 
 export interface FakeApiOptions {
-  /** Where the fake reads "now" from, so its stored instants line up with the clock under test. */
+  /** Where the fake reads "now" from. */
   now: () => number;
-  /** Seconds the API adds to the request instant to get the judging deadline. */
+  /**
+   * Default `judging_duration` for subjects this fake creates (§2.2's third
+   * column). Per-subject, not global — `addSubject` can override it.
+   */
   judgingDurationSeconds?: number;
+  /**
+   * Milliseconds the API's clock runs BEHIND the scheduler's.
+   *
+   * §4.2 puts every instant comparison on the DATABASE clock, so the two are
+   * not the same clock and a test must be able to make them disagree. A
+   * positive skew makes the API believe less time has passed, which is the case
+   * that matters: a deadline timer the scheduler fires before the API agrees
+   * the deadline has arrived.
+   */
+  apiClockSkewMs?: number;
 }
 
 /**
@@ -172,30 +192,81 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
 
   #now: () => number;
   #judgingSeconds: number;
+  #skewMs: number;
   #seq = 0;
   #nextSession = 1;
 
   constructor(opts: FakeApiOptions) {
     this.#now = opts.now;
     this.#judgingSeconds = opts.judgingDurationSeconds ?? 600;
+    this.#skewMs = opts.apiClockSkewMs ?? 0;
+  }
+
+  /**
+   * §4.2's database clock, which is NOT the scheduler's.
+   *
+   * Every stored instant and every comparison below reads this, exactly as the
+   * real API reads `clock_timestamp()` inside the deciding transaction. With
+   * the default zero skew the two agree, which is the ordinary case; a test
+   * that cares about disagreement sets `apiClockSkewMs`.
+   */
+  #dbNow(): number {
+    return this.#now() - this.#skewMs;
+  }
+
+  /**
+   * §2.2's grid: the first instant strictly after `afterMs` that lies on this
+   * subject's grid.
+   *
+   * This is the whole of the amendment on the API's side, and the reason it is
+   * modelled here rather than approximated: `now + duration` and "the next grid
+   * instant" agree whenever turnover is punctual, so a fake that added a
+   * duration would pass every punctual test and hide every late one — which is
+   * precisely the drift the grid exists to prevent.
+   */
+  #nextGridInstant(subject: FakeSubject, afterMs: number): number {
+    const spacing = subject.epochDurationSeconds * 1000;
+    const k = Math.floor((afterMs - subject.epochAnchorMs) / spacing) + 1;
+    return subject.epochAnchorMs + k * spacing;
   }
 
   // ── fixture helpers ────────────────────────────────────────────────────────
 
-  addSubject(subjectId: string, epochDurationSeconds: number, active = true): void {
-    this.subjects.set(subjectId, { subjectId, name: subjectId, epochDurationSeconds, active });
+  /**
+   * Add a subject to the grid.
+   *
+   * `epochAnchorMs` defaults to the clock's current instant, so a subject added
+   * at T0 with a 600s duration has grid instants at T0+600s, T0+1200s, … —
+   * which is what every test that predates the grid amendment assumed of
+   * `now + duration`, and is why those assertions still read the same.
+   */
+  addSubject(
+    subjectId: string,
+    epochDurationSeconds: number,
+    active = true,
+    opts: { epochAnchorMs?: number; judgingDurationSeconds?: number } = {},
+  ): void {
+    this.subjects.set(subjectId, {
+      subjectId,
+      name: subjectId,
+      epochDurationSeconds,
+      epochAnchorMs: opts.epochAnchorMs ?? this.#dbNow(),
+      judgingDurationSeconds: opts.judgingDurationSeconds ?? this.#judgingSeconds,
+      active,
+    });
   }
 
   /** Put a session into the fake at a chosen state, as a recovery fixture. */
   addSession(s: Partial<FakeSession> & { sessionId: string; subjectId: string }): FakeSession {
     const full: FakeSession = {
       state: "collecting",
-      windowClosesAt: this.#now(),
+      windowClosesAt: this.#dbNow(),
       judgeMode: "off",
       judgingDeadlineAt: null,
       consensusAt: null,
       outcome: null,
       successorId: null,
+      capturedJudgingSeconds: this.#judgingSeconds,
       ...s,
     };
     this.sessions.set(full.sessionId, full);
@@ -237,6 +308,8 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   }
 
   #record(call: string, args: Record<string, string>): void {
+    // The DISPATCH instant is the CALLER's clock — that is what §10's timing
+    // gates measure — while every decision below reads the database clock.
     this.calls.push({ call, atMs: this.#now(), args });
   }
 
@@ -311,15 +384,31 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
     return { ok: true, ...this.#open(subject) };
   }
 
-  #open(subject: FakeSubject): OpenBody {
+  /**
+   * Open one epoch.
+   *
+   * `afterMs` is the instant the grid is measured from: for a TURNOVER it is
+   * the closing epoch's own `window_closes_at`, so §2.2's "N+1 closes at the
+   * first grid instant after N's close" holds even when the turnover itself was
+   * late. For a FIRST epoch it is now, so §2.2's "its window can therefore be
+   * shorter than a full duration" holds.
+   *
+   * And when the computed instant has already passed — the late-turnover case
+   * §2.2 names explicitly — the grid is re-measured from now, so the successor
+   * gets the first FUTURE slot and the missed ones are skipped, never opened.
+   */
+  #open(subject: FakeSubject, afterMs?: number): OpenBody {
     const sessionId = `s${this.#nextSession++}`;
-    const closesAt = this.#now() + subject.epochDurationSeconds * 1000;
+    const from = afterMs ?? this.#dbNow();
+    let closesAt = this.#nextGridInstant(subject, from);
+    if (closesAt <= this.#dbNow()) closesAt = this.#nextGridInstant(subject, this.#dbNow());
     this.addSession({
       sessionId,
       subjectId: subject.subjectId,
       state: "collecting",
       windowClosesAt: closesAt,
       judgeMode: "off",
+      capturedJudgingSeconds: subject.judgingDurationSeconds,
     });
     this.#seq += 1;
     return {
@@ -363,7 +452,8 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
       // boundary in practice, but the guard is here so a stale timer cannot.
       return { ok: false, status: 409, error: "subject_not_active", transient: false };
     }
-    const opened = this.#open(subject);
+    // §2.2: measured from the CLOSED epoch's scheduled close, not from now.
+    const opened = this.#open(subject, closing.windowClosesAt);
     closing.successorId = opened.sessionId;
     return {
       ok: true,
@@ -412,7 +502,8 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
       return { ok: false, status: 409, error: "session_not_aggregated", transient: false };
     }
     s.state = "judging";
-    s.judgingDeadlineAt = this.#now() + this.#judgingSeconds * 1000;
+    // §4.4: the duration CAPTURED at turnover, never the subject's live value.
+    s.judgingDeadlineAt = this.#dbNow() + s.capturedJudgingSeconds * 1000;
     return {
       ok: true,
       sessionId,
@@ -426,7 +517,7 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   recordConsensus(sessionId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    s.consensusAt = this.#now();
+    s.consensusAt = this.#dbNow();
     if (s.state === "judging") s.state = "judged";
     this.#seq += 1;
   }
@@ -448,9 +539,13 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
     const deadline = s.judgingDeadlineAt;
     if (deadline == null) return { ok: false, status: 409, error: "judging_not_requested", transient: false };
     const eligible = s.consensusAt != null && s.consensusAt <= deadline;
-    if (!eligible && this.#now() < deadline) {
+    if (!eligible && this.#dbNow() < deadline) {
       // §4.4's time guard: a reasoned no-op, never a retryable error.
-      return { ok: false, status: 409, error: "deadline_not_reached", transient: false };
+      // The REAL code, verbatim from backend/src/swarm/domain.ts's
+      // finalizeEpoch. It was spelled `deadline_not_reached` here at first, and
+      // the clock branches on the exact string — so the fake silently exercised
+      // a path the real API can never reach and the re-arm was never tested.
+      return { ok: false, status: 409, error: "judging_deadline_not_reached", transient: false };
     }
     s.state = "published";
     s.outcome = eligible ? "judged" : "no_consensus";
