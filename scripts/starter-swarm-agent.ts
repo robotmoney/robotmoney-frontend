@@ -399,16 +399,27 @@ async function ensureE2eOpenSession(backendUrl: string, automationToken: string)
 
   const date = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
   const subject = { id: "starter-agent", name: "Starter Agent Exercise" };
+  // The subject through the admin subject route, which publishes
+  // `subject.changed` (scheduler spec §6.2); the dispatcher's `subject`,
+  // `open` and `brief` actions that used to do this are gone (issue #1026).
+  // 409 is "already there", which is all this needs.
+  const created = await fetch(`${backendUrl}${ROUTES.swarm.admin.subjects}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Automation-Token": automationToken },
+    body: JSON.stringify({ ...subject, recommendationType: "position_actions" }),
+  });
+  if (created.status !== 201 && created.status !== 409) {
+    throw new Error(`starter e2e subject create failed with HTTP ${created.status}: ${await created.text()}`);
+  }
   await adminJson(backendUrl, automationToken, "subject_fixtures", { ...subject, date });
-  const scheduled = await adminJson<{ id?: string | number }>(backendUrl, automationToken, "open", {
-    date,
-    subjectId: subject.id,
+  // §4.1: one call creates the session, publishes its brief and sets its
+  // window on the subject's grid.
+  const opened = await restJson<{ sessionId?: string }>(backendUrl, ROUTES.swarm.admin.epochOpen, "starter e2e epoch open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Automation-Token": automationToken },
+    body: JSON.stringify({ subjectId: subject.id }),
   });
-  if (scheduled.id === undefined) throw new Error("starter e2e open returned no session id");
-  await adminJson(backendUrl, automationToken, "brief", {
-    sessionId: String(scheduled.id),
-    windowMinutes: 60,
-  });
+  if (!opened.sessionId) throw new Error("starter e2e epochs/open returned no session id");
 }
 
 async function main(): Promise<void> {

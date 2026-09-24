@@ -126,10 +126,14 @@ describe(`nothing in the repo sends swarm email (/${PATTERN}/i)`, () => {
     // D50 leaves the applicant one channel, their status page, and the
     // waitlist one path, an operator inviting by hand. Copy that still says
     // "we email you" sends applicants to an inbox that stays empty. The scope
-    // is what an applicant or their agent reads: the public site and the
-    // onboarding skill it serves. The dated changelog is history, as above.
+    // is what an applicant or their agent reads: the public site, the
+    // onboarding skill it serves, and the API's own route responses — the
+    // agent following that skill reads a refusal like `apply`'s 400 over REST,
+    // so an error string is onboarding copy too. The dated changelog is
+    // history, as above.
     const copy = Bun.spawnSync(
-      ["git", "grep", "-niIE", EMAIL_PROMISE, "--", "frontend/public", ":!frontend/public/views/changelog.html"],
+      ["git", "grep", "-niIE", EMAIL_PROMISE, "--", "frontend/public", "backend/src/api/routes",
+        ":!frontend/public/views/changelog.html"],
       { cwd: REPO },
     );
     // Exit 1 with no output is "searched and found nothing"; a broken pathspec
@@ -144,6 +148,13 @@ describe(`nothing in the repo sends swarm email (/${PATTERN}/i)`, () => {
       { cwd: REPO },
     );
     expect(skill.exitCode).toBe(0);
+    // And that it reaches the route that carried the last promise (apply's
+    // contact-email refusal), rather than assuming the pathspec covers it.
+    const route = Bun.spawnSync(
+      ["git", "ls-files", "--error-unmatch", join("backend", "src", "api", "routes", "swarm.ts")],
+      { cwd: REPO },
+    );
+    expect(route.exitCode).toBe(0);
   });
 
   test("red control: the copy pattern catches each promise it replaced", () => {

@@ -518,6 +518,43 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
 }
 
 /**
+ * Make sure a subject exists, through the ADMIN SUBJECT ROUTE — the one path
+ * that creates a subject and publishes its `subject.changed` in the same
+ * transaction (scheduler spec §2.3, §6.2), so the scheduler hears of it and
+ * opens its first epoch.
+ *
+ * It replaces the dispatcher's `subject` action, which upserted an active row
+ * with no event and is gone (410). Idempotent the way that action was: an
+ * existing subject is left exactly as it is (409 `subject id already exists`
+ * is the "already there" answer, not a failure), so a driver restarted against
+ * a persistent stack never rewrites a subject it did not create. Any other
+ * refusal throws — a subject that could not be created is not a subject the
+ * session below can open an epoch for.
+ *
+ * `recommendationType` defaults to `bucket_weights`, which is what the removed
+ * action seeded, so every caller's subject asks for the same thing it did.
+ */
+export async function ensureSubjectViaAdmin(
+  subject: SessionSubject,
+  automationToken?: string,
+  opts: { recommendationType?: string } = {},
+): Promise<{ created: boolean }> {
+  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.subjects}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
+    body: JSON.stringify({
+      id: subject.id,
+      name: subject.name,
+      recommendationType: opts.recommendationType ?? "bucket_weights",
+    }),
+  });
+  if (r.status === 201) return { created: true };
+  const body = await responseJson<{ error?: string }>(r);
+  if (r.status === 409 && body?.error === "subject id already exists") return { created: false };
+  throw new Error(`POST ${ROUTES.swarm.admin.subjects} {id:${subject.id}} -> ${r.status}: ${JSON.stringify(body)}`);
+}
+
+/**
  * Set a subject's `epoch_duration_seconds` through the admin API — §2.3's only
  * supported route, and §8's stated way to make a test's lifecycle fast.
  *
@@ -1419,8 +1456,11 @@ export async function runSession(
   // date, while the fixtures are filed under the session's date and therefore
   // cannot run until the session exists. Ordering them the other way round is
   // what made a clean database fail its first two sessions with a foreign-key
-  // violation while the boot still reported READY.
-  await admin("subject", subject, rail.automationToken);
+  // violation while the boot still reported READY. Created through the admin
+  // subject route, which publishes `subject.changed` (§6.2) — the retired
+  // `subject` dispatcher action wrote an active subject the scheduler never
+  // heard of.
+  await ensureSubjectViaAdmin(subject, rail.automationToken);
   // THE WINDOW LENGTH IS A COLUMN ON THE SUBJECT NOW (§2.2, §2.3), set through
   // the admin API before the epoch that will use it is opened. It used to be a
   // `windowMinutes` argument on every `publish_brief`, which meant two sessions
@@ -1736,7 +1776,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await admin("subject", subjects[0], rail.automationToken);
+  await ensureSubjectViaAdmin(subjects[0], rail.automationToken);
 
   // Session 1: today's subject
   await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
@@ -1797,12 +1837,15 @@ async function main() {
   const regimeGateOpen = regimeWriteRes.status !== 403;
   console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).
-  const adminCloseRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.close}`, {
+  // 5d. Known member token calling a lifecycle transition (same insecure-mode
+  // caveat). The epoch turnover, not the retired `close` action: it is the
+  // route that actually closes a window now (§4.3), so it is the one whose
+  // gate is worth observing.
+  const adminCloseRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.epochTurnover}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
-    body: JSON.stringify({ sessionId: -1 }),
+    body: JSON.stringify({ subjectId: "cross-role-probe", expectedSessionId: "00000000-0000-4000-8000-000000000000" }),
   });
-  console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → epoch turnover → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // NO JUDGE COVERAGE HERE (issue #1026, D48/D53). This used to grant `themis`
   // the judge role and flip `swarm_judge_config.mode` to `enforce` around
