@@ -200,15 +200,16 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
   expect(reserved!.filled).toBeLessThan(reserved!.viewport);
 });
 
-test("the skills hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
+test("the deposit hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
-  await navigate(page, "/skills");
+  // /deposit since RM-129; this was /skills, now the index of every skill.
+  await navigate(page, "/deposit");
 
   // The install command is the call to action on this page, so it belongs in
   // the hero beside the headline rather than in a block further down.
   const hero = page.locator(".sk__head");
-  await expect(hero.locator(".sk__title")).toContainText("Agent");
+  await expect(hero.locator(".sk__title")).toContainText("Deposit");
   await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
   await expect(hero.locator(".sk__cta")).toBeVisible();
 
@@ -251,12 +252,19 @@ const EXTRA_HERO_ROUTES = [
   "/projects",
 ];
 
+// The hero bands components.css pins to one offset. Since RM-124 the nav also
+// reaches pages that open without one (a vault, a subject, the docs), and the
+// invariant is about the bands, so those are passed over rather than listed.
+const HERO_BANDS = ".a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head";
+
 async function heroRoutes(page: Page): Promise<string[]> {
   const nav = await page.locator(".nav a[href^='/']").evaluateAll((els) =>
     els.map((el) => el.getAttribute("href") as string));
   // "/" is the home page: a full-bleed landing hero, not one of the nav pages
-  // this invariant is about.
-  const routes = [...new Set([...nav, ...EXTRA_HERO_ROUTES])].filter((h) => h !== "/");
+  // this invariant is about. A link to a section of a page (/swarm#members) is
+  // that page again, and llms.txt is a file.
+  const routes = [...new Set([...nav, ...EXTRA_HERO_ROUTES])]
+    .filter((h) => h !== "/" && !h.includes("#") && !/\.[a-z]+$/.test(h));
   // A derived list that silently derives to nothing would pass this test
   // without asserting anything.
   expect(routes.length).toBeGreaterThanOrEqual(7);
@@ -270,7 +278,9 @@ test("every hero headline shares one size, one typeface and one offset", async (
   const seen: Record<string, { size: string; family: string; transform: string; top: number }> = {};
   for (const route of HERO_ROUTES) {
     await navigate(page, route);
-    const h1 = page.locator("#view h1").first();
+    const band = page.locator(`#view :is(${HERO_BANDS})`).first();
+    if (!(await band.count())) continue;
+    const h1 = band.locator("h1").first();
     await expect(h1).toBeVisible();
     seen[route] = await h1.evaluate((el) => {
       const c = getComputedStyle(el);
@@ -283,8 +293,11 @@ test("every hero headline shares one size, one typeface and one offset", async (
     });
   }
 
-  const first = seen[HERO_ROUTES[0]];
-  for (const route of HERO_ROUTES) {
+  const checked = Object.keys(seen);
+  // The pages that carried the nav before RM-124 all open with a band.
+  expect(checked.length).toBeGreaterThanOrEqual(7);
+  const first = seen[checked[0]];
+  for (const route of checked) {
     expect(seen[route].size, `${route} font-size`).toBe(first.size);
     expect(seen[route].family, `${route} font-family`).toBe(first.family);
     expect(seen[route].transform, `${route} text-transform`).toBe(first.transform);
@@ -335,7 +348,8 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
     return chart.id;
   });
 
-  await page.getByRole("link", { name: "Home", exact: true }).first().click();
+  // The logo is the way home: the nav has no Home link (RM-124).
+  await page.locator(".nav__logo").click();
   await expect(page.locator(".a2-chart canvas")).toHaveCount(0);
   await expect.poll(() =>
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
@@ -347,7 +361,7 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const handle = await p5Canvas.elementHandle();
   if (!handle) throw new Error("p5 canvas was not created");
 
-  await page.getByRole("link", { name: "Home", exact: true }).first().click();
+  await page.locator(".nav__logo").click();
   await expect.poll(() => handle.evaluate((canvas) => canvas.isConnected)).toBe(false);
 
   await expectNoBrowserErrors(errors);
@@ -364,6 +378,7 @@ const NOINDEX_STUB_ROUTES = [
   { path: "/flow-field", title: "Flow Field (in progress) — Robot Money" },
   { path: "/regime_2panel", title: "Regime Classifier, 2-panel reference — Robot Money" },
   { path: "/tech-proposal-march-16", title: "Technical Proposal, March 16 (archived) — Robot Money" },
+  { path: "/visualizations", title: "Robot Money Visualizations — Live Vault Data" },
 ];
 
 for (const { path, title } of NOINDEX_STUB_ROUTES) {

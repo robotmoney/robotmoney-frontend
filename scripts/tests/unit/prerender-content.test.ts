@@ -52,7 +52,9 @@ const readableChars = (html: string) => readableText(html).length;
 
 // Nav, footer and the legal fine print, measured on a shell with an empty
 // mount. Any route at or under this is serving furniture and no content.
-const BOILERPLATE_CHARS = 800;
+// 1,440: the shell read 1,438 once the site nav and the footer's site index
+// landed (RM-124); it was 857 before, already past the 800 this used to say.
+const BOILERPLATE_CHARS = 1440;
 
 describe("prerendered routes carry their own content", () => {
   test("the prerender ran clean", () => {

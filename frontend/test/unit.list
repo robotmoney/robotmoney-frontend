@@ -23,6 +23,7 @@ scripts/tests/unit/member-mark-distinctness.test.ts
 scripts/tests/unit/prerender-content.test.ts
 scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts
+scripts/tests/unit/site-nav.test.ts
 scripts/tests/unit/sparkline.test.ts
 scripts/tests/unit/swarm-apply-form-and-status.test.ts
 scripts/tests/unit/swarm-history-search.test.ts
