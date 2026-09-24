@@ -35,6 +35,7 @@ import {
   createStack,
   DEFAULT_STACK_DATABASE,
   describePortHolders,
+  dockerClientHostEnv,
   generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -54,6 +55,7 @@ import {
 import { gitRunner, resolveSourceIdentities } from "../stack/source-identity.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "./smoke-failure.ts";
+import { POSTGRES_IMAGE } from "./postgres-image.ts";
 import {
   acquireDeploymentLock,
   instanceFlag,
@@ -930,44 +932,45 @@ const LEDGER_SQL = "SELECT name FROM schema_migrations ORDER BY name";
 const MANIFEST_SQL = "SELECT content_hash FROM schema_manifest";
 /**
  * The migration ledger and manifest hash, or `null` when the database cannot be
- * asked right now (its container is not running yet). Through `psql` in this
- * instance's postgres (or the restored dump's) container, else through the
- * running api container, which is how a remote target is reached.
+ * asked right now (its container is not running yet, or a remote server does
+ * not answer). Always a `psql` SUBPROCESS, never a client in this process: in
+ * this instance's postgres (or the restored dump's) container, and for a
+ * remote target in a throwaway container of the stack's own Postgres image,
+ * with the password handed through the environment (`-e PGPASSWORD` names the
+ * variable, never its value, so it is in no argv and no container config).
  */
 function observeSchema(): { ledger: string[]; manifestHash: string | null } | null {
-  const psql = (container: string, user: string, db: string, sql: string) =>
-    Bun.spawnSync(["docker", "exec", container, "psql", "-U", user, "-d", db, "-tAq", "-c", sql], { stdout: "pipe", stderr: "pipe" });
-  const viaPsql = (container: string, user: string, db: string) => {
-    const ledger = psql(container, user, db, LEDGER_SQL);
+  const run = (argv: string[], env?: Record<string, string>) =>
+    Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe", ...(env ? { env: { ...dockerClientHostEnv(process.env), ...env } } : {}) });
+  const read = (query: (sql: string) => ReturnType<typeof run>) => {
+    const ledger = query(LEDGER_SQL);
     if (ledger.exitCode !== 0 && !/does not exist/.test(ledger.stderr.toString())) return null;
-    const manifest = psql(container, user, db, MANIFEST_SQL);
+    const manifest = query(MANIFEST_SQL);
     return {
       ledger: ledger.exitCode === 0 ? ledger.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean) : [],
       manifestHash: manifest.exitCode === 0 ? manifest.stdout.toString().trim() || null : null,
     };
   };
+  const inContainer = (container: string, user: string, db: string) =>
+    read((sql) => run(["docker", "exec", container, "psql", "-U", user, "-d", db, "-tAq", "-c", sql]));
   if (composePostgres) {
     const pg = serviceContainer("postgres");
-    return pg ? viaPsql(pg, DB_USER, DB_NAME) : null;
+    return pg ? inContainer(pg, DB_USER, DB_NAME) : null;
   }
-  if (dataPath.kind === "smoke-twin" && dataPath.url) {
+  if (dataPath.kind === "smoke-twin") {
+    if (!dataPath.url) return null;
     const url = new URL(dataPath.url);
-    return viaPsql(dataPath.container, decodeURIComponent(url.username), decodeURIComponent(url.pathname.slice(1)));
+    return inContainer(dataPath.container, decodeURIComponent(url.username), decodeURIComponent(url.pathname.slice(1)));
   }
-  const api = serviceContainer("api");
-  if (!api) return null;
-  const script =
-    'import postgres from "postgres"; const sql = postgres(process.env.DATABASE_URL, { max: 1 }); ' +
-    `let ledger = []; try { ledger = (await sql.unsafe(${JSON.stringify(LEDGER_SQL)})).map((r) => r.name); } catch (e) { if (e.code !== "42P01") throw e; } ` +
-    `let manifestHash = null; try { manifestHash = (await sql.unsafe(${JSON.stringify(MANIFEST_SQL)}))[0]?.content_hash ?? null; } catch {} ` +
-    "console.log(JSON.stringify({ ledger, manifestHash })); await sql.end();";
-  const r = Bun.spawnSync(["docker", "exec", api, "bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
-  if (r.exitCode !== 0) return null;
-  try {
-    return JSON.parse(r.stdout.toString().trim().split("\n").at(-1) ?? "") as { ledger: string[]; manifestHash: string | null };
-  } catch {
-    return null;
-  }
+  if (dataPath.kind !== "external") return null;
+  const url = new URL(dataPath.url);
+  return read((sql) =>
+    run(
+      ["docker", "run", "--rm", "-e", "PGPASSWORD", POSTGRES_IMAGE, "psql",
+        "-h", url.hostname, "-p", url.port || "5432", "-U", decodeURIComponent(url.username), "-d", decodeURIComponent(url.pathname.slice(1)),
+        "-tAq", "-c", sql],
+      { PGPASSWORD: decodeURIComponent(url.password) },
+    ));
 }
 
 // --- Orchestration --------------------------------------------------------
