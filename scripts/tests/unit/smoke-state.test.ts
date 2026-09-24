@@ -758,6 +758,24 @@ describe("two instances on one host: each command acts only on the named one (cr
     expect(alpha.out).toContain("volume=rm_local_alpha_pgdata_volume: could not ask Docker");
   }, 60_000);
 
+  test("smoke:reap --instance aims at the named instance's recorded project; without it, every instance's project is protected", () => {
+    const root = freshRoot();
+    writeStackState(instancePaths(root, "rm_local_alpha", { create: true }), stackRecord("rm_local_alpha", { project: "rm_smoke_stack_aaaaaaaaaa" }));
+    writeStackState(instancePaths(root, "rm_local_bravo", { create: true }), stackRecord("rm_local_bravo", { project: "rm_smoke_stack_bbbbbbbbbb" }));
+    const aimed = run(root, "smoke-reap.ts", ["--dry-run", "--instance", "rm_local_alpha"]);
+    expect(aimed.out).toContain("--instance rm_local_alpha: sweeping only project=rm_smoke_stack_aaaaaaaaaa");
+    expect(aimed.out).not.toContain("rm_smoke_stack_bbbbbbbbbb");
+    // G1 across the host: both instances' stacks are protected by default.
+    const broad = run(root, "smoke-reap.ts", ["--dry-run"]);
+    expect(broad.out).toContain("G1 protects project=rm_smoke_stack_aaaaaaaaaa");
+    expect(broad.out).toContain("G1 protects project=rm_smoke_stack_bbbbbbbbbb");
+    // Red control: an instance with no stack record names no project to sweep.
+    instancePaths(root, "rm_local_charlie", { create: true });
+    const none = run(root, "smoke-reap.ts", ["--dry-run", "--instance", "rm_local_charlie"]);
+    expect(none.code).toBe(2);
+    expect(none.out).toContain("instance rm_local_charlie has no stack record");
+  }, 60_000);
+
   test("journal resume decides on the named instance's journal only; the other's is untouched", async () => {
     const root = freshRoot();
     const a = await instanceWithOpenJournal(root, "rm_local_alpha");
