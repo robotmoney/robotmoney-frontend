@@ -18,7 +18,7 @@
 # selector wrong means killing the live site.
 #
 # The two RM_STACK_* values are set by scripts/stack/config.ts's buildComposeEnv
-# and reproduced from .agents/smoke-state.json by smoke:down / smoke:status.
+# and reproduced from the instance's stack-state.json by smoke:down / smoke:status.
 
 # THE SHARED WORKER-LANE OVERLAY, AS A TOP-LEVEL EXTENSION FIELD.
 #

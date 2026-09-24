@@ -12,7 +12,7 @@
 // It exercises the REAL deploy path, not a stand-in:
 //   1. `scripts/static-assembly.sh` — the same script scripts/stack/stack.ts
 //      runs before `docker compose up`, producing what docker-compose.yml
-//      bind-mounts into the website-server container at /srv/frontend.
+//      serves from /srv/web/current (the instance's current site).
 //   2. `website-server/Dockerfile` — the real website-server image, built from
 //      this repo's tree and run as a real container with `_static/` bind-
 //      mounted read-only, answering over real HTTP. No Bun process anywhere in
@@ -112,7 +112,10 @@ describe("prerendered STATIC_DIR served by the website-server image (no Bun in t
     const run = execFileSync("docker", [
       "run", "-d", "--rm",
       "-p", "127.0.0.1::8080",
-      "-v", `${staticDir}:/srv/frontend:ro`,
+      // nginx serves the instance's current site (website-server/nginx.conf `root
+      // /srv/web/current`; docker-compose.yml mounts the instance's web/ dir at
+      // /srv/web). Mounting the assembly straight at that root is the same tree.
+      "-v", `${staticDir}:/srv/web/current:ro`,
       IMAGE_TAG,
     ]);
     containerId = run.toString().trim();

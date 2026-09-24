@@ -48,10 +48,29 @@ import {
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
 import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
+import { placeSite, WEB_DIR_NAME } from "../lib/smoke-site.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
+
+/**
+ * The steps up() takes, in order, as {@link StackUpOptions.beforeStep} names
+ * them. Not a {@link StackPhase}: the event sequence is pinned by
+ * scripts/tests/unit/stack-lifecycle-order.test.ts, and these are boundaries a
+ * caller may act at, not narration.
+ */
+export type StackStep =
+  | "assemble"
+  | "site"
+  | "build"
+  | "postgres"
+  | "preflight"
+  | "migrate"
+  | "services"
+  | "health"
+  | "initialize"
+  | "deferred";
 
 export type StackEvent =
   | { phase: StackPhase; status: "start" | "done"; detail?: string }
@@ -106,6 +125,15 @@ export interface StackUpOptions {
    * durable input. They are started with Compose's health barrier so a caller
    * cannot consume a process still busy with boot-time catch-up. */
   deferredServices?: string[];
+  /**
+   * Awaited before each step up() takes (only the steps this call will take:
+   * no `migrate` when migrate is off, no `preflight` or `initialize` without
+   * their callbacks). The seam a deployment journal (smoke spec §1.3) hangs
+   * its phase boundaries on: `bun smoke` journals a phase and honours a
+   * Ctrl-C here, between steps, never inside one. A throw aborts the bring-up
+   * at that boundary with nothing of the next step begun.
+   */
+  beforeStep?: (step: StackStep) => Promise<void>;
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
 }
@@ -497,10 +525,28 @@ export function createStack(
     // Both the static manifest (T26) and any build below report the identity of
     // THIS tree, and they must not be able to disagree about it.
     resolveIdentityOnce();
+    const boundary = async (step: StackStep): Promise<void> => {
+      if (upOpts.beforeStep) await upOpts.beforeStep(step);
+    };
+    await boundary("assemble");
     await assembleStaticDir();
+    if (cfg.instance) {
+      // The assembled site becomes the instance's current one (website-server
+      // serves `web/current`; scripts/lib/smoke-site.ts). Every consumer of this
+      // module gets it, so an eval's website-server serves the same bytes a
+      // smoke's does. Idempotent: an unchanged site is neither copied nor swapped.
+      await boundary("site");
+      const site = placeSite(join(cfg.instance.stateDir, WEB_DIR_NAME), join(cfg.repoRoot, "_static"));
+      emit({
+        phase: "log",
+        message: `site ${site.siteId}: ${site.copied ? "placed" : "already placed"}${site.swapped ? `, now current (was ${site.previous ?? "none"})` : ", already current"}`,
+      });
+    }
+    await boundary("build");
     if (shippedImages) assertShippedImagesPresent();
     else await build();
 
+    await boundary("postgres");
     emit({ phase: "postgres", status: "start" });
     if (externalPostgres) {
       // Nothing to start and nothing to poll: the server is somebody else's,
@@ -516,9 +562,13 @@ export function createStack(
 
     // Refuse before the first write, not after it. migrate() is that first
     // write — it does not only migrate, it seeds.
-    if (upOpts.preflight) await upOpts.preflight();
+    if (upOpts.preflight) {
+      await boundary("preflight");
+      await upOpts.preflight();
+    }
 
     if (upOpts.migrate ?? true) {
+      await boundary("migrate");
       try {
         await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
       } finally {
@@ -541,6 +591,7 @@ export function createStack(
       throw new Error(`deferred services are not in the ${cfg.profile} profile: ${unknownDeferred.join(", ")}`);
     }
     const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
+    await boundary("services");
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
     await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
@@ -557,6 +608,7 @@ export function createStack(
       detail: `api=:${ports.apiPort} web=:${ports.webPort} pg=${ports.pgPort === null ? "external" : `:${ports.pgPort}`}`,
     });
 
+    await boundary("health");
     emit({ phase: "health", status: "start" });
     // api's own /health directly first: a database-connectivity problem is a
     // more specific diagnostic there than the same check proxied through
@@ -575,6 +627,7 @@ export function createStack(
     // API that was up but not yet listening. Readiness is a precondition of
     // initialization, so it is sequenced as one.
     if (upOpts.initialize) {
+      await boundary("initialize");
       emit({ phase: "initialize", status: "start" });
       await upOpts.initialize();
       emit({ phase: "initialize", status: "done" });
@@ -582,6 +635,7 @@ export function createStack(
 
     if (requestedDeferred.size > 0) {
       const deferred = [...requestedDeferred];
+      await boundary("deferred");
       emit({ phase: "services", status: "start", detail: deferred.join(", ") });
       await composeAsync(
         upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),

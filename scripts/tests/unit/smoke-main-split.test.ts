@@ -11,15 +11,13 @@
 // This suite is therefore written as FUNCTIONS OVER SOURCE TEXT, across
 // smoke-main.ts and the two modules it now delegates to.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const libDir = join(repoRoot, "scripts", "lib");
 
 const smokeMain = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
-const tuiView = readFileSync(join(repoRoot, "scripts", "lib", "smoke-tui-view.ts"), "utf8");
-const readinessPolling = readFileSync(join(repoRoot, "scripts", "lib", "smoke-readiness-polling.ts"), "utf8");
 
 // The pre-#456 baseline, verified via `git log`/the issue body: 2087 lines,
 // 45 top-level functions.
@@ -71,41 +69,37 @@ describe("scripts/lib/smoke-main.ts is measurably smaller after the #456 split",
     expect(PRE_FIX_FUNCTIONS - count).toBeGreaterThan(10);
   });
 
-  test("the two extracted modules stay extracted, and smoke-main.ts imports NEITHER (spec §1: no TUI)", () => {
-    // Flipped by issue #1026. Both modules exist only to paint and feed the
-    // TUI panes; `bun smoke` draws no TUI, so the boot imports neither. The
-    // transitive proof is scripts/tests/unit/smoke-tui.test.ts's import walk.
-    expect(smokeMain).not.toContain('from "./smoke-tui-view.ts"');
-    expect(smokeMain).not.toContain('from "./smoke-readiness-polling.ts"');
+  // Issue #1026 retired both modules #456 extracted. They painted and fed the
+  // TUI panes (the state machine in smoke-tui-view.ts, the readiness probes in
+  // smoke-readiness-polling.ts, the container telemetry in smoke-telemetry.ts),
+  // and `bun smoke` draws no TUI (spec §1): it prints, journals and exits. A
+  // running stack is observed with `smoke:status` / `smoke:tui`, which read the
+  // journal and receipt. What must hold now is that they stay retired — not
+  // re-inlined into smoke-main.ts, and not quietly resurrected beside it.
+  test("the TUI pane modules are retired, and smoke-main.ts imports no TUI module (spec §1)", () => {
+    for (const retired of ["smoke-tui-view.ts", "smoke-readiness-polling.ts", "smoke-telemetry.ts"]) {
+      expect({ retired, exists: existsSync(join(libDir, retired)) }).toEqual({ retired, exists: false });
+      expect(smokeMain).not.toContain(`from "./${retired}"`);
+    }
     expect(smokeMain).not.toContain('from "./tui.ts"');
-    // Both files are real, non-trivial modules, not empty stubs.
-    expect(tuiView.split("\n").length).toBeGreaterThan(50);
-    expect(readinessPolling.split("\n").length).toBeGreaterThan(50);
   });
 
-  test("the TUI state machine moved to smoke-tui-view.ts, not merely duplicated", () => {
+  test("the TUI state machine did not move back into smoke-main.ts", () => {
     for (const fn of ["setContainer", "setStep", "startOnboarding", "setOnboardStep", "swarmProgress", "phaseGlyph", "columns"]) {
-      expect(tuiView).toMatch(new RegExp(`export function ${fn}\\(|export const ${fn}\\b`));
-      // smoke-main.ts must call these, not redeclare them.
-      expect(smokeMain).not.toMatch(new RegExp(`^function ${fn}\\(`, "m"));
+      expect(smokeMain).not.toMatch(new RegExp(`^(export )?function ${fn}\\(`, "m"));
     }
   });
 
-  test("the readiness-probe polling moved to smoke-readiness-polling.ts, not merely duplicated", () => {
-    // pollResearch/pollNextRuns/pollContainerHealth are declared INSIDE the
-    // createReadinessPolling() factory (private instance state, not
-    // module-level) — matched without an `export`/indentation anchor;
-    // classifyContainer is a standalone exported pure helper.
-    for (const fn of ["pollResearch", "pollNextRuns", "pollContainerHealth"]) {
-      expect(readinessPolling).toMatch(new RegExp(`(async )?function ${fn}\\(`));
+  test("the readiness-probe polling did not move back into smoke-main.ts", () => {
+    for (const fn of ["pollResearch", "pollNextRuns", "pollContainerHealth", "classifyContainer", "createReadinessPolling"]) {
       expect(smokeMain).not.toMatch(new RegExp(`^(async )?function ${fn}\\(`, "m"));
+      expect(smokeMain).not.toContain(`${fn}(`);
     }
-    expect(readinessPolling).toContain("export function classifyContainer(");
-    expect(readinessPolling).toContain("export function createReadinessPolling(");
-    expect(smokeMain).not.toMatch(/^function classifyContainer\(/m);
-    expect(smokeMain).not.toMatch(/^function createReadinessPolling\(/m);
-    // The polls fed TUI panes only, so the boot no longer starts them.
-    expect(smokeMain).not.toContain("createReadinessPolling(");
+  });
+
+  test("red control: a re-inlined pane function is caught", () => {
+    const planted = `${smokeMain}\nfunction setStep(s: string): void {}\n`;
+    expect(/^(export )?function setStep\(/m.test(planted)).toBe(true);
   });
 });
 

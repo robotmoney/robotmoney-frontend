@@ -13,11 +13,11 @@
 // `bun smoke:status` and `bun smoke:tui` observe a running stack from another
 // terminal; **`bun smoke` never draws a TUI**."
 //
-// Today it is the other way round: `scripts/lib/smoke-main.ts` draws the TUI
-// itself and stays in the foreground, so the invoking terminal is the thing
-// holding the deployment up. That couples two entirely unrelated lifetimes —
+// It used to be the other way round: `scripts/lib/smoke-main.ts` drew the TUI
+// itself and stayed in the foreground, so the invoking terminal was the thing
+// holding the deployment up. That coupled two entirely unrelated lifetimes —
 // the operator's SSH session and the production cluster's — and the coupling
-// fails in both directions:
+// failed in both directions:
 //
 //  - The session ends (a laptop sleeps, a VPN drops, a `tmux` is killed) and
 //    the deployment goes with it, or is left in whatever half-replaced state
@@ -71,7 +71,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { listInstances, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
+import { instanceStackProject, listInstances, readStackState, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
 import { readJournal, readReceipt, type DeploymentPlan } from "./lib/smoke-journal.ts";
 
 /** Flags §1 retires "with no alias"; naming one in a refusal is the point. */
@@ -257,23 +257,28 @@ interface SeenContainer {
   readonly image: string;
 }
 
-/** `docker ps` only: nothing here starts, stops, removes or recreates anything. */
-async function seeContainers(instance: string): Promise<{ containers: SeenContainer[]; note: string | null }> {
+/** Run a read-only docker query; `null` when the daemon cannot answer it. */
+async function dockerRead(argv: string[]): Promise<string | null> {
+  const child = Bun.spawn(["docker", ...argv], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return code === 0 ? stdout : null;
+}
+
+/**
+ * `docker ps` and `docker inspect` only: nothing here starts, stops, removes or
+ * recreates anything. The containers are the instance's compose PROJECT, which
+ * `bun smoke` records in the instance's stack record (the project is not the
+ * instance name). `image` is the image DIGEST the container runs, so a service
+ * can be compared with the digest the journal or receipt recorded.
+ */
+async function seeContainers(project: string): Promise<{ containers: SeenContainer[]; note: string | null }> {
   try {
-    const child = Bun.spawn(
-      [
-        "docker",
-        "ps",
-        "-a",
-        "--filter",
-        `label=com.docker.compose.project=${instance}`,
-        "--format",
-        "{{.Names}}\t{{.State}}\t{{.Image}}",
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    if (code !== 0) return { containers: [], note: "docker is unreachable; container state is unknown." };
+    const ids = await dockerRead(["ps", "-aq", "--filter", `label=com.docker.compose.project=${project}`]);
+    if (ids === null) return { containers: [], note: "docker is unreachable; container state is unknown." };
+    const list = ids.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (list.length === 0) return { containers: [], note: null };
+    const stdout = await dockerRead(["inspect", "--format", "{{.Name}}\t{{.State.Status}}\t{{.Image}}", ...list]);
+    if (stdout === null) return { containers: [], note: "docker is unreachable; container state is unknown." };
     const containers = stdout
       .split("\n")
       .filter((line) => line.trim() !== "")
@@ -310,7 +315,22 @@ export async function observe(paths: InstancePaths): Promise<ObservedStack> {
     notes.push(`lock held by pid ${typeof holderPid === "number" ? holderPid : "unknown"}`);
   }
 
-  const { containers, note } = await seeContainers(instance);
+  let recorded: string | null = null;
+  try {
+    recorded = readStackState(paths)?.project ?? null;
+  } catch (error) {
+    notes.push(String(error instanceof Error ? error.message : error));
+  }
+  let project: string;
+  if (recorded !== null) {
+    project = recorded;
+  } else {
+    // No record is not "no containers": a boot killed before it wrote one may
+    // have started some, and the project is fixed by the instance name.
+    project = instanceStackProject(instance, process.env);
+    notes.push(`no stack record; derived project ${project}`);
+  }
+  const { containers, note } = await seeContainers(project);
   if (note !== null) notes.push(note);
 
   const match = (member: string): SeenContainer | undefined => containers.find((c) => c.name.includes(member));

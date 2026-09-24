@@ -508,12 +508,14 @@ jobs:
       # spawned member-agent eval containers that the compose model does not
       # declare; `-v` reclaims this project's volumes in the same pass.
       #
-      # WEB_PORT / POSTGRES_PORT are placeholders purely to satisfy compose
-      # INTERPOLATION: docker-compose.yml's port lines are `${VAR:?…}` and refuse
-      # to resolve without a value (c0d34f4). `down` publishes nothing, so the
-      # numbers only have to exist — same trick scripts/smoke-down.ts uses. The
-      # `|| true` is deliberate: a compose-down failure must not skip the
-      # smoke-clean verdict below, which is the step's actual gate.
+      # RM_INSTANCE / RM_INSTANCE_STATE_DIR are placeholders purely to satisfy
+      # compose INTERPOLATION: docker-compose.yml spells both `${VAR:?…}` (the
+      # instance's state directory has no checkout fallback, spec §1.1) and
+      # refuses to parse without them. `down` mounts nothing, so the values only
+      # have to exist; `-p "$SMOKE_PROJECT"` is what selects this run's stack.
+      # (WEB_PORT / POSTGRES_PORT are the same trick, kept for older compose
+      # files.) The `|| echo` is deliberate: a compose-down failure must not
+      # skip the smoke-clean verdict below, which is the step's actual gate.
       # ── The admission RECORD (issue #373) ─────────────────────────────────
       # Reporting on the admission that ALREADY ran — no new harness, no
       # sampling loop, no second stack bring-up. scripts/lib/smoke-main.ts
@@ -564,6 +566,8 @@ jobs:
           SMOKE_PROJECT: ${{ steps.smoke-project.outputs.name }}
           WEB_PORT: "1"
           POSTGRES_PORT: "1"
+          RM_INSTANCE: teardown
+          RM_INSTANCE_STATE_DIR: /nonexistent-teardown-placeholder
       # Cross-run orphan reaper (the third gap behind run 30406428674): even a
       # perfect teardown above only ever cleans ITS OWN run, so a run whose
       # teardown was killed outright leaked forever. This host had accumulated

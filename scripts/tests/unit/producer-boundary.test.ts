@@ -1,13 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildComposeEnv, DEFAULT_COMPOSE_FILES, DEFAULT_STACK_DATABASE, type StackConfig } from "../../stack/config.ts";
-import {
-  provisionSmokeAnalyticsToken,
-  provisionSmokeAnalyticsTokenAfterPreflight,
-  removeSmokeAnalyticsToken,
-} from "../../lib/smoke-secret.ts";
+import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "../../lib/smoke-secret.ts";
+import { instancePaths } from "../../lib/smoke-state.ts";
 
 const repo = join(import.meta.dir, "../../..");
 
@@ -35,33 +32,52 @@ describe("issue #361 independent producer credential boundary", () => {
     expect(env.ANALYTICS_TOKEN_FILE_HOST).toBe("/run/private/token");
   });
 
-  test("smoke provisions the analytics token outside the repo and lifecycle teardown removes it", () => {
-    const project = "rm_smoke_stack_secret_test";
-    const token = "test-token-never-log";
-    const tokenFile = provisionSmokeAnalyticsToken(project, token);
-    expect(dirname(dirname(tokenFile))).toBe(resolve(tmpdir()));
-    expect(tokenFile.startsWith(repo)).toBe(false);
-    expect(readFileSync(tokenFile, "utf8")).toBe(`${token}\n`);
-    expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
-    expect(removeSmokeAnalyticsToken(join(repo, ".agents", "analytics-token"), project)).toBe(false);
-    expect(removeSmokeAnalyticsToken(tokenFile, "different-project")).toBe(false);
-    expect(removeSmokeAnalyticsToken(tokenFile, project)).toBe(true);
-    expect(existsSync(tokenFile)).toBe(false);
+  // Spec §3 (issue #1026, criterion 40): a service token is a file in the
+  // INSTANCE's state directory, per holder — not the checkout, and not an
+  // os.tmpdir() directory no instance owns (the previous location).
+  test("smoke provisions the analytics token in the instance's own token directory and teardown removes only it", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-producer-boundary-"));
+    try {
+      const paths = instancePaths(root, "rm_local_secret_test", { create: true });
+      const other = instancePaths(root, "rm_local_other", { create: true });
+      const token = "test-token-never-log";
+      const tokenFile = provisionSmokeAnalyticsToken(paths, token);
+      expect(tokenFile).toBe(paths.tokenFiles["analytics-producer"]);
+      expect(tokenFile.startsWith(repo)).toBe(false);
+      expect(readFileSync(tokenFile, "utf8")).toBe(`${token}\n`);
+      expect(statSync(tokenFile).mode & 0o777).toBe(0o600);
+      // Red controls: the checkout path, the retired tmpdir shape, and another
+      // instance's token file are all refused.
+      expect(removeSmokeAnalyticsToken(join(repo, ".agents", "analytics-token"), paths)).toBe(false);
+      expect(removeSmokeAnalyticsToken(join(tmpdir(), "robotmoney-smoke-p-secrets-abc", "analytics-token"), paths)).toBe(false);
+      expect(removeSmokeAnalyticsToken(tokenFile, other)).toBe(false);
+      expect(existsSync(tokenFile)).toBe(true);
+      expect(removeSmokeAnalyticsToken(tokenFile, paths)).toBe(true);
+      expect(existsSync(tokenFile)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
 
     const smoke = readFileSync(join(repo, "scripts/lib/smoke-main.ts"), "utf8");
     const down = readFileSync(join(repo, "scripts/smoke-down.ts"), "utf8");
-    expect(smoke).toContain("provisionSmokeAnalyticsTokenAfterPreflight(project, analyticsToken");
+    expect(smoke).toContain("provisionSmokeAnalyticsToken(paths, analyticsToken)");
     expect(smoke).not.toMatch(/join\(repoRoot,\s*["']\.agents["'][^\n]*analytics-token/);
-    expect(smoke).toContain("removeSmokeAnalyticsToken(analyticsTokenFile, project)");
-    expect(down).toContain("removeSmokeAnalyticsToken(s.analyticsTokenFile, s.project)");
+    expect(smoke).toContain("removeSmokeAnalyticsToken(analyticsTokenFile, paths)");
+    expect(down).toContain("removeSmokeAnalyticsToken(s.analyticsTokenFile, paths)");
   });
 
-  test("a failing model/pre-stack preflight creates no temporary bearer", () => {
-    const project = `rm_smoke_stack_preflight_${Date.now()}`;
-    expect(() => provisionSmokeAnalyticsTokenAfterPreflight(project, "never-written", () => {
-      throw new Error("model preflight failed");
-    })).toThrow("model preflight failed");
-    const tempEntries = Array.from(new Bun.Glob(`robotmoney-smoke-${project}-secrets-*`).scanSync(tmpdir()));
-    expect(tempEntries).toEqual([]);
+  test("a failing model/pre-stack preflight creates no bearer: the boot writes it only after the plan", () => {
+    // The inference preflight runs at module scope and exits on refusal; the
+    // bearer is written inside main(), by the `instance` preparation that
+    // follows the journaled plan phase (spec §1.2: nothing before the plan).
+    const smoke = readFileSync(join(repo, "scripts/lib/smoke-main.ts"), "utf8");
+    const preflight = smoke.indexOf("preflightInferenceOrExit(");
+    const main = smoke.indexOf("async function main(");
+    const planPhase = smoke.indexOf('await begin("plan"');
+    const provision = smoke.indexOf("provisionSmokeAnalyticsToken(paths, analyticsToken)");
+    expect(preflight).toBeGreaterThan(-1);
+    expect(main).toBeGreaterThan(preflight);
+    expect(planPhase).toBeGreaterThan(main);
+    expect(provision).toBeGreaterThan(planPhase);
   });
 });

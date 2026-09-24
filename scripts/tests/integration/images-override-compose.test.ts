@@ -35,7 +35,9 @@ function composeConfig(extraFiles: string[], args: string[]): { stdout: string; 
     ["docker", "compose", "-p", "rm_images_override_it", "--profile", "member-agent",
       "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml",
       ...extraFiles.flatMap((f) => ["-f", f]), ...args],
-    { cwd: repoRoot, env: { ...process.env, DATABASE_URL: "postgres://x:y@postgres:5432/z" }, stdout: "pipe", stderr: "pipe" },
+    // RM_INSTANCE / RM_INSTANCE_STATE_DIR: docker-compose.yml requires both (no checkout fallback,
+    // smoke spec §1.1); `config` mounts nothing, so any absolute path renders.
+    { cwd: repoRoot, env: { ...process.env, DATABASE_URL: "postgres://x:y@postgres:5432/z", RM_INSTANCE: "rm_local_images", RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_images" }, stdout: "pipe", stderr: "pipe" },
   );
   return { stdout: new TextDecoder().decode(r.stdout), exitCode: r.exitCode ?? -1 };
 }

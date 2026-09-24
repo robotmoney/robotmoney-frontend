@@ -24,8 +24,17 @@ import { join } from "node:path";
 import { resolveSmokeEnv } from "../../smoke.ts";
 import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
 import { scenarioPlan } from "../../lib/smoke-mode.ts";
+import { instancePaths } from "../../lib/smoke-state.ts";
+import { SERVICE_BUILD_CONTEXTS } from "../../stack/config.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
+
+// The instance a boot hands compose (smoke spec §1.1): a state directory under
+// the state root, never the checkout. `config` mounts nothing, so it need not
+// exist; it must be absolute, because the compose file has no fallback.
+const STATE_ROOT = join(tmpdir(), "rm-compose-config-state");
+const INSTANCE = "rm_local_composecfg";
+const INSTANCE_DIR = instancePaths(STATE_ROOT, INSTANCE).dir;
 
 interface ComposeConfig {
   services: Record<string, {
@@ -52,6 +61,8 @@ function baseEnv(): Record<string, string> {
     if (v === undefined) continue;
     if ([
       "BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED",
+      // The instance is set below for every render, never inherited.
+      "RM_INSTANCE", "RM_INSTANCE_STATE_DIR",
       "HTTP_FETCH_CACHE_TTL_MS", "TOKEN_PRICE_CACHE_TTL_MS",
       "ANALYTICS_TOKEN", "ANALYTICS_TOKEN_FILE_HOST", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME",
       // Cadence knobs (issue #371): only resolveSmokeEnv's stage path may set
@@ -76,6 +87,11 @@ function baseEnv(): Record<string, string> {
   // Values are arbitrary — this test never publishes anything.
   env.WEB_PORT = "18787";
   env.POSTGRES_PORT = "15432";
+  // REQUIRED as well, and with no default at all: the instance and its state
+  // directory, which the scheduler's token mount and website-server's site
+  // mount interpolate (criteria 40, 113).
+  env.RM_INSTANCE = INSTANCE;
+  env.RM_INSTANCE_STATE_DIR = INSTANCE_DIR;
   return env;
 }
 
@@ -760,6 +776,67 @@ describe("every long-running service reports its own health", () => {
     // supervises it as a standing process.
     expect(gated.services["member-agent"]?.restart).toBe("no");
     expect(gated.services["member-agent"]?.profiles).toEqual(["member-agent"]);
+  });
+});
+
+// Criterion 40 (D52): instance state lives under the state root, never in the
+// checkout, and the compose file has no `./.agents/state` fallback. Criterion
+// 113: the scheduler mounts its own token directory, nothing wider. Asserted
+// over the RENDERED configuration of every composition, so a mount spelled any
+// other way is caught.
+describe("instance state is mounted from the state root, never the checkout (criteria 40, 113)", () => {
+  /** Every bind mount source of every service in `cfg`, as `service: source -> target`. */
+  const binds = (cfg: ComposeConfig) =>
+    Object.entries(cfg.services).flatMap(([name, svc]) =>
+      (svc.volumes ?? []).filter((v) => v.source?.startsWith("/")).map((v) => ({ name, source: v.source!, target: v.target, ro: v.read_only === true })));
+
+  for (const files of [DEMO_COMPOSE_FILES, STAGE_COMPOSE_FILES]) {
+    const label = files.join("+");
+
+    test(`${label}: the scheduler mounts exactly tokens/system-scheduler, read-only, from the instance directory`, () => {
+      const scheduler = binds(composeConfig({}, files)).filter((b) => b.name === "system-scheduler");
+      expect(scheduler).toEqual([
+        { name: "system-scheduler", source: join(INSTANCE_DIR, "tokens", "system-scheduler"), target: "/run/rm-token", ro: true },
+      ]);
+      expect(serviceEnv(composeConfig({}, files), "system-scheduler").SCHEDULER_TOKEN_FILE).toBe("/run/rm-token/token");
+    });
+
+    test(`${label}: website-server serves the instance's web directory, read-only`, () => {
+      const web = binds(composeConfig({}, files)).filter((b) => b.name === "website-server");
+      expect(web).toEqual([{ name: "website-server", source: join(INSTANCE_DIR, "web"), target: "/srv/web", ro: true }]);
+    });
+
+    test(`${label}: no service mounts anything under the checkout's .agents/`, () => {
+      const offenders = binds(composeConfig({}, files)).filter((b) => b.source.startsWith(join(repoRoot, ".agents")));
+      expect(offenders).toEqual([]);
+    });
+  }
+
+  test("red control: without RM_INSTANCE_STATE_DIR the compose file refuses to render — it never falls back", () => {
+    const env = baseEnv();
+    delete env.RM_INSTANCE_STATE_DIR;
+    const r = Bun.spawnSync(
+      ["docker", "compose", "--env-file", "/dev/null", ...DEMO_COMPOSE_FILES.flatMap((f) => ["-f", f]), "config", "--format", "json"],
+      { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("RM_INSTANCE_STATE_DIR");
+  }, 30_000);
+});
+
+// The plan id's image input (D52) is SERVICE_BUILD_CONTEXTS: the Git tree of
+// each service's build context. A literal map, so it must agree with the
+// build contexts compose actually resolves, or the plan would hash the wrong
+// tree for a service.
+describe("SERVICE_BUILD_CONTEXTS is the compose files' own build contexts (criterion 38)", () => {
+  test("every built service, member-agent included, resolves to the context the map names", () => {
+    const cfg = composeConfig({}, DEMO_COMPOSE_FILES, ["member-agent"]);
+    const rendered = Object.fromEntries(
+      Object.entries(cfg.services)
+        .filter(([, svc]) => svc.build?.context)
+        .map(([name, svc]) => [name, svc.build!.context === repoRoot ? "." : svc.build!.context!.slice(repoRoot.length + 1)]),
+    );
+    expect(rendered).toEqual({ ...SERVICE_BUILD_CONTEXTS });
   });
 });
 

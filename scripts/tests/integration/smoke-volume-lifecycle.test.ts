@@ -50,6 +50,10 @@ function composeEnv(extra: Record<string, string> = {}): Record<string, string> 
     WEB_PORT: "18789",
     POSTGRES_PORT: "15432",
     ANALYTICS_TOKEN_FILE_HOST: "/dev/null", // compose-config/lifecycle fixture; no producer execution
+    // Required by docker-compose.yml (smoke spec §1.1: the instance's state directory has no
+    // checkout fallback). Only postgres runs here, and it mounts neither.
+    RM_INSTANCE: "rm_local_vollifecycle",
+    RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_vollifecycle",
     ...extra,
   };
 }

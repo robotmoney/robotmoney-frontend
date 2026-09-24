@@ -61,11 +61,17 @@
 // policy; the detector is a pure function, so its own cases and the red control
 // still run and still prove it works.
 import { beforeAll, describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { instancePaths, TOKEN_FILE_NAME } from "../../lib/smoke-state.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
+
+// The instance a boot hands compose (smoke spec §1.1). Its directory holds
+// role-passwords.json and every service token; the scheduler may see only its
+// own token directory inside it (criterion 113).
+const INSTANCE_PATHS = instancePaths(join(tmpdir(), "rm-no-db-credential-state"), "rm_local_nodbcred");
 
 export interface ComposeServiceLike {
   environment?: Record<string, string | null> | string[];
@@ -174,6 +180,13 @@ export const EXEMPT: Record<string, string> = {
  */
 export const UNLANDED_REMOVALS = ["worker-research"] as const;
 
+/** Whether a bind mount of `source` exposes `file`: the file is the source or lies below it. */
+export function mountReaches(source: string, file: string): boolean {
+  if (source === "") return false;
+  const rel = relative(source, file);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/"));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,6 +201,9 @@ function baseEnv(): Record<string, string> {
   env.SMOKE_PROJECT = "no-db-credential-test";
   env.RM_STACK_ENV_CLASS = "local";
   env.RM_STACK_ENV_HASH = "nodbcred000";
+  // Required, with no fallback, by docker-compose.yml.
+  env.RM_INSTANCE = "rm_local_nodbcred";
+  env.RM_INSTANCE_STATE_DIR = INSTANCE_PATHS.dir;
   env.WEB_PORT = "18788";
   env.POSTGRES_PORT = "15433";
   return env;
@@ -313,20 +329,39 @@ describe("only the named services carry a database credential (§9, §10)", () =
     }
   });
 
-  test("`system-scheduler` mounts exactly ONE volume, read-only: the state directory its token file lives in", () => {
+  test("`system-scheduler` mounts exactly ONE volume, read-only: its OWN token directory, never the instance directory", () => {
     for (const { label, files, profiles } of COMPOSITIONS) {
       const svc = composeConfig(files, profiles).services?.["system-scheduler"];
-      const volumes = (svc as { volumes?: Array<{ target?: string; read_only?: boolean }> } | undefined)?.volumes ?? [];
+      const volumes = (svc as { volumes?: Array<{ source?: string; target?: string; read_only?: boolean }> } | undefined)?.volumes ?? [];
       expect({ label, count: volumes.length }).toEqual({ label, count: 1 });
-      expect({ label, target: volumes[0]?.target, readOnly: volumes[0]?.read_only }).toEqual({
+      expect({ label, source: volumes[0]?.source, target: volumes[0]?.target, readOnly: volumes[0]?.read_only }).toEqual({
         label,
-        target: "/run/rm-state",
+        source: INSTANCE_PATHS.tokenDirs["system-scheduler"],
+        target: "/run/rm-token",
         readOnly: true,
       });
-      // …and the token file it names lives inside that one read-only mount.
+      // …and the token file it names is the one file in that mount.
       const env = normaliseEnvironment(svc?.environment);
-      expect({ label, inMount: String(env.SCHEDULER_TOKEN_FILE).startsWith("/run/rm-state/") }).toEqual({ label, inMount: true });
+      expect({ label, tokenFile: env.SCHEDULER_TOKEN_FILE }).toEqual({ label, tokenFile: `/run/rm-token/${TOKEN_FILE_NAME}` });
     }
+  });
+
+  // Criterion 113: "the scheduler's rendered mounts reach no role-passwords.json".
+  // A mount reaches a host file when the file is at or below the mount's source.
+  test("no rendered `system-scheduler` mount reaches role-passwords.json or another holder's token, in any composition", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const svc = composeConfig(files, profiles).services?.["system-scheduler"];
+      const sources = ((svc as { volumes?: Array<{ source?: string }> } | undefined)?.volumes ?? []).map((v) => v.source ?? "");
+      const reached = [INSTANCE_PATHS.rolePasswordsFile, INSTANCE_PATHS.tokenFiles.operator, INSTANCE_PATHS.tokenFiles["analytics-producer"]]
+        .filter((file) => sources.some((source) => mountReaches(source, file)));
+      expect({ label, reached }).toEqual({ label, reached: [] });
+    }
+  });
+
+  test("red control: a mount of the whole instance directory (the retired shape) DOES reach role-passwords.json", () => {
+    expect(mountReaches(INSTANCE_PATHS.dir, INSTANCE_PATHS.rolePasswordsFile)).toBe(true);
+    expect(mountReaches(dirname(INSTANCE_PATHS.dir), INSTANCE_PATHS.rolePasswordsFile)).toBe(true);
+    expect(mountReaches(INSTANCE_PATHS.tokenDirs["system-scheduler"], INSTANCE_PATHS.rolePasswordsFile)).toBe(false);
   });
 
   // Criterion 119: `analytics-producer` carries only its API URL and token

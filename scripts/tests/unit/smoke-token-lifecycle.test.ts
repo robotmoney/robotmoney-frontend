@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "../../lib/smoke-secret.ts";
+import { throwawayInstance } from "../../lib/smoke-state.ts";
 import { cleanupKeptSwarmEval, swarmEvalStateFile } from "../../swarm-eval-local.ts";
 
 const state = {
@@ -35,18 +36,20 @@ describe("smoke token lifecycle", () => {
   test("swarm eval --keep state makes token cleanup discoverable and tolerates an already-missing file", () => {
     const repo = mkdtempSync(join(tmpdir(), "rm-kept-eval-state-"));
     const project = `rm_eval_keep_${Date.now()}`;
-    const tokenFile = provisionSmokeAnalyticsToken(project, "secret");
+    const instance = throwawayInstance(project);
+    const tokenFile = provisionSmokeAnalyticsToken(instance.paths, "secret");
     const stateFile = swarmEvalStateFile(repo, project);
     mkdirSync(dirname(stateFile), { recursive: true });
     writeFileSync(stateFile, JSON.stringify({
       project,
+      stateDir: instance.stateDir,
       analyticsTokenFile: tokenFile,
       composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
       envClass: "local",
       envHash: "0123456789",
       createdAt: new Date().toISOString(),
     }));
-    expect(removeSmokeAnalyticsToken(tokenFile, project)).toBe(true);
+    expect(removeSmokeAnalyticsToken(tokenFile, instance.paths)).toBe(true);
 
     let invoked = false;
     cleanupKeptSwarmEval(repo, project, {}, (argv, env) => {

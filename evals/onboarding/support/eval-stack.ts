@@ -21,6 +21,7 @@ import {
   resolveStackEnvironment,
   type Stack,
 } from "../../../scripts/stack/index.ts";
+import { throwawayInstance } from "../../../scripts/lib/smoke-state.ts";
 
 // evals/onboarding/support/ -> repo root
 export const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -38,7 +39,11 @@ export function evalProject(claim: string): string {
 // A stack object used ONLY for its compose plumbing (build + teardown). No
 // service is started: the isolated claims have no server by design.
 export function imageOnlyStack(project: string): Stack {
-  return createStack(
+  // The compose file requires an instance state directory outside the checkout
+  // (RM_INSTANCE_STATE_DIR, no fallback). Nothing here mounts it; a throwaway
+  // one satisfies the interpolation.
+  const instance = throwawayInstance(project);
+  const stack = createStack(
     {
       repoRoot,
       project,
@@ -47,10 +52,17 @@ export function imageOnlyStack(project: string): Stack {
       database: DEFAULT_STACK_DATABASE,
       credentials: generateStackCredentials(),
       environment: resolveStackEnvironment({}),
+      instance: { name: instance.name, stateDir: instance.stateDir },
     },
     { hostEnv: dockerClientHostEnv(), io: { stdout: "pipe", stderr: "pipe" } },
   );
+  throwawayDirs.set(stack, instance.dispose);
+  return stack;
 }
+
+// The throwaway state directory each imageOnlyStack() made, removed by
+// tearDown() so a claim leaves nothing behind in the temp dir.
+const throwawayDirs = new WeakMap<Stack, () => void>();
 
 // Build the vanilla member-agent image. THROWS when Docker is unusable — that
 // is the E2 behaviour, and it is why this is a plain call with no guard around
@@ -71,4 +83,8 @@ export function tearDown(stack: Stack | null, label: string): void {
   if (r.exitCode !== 0) {
     console.error(`[${label}] teardown for project ${stack.config.project} failed (exit ${r.exitCode}): ${r.stderr}`);
   }
+  // After `down`, which interpolates the compose file and so still needs the
+  // directory's path; nothing ever mounted it.
+  throwawayDirs.get(stack)?.();
+  throwawayDirs.delete(stack);
 }

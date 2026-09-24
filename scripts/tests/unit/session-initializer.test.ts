@@ -66,8 +66,19 @@ describe("every smoke-side session caller states its scenario", () => {
     expect(smokeMain).toContain('initializer: "adopt"');
   });
 
-  test("the STANDING loop asks which data path it's on — the exact omission that caused the corruption", () => {
-    expect(smokeMain).toContain('initializer: dataPath.kind === "ephemeral" ? "simulation" : "adopt"');
+  test("there is no STANDING loop left to omit the question — the boot convenes only the CI-twin session", () => {
+    // Issue #1026: `bun smoke` exits at readiness (smoke spec §1), so the
+    // standing loop that had to ask `dataPath.kind === "ephemeral" ? "simulation"
+    // : "adopt"` is gone with it; sessions are the system-scheduler's. The one
+    // session the boot still runs is the CI twin's, which states adopt above.
+    const calls = smokeMain.match(/\brunSession\(/g) ?? [];
+    expect(calls.length).toBe(1);
+    expect(smokeMain).toMatch(/runSession\([^)]*initializer: "adopt"/);
+  });
+
+  test("red control: a second, data-path-blind session caller is counted", () => {
+    const planted = `${smokeMain}\nawait e2e.runSession(subject, 1, { rail, members, cadence });\n`;
+    expect((planted.match(/\brunSession\(/g) ?? []).length).toBe(2);
   });
 
   test("no smoke-side caller hardcodes simulation unconditionally, which would defeat a real or twin boot", () => {

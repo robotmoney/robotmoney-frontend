@@ -1,9 +1,10 @@
 // The plan, the plan id, the phase journal, resume and interruption semantics,
 // and the readiness receipt — spec §§1.2–1.4.
 //
-// STATUS. Implemented and unit-tested (scripts/tests/unit/smoke-journal.test.ts).
-// `smoke:tui` reads journals and receipts through it; `bun smoke` writing them
-// is later #1026 work.
+// STATUS. Implemented, unit-tested (scripts/tests/unit/smoke-journal.test.ts)
+// and wired: `bun smoke` prints the plan, journals every phase and writes the
+// receipt through it (scripts/lib/smoke-main.ts); `smoke:status` and
+// `smoke:tui` read them back.
 //
 // ── The problem this module exists to solve ─────────────────────────────────
 //
@@ -776,7 +777,7 @@ export type ResumeDecision =
  * `null` for a journal with no phase yet: it has recorded no expectation, so
  * there is nothing to hold the world to.
  */
-function projectExpectations(journal: Journal): StateExpectations | null {
+export function projectExpectations(journal: Journal): StateExpectations | null {
   const last = journal.phases.at(-1);
   if (last === undefined) return null;
   const base = last.expectations;
@@ -793,6 +794,30 @@ function projectExpectations(journal: Journal): StateExpectations | null {
     services: { ...base.services, ...done.servicesReplaced },
     spoofGeneration: done.spoofGenerationWritten ?? base.spoofGeneration,
   };
+}
+
+/**
+ * Compare observed state with what a journal expects, and name the first
+ * difference, or return `null` when they agree. {@link decideResume} runs the
+ * full check at open; this is for a run that could not observe the schema then
+ * (the database was not running yet) and must hold the world to the journal
+ * the moment it can, rather than never.
+ */
+export function expectationMismatch(
+  expected: StateExpectations,
+  observed: Pick<StateExpectations, "ledger" | "manifestHash">,
+): string | null {
+  const observedLedger = [...observed.ledger].sort();
+  const same =
+    observedLedger.length === expected.ledger.length &&
+    observedLedger.every((name, index) => name === expected.ledger[index]);
+  if (!same) {
+    return `the migration ledger holds ${describeLedger(observedLedger)}, but this journal expects ${describeLedger(expected.ledger)}`;
+  }
+  if (observed.manifestHash !== expected.manifestHash) {
+    return `the schema manifest hash is ${String(observed.manifestHash)}, but this journal expects ${String(expected.manifestHash)}`;
+  }
+  return null;
 }
 
 /** A ledger list, named by length and last file, for a refusal. */
@@ -925,6 +950,20 @@ export function decideResume(
   }
 
   return { kind: "resume", journal, nextPhase: nextPhaseAfter(journal) };
+}
+
+/**
+ * Thrown by a {@link JournalWriter} write when the journal on disk is no longer
+ * the open journal this writer holds: closed underneath it (`smoke:down`),
+ * replaced, removed or unreadable. The write did NOT happen, and the caller
+ * must stop without acting: the operator's stop, or the other operation's
+ * record, wins over the run's in-memory copy.
+ */
+export class JournalClosedUnderneathError extends Error {
+  constructor(message: string) {
+    super(`Refusing to write the journal: ${message}.`);
+    this.name = "JournalClosedUnderneathError";
+  }
 }
 
 /**
@@ -1062,8 +1101,36 @@ export function openJournal(
     journal = fresh();
   }
 
+  // Every write after the first re-reads the journal on disk first. The writer
+  // holds the whole journal in memory and rewrites it, so without this check a
+  // journal closed underneath the run (`smoke:down` closing it, spec §1.4:
+  // "`smoke:down` stops everything") would be silently reopened by the run's
+  // next begin or commit, and the run would go on to start the stack the
+  // operator just stopped. The run must stop instead, before its phase acts.
+  let persisted = false;
   function persist(): void {
+    if (persisted) {
+      let onDiskNow: Journal | null;
+      try {
+        onDiskNow = readJournal(paths);
+      } catch (error) {
+        throw new JournalClosedUnderneathError(
+          `the journal on disk can no longer be read (${error instanceof Error ? error.message : String(error)}); this run stops rather than overwrite it`,
+        );
+      }
+      if (onDiskNow === null || onDiskNow.planId !== journal.planId || onDiskNow.openedAt !== journal.openedAt) {
+        throw new JournalClosedUnderneathError(
+          "the journal on disk is no longer this run's (it was removed or replaced by another operation); this run stops rather than overwrite it",
+        );
+      }
+      if (onDiskNow.closedAt !== null) {
+        throw new JournalClosedUnderneathError(
+          `the journal was closed underneath this run at ${onDiskNow.closedAt} (${onDiskNow.closeReport ?? "no reason recorded"}); this run stops rather than reopen it`,
+        );
+      }
+    }
     writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: journal }, null, 2));
+    persisted = true;
   }
 
   function markOpenPhase(update: (record: PhaseRecord) => PhaseRecord): void {
@@ -1114,6 +1181,26 @@ export function openJournal(
 }
 
 /**
+ * Close the instance's open journal on disk, recording why, without a plan in
+ * hand: the operator stopped the deployment it describes (`smoke:down`), or a
+ * CI job tore its own stack down. Its expectations (services running on known
+ * digests) are then false by the operator's own act, and a later run must
+ * start from current state rather than refuse over it: §1.3 rule 3 is for
+ * ANOTHER operation's changes, not for the stop the operator asked for.
+ *
+ * Output: `true` when an open journal was closed, `false` when there was none
+ * or it was already closed. Refuses a malformed journal, as
+ * {@link readJournal} does.
+ */
+export function closeOpenJournal(paths: InstancePaths, reason: string): boolean {
+  const journal = readJournal(paths);
+  if (journal === null || journal.closedAt !== null) return false;
+  const closed: Journal = { ...journal, closedAt: new Date().toISOString(), closeReport: reason };
+  writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: closed }, null, 2));
+  return true;
+}
+
+/**
  * Interruption handling for spec §1.4: "Ctrl-C stops at the next phase
  * boundary."
  *
@@ -1146,20 +1233,24 @@ export interface InterruptWatch {
  * preparation journaled not undone. Ctrl-C after: journal reported, rerun
  * resumes."
  */
+/** The signals {@link watchForInterrupt} turns into a stop at the next phase boundary. */
+export const INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
 export function watchForInterrupt(): InterruptWatch {
   let stopRequested = false;
   let disposed = false;
   const handler = (): void => {
     if (!disposed) stopRequested = true;
   };
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
+  // SIGHUP too: a closed terminal or a dropped ssh session must not kill the
+  // run mid-phase (its default action), which would leave a stack started with
+  // no stack record and a journal that never says where it stopped.
+  for (const signal of INTERRUPT_SIGNALS) process.on(signal, handler);
   return {
     requested: () => stopRequested,
     dispose: () => {
       disposed = true;
-      process.removeListener("SIGINT", handler);
-      process.removeListener("SIGTERM", handler);
+      for (const signal of INTERRUPT_SIGNALS) process.removeListener(signal, handler);
     },
   };
 }

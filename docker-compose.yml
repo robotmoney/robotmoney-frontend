@@ -30,7 +30,8 @@
 #
 # Read the assignment back with `docker compose -p <project> port <svc> <port>`
 # (scripts/stack/ports.ts's parseComposePortOutput); `bun run smoke` prints both
-# in its READY banner and records them in .agents/smoke-state.json.
+# in its READY banner and records them in the instance's stack-state.json
+# (scripts/lib/smoke-state.ts), never in the checkout.
 #
 # THE ONE FIXED PORT in the whole system is the stage tunnel origin, and it
 # lives in its own overlay: docker-compose.stage.yml pins api to 48787 with
@@ -405,12 +406,21 @@ services:
   # why mounting `frontend/public` directly breaks every route's metadata.
   # website-server/nginx.conf proxies /api/ and /health to the api service and
   # replicates the old routeShell() fallback order for everything else.
+  #
+  # WHAT IT SERVES is the instance's site directory, not the checkout's
+  # `_static`: `bun smoke` places each assembled `_static` as an immutable
+  # `web/<siteId>/` and swaps the `current` symlink (scripts/lib/smoke-site.ts),
+  # and nginx serves `/srv/web/current`. A site switch is then a symlink rename
+  # that touches no container, and a rebuild of `_static` in the checkout can no
+  # longer change what a running stack serves underneath it.
   website-server:
     build:
       context: ./website-server
       dockerfile: Dockerfile
+    labels:
+      robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
     volumes:
-      - ./_static:/srv/frontend:ro
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/web:/srv/web:ro
     ports:
       # Docker-assigned host port, same convention as every other service in
       # this file (see the header comment) — CONTAINER side is nginx.conf's
@@ -514,19 +524,24 @@ services:
       # and committed into whatever file an operator generated it from; a path
       # to a read-only mount is none of those. Rotation is a re-provision by the
       # boot plus a restart of this container, with no edit to this file.
-      SCHEDULER_TOKEN_FILE: /run/rm-state/${RM_INSTANCE:-default}-scheduler-token
+      # `token` is TOKEN_FILE_NAME in scripts/lib/smoke-state.ts: the one file
+      # in the holder's own token directory mounted below.
+      SCHEDULER_TOKEN_FILE: /run/rm-token/token
       # Explicit rather than relying on readSchedulerEnv()'s 8090 default, so
       # the healthcheck below and the process cannot disagree silently.
       SCHEDULER_HEALTH_PORT: "8090"
+    labels:
+      # Which deployment instance (smoke spec §1.1) this clock serves.
+      robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
     volumes:
-      # The instance's state directory, READ-ONLY — the scheduler only ever
-      # reads its token from it, and a clock that can write to the directory
-      # holding a deployment's credentials has more authority than §7 gives it.
-      # The host path is the instance directory under stateRoot() (see
-      # scripts/lib/smoke-state.ts); the interpolation default only exists so a
-      # bare `docker compose config` parses, and a boot that means to run this
-      # service always supplies the real one.
-      - ${RM_INSTANCE_STATE_DIR:-./.agents/state}:/run/rm-state:ro
+      # The scheduler's OWN token directory, READ-ONLY, and nothing else of the
+      # instance's state (criterion 113). Not the instance directory: that holds
+      # role-passwords.json and every other holder's token, and §7 gives this
+      # clock exactly one credential. A directory rather than a single-file bind
+      # so a rotation (write-and-rename inside it) is visible without a
+      # remount. No default: a boot that did not say which instance it serves
+      # fails compose's interpolation here instead of mounting a checkout path.
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/system-scheduler:/run/rm-token:ro
     depends_on:
       # Start ordering only, deliberately not `condition: service_healthy`: the
       # process serves its own health surface BEFORE its first rebuild

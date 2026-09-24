@@ -36,6 +36,7 @@ import {
   stackProjectName,
   STAGE_WEB_PORT,
 } from "./stack/index.ts";
+import { throwawayInstance } from "./lib/smoke-state.ts";
 
 export interface AdmissionEvalCaseOptions {
   repoRoot?: string;
@@ -128,6 +129,10 @@ const telemetry = createOnboardingTelemetry(
   [{ value: identity.contact, placeholder: "<contact redacted>" }],
 );
 const credentials = generateStackCredentials();
+// The compose model needs a state directory outside the checkout
+// (RM_INSTANCE_STATE_DIR; smoke spec §1.1). An eval is not a deployment
+// instance, so it gets a throwaway one, removed with the stack.
+const instance = throwawayInstance(project);
 const stack = createStack(
   {
     repoRoot,
@@ -137,6 +142,7 @@ const stack = createStack(
     database: DEFAULT_STACK_DATABASE,
     credentials,
     environment: stackEnvironment,
+    instance: { name: instance.name, stateDir: instance.stateDir },
   },
   {
     hostEnv: env,
@@ -250,6 +256,7 @@ try {
     cleanup.stackDownExitCode = down.exitCode;
     telemetry.emit({ source: "cleanup", stream: "event", message: `stack teardown exit=${down.exitCode}` });
     if (down.exitCode !== 0) console.error(`[eval] stack teardown failed: ${redactTelemetryText(down.stderr)}`);
+    else instance.dispose();
   }
 
   artifacts.finish({

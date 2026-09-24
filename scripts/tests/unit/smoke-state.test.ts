@@ -22,22 +22,31 @@
 //      processes contending is the integration test that later #1026 work adds)
 //   - "`volume` reuse after restart."
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireDeploymentLock,
   generateRolePasswords,
+  instanceFlag,
   instancePaths,
+  instanceStackProject,
   listInstances,
   PRODUCTION_INSTANCE,
   readRolePasswords,
+  readStackState,
   resolveInstance,
+  selectExistingInstance,
   SERVICE_TOKEN_HOLDERS,
   stateRoot,
+  throwawayInstance,
   TOKEN_FILE_NAME,
+  writeStackState,
+  type InstancePaths,
   type InstanceResolutionInput,
+  type StackStateRecord,
 } from "../../lib/smoke-state.ts";
+import { computePlanId, openJournal, readArchivedJournals, readJournal, type DeploymentPlan } from "../../lib/smoke-journal.ts";
 import type { StackEnvironment } from "../../stack/naming.ts";
 
 const MODULE = join(import.meta.dir, "..", "..", "lib", "smoke-state.ts");
@@ -566,4 +575,271 @@ describe("listInstances — §1.1, attributing this host's state to instances", 
     writeFileSync(asFile, "x");
     expect(() => listInstances(asFile)).toThrow(/read|director/i);
   });
+});
+
+// ── The stack record, and selecting an instance that already exists ─────────
+function stackRecord(instance: string, overrides: Partial<StackStateRecord> = {}): StackStateRecord {
+  return {
+    instance,
+    project: `rm_smoke_stack_${instance.slice(-10).padStart(10, "0")}`,
+    apiPort: 0,
+    webPort: 0,
+    pgPort: 0,
+    stage: false,
+    envClass: "local",
+    envHash: "0123456789",
+    composeFiles: "docker-compose.yml:docker-compose.smoke.yml",
+    db: "ephemeral",
+    externalPg: false,
+    databaseUrl: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
+    dbUser: "robotmoney",
+    dbPassword: "robotmoney",
+    dbName: "robotmoney",
+    logFile: "",
+    pgVolume: `${instance}_pgdata_volume`,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+describe("the stack record — what `bun smoke` brought up, kept with the instance (criterion 40)", () => {
+  test("it lives in the instance directory, owner-only, and reads back", () => {
+    const paths = instancePaths(freshRoot(), "rm_local_rec", { create: true });
+    expect(paths.stackStateFile.startsWith(paths.dir)).toBe(true);
+    expect(paths.logFile.startsWith(paths.dir)).toBe(true);
+    expect(paths.overlaysDir.startsWith(paths.dir)).toBe(true);
+    writeStackState(paths, stackRecord("rm_local_rec"));
+    expect(statSync(paths.stackStateFile).mode & 0o777).toBe(0o600);
+    expect(readStackState(paths)?.pgVolume).toBe("rm_local_rec_pgdata_volume");
+  });
+
+  test("no record is null; a malformed one refuses rather than reading as absent", () => {
+    const paths = instancePaths(freshRoot(), "rm_local_rec", { create: true });
+    expect(readStackState(paths)).toBeNull();
+    writeFileSync(paths.stackStateFile, "{not json");
+    expect(() => readStackState(paths)).toThrow(/malformed/);
+    writeFileSync(paths.stackStateFile, JSON.stringify({ apiPort: 1 }));
+    expect(() => readStackState(paths)).toThrow(/no compose project/);
+  });
+
+  test("the layout names nothing inside a checkout: every path is under the state root", () => {
+    const root = freshRoot();
+    const paths = instancePaths(root, "rm_local_rec", { create: true });
+    for (const path of [paths.stackStateFile, paths.logFile, paths.overlaysDir, paths.webDir, paths.journalFile, paths.receiptFile, ...Object.values(paths.tokenFiles)]) {
+      expect(path.startsWith(root)).toBe(true);
+    }
+  });
+});
+
+describe("selectExistingInstance — lifecycle commands select, they never mint", () => {
+  test("the named instance, or the only one with state; several without a name refuses", () => {
+    const root = freshRoot();
+    const a = instancePaths(root, "rm_local_a", { create: true });
+    expect(selectExistingInstance(root, undefined).dir).toBe(a.dir);
+    instancePaths(root, "rm_local_b", { create: true });
+    expect(selectExistingInstance(root, "rm_local_b").dir).toBe(join(root, "rm_local_b"));
+    expect(() => selectExistingInstance(root, undefined)).toThrow(/several instances/);
+  });
+
+  test("an unknown name refuses, lists the known ones, and creates nothing", () => {
+    const root = freshRoot();
+    instancePaths(root, "rm_local_a", { create: true });
+    expect(() => selectExistingInstance(root, "rm_local_zzz")).toThrow(/rm_local_a/);
+    expect(existsSync(join(root, "rm_local_zzz"))).toBe(false);
+    expect(() => selectExistingInstance(freshRoot(), undefined)).toThrow(/nothing has been deployed/);
+  });
+
+  test("instanceFlag reads both spellings, and refuses a flag with no name", () => {
+    expect(instanceFlag(["--local", "blank", "--instance", "rm_x"])).toBe("rm_x");
+    expect(instanceFlag(["--instance=rm_y"])).toBe("rm_y");
+    expect(instanceFlag(["--local", "blank"])).toBeUndefined();
+    expect(() => instanceFlag(["--instance", "--migrate"])).toThrow(/needs a name/);
+  });
+
+  test("throwawayInstance is outside every state root and gone after dispose", () => {
+    const t = throwawayInstance("rm_eval_x");
+    expect(t.stateDir.startsWith(tmpdir())).toBe(true);
+    expect(existsSync(t.paths.tokenDirs["analytics-producer"])).toBe(true);
+    t.dispose();
+    expect(existsSync(t.stateDir)).toBe(false);
+  });
+});
+
+// ── Criterion 33: status, down, volume reuse and resume act only on the named instance ──
+//
+// Two instances with state on one host, and the real commands run as their own
+// processes against them — with Docker pointed at a dead socket, so nothing can
+// be touched except through the state directories, and so this runs wherever
+// the unit suite does (criterion 151). Each command is aimed at ONE instance,
+// and the other instance's files are byte-for-byte what they were.
+//
+// This half proves the STATE-DIRECTORY isolation only. That the named
+// instance's containers and volume are the only ones a down, a resume or a
+// reattach touches is a runtime claim, proved on real boots in
+// scripts/tests/integration/smoke-instance-isolation.test.ts.
+describe("two instances on one host: each command acts only on the named one (criterion 33)", () => {
+  const repoRoot = join(import.meta.dir, "..", "..", "..");
+  const DEAD_DOCKER = "tcp://127.0.0.1:1";
+
+  function planFor(instance: string): DeploymentPlan {
+    return {
+      instance,
+      target: { kind: "local", rmEnv: "stage", identity: "rehearsal", mode: "blank", volume: `${instance}_pgdata_volume` },
+      images: { api: { source: "a".repeat(40), digest: null } },
+      roster: { agents: [], judges: [] },
+      configuration: { SMOKE_CADENCE: "fast" },
+      mutations: [],
+    };
+  }
+  async function instanceWithOpenJournal(root: string, instance: string): Promise<InstancePaths> {
+    const paths = instancePaths(root, instance, { create: true });
+    writeStackState(paths, stackRecord(instance));
+    const journal = openJournal(paths, { kind: "fresh-start", reason: "no journal" }, planFor(instance));
+    await journal.beginPhase("plan", null, { ledger: [], manifestHash: null, identity: "rehearsal", participants: [], services: {}, spoofGeneration: null });
+    await journal.commitPhase({ migrationsApplied: [], manifestPublished: null, participantsStarted: [], participantsStopped: [], servicesReplaced: {}, spoofGenerationWritten: null });
+    return paths;
+  }
+  /** Every file of an instance directory, with its bytes: what "untouched" means. */
+  function snapshot(paths: InstancePaths): Record<string, string> {
+    const out: Record<string, string> = {};
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else out[full.slice(paths.dir.length)] = readFileSync(full, "utf8");
+      }
+    };
+    walk(paths.dir);
+    return out;
+  }
+  function run(root: string, script: string, args: string[]): { code: number; out: string } {
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", script), ...args], {
+      cwd: repoRoot,
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "smoke", AGENT_MODEL: "free" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
+  }
+
+  test("smoke:status reports the named instance only", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const b = await instanceWithOpenJournal(root, "rm_local_bravo");
+    const before = snapshot(b);
+    const r = run(root, "smoke-status.ts", ["--instance", "rm_local_alpha"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`plan ${readJournal(a)!.planId}`);
+    expect(r.out).not.toContain(String(readJournal(b)!.planId));
+    expect(snapshot(b)).toEqual(before);
+  }, 30_000);
+
+  test("smoke:down with no stack record and a daemon it cannot ask REFUSES — 'no record' is never 'nothing running'", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const b = await instanceWithOpenJournal(root, "rm_local_bravo");
+    // No stack record on alpha (a boot killed before it wrote one). Its
+    // project is fixed by its name, but the dead daemon cannot say whether
+    // that project has containers: refused, alpha's journal left OPEN (the old
+    // code said "nothing to tear down" and closed it over a running stack).
+    rmSync(a.stackStateFile);
+    const aBefore = snapshot(a);
+    const before = snapshot(b);
+    const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Refusing: instance rm_local_alpha has no stack record");
+    expect(r.out).toContain(`its project ${instanceStackProject("rm_local_alpha", {})}`);
+    expect(r.out).not.toContain("nothing to tear down");
+    expect(snapshot(a)).toEqual(aBefore);
+    expect(readJournal(a)!.closedAt).toBeNull();
+    expect(snapshot(b)).toEqual(before);
+  }, 30_000);
+
+  test("smoke:down refuses while a LIVE run holds the named instance's deployment lock, and stops nothing", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const b = await instanceWithOpenJournal(root, "rm_local_bravo");
+    // A live holder: this test process stands in for the `bun smoke` run.
+    const lock = acquireDeploymentLock(a, String(readJournal(a)!.planId));
+    try {
+      const aBefore = snapshot(a);
+      const before = snapshot(b);
+      const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`Refusing: a \`bun smoke\` run (pid ${process.pid}, plan ${readJournal(a)!.planId})`);
+      expect(r.out).toContain(`kill -TERM ${process.pid}`);
+      // Nothing was stopped or closed: the run's journal and lock are as they were.
+      expect(r.out).not.toContain("tearing down");
+      expect(snapshot(a)).toEqual(aBefore);
+      expect(readJournal(a)!.closedAt).toBeNull();
+      expect(snapshot(b)).toEqual(before);
+    } finally {
+      lock.release();
+    }
+  }, 30_000);
+
+  test("red control: a STALE lock (holder gone) does not block smoke:down", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const gone = Bun.spawnSync(["true"]).pid;
+    writeFileSync(a.lockFile, `${JSON.stringify({ instance: "rm_local_alpha", holderPid: gone, planId: "p", acquiredAt: new Date().toISOString() })}\n`);
+    const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
+    expect(r.out).not.toContain("Refusing: a `bun smoke` run");
+    expect(r.out).toContain(`the deployment lock names pid ${gone}, which is gone (a stale lock)`);
+  }, 30_000);
+
+  test("`--local volume` reattaches the NAMED instance's saved volume, never the other's", () => {
+    const root = freshRoot();
+    const a = instancePaths(root, "rm_local_alpha", { create: true });
+    writeStackState(a, stackRecord("rm_local_alpha"));
+    instancePaths(root, "rm_local_bravo", { create: true });
+    // bravo has no saved volume: refused, naming bravo — alpha's volume is not borrowed.
+    const bravo = run(root, "smoke.ts", ["--local", "volume", "--instance", "rm_local_bravo"]);
+    expect(bravo.code).toBe(1);
+    expect(bravo.out).toContain("found no saved volume for instance rm_local_bravo");
+    expect(bravo.out).not.toContain("rm_local_alpha_pgdata_volume");
+    // alpha's saved volume is the one asked about (the dead daemon then refuses).
+    const alpha = run(root, "smoke.ts", ["--local", "volume", "--instance", "rm_local_alpha"]);
+    expect(alpha.code).toBe(1);
+    expect(alpha.out).toContain("volume=rm_local_alpha_pgdata_volume: could not ask Docker");
+  }, 60_000);
+
+  test("smoke:reap --instance aims at the named instance's recorded project; without it, every instance's project is protected", () => {
+    const root = freshRoot();
+    writeStackState(instancePaths(root, "rm_local_alpha", { create: true }), stackRecord("rm_local_alpha", { project: "rm_smoke_stack_aaaaaaaaaa" }));
+    writeStackState(instancePaths(root, "rm_local_bravo", { create: true }), stackRecord("rm_local_bravo", { project: "rm_smoke_stack_bbbbbbbbbb" }));
+    const aimed = run(root, "smoke-reap.ts", ["--dry-run", "--instance", "rm_local_alpha"]);
+    expect(aimed.out).toContain("--instance rm_local_alpha: sweeping only project=rm_smoke_stack_aaaaaaaaaa");
+    expect(aimed.out).not.toContain("rm_smoke_stack_bbbbbbbbbb");
+    // G1 across the host: both instances' stacks are protected by default.
+    const broad = run(root, "smoke-reap.ts", ["--dry-run"]);
+    expect(broad.out).toContain("G1 protects project=rm_smoke_stack_aaaaaaaaaa");
+    expect(broad.out).toContain("G1 protects project=rm_smoke_stack_bbbbbbbbbb");
+    // Red control: an instance with no stack record names no project to sweep.
+    instancePaths(root, "rm_local_charlie", { create: true });
+    const none = run(root, "smoke-reap.ts", ["--dry-run", "--instance", "rm_local_charlie"]);
+    expect(none.code).toBe(2);
+    expect(none.out).toContain("instance rm_local_charlie has no stack record");
+  }, 60_000);
+
+  test("the resume decision reads the named instance's journal only (here it SUPERSEDES); the other's is untouched", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const b = await instanceWithOpenJournal(root, "rm_local_bravo");
+    rmSync(a.stackStateFile);
+    const before = snapshot(b);
+    const aPlan = readJournal(a)!.planId;
+    // A real boot aimed at alpha. Its plan differs from the planted one, so it
+    // supersedes alpha's journal (§1.3 rule 2) — then fails at the dead daemon.
+    const r = run(root, "smoke.ts", ["--local", "blank", "--instance", "rm_local_alpha"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(`The previous plan ${aPlan} is superseded`);
+    const archived = readArchivedJournals(a);
+    expect(archived.map((j) => String(j.planId))).toEqual([String(aPlan)]);
+    expect(String(readJournal(a)!.planId)).not.toBe(String(aPlan));
+    // bravo: not archived, not superseded, not written.
+    expect(readArchivedJournals(b)).toEqual([]);
+    expect(snapshot(b)).toEqual(before);
+    expect(computePlanId(planFor("rm_local_bravo"))).toBe(readJournal(b)!.planId);
+  }, 90_000);
 });

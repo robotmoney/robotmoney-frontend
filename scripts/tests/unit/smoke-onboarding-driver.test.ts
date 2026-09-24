@@ -1,5 +1,18 @@
-// The standing smoke's onboarding driver rides the RETRY wrapper and names the
-// classified outcome (docs/architecture.md §11 R8 / §11.3 E4, issue #278).
+// The smoke's onboarding admissions ride the RETRY wrapper and name the
+// classified outcome (docs/architecture.md §11 R8 / §11.3 E4, issue #278) —
+// and, since issue #1026, `bun smoke` runs NO standing in-process driver at all.
+//
+// SPEC §1 (issue #1026). "`bun smoke --static-port` brings up the production
+// cluster and **exits**. Containers stay up under Docker." A process that exits
+// at readiness cannot host a loop that admits newcomers or convenes sessions for
+// hours afterwards, so the standing onboarding driver and the standing swarm
+// loop are retired from smoke-main.ts: sessions are the system-scheduler's
+// (scheduler spec), and takes and admissions are participants' — standing
+// containers (smoke spec §6.2) that outlive the invoking terminal. What remains
+// in the boot is the CI real-inference admission sweep, which must still ride
+// the retry wrapper with the running stack's exact compose environment. The
+// graders below stay exported and red-controlled, so a driver re-introduced
+// anywhere is held to the same standard.
 //
 // WHAT THIS PROTECTS. On 2026-07-25 a standing smoke run admitted ZERO members.
 // The member agent REFUSED the canonical onboarding prompt, the container
@@ -91,10 +104,10 @@ export function admissionDelaysComeFromProfile(body: string): string | null {
 }
 
 /** Every smoke admission must reuse the exact environment of its live stack. */
-export function retryCallsReuseStackEnvironment(src: string): string | null {
+export function retryCallsReuseStackEnvironment(src: string, expectedCalls = 1): string | null {
   const calls = [...src.matchAll(/await\s+runOnboardingEvalWithRetry\(\{[\s\S]*?\n\s*\}\);/g)].map((m) => m[0]);
-  if (calls.length !== 2) {
-    return `expected exactly two smoke retry-wrapper call sites, found ${calls.length}`;
+  if (calls.length !== expectedCalls) {
+    return `expected exactly ${expectedCalls} smoke retry-wrapper call site(s), found ${calls.length}`;
   }
   const missing = calls.filter((call) => !/composeSpawnEnv:\s*stack\.spawnEnv/.test(call));
   return missing.length === 0
@@ -132,58 +145,40 @@ export function retainsProspectTranscript(body: string): string | null {
   return null;
 }
 
-describe("the smoke's onboarding driver (scripts/lib/smoke-main.ts)", () => {
-  const body = onboardingDriverBody(smokeMain);
+/**
+ * null when `src` hosts no standing in-process driver and does not stay
+ * resident after readiness; a reason string otherwise (spec §1).
+ */
+export function runsNoStandingDriver(src: string): string | null {
+  for (const retired of ["async function onboardingDriver(", "async function swarmDriver(", "void onboardingDriver()", "void swarmDriver()"]) {
+    if (src.includes(retired)) return `smoke-main.ts still hosts a standing driver (${retired}) — bun smoke exits at readiness (spec §1)`;
+  }
+  if (/new Promise<never>\(/.test(src)) return "smoke-main.ts still awaits a never-settling promise after readiness";
+  return null;
+}
 
-  test("the extracted driver body is the real one — not an empty or truncated slice", () => {
-    expect(body.length).toBeGreaterThan(500);
-    expect(body).toContain("plannedNewcomer(n)");
-    // Was `startOnboarding(`, a TUI pane call; `bun smoke` draws no TUI now
-    // (issue #1026), so the anchor is the driver's own launch line instead.
-    expect(body).toContain("launching the member-agent container");
+describe("the smoke's onboarding admissions (scripts/lib/smoke-main.ts)", () => {
+  test("bun smoke hosts no standing onboarding or swarm driver, and never stays resident (spec §1)", () => {
+    expect(runsNoStandingDriver(smokeMain)).toBeNull();
+    // It exits 0 once readiness is logged: the READY line, then process.exit(0).
+    const ready = smokeMain.indexOf("log(`READY");
+    expect(ready).toBeGreaterThan(-1);
+    expect(smokeMain.indexOf("process.exit(0);", ready)).toBeGreaterThan(ready);
   });
 
-  test("it rides runOnboardingEvalWithRetry — a refusal can no longer forfeit a roster seat", () => {
-    expect(ridesRetryWrapper(body)).toBeNull();
+  test("the CI sweep rides runOnboardingEvalWithRetry — a refusal cannot forfeit a seat there either", () => {
+    const sweep = smokeMain.slice(smokeMain.indexOf('if (process.env.ONBOARDING_REAL_EVAL === "1")'));
+    expect(ridesRetryWrapper(sweep)).toBeNull();
   });
 
-  test("it logs the classified outcome and the evidence that decided it", () => {
-    expect(logsClassifiedOutcome(body)).toBeNull();
-  });
-
-  test("the bare runOnboardingEval is not even imported by the driver's module", () => {
-    // The smoke's CI sweep block already used the wrapper; with the driver moved
-    // over, nothing in this file needs the unretried form at all.
+  test("the bare runOnboardingEval is not even imported by the boot", () => {
     const importBlock = smokeMain.slice(smokeMain.indexOf("} from \"./onboarding-eval.ts\";") - 400, smokeMain.indexOf("} from \"./onboarding-eval.ts\";"));
     expect(importBlock).toContain("runOnboardingEvalWithRetry");
-    expect(importBlock).toContain("classifyOutcome");
     expect(importBlock.match(/(?<!WithRetry)\brunOnboardingEval,/)).toBeNull();
   });
 
-  test("the driver still distinguishes a NEVER-retried outcome in its log wording", () => {
-    // A blanket "retries exhausted" on every failure would erase the very
-    // distinction §11 R8 depends on: a navigation failure is a real red result.
-    expect(body).toContain("this is a real eval result, never retried");
-    expect(body).toContain("retries exhausted");
-  });
-
-  test("both the CI sweep and standing driver reuse the running stack's exact Compose environment", () => {
+  test("the CI sweep reuses the running stack's exact Compose environment", () => {
     expect(retryCallsReuseStackEnvironment(smokeMain)).toBeNull();
-  });
-
-  test("it retains a discoverable, tailable per-prospect transcript for every admission attempt (issue #317)", () => {
-    expect(retainsProspectTranscript(body)).toBeNull();
-  });
-
-  test("the driver imports startProspectTranscript from its dedicated module", () => {
-    expect(smokeMain).toContain('import { startProspectTranscript } from "./smoke-prospect-transcript.ts"');
-  });
-
-  test("its admission delays come from the cadence profile, not from 60_000 / 300_000 literals", () => {
-    // Issue #371: under `--stage` an admission must land once per swarm
-    // interval (6 h). A surviving literal here would keep newcomers arriving
-    // every five minutes on the public smoke regardless of the profile.
-    expect(admissionDelaysComeFromProfile(body)).toBeNull();
   });
 });
 
@@ -254,7 +249,17 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
 
   test("the stack-environment guard reports a call site that drops composeSpawnEnv", () => {
     const broken = smokeMain.replaceAll("composeSpawnEnv: stack.spawnEnv,", "");
-    expect(retryCallsReuseStackEnvironment(broken)).toContain("2/2");
+    expect(retryCallsReuseStackEnvironment(broken)).toContain("1/1");
+  });
+
+  // Issue #1026 controls: the retired standing driver and the forever-await
+  // that kept `bun smoke` resident are both REPORTED.
+  test("runsNoStandingDriver REPORTS the retired standing onboarding driver", () => {
+    expect(runsNoStandingDriver(`${PRE_FIX_DRIVER}void onboardingDriver();`)).toContain("onboardingDriver");
+  });
+
+  test("runsNoStandingDriver REPORTS the retired forever-await", () => {
+    expect(runsNoStandingDriver("await new Promise<never>(() => { /* run forever */ });")).toContain("never-settling");
   });
 
   // Issue #317 controls: a driver that launches the eval but never retains a
@@ -297,8 +302,12 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
     expect(reason).toContain("finishThrew");
   });
 
-  test("retainsProspectTranscript accepts the real driver's wiring", () => {
-    expect(retainsProspectTranscript(onboardingDriverBody(smokeMain))).toBeNull();
+  test("retainsProspectTranscript accepts a driver wired the way the retired one was", () => {
+    const wired =
+      "const transcript = startProspectTranscript({ identity });\n" +
+      "await runOnboardingEvalWithRetry({ identity, onStructuredEvent: transcript.sink });\n" +
+      "transcript.finish(result, 0);\n} catch (err) {\ntranscript.finishThrew(err, 0);\n";
+    expect(retainsProspectTranscript(wired)).toBeNull();
   });
 
   // Issue #371 controls. The pre-#371 driver read its delays from two constants
@@ -325,8 +334,10 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
     expect(admissionDelaysComeFromProfile(half)).toContain("300000");
   });
 
-  test("re-inlining the interval into the REAL driver body is caught", () => {
-    const broken = onboardingDriverBody(smokeMain).replaceAll("cadence.onboardingIntervalMs", "300_000");
+  test("re-inlining the interval into a profile-driven driver body is caught", () => {
+    const profiled = "const delay = admissionDelayMs(admitted, cadence.onboardingFirstMs, cadence.onboardingIntervalMs);";
+    expect(admissionDelaysComeFromProfile(profiled)).toBeNull();
+    const broken = profiled.replaceAll("cadence.onboardingIntervalMs", "300_000");
     expect(admissionDelaysComeFromProfile(broken)).toContain("300_000");
   });
 });
