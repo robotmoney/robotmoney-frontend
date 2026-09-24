@@ -2,10 +2,10 @@
 // split rule): which services a failed boot stops, what it recovers out of the
 // log as a cause, and that the pane says whether the database is still moving.
 import { describe, expect, test } from "bun:test";
-import { DB_WRITER_SERVICES, selectFailureDetail } from "../../lib/smoke-failure.ts";
-// The painting half moved to the TUI view (issue #1026), so the decisions
-// `bun smoke` imports carry no TUI module; the assertions are unchanged.
-import { renderFailurePane, writerQuiesceLine, type FatalState } from "../../lib/smoke-tui-view.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "../../lib/smoke-failure.ts";
 
 const STRIP_ANSI = /\x1b\[[0-9;]*m/g;
 const plain = (s: string) => s.replace(STRIP_ANSI, "");
@@ -41,8 +41,8 @@ describe("writerQuiesceLine — states whether the database stopped changing", (
     expect(line).toContain("smoke:down");
   });
 
-  test("every state renders a non-empty line (no silent gap in the pane)", () => {
-    for (const w of ["pending", "stopped", "failed", "none"] as const) {
+  test("every state renders a non-empty line (no silent gap in the report)", () => {
+    for (const w of ["stopped", "failed", "none"] as const) {
       expect(plain(writerQuiesceLine(w)).trim().length).toBeGreaterThan(0);
     }
   });
@@ -108,38 +108,42 @@ describe("selectFailureDetail — recovers a cause the orchestrator never sees",
   });
 });
 
-describe("renderFailurePane", () => {
-  const fatal: FatalState = {
-    step: "archive restore",
-    message: "archive initializer (already migrated) failed (exit 1)",
-    detail: ["2 inconsistencies detected", "full log: /tmp/smoke.log"],
-    writers: "stopped",
+// The failure PANE retired with the TUI (issue #1026, smoke spec §1: `bun
+// smoke` draws nothing). What an operator gets instead is the boot's own
+// printed report, executed here as a real failing `bun smoke` process: Docker
+// is pointed at a dead socket, so the boot resolves its instance, prints and
+// journals its plan, and then fails at the stack's Docker check.
+describe("a failed boot's printed report (it replaced the failure pane)", () => {
+  const repoRoot = join(import.meta.dir, "..", "..", "..");
+  const root = mkdtempSync(join(tmpdir(), "rm-smoke-failure-"));
+  const credentials = join(root, "credential.json");
+  Bun.write(credentials, JSON.stringify({ agents: {}, judges: {} }));
+  const run = () => {
+    const r = Bun.spawnSync(
+      ["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), "--local", "blank", "--instance", "rm_local_failreport", "--credentials", credentials],
+      {
+        cwd: repoRoot,
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1", RM_ENV: "smoke", AGENT_MODEL: "free" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    return { code: r.exitCode, out: `${r.stdout.toString()}${r.stderr.toString()}` };
   };
 
-  test("shows the failed step, the message, the detail and the writer state together", () => {
-    const pane = renderFailurePane(fatal, 100, "rm_smoke_stack_x").map(plain).join("\n");
-    expect(pane).toContain("STARTUP FAILED");
-    expect(pane).toContain("archive restore");
-    expect(pane).toContain("exit 1");
-    expect(pane).toContain("2 inconsistencies detected");
-    expect(pane).toContain("nothing is still writing");
-  });
-
-  test("tells the operator how to inspect the stack it deliberately left up", () => {
-    const pane = renderFailurePane(fatal, 100, "rm_smoke_stack_x").map(plain).join("\n");
-    expect(pane).toContain("smoke:status");
-    expect(pane).toContain("rm_smoke_stack_x");
-  });
-
-  test("never emits a line wider than the terminal (the TUI paints these raw)", () => {
-    for (const line of renderFailurePane(fatal, 40, "rm_smoke_stack_x")) {
-      expect(plain(line).length).toBeLessThanOrEqual(40);
+  test("names the failure, says whether the writers stopped, and how to inspect and stop the instance", () => {
+    try {
+      const r = run();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("[smoke] startup failed: docker is required");
+      // The dead daemon cannot stop anything, and the report says so rather than implying calm.
+      expect(r.out).toContain(`[smoke] ${writerQuiesceLine("failed")}`);
+      expect(r.out).toContain("inspect:     bun smoke:status --instance rm_local_failreport");
+      expect(r.out).toContain("tear down:   bun smoke:down --instance rm_local_failreport");
+      // Printed and exited: nothing repaints.
+      expect(r.out).not.toContain("\x1b[?1049h");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  test("a step-less failure (died before any step began) still renders", () => {
-    const pane = renderFailurePane({ ...fatal, step: undefined }, 100, "p").map(plain).join("\n");
-    expect(pane).toContain("STARTUP FAILED");
-    expect(pane).toContain("exit 1");
-  });
+  }, 60_000);
 });

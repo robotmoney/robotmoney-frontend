@@ -7,11 +7,12 @@
 // applied to the TUI view and the smoke plan. smoke-main.ts keeps only the
 // wiring: running `docker compose stop`, and reading the log file off disk.
 //
-// NO TUI IMPORT. `bun smoke` imports this module and draws no TUI (smoke spec
-// §1), so how a failure is PAINTED — writerQuiesceLine() and
-// renderFailurePane() — lives with the rest of the painting, in
-// smoke-tui-view.ts. scripts/tests/unit/smoke-tui.test.ts walks the import
-// graph and fails if a TUI module comes back through here.
+// NO TUI. `bun smoke` draws no TUI (smoke spec §1): a failure is printed as
+// plain lines and the process exits. writerQuiesceLine() below is the one line
+// of that report that is a decision rather than a message; the failure pane
+// that used to paint it (smoke-tui-view.ts) is retired with the TUI.
+// scripts/tests/unit/smoke-tui.test.ts walks the import graph and fails if a
+// TUI module comes back through here.
 
 /**
  * Every compose service that WRITES to the database — the set a failed startup
@@ -83,4 +84,22 @@ export function selectFailureDetail(logText: string, logFile: string): string[] 
     ? tail.slice(first, first + MAX_DETAIL_LINES)
     : tail.slice(-MAX_DETAIL_LINES);
   return [...picked, `full log: ${logFile}`];
+}
+
+/** Whether a failed boot stopped the database writers (DB_WRITER_SERVICES). */
+export type WriterQuiesce = "stopped" | "failed" | "none";
+
+/**
+ * One line stating, plainly, whether the database is still being written to.
+ *
+ * The operator's next decision depends on this more than on the error text, so
+ * it is never implied: a failed quiesce says so in as many words, because the
+ * writes it could not stop are the ones no teardown can roll back.
+ */
+export function writerQuiesceLine(w: WriterQuiesce): string {
+  switch (w) {
+    case "stopped": return "database writers: stopped — nothing is still writing";
+    case "none": return "database writers: none were running";
+    case "failed": return "database writers: could NOT stop them — they may STILL be writing; run `bun smoke:down`";
+  }
 }

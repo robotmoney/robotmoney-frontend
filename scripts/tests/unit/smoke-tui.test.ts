@@ -359,7 +359,8 @@ describe("renderFrame — §1, the source label and the redaction promise", () =
 // or off it. The proof is structural: walk every relative import (static AND
 // dynamic) reachable from the `bun smoke` entry point and assert that no TUI
 // module is among them. The TUI modules are the alternate-screen driver
-// (tui.ts), the panes it painted (smoke-tui-view.ts) and this observer.
+// (tui.ts), the panes it painted (smoke-tui-view.ts, retired by issue #1026 and
+// listed so it cannot come back through the boot) and this observer.
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const TUI_MODULES = ["scripts/lib/tui.ts", "scripts/lib/smoke-tui-view.ts", "scripts/smoke-tui.ts"];
 

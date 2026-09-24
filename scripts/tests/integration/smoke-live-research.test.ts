@@ -16,6 +16,7 @@
 // Docker is a hard dependency of this repo's test harness; a missing docker CLI
 // fails this test loudly — never a silent skip (test-coverage policy).
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -78,9 +79,6 @@ describe("smoke lane topology (issue #107)", () => {
 
 describe("smoke readiness polling is lane-aware (issue #107)", async () => {
   const src = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
-  // Issue #456: the readiness-probe polling (including these SQL kind
-  // clauses) moved out of smoke-main.ts into its own module.
-  const pollingSrc = await Bun.file(join(repoRoot, "scripts/lib/smoke-readiness-polling.ts")).text();
   // Issue #1026: `bun smoke` draws no TUI (spec §1), so smoke-main.ts no longer
   // holds a startup pane naming the lanes. The lanes a failed boot must STOP
   // are still named, in the decisions module smoke-main.ts does import.
@@ -92,15 +90,16 @@ describe("smoke readiness polling is lane-aware (issue #107)", async () => {
     }
   });
 
-  test("research pane polls the two distinct kinds and never the retired analytics.run", () => {
-    expect(pollingSrc).toContain("j.kind IN ('regime.classify','research.refresh')");
-    expect(pollingSrc).toContain("kind IN ('regime.classify','research.refresh')");
-    expect(pollingSrc).not.toContain("analytics.run");
+  // The research PANE and its poller retired with the TUI (issue #1026, smoke
+  // spec §1): `bun smoke` polls no job kinds at all now. What must still hold
+  // is that nothing in the boot names the retired analytics.run kind.
+  test("the boot never names the retired analytics.run kind, and runs no job poller", () => {
     expect(src).not.toContain("analytics.run");
+    expect(src).not.toContain("smoke-readiness-polling");
   });
 
-  test("independent countdown per kind lives in the polling module, and the boot paints none", () => {
-    expect(pollingSrc).toContain("function secsUntilNext(kind: string)");
+  test("the per-kind countdown retired with the poller, and the boot paints none", () => {
+    expect(existsSync(join(repoRoot, "scripts/lib/smoke-readiness-polling.ts"))).toBe(false);
     expect(src).not.toContain("secsUntilNext(");
   });
 });

@@ -122,11 +122,14 @@ describe("every compose invocation passes --env-file /dev/null (criterion 122)",
   const files = sourceFiles();
 
   test("the sweep is not vacuous: it reads the files that spawn compose", () => {
-    for (const f of ["scripts/lib/smoke-main.ts", "scripts/smoke-down.ts", "scripts/smoke-status.ts", "scripts/lib/smoke-readiness-polling.ts", "scripts/lib/smoke-telemetry.ts", "scripts/stack/config.ts"]) {
+    for (const f of ["scripts/lib/smoke-main.ts", "scripts/smoke-down.ts", "scripts/smoke-status.ts", "scripts/stack/config.ts"]) {
       expect(files).toContain(f);
     }
     const composeMentions = files.filter((f) => /["']compose["']\s*,/.test(readFileSync(join(repoRoot, f), "utf8")));
-    expect(composeMentions.length).toBeGreaterThanOrEqual(6);
+    // Four since issue #1026 retired the two TUI pollers that also spelled a
+    // compose argv (smoke-readiness-polling.ts, smoke-telemetry.ts); every one
+    // of the four is named above, so the floor is exact, not a guess.
+    expect(composeMentions.length).toBeGreaterThanOrEqual(4);
   });
 
   test("no TypeScript source spawns compose without --env-file /dev/null", () => {

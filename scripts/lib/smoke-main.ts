@@ -53,7 +53,7 @@ import {
 } from "../stack/index.ts";
 import { gitRunner, resolveSourceIdentities } from "../stack/source-identity.ts";
 import { ROUTES } from "@robotmoney/contract";
-import { DB_WRITER_SERVICES, selectFailureDetail } from "./smoke-failure.ts";
+import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "./smoke-failure.ts";
 import {
   acquireDeploymentLock,
   instanceFlag,
@@ -1547,7 +1547,7 @@ main().catch(async (err) => {
   // LOCAL: the stack stays up for inspection, so the writers must be stopped
   // EXPLICITLY — leaving them running is what let a failed boot go on mutating
   // the database (a remote one, that no teardown can roll back).
-  const writers = dockerEnv ? quiesceWriters() : "stopped";
+  const writers = dockerEnv ? quiesceWriters() : "none";
   // Failure may have happened before readiness wrote the stack record, yet the
   // containers can already be up. Write it best-effort so `smoke:down` can find
   // and tear them down. Never auto-teardown locally.
@@ -1557,11 +1557,7 @@ main().catch(async (err) => {
   console.error("[smoke] startup failed:", em);
   for (const d of failureDetail()) console.error(`[smoke]   ${d}`);
   if (!cleaned) dumpDiagnostics();
-  console.log(
-    writers === "stopped"
-      ? "[smoke] database writers: stopped — nothing is still writing"
-      : "[smoke] database writers: could NOT be stopped — they may STILL be writing; run `bun run smoke:down`",
-  );
+  console.log(`[smoke] ${writerQuiesceLine(writers)}`);
   printLeaveRunning();
   process.exit(1);
 });
