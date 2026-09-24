@@ -19,6 +19,11 @@
 //   it, Up and Down move through its links (Up from the first returns to the
 //   label), Home and End jump, Esc closes and hands focus back to the label.
 //
+// The Vaults card and the sheet show each vault's value, read the first time
+// either opens, not on every page load. Only a live read shows: a saved
+// snapshot or devnet data must be labelled wherever a figure appears, and a
+// menu row has no room for the label, so it shows none.
+//
 // The active section is not tracked here: router.js syncNav() marks it on
 // every route change (lib/site-nav.js navSectionFor).
 import { INTENT_MS, LEAVE_MS } from "../lib/sleeve-explorer.js";
@@ -31,8 +36,10 @@ export function registerSiteNav(Alpine) {
     pinned: false,  // opened by click or key: the pointer leaving does not close it
     sheet: false,   // the phone sheet
     wide: true,
+    vaultFigures: null, // { total, rmusdc, ... } once a live read lands
     _intent: 0,
     _grace: 0,
+    _figuresAsked: false,
 
     init() {
       const mq = window.matchMedia(WIDE);
@@ -59,7 +66,37 @@ export function registerSiteNav(Alpine) {
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && this.open && !this.$root.contains(document.activeElement)) this.close();
       });
+      this.$watch("open", (key) => { if (key === "vaults") this.loadVaultFigures(); });
       this.$root.classList.add("nav--js");
+    },
+
+    async loadVaultFigures() {
+      if (this._figuresAsked) return;
+      this._figuresAsked = true;
+      try {
+        // Imported here, not at the top: every page loads the nav, and only a
+        // reader who opens Vaults needs the vault loader.
+        const [{ loadVaultOverview }, { fmtUsd }] = await Promise.all([
+          import("../lib/vault-source.js"),
+          import("../lib/vault-data.js"),
+        ]);
+        const load = await loadVaultOverview({ recommendation: false });
+        if (!load?.overview || load.error || load.label) return;
+        const figures = {};
+        for (const v of load.overview.vaults || []) {
+          if (v.availability === "not_on_network") figures[v.slug] = "Coming soon";
+          else if (v.availability === "live" && v.tvlUsd !== null) figures[v.slug] = fmtUsd(v.tvlUsd);
+        }
+        const total = load.overview.combined?.tvlUsd;
+        if (total !== null && total !== undefined) figures.total = fmtUsd(total);
+        this.vaultFigures = figures;
+      } catch {
+        /* The menu works without its figures. */
+      }
+    },
+
+    vaultFigure(key) {
+      return this.vaultFigures?.[key] || "";
     },
 
     isOpen(key) {
@@ -70,12 +107,6 @@ export function registerSiteNav(Alpine) {
       if (!this.wide || e.pointerType !== "mouse") return;
       clearTimeout(this._grace);
       clearTimeout(this._intent);
-      if (key === null) {
-        // A label with no panel (Token) closes a hovered panel as the pointer
-        // reaches it, and leaves a pinned one alone.
-        if (this.open && !this.pinned) this.open = null;
-        return;
-      }
       if (this.open === key) return;
       if (this.open) {
         // Moving along the bar hands over to hover: the next click on this
@@ -123,6 +154,7 @@ export function registerSiteNav(Alpine) {
 
     setSheet(on) {
       this.sheet = on;
+      if (on) this.loadVaultFigures();
       document.documentElement.classList.toggle("nav-sheet-open", on);
     },
 

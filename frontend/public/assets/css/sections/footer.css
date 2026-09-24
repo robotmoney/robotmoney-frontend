@@ -20,12 +20,15 @@
   padding-block: 2.75rem;  /* reduced from py-12 */
 }
 
-/* <div className="grid md:grid-cols-5 gap-10"> */
+/* The site index (RM-124): the brand on its own row, then six columns in
+   the nav's order. Two to a row on a phone, three on a tablet, all six in
+   one row from 1024px. */
 .footer__grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 2rem; /* reduced from gap-10 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.25rem 1.5rem;
 }
+.footer__col--brand { grid-column: 1 / -1; }
 
 /* <div className="space-y-4 ..."> — vertical rhythm between direct children */
 .footer__col > * + * {
@@ -142,21 +145,35 @@
   text-align: center;
 }
 
+/* The bottom bar: legal links and the copyright on one line, the disclaimer
+   under them. */
+.footer__legal { order: 1; }
+.footer__bottom > .footer__fineprint:not(.footer__fineprint--legal) { order: 2; }
+.footer__fineprint--legal { order: 3; }
+/* Legal, in the bottom bar: the same quiet mono as the fine print beside it. */
+.footer__legal { display: flex; gap: 1.25rem; }
+.footer__legal-link {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: color 0.2s var(--ease-out-expo);
+}
+.footer__legal-link:hover { color: var(--color-link); }
+
 /* ── md: breakpoint (Tailwind md = 768px) ── */
 @media (min-width: 768px) {
-  /* grid md:grid-cols-5 */
-  .footer__grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-  /* md:col-span-2 on the brand column */
-  .footer__col--brand {
-    grid-column: span 2 / span 2;
-  }
+  .footer__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 2rem; }
   /* md:flex-row + md:text-left on the bottom bar */
   .footer__bottom {
     flex-direction: row;
   }
+  .footer__bottom { flex-wrap: wrap; row-gap: 0.75rem; }
   .footer__fineprint--legal {
+    flex: 1 1 100%;
+    max-width: 48rem;
     text-align: left;
   }
 }
@@ -166,4 +183,7 @@
   .footer__inner {
     padding-inline: 2rem; /* px-8 */
   }
+}
+@media (min-width: 1024px) {
+  .footer__grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2.75rem 1.75rem; }
 }

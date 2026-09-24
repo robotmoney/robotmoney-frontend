@@ -18,9 +18,8 @@ export const NAV_SECTIONS = [
     key: "research",
     prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks"],
   },
-  { key: "token", prefixes: ["/tokenomics"] },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
-  { key: "about", prefixes: ["/media", "/performance"] },
+  { key: "company", prefixes: ["/tokenomics", "/media", "/performance"] },
 ];
 
 /** @param {string} pathname */
