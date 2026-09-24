@@ -29,6 +29,7 @@ import {
   SNAPSHOT_FILES,
   baselineLedger,
   bootstrapBlankDatabase,
+  dumpSessionSettings,
   loadSnapshot,
 } from "../src/db/schema-snapshot.ts";
 import { runPreflight, type PreflightContext, type PreflightReport } from "../src/db/preflight.ts";
@@ -305,6 +306,50 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
       const [schedule] = await db<{ kind: string }[]>`SELECT kind FROM job_schedules`;
       expect(schedule?.kind).toBe("vault.sample_share_price");
     });
+  });
+
+  test("leaves the caller's session as it found it — the dump's preamble settings do not outlive the bootstrap", async () => {
+    // pg_dump's preamble turns statement_timeout off, row security off and
+    // function-body checks off for the SESSION. A bootstrap that left them in
+    // force would hand its caller a handle with no statement timeout and
+    // row-level security disabled — and RESET ALL is no fix, because it would
+    // also drop the caller's SET ROLE.
+    const snapshot = await loadSnapshot();
+    const touched = dumpSessionSettings(snapshot.declarationSql, snapshot.bootstrapDataSql);
+    for (const name of ["search_path", "statement_timeout", "lock_timeout", "row_security", "check_function_bodies", "client_min_messages"]) {
+      expect(touched).toContain(name);
+    }
+    await withBlankDatabase(async (db) => {
+      await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      const read = async () =>
+        (
+          (await db.unsafe(`
+            SELECT current_user AS role,
+                   current_setting('search_path') AS search_path,
+                   current_setting('statement_timeout') AS statement_timeout,
+                   current_setting('lock_timeout') AS lock_timeout,
+                   current_setting('row_security') AS row_security,
+                   current_setting('check_function_bodies') AS check_function_bodies,
+                   current_setting('client_min_messages') AS client_min_messages`)) as unknown as Record<string, string>[]
+        )[0]!;
+      await db.unsafe("SET ROLE rm_owner");
+      const before = await read();
+      await bootstrapBlankDatabase(db, snapshot);
+      expect(await read()).toEqual(before);
+      expect(before.role).toBe("rm_owner");
+      expect(before.row_security).toBe("on");
+      expect(before.check_function_bodies).toBe("on");
+    });
+  });
+
+  test("dumpSessionSettings reads SET lines and session set_config calls, never a transaction-local one", () => {
+    expect(
+      dumpSessionSettings(
+        "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n" +
+          "SELECT set_config('work_mem', '1MB', true);\nSET ROLE rm_owner;\nSET LOCAL lock_timeout = 0;",
+        "set row_security TO off;\nSET statement_timeout = 0;",
+      ),
+    ).toEqual(["statement_timeout", "search_path", "row_security"]);
   });
 
   test("writes deployment_identity = rehearsal, never production", async () => {
@@ -802,6 +847,40 @@ describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstra
         { revision: 1, final: false },
         { revision: 2, final: true },
       ]);
+    });
+  });
+
+  test("D51 for a writer that predates `final`: an insert that omits it becomes the member's one final take", async () => {
+    // The old code keeps accepting takes during §8.5's migrate-then-boot
+    // window, and after a code-only rollback. Its INSERT never names `final`,
+    // so without the trigger a first take would have no final row and an
+    // amendment would leave the OLD revision final.
+    await withRealBootstrap(async ({ owner, app }) => {
+      await owner`INSERT INTO swarm_subjects (id, name) VALUES ('legacy-subject', 'Legacy Subject')`;
+      await owner`INSERT INTO swarm_members (id, name, handle) VALUES ('legacy-member', 'Legacy Member', 'legacy-member')`;
+      const [session] = (await owner`
+        INSERT INTO swarm_sessions (subject_id, state) VALUES ('legacy-subject', 'collecting')
+        RETURNING id`) as unknown as { id: string }[];
+      const legacyTake = (revision: number) => `
+        INSERT INTO swarm_recommendations
+          (session_id, member_id, subject_id, date, nonce, stance, payload, signature, revision)
+        VALUES ('${session!.id}', 'legacy-member', 'legacy-subject', CURRENT_DATE, 'legacy-${revision}', 'hold',
+                '{}'::jsonb, 'sig-${revision}', ${revision})`;
+      const finals = async () =>
+        (
+          (await owner`
+            SELECT revision FROM swarm_recommendations
+             WHERE session_id = ${session!.id} AND member_id = 'legacy-member' AND final
+             ORDER BY revision`) as unknown as { revision: number }[]
+        ).map((r) => r.revision);
+
+      // As rm_app, the runtime role, over a real login: the trigger's UPDATE
+      // runs with the inserter's privileges, so this is also the proof that
+      // UPDATE (final) is enough for it.
+      await app.unsafe(legacyTake(1));
+      expect(await finals()).toEqual([1]);
+      await app.unsafe(legacyTake(2));
+      expect(await finals()).toEqual([2]);
     });
   });
 

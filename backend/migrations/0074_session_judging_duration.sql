@@ -17,11 +17,22 @@
 -- subject's judging wait cannot move the deadline of a session that is already
 -- waiting on a judge.
 --
--- NULLABLE, and NULL means "not captured yet", exactly like `judge_mode`: a
--- `collecting` session has not closed, so there is nothing to capture. It is
--- not a disabled state — the CHECK refuses zero and negatives, and a session
--- that reaches `judging` with no captured duration is a turnover defect for
--- the settlement code to refuse, not a value to default.
+-- NULLABLE, and NULL means "not captured": either the session is still
+-- `collecting` (nothing to capture yet), or it closed under code that predates
+-- this column. It is not a disabled state — the CHECK refuses zero and
+-- negatives, and nothing may default a NULL to some duration.
+--
+-- WHAT A NULL MEANS TO SETTLEMENT. This column is read once, at the turnover,
+-- to COMPUTE `judging_deadline_at`; settlement compares against that stored
+-- absolute instant (0068), never against this column. So:
+--   * NULL here, `judging_deadline_at` stored — a LEGACY session. It closed
+--     before this migration, or during §8.5's migrate-then-boot window when
+--     the old code was still turning epochs over, or after a code-only
+--     rollback. Its deadline is already fixed; settle it against that stored
+--     deadline exactly as today. This is not a defect and must not be refused.
+--   * NULL here AND no stored `judging_deadline_at` when settlement needs a
+--     deadline — nothing fixed one and nothing can compute one. That, and
+--     only that, is the defect for settlement to refuse.
 --
 -- NO BACKFILL. Existing closed sessions settled (or are settling) under the
 -- hardcoded 900-second deadline, and their `judging_deadline_at` is already

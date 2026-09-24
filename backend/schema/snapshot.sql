@@ -438,6 +438,39 @@ END;
 $$;
 
 
+--
+-- Name: swarm_recommendations_default_final(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.swarm_recommendations_default_final() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- A writer that knows D51 set the flag itself; the partial unique index
+  -- is its check.
+  IF NEW.final THEN
+    RETURN NEW;
+  END IF;
+  -- Only the member's newest revision in the session is the counting take.
+  IF EXISTS (
+    SELECT 1 FROM public.swarm_recommendations
+     WHERE session_id = NEW.session_id
+       AND member_id = NEW.member_id
+       AND revision >= NEW.revision
+  ) THEN
+    RETURN NEW;
+  END IF;
+  UPDATE public.swarm_recommendations
+     SET final = false
+   WHERE session_id = NEW.session_id
+     AND member_id = NEW.member_id
+     AND final;
+  NEW.final := true;
+  RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -5379,6 +5412,13 @@ ALTER TABLE public.swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendat
 CREATE TRIGGER swarm_recommendations_append_only_row BEFORE DELETE ON public.swarm_recommendations FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendations_append_only_row;
+
+
+--
+-- Name: swarm_recommendations swarm_recommendations_default_final_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_recommendations_default_final_trigger BEFORE INSERT ON public.swarm_recommendations FOR EACH ROW EXECUTE FUNCTION public.swarm_recommendations_default_final();
 
 
 --
