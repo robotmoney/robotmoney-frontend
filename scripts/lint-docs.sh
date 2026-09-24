@@ -15,6 +15,12 @@
 #   4. the IC swarm docs (issue #187) never regress to the legacy
 #      /api/ic/submit design: no reference to /api/ic/submit or the
 #      x-ic-key header, per that issue's own acceptance criterion.
+#   5. no current doc names the retired `rm_migrator` role (issue #1026
+#      criterion 3, D47). The only allowed hits are the D46/D47 history in
+#      docs/decisions.md and the one "There is no rm_migrator" line in
+#      smoke-production-spec.md §3. docs/archive/ is history and is not scanned.
+#      scripts/tests/unit/docs-no-rm-migrator.test.ts holds the same rule and
+#      its red controls.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -62,6 +68,33 @@ for f in "${ic_docs[@]}"; do
     err "$f still references the legacy /api/ic/submit endpoint or x-ic-key header (issue #187 AC1)"
   fi
 done
+
+# 5. `rm_migrator` appears only in D46/D47 history and smoke-production-spec §3.
+#    The allowed ranges are found by anchor and heading, not by line number, so
+#    an edit above them does not move the goalposts. A missing anchor or heading
+#    allows nothing, which fails loudly instead of passing quietly.
+decisions="docs/decisions.md"
+smoke_spec="docs/technical/smoke-production-spec.md"
+d46="$(grep -n '<a id="d46"></a>' "$decisions" 2>/dev/null | head -1 | cut -d: -f1)"
+d48="$(grep -n '<a id="d48"></a>' "$decisions" 2>/dev/null | head -1 | cut -d: -f1)"
+s3="$(grep -n '^## 3\. ' "$smoke_spec" 2>/dev/null | head -1 | cut -d: -f1)"
+s4="$(grep -n '^## 4\. ' "$smoke_spec" 2>/dev/null | head -1 | cut -d: -f1)"
+spec_hits=0
+migrator_hits="$(git grep -n rm_migrator -- docs ':!docs/archive' 2>/dev/null || true)"
+if [ -n "$migrator_hits" ]; then
+  while IFS=: read -r f line _; do
+    if [ "$f" = "$decisions" ] && [ -n "$d46" ] && [ -n "$d48" ] \
+      && [ "$line" -gt "$d46" ] && [ "$line" -lt "$d48" ]; then
+      continue
+    fi
+    if [ "$f" = "$smoke_spec" ] && [ -n "$s3" ] && [ -n "$s4" ] \
+      && [ "$line" -gt "$s3" ] && [ "$line" -lt "$s4" ] && [ "$spec_hits" -eq 0 ]; then
+      spec_hits=1
+      continue
+    fi
+    err "$f:$line names rm_migrator; only D46/D47 history and smoke-production-spec §3 may (issue #1026)"
+  done <<<"$migrator_hits"
+fi
 
 if [ "$fail" -ne 0 ]; then
   exit 1

@@ -4,8 +4,8 @@
 > [Smoke production spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)
 > governs roles and secrets for the adopted design. This utility's vault and
 > GitHub Environment inventory describe its own older GitOps workflow. They do
-> not authorize storing PostgreSQL owner credentials, adding `rm_migrator`, or
-> routing participant keys through GitHub secrets. Check the script at the exact
+> not authorize storing PostgreSQL owner credentials, adding a separate
+> migration role, or routing participant keys through GitHub secrets. Check the script at the exact
 > commit before using its commands; this document does not establish that any
 > deployment consumes the published values.
 
