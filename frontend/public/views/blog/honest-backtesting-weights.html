@@ -3,7 +3,7 @@
      The figure below renders from that same committed fixture via the
      weightingCompareChart() factory (alpine/views/blog-charts.js), registered
      at boot in alpine/views.js, the same pattern as views/regime.js's canvases. -->
-<article class="blog-root" x-data="weightingCompareChart()" x-init="load()">
+<article class="blog-root" x-data="weightingCompareChart()" x-init="load()" data-anchors>
   <a href="/blog" class="blog-back">&larr; Back to Blog</a>
 
   <header class="blog-header">
@@ -17,16 +17,18 @@
       test without it. The honest version is less flashy, and far more trustworthy.
     </p>
     <p class="rr-note blog-note-line">
-      Research note: not investment advice or an offer to buy or sell any security or digital
-      asset, and Robot Money is not a registered investment advisor. Every figure is a
-      hypothetical backtest that benefits from hindsight in the choice of indicators and
-      parameters, even where the weighting is point-in-time. Past performance does not predict
-      future results. <a href="/disclaimer">Full disclaimer</a>
+      Research note: not investment advice, not a financial product, and not an offer to buy
+      or sell any security or digital asset. Robot Money publishes this as research and is not
+      a registered investment advisor. Every figure is a hypothetical backtest from historical
+      data, not live trading or fund returns, and benefits from hindsight in the choice of
+      indicators and parameters, even where the weighting is point-in-time. Past performance,
+      especially backtested, does not predict future results. Methodology and the live
+      snapshot are on the <a href="/regime">regime page</a>. <a href="/disclaimer">Full disclaimer</a>
     </p>
   </header>
 
   <div class="blog-prose">
-    <h2>A backtest is only as honest as its worst look-ahead</h2>
+    <h2 id="a-backtest-is-only-as-honest-as-its-worst-look-ahead">A backtest is only as honest as its worst look-ahead</h2>
     <p>
       The most valuable thing you can do with a backtest is try to break it. Our
       <a href="/regime">regime classifier</a> reads 20 indicators across a macro panel
@@ -45,7 +47,7 @@
       it&rsquo;s exactly the kind of thing a backtest should be stress-tested for. So we did.
     </p>
 
-    <h2>Three ways to weigh the same signal</h2>
+    <h2 id="three-ways-to-weigh-the-same-signal">Three ways to weigh the same signal</h2>
     <p>
       Everything else held identical: same raw data, same percentile ranking, same
       0.33/0.67 buckets, same 5-day confirmation smoothing, same constant 2.6%/yr cash leg,
@@ -69,7 +71,7 @@
       </li>
     </ul>
 
-    <h2>The comparison</h2>
+    <h2 id="the-comparison">The comparison</h2>
     <figure class="blog-figure">
       <div class="blog-figure-label">Equity curves: static vs equal vs walk-forward weighting</div>
       <div class="blog-figure-chart"><canvas x-ref="chart"></canvas></div>
@@ -81,7 +83,7 @@
       </p>
     </figure>
 
-    <h2>The numbers: ETH / cash</h2>
+    <h2 id="the-numbers-eth-cash">The numbers: ETH / cash</h2>
     <div class="blog-table-wrap">
       <table class="blog-table">
         <thead>
@@ -126,7 +128,7 @@
       </p>
     </div>
 
-    <h2>The numbers: diversified 50/50 ETH+SP500</h2>
+    <h2 id="the-numbers-diversified-50-50-eth-sp500">The numbers: diversified 50/50 ETH+SP500</h2>
     <div class="blog-table-wrap">
       <table class="blog-table">
         <thead>
@@ -166,7 +168,7 @@
       </table>
     </div>
 
-    <h2>What survived the honest test</h2>
+    <h2 id="what-survived-the-honest-test">What survived the honest test</h2>
     <p>
       This is the encouraging part, and it&rsquo;s the part that matters most. The findings
       that hold across <em>all three</em> weighting methods are the ones built on real
@@ -193,7 +195,7 @@
       </li>
     </ul>
 
-    <h2>What was hindsight, and why we&rsquo;re glad we checked</h2>
+    <h2 id="what-was-hindsight-and-why-were-glad-we-checked">What was hindsight, and why we&rsquo;re glad we checked</h2>
     <p>
       The static method made the <strong>conservative</strong> rule look spectacular on ETH:
       21.7&times;, more than double the composite. Under honest walk-forward weights that
@@ -209,7 +211,7 @@
       been trusting a number that hindsight built.
     </p>
 
-    <h2>What we&rsquo;re doing about it</h2>
+    <h2 id="what-were-doing-about-it">What we&rsquo;re doing about it</h2>
     <ul class="blog-list">
       <li>
         <strong>Walk-forward weighting becomes the standard for backtests.</strong> Weights
@@ -231,7 +233,7 @@
       </li>
     </ul>
 
-    <h2>Takeaways</h2>
+    <h2 id="takeaways">Takeaways</h2>
     <p>
       The substance is intact and arguably stronger for being tested: a two-panel regime
       overlay improves risk-adjusted return and materially reduces drawdown versus
@@ -242,7 +244,7 @@
       is the whole job.
     </p>
 
-    <h2>Considerations</h2>
+    <h2 id="considerations">Considerations</h2>
     <ul class="blog-list blog-list-muted">
       <li>
         <strong>Still backtested.</strong> Walk-forward removes look-ahead in the

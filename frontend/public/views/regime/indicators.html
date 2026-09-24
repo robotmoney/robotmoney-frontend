@@ -7,18 +7,23 @@
      The /regime dashboard links each indicator's info icon to
      /regime/indicators#<indicator_id>, so every indicator emits a section
      with a matching id and those fragment links land.
+     Each heading also carries its own slug id, and a data-anchor naming the
+     section id above: the section link lib/heading-anchors.js adds copies
+     #T10Y2Y, the address the dashboard and the index already use, rather
+     than a second one for the same entry.
      Every indicator keeps its upstream primary-source link (FRED, Yahoo
      Finance, DefiLlama, Blockchain.com, Coinmetrics, GeckoTerminal,
      multpl.com) so a reader can verify each number at source.
      NO <script>, NO custom Alpine factories. -->
 
-<section class="ri">
+<section class="ri" data-anchors>
   <div class="ri__container">
     <header class="ri__head">
       <div class="ri__eyebrow">Methodology &middot; Indicator Glossary</div>
       <h1 class="ri__title">The 26 regime indicators</h1>
       <p class="ri__lede">
-        The composite reads 18 indicators in two panels, macro and on-chain. The 8 equity factor
+        What each indicator measures, where the number comes from, and how to read high and low
+        readings. The composite reads 18 indicators in two panels, macro and on-chain. The 8 equity factor
         indicators are computed alongside them for context and are not part of it. Every indicator
         is built from open data and cites its upstream source. The live classification is on the
         <a class="ri__inline" href="/regime">regime page</a>.
@@ -71,7 +76,7 @@
 
     <section class="ri__panel">
       <div class="ri__panel-head" id="panel-macro">
-        <h2 class="ri__panel-tag">Macro panel</h2>
+        <h2 class="ri__panel-tag" id="macro-panel" data-anchor="panel-macro">Macro panel</h2>
         <span class="ri__panel-count">8 indicators</span>
       </div>
       <p class="ri__panel-desc">Traditional-finance signals: rates, credit, the dollar, volatility, and cross-asset ratios.</p>
@@ -79,7 +84,7 @@
 
         <section class="ri__ind" id="T10Y2Y">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">10y&ndash;2y yield curve</h3>
+            <h3 class="ri__ind-name" id="10y-2y-yield-curve" data-anchor="T10Y2Y">10y&ndash;2y yield curve</h3>
             <code class="ri__ind-id">T10Y2Y &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -106,7 +111,7 @@
 
         <section class="ri__ind" id="DFII10">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Real 10y yield</h3>
+            <h3 class="ri__ind-name" id="real-10y-yield" data-anchor="DFII10">Real 10y yield</h3>
             <code class="ri__ind-id">DFII10 &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -133,7 +138,7 @@
 
         <section class="ri__ind" id="T5YIE">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">5y breakeven inflation</h3>
+            <h3 class="ri__ind-name" id="5y-breakeven-inflation" data-anchor="T5YIE">5y breakeven inflation</h3>
             <code class="ri__ind-id">T5YIE &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -160,7 +165,7 @@
 
         <section class="ri__ind" id="HY_OAS">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">HY OAS credit spread</h3>
+            <h3 class="ri__ind-name" id="hy-oas-credit-spread" data-anchor="HY_OAS">HY OAS credit spread</h3>
             <code class="ri__ind-id">HY_OAS &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -187,7 +192,7 @@
 
         <section class="ri__ind" id="DXY">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">DXY (trade-weighted USD)</h3>
+            <h3 class="ri__ind-name" id="dxy-trade-weighted-usd" data-anchor="DXY">DXY (trade-weighted USD)</h3>
             <code class="ri__ind-id">DXY &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -214,7 +219,7 @@
 
         <section class="ri__ind" id="ICSA">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Initial jobless claims</h3>
+            <h3 class="ri__ind-name" id="initial-jobless-claims" data-anchor="ICSA">Initial jobless claims</h3>
             <code class="ri__ind-id">ICSA &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -241,7 +246,7 @@
 
         <section class="ri__ind" id="VIX">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">VIX</h3>
+            <h3 class="ri__ind-name" id="macro-panel-vix" data-anchor="VIX">VIX</h3>
             <code class="ri__ind-id">VIX &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -268,7 +273,7 @@
 
         <section class="ri__ind" id="COPPER_GOLD">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Copper / Gold ratio</h3>
+            <h3 class="ri__ind-name" id="copper-gold-ratio" data-anchor="COPPER_GOLD">Copper / Gold ratio</h3>
             <code class="ri__ind-id">COPPER_GOLD &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -298,7 +303,7 @@
 
     <section class="ri__panel">
       <div class="ri__panel-head" id="panel-onchain">
-        <h2 class="ri__panel-tag">On-chain panel</h2>
+        <h2 class="ri__panel-tag" id="on-chain-panel" data-anchor="panel-onchain">On-chain panel</h2>
         <span class="ri__panel-count">10 indicators</span>
       </div>
       <p class="ri__panel-desc">Crypto-native signals: TVL, stablecoin float, active addresses, valuation, and trend.</p>
@@ -306,7 +311,7 @@
 
         <section class="ri__ind" id="DEFI_TVL">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Total DeFi TVL</h3>
+            <h3 class="ri__ind-name" id="total-defi-tvl" data-anchor="DEFI_TVL">Total DeFi TVL</h3>
             <code class="ri__ind-id">DEFI_TVL &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -333,7 +338,7 @@
 
         <section class="ri__ind" id="STABLES">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Total stablecoin float</h3>
+            <h3 class="ri__ind-name" id="total-stablecoin-float" data-anchor="STABLES">Total stablecoin float</h3>
             <code class="ri__ind-id">STABLES &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -360,7 +365,7 @@
 
         <section class="ri__ind" id="BTC_ACTIVE">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">BTC active addresses</h3>
+            <h3 class="ri__ind-name" id="btc-active-addresses" data-anchor="BTC_ACTIVE">BTC active addresses</h3>
             <code class="ri__ind-id">BTC_ACTIVE &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -387,7 +392,7 @@
 
         <section class="ri__ind" id="ETH_ACTIVE">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">ETH active addresses</h3>
+            <h3 class="ri__ind-name" id="eth-active-addresses" data-anchor="ETH_ACTIVE">ETH active addresses</h3>
             <code class="ri__ind-id">ETH_ACTIVE &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -414,7 +419,7 @@
 
         <section class="ri__ind" id="BTC_MVRV">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">BTC MVRV</h3>
+            <h3 class="ri__ind-name" id="btc-mvrv" data-anchor="BTC_MVRV">BTC MVRV</h3>
             <code class="ri__ind-id">BTC_MVRV &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -441,7 +446,7 @@
 
         <section class="ri__ind" id="BTC_ETH">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">BTC / ETH ratio</h3>
+            <h3 class="ri__ind-name" id="btc-eth-ratio" data-anchor="BTC_ETH">BTC / ETH ratio</h3>
             <code class="ri__ind-id">BTC_ETH &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -468,7 +473,7 @@
 
         <section class="ri__ind" id="ETH_TREND">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">ETH 50d/200d trend</h3>
+            <h3 class="ri__ind-name" id="eth-50d-200d-trend" data-anchor="ETH_TREND">ETH 50d/200d trend</h3>
             <code class="ri__ind-id">ETH_TREND &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -495,7 +500,7 @@
 
         <section class="ri__ind" id="NEW_TOKENS">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">New DEX pools (24h)</h3>
+            <h3 class="ri__ind-name" id="new-dex-pools-24h" data-anchor="NEW_TOKENS">New DEX pools (24h)</h3>
             <code class="ri__ind-id">NEW_TOKENS &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -522,7 +527,7 @@
 
         <section class="ri__ind" id="DEFI_GROWTH">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">DeFi TVL growth (90d)</h3>
+            <h3 class="ri__ind-name" id="defi-tvl-growth-90d" data-anchor="DEFI_GROWTH">DeFi TVL growth (90d)</h3>
             <code class="ri__ind-id">DEFI_GROWTH &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -549,7 +554,7 @@
 
         <section class="ri__ind" id="STABLES_GROWTH">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Stablecoin float growth (90d)</h3>
+            <h3 class="ri__ind-name" id="stablecoin-float-growth-90d" data-anchor="STABLES_GROWTH">Stablecoin float growth (90d)</h3>
             <code class="ri__ind-id">STABLES_GROWTH &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -579,7 +584,7 @@
 
     <section class="ri__panel">
       <div class="ri__panel-head" id="panel-factor">
-        <h2 class="ri__panel-tag">Equity factor panel</h2>
+        <h2 class="ri__panel-tag" id="equity-factor-panel" data-anchor="panel-factor">Equity factor panel</h2>
         <span class="ri__panel-count">8 indicators</span>
       </div>
       <p class="ri__panel-desc">Equity-factor and valuation signals: trend, breadth, momentum, style, and cyclically-adjusted valuation. Computed and shown for context; not part of the composite.</p>
@@ -587,7 +592,7 @@
 
         <section class="ri__ind" id="SPX_TREND">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">S&amp;P 500 50d/200d trend</h3>
+            <h3 class="ri__ind-name" id="sp-500-50d-200d-trend" data-anchor="SPX_TREND">S&amp;P 500 50d/200d trend</h3>
             <code class="ri__ind-id">SPX_TREND &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -614,7 +619,7 @@
 
         <section class="ri__ind" id="IWM_SPY">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Equity breadth (IWM/SPY)</h3>
+            <h3 class="ri__ind-name" id="equity-breadth-iwm-spy" data-anchor="IWM_SPY">Equity breadth (IWM/SPY)</h3>
             <code class="ri__ind-id">IWM_SPY &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -641,7 +646,7 @@
 
         <section class="ri__ind" id="SPHB_SPLV">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">High-beta vs low-vol</h3>
+            <h3 class="ri__ind-name" id="high-beta-vs-low-vol" data-anchor="SPHB_SPLV">High-beta vs low-vol</h3>
             <code class="ri__ind-id">SPHB_SPLV &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -668,7 +673,7 @@
 
         <section class="ri__ind" id="MTUM_SPY">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Momentum factor</h3>
+            <h3 class="ri__ind-name" id="momentum-factor" data-anchor="MTUM_SPY">Momentum factor</h3>
             <code class="ri__ind-id">MTUM_SPY &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -695,7 +700,7 @@
 
         <section class="ri__ind" id="IWF_IWD">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Growth vs value</h3>
+            <h3 class="ri__ind-name" id="growth-vs-value" data-anchor="IWF_IWD">Growth vs value</h3>
             <code class="ri__ind-id">IWF_IWD &middot; sign +1</code>
           </div>
           <div class="ri__specs">
@@ -722,7 +727,7 @@
 
         <section class="ri__ind" id="XLU_SPY">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Utilities leadership</h3>
+            <h3 class="ri__ind-name" id="utilities-leadership" data-anchor="XLU_SPY">Utilities leadership</h3>
             <code class="ri__ind-id">XLU_SPY &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -749,7 +754,7 @@
 
         <section class="ri__ind" id="XLP_XLY">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Staples vs discretionary</h3>
+            <h3 class="ri__ind-name" id="staples-vs-discretionary" data-anchor="XLP_XLY">Staples vs discretionary</h3>
             <code class="ri__ind-id">XLP_XLY &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
@@ -776,12 +781,12 @@
 
         <section class="ri__ind" id="SHILLER_CAPE">
           <div class="ri__ind-head">
-            <h3 class="ri__ind-name">Shiller CAPE (cyclically adjusted P/E)</h3>
+            <h3 class="ri__ind-name" id="shiller-cape" data-anchor="SHILLER_CAPE">Shiller CAPE (cyclically adjusted P/E)</h3>
             <code class="ri__ind-id">SHILLER_CAPE &middot; sign &minus;1</code>
           </div>
           <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.multpl.com/shiller-pe" target="_blank" rel="noopener noreferrer">multpl.com</a></dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.multpl.com/shiller-pe" target="_blank" rel="noopener noreferrer">Shiller spreadsheet</a></dd></div>
               <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
               <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio2</code></dd></div>
               <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1, risk-off when rising (inverted)</dd></div>

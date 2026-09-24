@@ -1,4 +1,4 @@
-import { metaFor } from "../frontend/public/assets/js/app/seo.js";
+import { renderMeta } from "../frontend/public/assets/js/app/seo.js";
 import { viewFor } from "../frontend/public/assets/js/app/routes.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -151,20 +151,11 @@ async function prerenderView(html: string, route: string): Promise<string> {
 }
 
 /** The shell with one route's metadata substituted in. The view mount is still
- *  empty at this point; prerenderView fills it. */
+ *  empty at this point; prerenderView fills it. seo.js's `renderMeta` does the
+ *  head, the same function the api process's shell fallback uses, so the
+ *  prerendered page carries the route's structured data and og:type too. */
 function shellFor(route: string): string {
-  const m = metaFor(route);
-  const url = ORIGIN + (route === "/" ? "/" : route);
-  return shell
-    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(m.title)}</title>`)
-    .replace(/(<meta name="description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta property="og:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
-    .replace(/(<meta property="og:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${url}$2`)
-    .replace(/(<meta name="twitter:title" content=")[^"]*(")/, `$1${escapeAttr(m.title)}$2`)
-    .replace(/(<meta name="twitter:description" content=")[^"]*(")/, `$1${escapeAttr(m.description)}$2`)
-    .replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
+  return renderMeta(shell, route).replace("<!--AGENT-DATA-->", () => routeDataBlock(route));
 }
 
 // The shell to answer an UNKNOWN client route with, originally written for

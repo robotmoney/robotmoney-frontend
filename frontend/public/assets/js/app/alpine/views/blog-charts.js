@@ -103,8 +103,8 @@ export function registerBlogCharts(Alpine) {
     // mint is Conservative and emerald is Aggressive on the same backtests.
     _series() {
       return [
-        { key: "base", label: "2-panel composite", color: SERIES.slate, dash: [6, 3] },
-        { key: "eq", label: "3-panel composite", color: STRATEGY_STYLE.composite.color, dash: [] },
+        { key: "base", label: "Legacy 2-panel", color: SERIES.slate, dash: [6, 3] },
+        { key: "eq", label: "3-panel (current)", color: STRATEGY_STYLE.composite.color, dash: [] },
         { key: "factor_alone", label: "Factor panel alone", color: STRATEGY_STYLE.factor.color, dash: [] },
       ];
     },

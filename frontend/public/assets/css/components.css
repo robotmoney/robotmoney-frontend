@@ -747,6 +747,68 @@
 }
 @media (prefers-reduced-motion: reduce) { .rm-tip__bub { transition: opacity 0.01s; } }
 
+/* ─── Section links ────────────────────────────────────────────────────────
+   The "#" lib/heading-anchors.js appends to each h2/h3 with an id, on a page
+   whose content root carries data-anchors. Scoped under #view on purpose: the
+   per-view <style> blocks load after this sheet and style every `a` in their
+   prose, and the id outranks them without !important.
+
+   The glyph is generated content, so the heading's text is unchanged for
+   anything that reads it, and the link's name is its aria-label. The word
+   joiner in front of it keeps it on the line of the heading's last word: an
+   orphaned "#" on a line of its own reads as a stray character.
+
+   "Copied" is a small bubble in the tooltip skin (.rm-tip__bub), right-aligned
+   to the glyph so it grows leftwards into the heading and never past the page
+   edge on a phone. It opens BELOW the glyph: the click has just scrolled the
+   heading to 6rem from the top, and above it the bubble sat under the nav.
+
+   Every fragment target on these pages clears the fixed nav, not only the
+   headings: the glossary's links land on its indicator sections (#T10Y2Y).
+   The router's fragmentTop() reads this margin too, so a link followed in the
+   page and one arriving from another page stop at the same place. */
+#view [data-anchors] :is(h2, h3)[id], #view [data-anchors] [id] { scroll-margin-top: 6rem; }
+#view [data-anchors] .rm-hlink {
+  position: relative;
+  margin-left: 0.45em;
+  padding: 0.3rem 0.2rem;
+  font-family: var(--font-mono); font-size: 0.8125rem; font-weight: 400; font-style: normal;
+  line-height: 1; letter-spacing: 0; text-transform: none;
+  vertical-align: middle;
+  color: var(--color-text-muted);
+  text-decoration: none; border: 0; border-radius: 0; background: none;
+  opacity: 0;
+  transition: opacity 0.14s ease, color 0.14s ease;
+}
+#view [data-anchors] .rm-hlink::before { content: "\2060#"; content: "\2060#" / ""; }
+#view [data-anchors] :is(h2, h3):hover > .rm-hlink,
+#view [data-anchors] .rm-hlink:focus-visible,
+#view [data-anchors] .rm-hlink.is-copied { opacity: 1; }
+#view [data-anchors] .rm-hlink:hover { color: var(--color-text-soft); text-decoration: none; }
+#view [data-anchors] .rm-hlink:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+/* No hover on a touch screen, so nothing would ever reveal it: always there,
+   faintly, and full strength once tapped. */
+@media (hover: none) {
+  #view [data-anchors] .rm-hlink { opacity: 0.5; }
+}
+#view [data-anchors] .rm-hlink::after {
+  content: "Copied"; content: "Copied" / "";
+  position: absolute; right: 0; top: calc(100% + 4px);
+  padding: 0.25rem 0.45rem;
+  background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: 0;
+  font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.2; letter-spacing: 0.04em;
+  color: var(--color-text-muted); white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+}
+#view [data-anchors] .rm-hlink.is-copied::after {
+  opacity: 1; visibility: visible; transform: none; transition-delay: 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  #view [data-anchors] .rm-hlink, #view [data-anchors] .rm-hlink::after { transition: none; }
+}
+
 /* ─── Session phase ────────────────────────────────────────────────────────
    One treatment for "what phase is this session in", so /swarm, the apply
    page, the session page and a member profile cannot say the same fact four

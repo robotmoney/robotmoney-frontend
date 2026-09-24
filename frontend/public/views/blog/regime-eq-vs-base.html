@@ -3,13 +3,13 @@
      The three charts below render from that same committed fixture via the
      regimeEqCompareCharts() factory (alpine/views/blog-charts.js), registered
      at boot in alpine/views.js, the same pattern as views/regime.js's canvases. -->
-<article class="blog-root" x-data="regimeEqCompareCharts()" x-init="load()">
+<article class="blog-root" x-data="regimeEqCompareCharts()" x-init="load()" data-anchors>
   <a href="/blog" class="blog-back">&larr; Back to Blog</a>
 
   <header class="blog-header">
     <div class="blog-meta">
       <span class="rm-role">Research</span>
-      <time datetime="2026-05-31" class="blog-date">May 31, 2026</time>
+      <time datetime="2026-05-30" class="blog-date">May 30, 2026</time>
     </div>
     <h1 class="blog-title">Adding an equity factor panel: how the 3-panel regime classifier improves on the legacy 2-panel</h1>
     <p class="blog-lede">
@@ -23,16 +23,19 @@
       walk-forward inverse-correlation weights
     </div>
     <p class="rr-note blog-note-line">
-      Research note: not investment advice or an offer to buy or sell any security or digital
-      asset, and Robot Money is not a registered investment advisor. Every figure is a
-      hypothetical backtest. The weights are point-in-time with no look-ahead, but the choice
-      of indicators and parameters benefits from hindsight. Past performance does not predict
-      future results. <a href="/disclaimer">Full disclaimer</a>
+      Research note: not investment advice, not a financial product, and not an offer to buy
+      or sell any security or digital asset. Robot Money publishes this as research and is not
+      a registered investment advisor. Every figure is a hypothetical backtest from historical
+      data, not live trading or fund returns. The weights are point-in-time with no look-ahead,
+      but the choice of indicators and parameters benefits from hindsight. Past performance,
+      especially backtested, does not predict future results. Live methodology and snapshots
+      are on the <a href="/regime">regime page</a> (the current default, 3 panels) and the
+      <a href="/regime_2panel">2-panel reference</a>. <a href="/disclaimer">Full disclaimer</a>
     </p>
   </header>
 
   <div class="blog-prose">
-    <h2>The headline</h2>
+    <h2 id="the-headline">The headline</h2>
     <p>
       Adding the equity factor panel to the composite improves all three portfolios
       measurably and consistently. Final multiples rise, CAGR is higher, Sharpe edges up,
@@ -84,7 +87,7 @@
       the mixed 50/50, with Sharpe holding or improving in both.
     </p>
 
-    <h2>Equity curves, side by side</h2>
+    <h2 id="equity-curves-side-by-side">Equity curves, side by side</h2>
     <p>
       Same starting capital, same backtest engine, same cost assumptions, across three
       classifiers: the 3-panel composite, the legacy 2-panel base, and the
@@ -96,11 +99,12 @@
       <div class="blog-figure-chart"><canvas x-ref="equity"></canvas></div>
       <p class="blog-figure-caption">
         The augmented composite edges out the legacy base across the full
-        8-year window; the standalone factor panel runs hottest of all.
+        8-year window; the standalone factor panel runs hottest of all. Live snapshots are on
+        the <a href="/regime">regime page</a> and the <a href="/regime_2panel">2-panel reference</a>.
       </p>
     </figure>
 
-    <h2>The factor panel is the strongest single signal in this sample</h2>
+    <h2 id="the-factor-panel-is-the-strongest-single-signal-in-this-sample">The factor panel is the strongest single signal in this sample</h2>
     <p>
       This is the result that surprised us most. We expected the equity panel to be
       additive on top of macro + on-chain. What the backtest actually shows is that
@@ -127,7 +131,7 @@
       We&rsquo;ll address why this might be coherent below.
     </p>
 
-    <h2>The composite, over time</h2>
+    <h2 id="the-composite-over-time">The composite, over time</h2>
     <p>
       The augmented composite tracks the base composite closely but diverges meaningfully
       around inflection points. Across the full window the two composites assign the same
@@ -144,7 +148,7 @@
       </p>
     </figure>
 
-    <h2>The augmented classifier spends more time in markets</h2>
+    <h2 id="the-augmented-classifier-spends-more-time-in-markets">The augmented classifier spends more time in markets</h2>
     <p>
       One of the cleanest ways to read the difference is to count days. Both arms see
       the same 8 years; the only thing that varies is how they label those days.
@@ -203,7 +207,7 @@
       still comes out ahead.
     </p>
 
-    <h2>Where the gains land, phase by phase</h2>
+    <h2 id="where-the-gains-land-phase-by-phase">Where the gains land, phase by phase</h2>
     <p>
       The 8-year compound number can hide as much as it reveals. Splitting the window
       into market phases shows when the augmented composite is contributing, when it
@@ -376,7 +380,7 @@
       wouldn&rsquo;t see.
     </p>
 
-    <h2>Why have equity signals been so determinative this era?</h2>
+    <h2 id="why-have-equity-signals-been-so-determinative-this-era">Why have equity signals been so determinative this era?</h2>
     <p>
       The eight years this backtest covers are an unusually equity-dominated stretch
       for crypto. From the 2020 COVID liquidity flood onward, ETH&rsquo;s correlation
@@ -404,7 +408,7 @@
       improved CAGR and Sharpe in the backtest.
     </p>
 
-    <h2>Doesn&rsquo;t this contradict efficient markets?</h2>
+    <h2 id="doesnt-this-contradict-efficient-markets">Doesn&rsquo;t this contradict efficient markets?</h2>
     <p>
       Worth addressing directly: the classifier doesn&rsquo;t predict returns. It
       predicts <em>volatility regime</em>. Volatility clusters: Engle&rsquo;s GARCH and
@@ -418,7 +422,7 @@
       money to a path-dependent investor.
     </p>
 
-    <h2>Honest caveats</h2>
+    <h2 id="honest-caveats">Honest caveats</h2>
     <ul class="blog-list blog-list-muted">
       <li>
         <strong>Single era.</strong> 2018&ndash;2026 covers roughly two crypto cycles and one
@@ -457,11 +461,14 @@
       </li>
     </ul>
 
-    <h2>What we&rsquo;re doing about it</h2>
+    <h2 id="what-were-doing-about-it">What we&rsquo;re doing about it</h2>
     <p>
-      The 3-panel classifier is now the default on the <a href="/regime">regime page</a>. It
-      updates every 24 hours, computes point-in-time so it has no look-ahead, and publishes
-      its full methodology, data sources, and historical snapshots openly.
+      The 3-panel classifier is now the default on the <a href="/regime">regime page</a>, with
+      the legacy 2-panel version preserved as a <a href="/regime_2panel">reference</a>. Both
+      update every 24 hours from the same fetcher, both compute point-in-time so neither has
+      look-ahead, and both publish their full methodology, data sources, and historical
+      snapshots openly, side by side, so you can watch the comparison evolve in real time, on
+      real data, without revisions.
     </p>
     <p>
       The data here makes a strong case that incorporating equity-market readings

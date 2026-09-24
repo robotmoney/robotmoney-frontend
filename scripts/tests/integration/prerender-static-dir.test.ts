@@ -174,7 +174,7 @@ describe("prerendered STATIC_DIR served by the website-server image (no Bun in t
     // Guards the assertion below: if seo.js ever gave this route the home
     // page's title, "not the shell's" would be trivially satisfiable.
     expect(m.title).not.toBe(home.title);
-    expect(m.title).toBe("Late-Cycle Signals — How Late in the Rally Are We?");
+    expect(m.title).toBe("Late-Cycle Signals: How Late Is the Rally? | Robot Money");
 
     expect(html).toContain(`<title>${escapeHtml(m.title)}</title>`);
     expect(html).toContain(`property="og:title" content="${escapeAttr(m.title)}"`);

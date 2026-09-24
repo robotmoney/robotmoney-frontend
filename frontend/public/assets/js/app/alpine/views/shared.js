@@ -10,15 +10,22 @@
 // the old monolithic views.js (review-maintainability finding 025). The regime
 // page, the blog's backtest charts and the swarm views import from here; any
 // other chart view should too, rather than re-declaring a series colour.
-import { PALETTE, SERIES, CATEGORICAL, REGIME, rgba } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, CATEGORICAL, rgba } from "../../lib/chart-theme.js";
 
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
-// Background regime bands painted behind the line datasets. Only risk-off is
-// shaded, as a neutral slate wash; risk-on and neutral stay bare. Cyan is a
-// line and beacon is a point, so neither may be a full-height filled area.
-// The regime hues themselves (REGIME in lib/chart-theme.js) belong on dots and
-// lines, and on a ribbon of 12px or less once one replaces these bands.
-export const REGIME_BAND = { risk_off: rgba(REGIME.neutral, 0.1), risk_on: null, neutral: null };
+// Background regime bands painted behind the line datasets, one treatment per
+// state: risk-on a light wash, neutral a fainter one, risk-off a diagonal
+// hatch. They are drawn in the text colour, not in a hue, because every hue
+// the palette has is already a series on these charts (the regime hues too:
+// emerald, slate and beacon are strategy lines), and a band in a series
+// colour reads as that series. Cyan is a line and beacon is a point, so
+// neither may be a full-height area anyway.
+export const REGIME_BAND = {
+  risk_on: { fill: rgba(PALETTE.text, 0.09) },
+  neutral: { fill: rgba(PALETTE.text, 0.03) },
+  risk_off: { hatch: rgba(PALETTE.text, 0.16) },
+};
+const HATCH_GAP = 6;
 export const regimeBandsPlugin = {
   id: "regimeBands",
   beforeDatasetsDraw(chart, _args, opts) {
@@ -34,12 +41,32 @@ export const regimeBandsPlugin = {
       const cur = regimes[i];
       let j = i;
       while (j + 1 < regimes.length && regimes[j + 1] === cur) j++;
-      const fill = cur ? REGIME_BAND[cur] : null;
-      if (fill) {
+      const band = cur ? REGIME_BAND[cur] : null;
+      if (band) {
         const x0 = x.getPixelForValue(i);
         const x1 = j + 1 < regimes.length ? x.getPixelForValue(j + 1) : right;
-        ctx.fillStyle = fill;
-        ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        if (band.fill) {
+          ctx.fillStyle = band.fill;
+          ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        }
+        if (band.hatch) {
+          // Lines of x + y = k ("/"), with k on one grid for the whole chart,
+          // so two neighbouring risk-off spans hatch as one surface.
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x0, top, x1 - x0, bottom - top);
+          ctx.clip();
+          ctx.strokeStyle = band.hatch;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          const k0 = Math.floor((x0 + top) / HATCH_GAP) * HATCH_GAP;
+          for (let k = k0; k <= x1 + bottom; k += HATCH_GAP) {
+            ctx.moveTo(k - top, top);
+            ctx.lineTo(k - bottom, bottom);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
       }
       i = j + 1;
     }
@@ -236,9 +263,15 @@ export const SOURCE_LABEL = {
 };
 
 // The inline regime-band legend swatches, shown next to "Full history" and each
-// equity-curve chart. One entry, because REGIME_BAND shades risk-off alone: an
-// unshaded span is neutral or risk-on. The swatch is the band's slate, a little
-// stronger so a 10px square still reads.
+// equity-curve chart: one per state, in REGIME_BAND's treatments, a little
+// stronger so a 10px square still reads. `bg` is a CSS background value; the
+// hatch is an SVG image rather than a repeating gradient, which the covenant
+// scan would flag.
+const HATCH_SWATCH = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><path d='M3-1L-9 11M7-1L-5 11M11-1L-1 11M15-1L3 11M19-1L7 11' stroke='rgba(242,244,249,0.6)' stroke-width='1'/></svg>",
+)}")`;
 export const REGIME_BG_LEGEND = [
-  { label: "risk-off", color: rgba(REGIME.neutral, 0.3) },
+  { label: "risk-off", bg: HATCH_SWATCH },
+  { label: "neutral", bg: rgba(PALETTE.text, 0.1) },
+  { label: "risk-on", bg: rgba(PALETTE.text, 0.34) },
 ];

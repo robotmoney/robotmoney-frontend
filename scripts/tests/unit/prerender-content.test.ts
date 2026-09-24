@@ -23,6 +23,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { researchRoutes } from "../../../frontend/public/assets/js/app/seo.js";
 import { publishableFragment } from "../../lib/prerender-view.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -114,6 +115,30 @@ describe("prerendered routes carry their own content", () => {
       expect(readableText(html), `${route} lost its heading`).toContain(marker);
       expect(readableChars(html), `${route} is thin`).toBeGreaterThan(1200);
     }
+  });
+});
+
+describe("research pages ship their structured data", () => {
+  // The JSON-LD is only worth having where a crawler reads it, which is the
+  // prerendered page. renderMeta() writing it in a unit test proved nothing
+  // about the deploy: prerender.ts ran its own head substitutions and shipped
+  // none of it.
+  const ld = (html: string) => Array.from(html.matchAll(/<script type="application\/ld\+json" data-route-ld>([\s\S]*?)<\/script>/g), (m) => m[1]);
+
+  test("every research route carries exactly one parseable graph", () => {
+    const routes = researchRoutes();
+    expect(routes.length).toBeGreaterThan(10);
+    for (const route of routes) {
+      const blocks = ld(htmlFor(route));
+      expect(blocks.length, `${route} JSON-LD blocks`).toBe(1);
+      const doc = JSON.parse(blocks[0]);
+      expect(Array.isArray(doc["@graph"]), `${route} @graph`).toBe(true);
+      expect(doc["@graph"].some((n: { "@type"?: string }) => n["@type"] === "BreadcrumbList"), `${route} breadcrumbs`).toBe(true);
+    }
+  });
+
+  test("a page that is not research carries none", () => {
+    for (const route of ["/", "/allocation", "/swarm"]) expect(ld(htmlFor(route)).length, route).toBe(0);
   });
 });
 

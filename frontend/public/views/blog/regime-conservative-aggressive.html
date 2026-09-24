@@ -26,7 +26,7 @@
      history (ETH price + per-panel regime labels, 2018-05-15..2026-06-25)
      needed to paint the regime bands. -->
 
-<article class="blog-research" x-data="regimeRuleCompareCharts()" x-init="load()">
+<article class="blog-research" x-data="regimeRuleCompareCharts()" x-init="load()" data-anchors>
   <header class="blog-research__head">
     <div class="blog-research__meta">
       <span class="rm-role">Research</span>
@@ -35,13 +35,13 @@
     <h1 class="blog-research__title">Conservative vs aggressive: combining macro and on-chain regime signals</h1>
     <p class="blog-research__lede">Five strategies, 8 years of daily data, one striking result.</p>
     <div class="blog-research__window">Backtest window: 2018-05-15 → 2026-06-25</div>
-    <p class="rr-note blog-research__note">Research note: not investment advice or an offer to buy or sell any security or digital asset, and Robot Money is not a registered investment advisor. Every figure is a hypothetical backtest, not the return of any fund or tradable instrument. It benefits from hindsight in the choice of indicators and parameters, assumes frictionless execution where costs are not modeled, and does not fully reflect smart-contract, custody, regulatory or counterparty risk. Past performance does not predict future results. <a href="/disclaimer">Full disclaimer</a></p>
+    <p class="rr-note blog-research__note">Research note: not investment advice, not a financial product, and not an offer to buy or sell any security or digital asset. Robot Money publishes this as research and is not a registered investment advisor. Every figure is a hypothetical backtest computed from historical data: not live trading, and not the return of any tradable instrument, fund or managed account. Backtests assume frictionless execution where costs are not modeled and benefit from hindsight in the choice of indicators and parameters. Smart-contract, custody, regulatory and counterparty risks are not fully reflected in these numbers. Past performance, especially backtested, does not predict future results. Source data, methodology and the live snapshot are on the <a href="/regime">regime page</a>. <a href="/disclaimer">Full disclaimer</a></p>
   </header>
 
   <div class="blog-research__body">
-    <h2>The composite isn&apos;t the only way to combine panels</h2>
+    <h2 id="the-composite-isnt-the-only-way-to-combine-panels">The composite isn&apos;t the only way to combine panels</h2>
     <p>The <a href="/regime">regime classifier</a> produces a daily call from two independent panels. The macro panel reads 10 traditional risk indicators: yield curve, credit spreads, the dollar, jobless claims, VIX. The on-chain panel reads 10 crypto-native indicators: TVL, stablecoin float, BTC/ETH metrics. Each panel ends up in one of three states: risk-off, neutral, or risk-on.</p>
-    <p>The default way to combine them is averaging: take the mean of both panel percentile ranks, percentile-rank that again, bucket at 0.33 / 0.67. We call this the <strong>composite</strong>. It&apos;s the headline reading on the <a href="/regime">regime page</a>.</p>
+    <p>The default way to combine them is averaging: take the mean of both panel percentile ranks, percentile-rank that again, bucket at 0.33 / 0.67. We call this the <strong>composite</strong>. It&apos;s the headline reading on the <a href="/regime">regime page</a>, and the cyan line on each of its charts.</p>
     <p>Averaging is one choice. There are at least two others worth examining:</p>
     <ul>
       <li><strong>Conservative:</strong> any panel reading risk-off forces the portfolio to risk-off. Both must read risk-on for the portfolio to be risk-on. Otherwise neutral.</li>
@@ -49,12 +49,12 @@
     </ul>
     <p>These map to two natural framings: <em>treasury risk management</em> (any worry signal triggers defense) vs <em>return optimization</em> (any growth signal triggers offense). The averaged composite is between them.</p>
 
-    <h2>The exact truth tables</h2>
+    <h2 id="the-exact-truth-tables">The exact truth tables</h2>
     <p>For each cell, given the macro panel state (column) and on-chain panel state (row), the portfolio takes the indicated state.</p>
 
     <div class="blog-research__truths">
       <div class="truth">
-        <h3 class="truth__title">Conservative</h3>
+        <h3 class="truth__title" id="conservative">Conservative</h3>
         <p class="truth__sub">"any panel off → off; both on → on"</p>
         <table class="truth__table">
           <thead><tr><th></th><th>macro off</th><th>neutral</th><th>on</th></tr></thead>
@@ -66,7 +66,7 @@
         </table>
       </div>
       <div class="truth">
-        <h3 class="truth__title">Aggressive</h3>
+        <h3 class="truth__title" id="aggressive">Aggressive</h3>
         <p class="truth__sub">"any panel on → on, unless the other is off; both off → off"</p>
         <table class="truth__table">
           <thead><tr><th></th><th>macro off</th><th>neutral</th><th>on</th></tr></thead>
@@ -81,7 +81,7 @@
 
     <p>Both treat the panels symmetrically: neither macro nor on-chain is privileged. The difference is which corner of the 3×3 dominates: conservative gives the risk-off corner more weight, aggressive gives the risk-on corner more weight.</p>
 
-    <h2>The portfolio</h2>
+    <h2 id="the-portfolio">The portfolio</h2>
     <p>The simplest possible setup. The strategy holds:</p>
     <ul>
       <li><strong>100% cash</strong> (3-month T-bill yield) when the portfolio state is risk-off</li>
@@ -90,7 +90,7 @@
     </ul>
     <p>Daily-rebalanced. 10 bps transaction cost on bucket flips. Two baselines: 100% ETH HODL and 100% cash. Backtest runs over the full 2018-05-15 → 2026-06-25 window (no in-sample / out-of-sample split for this analysis).</p>
 
-    <h2>When does each rule say off?</h2>
+    <h2 id="when-does-each-rule-say-off">When does each rule say off?</h2>
     <p>Before looking at returns, it is worth knowing when each rule calls <em>risk-off</em> against the same ETH price history. Only the rule changes between the three, and the difference is in where each one sits out. The conservative rule spends longer in risk-off around 2018 and 2022, because it bails earlier and stays out longer. The aggressive rule spends far more of the window in risk-on, because one panel saying &quot;on&quot; is enough to override a neutral reading on the other.</p>
     <div class="blog-research__figure">
       <div class="blog-research__figure-label">ETH price (log) with regime bands, all three rules</div>
@@ -108,17 +108,17 @@
           <div class="blog-research__band-chart"><canvas x-ref="bandsAggressive"></canvas></div>
         </div>
       </div>
-      <p class="blog-research__figure-caption">Shaded spans are risk-off; unshaded spans are neutral or risk-on. The ETH price line is the same in all three; only the rule behind the bands changes.</p>
+      <p class="blog-research__figure-caption">A light wash is risk-on, a faint wash neutral, and hatching risk-off. The ETH price line is the same in all three; only the rule behind the bands changes.</p>
     </div>
 
-    <h2>Results</h2>
+    <h2 id="results">Results</h2>
     <div class="blog-research__figure">
       <div class="blog-research__figure-label">Rule-comparison equity curves, $1 starting capital, log scale</div>
       <div class="blog-research__figure-chart"><canvas x-ref="rules"></canvas></div>
-      <p class="blog-research__figure-caption">10 bps transaction cost on bucket flips. Dashed lines are the ETH HODL and cash baselines.</p>
+      <p class="blog-research__figure-caption">10 bps transaction cost on bucket flips. Dashed lines are the ETH HODL and cash baselines; the numbers below carry the same result.</p>
     </div>
 
-    <h2>Results, the numbers</h2>
+    <h2 id="results-the-numbers">Results, the numbers</h2>
     <div class="blog-research__scroll">
       <table class="blog-research__table">
         <thead>
@@ -137,7 +137,7 @@
       </table>
     </div>
 
-    <h2>Results, phase by phase</h2>
+    <h2 id="results-phase-by-phase">Results, phase by phase</h2>
     <p>The 8-year aggregate makes the headline easy to read, but it can also disguise <em>when</em> each rule was earning its return. The phase-by-phase view shows whether the conservative rule&apos;s edge is consistent across the cycle or concentrated in one window.</p>
 
     <div class="blog-research__scroll">
@@ -196,7 +196,7 @@
 
     <p>The 2022 drawdown is where the rules separate most cleanly: conservative gave back just 8% while ETH HODL gave back 71%, and conservative beat the composite there too. The 2021 mania is the one window where aggressive looks like the clear winner (both panels were broadly constructive, and aggressive even edged HODL), while conservative&apos;s &ldquo;both must agree&rdquo; rule kept it on the sidelines for chunks of the rally. In the Recovery window, conservative trails HODL on raw return but with no meaningful drawdown. In the Recent window, conservative is the only risk-taking rule that finished positive. The 8-year compounding is the net of all of this. Across every phase, conservative posts the smallest drawdown (within a percentage point of the smallest in the 2021 mania, when everyone&apos;s drawdown is modest anyway).</p>
 
-    <h2>Does this still help on a diversified portfolio?</h2>
+    <h2 id="does-this-still-help-on-a-diversified-portfolio">Does this still help on a diversified portfolio?</h2>
     <p>The ETH-only test isolates regime quality, but a treasury managing a single risky asset is rare. The more practical question: does the conservative rule still earn its keep on a <em>diversified</em> portfolio, one that already gets some risk reduction from holding two uncorrelated risky assets? We re-ran the same five strategies on a 50/50 ETH+SP500 sleeve. Risk-off → 100% T-bill cash. Neutral → 25% ETH + 25% SP500 + 50% cash. Risk-on → 50% ETH + 50% SP500. The HODL benchmark is a constant 50/50 ETH+SP500 blend.</p>
 
     <div class="blog-research__scroll">
@@ -271,25 +271,25 @@
     <p>Why does the gap widen on a diversified portfolio? Because diversification fails exactly when you need it most: coordinated drawdowns. In 2022, ETH fell 70%+ and SP500 fell 25%+ at the same time. The 50/50 HODL took a 47% phase loss and a 54% intra-phase drawdown. The conservative rule was in cash for most of it: −3% phase return, −5% drawdown. Diversification didn&apos;t save HODL because the correlation spiked; the regime rule did, because it was reading two independent panels and one of them was already saying risk-off.</p>
     <p>The 2021 mania is the one window where conservative&apos;s patience visibly costs you: it captured 171% CAGR while HODL captured 251%. But that&apos;s the only window where the trade-off goes the wrong way, and even then the absolute return is substantial. Across every other phase, conservative either wins on CAGR or gives up modest upside in exchange for a much smaller drawdown.</p>
 
-    <h2>The headline</h2>
+    <h2 id="the-headline">The headline</h2>
     <p><strong>The conservative rule dominates every metric.</strong></p>
     <p>5.90× final value vs 13.73× for the composite, more than double the compounded result. +24.5% CAGR vs +38.1%. Sharpe 0.71 vs 0.85. Max drawdown −59% vs −65%.</p>
     <p>Even more striking: conservative beats <strong>100% ETH HODL</strong> on every dimension over this 8-year period (3× the final value, much higher Sharpe, drawdown nearly half). The "stay in ETH and hope for the best" strategy turned $1 into 2.03×; this rule turned $1 into 5.90×.</p>
 
-    <h2>Why conservative works</h2>
+    <h2 id="why-conservative-works">Why conservative works</h2>
     <p>The 2022 ETH drawdown happened with both panels reading risk-off in lockstep. Under any rule, the strategy was in cash for the worst of it. But the conservative rule was also in cash during periods where <em>just one</em> of the panels was risk-off, including parts of 2018, the March 2020 COVID crash, and the late 2021 distribution before the full 2022 cascade. The composite (averaging the panels) often read &ldquo;neutral&rdquo; in those moments because one panel was still constructive. Conservative said &ldquo;something is wrong&rdquo; and moved to cash.</p>
     <p>On the upside, conservative is patient. It only goes to 100% ETH when both panels are simultaneously risk-on, which happens in the meatiest parts of bull runs, not the warm-up. Most of the 2021 mania, both panels were risk-on. Most of the 2024 ETF rally, both panels were risk-on. Conservative captures those.</p>
     <p>The cost it pays is in periods where the panels disagree: typically late-cycle ambiguity and early-recovery uncertainty. Conservative sits in cash; aggressive and composite sit in ETH or 50/50. Today (as of 2026-06-25) is exactly that kind of moment: macro reads risk-on, on-chain reads risk-off. Conservative is 100% cash. Composite is neutral. Aggressive is neutral. Whether conservative&apos;s caution pays off here is the next cycle&apos;s question.</p>
 
-    <h2>Why aggressive doesn&apos;t win</h2>
+    <h2 id="why-aggressive-doesnt-win">Why aggressive doesn&apos;t win</h2>
     <p>Aggressive looks reasonable on paper: "any growth signal, go." It does outperform the composite (5.35× vs 13.73×) and ETH HODL. But it doesn&apos;t reach conservative&apos;s numbers because it took bigger drawdowns (−65% vs −59%) that compounded into lower terminal value.</p>
     <p>The math is asymmetric: a 60% drawdown requires a 150% recovery to break even. A 50% drawdown requires 100%. Conservative&apos;s extra caution during single-panel-warning periods avoided the larger drawdowns, and the avoided drawdowns compounded forward into the dominant terminal value.</p>
 
-    <h2>What this means for the composite</h2>
+    <h2 id="what-this-means-for-the-composite">What this means for the composite</h2>
     <p>The averaged composite is the published default on the regime page. This analysis says: averaging is the worst of three reasonable choices. The two AND/OR rules, particularly conservative, produce strictly better risk-adjusted outcomes over the 8-year sample.</p>
     <p>Why doesn&apos;t averaging work? Because the panels are <em>signaling different things at different times</em>. Averaging dilutes both signals. Conservative respects that &ldquo;one panel saying off&rdquo; is informative even when the other says on. Aggressive respects that &ldquo;one panel saying on&rdquo; is informative when the other is merely neutral.</p>
 
-    <h2>Considerations</h2>
+    <h2 id="considerations">Considerations</h2>
     <ul>
       <li><strong>Single sample.</strong> 8 years covers roughly two crypto cycles. The dominance of conservative is meaningful in this sample; whether it generalizes to future cycles is a separate question that no backtest can answer.</li>
       <li><strong>Backtest, not deployment.</strong> Real execution introduces slippage, custody overhead, and behavioral drift, particularly during the 2022 drawdown when discipline is hardest. Realized performance will differ from backtest.</li>
@@ -297,7 +297,7 @@
       <li><strong>Methodology is fixed.</strong> Thresholds (0.33 / 0.67), smoothing (5-day confirmation + 2σ fast-track), and weighting (inverse-correlation, 25% cap) are chosen from published convention. We did not tune them on backtest output for this analysis.</li>
     </ul>
 
-    <h2>What this is</h2>
+    <h2 id="what-this-is">What this is</h2>
     <p>A public research artifact. Open data, open code, deterministic computation, point-in-time reproducibility. Not a fund, a managed account, or a financial product. The numbers are backtested. Source data, methodology, and live snapshot are on the <a href="/regime">regime page</a>.</p>
 
   </div>
