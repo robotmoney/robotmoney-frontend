@@ -12,7 +12,7 @@
 // `resolveJudgeTransport()` and `wireModelId()` run for real rather than being
 // stubbed around — the bare-vs-qualified model id bug that cost this release a
 // day (Zen answers a qualified id with HTTP 401) would surface here.
-import { afterAll } from "bun:test";
+import { afterAll, beforeAll } from "bun:test";
 
 /** The selector to put in `swarm_judge_config.model` to reach this server. */
 export const STUB_JUDGE_MODEL = "stub/judge";
@@ -38,22 +38,33 @@ export function stubJudgeReset(): void {
   body = STUB_JUDGE_REPLY;
 }
 
-const server = Bun.serve({
-  port: 0,
-  fetch: async () => Response.json({ choices: [{ message: { content: body } }] }),
-});
-
 /**
- * Point the judge at this server. Call once per suite, at import time — it sets
- * the two environment variables `resolveJudgeTransport()` reads.
+ * Point the judge at a stub server for the calling suite. Call once per suite,
+ * at import time — it sets the two environment variables
+ * `resolveJudgeTransport()` reads.
+ *
+ * The server belongs to the SUITE that calls this, not to the module. bun test
+ * runs every file in one process and evaluates this module once, so a server
+ * started at module scope was stopped by the FIRST suite's afterAll, and every
+ * later suite that imported it judged against a dead port
+ * ("model_unavailable:Unable to connect"). Each call now starts its own server,
+ * re-points the environment at it in beforeAll (a later file's import has
+ * already overwritten it by then), and stops it in its own afterAll.
  *
  * The key is only set when absent, so a runner that carries a real
  * OPENCODE_API_KEY keeps it (the base URL still redirects the call here, so no
  * test spends money).
  */
 export function useStubJudge(): void {
-  process.env.SWARM_JUDGE_BASE_URL = `http://127.0.0.1:${server.port}`;
-  process.env.OPENCODE_API_KEY ||= "sk-stub-judge-key";
+  const server = Bun.serve({
+    port: 0,
+    fetch: async () => Response.json({ choices: [{ message: { content: body } }] }),
+  });
+  const point = () => {
+    process.env.SWARM_JUDGE_BASE_URL = `http://127.0.0.1:${server.port}`;
+    process.env.OPENCODE_API_KEY ||= "sk-stub-judge-key";
+  };
+  point();
+  beforeAll(point);
+  afterAll(() => server.stop(true));
 }
-
-afterAll(() => server.stop(true));
