@@ -49,6 +49,10 @@ SET row_security = off;
 -- the migrate run publishes (§9.1 step 2). Needs the bootstrap's database to be
 -- owned by rm_owner, which every blank bootstrap creates it as.
 ALTER SCHEMA public OWNER TO rm_owner;
+-- And the schema's ACL as 0053:134 leaves it: initdb grants PUBLIC USAGE, and
+-- the migrations revoke it. grants.sql:185 re-grants USAGE to the three
+-- application roles by name, so nothing that needs the schema loses it.
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
 
 
 --

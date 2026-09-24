@@ -555,7 +555,26 @@ for (const tag of SUPPORTED_RELEASES) {
 
     test("check 3a passes on the upgraded database for any booting code — it compares the database with its own manifest", async () => {
       const findings = (await checkSchemaIntegrity(db, context(HEAD_FILES))).findings;
-      expect(findings.filter((f) => f.severity === "refuse")).toEqual([]);
+      // THE HARNESS LOGIN STANDS IN FOR THE PROVIDER'S ADMIN. Migration
+      // 0016:37-38 sets default privileges FOR the login that runs it. In
+      // production that login is doadmin, which the installed manifest's
+      // provider exclusion list covers, so 3a has nothing to say. Here the
+      // release-era files ran as this harness's login, which the list does not
+      // name, so exactly those two default ACLs are extras — the same two
+      // entries schema-equivalence.test.ts records as cause E. They are pinned
+      // by name, and any other refusal still fails. The list is never widened
+      // for a test.
+      const login = new URL(config.databaseUrl).username;
+      const manifest = await readManifest(db);
+      const providerRoles = (JSON.parse(manifest!.declaration.text) as { exclusions: { roles: string[] } }).exclusions.roles;
+      const harnessOnly = providerRoles.includes(login)
+        ? []
+        : ["sequences", "tables"].map(
+            (on) =>
+              `default privileges for ${login} in schema public on ${on} is in the live catalog but not declared by the ` +
+              `installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
+          );
+      expect(findings.filter((f) => f.severity === "refuse").map((f) => f.message).sort()).toEqual(harnessOnly.sort());
     });
 
     test("code at every N from the last breaking file onward boots against the additive tail (check 3b)", async () => {

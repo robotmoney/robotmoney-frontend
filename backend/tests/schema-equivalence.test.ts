@@ -386,49 +386,13 @@ const CAUSES: readonly DriftCause[] = [
     ].map((fn) => ({ key: `acl function public.${fn}`, migrated: "rm_owner:EXECUTE by rm_owner", snapshot: "<default>" })),
   },
   {
-    id: "D: the snapshot does not declare schema public's owner or ACL",
-    fix:
-      "0053 makes rm_owner the owner of schema public and revokes ALL from PUBLIC; snapshot.sql skips the " +
-      "schema ('*not* creating schema, since initdb creates it'), so a blank database keeps initdb's " +
-      "pg_database_owner ownership and PUBLIC USAGE. grants.sql:185 only adds USAGE. Declare both.",
-    kind: "exact",
-    items: [
-      { key: "schema public", migrated: "owner=rm_owner", snapshot: "owner=pg_database_owner" },
-      {
-        key: "acl schema public",
-        migrated:
-          "rm_app:USAGE by rm_owner, rm_owner:CREATE by rm_owner, rm_owner:USAGE by rm_owner, " +
-          "rm_readonly:USAGE by rm_owner, rm_worker:USAGE by rm_owner",
-        snapshot:
-          "PUBLIC:USAGE by pg_database_owner, pg_database_owner:CREATE by pg_database_owner, " +
-          "pg_database_owner:USAGE by pg_database_owner, rm_app:USAGE by pg_database_owner, " +
-          "rm_readonly:USAGE by pg_database_owner, rm_worker:USAGE by pg_database_owner",
-      },
-    ],
-  },
-  {
     id: "E: default privileges differ between the migrations and grants.sql",
     fix:
       "0016:37-38 set default privileges for the provisioning login (rm_worker DML on its future tables and " +
-      "sequences); 0053:139-154 set rm_owner's sequence defaults and add rm_worker SELECT to its table " +
-      "defaults; grants.sql:189-190 adds rm_app SELECT, INSERT, UPDATE and rm_readonly SELECT to the table " +
-      "defaults and revokes nothing, so a migrated database keeps 0053's rm_worker SELECT and sequence " +
-      "defaults that a blank one never gets.",
+      "sequences), and neither grants.sql nor snapshot.sql declares any for that login. (rm_owner's own " +
+      "defaults now match: snapshot.sql declares the 0053/0062 rm_worker and sequence defaults.)",
     kind: "exact",
     items: [
-      {
-        key: "default privileges for rm_owner in public on sequences",
-        migrated: "rm_app:SELECT by rm_owner, rm_readonly:SELECT by rm_owner, rm_worker:SELECT by rm_owner",
-        snapshot: null,
-      },
-      {
-        key: "default privileges for rm_owner in public on tables",
-        migrated:
-          "rm_app:INSERT by rm_owner, rm_app:SELECT by rm_owner, rm_app:UPDATE by rm_owner, " +
-          "rm_readonly:SELECT by rm_owner, rm_worker:SELECT by rm_owner",
-        snapshot:
-          "rm_app:INSERT by rm_owner, rm_app:SELECT by rm_owner, rm_app:UPDATE by rm_owner, rm_readonly:SELECT by rm_owner",
-      },
       {
         key: `default privileges for ${DATABASE_LOGIN} in public on sequences`,
         migrated: `rm_worker:SELECT by ${DATABASE_LOGIN}, rm_worker:USAGE by ${DATABASE_LOGIN}`,

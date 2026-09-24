@@ -106,7 +106,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "69c0956c365168303a4e218f1386e31e568584a71db9975ac82a38ab06e86b5c",
+  "contentHash": "67b0868feab5652cd94678ad30ef345594d10dbe6ce5dc2b0c18a12c647c980b",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
