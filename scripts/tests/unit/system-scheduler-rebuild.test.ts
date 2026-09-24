@@ -145,13 +145,58 @@ describe("a missed boundary fires once, on rebuild (§3.2, §10)", () => {
     expect(api.countCalls("openEpoch")).toBe(1);
     const sessions = api.sessionsOf("late");
     expect(sessions).toHaveLength(1);
-    // §2.2: "An epoch opened with no predecessor … closes at the first grid
-    // instant after now. Its window can therefore be shorter than one
-    // duration." The anchor is T0 and the spacing 300s, so the first slot after
-    // T0 + 5_000_000 is T0 + 5_100_000 — a window of 100s, not 300s.
-    expect(sessions[0].windowClosesAt).toBe(T0 + 5_100_000);
-    expect(sessions[0].windowClosesAt - timers.now()).toBeLessThan(300_000);
+    // §2.2 as amended 2026-09-24 (D52): "An epoch opened with no predecessor …
+    // closes at the first grid instant at least half of `epoch_duration` after
+    // now; if the next instant is nearer than that, it closes at the one
+    // after." The anchor is T0 and the spacing 300s, so the first slot after
+    // T0 + 5_000_000 is T0 + 5_100_000 — only 100s away, under the 150s floor
+    // — and the window closes at the slot after it, T0 + 5_400_000: 400s long.
+    // Before the amendment this test expected the 100s sliver.
+    expect(sessions[0].windowClosesAt).toBe(T0 + 5_400_000);
+    expect(sessions[0].windowClosesAt - timers.now()).toBeGreaterThanOrEqual(150_000);
+    expect((sessions[0].windowClosesAt - T0) % 300_000).toBe(0);
+    // Never backdated: the client supplied no instant, and the API's is ahead.
+    expect(api.callsOf("openEpoch")[0].args).toEqual({ subjectId: "late" });
     expect(sessions[0].windowClosesAt).toBeGreaterThan(timers.now());
+    expect(clock.boundaryAt("late")).toBe(T0 + 5_400_000);
+  });
+
+  describe("FIRST-EPOCH FLOOR (§2.2, §10): a first window is never under half a duration", () => {
+    // §10: "activate a subject one second before a grid instant; its first
+    // window closes at the following instant instead, is at least half a
+    // duration long". The three cases pin the boundary of "at least": exactly
+    // half is enough, one millisecond under is not.
+    async function firstClose(msBeforeGridInstant: number): Promise<{ close: number; now: number }> {
+      const { timers, api, boot } = world();
+      api.addSubject("sub-f", 600, true, { epochAnchorMs: T0 });
+      // The next grid instant after this restart is T0 + 3_000_000.
+      await timers.advanceTo(T0 + 3_000_000 - msBeforeGridInstant);
+      const clock = boot();
+      await clock.rebuild(await api.fullRead());
+      await clock.idle();
+      expect(api.countCalls("openEpoch")).toBe(1);
+      const [session] = api.sessionsOf("sub-f");
+      expect(clock.boundaryAt("sub-f")).toBe(session.windowClosesAt);
+      return { close: session.windowClosesAt, now: timers.now() };
+    }
+
+    test("one second before a grid instant: the window runs to the FOLLOWING instant", async () => {
+      const { close, now } = await firstClose(1_000);
+      expect(close).toBe(T0 + 3_600_000);
+      expect(close - now).toBe(601_000);
+    });
+
+    test("exactly half a duration before a grid instant: that instant is far enough", async () => {
+      const { close, now } = await firstClose(300_000);
+      expect(close).toBe(T0 + 3_000_000);
+      expect(close - now).toBe(300_000);
+    });
+
+    test("one millisecond under half a duration: skipped to the following instant", async () => {
+      const { close, now } = await firstClose(299_999);
+      expect(close).toBe(T0 + 3_600_000);
+      expect(close - now).toBe(899_999);
+    });
   });
 
   test("a rebuild whose windows are all still ahead fires nothing", async () => {

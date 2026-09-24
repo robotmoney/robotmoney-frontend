@@ -23,10 +23,13 @@
 // answers the second, and each test says which it used and what it measured.
 // Nothing here fakes a transition: the fake API records the exact calls made,
 // in order, and the tests assert over that list.
+import type { StreamHandlers } from "../../../lib/system-scheduler/api-client.ts";
+import type { StartupCheck } from "../../../lib/system-scheduler/health.ts";
+import type { SchedulerTransport } from "../../../lib/system-scheduler/runtime.ts";
 import type {
-  ConsumerApi,
   FullReadSnapshot,
   StreamEventFrame,
+  StreamFrame,
 } from "../../../lib/system-scheduler/stream-consumer.ts";
 import type {
   AggregateBody,
@@ -117,11 +120,39 @@ export async function drain(rounds = 12): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface RecordedCall {
-  /** The transition name, or `fullRead` / `subscribe` / `ackJob`. */
+  /** The transition name, or `fullRead` / `subscribe`. */
   call: string;
   /** The clock instant the call was DISPATCHED at, as the injected timer host reports it. */
   atMs: number;
   args: Record<string, string>;
+  /**
+   * What the fake ANSWERED, for a transition. Recorded so a recovery test can
+   * assert the `transitioned` / `replayed` / `created` flags of every repeat —
+   * which is the only honest evidence that no durable effect happened twice.
+   */
+  result?: SchedulerApiResult<Record<string, unknown>>;
+}
+
+/**
+ * How one injected fault behaves.
+ *
+ *   * `transient` — a 503 before anything commits.
+ *   * `throw`     — a network error before anything commits.
+ *   * `lost`      — the transition COMMITS, then the response is lost. The
+ *                   real failure §4.6 and §10's "after an API commit whose
+ *                   response was lost" are about: the effect happened and the
+ *                   caller does not know it.
+ */
+export type FaultMode = "transient" | "throw" | "lost";
+
+/** One subscription the fake served, as the scheduler's side of a socket. */
+export interface FakeSocket {
+  id: number;
+  cursor: number;
+  /** Closed when the scheduler replaced it or the fake dropped it. */
+  open: boolean;
+  /** Open, but delivering nothing: §10's "stall the connection without closing it". */
+  stalled: boolean;
 }
 
 interface FakeSubject {
@@ -180,21 +211,31 @@ export interface FakeApiOptions {
  * tests are the authority — this one exists so the CLIENT's reaction to each
  * answer is testable without a database.
  */
-export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
+export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
   readonly calls: RecordedCall[] = [];
   readonly subjects = new Map<string, FakeSubject>();
   readonly sessions = new Map<string, FakeSession>();
 
-  /** Per-transition-name queue of injected outcomes, consumed one per call. */
-  readonly faults = new Map<string, ("transient" | "throw" | "ok")[]>();
-  /** Transitions that fail transiently on EVERY call until cleared. */
+  /**
+   * Queues of injected outcomes, consumed one per call. Keyed by the call name
+   * alone (every target) or `name:target`, where the target is a subject or
+   * session id, so one session's settlement can fail while another's runs.
+   */
+  readonly faults = new Map<string, FaultMode[]>();
+  /** Keys (same shape) that fail transiently on EVERY call until recovered. */
   readonly stuck = new Set<string>();
+  /** Every subscription served, in order. Only the last can be open. */
+  readonly sockets: FakeSocket[] = [];
 
   #now: () => number;
   #judgingSeconds: number;
   #skewMs: number;
   #seq = 0;
   #nextSession = 1;
+  #handlers: StreamHandlers | null = null;
+  #unreachable = false;
+  #tokenRotated = false;
+  #fullReadGate: Promise<void> | null = null;
 
   constructor(opts: FakeApiOptions) {
     this.#now = opts.now;
@@ -228,6 +269,18 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
     const spacing = subject.epochDurationSeconds * 1000;
     const k = Math.floor((afterMs - subject.epochAnchorMs) / spacing) + 1;
     return subject.epochAnchorMs + k * spacing;
+  }
+
+  /**
+   * §2.2's first-epoch floor (amended 2026-09-24, D52): an epoch opened with no
+   * predecessor "closes at the first grid instant at least half of
+   * `epoch_duration` after now; if the next instant is nearer than that, it
+   * closes at the one after." Exactly half is enough.
+   */
+  #firstEpochClose(subject: FakeSubject, nowMs: number): number {
+    const spacing = subject.epochDurationSeconds * 1000;
+    const next = this.#nextGridInstant(subject, nowMs);
+    return next - nowMs < spacing / 2 ? next + spacing : next;
   }
 
   // ── fixture helpers ────────────────────────────────────────────────────────
@@ -292,45 +345,140 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
 
   // ── fault injection ────────────────────────────────────────────────────────
 
-  failNext(call: string, times: number, mode: "transient" | "throw" = "transient"): void {
-    const q = this.faults.get(call) ?? [];
+  /**
+   * Queue `times` faults for `call`. With a `target` (a subject or session id)
+   * only calls naming that target are affected, so a test can fail one
+   * session's step while another session's identical step succeeds.
+   */
+  failNext(call: string, times: number, mode: FaultMode = "transient", target?: string): void {
+    const key = target ? `${call}:${target}` : call;
+    const q = this.faults.get(key) ?? [];
     for (let i = 0; i < times; i += 1) q.push(mode);
-    this.faults.set(call, q);
+    this.faults.set(key, q);
   }
 
-  failAlways(call: string): void {
-    this.stuck.add(call);
+  failAlways(call: string, target?: string): void {
+    this.stuck.add(target ? `${call}:${target}` : call);
   }
 
-  recover(call: string): void {
-    this.stuck.delete(call);
-    this.faults.delete(call);
+  /** Clear the faults on `call` — for one target, or with none given, for every target. */
+  recover(call: string, target?: string): void {
+    const matches = (key: string): boolean =>
+      target ? key === `${call}:${target}` : key === call || key.startsWith(`${call}:`);
+    for (const key of [...this.stuck]) if (matches(key)) this.stuck.delete(key);
+    for (const key of [...this.faults.keys()]) if (matches(key)) this.faults.delete(key);
   }
 
-  #record(call: string, args: Record<string, string>): void {
+  /** The API cannot be reached at all: reads and subscriptions throw, transitions are transient. */
+  setUnreachable(down: boolean): void {
+    this.#unreachable = down;
+  }
+
+  /**
+   * The token this scheduler holds was re-provisioned away (automation-token
+   * criterion). From now on every call is refused as the real API refuses it:
+   * a 403, which is a reasoned refusal and never transient.
+   */
+  rotateToken(): void {
+    this.#tokenRotated = true;
+  }
+
+  /** A restarted process has read the re-provisioned token file. */
+  adoptNewToken(): void {
+    this.#tokenRotated = false;
+  }
+
+  /** `runStartupCheck`'s answer, as this fake's state would produce it. Not recorded: a probe, not a lifecycle call. */
+  async probe(): Promise<StartupCheck> {
+    if (this.#unreachable) {
+      return { ok: false, apiReachable: false, tokenValid: false, tokenRejected: false, error: "API unreachable: connect ECONNREFUSED" };
+    }
+    if (this.#tokenRotated) {
+      return { ok: false, apiReachable: true, tokenValid: false, tokenRejected: true, error: "API rejected the automation token (HTTP 403)" };
+    }
+    return { ok: true, apiReachable: true, tokenValid: true, tokenRejected: false, error: null };
+  }
+
+  /** Hold every full read until the returned function is called. */
+  holdFullRead(): () => void {
+    let release!: () => void;
+    this.#fullReadGate = new Promise<void>((r) => {
+      release = r;
+    });
+    return () => {
+      this.#fullReadGate = null;
+      release();
+    };
+  }
+
+  #record(call: string, args: Record<string, string>): RecordedCall {
     // The DISPATCH instant is the CALLER's clock — that is what §10's timing
     // gates measure — while every decision below reads the database clock.
-    this.calls.push({ call, atMs: this.#now(), args });
+    const rec: RecordedCall = { call, atMs: this.#now(), args };
+    this.calls.push(rec);
+    return rec;
   }
 
-  /** Returns a transient result when a fault is queued for this call, else null. */
-  #fault(call: string): SchedulerApiResult<never> | null {
-    if (this.stuck.has(call)) {
-      return { ok: false, status: 503, error: "injected_dependency_down", transient: true };
+  /** The fault that applies to this call, most specific key first, else null. */
+  #fault(call: string, args: Record<string, string>): FaultMode | "stuck" | null {
+    const keys = [...Object.values(args).map((v) => `${call}:${v}`), call];
+    for (const key of keys) if (this.stuck.has(key)) return "stuck";
+    for (const key of keys) {
+      const q = this.faults.get(key);
+      const mode = q?.shift();
+      if (mode) return mode;
     }
-    const q = this.faults.get(call);
-    const mode = q?.shift();
-    if (!mode || mode === "ok") return null;
-    if (mode === "throw") {
-      return { ok: false, status: null, error: "injected_network_error", transient: true };
+    return null;
+  }
+
+  /**
+   * One transition: recorded, subjected to the injected faults, answered, and
+   * the answer recorded too. `apply` is the real guard-and-commit; a `lost`
+   * fault runs it and then throws the answer away.
+   */
+  #transition<T>(
+    call: string,
+    args: Record<string, string>,
+    apply: () => SchedulerApiResult<T>,
+  ): SchedulerApiResult<T> {
+    const rec = this.#record(call, args);
+    let result: SchedulerApiResult<T>;
+    const fault = this.#tokenRotated || this.#unreachable ? null : this.#fault(call, args);
+    if (this.#tokenRotated) {
+      result = { ok: false, status: 403, error: "automation_token_rejected", transient: false };
+    } else if (this.#unreachable) {
+      result = { ok: false, status: null, error: "connect ECONNREFUSED", transient: true };
+    } else if (fault === "stuck") {
+      result = { ok: false, status: 503, error: "injected_dependency_down", transient: true };
+    } else if (fault === "throw") {
+      result = { ok: false, status: null, error: "injected_network_error", transient: true };
+    } else if (fault === "transient") {
+      result = { ok: false, status: 503, error: "injected_transient", transient: true };
+    } else if (fault === "lost") {
+      const committed = apply();
+      rec.result = committed as SchedulerApiResult<Record<string, unknown>>;
+      return { ok: false, status: null, error: "injected_lost_response", transient: true };
+    } else {
+      result = apply();
     }
-    return { ok: false, status: 503, error: "injected_transient", transient: true };
+    rec.result = result as SchedulerApiResult<Record<string, unknown>>;
+    return result;
+  }
+
+  /** The flags the fake answered for every successful call of `name`, in order. */
+  resultsOf(name: string): Record<string, unknown>[] {
+    return this.callsOf(name)
+      .map((c) => c.result)
+      .filter((r): r is SchedulerApiResult<Record<string, unknown>> & { ok: true } => r?.ok === true);
   }
 
   // ── the consumer half ──────────────────────────────────────────────────────
 
   async fullRead(): Promise<FullReadSnapshot & SchedulerFullRead> {
     this.#record("fullRead", {});
+    if (this.#fullReadGate) await this.#fullReadGate;
+    if (this.#unreachable) throw new Error("full read failed: connect ECONNREFUSED");
+    if (this.#tokenRotated) throw new Error("full read failed: HTTP 403");
     const subjects = [...this.subjects.values()]
       .filter((s) => s.active)
       .map((s) => ({ subjectId: s.subjectId, name: s.name, epochDurationSeconds: s.epochDurationSeconds }));
@@ -353,20 +501,85 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
     return { subjects, collecting, settling, cursor: this.#seq };
   }
 
-  async subscribe(cursor: number): Promise<void> {
-    this.#record("subscribe", { cursor: String(cursor) });
+  // ── the socket ─────────────────────────────────────────────────────────────
+  //
+  // Modelled as sockets, not as a counter. A `subscribe` that only counted
+  // would let a transport whose subscribe is a no-op pass every test: the
+  // count goes up, and nothing is connected. Here a frame reaches the
+  // scheduler ONLY through the socket the latest subscribe opened, so a
+  // scheduler left on a stalled socket receives nothing, and a test can see it.
+
+  attachStream(handlers: StreamHandlers): void {
+    this.#handlers = handlers;
   }
 
-  async ackJob(idempotencyKey: string): Promise<void> {
-    this.#record("ackJob", { idempotencyKey });
+  async subscribe(cursor: number): Promise<void> {
+    this.#record("subscribe", { cursor: String(cursor) });
+    if (this.#unreachable) throw new Error("subscribe failed: connect ECONNREFUSED");
+    if (this.#tokenRotated) throw new Error("subscribe failed: HTTP 403");
+    this.closeStream();
+    this.sockets.push({ id: this.sockets.length + 1, cursor, open: true, stalled: false });
+  }
+
+  /** The scheduler closing its own socket. Not an API call, so not recorded. */
+  closeStream(): void {
+    const live = this.liveSocket;
+    if (live) live.open = false;
+  }
+
+  get liveSocket(): FakeSocket | null {
+    const last = this.sockets[this.sockets.length - 1];
+    return last?.open ? last : null;
+  }
+
+  /** The sequence of the last event committed: what a keepalive carries. */
+  get head(): number {
+    return this.#seq;
+  }
+
+  /**
+   * Put one frame on the live socket. Returns false — and delivers nothing —
+   * when there is no open socket or it is stalled.
+   */
+  async deliver(frame: StreamFrame): Promise<boolean> {
+    const live = this.liveSocket;
+    if (!live || live.stalled || !this.#handlers) return false;
+    await this.#handlers.onFrame(frame);
+    return true;
+  }
+
+  /** A keepalive carrying the current head, on the live socket. */
+  keepalive(): Promise<boolean> {
+    return this.deliver({ type: "keepalive", head: this.#seq });
+  }
+
+  /** Stall the live socket without closing it. */
+  stall(): void {
+    const live = this.liveSocket;
+    if (live) live.stalled = true;
+  }
+
+  /** Close the live socket from the API's side, as a network drop would. */
+  dropConnection(reason = "injected drop"): void {
+    const live = this.liveSocket;
+    if (!live) return;
+    live.open = false;
+    this.#handlers?.onClosed(reason);
+  }
+
+  /** Commit an event the stream will carry, without delivering it. Returns its sequence. */
+  commitEvent(): number {
+    this.#seq += 1;
+    return this.#seq;
   }
 
   // ── the transition half ────────────────────────────────────────────────────
 
   async openEpoch(subjectId: string): Promise<SchedulerApiResult<OpenBody>> {
-    this.#record("openEpoch", { subjectId });
-    const fault = this.#fault("openEpoch");
-    if (fault) return fault;
+    return this.#transition("openEpoch", { subjectId }, () => this.#openEpoch(subjectId));
+  }
+
+  #openEpoch(subjectId: string): SchedulerApiResult<OpenBody> {
     const subject = this.subjects.get(subjectId);
     if (!subject) return { ok: false, status: 404, error: "subject_not_found", transient: false };
     if (!subject.active) return { ok: false, status: 409, error: "subject_not_active", transient: false };
@@ -390,8 +603,8 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
    * `afterMs` is the instant the grid is measured from: for a TURNOVER it is
    * the closing epoch's own `window_closes_at`, so §2.2's "N+1 closes at the
    * first grid instant after N's close" holds even when the turnover itself was
-   * late. For a FIRST epoch it is now, so §2.2's "its window can therefore be
-   * shorter than a full duration" holds.
+   * late. A FIRST epoch has none, and gets §2.2's floor instead: the first grid
+   * instant at least half a duration after now (`#firstEpochClose`).
    *
    * And when the computed instant has already passed — the late-turnover case
    * §2.2 names explicitly — the grid is re-measured from now, so the successor
@@ -399,9 +612,16 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
    */
   #open(subject: FakeSubject, afterMs?: number): OpenBody {
     const sessionId = `s${this.#nextSession++}`;
-    const from = afterMs ?? this.#dbNow();
-    let closesAt = this.#nextGridInstant(subject, from);
-    if (closesAt <= this.#dbNow()) closesAt = this.#nextGridInstant(subject, this.#dbNow());
+    // One reading of the clock for the whole derivation (§10 "One present per
+    // transaction"), as the real API reads clock_timestamp() once.
+    const now = this.#dbNow();
+    let closesAt: number;
+    if (afterMs === undefined) {
+      closesAt = this.#firstEpochClose(subject, now);
+    } else {
+      closesAt = this.#nextGridInstant(subject, afterMs);
+      if (closesAt <= now) closesAt = this.#nextGridInstant(subject, now);
+    }
     this.addSession({
       sessionId,
       subjectId: subject.subjectId,
@@ -421,9 +641,12 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   }
 
   async turnover(subjectId: string, expectedSessionId: string): Promise<SchedulerApiResult<TurnoverBody>> {
-    this.#record("turnover", { subjectId, expectedSessionId });
-    const fault = this.#fault("turnover");
-    if (fault) return fault;
+    return this.#transition("turnover", { subjectId, expectedSessionId }, () =>
+      this.#turnover(subjectId, expectedSessionId),
+    );
+  }
+
+  #turnover(subjectId: string, expectedSessionId: string): SchedulerApiResult<TurnoverBody> {
     const closing = this.sessions.get(expectedSessionId);
     if (!closing || closing.subjectId !== subjectId) {
       return { ok: false, status: 404, error: "session_not_for_subject", transient: false };
@@ -467,9 +690,10 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   }
 
   async aggregate(sessionId: string): Promise<SchedulerApiResult<AggregateBody>> {
-    this.#record("aggregate", { sessionId });
-    const fault = this.#fault("aggregate");
-    if (fault) return fault;
+    return this.#transition("aggregate", { sessionId }, () => this.#aggregate(sessionId));
+  }
+
+  #aggregate(sessionId: string): SchedulerApiResult<AggregateBody> {
     const s = this.sessions.get(sessionId);
     if (!s) return { ok: false, status: 404, error: "session_not_found", transient: false };
     if (["aggregated", "judging", "judged", "published"].includes(s.state)) {
@@ -483,9 +707,10 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   }
 
   async requestJudging(sessionId: string): Promise<SchedulerApiResult<RequestJudgingBody>> {
-    this.#record("requestJudging", { sessionId });
-    const fault = this.#fault("requestJudging");
-    if (fault) return fault;
+    return this.#transition("requestJudging", { sessionId }, () => this.#requestJudging(sessionId));
+  }
+
+  #requestJudging(sessionId: string): SchedulerApiResult<RequestJudgingBody> {
     const s = this.sessions.get(sessionId);
     if (!s) return { ok: false, status: 404, error: "session_not_found", transient: false };
     if (s.judgeMode === "off") return { ok: false, status: 409, error: "judge_mode_off", transient: false };
@@ -523,9 +748,10 @@ export class FakeSchedulerApi implements TransitionApi, ConsumerApi {
   }
 
   async finalize(sessionId: string): Promise<SchedulerApiResult<FinalizeBody>> {
-    this.#record("finalize", { sessionId });
-    const fault = this.#fault("finalize");
-    if (fault) return fault;
+    return this.#transition("finalize", { sessionId }, () => this.#finalize(sessionId));
+  }
+
+  #finalize(sessionId: string): SchedulerApiResult<FinalizeBody> {
     const s = this.sessions.get(sessionId);
     if (!s) return { ok: false, status: 404, error: "session_not_found", transient: false };
     if (s.state === "published") {

@@ -27,8 +27,9 @@
 //
 // So the boundary is asserted over the module graph, statically, and the test
 // plants a violation to prove the check can fail.
-import { describe, expect, test } from "bun:test";
-import { readFileSync, existsSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   healthPayload,
@@ -36,7 +37,8 @@ import {
   runStartupCheck,
 } from "../../lib/system-scheduler/health.ts";
 import { SchedulerClock } from "../../lib/system-scheduler/clock.ts";
-import { FakeSchedulerApi, FakeTimers } from "./support/scheduler-harness.ts";
+import { SchedulerRuntime } from "../../lib/system-scheduler/runtime.ts";
+import { drain, FakeSchedulerApi, FakeTimers } from "./support/scheduler-harness.ts";
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 const T0 = 1_800_000_000_000;
@@ -82,6 +84,20 @@ describe("the startup check is HTTP and nothing else", () => {
     });
     expect(check.apiReachable).toBe(true);
     expect(check.tokenValid).toBe(false);
+    expect(check.tokenRejected).toBe(true);
+  });
+
+  test("a 5xx is reachable and unproven, but NOT a rejected token", async () => {
+    // `main()` exits only on a rejection; a 5xx at boot is the ordinary
+    // "the API is still coming up" case and must stay up.
+    const check = await runStartupCheck({
+      apiUrl: "http://api",
+      token: "rmat_good",
+      fetchImpl: async () => new Response("{}", { status: 503 }),
+    });
+    expect(check.apiReachable).toBe(true);
+    expect(check.tokenValid).toBe(false);
+    expect(check.tokenRejected).toBe(false);
   });
 
   test("a 200 full read reports reachable and authenticated", async () => {
@@ -169,17 +185,72 @@ describe("the health surface reports each of §6.3's requirements separately", (
     expect(clock.health.healthy).toBe(false);
   });
 
-  test("a rejected token after re-provisioning makes the running scheduler unhealthy", async () => {
-    const { api, clock } = clockWith();
-    clock.markAuthenticated(true);
-    clock.markStreamSynchronized(true);
-    await clock.rebuild(await api.fullRead());
-    await clock.idle();
-    expect(clock.health.healthy).toBe(true);
+  test("a token re-provisioned away makes the RUNNING scheduler unhealthy until it is restarted", async () => {
+    // automation-token criterion: "after re-provisioning the old token is
+    // rejected and the running scheduler is unhealthy until restarted." Nothing
+    // here calls markAuthenticated by hand: the fake API starts refusing the
+    // token, and the scheduler has to find that out from its own calls.
+    const timers = new FakeTimers(T0);
+    const api = new FakeSchedulerApi({ now: () => timers.now() });
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: T0 });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 600_000, judgeMode: "off" });
+    const boot = async (): Promise<SchedulerRuntime> => {
+      const rt = new SchedulerRuntime(api, { timers, probe: () => api.probe(), keepaliveBudgetMs: 30_000, watchdogMs: 5_000 });
+      await rt.start();
+      await rt.clock.idle();
+      return rt;
+    };
+    const a = await boot();
+    expect(a.clock.health.healthy).toBe(true);
+    // A live stream up to just before the boundary.
+    while (timers.now() < T0 + 590_000) {
+      await timers.advanceBy(10_000);
+      await api.keepalive();
+    }
+    expect(a.clock.health.healthy).toBe(true);
 
-    clock.markAuthenticated(false, "403 forbidden after re-provisioning");
-    expect(clock.health.healthy).toBe(false);
-    expect(clock.health.lastError).toContain("403");
+    // The operator re-provisions this instance's token. The open subscription
+    // keeps delivering keepalives — the API-side close is a separate change —
+    // so the stream alone would never notice.
+    api.rotateToken();
+    await timers.advanceTo(T0 + 600_000);
+    await api.keepalive();
+    await a.clock.idle();
+
+    expect(api.resultsOf("turnover")).toEqual([]);
+    expect(api.callsOf("turnover")[0].result).toMatchObject({ status: 403, transient: false });
+    // Refused once, not retried: a rejected credential is not a transient.
+    expect(api.countCalls("turnover")).toBe(1);
+    expect(a.clock.health.authenticated).toBe(false);
+    expect(a.clock.health.healthy).toBe(false);
+    expect(a.clock.health.lastError).toContain("403");
+    expect(healthStatusCode(a.clock.health)).toBe(503);
+
+    // It STAYS unhealthy. Time passes, keepalives keep flowing, and even a
+    // successful read (a rebuild's markAuthenticated(true)) does not clear it.
+    for (let i = 0; i < 6; i += 1) {
+      await timers.advanceBy(10_000);
+      await api.keepalive();
+    }
+    a.clock.markAuthenticated(true);
+    expect(a.clock.health.healthy).toBe(false);
+
+    // A forced rebuild against the rotated token fails too, and the reconnect
+    // loop's probe names the rejection rather than an outage.
+    api.commitEvent();
+    await api.keepalive();
+    await timers.advanceBy(1_000);
+    await drain();
+    expect(a.clock.health.healthy).toBe(false);
+    expect(a.clock.health.lastError).toContain("rejected");
+    a.stop();
+
+    // THE RESTART: a new process that has read the re-provisioned token file.
+    api.adoptNewToken();
+    const b = await boot();
+    expect(b.clock.health.authenticated).toBe(true);
+    expect(b.clock.health.healthy).toBe(true);
+    b.stop();
   });
 
   test("exhausted work names its session, its subject and its last error", async () => {
@@ -234,6 +305,7 @@ const SCHEDULER_SOURCES = [
   "scripts/lib/system-scheduler/clock.ts",
   "scripts/lib/system-scheduler/health.ts",
   "scripts/lib/system-scheduler/api-client.ts",
+  "scripts/lib/system-scheduler/runtime.ts",
   "scripts/lib/system-scheduler/stream-consumer.ts",
   "scripts/lib/system-scheduler/types.ts",
   "scripts/system-scheduler.ts",
@@ -318,10 +390,164 @@ describe("the scheduler holds exactly one kind of credential (§7)", () => {
     expect({ relative, outside }).toEqual({ relative, outside: [] });
   });
 
+  test("every module the entrypoint reaches is on the credential-boundary list above", () => {
+    // SCHEDULER_SOURCES is only as good as its coverage: a new module the
+    // entrypoint imports, absent from the list, would be exempt from both
+    // checks above. Walk the relative imports from the entrypoint and demand
+    // every file reached is listed.
+    const seen = new Set<string>();
+    const walk = (rel: string): void => {
+      if (seen.has(rel)) return;
+      seen.add(rel);
+      const text = readFileSync(join(REPO, rel), "utf8");
+      const dir = rel.slice(0, rel.lastIndexOf("/"));
+      for (const spec of importsOf(text).filter((x) => x.startsWith("."))) {
+        walk(join(dir, spec));
+      }
+    };
+    walk("scripts/system-scheduler.ts");
+    expect([...seen].sort()).toEqual([...SCHEDULER_SOURCES].sort());
+  });
+
   test("the entrypoint reads its token from a file path, not from the environment directly", () => {
     // smoke §3: "a file the boot places in the instance's state directory, named
     // per instance, never in `~/.env` and never in the image."
     const text = readFileSync(join(REPO, "scripts/system-scheduler.ts"), "utf8");
     expect(text).toContain("SCHEDULER_TOKEN_FILE");
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// main(), executed (§1, §7)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The startup decision — exit on a rejected token, stay up unhealthy on an
+// unreachable API — lives in `main()`, and until now it was only ever read as
+// text. These run the real entrypoint as a process, exactly as the container's
+// `command` does, against a stub API served on a loopback port. The stub is
+// the API's scheduler surface in miniature: evidence about `main()`, not about
+// the real API.
+
+const ENTRYPOINT = join(REPO, "scripts/system-scheduler.ts");
+
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+  while (cleanups.length) cleanups.pop()!();
+});
+
+function tokenFile(token: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "rm-scheduler-main-"));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "automation-token");
+  writeFileSync(path, `${token}\n`);
+  return path;
+}
+
+function spawnScheduler(env: Record<string, string>) {
+  const child = Bun.spawn(["bun", "run", ENTRYPOINT], {
+    cwd: REPO,
+    // A clean environment: nothing inherited, so no DATABASE_URL or model key
+    // could be what makes this pass.
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  cleanups.push(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  });
+  return child;
+}
+
+/** Read stdout until `pattern` matches, or fail after `ms`. */
+async function waitForLine(stream: ReadableStream<Uint8Array>, pattern: RegExp, ms = 15_000): Promise<RegExpMatchArray> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  const deadline = Date.now() + ms;
+  try {
+    while (Date.now() < deadline) {
+      const next = await Promise.race([
+        reader.read(),
+        Bun.sleep(Math.max(1, deadline - Date.now())).then(() => ({ done: true, value: undefined })),
+      ]);
+      if (next.done) break;
+      seen += decoder.decode(next.value, { stream: true });
+      const m = seen.match(pattern);
+      if (m) return m;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  throw new Error(`no line matching ${pattern} in: ${seen}`);
+}
+
+describe("main() executed against a stub API", () => {
+  test("a REJECTED token exits 1, naming the rejection", async () => {
+    let fullReads = 0;
+    const stub = Bun.serve({
+      port: 0,
+      fetch(req) {
+        if (new URL(req.url).pathname === "/api/swarm/scheduler/full-read") fullReads += 1;
+        return Response.json({ error: "automation_token_rejected" }, { status: 403 });
+      },
+    });
+    cleanups.push(() => stub.stop(true));
+
+    const child = spawnScheduler({
+      SCHEDULER_API_URL: `http://127.0.0.1:${stub.port}`,
+      SCHEDULER_TOKEN_FILE: tokenFile("rmat_revoked"),
+      SCHEDULER_HEALTH_PORT: "0",
+    });
+    const code = await child.exited;
+    const stderr = await new Response(child.stderr).text();
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("the API rejected this automation token");
+    expect(stderr).toContain("403");
+    // It asked with the token, once, and did not go on to subscribe.
+    expect(fullReads).toBe(1);
+  }, 30_000);
+
+  test("an UNREACHABLE API stays up and answers 503 on health, with the reason", async () => {
+    // Port 1 refuses. The process must not exit: this is the ordinary boot
+    // race between `api` and the scheduler.
+    const child = spawnScheduler({
+      SCHEDULER_API_URL: "http://127.0.0.1:1",
+      SCHEDULER_TOKEN_FILE: tokenFile("rmat_fine"),
+      SCHEDULER_HEALTH_PORT: "0",
+    });
+    const [, port] = await waitForLine(child.stdout, /health on :(\d+)\/health/);
+    await waitForLine(child.stdout, /startup check: API unreachable/);
+
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { authenticated: boolean; streamSynchronized: boolean; healthy: boolean; lastError: string | null };
+    expect(body.healthy).toBe(false);
+    expect(body.authenticated).toBe(false);
+    expect(body.streamSynchronized).toBe(false);
+    expect(body.lastError).toContain("unreachable");
+
+    // Still running after the startup check has come and gone.
+    await Bun.sleep(300);
+    expect(child.exitCode).toBeNull();
+
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(0);
+  }, 30_000);
+
+  test("a missing token file exits 2 before serving anything, naming the file", async () => {
+    const child = spawnScheduler({
+      SCHEDULER_API_URL: "http://127.0.0.1:1",
+      SCHEDULER_TOKEN_FILE: "/nonexistent/automation-token",
+      SCHEDULER_HEALTH_PORT: "0",
+    });
+    expect(await child.exited).toBe(2);
+    expect(await new Response(child.stderr).text()).toContain(
+      "automation token file not found: /nonexistent/automation-token",
+    );
+  }, 30_000);
 });

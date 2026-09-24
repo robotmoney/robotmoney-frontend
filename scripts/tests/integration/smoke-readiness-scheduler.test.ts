@@ -19,14 +19,27 @@
 //      and the translation between them is the kind of thing that is correct in
 //      every unit test and wrong on the wire.
 //   2. `serveHealth` answers the real payload with the real status code.
-//   3. `fetchSchedulerHealth` + `evaluateSchedulerReadiness` — the code
-//      `bun smoke` calls — consume that answer and reach §6.3's verdict.
+//   3. `fetchSchedulerHealth` + `evaluateSchedulerReadiness` — smoke's
+//      readiness gate for the scheduler — consume that answer and reach §6.3's
+//      verdict.
 //
-// IT DOES NOT PROVE that a real `bun smoke` boots a real `system-scheduler`
-// container against a real API and a real Postgres. There is no container here,
-// no database, and the API is a Bun server implementing the epoch routes in
-// memory. That is the `[e2e]` gate on the issue and it is NOT satisfied by this
-// file. The API's own behaviour is owned by `backend/tests/api-event-stream.test.ts`
+// The scheduler side runs through `SchedulerRuntime`, the same wiring
+// `scripts/system-scheduler.ts` runs, so the socket each rebuild opens is the
+// real `SchedulerHttpApi.subscribe` over a real connection.
+//
+// IT DOES NOT PROVE that `bun smoke` consumes this. As of this change nothing
+// in smoke's boot path imports `scripts/lib/smoke-readiness-scheduler.ts`:
+// smoke marks `system-scheduler` healthy when compose `up` returns, without
+// reading /health. Wiring the gate into `bun smoke` is a later part of #1026,
+// and until it lands this file is evidence about the gate's code, not about
+// smoke's behaviour.
+//
+// NOR DOES IT PROVE that a real `system-scheduler` container boots against a
+// real API and a real Postgres. There is no container here, no database, and
+// the API is a Bun server implementing the epoch routes in memory. That is the
+// `[e2e]` gate on the issue and it is NOT satisfied by this file.
+// (`system-scheduler-image.test.ts` boots the image, but only far enough to
+// prove the entrypoint resolves and refuses without its token file.) The API's own behaviour is owned by `backend/tests/api-event-stream.test.ts`
 // and `backend/tests/epoch-*.test.ts`, which run against real Postgres.
 //
 // The in-memory API is deliberately thin — it serves what the real handlers
@@ -38,7 +51,8 @@ import { ROUTES } from "@robotmoney/contract";
 import { SchedulerClock } from "../../lib/system-scheduler/clock.ts";
 import { SchedulerHttpApi } from "../../lib/system-scheduler/api-client.ts";
 import { runStartupCheck, serveHealth, type HealthServer } from "../../lib/system-scheduler/health.ts";
-import { SchedulerStreamConsumer } from "../../lib/system-scheduler/stream-consumer.ts";
+import { SchedulerRuntime } from "../../lib/system-scheduler/runtime.ts";
+import type { StreamEventFrame } from "../../lib/system-scheduler/stream-consumer.ts";
 import { realTimers, type SchedulerFullRead } from "../../lib/system-scheduler/types.ts";
 import {
   evaluateSchedulerReadiness,
@@ -56,6 +70,12 @@ interface FakeApi {
   /** Push one event onto the stream every live subscriber will receive. */
   emit(kind: string, subjectId: string | null, sessionId: string | null, payload: Record<string, unknown>): void;
   snapshot: SchedulerFullRead;
+  /** The cursor of every subscription served, in order. */
+  readonly subscriptions: number[];
+  /** Subscriptions whose socket is still open. */
+  openSubscriptions(): number;
+  /** Stop sending anything on every open socket without closing it. */
+  stallAll(): void;
 }
 
 /**
@@ -70,6 +90,8 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
   const turnovers: string[] = [];
   const events: { seq: number; kind: string; subjectId: string | null; sessionId: string | null; payload: Record<string, unknown> }[] = [];
   let seq = initial.cursor;
+  const subscriptions: number[] = [];
+  const sockets: { live: boolean; stalled: boolean }[] = [];
 
   const authorized = (req: Request): boolean => {
     const presented = req.headers.get("X-Automation-Token") ?? (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -90,20 +112,22 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
         const from = Number(url.searchParams.get("cursor"));
         if (!Number.isInteger(from)) return Response.json({ error: "cursor required" }, { status: 400 });
         let sent = from;
-        let live = true;
+        const socket = { live: true, stalled: false };
+        subscriptions.push(from);
+        sockets.push(socket);
         const body = new ReadableStream<Uint8Array>({
           start(controller) {
             const enc = new TextEncoder();
             const send = (event: string, data: unknown): void => {
-              if (!live) return;
+              if (!socket.live || socket.stalled) return;
               try {
                 controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
               } catch {
-                live = false;
+                socket.live = false;
               }
             };
             void (async () => {
-              while (live) {
+              while (socket.live) {
                 for (const e of events.filter((x) => x.seq > sent)) {
                   send("event", { ...e, committedAt: new Date().toISOString() });
                   sent = e.seq;
@@ -114,7 +138,7 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
             })();
           },
           cancel() {
-            live = false;
+            socket.live = false;
           },
         });
         return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
@@ -158,8 +182,6 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
           created: true,
         });
       }
-      if (url.pathname === ROUTES.swarm.scheduler.jobAck) return Response.json({ known: true, acked: true });
-
       return new Response("not found", { status: 404 });
     },
   });
@@ -178,6 +200,11 @@ function startFakeApi(initial: SchedulerFullRead): FakeApi {
     set snapshot(next: SchedulerFullRead) {
       snapshot = next;
     },
+    subscriptions,
+    openSubscriptions: () => sockets.filter((x) => x.live).length,
+    stallAll() {
+      for (const x of sockets) x.stalled = true;
+    },
   };
 }
 
@@ -188,26 +215,36 @@ afterEach(() => {
   while (running.length) running.pop()!.stop();
 });
 
-/** Bring up a real scheduler over a real socket, the way the container does. */
-async function bootScheduler(api: FakeApi): Promise<{ clock: SchedulerClock; health: HealthServer; healthUrl: string }> {
+/** Bring up a real scheduler over a real socket, through the wiring the container runs. */
+async function bootScheduler(
+  api: FakeApi,
+  opts: { keepaliveBudgetMs?: number; watchdogMs?: number; onEvent?: (e: StreamEventFrame) => void } = {},
+): Promise<{ clock: SchedulerClock; runtime: SchedulerRuntime; health: HealthServer; healthUrl: string }> {
   const http = new SchedulerHttpApi({ apiUrl: api.url, token: TOKEN });
-  const clock = new SchedulerClock(http, { timers: realTimers(), sleep: (ms) => Bun.sleep(ms) });
+  const runtime = new SchedulerRuntime(http, {
+    timers: realTimers(),
+    probe: () => runStartupCheck({ apiUrl: api.url, token: TOKEN }),
+    keepaliveBudgetMs: opts.keepaliveBudgetMs ?? 30_000,
+    watchdogMs: opts.watchdogMs ?? 5_000,
+  });
+  const clock = runtime.clock;
+  if (opts.onEvent) {
+    const apply = clock.applyEvent.bind(clock);
+    clock.applyEvent = async (e) => {
+      opts.onEvent!(e);
+      await apply(e);
+    };
+  }
   const health = serveHealth(0, () => clock.health);
-  running.push(health, { stop: () => { http.closeStream(); clock.stop(); } });
+  running.push(health, { stop: () => runtime.stop() });
 
   const startup = await runStartupCheck({ apiUrl: api.url, token: TOKEN });
   clock.markAuthenticated(startup.tokenValid, startup.error ?? undefined);
 
-  const consumer = new SchedulerStreamConsumer(http, {
-    applyEvent: (e) => clock.applyEvent(e),
-    onRebuild: (snap) => clock.rebuild(snap as unknown as SchedulerFullRead),
-  });
-  await consumer.start();
-  await http.subscribeStream(consumer.cursor, (f) => consumer.receive(f), () => clock.markStreamSynchronized(false));
-  clock.markStreamSynchronized(consumer.current);
+  await runtime.start();
   await clock.idle();
 
-  return { clock, health, healthUrl: `http://127.0.0.1:${health.port}/health` };
+  return { clock, runtime, health, healthUrl: `http://127.0.0.1:${health.port}/health` };
 }
 
 describe("the scheduler's health endpoint, read the way smoke reads it", () => {
@@ -321,24 +358,45 @@ describe("the SSE hop, which only a real socket exercises", () => {
       cursor: 0,
     });
     running.push(api);
-    const http = new SchedulerHttpApi({ apiUrl: api.url, token: TOKEN });
-    const clock = new SchedulerClock(http, { timers: realTimers() });
-    running.push({ stop: () => { http.closeStream(); clock.stop(); } });
-    const consumer = new SchedulerStreamConsumer(http, {
-      applyEvent: (e) => clock.applyEvent(e),
-      onRebuild: (s) => clock.rebuild(s as unknown as SchedulerFullRead),
-    });
-    await consumer.start();
-    await http.subscribeStream(consumer.cursor, (f) => consumer.receive(f), () => {});
+    const { runtime } = await bootScheduler(api, { keepaliveBudgetMs: 200, watchdogMs: 50 });
+    const consumer = runtime.consumer;
 
     // The fake sends a keepalive every 25ms and nothing else. Twenty of them
     // later the copy is still current and nothing has been applied — §10's
-    // "transport keepalive frames are not API calls" on the real wire.
+    // "transport keepalive frames are not API calls" on the real wire, with a
+    // watchdog running at a budget eight keepalives wide.
     const rebuildsBefore = consumer.rebuilds.length;
     await Bun.sleep(600);
     expect(consumer.current).toBe(true);
     expect(consumer.lastApplied).toBe(0);
     expect(consumer.rebuilds.length).toBe(rebuildsBefore);
+    expect(api.subscriptions).toEqual([0]);
+  });
+
+  test("a stalled socket is replaced by the rebuild: one re-read, one new subscription, then quiet", async () => {
+    // §10 "Silent stall" on a real connection. The defect this pins: the HTTP
+    // transport's subscribe was a no-op, so the rebuild stayed on the stalled
+    // socket and the watchdog re-read on every budget for ever.
+    const api = startFakeApi({
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(Date.now() + 3_600_000) }],
+      settling: [],
+      cursor: 0,
+    });
+    running.push(api);
+    const { runtime } = await bootScheduler(api, { keepaliveBudgetMs: 200, watchdogMs: 50 });
+    expect(api.subscriptions).toEqual([0]);
+
+    api.stallAll();
+    // Several budgets: the stall is caught once, and the new socket's
+    // keepalives keep the copy current after that.
+    for (let i = 0; i < 80 && runtime.consumer.rebuilds.length < 2; i += 1) await Bun.sleep(25);
+    await Bun.sleep(1_000);
+
+    expect(runtime.consumer.rebuilds.map((r) => r.trigger)).toEqual(["start", "missed_keepalive"]);
+    expect(api.subscriptions).toEqual([0, 0]);
+    expect(api.openSubscriptions()).toBe(1);
+    expect(runtime.consumer.current).toBe(true);
   });
 
   test("an event emitted over the real wire is applied in order and moves lastApplied", async () => {
@@ -349,19 +407,9 @@ describe("the SSE hop, which only a real socket exercises", () => {
       cursor: 0,
     });
     running.push(api);
-    const http = new SchedulerHttpApi({ apiUrl: api.url, token: TOKEN });
-    const clock = new SchedulerClock(http, { timers: realTimers() });
-    running.push({ stop: () => { http.closeStream(); clock.stop(); } });
     const applied: number[] = [];
-    const consumer = new SchedulerStreamConsumer(http, {
-      applyEvent: async (e) => {
-        applied.push(e.seq);
-        await clock.applyEvent(e);
-      },
-      onRebuild: (s) => clock.rebuild(s as unknown as SchedulerFullRead),
-    });
-    await consumer.start();
-    await http.subscribeStream(consumer.cursor, (f) => consumer.receive(f), () => {});
+    const { clock, runtime } = await bootScheduler(api, { onEvent: (e) => void applied.push(e.seq) });
+    const consumer = runtime.consumer;
 
     api.emit("subject.changed", "sub-a", null, { reason: "updated", epochDurationSeconds: 60 });
     api.emit("subject.changed", "sub-a", null, { reason: "updated", epochDurationSeconds: 30 });

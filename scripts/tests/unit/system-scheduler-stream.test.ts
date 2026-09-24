@@ -17,17 +17,31 @@
 // in exactly the ways §6.3 names. The fake counts calls, which is how the
 // "zero API calls between instants" gate is asserted at all.
 //
+// The later sections go one step further and run `SchedulerRuntime` — the
+// wiring the container itself runs — over the shared fake API with its stream
+// modelled as sockets, so the consumer and the clock are tested TOGETHER on
+// fake timers: a boundary that falls while the copy is stale must not fire.
+//
 // WHAT THIS FILE DOES NOT PROVE. It does not prove the real API emits these
-// frames — that is the backend file's job — and it does not prove the
-// `system-scheduler` container wires this consumer to a real socket and real
-// timers, which is W4's third part. It proves the contract in the middle.
+// frames — that is the backend file's job — and it proves nothing about a
+// real socket beyond the HTTP transport's own subscribe, driven here through
+// an injected fetch. Everything here is module evidence against fakes; the
+// integration suite runs the same runtime over real sockets.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseSseFrame, SchedulerHttpApi } from "../../lib/system-scheduler/api-client.ts";
+import { SchedulerRuntime } from "../../lib/system-scheduler/runtime.ts";
 import {
   SchedulerStreamConsumer,
   type ConsumerApi,
   type FullReadSnapshot,
   type RebuildTrigger,
+  type StreamFrame,
 } from "../../lib/system-scheduler/stream-consumer.ts";
+import { drain, FakeSchedulerApi, FakeTimers } from "./support/scheduler-harness.ts";
+
+const REPO = join(import.meta.dir, "..", "..", "..");
 
 /**
  * A fake API that counts every call.
@@ -41,7 +55,6 @@ import {
 class FakeApi implements ConsumerApi {
   calls: string[] = [];
   subscribedFrom: number[] = [];
-  acked: string[] = [];
   cursor = 100;
   snapshotTag = "first";
 
@@ -49,13 +62,12 @@ class FakeApi implements ConsumerApi {
     this.calls.push("fullRead");
     return { cursor: this.cursor, tag: this.snapshotTag } as FullReadSnapshot;
   }
+  // Counts only. What a subscribe DOES to the socket is asserted against the
+  // real transport and the socket-modelling fake further down, where a no-op
+  // cannot hide behind a counter.
   async subscribe(cursor: number): Promise<void> {
     this.calls.push("subscribe");
     this.subscribedFrom.push(cursor);
-  }
-  async ackJob(key: string): Promise<void> {
-    this.calls.push("ackJob");
-    this.acked.push(key);
   }
 }
 
@@ -63,14 +75,12 @@ interface Harness {
   api: FakeApi;
   consumer: SchedulerStreamConsumer;
   applied: number[];
-  jobsRun: string[];
   clock: { ms: number };
 }
 
 async function started(opts: { keepaliveBudgetMs?: number } = {}): Promise<Harness> {
   const api = new FakeApi();
   const applied: number[] = [];
-  const jobsRun: string[] = [];
   const clock = { ms: 1_000 };
   const consumer = new SchedulerStreamConsumer(
     api,
@@ -78,14 +88,11 @@ async function started(opts: { keepaliveBudgetMs?: number } = {}): Promise<Harne
       applyEvent: (e) => {
         applied.push(e.seq);
       },
-      runJob: (job) => {
-        jobsRun.push(job.idempotencyKey);
-      },
     },
     { keepaliveBudgetMs: opts.keepaliveBudgetMs ?? 30_000, now: () => clock.ms },
   );
   await consumer.start();
-  return { api, consumer, applied, jobsRun, clock };
+  return { api, consumer, applied, clock };
 }
 
 const evt = (seq: number) => ({ type: "event" as const, seq, kind: "epoch.turned_over", payload: {} });
@@ -321,59 +328,374 @@ describe("a stalled or dropped connection", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §6.3 — job pushes
+// §6.3 — no job pushes
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("job pushes", () => {
-  const job = (key: string) => ({ type: "job" as const, kind: "reconcile_subject", target: "sub-1", idempotencyKey: key });
+describe("the stream carries change events only (§6.3, amended 2026-09-24)", () => {
+  // "No job pushes. The stream carries change events only. Every piece of work
+  // the scheduler does follows from an event or a timer; there is no ad-hoc
+  // job kind for the API to push, ack or redeliver." The failure this replaces
+  // was worse than dead code: the consumer ACKED a job frame it had no hook to
+  // run, so the API recorded as done work nothing had done.
 
-  test("a job is run and then acked through the API", async () => {
-    const { api, consumer, jobsRun } = await started();
-    await consumer.receive(job("k1"));
-    expect(jobsRun).toEqual(["k1"]);
-    expect(api.acked).toEqual(["k1"]);
+  test("a `job` frame on the wire parses to nothing", () => {
+    const wire = `event: job\ndata: ${JSON.stringify({ kind: "reconcile_subject", target: "sub-1", idempotencyKey: "k1" })}`;
+    expect(parseSseFrame(wire)).toBeNull();
   });
 
-  test("a seen idempotency key produces no second effect, and is acked again", async () => {
-    // Acked again on purpose: a redelivery means the first ack did not reach
-    // the API, so staying silent would leave the job unacked for ever.
-    const { api, consumer, jobsRun } = await started();
-    await consumer.receive(job("k2"));
-    await consumer.receive(job("k2"));
-    expect(jobsRun).toEqual(["k2"]);
-    expect(api.acked).toEqual(["k2", "k2"]);
+  test("the client has no job surface: no ack call, no job hook, no job memory", () => {
+    expect("ackJob" in SchedulerHttpApi.prototype).toBe(false);
+    expect("seenJobKeys" in SchedulerStreamConsumer.prototype).toBe(false);
+    for (const rel of [
+      "scripts/lib/system-scheduler/api-client.ts",
+      "scripts/lib/system-scheduler/stream-consumer.ts",
+      "scripts/lib/system-scheduler/runtime.ts",
+      "scripts/system-scheduler.ts",
+    ]) {
+      const code = readFileSync(join(REPO, rel), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|\n)\s*\/\/.*/g, "");
+      for (const needle of ["jobAck", "ackJob", "runJob", "JobFrame", "idempotencyKey"]) {
+        expect({ rel, needle, found: code.includes(needle) }).toEqual({ rel, needle, found: false });
+      }
+    }
   });
 
-  test("a job redelivered after a reconnect still produces no second effect", async () => {
-    const { consumer, jobsRun } = await started();
-    await consumer.receive(job("k3"));
-    await consumer.connectionDropped();
-    await consumer.reconnect();
-    await consumer.receive(job("k3"));
-    expect(jobsRun).toEqual(["k3"]);
-  });
-
-  test("a job is not a stream event: it moves no cursor and leaves no gap behind", async () => {
-    const { consumer, applied } = await started();
-    await consumer.receive(job("k4"));
-    expect(consumer.lastApplied).toBe(100);
-    await consumer.receive(evt(101));
-    expect(applied).toEqual([101]);
+  test("a job-shaped frame that reached the consumer anyway does nothing at all", async () => {
+    const { api, consumer, applied } = await started();
+    const before = api.calls.length;
+    const job = { type: "job", kind: "reconcile_subject", target: "sub-1", idempotencyKey: "k1" };
+    await consumer.receive(job as unknown as StreamFrame);
+    expect(api.calls.length).toBe(before);
+    expect(applied).toEqual([]);
     expect(triggers(consumer)).toEqual(["start"]);
+    expect(consumer.lastApplied).toBe(100);
   });
+});
 
-  test("a job whose work throws is NOT acked", async () => {
-    const api = new FakeApi();
-    const consumer = new SchedulerStreamConsumer(api, {
-      runJob: () => {
-        throw new Error("the work failed");
+// ─────────────────────────────────────────────────────────────────────────────
+// The transport's subscribe REPLACES the socket
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A `fetch` that serves the subscribe route with a stream the test writes to,
+ * and aborts it the way a real connection aborts.
+ */
+function socketFetch() {
+  const opened: { cursor: number; signal: AbortSignal; write(frame: string): void; end(): void }[] = [];
+  const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
       },
     });
-    await consumer.start();
-    await consumer.receive(job("k5"));
-    expect(api.acked).toEqual([]);
-    // And it is not remembered as seen, so the API's redelivery can retry it.
-    expect(consumer.seenJobKeys).not.toContain("k5");
+    const signal = init!.signal!;
+    signal.addEventListener("abort", () => {
+      try {
+        controller.error(new Error("aborted"));
+      } catch {
+        /* already closed */
+      }
+    });
+    opened.push({
+      cursor: Number(url.searchParams.get("cursor")),
+      signal,
+      write: (frame) => controller.enqueue(new TextEncoder().encode(frame)),
+      end: () => controller.close(),
+    });
+    return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+  return { opened, fetchImpl };
+}
+
+describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", () => {
+  // The defect this pins: `subscribe(cursor)` was a no-op, so a rebuild the
+  // stream itself triggered (a gap, a head-sequence mismatch, a missed
+  // keepalive) re-read the world and stayed on the old socket. On a stall that
+  // socket never spoke again, and the watchdog re-read once per budget forever.
+
+  test("a second subscribe aborts the first socket and opens a new one at the new cursor", async () => {
+    const { opened, fetchImpl } = socketFetch();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+    const frames: StreamFrame[] = [];
+    const closed: string[] = [];
+    http.attachStream({ onFrame: (f) => void frames.push(f), onClosed: (r) => void closed.push(r) });
+
+    await http.subscribe(5);
+    await http.subscribe(9);
+    await drain();
+
+    expect(opened.map((o) => o.cursor)).toEqual([5, 9]);
+    expect(opened[0].signal.aborted).toBe(true);
+    expect(opened[1].signal.aborted).toBe(false);
+    expect(http.streamOpen).toBe(true);
+    // Replacing a socket is deliberate, and reporting it as a drop would turn
+    // every rebuild into a reconnect.
+    expect(closed).toEqual([]);
+
+    opened[1].write(`event: keepalive\ndata: {"head":9}\n\n`);
+    await drain();
+    expect(frames).toEqual([{ type: "keepalive", head: 9 }]);
+  });
+
+  test("only the CURRENT socket's end is reported, exactly once", async () => {
+    const { opened, fetchImpl } = socketFetch();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+    const closed: string[] = [];
+    http.attachStream({ onFrame: () => {}, onClosed: (r) => void closed.push(r) });
+    await http.subscribe(1);
+    await http.subscribe(2);
+    opened[1].end();
+    await drain();
+    expect(closed).toEqual(["stream ended"]);
+    expect(http.streamOpen).toBe(false);
+  });
+
+  test("closeStream ends the socket silently", async () => {
+    const { opened, fetchImpl } = socketFetch();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl });
+    const closed: string[] = [];
+    http.attachStream({ onFrame: () => {}, onClosed: (r) => void closed.push(r) });
+    await http.subscribe(1);
+    http.closeStream();
+    await drain();
+    expect(opened[0].signal.aborted).toBe(true);
+    expect(closed).toEqual([]);
+  });
+
+  test("a refused subscribe throws and leaves no socket", async () => {
+    const http = new SchedulerHttpApi({
+      apiUrl: "http://api",
+      token: "rmat_t",
+      fetchImpl: async () => new Response("{}", { status: 503 }),
+    });
+    http.attachStream({ onFrame: () => {}, onClosed: () => {} });
+    await expect(http.subscribe(1)).rejects.toThrow("HTTP 503");
+    expect(http.streamOpen).toBe(false);
+  });
+
+  test("a subscribe with nowhere to deliver frames refuses rather than dropping them", async () => {
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl: socketFetch().fetchImpl });
+    await expect(http.subscribe(1)).rejects.toThrow("attachStream");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The consumer and the clock together, on fake timers
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `SchedulerRuntime` is the wiring `scripts/system-scheduler.ts` runs. Here it
+// runs over the shared FakeSchedulerApi, whose stream is modelled as SOCKETS:
+// a frame reaches the scheduler only through the socket the latest subscribe
+// opened. A transport whose subscribe did nothing would leave the scheduler on
+// the stalled socket, and every assertion below on full reads and sockets
+// would fail. Evidence against a fake API: module-level, not a runtime claim
+// about the real API, which is the integration and backend suites' job.
+
+const T0 = 1_800_000_000_000;
+const BUDGET = 30_000;
+const WATCHDOG = 5_000;
+
+async function runtimeWorld(opts: { boundaryAt?: number } = {}) {
+  const timers = new FakeTimers(T0);
+  const fake = new FakeSchedulerApi({ now: () => timers.now() });
+  fake.addSubject("sub-a", 600, true, { epochAnchorMs: T0 - 600_000 + (opts.boundaryAt ?? 600_000) });
+  fake.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + (opts.boundaryAt ?? 600_000), judgeMode: "off" });
+  const runtime = new SchedulerRuntime(fake, {
+    timers,
+    probe: () => fake.probe(),
+    keepaliveBudgetMs: BUDGET,
+    watchdogMs: WATCHDOG,
+  });
+  await runtime.start();
+  await runtime.clock.idle();
+  const rebuildTriggers = () => runtime.consumer.rebuilds.map((r) => r.trigger);
+  /** Advance to `t` in `step`s, sending a keepalive on the live socket at each step. */
+  const liveUntil = async (t: number, step = 10_000): Promise<void> => {
+    while (timers.now() < t) {
+      await timers.advanceTo(Math.min(t, timers.now() + step));
+      await fake.keepalive();
+      await runtime.clock.idle();
+    }
+  };
+  return { timers, fake, runtime, rebuildTriggers, liveUntil };
+}
+
+describe("the runtime: a stale copy never fires (§3.1, §10)", () => {
+  test("a dropped connection marks the copy stale BEFORE anything else, then rebuilds on a new socket", async () => {
+    const { timers, fake, runtime, rebuildTriggers } = await runtimeWorld();
+    expect(runtime.consumer.current).toBe(true);
+    expect(runtime.clock.health.streamSynchronized).toBe(true);
+
+    fake.dropConnection("peer reset");
+    // Synchronously: no await between the drop and these reads.
+    expect(runtime.consumer.current).toBe(false);
+    expect(runtime.clock.health.streamSynchronized).toBe(false);
+
+    await timers.advanceBy(1_000); // past the first reconnect backoff step
+    await runtime.settled();
+    expect(rebuildTriggers()).toEqual(["start", "dropped_connection"]);
+    expect(fake.countCalls("fullRead")).toBe(2);
+    expect(fake.sockets.map((s) => s.open)).toEqual([false, true]);
+    expect(runtime.consumer.current).toBe(true);
+    expect(runtime.clock.health.streamSynchronized).toBe(true);
+  });
+
+  test("BACKOFF: a boundary falling while the API is unreachable makes ZERO turnover calls, then fires once on rebuild", async () => {
+    const { timers, fake, runtime } = await runtimeWorld({ boundaryAt: 60_000 });
+    await timers.advanceTo(T0 + 50_000);
+    fake.setUnreachable(true);
+    fake.dropConnection("api went away");
+
+    // The boundary instant passes during the backoff, with several failed
+    // reconnects behind it.
+    await timers.advanceTo(T0 + 90_000);
+    await runtime.clock.idle();
+    expect(fake.countCalls("turnover")).toBe(0);
+    expect(fake.countCalls("fullRead")).toBeGreaterThan(2);
+    expect(runtime.clock.health.healthy).toBe(false);
+
+    fake.setUnreachable(false);
+    await timers.advanceBy(20_000);
+    await runtime.settled();
+    await runtime.clock.idle();
+
+    const [turnover] = fake.callsOf("turnover");
+    expect(fake.countCalls("turnover")).toBe(1);
+    expect(turnover.args.expectedSessionId).toBe("sa");
+    // Dispatched by the rebuild that ended the interval, after its full read.
+    const lastRead = fake.callsOf("fullRead").at(-1)!;
+    expect(fake.calls.indexOf(turnover)).toBeGreaterThan(fake.calls.indexOf(lastRead));
+    expect(runtime.clock.health.healthy).toBe(true);
+  });
+
+  test("SILENT STALL: caught within the budget; a boundary falling during the rebuild makes ZERO turnover calls", async () => {
+    const { timers, fake, runtime, rebuildTriggers, liveUntil } = await runtimeWorld({ boundaryAt: 70_000 });
+    await liveUntil(T0 + 10_000);
+    fake.stall();
+    const release = fake.holdFullRead();
+
+    // Last keepalive at T0+10s; the budget runs out at T0+40s and the watchdog
+    // (every 5s) sees it at the first tick after that.
+    await timers.advanceTo(T0 + 45_000);
+    expect(rebuildTriggers()).toEqual(["start"]); // the rebuild is in flight
+    expect(runtime.consumer.current).toBe(false);
+    expect(fake.countCalls("fullRead")).toBe(2);
+    expect(fake.callsOf("fullRead")[1].atMs).toBeLessThanOrEqual(T0 + 10_000 + BUDGET + WATCHDOG);
+
+    // The boundary falls while the full read is held. The old copy's timer
+    // must not act on it.
+    await timers.advanceTo(T0 + 80_000);
+    await runtime.clock.idle();
+    expect(fake.countCalls("turnover")).toBe(0);
+
+    release();
+    await drain();
+    await runtime.clock.idle();
+    expect(rebuildTriggers()).toEqual(["start", "missed_keepalive"]);
+    expect(fake.countCalls("turnover")).toBe(1);
+    expect(fake.callsOf("turnover")[0].atMs).toBe(T0 + 80_000);
+  });
+
+  test("SILENT STALL: exactly one full read across several keepalive budgets, because the rebuild moved to a live socket", async () => {
+    const { timers, fake, runtime, rebuildTriggers, liveUntil } = await runtimeWorld({ boundaryAt: 3_600_000 });
+    await liveUntil(T0 + 10_000);
+    fake.stall();
+    // Nothing reaches the scheduler on the stalled socket; the keepalives the
+    // helper sends go to whatever socket is live, and there is none until the
+    // rebuild opens one.
+    await liveUntil(T0 + 10_000 + 6 * BUDGET);
+
+    expect(rebuildTriggers()).toEqual(["start", "missed_keepalive"]);
+    expect(fake.countCalls("fullRead")).toBe(2);
+    expect(fake.countCalls("subscribe")).toBe(2);
+    expect(fake.sockets).toHaveLength(2);
+    expect(fake.sockets[0]).toMatchObject({ open: false, stalled: true });
+    expect(fake.sockets[1]).toMatchObject({ open: true, stalled: false, cursor: fake.head });
+    expect(runtime.consumer.current).toBe(true);
+    expect(fake.countCalls("turnover")).toBe(0);
+    expect(timers.now()).toBe(T0 + 10_000 + 6 * BUDGET);
+  });
+
+  test("GAP: a full read and rebuild complete before any further fire", async () => {
+    const { timers, fake, runtime, rebuildTriggers } = await runtimeWorld({ boundaryAt: 60_000 });
+    const release = fake.holdFullRead();
+    fake.commitEvent();
+    const skipped = fake.commitEvent();
+    // Event `skipped - 1` never arrives; `skipped` does.
+    // Not awaited: the frame's handler is the rebuild, and it is held.
+    void fake.deliver({ type: "event", seq: skipped, kind: "subject.changed", subjectId: "sub-a", payload: { reason: "updated" } });
+    await drain();
+    expect(runtime.consumer.current).toBe(false);
+
+    await timers.advanceTo(T0 + 70_000);
+    await runtime.clock.idle();
+    expect(fake.countCalls("turnover")).toBe(0);
+
+    release();
+    await drain();
+    await runtime.clock.idle();
+    expect(rebuildTriggers()).toEqual(["start", "gap"]);
+    expect(fake.countCalls("turnover")).toBe(1);
+    expect(runtime.consumer.lastApplied).toBe(skipped);
+  });
+
+  test("RESYNC: a boundary during the forced rebuild does not fire from the old copy", async () => {
+    const { timers, fake, runtime, rebuildTriggers } = await runtimeWorld({ boundaryAt: 60_000 });
+    const release = fake.holdFullRead();
+    void fake.deliver({ type: "resync", reason: "buffer_overflow" });
+    await drain();
+    await timers.advanceTo(T0 + 70_000);
+    await runtime.clock.idle();
+    expect(fake.countCalls("turnover")).toBe(0);
+    release();
+    await drain();
+    await runtime.clock.idle();
+    expect(rebuildTriggers()).toEqual(["start", "resync"]);
+    expect(fake.countCalls("turnover")).toBe(1);
+  });
+
+  test("no event is applied while the copy is not current; held frames follow the ordinary rules afterwards", async () => {
+    const { fake, runtime } = await runtimeWorld();
+    const applied: number[] = [];
+    const original = runtime.clock.applyEvent.bind(runtime.clock);
+    runtime.clock.applyEvent = async (e) => {
+      expect(runtime.consumer.current).toBe(true);
+      applied.push(e.seq);
+      await original(e);
+    };
+    const release = fake.holdFullRead();
+    void fake.deliver({ type: "resync", reason: "cursor_above_head" });
+    await drain();
+    const seq = fake.commitEvent();
+    // Arrives mid-rebuild, on the socket the rebuild has not replaced yet.
+    await fake.deliver({ type: "event", seq, kind: "subject.changed", subjectId: "sub-a", payload: { reason: "updated" } });
+    expect(applied).toEqual([]);
+    release();
+    await drain();
+    // The rebuilt snapshot's cursor already covers it: a duplicate, ignored.
+    expect(applied).toEqual([]);
+    expect(runtime.consumer.ignoredDuplicates).toBe(1);
+    expect(runtime.consumer.current).toBe(true);
+  });
+
+  test("FINAL-EVENT LOSS: the keepalive head alone triggers the rebuild, and the trigger says so", async () => {
+    const { fake, runtime, rebuildTriggers } = await runtimeWorld();
+    fake.commitEvent(); // committed, never delivered
+    await fake.keepalive();
+    await drain();
+    expect(rebuildTriggers()).toEqual(["start", "head_sequence"]);
+    expect(runtime.consumer.rebuilds[1].observedHead).toBe(fake.head);
+    expect(runtime.consumer.lastApplied).toBe(fake.head);
+  });
+
+  test("between instants, with a live stream and keepalives flowing, the runtime makes ZERO API calls — watchdog included", async () => {
+    const { fake, liveUntil } = await runtimeWorld({ boundaryAt: 3_600_000 });
+    const before = fake.calls.length;
+    await liveUntil(T0 + 20 * 60_000);
+    expect(fake.calls.slice(before)).toEqual([]);
   });
 });
 
