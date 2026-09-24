@@ -6,10 +6,6 @@ import postgres from "postgres";
 import { canonicalizeApplication, canonicalizeClaimChallenge, SWARM_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as ic from "../src/swarm/domain.ts";
-import {
-  deliverSwarmNotification,
-  type SwarmEmailMessage,
-} from "../src/swarm/notifications.ts";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -60,109 +56,14 @@ async function challengeFor(memberId: string) {
 // database can.
 useCleanDatabasePerTest(import.meta.file);
 
-test("activation persists an email outbox and the executed fake transport delivers it", async () => {
-  const applicant = await applyAndActivate("notify");
-  expect((applicant.activated as any).notificationQueued).toBe(true);
-
-  // Filtered by kind: applying also writes an 'application_received' row for
-  // this same member, so an unfiltered read here would return two rows in
-  // arbitrary order and pick the wrong one roughly half the time.
-  const outbox = (await sql<{ id: string; sent_at: Date | null }[]>`
-    SELECT id, sent_at FROM swarm_notification_outbox
-    WHERE member_id = ${applicant.memberId} AND kind = 'activation_approved'`)[0];
-  expect(outbox).toBeTruthy();
-  expect(outbox.sent_at).toBeNull();
-  const jobs = await sql`
-    SELECT id FROM jobs
-    WHERE kind = 'swarm.send_activation_notification'
-      AND payload->>'outboxId' = ${outbox.id}`;
-  expect(jobs).toHaveLength(1);
-
-  const delivered: SwarmEmailMessage[] = [];
-  const fakeTransport = { send: async (message: SwarmEmailMessage) => { delivered.push(message); } };
-  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
-  expect(delivered).toHaveLength(1);
-  expect(delivered[0]).toMatchObject({
-    from: "swarm-test@robotmoney.invalid",
-    to: applicant.contact,
-  });
-  // The approval mail is read by an operator and by nobody else, so it is judged
-  // on what a person can do with it. The name leads (nobody recognises a member
-  // by UUID, and one operator may run several), the id survives only as a
-  // reference line, and the raw claim endpoints are gone: the agent already holds
-  // the id and the claim flow, and it never reads this inbox.
-  expect(delivered[0].subject).toContain(applicant.name);
-  expect(delivered[0].text).toContain(applicant.name);
-  expect(delivered[0].text).not.toContain(ROUTES.swarm.claimChallenge);
-  expect(delivered[0].text).not.toContain(ROUTES.swarm.claimToken);
-  expect(delivered[0].text).toContain(applicant.memberId);
-  // Four links, all built from the configured public origin, all real routes in
-  // frontend/public/assets/js/app/routes.js. The swarm link carries its
-  // paragraph break so the assertion cannot be satisfied by the /swarm prefix
-  // of the two per-member URLs above.
-  expect(delivered[0].text).toContain(`${config.swarmPublicBaseUrl}/swarm/members/${applicant.memberId}`);
-  expect(delivered[0].text).toContain(`${config.swarmPublicBaseUrl}/swarm/apply/${applicant.memberId}`);
-  expect(delivered[0].text).toContain(`${config.swarmPublicBaseUrl}/swarm\n`);
-  expect(delivered[0].text).toContain(`${config.swarmPublicBaseUrl}/docs/investment-swarm/how-it-works`);
-  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: false, idempotent: true });
-  expect(delivered).toHaveLength(1);
-});
-
-// The status page URL reaches an operator exactly once, printed by their own
-// agent into a chat transcript, and nothing on the site links to it. This email
-// is the only durable copy, so its existence and its contents are both load
-// bearing, and so is the re-send on the recovery path.
-test("applying persists an application-received email carrying the status page URL", async () => {
-  const label = rid("receipt");
-  const keypair = await generateKeyPair();
-  const application = { name: `Applicant ${label}`, contact: `${label}@example.test`, publicKey: keypair.publicKeyB64 };
-  const signature = await signMessage(canonicalizeApplication(application), keypair.privateKey);
-  const applied = await post(ROUTES.swarm.apply, { ...application, signature });
-  expect(applied?.status).toBe(201);
-  const memberId = (applied!.body as { memberId: string }).memberId;
-
-  const outbox = (await sql<{ id: string; to_email: string; sent_at: Date | null }[]>`
-    SELECT id, to_email, sent_at FROM swarm_notification_outbox
-    WHERE member_id = ${memberId} AND kind = 'application_received'`)[0];
-  expect(outbox).toBeTruthy();
-  expect(outbox.to_email).toBe(application.contact);
-  // Queued, not sent: the outbox write is complete at commit and owes nothing to
-  // a reachable transport.
-  expect(outbox.sent_at).toBeNull();
-  expect(await sql`
-    SELECT id FROM jobs
-    WHERE kind = 'swarm.send_application_received_notification'
-      AND payload->>'outboxId' = ${outbox.id}`).toHaveLength(1);
-
-  const delivered: SwarmEmailMessage[] = [];
-  const fakeTransport = { send: async (message: SwarmEmailMessage) => { delivered.push(message); } };
-  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
-  expect(delivered[0].to).toBe(application.contact);
-  expect(delivered[0].text).toContain(`${config.swarmPublicBaseUrl}/swarm/apply/${memberId}`);
-  // Same name-first rule as the approval mail: two receipts separated only by
-  // UUID are two indistinguishable emails to the operator holding both.
-  expect(delivered[0].subject).toContain(application.name);
-  expect(delivered[0].text).toContain(application.name);
-
-  // Re-applying with the same key is the operator recovering a lost id, so it
-  // re-arms the one permitted row (UNIQUE (kind, member_id)) and enqueues a
-  // fresh job under a new send generation rather than silently no-oping.
-  const reapplied = await post(ROUTES.swarm.apply, { ...application, signature });
-  expect(reapplied?.status).toBe(201);
-  expect((reapplied!.body as { memberId: string }).memberId).toBe(memberId);
-  const rearmed = await sql<{ id: string; sent_at: Date | null }[]>`
-    SELECT id, sent_at FROM swarm_notification_outbox
-    WHERE member_id = ${memberId} AND kind = 'application_received'`;
-  expect(rearmed).toHaveLength(1);
-  expect(rearmed[0].id).toBe(outbox.id);
-  expect(rearmed[0].sent_at).toBeNull();
-  expect((await sql`
-    SELECT id FROM jobs
-    WHERE kind = 'swarm.send_application_received_notification'
-      AND payload->>'outboxId' = ${outbox.id}`).length).toBeGreaterThan(1);
-  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
-  expect(delivered).toHaveLength(2);
-});
+// The two email cases that used to sit here — "activation persists an email
+// outbox and the executed fake transport delivers it" and "applying persists an
+// application-received email carrying the status page URL" — are DELETED, not
+// skipped. Swarm email is removed (issue #1026 W5, decision D50 reversing D30):
+// there is no outbox, no transport and no sender, so there is no behaviour left
+// for them to assert. What they also covered incidentally — that apply returns
+// the member id and that activation reaches status=active — is asserted by
+// applyAndActivate() above, which every case below runs through.
 
 test("challenge issuance is indistinguishable and keeps one live 10-minute challenge per active member", async () => {
   const applicant = await applyAndActivate("challenge");

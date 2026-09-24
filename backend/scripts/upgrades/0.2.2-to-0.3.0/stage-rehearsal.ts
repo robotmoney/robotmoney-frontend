@@ -1,7 +1,6 @@
 // ⛔ RUN THIS ON THE DEDICATED STAGING HOST, NEVER THE PRODUCTION API HOST.
 // This does a real Docker image build plus a full app boot — genuine compute
-// and disk load that a machine serving live production traffic cannot spare
-// (docs/runbooks/rollout-procedure.md §4, added after exactly this mistake).
+// and disk load that a machine serving live production traffic cannot spare.
 //
 // The v0.3.0 entry point for the heavy rehearsal, and the step that emits
 // P5.rehearsal-boot. What it grades: the Gate C backup restores, this release's
@@ -13,7 +12,7 @@
 // none of that was ever specific to a release: it is what "boot a smoke-twin and
 // check it" means. Sitting in a release directory only meant `main` — already
 // past v0.2.2 — had no smoke-twin entry point at all, which is now `bun run
-// smoke:smoke-twin --once`. v0.2.1-to-0.2.2's copy is left exactly as it executed; a
+// smoke:twin:once`. v0.2.1-to-0.2.2's copy is left exactly as it executed; a
 // shipped release directory is the record of what that release actually
 // checked, and rewriting it would destroy that.
 //

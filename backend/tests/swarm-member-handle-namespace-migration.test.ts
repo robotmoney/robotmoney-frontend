@@ -157,7 +157,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try { await db?.end({ timeout: 5 }); } catch { /* closing a dead pool is not a failure */ }
-  if (containerName) Bun.spawnSync(["docker", "rm", "-f", containerName]);
+  if (containerName) Bun.spawnSync(["docker", "rm", "-f", "-v", containerName]);
 });
 
 // ── DEPLOYING OVER DATA THAT ALREADY VIOLATES THE INVARIANT ─────────────────

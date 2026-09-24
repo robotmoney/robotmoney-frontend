@@ -255,18 +255,77 @@ export async function checkResearchSignalsParity(db: DbHandle = sql): Promise<Pa
   return buildResult("research_signals", legacy, ledger);
 }
 
+// 0059 creates swarm_brief_revisions and DOES NOT BACKFILL it — the runbook
+// states that outright ("no backfill — same documented cutover shape as 0049";
+// every pre-cutover brief stays NULL-report). So a brief written before 0059
+// landed has, by design, no ledger row, and comparing the two sides over all
+// history reports every one of them as "present in compatibility table,
+// missing from ledger" forever.
+//
+// That is the SAME failure mode provenanceComparableFromMs() above exists to
+// prevent for 0061's column — "comparing those rows would park the gate
+// permanently red on history alone" — and it was not guarded here. Measured on
+// a smoke-twin restored from production: legacy 226 rows vs ledger 1, matched
+// false on every sweep, which makes the §6.1 cutover gate UNPASSABLE on any
+// database carrying pre-0059 briefs. Production is exactly that database, so
+// ledger-mode reads could never have been armed there.
+//
+// The boundary is 0059's own `applied_at`, and a brief is excluded from BOTH
+// sides when it predates it — never from one, or the exclusion would itself
+// manufacture a divergence in the opposite direction (a pre-0059 brief that is
+// revised AFTER the cutover has a ledger row and would otherwise read as
+// "present in ledger, missing from compatibility").
+//
+// WHY THIS CANNOT HIDE A REAL REGRESSION, on the same terms as 0061's
+// exemption: scope is decided by WHEN the brief was written, never by what it
+// says. Any brief written at or after 0059 is compared in full, in both
+// directions; a writer that stops populating the ledger lands an in-scope
+// legacy row with no ledger row and mismatches; and a session_id that appears
+// in the ledger with no compatibility row at all stays in scope, because that
+// is a genuine divergence rather than history.
+const BRIEF_LEDGER_MIGRATION = "0059_analytics_output_and_report_snapshots.sql";
+
+async function briefLedgerFromMs(db: DbHandle): Promise<number | null> {
+  const rows = (await db`
+    SELECT EXTRACT(EPOCH FROM applied_at) AS applied_epoch
+    FROM schema_migrations WHERE name = ${BRIEF_LEDGER_MIGRATION}
+  `) as unknown as { applied_epoch: string | number }[];
+  if (rows.length === 0) return null; // 0059 unapplied here: the ledger table cannot exist
+  return Math.round(Number(rows[0]!.applied_epoch) * 1000);
+}
+
 export async function checkSwarmBriefsParity(db: DbHandle = sql): Promise<ParityResult> {
-  const legacyRows = (await db`SELECT session_id, body FROM swarm_briefs WHERE session_id IS NOT NULL`) as unknown as {
+  const fromMs = await briefLedgerFromMs(db);
+  if (fromMs === null) {
+    // Nothing is comparable before the ledger exists. An empty-vs-empty result
+    // is honest; it is not a pass smuggled in, because the gate additionally
+    // requires a MINIMUM observation count and window before it will arm.
+    return buildResult("swarm_briefs", new Map(), new Map());
+  }
+  const legacyRows = (await db`
+    SELECT session_id, body, EXTRACT(EPOCH FROM created_at) * 1000 AS created_ms
+    FROM swarm_briefs WHERE session_id IS NOT NULL`) as unknown as {
     session_id: string;
     body: unknown;
+    created_ms: string | number;
   }[];
   const legacy = new Map<string, Record<string, unknown>>();
-  for (const r of legacyRows) legacy.set(r.session_id, { sessionId: r.session_id, body: r.body });
+  // Sessions whose compatibility row predates the ledger: dropped from BOTH
+  // sides below, never from one.
+  const preLedger = new Set<string>();
+  for (const r of legacyRows) {
+    if (Number(r.created_ms) < fromMs) {
+      preLedger.add(r.session_id);
+      continue;
+    }
+    legacy.set(r.session_id, { sessionId: r.session_id, body: r.body });
+  }
   const ledgerRows = (await db`
     SELECT DISTINCT session_id FROM swarm_brief_revisions
   `) as unknown as { session_id: string }[];
   const ledger = new Map<string, Record<string, unknown>>();
   for (const row of ledgerRows) {
+    if (preLedger.has(row.session_id)) continue; // symmetric with the legacy filter above
     const [rev] = (await db`
       SELECT body_bytes FROM swarm_brief_revisions WHERE session_id = ${row.session_id} ORDER BY revision DESC LIMIT 1
     `) as unknown as { body_bytes: Buffer }[];

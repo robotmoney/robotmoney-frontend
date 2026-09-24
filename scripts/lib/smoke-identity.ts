@@ -1,0 +1,460 @@
+// `deployment_identity` — the one-row table that tells a tool what the database
+// it is connected to is ENROLLED FOR, independently of whatever the operator
+// typed into `RM_ENV`. This module reads it, writes it, and implements the
+// rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
+//
+// Implemented for issue #1026, W1 step 2. The table itself is created by
+// backend/migrations/0063_deployment_identity.sql. Nothing imports this module
+// yet, so it remains additive and behaviour-neutral until the tools of §2 wire
+// it in.
+//
+// ── Why a row in the database, and not a file or a flag ─────────────────────
+//
+// Every other signal about "which database is this?" travels WITH the operator:
+// an environment variable, a connection string, a command-line flag, a `.env`
+// that was copied from somewhere. All of them can be wrong in exactly the same
+// way at the same time, because they all came from the same mistaken belief
+// about which host the terminal is on. A row inside the target is the only
+// signal that travels with the TARGET. It cannot be copied along with a `.env`,
+// it cannot be inherited by a shell, and restoring a production dump into a
+// rehearsal database carries the production row into the rehearsal database
+// exactly once — which is why spec §4.2 requires every `--local dump` restore
+// and the documented remote-twin restore procedure to overwrite it with
+// `rehearsal` as part of the restore.
+//
+// ── What it is NOT ──────────────────────────────────────────────────────────
+//
+// Spec §4.2, quoted because it is the sentence most likely to be forgotten by
+// the next person to build on this: "It marks what the target is enrolled for.
+// It is an accidental-target safeguard, not proof the data is disposable: its
+// protection rests on the write restriction and on the restore procedure being
+// pointed at the right database."
+//
+// So: a `rehearsal` row is not permission to destroy data. It is evidence that
+// SOMEONE ENROLLED this database for rehearsal. If the restore procedure was
+// aimed at the wrong database, the row is a lie that this module will faithfully
+// report. The safeguard it actually provides is the negative one — a database
+// that was never enrolled refuses every rehearsal-only operation — and that is
+// the property the W1/W2 gates test.
+//
+// ── Write restriction ───────────────────────────────────────────────────────
+//
+// Only `rm_owner` may write the row (§4.2), and `rm_owner` is the migration
+// login whose password is typed at the terminal for the one run that needs it
+// and never stored (§3). The runtime roles handed to containers — `rm_app`,
+// `rm_worker`, `rm_readonly` — can read it and cannot change it. That is what
+// makes the row worth reading: a compromised or merely buggy application
+// process cannot re-label the database it is running against in order to unlock
+// `--seed`.
+//
+// ── Governing spec sections ─────────────────────────────────────────────────
+//
+//   §4.2  the table, its one row, its two kinds, who may write it, who writes
+//         it when.
+//   §4.3  the matrix that consumes the value (see smoke-env-policy.ts).
+//   §5    `--local blank` / `--local dump` write `rehearsal` as part of the
+//         bootstrap; `--local volume` reattaches a volume that must already
+//         carry it.
+//   §6.4  `--spoof-keys` refuses unless the row says `rehearsal`.
+//   §8.5  `--migrate` refuses on `RM_ENV=prod` or identity ≠ `rehearsal`.
+//   §9.1  production initialization writes `production` exactly once, via
+//         `rm_owner`, receipted, never through `bun smoke`.
+//
+// Acceptance gates served (spec §10): W1 — the identity half of the policy
+// matrix; W2 — "`RM_ENV=stage` + typed owner password against
+// `deployment_identity = production` refuses"; W3 — the `--spoof-keys` guards.
+//
+// ── Layering note ───────────────────────────────────────────────────────────
+//
+// `scripts/**` does not import `backend/**` and does not depend on `postgres`
+// anywhere today, and this stub does not change that: the database access is
+// behind {@link DeploymentIdentityStore}, which the backend side implements.
+// Keeping the seam here is not ceremony — it is what lets the matrix and the
+// rehearsal gate be unit-tested with no database at all, which the W1 gates
+// need if they are to run in CI without provisioning a cluster.
+
+/**
+ * The two enrolled kinds of spec §4.2. There is no third value and no `unknown`
+ * member: a database with no row is represented by `null` at the read boundary
+ * (see {@link DeploymentIdentityRead}), never by a widened union, so that a
+ * `switch` over this type stays exhaustive and an un-enrolled database can
+ * never be accidentally handled by a `default` branch meant for a future kind.
+ */
+export type DeploymentIdentityKind = "production" | "rehearsal";
+
+/**
+ * The row itself.
+ *
+ * `writtenAt` and `writtenBy` exist for the incident case, not for any control
+ * flow: when a refusal says "this database says `production`" the very next
+ * question an operator asks is "since when, and by whom", and a row that cannot
+ * answer it sends them to the dump's provenance instead. Nothing in the matrix
+ * reads these fields.
+ */
+export interface DeploymentIdentityRow {
+  readonly kind: DeploymentIdentityKind;
+  /** When the row was last written, UTC ISO-8601. */
+  readonly writtenAt: string;
+  /** The database role that wrote it; always `rm_owner` in a correct system. */
+  readonly writtenBy: string;
+  /** Free text from the writing procedure, e.g. which dump a restore came from. */
+  readonly note: string | null;
+}
+
+/**
+ * The result of trying to read the row, as a three-way answer rather than
+ * `DeploymentIdentityRow | null`.
+ *
+ * The third arm is the point. "The table is not there / I could not read it"
+ * must never be collapsed into "there is no row", because the matrix treats a
+ * missing row as "anything else" (a refusal on rows that name a kind) while a
+ * failed read is a DIFFERENT refusal with a different fix: the first means
+ * "enroll this database", the second means "your credential cannot see the
+ * table". Reporting the second as the first sends an operator to write a row
+ * they are not permitted to write.
+ */
+export type DeploymentIdentityRead =
+  | { readonly state: "enrolled"; readonly row: DeploymentIdentityRow }
+  | { readonly state: "absent" }
+  | { readonly state: "unreadable"; readonly reason: string };
+
+/**
+ * The database seam. Implemented on the backend side (which owns `postgres` and
+ * the connection pool); consumed here and by every tool in spec §2's list.
+ *
+ * `read` must be usable with a RUNTIME role: preflight (§7 check 5) runs under
+ * the credential a container will use, and it has to be able to see the row it
+ * is being judged against. `write` is `rm_owner`-only by the table's own
+ * privileges, so an implementation must not try to enforce that in TypeScript —
+ * the database is the enforcement, and a TypeScript check on top of it would be
+ * a second, weaker copy that drifts.
+ */
+export interface DeploymentIdentityStore {
+  /** Read the single row, or report absent/unreadable. Never throws for a normal absence. */
+  read(): Promise<DeploymentIdentityRead>;
+  /**
+   * Write (insert or replace) the single row. Must be a single statement or a
+   * single transaction that leaves exactly one row: the table's shape is "one
+   * row", and a partial write that leaves zero or two is worse than no write,
+   * because the next reader's answer becomes arbitrary.
+   */
+  write(kind: DeploymentIdentityKind, note: string | null): Promise<DeploymentIdentityRow>;
+  /** Release whatever connection the store holds. */
+  close(): Promise<void>;
+}
+
+/**
+ * Open a store against a connection.
+ *
+ * Inputs: a connection URL and the role whose credential it carries. Output: a
+ * {@link DeploymentIdentityStore}.
+ *
+ * Refusal cases:
+ *  - a URL that is empty or unparseable refuses immediately, naming the source
+ *    the caller said it came from, rather than deferring to a connection error
+ *    at read time — the read's error text would otherwise be attributed to the
+ *    database instead of to the configuration.
+ *  - a caller asking for a writable store while naming a non-`rm_owner` role
+ *    refuses up front (§4.2: writable only by `rm_owner`). This is a fast,
+ *    honest failure, NOT the security boundary; the grant is.
+ */
+export function openDeploymentIdentityStore(options: {
+  readonly databaseUrl: string;
+  readonly role: string;
+  readonly writable: boolean;
+}): DeploymentIdentityStore {
+  if (options.databaseUrl.trim() === "") {
+    throw new Error("deployment_identity: the connection URL is empty — a configuration error, not a database error.");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(options.databaseUrl);
+  } catch {
+    throw new Error(`deployment_identity: the connection URL is unparseable ("${options.databaseUrl}").`);
+  }
+  if (options.writable && options.role !== "rm_owner") {
+    throw new Error(
+      `deployment_identity: a writable store requires rm_owner (§4.2); the role given is "${options.role}".`,
+    );
+  }
+
+  const databaseUrl = options.databaseUrl;
+  let client: Bun.SQL | null = null;
+  const connection = (): Bun.SQL => (client ??= new Bun.SQL(databaseUrl));
+
+  const store: DeploymentIdentityStore = {
+    async read(): Promise<DeploymentIdentityRead> {
+      try {
+        const rows = (await connection()`
+          SELECT kind, written_at, written_by, note FROM deployment_identity
+        `) as IdentityRowShape[];
+        const row = rows[0];
+        return row === undefined ? { state: "absent" } : { state: "enrolled", row: toRow(row) };
+      } catch (error) {
+        return { state: "unreadable", reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async write(kind: DeploymentIdentityKind, note: string | null): Promise<DeploymentIdentityRow> {
+      const rows = (await connection()`
+        INSERT INTO deployment_identity (id, kind, written_at, written_by, note)
+        VALUES (true, ${kind}, now(), current_user, ${note})
+        ON CONFLICT (id) DO UPDATE
+          SET kind = EXCLUDED.kind,
+              written_at = EXCLUDED.written_at,
+              written_by = EXCLUDED.written_by,
+              note = EXCLUDED.note
+        RETURNING kind, written_at, written_by, note
+      `) as IdentityRowShape[];
+      const row = rows[0];
+      if (row === undefined) throw new Error("deployment_identity: the write returned no row.");
+      return toRow(row);
+    },
+    async close(): Promise<void> {
+      await client?.close();
+      client = null;
+    },
+  };
+
+  contexts.set(store, {
+    writable: options.writable,
+    role: options.role,
+    remote: !LOCAL_HOSTS.has(parsed.hostname),
+  });
+  return store;
+}
+
+/** The column shape of the one row, as the driver returns it. */
+interface IdentityRowShape {
+  readonly kind: DeploymentIdentityKind;
+  readonly written_at: string | Date;
+  readonly written_by: string;
+  readonly note: string | null;
+}
+
+function toRow(row: IdentityRowShape): DeploymentIdentityRow {
+  return {
+    kind: row.kind,
+    writtenAt: new Date(row.written_at).toISOString(),
+    writtenBy: row.written_by,
+    note: row.note,
+  };
+}
+
+/** Hosts that are not a remote target for the acknowledgement rule below. */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(["", "localhost", "127.0.0.1", "::1"]);
+
+/**
+ * How a store was opened. A store this module did not open (a test double, or
+ * the backend's own implementation) has no entry, and the enrollment functions
+ * then rely on the database's own grant — which §4.2 says is the real boundary.
+ */
+const contexts = new WeakMap<DeploymentIdentityStore, { writable: boolean; role: string; remote: boolean }>();
+
+function requireWritable(store: DeploymentIdentityStore): void {
+  const context = contexts.get(store);
+  if (context !== undefined && !context.writable) {
+    throw new Error(
+      `deployment_identity: writing requires a store opened writable as rm_owner (§4.2); this one is read-only as "${context.role}".`,
+    );
+  }
+}
+
+/**
+ * Read the row and reduce it to the value the §4.3 matrix consumes.
+ *
+ * Output: the kind when enrolled, `null` when the table exists with no row, and
+ * the literal `"unreadable"` when the table is missing or the read failed —
+ * matching `PolicyInput["identity"]` in smoke-env-policy.ts exactly, so the two
+ * modules cannot drift apart on what "no answer" means.
+ *
+ * Refusal cases: none. This function reports; it does not decide. Every refusal
+ * belongs to {@link resolveDeploymentPolicy} or {@link requireRehearsalTarget},
+ * because a read that could itself refuse would give the codebase two places
+ * that turn an identity into a verdict, and the spec has one (§4.3).
+ *
+ * Serves spec §10 W1 by being the single input path to the matrix.
+ */
+export async function readIdentityForPolicy(
+  store: DeploymentIdentityStore,
+): Promise<DeploymentIdentityKind | null | "unreadable"> {
+  const read = await store.read();
+  switch (read.state) {
+    case "enrolled":
+      return read.row.kind;
+    case "absent":
+      return null;
+    case "unreadable":
+      return "unreadable";
+  }
+}
+
+/**
+ * Enroll a database as `rehearsal`.
+ *
+ * Called by `--local blank` bootstrap, by `--local dump` restore, and by the
+ * documented remote-twin restore procedure (§4.2). In the `dump` case it is the
+ * step that OVERWRITES the `production` row the dump carried in, and it must run
+ * as part of the restore — before the restored database is reachable for
+ * anything else — because between the restore completing and this write landing
+ * there exists a database full of production-shaped data that answers
+ * `production` to every guard. That window is unavoidable; leaving it open
+ * longer than one step is not.
+ *
+ * Refusal cases:
+ *  - `RM_ENV=prod`: nothing that runs under production policy ever writes
+ *    `rehearsal` (it would be the exact inverse of the safeguard).
+ *  - the store was not opened writable / the role is not `rm_owner`.
+ *  - a remote connection without an explicit operator acknowledgement: writing
+ *    `rehearsal` onto a remote database is the one call in this module that can
+ *    disarm a protection, so the remote-twin procedure's confirmation is a
+ *    parameter here, not a convention in a runbook.
+ *
+ * Serves spec §10 W2's "`RM_ENV=stage` + typed owner password against
+ * `deployment_identity = production` refuses" from the other side: that gate is
+ * only meaningful if the rehearsal enrollment path is the one that can flip it.
+ */
+export async function enrollAsRehearsal(
+  store: DeploymentIdentityStore,
+  options: { readonly note: string | null; readonly remoteAcknowledged: boolean },
+): Promise<DeploymentIdentityRow> {
+  if (process.env.RM_ENV === "prod") {
+    throw new Error("deployment_identity: a run under RM_ENV=prod never writes `rehearsal` (§4.2).");
+  }
+  requireWritable(store);
+  if (contexts.get(store)?.remote === true && !options.remoteAcknowledged) {
+    throw new Error(
+      "deployment_identity: writing `rehearsal` onto a REMOTE database disarms a protection; the remote-twin procedure's explicit acknowledgement is required (§4.2).",
+    );
+  }
+  return await store.write("rehearsal", options.note);
+}
+
+/**
+ * Enroll a database as `production`. Step 3 of the one-time production
+ * initialization (§9.1).
+ *
+ * "`production` is written once by production initialization" (§4.2). Once, by
+ * a separate receipted command, never by `bun smoke` — spec §4.3 makes
+ * production initialization "a set of separate commands allowed on
+ * `production`, each gated by `RM_ENV=prod`, typed `rm_owner`, `y/n`, and a
+ * receipt. None is reachable through `bun smoke`."
+ *
+ * Refusal cases:
+ *  - `RM_ENV` is not exactly `prod`.
+ *  - the store is not writable as `rm_owner`.
+ *  - the operator did not confirm `y/n` at a terminal (a non-interactive
+ *    invocation refuses rather than defaulting to yes; an unattended process
+ *    that can enroll production is not a thing this repository has).
+ *  - the row already says `production` — re-enrollment is a no-op that must
+ *    still be reported, not silently rewritten, so the receipt does not claim a
+ *    transition that did not happen.
+ *  - the row says `rehearsal`: promoting a rehearsal database to production is
+ *    never a step in §9.1 and is far more likely to be the wrong connection
+ *    string than a real intent. It refuses and names both kinds.
+ */
+export async function enrollAsProduction(
+  store: DeploymentIdentityStore,
+  options: { readonly rmEnv: string | undefined; readonly confirmed: boolean; readonly note: string | null },
+): Promise<DeploymentIdentityRow> {
+  if (options.rmEnv !== "prod") {
+    const observed = options.rmEnv === undefined ? "RM_ENV is unset" : `RM_ENV is "${options.rmEnv}"`;
+    throw new Error(`deployment_identity: production enrollment requires RM_ENV=prod (§9.1); ${observed}.`);
+  }
+  if (!options.confirmed) {
+    throw new Error(
+      "deployment_identity: production enrollment requires the operator's typed y/n confirmation (§9.1); an unconfirmed invocation refuses.",
+    );
+  }
+  requireWritable(store);
+
+  const current = await store.read();
+  if (current.state === "enrolled") {
+    if (current.row.kind === "production") return current.row;
+    throw new Error(
+      "deployment_identity: this database is enrolled as `rehearsal`; promoting a rehearsal database to `production` is not a step of §9.1.",
+    );
+  }
+  return await store.write("production", options.note);
+}
+
+/**
+ * Which rehearsal-only preparation is being requested. Spec §4.3:
+ * "Rehearsal-only preparation: `--migrate`, `--seed`, `--spoof-keys` require
+ * `rehearsal` in addition to their own guards."
+ *
+ * "In addition to" is the load-bearing phrase: this gate does not replace
+ * `--seed`'s refusal of a populated database (§5), `--migrate`'s prompt-and-
+ * `y/n` on a remote connection (§8.5), or `--spoof-keys`'s four guards (§6.4).
+ * It is the floor under all three.
+ */
+export type RehearsalOnlyPreparation = "migrate" | "seed" | "spoof-keys";
+
+/**
+ * The shared gate. One function for all three flags, so a fourth preparation
+ * added later cannot ship with two of the three checks.
+ *
+ * Inputs: which preparation, the resolved `RM_ENV`, and the identity read.
+ * Output: allow, or refuse with a reason naming the preparation, the policy and
+ * the observed identity.
+ *
+ * Refusal cases, every one of which must be its own branch with its own text:
+ *  - `RM_ENV=prod`, whatever the identity says. A production-policy run never
+ *    prepares; production upgrades are an operator intervention (§8.5).
+ *  - identity `production`.
+ *  - identity absent — an un-enrolled database is not a rehearsal database.
+ *  - identity `"unreadable"` — no evidence, no preparation.
+ *  - the flag was not passed explicitly. §5: `--seed` "is explicit … and is
+ *    never implied by any mode"; §6.4: `--spoof-keys` refuses when the "flag
+ *    [is] not explicit". A preparation that a mode can imply is a preparation
+ *    that happens by surprise.
+ *
+ * Serves spec §10 W1 (the rehearsal half of the lifecycle gates), §10 W2
+ * ("Unattended CI boot `--local blank --migrate --seed`" must still pass, so
+ * the gate has to allow a correctly-enrolled local database without a prompt)
+ * and §10 W3 (`--spoof-keys` guards).
+ */
+export function requireRehearsalTarget(request: {
+  readonly preparation: RehearsalOnlyPreparation;
+  readonly rmEnv: string | undefined;
+  readonly identity: DeploymentIdentityKind | null | "unreadable";
+  readonly explicitlyRequested: boolean;
+}): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
+  const what = `--${request.preparation}`;
+  if (request.rmEnv === "prod") {
+    return {
+      allow: false,
+      reason: `${what} is refused under RM_ENV=prod: a production-policy run never prepares a database (§4.3, §8.5).`,
+    };
+  }
+  if (request.rmEnv !== undefined && request.rmEnv !== "stage") {
+    return {
+      allow: false,
+      reason: `${what} is refused: RM_ENV="${request.rmEnv}" is not a policy value (§4.1 allows prod or stage only).`,
+    };
+  }
+  if (!request.explicitlyRequested) {
+    return {
+      allow: false,
+      reason: `${what} is refused because it was not explicitly requested: no mode may imply a preparation (§5, §6.4).`,
+    };
+  }
+  if (request.identity === "production") {
+    return {
+      allow: false,
+      reason: `${what} is refused: this target is enrolled as production, and rehearsal-only preparation requires rehearsal (§4.3).`,
+    };
+  }
+  if (request.identity === null) {
+    return {
+      allow: false,
+      reason: `${what} is refused: this target is not enrolled at all, and an un-enrolled database is not a rehearsal database (§4.3). Enroll it as rehearsal first.`,
+    };
+  }
+  if (request.identity === "unreadable") {
+    return {
+      allow: false,
+      reason: `${what} is refused: deployment_identity is unreadable, so there is no evidence this target is a rehearsal database (§4.3). Check that the credential can read the table.`,
+    };
+  }
+  return { allow: true };
+}

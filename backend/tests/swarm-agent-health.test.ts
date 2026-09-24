@@ -109,6 +109,61 @@ test("closeWindow records exactly one absent event per missing expected roster m
   expect((excludedByPresentMember?.body as { events: unknown[] }).events).toHaveLength(0);
 });
 
+test("closeWindow closes the window even when the absence record cannot be written (telemetry never rolls back the transition)", async () => {
+  // The production incident that motivates this: closeWindow used to run the
+  // state transition and the absence inserts in ONE transaction, so a failure
+  // in the inserts (here: the partial unique index the ON CONFLICT clause
+  // depends on is missing) rolled the transition back. The job retried and
+  // settled `dead`, and the session stayed `collecting` forever — blocking
+  // every later lifecycle step and every submission for its subject.
+  const subj = rid("s3");
+  // PROSE ONLY. This session is scenery for the telemetry path — it asserts
+  // nothing about an allocation — and since T17 a weightless take filed against
+  // an `ensureSubject()` (bucket_weights) subject is refused 400 at submission.
+  await ensureProseSubject(subj, "S3");
+  const present = await activeMember();
+  const absent = await activeMember();
+  const session = await ic.openSession(subj);
+  const date = sessionDate(session);
+  for (const m of [present, absent]) {
+    await sql`INSERT INTO swarm_session_members (session_id, member_id, member_name, status)
+              VALUES (${session.id}, ${m.id}, ${m.id}, 'expected')`;
+  }
+  await ic.publishBrief(session.id, 60);
+
+  const sub = { memberId: present.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "present" };
+  const signature = await signMessage(canonicalizeSubmission(sub), present.privateKey);
+  expect((await ic.submitRecommendation(present.token, { ...sub, signature })).status).toBe(201);
+
+  // Break the absence-record path: drop the partial unique index that the
+  // insert's ON CONFLICT (session_id, member_id) WHERE event_type='absent'
+  // clause targets. Every such insert now fails.
+  await sql`DROP INDEX swarm_agent_health_events_absent_once_idx`;
+  try {
+    const result = await ic.closeWindow(session.id);
+    // The transition COMMITTED despite the telemetry failure...
+    const state = (await sql<{ state: string }[]>`SELECT state FROM swarm_sessions WHERE id = ${session.id}`)[0]!.state;
+    expect(state).toBe("window_closed");
+    // ...and the failure is surfaced in the return value, not thrown.
+    expect(result).toMatchObject({ sessionId: session.id, state: "window_closed" });
+    const warnings = (result as { telemetryWarnings?: string[] }).telemetryWarnings ?? [];
+    expect(warnings.some((w) => w.includes("absence event for"))).toBe(true);
+    // The session closed with no absence event on the record — the honest
+    // outcome of a broken telemetry path; the alternative (an open window)
+    // is the incident.
+    const rows = await sql`SELECT id FROM swarm_agent_health_events WHERE session_id = ${session.id}`;
+    expect(rows).toHaveLength(0);
+
+    // A re-close is still a no-op and still does not throw.
+    await ic.closeWindow(session.id);
+  } finally {
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS swarm_agent_health_events_absent_once_idx
+        ON swarm_agent_health_events (session_id, member_id)
+        WHERE event_type = 'absent'`;
+  }
+});
+
 test("a wrong-key/tampered submission is rejected 400 and recorded to the durable rejected-signature surface", async () => {
   const subj = rid("s2");
   await ensureProseSubject(subj, "S2");

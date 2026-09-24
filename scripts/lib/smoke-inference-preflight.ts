@@ -1,6 +1,6 @@
 // THE STANDING STACK MUST REACH A FUNDED MODEL OR NOT BOOT (AC-MODEL-01).
 //
-// `bun run smoke:stage` — the `--static-port` boot a tunnel points at — IS the
+// `bun smoke --static-port` — the boot a tunnel points at — IS the
 // staging deployment. On 2026-09-13 it had been running for weeks on
 // `AGENT_MODEL=free` (`nemotron-3-ultra-free`) with an EMPTY
 // `OPENCODE_API_KEY`: every analyst take and every judgement it produced was
@@ -11,7 +11,7 @@
 //   1. THE CREDENTIAL NEVER REACHED THE BOOT. Only
 //      scripts/lib/smoke-twin-rehearsal.ts read a key out of a file, and it
 //      reads `.env.readonly` alone — deliberately, because that command family
-//      is defined by not needing `.env`'s writer credential. `smoke:stage` has
+//      is defined by not needing `.env`'s writer credential. The standing boot has
 //      the opposite constraint: it ALREADY reads `.env` (that is where it finds
 //      DATABASE_URL), so `.env` is exactly where an operator correcting a stage
 //      host puts the key. It was put there, and the boot could not see it.
@@ -27,7 +27,7 @@
 // point and which the first cut of this file got wrong. It is written back into
 // the passed env (so the direct `docker compose` calls smoke-main.ts drives off
 // `dockerEnv` see it) AND RETURNED as a compose-env fragment, because the api
-// and worker-swarm services do NOT come up that way: they come up through
+// service does NOT come up that way: it comes up through
 // `stack.up()`, whose child environment is `buildSpawnEnv()` — a fixed
 // DOCKER_CLIENT_ENV_ALLOWLIST (PATH/HOME/DOCKER_*/proxy) plus
 // `buildComposeEnv()`. That allowlist exists precisely to keep a provider secret
@@ -73,15 +73,11 @@ export interface InferencePreflightOptions {
  * everywhere else. See this file's header for why writing `process.env` is not
  * enough on its own.
  *
- * A NON-STANDING boot keeps every escape hatch D22 rule 1 as amended left open:
- * the local `bun run smoke` and CI paths still accept `AGENT_MODEL=free` with no
- * credential at all, and nothing here READS a key from a file for them. The one
- * thing that changed (issue #1012) is DELIVERY: a key already present in this
- * process's environment is forwarded into the fragment, because the allowlist
- * drops it otherwise and CI's judge — and now the agent-launcher service that
- * starts its container — never saw a credential that WAS supplied. With no key
- * in the environment the fragment is still empty and compose's own `./.env`
- * interpolation keeps deciding, exactly as it did.
+ * A NON-STANDING boot is left exactly as it was: the local `bun run smoke` and
+ * CI paths keep every escape hatch D22 rule 1 as amended left open, including
+ * `AGENT_MODEL=free` with no credential at all — including the fragment, which
+ * stays empty so compose's own `./.env` interpolation keeps deciding, exactly as
+ * it does today.
  */
 export function preflightInference(opts: InferencePreflightOptions): Record<string, string> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -93,37 +89,6 @@ export function preflightInference(opts: InferencePreflightOptions): Record<stri
     log(`[smoke] inference credential: ${ZEN_KEY_ENV} from ${zen.source}`);
     opts.env[ZEN_KEY_ENV] = zen.key;
     composeEnv[ZEN_KEY_ENV] = zen.key;
-  } else {
-    // A KEY THAT IS ALREADY IN THE PROCESS ENVIRONMENT IS FORWARDED (issue #1012).
-    //
-    // Nothing is RESOLVED here — no file is read, no refusal is added, and a
-    // boot with no key in its environment is left exactly as it was, escape
-    // hatches and all. What changes is only DELIVERY, and only for a value the
-    // operator already put in this process's environment on purpose.
-    //
-    // The gap it closes is the one #1012 was filed about. CI's ephemeral
-    // `bun run scripts/smoke.ts` runs with OPENCODE_API_KEY set as a job
-    // environment variable, and DOCKER_CLIENT_ENV_ALLOWLIST drops it on the way
-    // to the containers (correctly — that allowlist is what keeps a provider
-    // secret out of a container by default). Only a key physically in `./.env`
-    // reached them, through compose's own interpolation. So every judged
-    // session in CI recorded `judge_unavailable:credential_unconfigured`, the
-    // swarm session driver's judge-role coverage check found zero judgement
-    // rows, and the e2e gate went red on a credential that WAS supplied.
-    //
-    // It matters more now than it did: since #1012 the credential also has to
-    // reach the `agent-launcher` service, which holds its own copy and injects
-    // it per judge container. A launcher with no key serves, reports
-    // `launchable: false`, and answers `launcher_unavailable` to every judging —
-    // loud, but still a stack that cannot judge.
-    //
-    // `extraComposeEnv` is the ONE channel buildComposeEnv() emits, which is why
-    // the fragment (not just the process env) is what carries it.
-    const fromProcess = opts.env[ZEN_KEY_ENV]?.trim();
-    if (fromProcess) {
-      log(`[smoke] inference credential: ${ZEN_KEY_ENV} from the process environment`);
-      composeEnv[ZEN_KEY_ENV] = fromProcess;
-    }
   }
   // On the standing stack this refuses a keyless/free-family model and a raw-id
   // AGENT_MODEL override outright (D22 rule 1); everywhere else it is the

@@ -12,7 +12,10 @@
 import { test, expect } from "bun:test";
 import { sql, jsonValue } from "../../src/db/client.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
-import { JUDGE_KIND, MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS } from "../../src/admin/overview.ts";
+import { MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS } from "../../src/admin/overview.ts";
+import * as overviewModule from "../../src/admin/overview.ts";
+import { openEpoch } from "../../src/swarm/domain.ts";
+import { ensureProseSubject } from "../support/prose-subject.ts";
 import { withFrozenClock } from "../support/fixed-clock.ts";
 
 const PROD = { adminToken: "s3cret-admin-token", allowInsecure: false } as const;
@@ -126,38 +129,20 @@ test("overview: the AC1 sampler kinds are monitored", async () => {
   for (const kind of SAMPLER_KINDS) expect(monitoredKinds).toContain(kind);
 });
 
-// D-A7's ALERT clause, and AC-FE-10's "Scheduler/worker tests ... exercise
-// alerting". A judge that cannot be ASKED now fails closed: no judgement row, no
-// consensus receipt, a 503, and a `degraded` job_run for kind `swarm.judge`. That
-// last step is only an ALERT if the kind is monitored — and `swarm.judge` was
-// absent from MONITORED_KINDS entirely, so every fail-closed judging landed in a
-// feed nobody watches. Adding it back is one line, which is exactly why it needs
-// a test: deleting that line again must go red here.
-test("overview: swarm.judge is monitored, and a degraded judging raises an alert", async () => {
-  expect(MONITORED_KINDS).toContain(JUDGE_KIND);
-
-  const res0 = await call(req("GET", "/api/admin/overview", PROD.adminToken));
-  const body0 = res0?.body as { production: Array<{ kind: string }> };
-  expect(body0.production.map((p) => p.kind)).toContain(JUDGE_KIND);
-
-  // The shape worker/loop.ts writes when judgeSessionAdmin answers
-  // `{ ok:false, error:"judge_unavailable" }` — i.e. a judge with no model, no
-  // credential, an unfunded credential or a rejected one.
-  const judgeJobId = await insertJob({ kind: JUDGE_KIND, status: "succeeded" });
-  await insertRun(judgeJobId, { kind: JUDGE_KIND, status: "degraded", error: "judge_unavailable" });
+// NO JUDGE LANE TO MONITOR (issue #1026). `swarm.judge` used to be a monitored
+// kind because a judge that could not be asked failed closed as a degraded
+// queue run. No queue job judges any more — the judge is a participant that
+// subscribes over HTTP — so a monitored `swarm.judge` could only ever report
+// "not run", a green-looking line about nothing. What an operator needs is
+// per session, and missingReceipts (swarm/receipt-gap.ts) names it from the
+// session's own `no_consensus`. Re-adding the kind must go red here.
+test("overview: swarm.judge is NOT a monitored kind — no queue job judges, so there is no lane to watch", async () => {
+  expect(MONITORED_KINDS as readonly string[]).not.toContain("swarm.judge");
+  expect("JUDGE_KIND" in overviewModule).toBe(false);
 
   const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
-  const body = res?.body as {
-    production: Array<{ kind: string; alert: string; lastRunStatus: string }>;
-    alerts: Array<{ level: string; source: string; message: string }>;
-  };
-  const judge = body.production.find((p) => p.kind === JUDGE_KIND)!;
-  expect(judge.lastRunStatus).toBe("degraded");
-  expect(judge.alert).toBe("degraded");
-  // …and it reaches the ALERT list, not merely the per-kind table.
-  const alert = body.alerts.find((a) => a.source === JUDGE_KIND);
-  expect(alert, "a degraded swarm.judge run must surface as an alert").toBeTruthy();
-  expect(alert!.level).toBe("degraded");
+  const body = res?.body as { production: Array<{ kind: string }> };
+  expect(body.production.map((p) => p.kind)).not.toContain("swarm.judge");
 });
 
 // issue #614 AC3: "latest-point age alone is not sufficient" — a sampler kind
@@ -271,25 +256,39 @@ test("overview: #398 regression — a today-dated regime_snapshots row with STAL
 });
 
 test("overview: enabled analytics schedules + next swarm event + alert shape", async () => {
-  const swarmId = await insertJob({
-    kind: "swarm.publish_brief",
-    status: "pending",
-    run_after: new Date(Date.now() + 60 * 60 * 1000),
-  });
+  // THE NEXT SWARM EVENT IS THE NEXT EPOCH BOUNDARY (issue #1026). It is read
+  // off the sessions — the earliest open window's close — because no queue
+  // job drives a session any more. A leftover pending `swarm.%` job row, which
+  // an upgraded database can still hold, must not be reported as one.
+  await insertJob({ kind: "swarm.legacy_pending", status: "pending", run_after: new Date(Date.now() + 60 * 1000) });
+  const subjectId = `admin_surface_${crypto.randomUUID().slice(0, 8)}`;
+  await ensureProseSubject(subjectId, subjectId);
+  await sql`UPDATE swarm_subjects SET epoch_duration_seconds = 3600, status = 'active' WHERE id = ${subjectId}`;
+  const opened = await openEpoch(subjectId);
+  expect(opened.ok).toBe(true);
+
   const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
   expect(res?.status).toBe(200);
   const body = res?.body as {
     enabledAnalyticsSchedules: Array<{ kind: string }>;
-    nextSwarmEvent: { jobId: number; kind: string } | null;
+    nextSwarmEvent: { jobId: number | null; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
     alerts: Array<{ level: string; source: string; message: string }>;
   };
   // External producer owns cadence; no consumer-DB analytics schedule is enabled.
   expect(body.enabledAnalyticsSchedules).toEqual([]);
-  expect(body.nextSwarmEvent).not.toBeNull();
-  expect(body.nextSwarmEvent!.jobId).toBeGreaterThanOrEqual(0);
+  const [earliest] = await sql`
+    SELECT id, window_closes_at FROM swarm_sessions
+     WHERE state = 'collecting' AND window_closes_at IS NOT NULL
+     ORDER BY window_closes_at, id LIMIT 1`;
+  expect(body.nextSwarmEvent).toEqual({
+    jobId: null,
+    kind: "session.window_close",
+    runAfter: new Date(earliest!.window_closes_at).toISOString(),
+    scopeType: "swarm_session",
+    scopeId: String(earliest!.id),
+  });
   const ALLOWED = new Set(["not_run", "running", "degraded", "failed", "dead", "stale", "healthy"]);
   for (const a of body.alerts) expect(ALLOWED.has(a.level)).toBe(true);
-  void swarmId;
 });
 
 // ── GET /api/admin/jobs and /api/admin/runs — filters, scope, cursor, 400s ─
@@ -444,7 +443,7 @@ test("schedule toggle: admin cannot enable retired consumer analytics schedules"
   expect(updated.kind).toBe("regime.classify"); // untouched
 });
 
-test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, swarm smoke rows", async () => {
+test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind", async () => {
   const [regime] = await sql`SELECT id FROM job_schedules WHERE kind = 'regime.classify' LIMIT 1`;
   const reason = "a perfectly fine operational reason";
 
@@ -461,11 +460,11 @@ test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields
   const [vault] = await sql`SELECT id FROM job_schedules WHERE kind = 'vault.sample_share_price' LIMIT 1`;
   expect((await call(req("PATCH", `/api/admin/schedules/${vault.id}`, PROD.adminToken, { enabled: false, reason })))?.status).toBe(400);
 
-  // swarm smoke row
-  const [swarm] = await sql`SELECT id FROM job_schedules WHERE kind LIKE 'swarm.%' LIMIT 1`;
-  expect((await call(req("PATCH", `/api/admin/schedules/${swarm.id}`, PROD.adminToken, { enabled: true, reason })))?.status).toBe(409);
-  const [unchanged] = await sql`SELECT enabled FROM job_schedules WHERE id = ${swarm.id}`;
-  expect(unchanged.enabled).toBe(false); // seeded disabled, still disabled
+  // The seeded-disabled swarm row case is deleted with the row (issue #1026
+  // W4): there is no `swarm.%` schedule to refuse a toggle on, because a
+  // subject's epoch duration is its whole schedule now
+  // (system-scheduler-spec.md §2.2). The non-analytics 409 above still covers
+  // the rule itself.
 });
 
 // ── GET /api/admin/audit ────────────────────────────────────────────────────

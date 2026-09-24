@@ -2,13 +2,10 @@
 // split rule): which services a failed boot stops, what it recovers out of the
 // log as a cause, and that the pane says whether the database is still moving.
 import { describe, expect, test } from "bun:test";
-import {
-  DB_WRITER_SERVICES,
-  renderFailurePane,
-  selectFailureDetail,
-  writerQuiesceLine,
-} from "../../lib/smoke-failure.ts";
-import type { FatalState } from "../../lib/smoke-tui-view.ts";
+import { DB_WRITER_SERVICES, selectFailureDetail } from "../../lib/smoke-failure.ts";
+// The painting half moved to the TUI view (issue #1026), so the decisions
+// `bun smoke` imports carry no TUI module; the assertions are unchanged.
+import { renderFailurePane, writerQuiesceLine, type FatalState } from "../../lib/smoke-tui-view.ts";
 
 const STRIP_ANSI = /\x1b\[[0-9;]*m/g;
 const plain = (s: string) => s.replace(STRIP_ANSI, "");
@@ -18,10 +15,17 @@ describe("DB_WRITER_SERVICES — what a failed boot must stop", () => {
     expect(DB_WRITER_SERVICES).not.toContain("postgres");
   });
 
-  test("covers every lane that writes: the api and all four producer/worker lanes", () => {
+  test("covers every service that writes: the api, the producer and both worker lanes", () => {
     expect([...DB_WRITER_SERVICES].sort()).toEqual(
-      ["analytics-producer", "api", "worker-analytics", "worker-research", "worker-swarm"],
+      ["analytics-producer", "api", "worker-analytics", "worker-research"],
     );
+  });
+
+  test("never names system-scheduler: it holds no database credential to quiesce", () => {
+    // system-scheduler-spec.md §7 — it holds exactly one credential, an API
+    // token. Listing it here would claim a writer that cannot write, and would
+    // stop the one container whose /health explains a stalled boot.
+    expect(DB_WRITER_SERVICES).not.toContain("system-scheduler");
   });
 });
 

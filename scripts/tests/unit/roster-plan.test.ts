@@ -25,7 +25,15 @@ import {
 } from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/smoke-newcomers.ts";
 import { personaIdentities, personaIdentity } from "../../lib/swarm/persona-keys.ts";
-import { SMOKE_MEMBERS, adoptRestoredRoster, adoptionFilter, resolveSeatAllRestored, scenarioPlan } from "../../lib/smoke-mode.ts";
+import {
+  SMOKE_MEMBERS,
+  adoptRestoredRoster,
+  adoptionFilter,
+  resolveSeatAllRestored,
+  scenarioPlan,
+  simulatedSigners,
+  unseatedActiveCharacters,
+} from "../../lib/smoke-mode.ts";
 import type { RosterMember } from "../../lib/swarm/session.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
@@ -252,7 +260,11 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
     // satisfied by a seed that hardcoded slugs. The ids above are this test's
     // own fixtures — planAdoptions itself matches on NAME and never reads the
     // allowlist's key.
-    expect([...SMOKE_MEMBERS].map((m) => m.handle).sort()).toEqual(["athena", "noop-analyst", "robot-money"]);
+    // The allowlist itself names FOUR agents (themis, the judge, is the
+    // fourth) — this fixture only seats three because themis carries no
+    // committed dev key (scripts/lib/swarm/fixtures/persona-keys.json), so
+    // personaIdentity() rejects it here regardless of the allowlist.
+    expect([...SMOKE_MEMBERS].map((m) => m.handle).sort()).toEqual(["athena", "noop-analyst", "robot-money", "themis"]);
     expect([...SMOKE_MEMBERS].some((m) => "id" in m)).toBe(false);
   });
 
@@ -309,6 +321,88 @@ describe("planAdoptions under the smoke allowlist (issue #537)", () => {
   });
 });
 
+// ── A TWIN seats the WHOLE restored roster ──────────────────────────────────
+// The stage twin ran sessions with three seats while its restored roster showed
+// seven active members: the four real ones (DualMint, Maximus, ShodAI, Woon)
+// were filtered out for having no committed key, and the page gave no hint that
+// anyone was missing. A twin database is a throwaway copy restored per boot, so
+// neither reason for that filter applies to it — see adoptionFilter's comment.
+describe("planAdoptions on a twin (the whole restored roster)", () => {
+  const twinFilter = adoptionFilter(true, { seatAllActive: true });
+  // The live stage roster, as the restored production dump actually holds it.
+  const RESTORED = [
+    row({ name: "Athena", id: "athena" }),
+    row({ name: "Robot Money", id: "robotmoney" }),
+    row({ name: "Noop analyst", id: "woon-archive" }),
+    row({ name: "DualMint", id: "dualmint" }),
+    row({ name: "Maximus", id: "maximus" }),
+    row({ name: "ShodAI", id: "shodai" }),
+    row({ name: "Woon", id: "woon" }),
+  ];
+
+  test("every active member is seated, committed key or not", () => {
+    const plan = planAdoptions(RESTORED, new Set(), twinFilter);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(
+      ["athena", "dualmint", "maximus", "robotmoney", "shodai", "woon", "woon-archive"],
+    );
+  });
+
+  test("the smoke allowlist is what it replaces — same roster, three seats", () => {
+    const plan = planAdoptions(RESTORED, new Set(), adoptionFilter(true));
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["athena", "robotmoney", "woon-archive"]);
+  });
+
+  test("still ACTIVE only, still one seat per character", () => {
+    const plan = planAdoptions(
+      [
+        ...RESTORED,
+        row({ name: "Applicant", id: "applied-1", status: "applied" }),
+        row({ name: "Retired", id: "gone-1", status: "deactivated" }),
+        row({ name: "DualMint", id: "dualmint-dup" }),
+      ],
+      new Set(),
+      twinFilter,
+    );
+    expect(plan.adopt.some((m) => m.id === "applied-1")).toBe(false);
+    expect(plan.adopt.some((m) => m.id === "gone-1")).toBe(false);
+    expect(plan.adopt.filter((m) => m.name === "DualMint")).toHaveLength(1);
+    expect(plan.duplicates.map((m) => m.id)).toEqual(["dualmint-dup"]);
+  });
+
+  test("simulatedSigners names exactly those signing with a minted key", () => {
+    // Athena / Robot Money / Noop analyst own committed identities; the four
+    // real members do not, so their takes carry OUR signature and the boot says so.
+    expect(simulatedSigners(RESTORED).sort()).toEqual(["DualMint", "Maximus", "ShodAI", "Woon"]);
+    expect(simulatedSigners([{ name: "Athena" }])).toEqual([]);
+  });
+});
+
+describe("unseatedActiveCharacters (the twin's coverage invariant)", () => {
+  const roster = [
+    row({ name: "Athena" }),
+    row({ name: "DualMint" }),
+    row({ name: "Retired", status: "deactivated" }),
+  ];
+
+  test("empty when every active character is seated", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }, { name: "DualMint" }])).toEqual([]);
+  });
+
+  test("names whoever was left out — the failure that is otherwise silent", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }])).toEqual(["DualMint"]);
+  });
+
+  test("an inactive row is not owed a seat, and a name is reported once", () => {
+    expect(unseatedActiveCharacters([...roster, row({ name: "DualMint", id: "dup" })], [])).toEqual(
+      ["Athena", "DualMint"],
+    );
+  });
+
+  test("matching is case- and whitespace-insensitive, as planAdoptions is", () => {
+    expect(unseatedActiveCharacters(roster, [{ name: " athena " }, { name: "DUALMINT" }])).toEqual([]);
+  });
+});
+
 // ── seat-all: the twin/stage full-committee restoral ─────────────────────────
 // A production-shaped boot on the pinned tunnel port seats the FULL active
 // restored committee, not just the three committed personas. Enrollment then
@@ -322,6 +416,12 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
     { id: "a1", handle: "athena", name: "Athena", lens: null, status: "active" },
     { id: "r1", handle: "robot-money", name: "Robot Money", lens: null, status: "active" },
     { id: "n1", handle: "noop-analyst", name: "Noop Analyst", lens: null, status: "active" },
+    // `themis` is the FOURTH committed persona (SMOKE_MEMBERS, issue #922):
+    // the named judge, a real LIVE_ROSTER member, so a restored production
+    // roster carries it. It has no committed key in persona-keys.json, so
+    // seat-all adopts it and the plain smoke allowlist does not — the two
+    // expectations below differ for exactly that reason.
+    { id: "t1", handle: "themis", name: "Themis", lens: null, status: "active" },
     { id: "d1", handle: "dualmint", name: "DualMint", lens: null, status: "active" },
     { id: "m1", handle: "maximus", name: "Maximus", lens: null, status: "active" },
     { id: "s1", handle: "shodai", name: "ShodAI", lens: null, status: "active" },
@@ -331,7 +431,7 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
 
   test("the seat-all filter adopts every ACTIVE member, committed persona or not", () => {
     const plan = planAdoptions([...RESTORED_FULL], new Set(), adoptionFilter(true, { seatAllActive: true }));
-    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
+    expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "t1", "w1"]);
   });
 
   test("the allowlist still excludes the same members when seat-all is OFF", () => {
@@ -339,9 +439,9 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
     expect(plan.adopt.map((m) => m.id).sort()).toEqual(["a1", "n1", "r1"]);
   });
 
-  test("adoptRestoredRoster seats every active restored member and keeps the three committed handles", () => {
+  test("adoptRestoredRoster seats every active restored member and keeps the committed handles", () => {
     const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, [], { seatAllActive: true });
-    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "w1"]);
+    expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "d1", "m1", "n1", "r1", "s1", "t1", "w1"]);
     expect(seated.every((m) => m.present)).toBe(true);
   });
 
@@ -350,7 +450,9 @@ describe("seatAllActive — twin/stage seats the full restored committee", () =>
     expect(() => adoptRestoredRoster(scenarioPlan(true), noNoop, [], { seatAllActive: true })).toThrow(/no 'noop-analyst'/);
   });
 
-  test("the plain smoke path still seats exactly the three committed personas", () => {
+  // THREE, not four: `themis` is allowlisted but carries no committed key, so
+  // the non-seat-all filter refuses it (see the RESTORED_FULL comment above).
+  test("the plain smoke path still seats exactly the three key-bearing committed personas", () => {
     const seated = adoptRestoredRoster(scenarioPlan(true), RESTORED_FULL, []);
     expect(seated.map((m) => m.memberId).sort()).toEqual(["a1", "n1", "r1"]);
   });

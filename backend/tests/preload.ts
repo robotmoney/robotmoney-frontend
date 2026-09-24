@@ -109,7 +109,6 @@ process.env.RM_TEST_TEMPLATE_DB = "robotmoney_tmpl";
 // cannot dump from a newer server at all).
 process.env.RM_TEST_PG_CONTAINER = name;
 process.env.RM_ENV = "ephemeral";
-process.env.SWARM_NOTIFICATION_EMAIL_FROM = "swarm-test@robotmoney.invalid";
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,
@@ -117,7 +116,7 @@ const up = Bun.spawnSync([
   "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
   "-p", `${port}:5432`, POSTGRES_IMAGE,
   // Durability off. This database exists for the length of one `bun test` and
-  // is `docker rm -f`d afterwards, so crash recovery has nothing to recover;
+  // is `docker rm -f -v`d afterwards, so crash recovery has nothing to recover;
   // what these buy is the checkpoint. CREATE/DROP DATABASE each force one, and
   // tests/support/clean-db.ts issues a CREATE per test file — with fsync on,
   // a single DROP DATABASE was observed taking 10s once the run had built up
@@ -139,11 +138,40 @@ const up = Bun.spawnSync([
 if (up.exitCode !== 0) {
   throw new Error(`tests require Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`);
 }
-process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", name]); } catch { /* ignore */ } });
+process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", "-v", name]); } catch { /* ignore */ } });
 
+// §7.3 CI ISOMORPHISM IS NOT IMPLEMENTED HERE, AND THIS IS WHY (issue #1026 W2).
+//
+// smoke-production-spec.md §7.3 asks for "no superuser test database: the test
+// database is provisioned by `rm_owner` and tests connect as
+// `rm_app`/`rm_worker`/`rm_readonly`". This file still provisions and hands out
+// the container's `robotmoney` superuser, because the suite that would have to
+// run under the runtime roles cannot:
+//
+//   * tests/db-preflight-checks.test.ts — the executable gate for check 2 —
+//     runs `ALTER ROLE rm_app SUPERUSER`, `GRANT rm_owner TO rm_app` and
+//     `ALTER TABLE ... OWNER TO rm_worker` to construct each denylist violation.
+//     Those statements REQUIRE superuser/CREATEROLE, so a suite connected as a
+//     runtime role cannot arm the very checks §7.3 exists to make honest;
+//   * tests/support/clean-db.ts clones a template database per file, and
+//     `rm_owner` holds no CREATEDB (0053 line 10 creates it NOCREATEDB);
+//   * ~190 files issue DDL through the shared pool against relations 0053 moved
+//     to `rm_owner`.
+//
+// So the isomorphism belongs to the boot path, not to the harness: the
+// production preflight (src/db/preflight.ts) is what CI runs, against the
+// production roles, and a runtime-role execution proof needs its own disposable
+// database rather than this shared one. Changing this file to runtime roles
+// today turns hundreds of correct tests red without making one check truer.
+//
 // migrate() retries a real SELECT 1 until the server accepts connections.
+// Seeding is separate from migrating (migrate() no longer seeds), so the
+// template is built by migrating and THEN seeding explicitly — the same
+// migrated-and-seeded database tests cloned before.
 const { migrate } = await import("../src/db/migrate.ts");
+const { seed } = await import("../src/db/seed.ts");
 await migrate();
+await seed();
 
 // Snapshot the migrated schema as a TEMPLATE database, so any test file can
 // clone a clean one for itself in tens of milliseconds instead of re-running
@@ -193,5 +221,5 @@ console.log(
 
 afterAll(async () => {
   await client.closeDb();
-  Bun.spawnSync(["docker", "rm", "-f", name]);
+  Bun.spawnSync(["docker", "rm", "-f", "-v", name]);
 });

@@ -5,9 +5,8 @@
 // the pair rather than only the one it is named after.
 //
 // WHAT MAKES THIS THE PRODUCTION PATH. docker-compose.yml's api service runs
-// `command: ["bun", "run", "src/api/index.ts"]`, and that is the whole bring-up
-// documented at docs/runbooks/deployment.md — no migrate step, no
-// scripts/db-preflight.ts. So this file spawns THAT file, as a real process,
+// `command: ["bun", "run", "src/api/index.ts"]`, and that is the current
+// bring-up command. So this file spawns THAT file, as a real process,
 // against a real database, and grades the process: a violating database must
 // produce a non-zero exit with both members named and NO port bound, and every
 // other database shape must still boot and serve.

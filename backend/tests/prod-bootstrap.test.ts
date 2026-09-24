@@ -241,7 +241,7 @@ test("edgar step: an unreachable API is classified as SKIPPED, not FAILED (never
 test("edgar step: a REACHABLE API that rejects the credential is classified as FAILED, not silently skipped", async () => {
   process.env.ANALYTICS_TOKEN = "tok_wrong_prod_bootstrap_test";
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch() {
       return new Response("unauthorized", { status: 401 });
     },

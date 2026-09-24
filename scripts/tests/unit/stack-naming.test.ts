@@ -187,11 +187,9 @@ describe("the scheme is actually wired into every spawner", () => {
     const smoke = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
     const classLines = smoke.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
     const hashLines = smoke.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
-    // postgres, website-server, api, the shared worker anchor, agent-launcher,
-    // member-agent, volume, network. agent-launcher (issue #1012) is stamped for
-    // the same reason the rest are, and one reason more: the short-lived JUDGE
-    // containers it starts are reaped by these labels, so a launcher the channel
-    // tooling could not select on would take its judge containers with it.
+    // postgres, website-server, api, the shared worker anchor, system-scheduler
+    // (issue #1026 — a standing container the reaper must be able to attribute),
+    // member-agent, volume, network.
     expect(classLines.length).toBe(8);
     expect(hashLines.length).toBe(8);
     for (const l of classLines) expect(l).toContain(`\${${ENV_CLASS_COMPOSE_VAR}}`);
@@ -228,28 +226,54 @@ describe("the scheme is actually wired into every spawner", () => {
     expect(src).toContain("...labelFlags");
   });
 
-  test("every workflow-pinned SMOKE_PROJECT carries the CI prefix", () => {
-    // Issue #373 retired swarm-opencode-nightly.yml: its real-inference
-    // admission is the SAME measurement e2e.yml already spends on a push to
-    // main, and e2e.yml now also runs on the nightly `schedule` that workflow
-    // used to hold. e2e.yml is therefore the only workflow left that pins a
-    // SMOKE_PROJECT.
-    const workflows = ["e2e.yml"];
-    let seen = 0;
-    for (const w of workflows) {
-      const src = readFileSync(join(repoRoot, ".github", "workflows", w), "utf8");
-      for (const line of src.split("\n")) {
-        const m = /^\s*SMOKE_PROJECT:\s*(\S+)/.exec(line);
-        if (!m) continue;
-        seen++;
-        // A CI project name that did NOT say `rm_ci` would be indistinguishable
-        // from the standing stage smoke to anything sweeping this host.
-        expect({ workflow: w, value: m[1]!.startsWith(`${CI_PROJECT_PREFIX}_`) }).toEqual({ workflow: w, value: true });
-      }
+  test("the workflow NAMES the boot's project through the helper, and never pins it into the boot", () => {
+    // Spec §1 retires SMOKE_PROJECT with no alias (issue #1026): the boot
+    // derives its project from the job's identity and refuses an exported one.
+    // So e2e.yml resolves the name with the SAME helper before the boot, and
+    // its later steps (billing diagnostic, always() teardown) read that step's
+    // output. e2e.yml is the only workflow that boots a smoke (issue #373
+    // retired swarm-opencode-nightly.yml).
+    const src = readFileSync(join(repoRoot, ".github", "workflows", "e2e.yml"), "utf8");
+    const values: string[] = [];
+    for (const line of src.split("\n")) {
+      const m = /^\s*SMOKE_PROJECT:\s*(\S.*)$/.exec(line);
+      if (m) values.push(m[1]!.trim());
     }
-    // The smoke boot, billing-diagnostic, and always() teardown steps each
-    // carry the run-scoped project name.
-    expect(seen).toBe(3);
+    // The diagnostic and the teardown each read the resolved name, and nothing
+    // else sets it: a literal would drift from what the boot derived.
+    expect(values).toEqual(["${{ steps.smoke-project.outputs.name }}", "${{ steps.smoke-project.outputs.name }}"]);
+    expect(src).toContain("id: smoke-project");
+    expect(src).toContain("scripts/stack/print-project-name.ts");
+    // The boot step itself carries no SMOKE_PROJECT: its env block ends at the
+    // next step, and the boot would refuse the variable anyway.
+    const boot = src.slice(src.indexOf("- name: Full-stack smoke"), src.indexOf("- name: Diagnose OpenCode billing exhaustion"));
+    expect(boot).toContain("scripts/smoke.ts --local blank");
+    expect(boot).not.toMatch(/^\s*SMOKE_PROJECT:/m);
+  });
+
+  test("the helper the workflow runs prints the boot's exact CI project, which carries the CI prefix", () => {
+    const ci = { GITHUB_ACTIONS: "true", GITHUB_WORKFLOW: "e2e", GITHUB_RUN_ID: "42", GITHUB_RUN_ATTEMPT: "2", GITHUB_JOB: "e2e" };
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", "stack", "print-project-name.ts")], {
+      env: { PATH: process.env.PATH ?? "", ...ci },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    const expected = stackProjectName("stack", resolveStackEnvironment(ci));
+    expect(r.stdout.toString().trim()).toBe(`name=${expected}`);
+    // A CI project name that did NOT say `rm_ci` would be indistinguishable
+    // from the standing stage smoke to anything sweeping this host.
+    expect(expected.startsWith(`${CI_PROJECT_PREFIX}_`)).toBe(true);
+  });
+
+  test("red control: outside Actions the helper refuses rather than print a name no boot will use", () => {
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", "stack", "print-project-name.ts")], {
+      env: { PATH: process.env.PATH ?? "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stdout.toString()).toBe("");
   });
 });
 });

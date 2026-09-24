@@ -19,7 +19,10 @@ set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-ARCH="docs/architecture.md"
+ARCH_NAME="docs/architecture/*.md"
+ARCH="$(mktemp)"
+trap 'rm -f "$ARCH"' EXIT
+cat docs/architecture/*.md > "$ARCH" 2>/dev/null
 DECISIONS="docs/decisions.md"
 ENV_EXAMPLE=".env.example"
 SELECT_TS="backend/src/analytics/access/select.ts"
@@ -27,7 +30,7 @@ SELECT_TS="backend/src/analytics/access/select.ts"
 fail=0
 err() { echo "FAIL: $*" >&2; fail=1; }
 
-[ -f "$ARCH" ] || { echo "FAIL: $ARCH missing" >&2; exit 1; }
+[ -s "$ARCH" ] || { echo "FAIL: $ARCH_NAME missing" >&2; exit 1; }
 [ -f "$DECISIONS" ] || { echo "FAIL: $DECISIONS missing" >&2; exit 1; }
 [ -f "$ENV_EXAMPLE" ] || { echo "FAIL: $ENV_EXAMPLE missing" >&2; exit 1; }
 
@@ -36,25 +39,25 @@ err() { echo "FAIL: $*" >&2; fail=1; }
 # select.ts files (e.g. backend/src/projects/access/select.ts) don't trip
 # this as a false positive.
 if [ ! -f "$SELECT_TS" ] && grep -nE 'analytics/access/select\.ts' "$ARCH"; then
-  err "$ARCH references select.ts but $SELECT_TS no longer exists (stale selector)."
+  err "$ARCH_NAME references select.ts but $SELECT_TS no longer exists (stale selector)."
 fi
 
 # 2. `PROVIDER=live` must not be presented as the analytics-source selector.
 if grep -nF 'PROVIDER=live' "$ARCH"; then
-  err "$ARCH references PROVIDER=live; ANALYTICS_SOURCE is the authoritative selector."
+  err "$ARCH_NAME references PROVIDER=live; ANALYTICS_SOURCE is the authoritative selector."
 fi
 
 # 3. The authoritative selector must be documented in the architecture doc...
-grep -qF 'ANALYTICS_SOURCE' "$ARCH" || err "$ARCH does not document ANALYTICS_SOURCE."
-grep -qF 'resolveAnalyticsSource' "$ARCH" || err "$ARCH does not document resolveAnalyticsSource()."
-grep -qF 'data-source.ts' "$ARCH" || err "$ARCH does not document access/data-source.ts."
+grep -qF 'ANALYTICS_SOURCE' "$ARCH" || err "$ARCH_NAME does not document ANALYTICS_SOURCE."
+grep -qF 'resolveAnalyticsSource' "$ARCH" || err "$ARCH_NAME does not document resolveAnalyticsSource()."
+grep -qF 'data-source.ts' "$ARCH" || err "$ARCH_NAME does not document access/data-source.ts."
 
 # 4. ...and in the primary env template.
 grep -qF 'ANALYTICS_SOURCE' "$ENV_EXAMPLE" || err "$ENV_EXAMPLE does not document ANALYTICS_SOURCE."
 
 # 5. The backtest + predictive-correlations surface must be documented.
-grep -qi 'backtest' "$ARCH" || err "$ARCH does not document the backtest surface."
-grep -qi 'correlations' "$ARCH" || err "$ARCH does not document the correlations surface."
+grep -qi 'backtest' "$ARCH" || err "$ARCH_NAME does not document the backtest surface."
+grep -qi 'correlations' "$ARCH" || err "$ARCH_NAME does not document the correlations surface."
 
 # 6. Allocation/vault-dashboard scope (issue #40): if either doc still
 # declares allocation/vault dashboards out of scope, that declaration must
@@ -70,9 +73,9 @@ done
 grep -qF 'D15' "$DECISIONS" || err "$DECISIONS does not contain the D15 (live vault-economics pipeline) decision entry."
 
 # 7. The new vault-economics endpoint + its data model must be documented.
-grep -qF '/api/dashboards/vault-economics' "$ARCH" || err "$ARCH does not document the /api/dashboards/vault-economics endpoint."
-grep -qF 'vault_share_price_history' "$ARCH" || err "$ARCH does not document the vault_share_price_history table."
-grep -qF 'chain/vault-economics.ts' "$ARCH" || err "$ARCH does not document backend/src/chain/vault-economics.ts."
+grep -qF '/api/dashboards/vault-economics' "$ARCH" || err "$ARCH_NAME does not document the /api/dashboards/vault-economics endpoint."
+grep -qF 'vault_share_price_history' "$ARCH" || err "$ARCH_NAME does not document the vault_share_price_history table."
+grep -qF 'chain/vault-economics.ts' "$ARCH" || err "$ARCH_NAME does not document backend/src/chain/vault-economics.ts."
 
 if [ "$fail" -ne 0 ]; then
   echo "check-docs-analytics: FAILED" >&2

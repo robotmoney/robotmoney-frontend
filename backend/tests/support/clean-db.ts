@@ -24,7 +24,7 @@
 //  - Restoring the pool is correctness: a file that does NOT opt in must still
 //    see the shared database it has always seen.
 //  - Dropping is CAPACITY. An earlier version of this file argued dropping was
-//    pointless because preload.ts's afterAll `docker rm -f`s the container.
+//    pointless because preload.ts's afterAll `docker rm -f -v`s the container.
 //    That is true about cleanup and wrong about PEAK: the clones are never
 //    released until the container dies, so the run's disk high-water mark is
 //    the SUM of every clone it ever made. Measured at 174 databases / ~2.0 GB

@@ -1,7 +1,7 @@
 // Runtime entrypoint for the contract. Only route data has a runtime form;
 // all DTOs are compile-time types declared in the companion .d.ts files.
 export { ROUTES, path } from "./routes.js";
-export { canonicalizeClaimChallenge, canonicalizeSubmission } from "./signing.js";
+export { canonicalizeClaimChallenge, canonicalizeJudgement, canonicalizeSubmission } from "./signing.js";
 export { REGIME_RISK_OFF, REGIME_RISK_ON, REGIME_METHOD, classifyRegime } from "./regime.js";
 export {
   BPS_DENOMINATOR,

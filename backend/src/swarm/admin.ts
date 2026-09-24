@@ -17,17 +17,20 @@ import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
-  getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
-  countActiveMembersTx,
+  appendStreamEvent,
+  closeEpochForDeactivation,
+  listJudgements,
+  sessionJudgeFingerprint,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
-// Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
-// an env var, because the swarm is live and an operator must be able to take
-// the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+// Issue #752 — the consensus judge's runtime switch. A DATABASE row, not an env
+// var, because the swarm is live and an operator must be able to take the
+// judge off without restarting anything. The judge itself is a participant
+// (issue #1026): nothing in this module judges.
+import { getJudgeConfig, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
 // R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
 // is the admin path below, so that every transition is an audited admin action
@@ -39,7 +42,6 @@ import {
   writeJudgeFaultInjection,
   type JudgeFaultInjectionState,
 } from "./judge-fault-injection.ts";
-import { enqueueSeatOpenNotifications } from "./notifications.ts";
 // The published shape of this module's member projection. Imported for the
 // `: AdminMember` return annotation on toMemberAdmin() below — see the comment
 // there (issue #572).
@@ -83,6 +85,10 @@ function toSubjectAdmin(row: Record<string, any>) {
     linkedMemberId: row.linked_member_id ?? null,
     structuralNotes: row.structural_notes ?? null,
     lastReviewed: row.last_reviewed ?? null,
+    // The subject's ONE scheduling parameter (scheduler spec §2.2). Surfaced on
+    // every admin read because §2.3 makes this route the only way it changes,
+    // and an operator cannot change a value the surface never shows.
+    epochDuration: row.epoch_duration_seconds != null ? Number(row.epoch_duration_seconds) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -144,6 +150,8 @@ export interface SubjectInput {
   linkedMemberId?: string;
   structuralNotes?: unknown;
   lastReviewed?: string;
+  /** Seconds the submission window stays open (scheduler spec §2.2). Omitted on create means the schema default. */
+  epochDuration?: number;
 }
 
 export async function listSubjectsAdmin() {
@@ -154,19 +162,42 @@ export async function listSubjectsAdmin() {
 export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   const existing = (await sql`SELECT id FROM swarm_subjects WHERE id = ${input.id}`)[0];
   if (existing) return err(409, "subject id already exists");
-  const rows = await sql`
-    INSERT INTO swarm_subjects
-      (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
-       source, recommendation_type, linked_member_id, structural_notes, last_reviewed)
-    VALUES
-      (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
-       ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${sql.json((input.wallets ?? null) as any)},
-       ${sql.json((input.nftContracts ?? null) as any)}, ${sql.json((input.source ?? null) as any)},
-       ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
-       ${sql.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null})
-    RETURNING *`;
-  await audit(actor, "subject_create", { subjectId: input.id });
-  return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  if (input.epochDuration !== undefined && !isPositiveWholeSeconds(input.epochDuration)) {
+    return err(400, "epochDuration must be a positive whole number of seconds");
+  }
+  // ONE TRANSACTION, because a created subject is an ACTIVE subject and §6.2
+  // makes activation a `subject.changed` event the scheduler acts on by opening
+  // that subject's first epoch. A create that committed without its event would
+  // leave an active subject the clock never hears about until its next rebuild.
+  return sql.begin(async (tx) => {
+    const rows = await tx`
+      INSERT INTO swarm_subjects
+        (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
+         source, recommendation_type, linked_member_id, structural_notes, last_reviewed,
+         epoch_duration_seconds)
+      VALUES
+        (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
+         ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${tx.json((input.wallets ?? null) as any)},
+         ${tx.json((input.nftContracts ?? null) as any)}, ${tx.json((input.source ?? null) as any)},
+         ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
+         ${tx.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null},
+         ${input.epochDuration !== undefined ? tx`${input.epochDuration}` : tx`DEFAULT`})
+      RETURNING *`;
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: input.id,
+      payload: { reason: "activated", epochDurationSeconds: Number(rows[0].epoch_duration_seconds) },
+    });
+    await audit(actor, "subject_create", { subjectId: input.id }, tx);
+    return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
+  });
+}
+
+/**
+ * A whole, positive number of seconds — the only shape an epoch duration may
+ * take (scheduler spec §2.2/§2.4, migration 0067's CHECK).
+ */
+function isPositiveWholeSeconds(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
 }
 
 export type SubjectPatch = Partial<Omit<SubjectInput, "id">>;
@@ -194,7 +225,14 @@ export async function updateSubjectAdmin(
       linked_member_id: patch.linkedMemberId ?? row.linked_member_id,
       structural_notes: patch.structuralNotes !== undefined ? patch.structuralNotes : row.structural_notes,
       last_reviewed: patch.lastReviewed ?? row.last_reviewed,
+      epoch_duration_seconds: patch.epochDuration ?? row.epoch_duration_seconds,
     };
+    // §2.4: "There is no on/off state for scheduling." A zero, a negative or a
+    // fractional duration is refused HERE, before the write, so the caller gets
+    // a 400 naming the field rather than a 23514 from migration 0067's CHECK.
+    if (patch.epochDuration !== undefined && !isPositiveWholeSeconds(patch.epochDuration)) {
+      return err(400, "epochDuration must be a positive whole number of seconds");
+    }
     const upd = await tx`
       UPDATE swarm_subjects SET
         name = ${merged.name}, operator = ${merged.operator}, homepage = ${merged.homepage},
@@ -202,7 +240,8 @@ export async function updateSubjectAdmin(
         wallets = ${tx.json(merged.wallets as any)}, nft_contracts = ${tx.json(merged.nft_contracts as any)},
         source = ${tx.json(merged.source as any)}, recommendation_type = ${merged.recommendation_type},
         linked_member_id = ${merged.linked_member_id}, structural_notes = ${tx.json(merged.structural_notes as any)},
-        last_reviewed = ${merged.last_reviewed}, version = version + 1, updated_at = now()
+        last_reviewed = ${merged.last_reviewed}, epoch_duration_seconds = ${merged.epoch_duration_seconds},
+        version = version + 1, updated_at = now()
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
@@ -217,6 +256,17 @@ export async function updateSubjectAdmin(
       await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
     }
 
+    // Scheduler spec §6.2: `subject.changed` — "epoch duration changed, or
+    // subject activated / deactivated". Published for ANY subject edit, not
+    // only a duration change: the scheduler's documented reaction is to re-read
+    // the subject, and deciding here which fields it cares about would make
+    // this function the second place that knowledge lives. Written inside the
+    // same transaction as the edit (§9), so the clock is never told about a
+    // change that rolled back.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "updated", epochDurationSeconds: Number(upd[0].epoch_duration_seconds) },
+    });
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
@@ -236,7 +286,20 @@ export async function deactivateSubjectAdmin(
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    await audit(actor, "subject_deactivate", { subjectId: id }, tx);
+    // Scheduler spec §4.5: "Deactivating a subject through the admin API closes
+    // its open epoch (recording absences as in §4.3) and opens no new one."
+    // In the SAME transaction as the status flip, so a crash between them
+    // cannot leave an inactive subject with a window still advertised open.
+    // Settlement of the closed epoch still has to finish, and §3 step 3 makes
+    // the scheduler pick it up on its next rebuild.
+    const closedEpochId = await closeEpochForDeactivation(id, tx);
+    // §6.2: on deactivation the scheduler "drops its boundary timer and settles
+    // the closed epoch". Same transaction as the status flip and the close.
+    await appendStreamEvent(tx, "subject.changed", {
+      subjectId: id,
+      payload: { reason: "deactivated", closedEpochId },
+    });
+    await audit(actor, "subject_deactivate", { subjectId: id, closedEpochId }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
   });
 }
@@ -446,8 +509,8 @@ export async function reviewApplicationAdmin(
 ): Promise<AdminResult> {
   if (decision === "approve") {
     // Reuse the SAME activation transaction the public path uses. Approval
-    // activates the pending key, queues the email, and flips status active;
-    // bearer plaintext is minted only by the member's first signed claim.
+    // activates the pending key and flips status active; bearer plaintext is
+    // minted only by the member's first signed claim.
     const res = await activateMember(memberId, role);
     if (!res.ok) return res as AdminResult;
     return {
@@ -457,7 +520,6 @@ export async function reviewApplicationAdmin(
       memberStatus: "active",
       role,
       claimRequired: true,
-      notificationQueued: res.notificationQueued,
     };
   }
   return sql.begin(async (tx) => {
@@ -647,19 +709,17 @@ export async function deactivateMemberAdmin(
     const row = (await tx`SELECT * FROM swarm_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
-    const wasActive = row.status === "active";
     const upd = await tx`
       UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
     await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
-    if (wasActive) {
-      const activeCount = await countActiveMembersTx(tx);
-      if (activeCount < SWARM_ROSTER_CAP) {
-        await enqueueSeatOpenNotifications(tx);
-      }
-    }
+    // A seat opening used to mail the waitlist here (enqueueSeatOpenNotifications).
+    // Swarm email is removed — issue #1026 W5, decision D50 reversing D30 — so
+    // deactivation now just frees the seat. The waitlist itself is untouched:
+    // rows keep accumulating through POST /api/swarm/waitlist and an operator
+    // reads them directly when a seat opens.
     await audit(actor, "member_deactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });
@@ -848,40 +908,22 @@ function isValidUtcDate(date: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
 }
 
-// Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
-// `swarm:<session-id>:<action>`.
-//
-// `swarm.judge` is ON THIS LIST (issue #767) and that is the ONLY thing that
-// makes `swarm_judge_config.mode` mean anything on the cadence. The handler,
-// the per-session enqueue endpoint and the admin button all shipped with #752,
-// but nothing SCHEDULED a judging — so a session was judged only when a human
-// asked for one, and flipping the mode to `shadow` changed nothing about what
-// the swarm actually did. The mode switch stays the on/off control; this list
-// is what gives it something to switch.
-const SESSION_JOB_KINDS = ["swarm.publish_brief", "swarm.close_window", "swarm.aggregate", "swarm.judge", "swarm.publish"] as const;
 
 // The narrowest gap a session may declare between two of its own instants
 // (issue #806). Validation used to be strict `<` on millisecond timestamps,
 // which admits a ONE-MILLISECOND window — and the lifecycle needs three
 // distinct instants between `windowClosesAt` and `publishAt` to order
-// aggregate, judge and publish at all. Below three seconds the clamp below can
-// only collapse them onto each other, and once `aggregate` and `judge` share a
-// `run_after` the claim order among them is a tiebreak, not a schedule. Stating
-// the requirement in validation is cheaper than making every consumer of the
-// queue defend against a degenerate one that was accepted.
+// aggregate, judge and publish at all. Stating the requirement in validation is
+// cheaper than making every consumer defend against a degenerate session that
+// was accepted.
 //
-// The clamp is KEPT even though validation now guarantees the room it needs:
-// it is the property (monotonic, never crossing) and this is the input bound,
-// and a bound is not a substitute for the property holding.
+// THE CLAMP IT GUARDED IS GONE (issue #1026 W4): the five scheduled jobs whose
+// `run_after` values it kept monotonic were removed with the rest of the
+// scheduled lifecycle. The BOUND is kept, because the instants an admin
+// declares are still stored on the session and a one-millisecond window is
+// still not a window. It is now an input sanity rule and nothing more.
 export const MIN_SESSION_STEP_MS = 3_000;
 
-const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
-  "swarm.publish_brief": "publish_brief",
-  "swarm.close_window": "close_window",
-  "swarm.aggregate": "aggregate",
-  "swarm.judge": "judge",
-  "swarm.publish": "publish",
-};
 
 export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
@@ -950,64 +992,36 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
         ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // One deduplicated, session-scoped job per lifecycle step (docs §4 US-C3):
-    // dedupe key `swarm:<session-id>:<action>` so re-creating a still-scheduled
-    // session never double-enqueues.
+    // NO JOBS ARE ENQUEUED HERE (issue #1026 W4). Creating a session enqueues
+    // nothing at all: the five deduplicated, session-scoped lifecycle rows this
+    // used to write — each with its own `run_after` derived from the admin's
+    // three instants, plus a clamp that kept them in order when the declared
+    // gaps were too narrow — are gone with the queue kinds they named.
     //
-    // ORDERING, not spacing, is what these instants buy. The queue claims
-    // `ORDER BY priority DESC, run_after` (worker/loop.ts), so a lane draining
-    // serially runs aggregate before judge before publish purely because their
-    // run_after values are ordered — the seconds between them are not a bet on
-    // how long a step takes. The judge reads the AGGREGATED take set and must
-    // land before the session publishes, so it sits one second behind aggregate
-    // and is clamped strictly below publishAt.
+    // WHY. Scheduler spec §4 gives the lifecycle a different shape
+    // entirely. A session is `collecting` from its first instant with no
+    // deferred brief (§4.1); it closes when the scheduler fires the boundary it
+    // holds, bound to a named epoch (§4.3); and settlement is "not scheduled —
+    // a chain the scheduler drives through the API, each step as soon as the
+    // previous one returns" (§4.4). Every one of the five rows was a scheduled
+    // step, which is precisely what the spec removes. Leaving them would have
+    // meant two mechanisms driving one session: the epoch path below opening
+    // and closing windows while five queue rows fired at their own instants
+    // against the states they expected to find.
     //
-    // BOTH intermediate instants are clamped, not just the judge's. Validation
-    // guarantees only `windowClosesAt < publishAt` — a gap that may be a single
-    // millisecond — so `windowClosesAt + 1s` can itself land at or beyond
-    // publish. Clamping the judge alone then pulled it BELOW the aggregate and
-    // inverted the one pair whose order is the whole point. Clamping downward
-    // from publish keeps the sequence monotonic for any legal input; on a gap
-    // too narrow to hold three distinct instants they collapse onto each other
-    // rather than crossing, which a two-second window is already wide enough to
-    // avoid.
-    const lastBeforePublish = publishAt.getTime() - 1;
-    const judgeMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 2_000, lastBeforePublish));
-    const aggregateMs = Math.max(windowClosesAt.getTime(), Math.min(windowClosesAt.getTime() + 1_000, judgeMs));
-    const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
-      "swarm.publish_brief": briefOpensAt,
-      "swarm.close_window": windowClosesAt,
-      "swarm.aggregate": new Date(aggregateMs),
-      "swarm.judge": new Date(judgeMs),
-      "swarm.publish": publishAt,
-    };
-    const jobIds: number[] = [];
-    for (const kind of SESSION_JOB_KINDS) {
-      const dedupeKey = `swarm:${sessionId}:${JOB_ACTION[kind]}`;
-      // RESCHEDULE RE-ARMS THE JOB, IT DOES NOT LEAVE IT BEHIND. This used to
-      // be `ON CONFLICT DO NOTHING`, which meant re-creating a still-scheduled
-      // session silently kept each job's STALE run_after and SPENT attempts —
-      // a session moved to a new date never actually ran on it. DO UPDATE
-      // moves run_after to the new instant and resets status/attempts/lock
-      // fields so a previously-succeeded or exhausted row runs again on the
-      // new timeline exactly like a fresh insert would.
-      const r = await tx`
-        INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
-        VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'swarm_session', ${sessionId}, ${actor})
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
-          run_after = EXCLUDED.run_after, status = 'pending', attempts = 0,
-          locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
-        RETURNING id`;
-      if (r[0]) jobIds.push(Number(r[0].id));
-    }
-
+    // WHAT REPLACES IT. `openEpoch` and `turnOverEpoch` (domain.ts) for the
+    // window, and `aggregateEpoch` / `requestJudging` / `finalizeEpoch` for
+    // settlement, all driven by `system-scheduler` through the epoch routes.
+    //
+    // WHAT IS UNTOUCHED. The job queue itself and every non-session kind — the
+    // analytics, research, vault, wallet, buyback and project work — all still
+    // enqueue exactly as they did. This removed five rows, not a queue.
     await audit(actor, "session_create", { sessionId, date: input.date, subjectId: input.subjectId }, tx);
     return {
       ok: true,
       status: existing ? 200 : 201,
       session: { id: sessionId, date: session.date, subjectId: session.subject_id, subjectName: session.subject_name, state: session.state, version: Number(session.version) },
       rosterSize: activeMembers.length,
-      jobIds,
     };
   });
 }
@@ -1191,11 +1205,11 @@ export async function guardedTransition(
 }
 
 /**
- * The same guard, run inside a transaction the CALLER owns. Extracted for
- * judgeSessionAdmin, which has to put the transition, the judgement row and the
- * opinion's effect on the session in ONE transaction — a transition that
- * commits on its own advertises a fact (`judged`) that no row yet supports, and
- * anything failing afterwards strands the session there.
+ * The guard's body, on a transaction handle. It was split out so the retired
+ * inline judge could put a transition and a judgement row in one transaction;
+ * the judge is a participant now (issue #1026) and `guardedTransition` is the
+ * only caller, but the handle keeps the transition, its event row and its audit
+ * row visibly in one transaction.
  */
 async function transitionWithin(
   tx: DbHandle,
@@ -1224,25 +1238,6 @@ async function transitionWithin(
   return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
 }
 
-/**
- * A READ-ONLY dry run of the same guard, so a caller that must do expensive
- * work BEFORE the transition (judgeSessionAdmin: a model call of up to 60s) can
- * refuse an illegal one without paying for it. It is not a substitute for the
- * guard — `transitionWithin` re-checks under `FOR UPDATE` inside the
- * transaction, and that check is the authority.
- */
-async function preflightTransition(sessionId: string, toState: string, expectedVersion?: number): Promise<AdminResult> {
-  const row = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; version: number }
-    | undefined;
-  if (!row) return err(404, "session not found");
-  if (expectedVersion != null && Number(row.version) !== expectedVersion) return err(409, "stale_version");
-  if (row.state === toState) return { ok: true, status: 200 };
-  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
-  if (!(TRANSITIONS[row.state] ?? []).includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-  return { ok: true, status: 200 };
-}
-
 export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
   return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
 }
@@ -1260,103 +1255,6 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
   if (!t.ok) return t;
   const rollup = await domainAggregateSession(sessionId);
   return { ...t, ...rollup, status: t.status };
-}
-
-// Judge a session that has already been aggregated. THE ORDER MATTERS, and it
-// is not the obvious one:
-//
-//   1. Read the mode ONCE. It is then passed down to judgeSession() rather than
-//      re-read there. Reading it twice meant an operator flipping the switch to
-//      `off` mid-run — precisely what the switch exists for — got a session
-//      advanced to `judged` and then a 409, i.e. a state whose name asserts a
-//      fact no row supports.
-//   2. Dry-run the state guard. A disabled judge or an illegal transition costs
-//      no model call.
-//   3. Form the opinion. OUTSIDE any transaction: this is a network call of up
-//      to 60s and nothing may hold a row lock or a pooled connection across it.
-//   4. Transition, record the judgement, and (in `enforce`) apply it — ALL IN
-//      ONE TRANSACTION, under an advisory lock on the session id. So the
-//      `judged` state and the row that justifies it commit together or not at
-//      all, and two judges racing the same session (the admin POST in the api
-//      process against a `swarm.judge` job in worker-swarm) are serialized
-//      rather than interleaved.
-//
-// A judge that falls back to template prose is still a successful judging — see
-// swarm/judge.ts on why failure is an outcome here rather than an error.
-export async function judgeSessionAdmin(
-  sessionId: string,
-  expectedVersion: number | undefined,
-  actor: Actor = ADMIN_ACTOR,
-  opts: { force?: boolean } = {},
-) {
-  const config = await getJudgeConfig();
-  if (config.mode === "off") return err(409, "judge_disabled");
-  const pre = await preflightTransition(sessionId, "judged", expectedVersion);
-  if (!pre.ok) return pre;
-
-  // Named-judge attribution (issue #918). Resolved by HANDLE, not hardcoded to
-  // an id, because the id is generated per deployment (roster-seed.ts). An
-  // environment that has not run seedLiveRoster() — most of this repo's own
-  // tests — resolves nothing here, and `judgeMemberId` MUST then stay
-  // `undefined` (never `""`) so judgeSession() takes its unnamed-judge path
-  // and every judgement keeps naming 'robotmoney-in-house', unchanged.
-  //
-  // NO STATUS/ROLE/CONFLICT CHECK HERE. judgeSession() already runs all three
-  // — active-status, role==='judge', and the take-conflict check — inside its
-  // own transaction once `judgeMemberId` is passed (judge-session.ts). Redoing
-  // any of them here would be a second, separately-maintained copy of a rule
-  // that must have exactly one source.
-  const namedJudge = await getMember("themis");
-  const judgeMemberId = namedJudge?.id;
-
-  let t: GuardedTransitionResult | undefined;
-  const result = await judgeSession(sessionId, {
-    config,
-    judgeMemberId,
-    force: opts.force,
-    // Runs inside the judge's transaction, after its advisory lock and before
-    // the judgement row is written. A refusal here rolls the whole thing back.
-    beforeRecord: async (tx) => {
-      t = await transitionWithin(tx, sessionId, "judged", actor, { expectedVersion });
-      return t;
-    },
-  });
-  // PRESERVE THE FULL RESULT, not just status/error via err()'s minimal shape.
-  // `judgeUnavailableReason` (credit_exhausted / credential_rejected /
-  // model_not_supported — see JudgeUnavailableError in judge.ts) is the one
-  // field that says WHICH fail-closed class this is, and `err()` here used to
-  // drop it silently: qualifyJudgeUnavailable() (worker/handlers/swarm.ts)
-  // reads exactly this field to turn the bare `judge_unavailable` into
-  // `judge_unavailable:<reason>` before it reaches job_runs.last_error and the
-  // console — but by the time judgeSession()'s cron handler received this
-  // object, the field was already gone, so the qualifier had nothing to
-  // qualify and every occurrence logged as the bare word forever. Confirmed
-  // against a real staging failure (2026-09-18): the actual cause was
-  // unrecoverable once the session/job was gone, because nothing between the
-  // throw site and the console ever wrote it down.
-  if (!result.ok) return { ...result, ok: false as const, error: result.error ?? "judge failed" };
-  await audit(actor, "session_judged", {
-    sessionId, mode: result.mode, applied: result.applied === true,
-    appliedSkippedReason: result.appliedSkippedReason ?? null,
-    source: result.outcome?.source, fallbackReason: result.outcome?.fallbackReason ?? null,
-    promptHash: result.outcome?.promptHash, inputsDigest: result.outcome?.inputsDigest,
-  });
-  return {
-    ...(t ?? { ok: true, status: 200 }),
-    status: t?.status ?? 200,
-    judge: {
-      mode: result.mode,
-      applied: result.applied === true,
-      appliedSkippedReason: result.appliedSkippedReason ?? null,
-      judgementId: result.judgementId,
-      source: result.outcome?.source,
-      fallbackReason: result.outcome?.fallbackReason ?? null,
-      model: result.outcome?.model ?? null,
-      promptHash: result.outcome?.promptHash,
-      inputsDigest: result.outcome?.inputsDigest,
-      releaseSafety: result.outcome?.opinion.release_safety,
-    },
-  };
 }
 
 // The runtime switch itself. Audited like every other admin write, because
@@ -1389,16 +1287,15 @@ export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeC
  */
 export function judgeModeWarnings(mode: JudgeMode): string[] {
   if (mode === "off") return [];
-  const warnings = [
-    // Not a defect: `FOR UPDATE SKIP LOCKED` is what makes the queue safe under
-    // N workers, and the swarm lane's ordering is bought by run_after, which is
-    // a CLAIM-order property. It holds today by topology, not by construction.
-    "ordering assumes EXACTLY ONE `swarm`-lane worker: `FOR UPDATE SKIP LOCKED` hands " +
-      "`swarm.judge` and `swarm.publish` to two workers the instant both are due, and the judge " +
-      "holds its worker for up to 60s on the model call. docker-compose.yml declares one " +
-      "`worker-swarm` with no replicas; scaling the lane requires making the ordering " +
-      "independent of worker count first (docs/architecture.md §9.7).",
-  ];
+  // THE SINGLE-WORKER ORDERING WARNING IS DELETED, NOT SUPPRESSED (issue #1026
+  // W4). It said judging and publishing were two queue rows whose order held
+  // only because exactly one worker claimed the lane. Neither is a queue row
+  // any more: system-scheduler-spec.md §4.4 makes settlement "a chain the
+  // scheduler drives through the API, each step as soon as the previous one
+  // returns", so the steps are sequenced by the caller rather than by
+  // run_after and claim order. This file's own rule is that a warning naming a
+  // fixed problem is deleted rather than left standing.
+  const warnings: string[] = [];
   if (mode === "enforce") {
     // Not a defect either: the aggregator OWNS the recommendation, and #806
     // chose to report this loss rather than prevent it. But an operator reading
@@ -1483,7 +1380,21 @@ function projectFaultInjection(state: JudgeFaultInjectionState) {
  * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
  * cites to bound the window. The BODY never reaches the audit row for the same
  * reason it never reaches the GET.
+ *
+ * ARMING IS REFUSED TODAY: THE LEVER HAS NO CONSUMER (issue #1026, D53 point
+ * 4). Its only consumer was the backend `judgeSession()`, deleted when the
+ * judge became a participant, and no participant reads the row yet. Accepting
+ * `enabled: true` would return 200, write an audit row saying "the judge is now
+ * answering from this table", and change no judging at all — the inert row an
+ * operator believes is working, which is exactly what the 403 above exists to
+ * prevent. So after the process gates pass (so a stack that could never arm it
+ * still says so first), arming is refused with `fault_injection_has_no_consumer`
+ * and writes nothing. Disarming stays open, so a row armed before the removal
+ * can always be cleared. Lift this refusal in the change that makes the judge
+ * participant consume the lever, and not before.
  */
+export const FAULT_INJECTION_HAS_CONSUMER: boolean = false;
+
 export async function setJudgeFaultInjectionAdmin(
   patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
   actor: Actor = ADMIN_ACTOR,
@@ -1496,6 +1407,14 @@ export async function setJudgeFaultInjectionAdmin(
         return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
       }
       throw e;
+    }
+    if (!FAULT_INJECTION_HAS_CONSUMER) {
+      return {
+        ...err(409, "fault_injection_has_no_consumer"),
+        error: "fault_injection_has_no_consumer",
+        detail: "the judge fault-injection lever has no consumer: the backend judge that read it is deleted (D53) and no " +
+          "judge participant reads it yet, so arming it would change no judging. Nothing was written.",
+      };
     }
   }
   let state: JudgeFaultInjectionState;
@@ -1524,18 +1443,18 @@ export async function setJudgeFaultInjectionAdmin(
   };
 }
 
-// ── The soak's read path (issue #767, folded from #768) ────────────────────
+// ── The judgement record's read path (issue #767, folded from #768) ────────
 //
-// `shadow` exists to accumulate judge opinions against live traffic until they
-// can be trusted. Until this route existed there was nothing to accumulate them
-// INTO that anyone could read: `swarm_session_judgements` had no admin route, no
-// UI, and `latestJudgement()` had no production caller at all — inspecting a
-// soak meant `psql` against production. A soak nobody can read is not a soak.
+// Built for the `shadow` soak, which D53 retired; it stays because it is the
+// only place an operator can read every judgement a session received — the
+// judge of record's, a second seated judge's that changed no outcome, late
+// evidence after publication, and historical `shadow` rows — beside what the
+// session itself carries.
 //
-// PRIVILEGED like everything else under /api/swarm/admin/*. The opinions include
-// model-authored prose about named members that `shadow` deliberately keeps off
-// the public session page; serving it unauthenticated would publish, through the
-// read path, exactly what the mode exists to withhold.
+// PRIVILEGED like everything else under /api/swarm/admin/*. Rows that never
+// reached the session carry model-authored prose about named members that the
+// public session page does not show; serving them unauthenticated would publish
+// through the read path what the lifecycle kept off the session.
 
 /**
  * One judgement row, camelCased and with the operator-facing facts up front.
@@ -1546,7 +1465,7 @@ export async function setJudgeFaultInjectionAdmin(
  */
 function toJudgementAdmin(
   r: Record<string, unknown>,
-  carried: { promptHash: string; inputsDigest: string } | null,
+  carried: { promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null,
 ) {
   const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
   // Does the session STILL carry this opinion? (issue #806.) `applied` is a
@@ -1557,9 +1476,14 @@ function toJudgementAdmin(
   // replaces `swarm_recommendation` wholesale and the judge's prose,
   // release_safety and fingerprint go with it. So the read path reconciles
   // instead of trusting the column.
+  //
+  // The JUDGE is compared too: two seated judges reading the same take set
+  // under the same prompt share both digests, and only the judge of record's
+  // judgement is on the session (system-scheduler-spec.md §4.4).
   const carriedBySession = carried != null
     && carried.inputsDigest === String(r.inputs_digest)
-    && carried.promptHash === String(r.prompt_hash);
+    && carried.promptHash === String(r.prompt_hash)
+    && carried.judgedByMemberId === ((r.judged_by_member_id as string | null) ?? null);
   return {
     id: String(r.id),
     mode: String(r.mode),
@@ -1592,7 +1516,8 @@ function toJudgementAdmin(
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     // Reconciliation against the session as it stands NOW (issue #806).
     carriedBySession,
-    // Only an `applied` row can be SUPERSEDED — a shadow row was never on the
+    // Only an `applied` row can be SUPERSEDED — an unapplied row (a second
+    // judge's, late evidence, a historical shadow row) was never on the
     // session, and saying "superseded" about it would invent a loss.
     supersededReason: r.applied === true && !carriedBySession
       ? (carried == null ? "recommendation_overwritten" : "session_carries_a_different_opinion")
@@ -1652,10 +1577,11 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
 // the receipt's bytes stay immutable and anchored. A session an operator may
 // still want to reopen must be reopened BEFORE its receipt exists.
 //
-// AND JUDGE IT IN `enforce`. A `shadow` judgement is deliberately withheld from
-// the session, so there is nothing for a receipt to attest to
-// (`judgement_not_adopted`): the receipt embeds the session's own judge block
-// or it embeds nothing.
+// AND IT MUST HAVE A CONSENSUS. Only the judge of record's judgement reaches the
+// session's own record; any other judgement (a second judge's, late evidence,
+// a historical `shadow` row) is never on the session, so there is nothing for a
+// receipt to attest to (`judgement_not_adopted`): the receipt embeds the
+// session's own judge block or it embeds nothing.
 //
 // EVERY REFUSAL REACHES THE OPERATOR with its reason code. Besides the two
 // above: `session_not_reaggregated` (a late FIRST take arrived after the rollup

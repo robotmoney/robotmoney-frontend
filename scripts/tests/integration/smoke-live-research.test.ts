@@ -2,10 +2,10 @@
 //
 //  1. Compose topology (docker compose config — offline interpolation, no
 //     containers): the smoke stack starts one worker container per execution
-//     lane (worker-swarm reserved / worker-analytics / worker-research),
-//     each with its WORKER_LANE pinned; the old undifferentiated `worker`
-//     service is gone. Fails loudly if the topology regresses to generic
-//     workers (which could consume the reserved swarm capacity).
+//     lane (worker-analytics / worker-research), each with its WORKER_LANE
+//     pinned; the old undifferentiated `worker` service is gone. Fails loudly
+//     if the topology regresses to generic workers. There is no session lane:
+//     issue #1026 moved session timing out of the queue entirely.
 //
 //  2. TUI wiring (source-level assertions on scripts/lib/smoke-main.ts, which
 //     cannot be imported without side effects): the Startup pane names each
@@ -21,7 +21,6 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "../../..");
 
 const WORKER_LANE_SERVICES: Record<string, string> = {
-  "worker-swarm": "swarm",
   "worker-analytics": "analytics",
   "worker-research": "research",
 };
@@ -73,15 +72,19 @@ describe("smoke lane topology (issue #107)", () => {
   });
 });
 
-describe("smoke TUI is lane-aware (issue #107)", async () => {
+describe("smoke readiness polling is lane-aware (issue #107)", async () => {
   const src = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
   // Issue #456: the readiness-probe polling (including these SQL kind
   // clauses) moved out of smoke-main.ts into its own module.
   const pollingSrc = await Bun.file(join(repoRoot, "scripts/lib/smoke-readiness-polling.ts")).text();
+  // Issue #1026: `bun smoke` draws no TUI (spec §1), so smoke-main.ts no longer
+  // holds a startup pane naming the lanes. The lanes a failed boot must STOP
+  // are still named, in the decisions module smoke-main.ts does import.
+  const failureSrc = await Bun.file(join(repoRoot, "scripts/lib/smoke-failure.ts")).text();
 
-  test("startup pane names each worker lane container", () => {
+  test("every worker lane container is one a failed boot stops", () => {
     for (const svc of Object.keys(WORKER_LANE_SERVICES)) {
-      expect(src).toContain(`"${svc}"`);
+      expect(failureSrc).toContain(`"${svc}"`);
     }
   });
 
@@ -92,8 +95,8 @@ describe("smoke TUI is lane-aware (issue #107)", async () => {
     expect(src).not.toContain("analytics.run");
   });
 
-  test("independent countdown per kind (regime vs research)", () => {
-    expect(src).toContain('secsUntilNext("regime.classify")');
-    expect(src).toContain('secsUntilNext("research.refresh")');
+  test("independent countdown per kind lives in the polling module, and the boot paints none", () => {
+    expect(pollingSrc).toContain("function secsUntilNext(kind: string)");
+    expect(src).not.toContain("secsUntilNext(");
   });
 });

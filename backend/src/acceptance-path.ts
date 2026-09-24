@@ -49,7 +49,7 @@ export interface InferencePathOptions {
    */
   path?: InferencePath;
   /**
-   * The STANDING stack: `bun run smoke:stage`, i.e. the `--static-port` boot a
+   * The STANDING stack: `bun smoke --static-port`, the boot a
    * tunnel points at. That is the staging deployment whatever `RM_ENV` says, so
    * it can only ever TIGHTEN the answer, never loosen it.
    */

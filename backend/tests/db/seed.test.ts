@@ -9,9 +9,10 @@
 // tests/preload.ts (already migrated + seeded once); seed()/seedJobSchedules()
 // are idempotent, so re-invoking them here is safe and self-contained.
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sql } from "../../src/db/client.ts";
 import { SCHEDULES, seed, seedSmokeJobSchedules, seedJobSchedules } from "../../src/db/seed.ts";
-import { resolveSwarmSchedules } from "../../src/config.ts";
 import { tickScheduler } from "../../src/worker/scheduler.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
@@ -244,13 +245,49 @@ test("smoke guard (#399): a disabled schedule is never picked up by the schedule
   expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and smoke scores stay untouched
 });
 
-test("canonical seeded row set is byte-for-byte SCHEDULES plus swarm rows", async () => {
-  await sql`DELETE FROM job_schedules`; // re-seeded immediately below (fresh-boot shape)
+test("the seed and the snapshot's REAL bootstrap data write the same job_schedules rows — and no swarm or session row", async () => {
+  // Two writers of one row set: backend/schema/bootstrap-data.sql (a blank
+  // bootstrap, smoke spec §8.1) and seedJobSchedules() (every other boot).
+  // This case used to compare seedJobSchedules() with SCHEDULES — the list it
+  // iterates — which could not fail. It now compares what each writer actually
+  // leaves in the table, column for column, so a row added to either and not
+  // the other goes red.
+  type FullRow = { kind: string; cron: string; enabled: boolean; timezone: string; payload: unknown; catchup_policy: string };
+  const readAll = async (): Promise<FullRow[]> =>
+    (
+      await sql<FullRow[]>`
+        SELECT kind, cron, enabled, timezone, payload, catchup_policy FROM job_schedules ORDER BY kind, cron`
+    ).map((r) => ({ ...r, payload: JSON.parse(JSON.stringify(r.payload)) }));
+
+  // The bootstrap data's own statements, verbatim from the file — not a copy.
+  const bootstrap = readFileSync(join(import.meta.dir, "..", "..", "schema", "bootstrap-data.sql"), "utf8");
+  const inserts = bootstrap.split("\n").filter((line) => line.startsWith("INSERT INTO public.job_schedules "));
+  expect(inserts.length).toBeGreaterThan(0);
+
+  await sql`DELETE FROM job_schedules`; // restored by the seed below and by afterEach
+  for (const statement of inserts) await sql.unsafe(statement);
+  const fromBootstrap = await readAll();
+
+  await sql`DELETE FROM job_schedules`;
   await seedJobSchedules();
-  const rows = plain(await sql<ScheduleRow[]>`SELECT kind, cron, enabled FROM job_schedules`);
-  const expected = plain([
-    ...SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-    ...resolveSwarmSchedules().map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-  ]);
-  expect(rows).toEqual(expected);
+  const fromSeed = await readAll();
+
+  expect(fromSeed).toEqual(fromBootstrap);
+
+  // And both are SCHEDULES, so the list the seed module exports is the list a
+  // blank database gets.
+  const expected = plain(SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })));
+  expect(plain(fromBootstrap)).toEqual(expected);
+
+  // §8.1: bootstrap data carries "the pipeline worker's job_schedules rows for
+  // the vault, wallet, buyback and project jobs. There are no session schedule
+  // rows." Each named family present and enabled; no swarm kind at all.
+  for (const family of ["vault.", "wallet.", "buybacks.", "projects."]) {
+    const present = fromBootstrap.some((r) => r.kind.startsWith(family) && r.enabled);
+    expect({ family, present }).toEqual({ family, present: true });
+  }
+  expect(fromBootstrap.filter((r) => r.kind.startsWith("swarm."))).toEqual([]);
+  // No other table's rows ride along as session scheduling: the file writes no
+  // swarm_sessions, swarm_subjects or swarm_recommendations row.
+  expect(bootstrap).not.toMatch(/INSERT INTO public\.swarm_(sessions|subjects|recommendations) /);
 });

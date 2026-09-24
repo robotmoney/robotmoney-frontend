@@ -44,11 +44,11 @@
 // sampler is hourly for per-IP quota protection, so boot freshness
 // rides on that one immediate enqueue), so the checks POLL until they all
 // pass or the deadline lapses; the deadline derives from the smoke's own
-// cadence profile (scripts/lib/smoke-schedule.ts), not magic numbers.
+// cadence profile (scripts/lib/smoke-cadence.ts), not magic numbers.
 // DEMO_LIVE_SMOKE_DEADLINE_MS overrides it ONLY so the unit self-test
 // (scripts/tests/integration/smoke-live-smoke.test.ts) can prove the red paths quickly.
 import { ROUTES, path as routePath } from "@robotmoney/contract";
-import { resolveSmokeCadence } from "./lib/smoke-schedule.ts";
+import { resolveSmokeCadence } from "./lib/smoke-cadence.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 
@@ -96,7 +96,7 @@ export function evaluateSessions(body: { sessions?: SessionRow[] } | null): stri
     return [
       `swarm: only ${published.length}/${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} sessions published ` +
         `(states: ${body.sessions.map((s) => `${s.date}/${s.subjectId}=${s.state}`).join(", ") || "none"}) — ` +
-        "worker-swarm lane starvation (#101 failure mode) or a lifecycle stall",
+        "a stalled `system-scheduler` (epochs not turning over) or a lifecycle stall",
     ];
   }
   return [];

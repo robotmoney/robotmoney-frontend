@@ -58,6 +58,14 @@ const ALLOWED: Record<string, string> = {
     "asserts regime deletion is refused while allowed current-view deletes are captured",
   "backend/tests/database-role-taxonomy.test.ts":
     "asserts rm_app direct evidence DELETE and TRUNCATE are denied 42501",
+  // The offending statements are `GRANT TRUNCATE ON swarm_members TO rm_app`:
+  // the file GRANTS a destructive privilege precisely so preflight check 2's
+  // denylist can be proved to catch it, then revokes it in a `finally`. No row
+  // is ever deleted or truncated — the privilege is the subject, not the data
+  // (spec §7 check 2, issue #1026 W2). Once W2.2's grant-transition migration
+  // lands, this same grant is what production must NOT have.
+  "backend/tests/db-preflight-checks.test.ts":
+    "GRANTs TRUNCATE so the preflight denylist can be proved to refuse it; deletes nothing",
   // The statements here are DATA, not code: fixture migration bodies handed to
   // preflight's scanner as strings so it can be proved to turn red on them. The
   // file opens no writeable connection to a protected table at all — its only
@@ -68,8 +76,27 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/preflight-0-3-0-append-only-safety.test.ts":
     "fixture SQL asserted to FAIL preflight's destructive-statement scan; never executed",
 
+  // DDL, not the DML this guard's triggers intercept (0032's own header says
+  // so): drops the table outright, in this file's own useCleanDatabase()
+  // clone, to exercise checkSchemaCurrent()'s "never migrated at all" branch.
+  "backend/tests/schema-current.test.ts": "DROP TABLE in an isolated clone, to test the never-migrated branch",
+
   // The migration that installs the guard names every table it protects.
   "backend/migrations/0032_append_only_history.sql": "installs the guard",
+
+  // Same statements as 0032, for the same reason: the snapshot declaration
+  // (spec §8.1, issue #1026 W2) is the canonical description of the schema, so
+  // it carries every `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON <table>`
+  // the guard installs. Those are the protection, not a use of it — the file
+  // creates objects on a blank database and deletes no row anywhere.
+  "backend/schema/snapshot.sql": "the snapshot declaration installs the guard's triggers",
+
+  // Same statements again, for the same reason, in the fixture snapshot the
+  // snapshot tests build on disk: its declaration carries
+  // `CREATE TRIGGER ... BEFORE DELETE OR TRUNCATE ON schema_migrations` so the
+  // fixture is honest about embodying 0032 and preflight check 3a can be run
+  // against it. Installing the guard is not using it — the file deletes no row.
+  "backend/tests/schema-snapshot.test.ts": "its fixture declaration installs the guard's triggers",
 
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":

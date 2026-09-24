@@ -188,7 +188,10 @@ describe("smoke overlay — pgdata volume namespacing (offline)", () => {
     const cfg = configJson([], composeEnv()) as unknown as {
       services: Record<string, { labels?: Record<string, string> }>;
     };
-    for (const svc of ["postgres", "api", "worker-swarm", "worker-analytics", "worker-research"]) {
+    // `system-scheduler` is in this list because it is a STANDING container
+    // (issue #1026): a killed CI job must leave it attributable by label, the
+    // same as every other service the reaper has to find.
+    for (const svc of ["postgres", "api", "worker-analytics", "worker-research", "system-scheduler"]) {
       const labels = cfg.services?.[svc]?.labels ?? {};
       expect({ svc, project: labels["robotmoney.smoke.project"] }).toEqual({ svc, project });
       expect({ svc, env: labels["robotmoney.env"] }).toEqual({ svc, env: environment.class });

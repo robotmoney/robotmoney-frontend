@@ -415,7 +415,7 @@ async function participate(): Promise<void> {
     // the vector this member states is covered by this member's own signature
     // and is reproducible by anyone holding the receipt. The client still never
     // builds canonical bytes locally — the server response is the authority.
-    ...(authored.weights ? { weights: authored.weights } : {}),
+    ...(authored.weights?.length ? { weights: authored.weights } : {}),
     ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);

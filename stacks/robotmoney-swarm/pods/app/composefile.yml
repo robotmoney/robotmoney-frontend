@@ -15,14 +15,13 @@
 # declared secret into every service of every generated composefile
 # regardless of what this source file says — verified by inspecting a real
 # deployment directory, where `website` (no `environment:` block below at
-# all) and every worker lane still receive all 5 secrets. See stack.yml's
-# header comment for what that means for OPENCODE_API_KEY's intended
-# worker-swarm-only scoping.
+# all) and every worker lane still receive every declared secret. See
+# stack.yml's header comment for why no model key is declared at all.
 #
 # All other (non-secret) values are forwarded as ${VAR} / ${VAR:-} — the same
 # env-var SET docker-compose.yml already forwards to `api`, but WITHOUT that
-# file's non-empty inline defaults (its RM_ENV default of "smoke", its swarm
-# cron-schedule defaults, and so on): an inline non-empty default would
+# file's non-empty inline defaults (its RM_ENV default of "smoke", and so
+# on): an inline non-empty default would
 # silently beat `--config` (field guide §5), so an operator must forward the
 # value explicitly (`stack init --config VAR=value`) rather than rely on one
 # baked in here. No non-empty fallback form appears in this file outside the
@@ -60,26 +59,12 @@ services:
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-}
-      SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-      SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${STACK_SECRET_SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
-      # Swarm session-lifecycle cron cadence (issue #208). docker-compose.yml
-      # inline-defaults these to the daily 06:00-08:00 UTC sequence; here they
-      # are forwarded only, per this file's no-inline-default rule above — an
-      # operator must set the cadence via --config.
-      SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-}
-      SWARM_OPEN_SESSION_CRON: ${SWARM_OPEN_SESSION_CRON:-}
-      SWARM_PUBLISH_BRIEF_CRON: ${SWARM_PUBLISH_BRIEF_CRON:-}
-      SWARM_CLOSE_WINDOW_CRON: ${SWARM_CLOSE_WINDOW_CRON:-}
-      SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-}
-      SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-}
-      SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-}
-      # Consensus judge (issue #752): shared OpenCode Zen credential, endpoint,
-      # per-call bound. On/off and model choice are `swarm_judge_config` rows,
-      # not env vars (D22 rule 1).
-      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # No session-scheduling variables are forwarded (issue #1026): a subject's
+      # epoch duration is the whole schedule, set by bootstrap on a blank
+      # database and afterwards only through the admin API (system scheduler
+      # spec §2.2, §2.3). There is no `--config` value to set.
+      # No model key (D52): nothing in `api` judges. The judge is a participant
+      # and takes its own key from credential.json (smoke spec §6.1, §6.2).
       # No STATIC_DIR / _static bind mount here: this stack's app pod carries
       # a dedicated `website` service (website-server/Dockerfile, #892) for
       # static/SPA serving; wiring api's own STATIC_DIR would re-add the

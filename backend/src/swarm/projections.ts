@@ -249,7 +249,7 @@ export function toBrief(row: Row): SwarmBrief {
 // payloads are embedded at publishBrief() and persisted into swarm_briefs.body
 // exactly as they were on the day they were written, so projecting here also
 // shrinks every EXISTING brief, needs no backfill, and leaves what
-// judge-session.ts reads (straight off the row, never through this function)
+// the judge's input reads (judgeInputFromFrozen, straight off the row, never through this function)
 // untouched. `?include=researchSignals` restores the legacy embedded shape for
 // a caller that genuinely wants it inline.
 export function projectBriefResearchSignals(brief: SwarmBrief, includeFull: boolean): SwarmBrief {

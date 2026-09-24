@@ -282,7 +282,7 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
 // worker slot. Points the live source's Base-RPC eth_call at a server that
 // accepts the connection but never responds, with a 200ms timeout.
 test("a stalled live provider fetch aborts at the timeout and fetchVaults degrades to last-persisted (no hang)", async () => {
-  const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Promise<Response>(() => {}) });
   const prevRpc = config.baseRpcUrl;
   const prevTimeout = process.env.LIVE_FETCH_TIMEOUT_MS;
   process.env.LIVE_FETCH_TIMEOUT_MS = "200";

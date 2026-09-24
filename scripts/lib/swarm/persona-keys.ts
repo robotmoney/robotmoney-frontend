@@ -24,13 +24,11 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PersonaIdentity } from "./credential-file.ts";
 
-export interface PersonaIdentity {
-  /** Raw Ed25519 public key, base64 — the form /api/swarm/register takes. */
-  publicKeyB64: string;
-  /** Private key as a JWK, seeded into the member container's client keystore. */
-  privateJwk: Record<string, unknown>;
-}
+// The identity type lives with the credential file that carries it (D52);
+// re-exported so the fixture's importers keep one name for it.
+export type { PersonaIdentity };
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "persona-keys.json");
 

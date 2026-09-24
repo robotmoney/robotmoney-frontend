@@ -1,3 +1,6 @@
+# Experimental configuration for the unadopted external-stack proposal. This
+# mechanism is not in use today and is not part of the adopted smoke deployment
+# design (docs/technical/smoke-production-spec.md, approved but unshipped).
 name: robotmoney-swarm
 description: "Robot Money — member-facing swarm: api, website, worker lanes"
 
@@ -20,8 +23,8 @@ pods:
 # robotmoney/devops). DATABASE_URL is an external secret below, exactly like
 # every other credential whose counterpart lives outside the deployment.
 
-# A secret declared here has NO per-container ACL
-# (docs/technical/stack-orchestrator.md §6), and it is WORSE than "opt-in via
+# A secret declared here has NO per-container ACL in the external tool version
+# described below, and it is WORSE than "opt-in via
 # ${STACK_SECRET_<NAME>:-}" — verified empirically against stack 2.0.0-47a4772
 # by inspecting a real `stack deploy` deployment directory's generated
 # composefiles: `stack deploy` itself writes an `environment:` entry for
@@ -33,16 +36,13 @@ pods:
 # pods/workers/composefile.yml below). A pod composefile choosing not to
 # reference a secret documents intent only — it is not an isolation boundary
 # stack enforces or even partially respects at deploy time.
-# docker-compose.yml deliberately keeps OPENCODE_API_KEY / SWARM_JUDGE_* off
-# the shared x-worker-env anchor, on worker-swarm's own environment block
-# only, so worker-analytics/worker-research — which never call a model — never
-# see a live inference credential (issue #757 review). This stack's
-# pods/workers/composefile.yml preserves that same scoping by choice, at the
-# composefile-authoring level only — every worker lane and website still
-# receive OPENCODE_API_KEY (and every other declared secret) in their actual
-# process environment once deployed via `stack`, regardless of this file's
-# choices. Accepted as a conscious tradeoff of adopting stack
-# (scaffold-stack.md §1.1), not a bug to work around in this issue.
+# NO MODEL KEY IS DECLARED (D52). Because `stack deploy` writes every declared
+# secret into every container, declaring OPENCODE_API_KEY here would hand a
+# model key to `api`, the worker lanes and `website` alike, and no service in
+# this stack calls a model: the judge is a participant that takes its own key
+# from credential.json (smoke spec §6.1, §6.2), and participants are not part
+# of this stack. The secret slot is removed rather than left for a future pod
+# to pick up by accident.
 # ADMIN_TOKEN / AUTOMATION_TOKEN /
 # ANALYTICS_TOKEN are intentionally NOT declared here: their generation
 # ownership (stack `generate` vs. the credential doctor) is an open decision
@@ -58,11 +58,5 @@ pods:
 secrets:
   DATABASE_URL:
     external: true
-  OPENCODE_API_KEY:
-    external: true
   BASE_RPC_URL:
-    external: true
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:
-    external: true
-  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:
     external: true

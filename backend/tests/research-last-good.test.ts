@@ -84,7 +84,7 @@ function startRejectingServer() {
   let failMethod: string | null = null;
   let failPath: string | null = null;
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       if (failMethod && failPath && req.method === failMethod && url.pathname === failPath) {
@@ -112,7 +112,7 @@ test(
       ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
     };
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         const r = await handleAnalytics(req, url);
@@ -337,7 +337,7 @@ test(
       ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
     };
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         const r = await handleAnalytics(req, url);

@@ -59,6 +59,7 @@
 //   bun run scripts/prod-bootstrap.ts
 // (wired as `bun run prod-bootstrap` in package.json)
 import { migrate } from "../src/db/migrate.ts";
+import { seed } from "../src/db/seed.ts";
 import { sql, closeDb } from "../src/db/client.ts";
 import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
 import { appendOnlyRefusalLines, checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
@@ -143,11 +144,19 @@ async function getAppliedMigrations(): Promise<Set<string>> {
 async function runMigrationsStep(): Promise<StepResult> {
   const before = await getAppliedMigrations();
   await migrate();
+  // migrate() no longer seeds — this step keeps migrate+seed together so a
+  // standalone bootstrap seats the canonical rows (job_schedules, and the
+  // SWARM_SEED_ROSTER seats the v0 backfill reconciles) before the later steps
+  // look at them. `--already-migrated` skips this whole step for a caller that
+  // has already migrated and seeded elsewhere in its own lifecycle — smoke no
+  // longer calls this script at all (the archive-adopt pipeline retired from
+  // smoke's scenario machinery), so today that is a manual invocation only.
+  await seed();
   const after = await getAppliedMigrations();
   const newly = [...after].filter((n) => !before.has(n));
   return {
     status: "success",
-    summary: `${newly.length} new migration(s) applied (${after.size} total)`,
+    summary: `${newly.length} new migration(s) applied (${after.size} total), then seeded`,
   };
 }
 

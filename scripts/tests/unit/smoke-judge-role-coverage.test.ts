@@ -1,26 +1,20 @@
-// Issue #845 — `bun smoke` never granted the judge role or flipped judge
-// mode, so the validator/judge flow had unit and DB-integration coverage
-// only, never a booted live stack.
+// Issue #845 once wired "judge role coverage" into both smoke paths: session.ts
+// `main()` granted `themis` the judge role and flipped `swarm_judge_config.mode`
+// to `enforce` around session 2, and smoke-main.ts's CI twin branch did the
+// same around its one session, each asserting that a MODEL-authored judgement
+// landed.
 //
-// THE TWO CALLERS. `--db smoke-twin` REQUIRES `--smoke` (smoke-db-mode.ts),
-// so it runs a MATERIALLY DIFFERENT branch than plain `bun smoke` /
-// `bun smoke -- --db external`: the `process.env.CI && smokeMode` block in
-// scripts/lib/smoke-main.ts drives ONE session straight through `runSession`
-// with the restored archive personas, never calling `scripts/lib/swarm/
-// session.ts`'s `main()` at all — so the coverage has to be wired at BOTH
-// call sites, not just inside `main()`. Both share the grant/flip/assert/
-// restore sequence itself (`runJudgeRoleCoverage`, exported from session.ts)
-// so there is exactly one implementation of that sequence to get right.
+// Issue #1026 removes it (D48 as waived by D53, criterion 6). Nothing on a
+// booted stack judges inline any more — the judge is a participant (smoke spec
+// §6.2) — so no booted stack can produce the row those assertions waited for,
+// and the mode flip was the one place a driver manufactured a judge-mode write.
+// Judge coverage returns with the participant judge, on the participant's own
+// path; until then this file pins the ABSENCE, at both former call sites, so the
+// flip cannot quietly come back.
 //
-// runSession and runJudgeRoleCoverage's effects drive docker, the job queue
-// and live inference, so they cannot be executed here (that's what the
-// required CI job proves for the demo path — `--db smoke-twin` has no CI job
-// at all, see the PR). What CAN be graded hermetically is the SHAPE: that
-// each caller wires the grant BEFORE its session runs, targeting a member the
-// session's own roster treats as absent. Each grader below is pinned by
-// source-text order and red-controlled (same technique
-// scripts/tests/unit/swarm-session-judge-step.test.ts uses to pin
-// runJudgeStep's position in runSession) so it cannot go vacuously green.
+// Graded on source text (the sessions drive docker and live inference, so they
+// cannot run here), with every grader red-controlled against a planted copy of
+// the retired shape so a green result is never vacuous.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,159 +22,85 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
 const smokeMainSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
+const smokeModeSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-mode.ts"), "utf8");
 
-describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared grant/flip/assert/restore sequence", () => {
-  const FN_START = "export async function runJudgeRoleCoverage(";
-  const GRANT = 'setMemberRole(memberId, "judge"';
-  const FLIP_SHADOW = 'setJudgeMode("shadow"';
-  const COUNT_JUDGEMENTS = "countJudgements(judged.sessionId";
-  // Issue #922: a SECOND assertion alongside #845's row-count check — the
-  // landed judgement must NAME the member this call granted the role to, not
-  // merely exist.
-  const IDENTITY_READ = "latestJudgedByMemberId(judged.sessionId";
-  const IDENTITY_CHECK = "judgedByMemberId !== memberId";
-  const RESTORE_MODE = "setJudgeMode(restoreJudgeMode";
-  const REVOKE = 'setMemberRole(memberId, "member"';
+/** Code only: comment lines dropped, so prose naming a retired call is not a call. */
+function codeOnly(src: string): string {
+  return src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+}
 
-  function order(src: string) {
-    const start = src.indexOf(FN_START);
-    return {
-      fnStart: start,
-      grant: src.indexOf(GRANT),
-      flip: src.indexOf(FLIP_SHADOW),
-      // The session under test is whatever `runJudgedSession()` returns — a
-      // caller-supplied callback, not a literal call this function makes.
-      count: src.indexOf(COUNT_JUDGEMENTS),
-      identityRead: src.indexOf(IDENTITY_READ),
-      identityCheck: src.indexOf(IDENTITY_CHECK),
-      restore: src.indexOf(RESTORE_MODE),
-      revoke: src.indexOf(REVOKE),
-    };
-  }
+/** The retired coverage calls a source still makes or declares. */
+const RETIRED = [
+  "runJudgeRoleCoverage",
+  "setJudgeMode",
+  "setJudgeModel",
+  "enableTwinJudge",
+  "setMemberRole",
+  "setMemberOperator",
+  "judgeCoverageCandidate",
+  "withMemberAbsent",
+];
+function retiredCalls(src: string): string[] {
+  const code = codeOnly(src);
+  return RETIRED.filter((name) => new RegExp(`\\b${name}\\s*\\(`).test(code));
+}
 
-  const o = order(sessionSrc);
+describe("session.ts main() runs session 2 plainly — no judge-role grant, no mode flip", () => {
+  const SESSION_2 = 'await runSession(subjects[1], 2, { rail, members, initializer: "simulation", cadence });';
 
-  test("the function exists and every landmark is present", () => {
-    expect(o.fnStart).toBeGreaterThan(-1);
-    for (const [name, at] of Object.entries(o)) expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
+  test("session 2 is a bare runSession call, not wrapped in a coverage callback", () => {
+    expect(sessionSrc).toContain(SESSION_2);
   });
 
-  test("grant and flip happen BEFORE the judgement count is read", () => {
-    expect(o.grant).toBeLessThan(o.count);
-    expect(o.flip).toBeLessThan(o.count);
+  test("session.ts declares and calls none of the retired coverage functions", () => {
+    expect(retiredCalls(sessionSrc)).toEqual([]);
   });
 
-  test("the identity check runs AFTER the row-count check, alongside it rather than replacing it", () => {
-    expect(o.count).toBeLessThan(o.identityRead);
-    expect(o.identityRead).toBeLessThan(o.identityCheck);
-    // COUNT_JUDGEMENTS itself must still be a real, standalone assertion —
-    // this fails if a future edit folds the count check away entirely.
-    expect(sessionSrc).toContain("if (!judgementCount || judgementCount < 1)");
-  });
-
-  test("restore and revoke happen AFTER both assertions, inside a finally", () => {
-    expect(o.identityCheck).toBeLessThan(o.restore);
-    expect(o.identityCheck).toBeLessThan(o.revoke);
-    expect(sessionSrc.slice(o.identityCheck, o.restore)).toContain("} finally {");
-  });
-
-  test("control: the grader fails on a definition with the grant removed", () => {
-    const broken = sessionSrc.replace(GRANT, GRANT.replace("judge", "member"));
-    expect(order(broken).grant).toBe(-1);
-    expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
-  });
-
-  test("control: the grader fails on a definition with the identity check removed", () => {
-    const broken = sessionSrc.replace(IDENTITY_CHECK, IDENTITY_CHECK.replace("judgedByMemberId", "somethingElse"));
-    expect(order(broken).identityCheck).toBe(-1);
+  test("red control: the retired wrapper shape is caught", () => {
+    const planted = sessionSrc.replace(
+      SESSION_2,
+      'await runJudgeRoleCoverage("themis", rail.automationToken, () =>\n    runSession(subjects[1], 2, { rail, members, initializer: "simulation", cadence }));',
+    );
+    expect(planted).not.toBe(sessionSrc);
+    expect(retiredCalls(planted)).toEqual(["runJudgeRoleCoverage"]);
   });
 });
 
-describe("session.ts main() wires session 2 through runJudgeRoleCoverage, targeting themis (issues #845, #922)", () => {
-  const CALL = 'runJudgeRoleCoverage("themis"';
-  const OPERATOR_CALL = 'setMemberOperator("themis", "robotmoney"';
-  const SESSION2 = "runSession(subjects[1], 2,";
-
-  test("main() calls it, immediately wrapping the session-2 runSession call", () => {
-    const callAt = sessionSrc.indexOf(CALL);
-    const session2At = sessionSrc.indexOf(SESSION2);
-    expect(callAt).toBeGreaterThan(-1);
-    expect(session2At).toBeGreaterThan(-1);
-    expect(callAt).toBeLessThan(session2At);
-    // No other runSession call sits between the two — session 2 IS the call
-    // runJudgeRoleCoverage's callback makes.
-    const between = sessionSrc.slice(callAt, session2At);
-    expect(between).not.toContain("runSession(");
-  });
-
-  test("main() sets themis's operator to 'robotmoney' BEFORE granting her the judge role (issue #922)", () => {
-    const operatorAt = sessionSrc.indexOf(OPERATOR_CALL);
-    const callAt = sessionSrc.indexOf(CALL);
-    expect(operatorAt).toBeGreaterThan(-1);
-    expect(operatorAt).toBeLessThan(callAt);
-  });
-
-  test("targets 'themis' specifically — the handle #918's judgeSessionAdmin resolves — not an arbitrary role=judge member", () => {
-    expect(sessionSrc.indexOf(CALL)).toBeGreaterThan(-1);
-    // The old #845 target must actually be gone from this call site, not just
-    // coexisting with the new one.
-    expect(sessionSrc.indexOf('runJudgeRoleCoverage("draco"')).toBe(-1);
-  });
-
-  test("control: fails if the call is renamed away", () => {
-    const broken = sessionSrc.replace(CALL, CALL.replace("runJudgeRoleCoverage", "notRunJudgeRoleCoverage"));
-    expect(broken.indexOf(CALL)).toBe(-1);
-  });
-});
-
-describe("smoke-main.ts's `--smoke` (twin-capable) CI branch wires the SAME coverage (issue #845)", () => {
-  // `--db smoke-twin` requires `--smoke`; `if (process.env.CI && smokeMode)`
-  // is therefore the ONLY branch that path's `bun run scripts/smoke.ts`
-  // invocation reaches — `main()`'s coverage (pinned above) never runs for
-  // it. This block exists so removing the twin-side wiring alone still fails
-  // a fast hermetic test, not just a live rehearsal nobody runs in CI.
-  const smokeModeSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-mode.ts"), "utf8");
-  const CI_SMOKE_BRANCH = "if (process.env.CI && smokeMode) {";
-  const CANDIDATE_CALL = "judgeCoverageCandidate(roster)";
-  const ABSENT_CALL = "withMemberAbsent(members, judgeCandidate.id)";
-  const COVERAGE_CALL = "session.runJudgeRoleCoverage(judgeCandidate.id";
-  const RUN_SESSION = "session.runSession(scenario.subjects[0]!, 1,";
+describe("smoke-main.ts's CI dump branch runs one plain session — no judge coverage", () => {
+  const CI_DUMP_BRANCH = 'if (process.env.CI && dataPath.kind === "smoke-twin") {';
+  const RUN_SESSION = 'await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: "adopt", cadence });';
 
   function sliceOfBranch(src: string): string {
-    const start = src.indexOf(CI_SMOKE_BRANCH);
+    const start = src.indexOf(CI_DUMP_BRANCH);
     expect(start).toBeGreaterThan(-1);
-    const nextBranch = src.indexOf("if (process.env.CI && !smokeMode)", start);
+    const nextBranch = src.indexOf('if (process.env.CI && dataPath.kind !== "smoke-twin")', start);
     expect(nextBranch).toBeGreaterThan(start);
     return src.slice(start, nextBranch);
   }
 
-  const branch = sliceOfBranch(smokeMainSrc);
-
-  test("smoke-mode.ts selects the judge candidate by a stable handle, not roster position", () => {
-    expect(smokeModeSrc).toContain('export const JUDGE_COVERAGE_HANDLE = "noop-analyst"');
-    expect(smokeModeSrc).toContain("export function judgeCoverageCandidate(");
-    expect(smokeModeSrc).toContain("export function withMemberAbsent(");
+  test("the branch runs the restored personas through one bare runSession", () => {
+    const branch = codeOnly(sliceOfBranch(smokeMainSrc));
+    expect(branch).toContain(RUN_SESSION);
+    expect(branch.indexOf("runSession(")).toBe(branch.lastIndexOf("runSession("));
   });
 
-  test("the branch selects a candidate, marks it absent BEFORE running the session, through runJudgeRoleCoverage", () => {
-    const candidateAt = branch.indexOf(CANDIDATE_CALL);
-    const absentAt = branch.indexOf(ABSENT_CALL);
-    const coverageAt = branch.indexOf(COVERAGE_CALL);
-    const runAt = branch.indexOf(RUN_SESSION);
-    for (const [name, at] of Object.entries({ candidateAt, absentAt, coverageAt, runAt })) {
-      expect(`${name}:${at >= 0}`).toBe(`${name}:true`);
-    }
-    expect(candidateAt).toBeLessThan(coverageAt);
-    expect(coverageAt).toBeLessThan(runAt);
-    // The only runSession-family call in this branch is the one inside the
-    // coverage callback — no bare, unwrapped call bypasses it.
-    expect(branch.indexOf(RUN_SESSION)).toBe(branch.lastIndexOf(RUN_SESSION));
+  test("smoke-main.ts calls none of the retired coverage functions anywhere", () => {
+    expect(retiredCalls(smokeMainSrc)).toEqual([]);
   });
 
-  test("control: the grader fails on a smoke-main.ts with the twin-side wiring removed", () => {
-    const broken = smokeMainSrc.replace(COVERAGE_CALL, COVERAGE_CALL.replace("runJudgeRoleCoverage", "runSession"));
-    const brokenBranch = sliceOfBranch(broken);
-    expect(brokenBranch.indexOf(COVERAGE_CALL)).toBe(-1);
-    expect(smokeMainSrc.length).toBeGreaterThan(1000); // the scan is over real text
+  test("smoke-mode.ts no longer exports the coverage candidate helpers", () => {
+    expect(smokeModeSrc).not.toContain("JUDGE_COVERAGE_HANDLE");
+    expect(retiredCalls(smokeModeSrc)).toEqual([]);
+  });
+
+  test("red control: the retired branch shape is caught", () => {
+    const planted = smokeMainSrc.replace(
+      RUN_SESSION,
+      "const judgeCandidate = judgeCoverageCandidate(roster);\n" +
+        "    await session.runJudgeRoleCoverage(judgeCandidate.id, automationToken, () =>\n" +
+        '      session.runSession(scenario.subjects[0]!, 1, { rail, members: withMemberAbsent(members, judgeCandidate.id), initializer: "adopt", cadence }));',
+    );
+    expect(planted).not.toBe(smokeMainSrc);
+    expect(retiredCalls(sliceOfBranch(planted))).toEqual(["runJudgeRoleCoverage", "judgeCoverageCandidate", "withMemberAbsent"]);
   });
 });

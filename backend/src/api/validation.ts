@@ -348,7 +348,7 @@ export function parsePositiveNumber(value: unknown, fallback: number): number {
 export function parseSubjectCreate(body: JsonObject | null): {
   id: string; name: string; operator?: string; homepage?: string; xHandle?: string; thesisBlurb?: string;
   wallets?: unknown; nftContracts?: unknown; source?: unknown; recommendationType?: string;
-  linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string;
+  linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string; epochDuration?: number;
 } | null {
   if (!body) return null;
   const id = requiredString(body, "id", 100);
@@ -367,6 +367,11 @@ export function parseSubjectCreate(body: JsonObject | null): {
     linkedMemberId: optionalString(body, "linkedMemberId", 100),
     structuralNotes: body.structuralNotes,
     lastReviewed: optionalString(body, "lastReviewed", 10),
+    // Passed through unvalidated ON PURPOSE: createSubjectAdmin refuses a
+    // non-positive or fractional duration with a message naming the field
+    // (scheduler spec §2.4), and a second check here would be a second place
+    // for that rule to drift from migration 0067's CHECK.
+    epochDuration: typeof body.epochDuration === "number" ? body.epochDuration : undefined,
   };
 }
 
@@ -532,14 +537,13 @@ export function validateMemberProfile(body: JsonObject | null): ValidationResult
   if (body.operator !== undefined) {
     const v = requiredString(body, "operator", 200);
     if (!v) return { ok: false, error: "operator must be a non-empty string up to 200 chars" };
-    // Issue #925, defense in depth. `judge-session.ts`'s in-house exemption no
-    // longer reads `operator` at all (it keys off `handle`, which self-service
-    // can never set), so this check gates nothing security-relevant by
-    // itself. It exists only because `GET /api/swarm/members` renders
-    // `operator` verbatim (issue #918) — refusing the literal in-house value
-    // stops an ordinary member from cosmetically forging itself as
-    // 'robotmoney'-operated on the public roster, while an ordinary operator
-    // string ('peaq', 'self', ...) still goes through untouched.
+    // Issue #925, re-armed by D52. The judge's third-party gate is keyed on
+    // `operator` (swarm/domain.ts submitJudgement, smoke-production-spec.md
+    // §6.2), so the in-house literal is security-relevant: a member that could
+    // write it into its own row would judge while third-party judging is off.
+    // `updateMemberProfile` refuses it at the writer as well; this is the
+    // route's half, and an ordinary operator string ('peaq', 'self', ...) still
+    // goes through untouched.
     if (v.toLowerCase() === "robotmoney") {
       return { ok: false, error: "operator cannot be set to 'robotmoney' via self-service" };
     }

@@ -8,6 +8,7 @@
 //   - the environment handed to a compose child is BUILT, not inherited, so an
 //     ambient provider key or an operator's own admin token can never reach a
 //     container.
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,11 +32,11 @@ import {
   migrateArgs,
   MEMBER_AGENT_SERVICE,
   pgReadyArgs,
-  LAUNCHER_SERVICES,
   servicesFor,
   upArgs,
   WORKER_LANE_SERVICES,
   PRODUCER_SERVICES,
+  SCHEDULER_SERVICES,
   type StackConfig,
 } from "../../stack/index.ts";
 
@@ -58,24 +59,25 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
 }
 
 describe("stack profiles", () => {
-  test("core is exactly postgres + api + website-server — no worker lane, no member-agent, no launcher", () => {
+  test("core is exactly postgres + api + website-server — no worker lane, no member-agent", () => {
     expect(servicesFor("core")).toEqual(["postgres", "api", "website-server"]);
     for (const lane of WORKER_LANE_SERVICES) expect(servicesFor("core")).not.toContain(lane);
     expect(servicesFor("core")).not.toContain("member-agent");
-    // Issue #1012: `core` never judges, so it never needs the one service that
-    // holds the Docker socket. Letting the socket into the cheapest profile
-    // would put it on every bring-up that only wanted an api.
-    for (const svc of LAUNCHER_SERVICES) expect(servicesFor("core")).not.toContain(svc);
   });
 
-  test("full is core plus worker lanes, the independent producer and the agent launcher, in order", () => {
-    expect(servicesFor("full")).toEqual([
-      ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
-    ]);
+  test("full is core plus worker lanes, the clock and the independent producer, in order", () => {
+    expect(servicesFor("full"))
+      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
-    // A `full` stack judges, and every judging starts a container through this
-    // service — so it must be RUNNING, not merely built (issue #1012).
-    expect(servicesFor("full")).toContain("agent-launcher");
+  });
+
+  test("the clock is in `full` but is NOT a worker lane (issue #1026)", () => {
+    // The distinction is load-bearing: anything reasoning about lanes (the
+    // external-pg `depends_on` surgery, the DB-writer quiesce list) must not
+    // pick it up, and anything reasoning about the full stack must.
+    expect(servicesFor("full")).toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).not.toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).toEqual(["worker-analytics", "worker-research"]);
   });
 
   test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {
@@ -188,9 +190,49 @@ describe("buildSpawnEnv", () => {
 });
 
 describe("argv builders", () => {
+  // A boot on a host whose checkout carries a deployment `.env` put that file's
+  // WORKER_DATABASE_URL into every worker lane of a twin stack that has no
+  // `postgres` service, and the lanes died in DNS. buildSpawnEnv's allowlist
+  // could not have stopped it: compose loads the project directory's `.env`
+  // itself. Neutralising it belongs in argv, next to `-p`/`-f`.
+  test("composeArgs neutralises compose's own .env auto-load", () => {
+    for (const argv of [composeArgs("p"), composeArgs("p", ["a.yml"])]) {
+      const i = argv.indexOf("--env-file");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argv[i + 1]).toBe("/dev/null");
+      // Before the subcommand, which composeArgs is only ever a prefix of.
+      expect(i).toBeLessThan(argv.indexOf("-p"));
+    }
+  });
+
+  // The prefix must be built in ONE place, or the `--env-file` above is only as
+  // good as whoever remembered it. scripts/lib/swarm/session.ts had a
+  // hand-rolled `["docker", "compose", "-p", …]` that spawned `run --rm` — a
+  // container-creating call, interpolating the compose files, outside this
+  // module's only guarantee.
+  test("no hand-rolled compose prefix anywhere under scripts/", () => {
+    const scriptsDir = join(import.meta.dir, "..", "..");
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "tests" && entry.name !== "node_modules") walk(full);
+        } else if (entry.name.endsWith(".ts") && full !== join(scriptsDir, "stack", "config.ts")) {
+          // `"compose", "-p"` — a prefix assembled by hand rather than by composeArgs().
+          if (/"compose",\s*"-p"/.test(readFileSync(full, "utf8"))) offenders.push(full.slice(scriptsDir.length + 1));
+        }
+      }
+    };
+    walk(scriptsDir);
+    expect(offenders).toEqual([]);
+  });
+
   test("composeArgs puts the topology in argv, not the environment", () => {
-    expect(composeArgs("p", ["a.yml", "b.yml"])).toEqual(["compose", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
-    expect(composeArgs("p")).toEqual(["compose", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
+    expect(composeArgs("p", ["a.yml", "b.yml"]))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
+    expect(composeArgs("p"))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {
@@ -215,12 +257,30 @@ describe("argv builders", () => {
   });
 
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
-    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-smoke-schedules"])).toEqual([
+    // The trailing script argument is a placeholder for the pass-through shape
+    // only. It used to be `--seed-smoke-schedules`, a flag src/db/migrate.ts
+    // stopped parsing in 17e978bf; no caller passes one now (issue #1026).
+    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--placeholder-arg"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
       "-e", "DEMO_SEED_PROJECTS=1",
-      "api", "bun", "run", "src/db/migrate.ts", "--seed-smoke-schedules",
+      "api", "bun", "run", "src/db/migrate.ts", "--placeholder-arg",
     ]);
-    expect(migrateArgs()).toEqual(["run", "--rm", "--no-deps", "-T", "api", "bun", "run", "src/db/migrate.ts"]);
+    expect(migrateArgs()).toEqual([
+      "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
+      "api", "bun", "run", "src/db/migrate.ts",
+    ]);
+  });
+
+  test("the migration credential is named BARE, so it never enters docker's argv", () => {
+    // `-e VAR=secret` would be readable in `ps` for the life of the call.
+    // `-e VAR` makes docker read it from its own environment instead.
+    const args = migrateArgs();
+    const i = args.indexOf("MIGRATE_DATABASE_URL");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i - 1]).toBe("-e");
+    expect(args.some((a) => a.startsWith("MIGRATE_DATABASE_URL="))).toBe(false);
   });
 });
 

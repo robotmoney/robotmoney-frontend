@@ -1,0 +1,371 @@
+// The registered query interface (spec §7.1) — the ONE place a database
+// statement may be issued from, and the input to preflight check 2.
+//
+// These tests are the specification for src/db/registry.ts, written against
+// the module as it is DOCUMENTED (issue #1026 W2). The module is implemented
+// and application modules register their call sites through it;
+// tests/swarm-judge-config-registry.test.ts reads the first real declarations.
+//
+// WHY THE ASSERTIONS ARE ABOUT SHAPE AND NOT ABOUT SQL. §7.1 is explicit that
+// the registry "is not a runtime proof: execution under each role against a
+// disposable database is a separate CI test" (W2.8). So nothing here executes a
+// registered statement. What is pinned is the three properties check 2 depends
+// on: a declaration cannot be ambiguous, every declaration is enumerable, and
+// the fold into (role → object → privileges) is a union rather than a
+// last-writer-wins overwrite.
+import { describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import {
+  registerQuery,
+  registeredSites,
+  requiredPrivileges,
+  type QueryDeclaration,
+  type RmRole,
+} from "../src/db/registry.ts";
+
+/** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
+ *  is cluster provisioning only (§3, §9.1), so neither may ever appear. */
+const TAXONOMY_ROLES: readonly RmRole[] = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"];
+
+/** Unique per call so one test's registration cannot decide another's outcome —
+ *  `registerQuery` refuses a duplicate id, which is itself under test below. */
+let seq = 0;
+function site(name: string): string {
+  return `tests/db-registry:${name}_${++seq}`;
+}
+
+function declaration(over: Partial<QueryDeclaration> = {}): QueryDeclaration {
+  return {
+    role: "rm_app",
+    object: "jobs",
+    privileges: ["SELECT"],
+    site: site("fixture"),
+    purpose: "Fixture declaration for the registry specification tests.",
+    callers: ["src/api/routes/fixture"],
+    ...over,
+  };
+}
+
+describe("registerQuery — one declaration per call site", () => {
+  test("returns a runner carrying back exactly the declaration it was given", () => {
+    const decl = declaration({ role: "rm_worker", object: "job_schedules", privileges: ["SELECT", "UPDATE"] });
+    const query = registerQuery(decl);
+    expect(query.declaration).toEqual(decl);
+  });
+
+  test("hands back no route to the underlying client — `run` is the whole surface", () => {
+    const query = registerQuery(declaration());
+    // An escape hatch is how the registry stops being complete (module header),
+    // so the runner exposes the declaration and `run`, and nothing else.
+    expect(Object.keys(query).sort()).toEqual(["declaration", "run"]);
+  });
+
+  test("refuses a second registration of the same site id with a different declaration", () => {
+    const id = site("duplicate");
+    registerQuery(declaration({ site: id, privileges: ["SELECT"] }));
+    expect(() => registerQuery(declaration({ site: id, privileges: ["SELECT", "INSERT"] }))).toThrow(id);
+  });
+
+  test("accepts an identical re-registration of the same site, because it is not ambiguous", () => {
+    const id = site("identical");
+    const decl = declaration({ site: id });
+    const first = registerQuery(decl);
+    const second = registerQuery({ ...decl });
+    expect(second.declaration).toEqual(first.declaration);
+  });
+
+  test("refuses an empty privilege list — a statement needing nothing does not touch the object it named", () => {
+    expect(() => registerQuery(declaration({ privileges: [] }))).toThrow("privileges");
+  });
+
+  test("refuses a schema-qualified object, which would resolve outside `public` through to_regclass", () => {
+    expect(() => registerQuery(declaration({ object: "public.jobs" }))).toThrow("public.jobs");
+  });
+
+  test("refuses a quoted object name", () => {
+    expect(() => registerQuery(declaration({ object: '"jobs"' }))).toThrow("object");
+  });
+
+  test("refuses an object name containing whitespace", () => {
+    expect(() => registerQuery(declaration({ object: "jobs " }))).toThrow("object");
+  });
+});
+
+describe("callers — every declaration names the entry modules that may reach it", () => {
+  // Spec §6.2: "nothing but the admin route writes `swarm_judge_config`". A
+  // statement about a call site can only be asserted from the registry if the
+  // registry records it, so a declaration with no caller is refused rather
+  // than read as "anyone".
+  test("a declaration carries its callers back, frozen", () => {
+    const query = registerQuery(declaration({ callers: ["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"] }));
+    expect(query.declaration.callers).toEqual(["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"]);
+    expect(Object.isFrozen(query.declaration.callers)).toBe(true);
+  });
+
+  test("refuses an empty callers list", () => {
+    expect(() => registerQuery(declaration({ callers: [] }))).toThrow("declared no callers");
+  });
+
+  test("refuses a missing callers field — a JS caller cannot skip the declaration the type demands", () => {
+    const { callers: _omitted, ...rest } = declaration();
+    expect(() => registerQuery(rest as unknown as QueryDeclaration)).toThrow("declared no callers");
+  });
+
+  test("refuses a caller that is not a module id under src/ or scripts/", () => {
+    for (const bad of ["swarm-admin", "src/api/routes/swarm-admin.ts", "/src/api/routes/swarm-admin", "src/", "tests/x", ""]) {
+      expect(() => registerQuery(declaration({ callers: [bad] })), bad).toThrow("caller");
+    }
+  });
+
+  test("refuses the same caller twice", () => {
+    expect(() => registerQuery(declaration({ callers: ["src/api/routes/a", "src/api/routes/a"] }))).toThrow("same caller twice");
+  });
+
+  test("a re-registration that changes only the callers is a DIFFERENT declaration, and is refused", () => {
+    const id = site("callers_changed");
+    registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin"] }));
+    expect(() => registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin", "src/worker/loop"] })))
+      .toThrow(id);
+  });
+});
+
+describe("registeredSites — the enumeration CI reads", () => {
+  test("enumerates every declaration made, in registration order", () => {
+    const first = declaration({ site: site("order_a"), object: "jobs" });
+    const second = declaration({ site: site("order_b"), object: "job_schedules", role: "rm_worker" });
+    registerQuery(first);
+    registerQuery(second);
+
+    const all = registeredSites();
+    const a = all.findIndex((d) => d.site === first.site);
+    const b = all.findIndex((d) => d.site === second.site);
+    expect(a).toBeGreaterThanOrEqual(0);
+    expect(b).toBe(a + 1);
+    expect(all[a]).toEqual(first);
+    expect(all[b]).toEqual(second);
+  });
+
+  test("returns declarations and never the runners, so enumerating cannot execute a call site", () => {
+    registerQuery(declaration({ site: site("no_runner") }));
+    for (const entry of registeredSites()) {
+      expect(entry).not.toHaveProperty("run");
+    }
+  });
+
+  test("returns a frozen array, so a caller cannot edit the evidence check 2 reads", () => {
+    registerQuery(declaration({ site: site("frozen") }));
+    expect(Object.isFrozen(registeredSites())).toBe(true);
+  });
+
+  test("every declared role is one of the four §3 roles — never `doadmin`, never `rm_migrator`", () => {
+    for (const entry of registeredSites()) {
+      expect(TAXONOMY_ROLES).toContain(entry.role);
+    }
+  });
+
+  test("every declared privilege is spelled the way has_table_privilege spells it", () => {
+    const catalog = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+    for (const entry of registeredSites()) {
+      for (const privilege of entry.privileges) {
+        expect(catalog).toContain(privilege);
+      }
+    }
+  });
+
+  test("site ids are unique across the whole process", () => {
+    const ids = registeredSites().map((d) => d.site);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("requiredPrivileges — the fold check 2 consumes", () => {
+  test("unions every call site's privileges for one role on one relation", () => {
+    registerQuery(declaration({ site: site("fold_read"), role: "rm_app", object: "jobs", privileges: ["SELECT"] }));
+    registerQuery(
+      declaration({ site: site("fold_write"), role: "rm_app", object: "jobs", privileges: ["INSERT", "UPDATE"] }),
+    );
+
+    const byObject = requiredPrivileges().get("rm_app");
+    expect(byObject).toBeDefined();
+    const jobs = byObject?.get("jobs");
+    expect(jobs).toBeDefined();
+    // A union, not a last-writer-wins overwrite: the reader that only SELECTs
+    // and the writer that INSERTs are both real requirements on `jobs`.
+    expect([...(jobs ?? [])].sort()).toEqual(expect.arrayContaining(["INSERT", "SELECT", "UPDATE"]));
+  });
+
+  test("keeps roles apart — rm_worker's declarations never appear under rm_app", () => {
+    const relation = `rm_registry_fold_probe_${++seq}`;
+    registerQuery(declaration({ site: site("role_split"), role: "rm_worker", object: relation, privileges: ["UPDATE"] }));
+
+    const map = requiredPrivileges();
+    expect([...(map.get("rm_worker")?.get(relation) ?? [])]).toEqual(["UPDATE"]);
+    expect(map.get("rm_app")?.get(relation)).toBeUndefined();
+  });
+
+  test("keeps relations apart — a privilege on one table is not required on another", () => {
+    const one = `rm_registry_rel_one_${++seq}`;
+    const two = `rm_registry_rel_two_${++seq}`;
+    registerQuery(declaration({ site: site("rel_one"), object: one, privileges: ["SELECT"] }));
+    registerQuery(declaration({ site: site("rel_two"), object: two, privileges: ["DELETE"] }));
+
+    const byObject = requiredPrivileges().get("rm_app");
+    expect([...(byObject?.get(one) ?? [])]).toEqual(["SELECT"]);
+    expect([...(byObject?.get(two) ?? [])]).toEqual(["DELETE"]);
+  });
+
+  test("never yields an empty privilege set, because registerQuery refuses one", () => {
+    registerQuery(declaration({ site: site("nonempty") }));
+    for (const [, byObject] of requiredPrivileges()) {
+      for (const [, privileges] of byObject) {
+        expect(privileges.size).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("covers exactly the (role, relation) pairs registeredSites() names — no more, no fewer", () => {
+    registerQuery(declaration({ site: site("coverage") }));
+    const expected = new Set(registeredSites().map((d) => `${d.role}/${d.object}`));
+    const actual = new Set<string>();
+    for (const [role, byObject] of requiredPrivileges()) {
+      for (const [object] of byObject) actual.add(`${role}/${object}`);
+    }
+    expect(actual).toEqual(expected);
+  });
+});
+
+describe("structural enforcement — a raw sql call outside the interface is detectable", () => {
+  // Spec §7.1: "CI forbids raw `sql` outside it, so the registry cannot drift
+  // into a hand-maintained list." This is the half of W2.3's gate that makes
+  // the registry COMPLETE rather than merely populated: without it a new call
+  // site can write to a table nobody declared, check 2 stays green, and the
+  // check is measuring the subset of the code that happened to opt in.
+  //
+  // `src/db/` is the permitted pool/interface layer — it is where the registry,
+  // the client and the guards live, and it is the module allowed to hold a raw
+  // statement by construction. Everything else must go through registerQuery.
+  const SRC = join(import.meta.dir, "..", "src");
+  const RAW_SQL = /(?:^|[^A-Za-z0-9_.])(?:sql|tx|db)(?:\.unsafe)?\s*`/;
+
+  function tsFilesUnder(dir: string): string[] {
+    return (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[])
+      .filter((rel) => rel.endsWith(".ts"))
+      .map((rel) => join(dir, rel));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE ALLOWLIST IS A RATCHET, AND IT MUST ONLY EVER SHRINK.
+  //
+  // Recorded 2026-09-23 (#1026 W2.3). These are every module under `src/`
+  // outside the db layer that issued a raw tagged template on that date. Moving
+  // all 54 onto `registerQuery` is a refactor of its own and is tracked
+  // separately; enforcing the rule only after that refactor would mean the rule
+  // does not exist until then, and a new call site landing in the meantime
+  // would be indistinguishable from the backlog.
+  //
+  // So the gate ships now, with the backlog RECORDED rather than hidden. A
+  // module not on this list may not issue a raw statement — that case fails
+  // below and is the tooth. A module on this list that has been converted must
+  // be REMOVED from it, which the second test enforces, so the list cannot be
+  // used to re-admit a module that already left.
+  //
+  // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
+  // written down instead of fixed, which is the one thing a ratchet exists to
+  // prevent. The only legal edit is a deletion.
+  const RAW_SQL_ALLOWLIST: readonly string[] = [
+    "src/admin/audit",
+    "src/admin/overview",
+    "src/analytics/cutover/gate",
+    "src/analytics/cutover/ledger-current",
+    "src/analytics/cutover/parity",
+    "src/analytics/cutover/read-mode",
+    "src/analytics/report/projections",
+    "src/analytics/store/output-snapshot-store",
+    "src/analytics/store/raw-history-store",
+    "src/analytics/store/regime-store",
+    "src/analytics/store/research-store",
+    "src/analytics/store/run-ledger-store",
+    "src/analytics/store/source-ledger-store",
+    "src/analytics/store/telemetry-store",
+    "src/api/auth",
+    "src/api/index",
+    "src/api/routes/admin",
+    "src/api/routes/admin-webauthn",
+    "src/api/routes/projects",
+    "src/api/routes/swarm/waitlist",
+    "src/chain/buyback-logs",
+    "src/ops/asset-prices",
+    "src/ops/gap-detector",
+    "src/ops/wallet-backfill",
+    "src/ops/wallet-snapshot-manifest",
+    "src/projects/agent-detail-projections",
+    "src/projects/agents-projections",
+    "src/projects/coins-vaults-wallets-projections",
+    "src/projects/dossier-projections",
+    "src/projects/entities-projections",
+    "src/projects/leaderboard-projections",
+    "src/projects/list2-projections",
+    "src/projects/profile-projections",
+    "src/projects/projections",
+    "src/projects/smoke-seed",
+    "src/swarm/admin",
+    "src/swarm/consensus-receipt",
+    "src/swarm/domain",
+    "src/swarm/judge-fault-injection",
+    "src/swarm/judge-replay",
+    "src/swarm/judgements",
+    "src/swarm/receipt-gap",
+    "src/swarm/roster-seed",
+    "src/worker/handlers/projects",
+    "src/worker/handlers/repair",
+    "src/worker/handlers/vault",
+    "src/worker/handlers/wallet",
+    "src/worker/loop",
+    "src/worker/reaper",
+    "src/worker/runtime",
+    "src/worker/scheduler",
+  ];
+
+  /** Every module under `src/` outside the db layer that issues a raw statement
+   *  and does not declare itself to the registry. */
+  function rawStatementModules(): string[] {
+    const declarants = new Set(registeredSites().map((d) => d.site.split(":")[0]));
+    const found: string[] = [];
+    for (const file of tsFilesUnder(SRC)) {
+      const relative = file.slice(SRC.length + 1);
+      // The db layer itself constructs pools and owns the interface.
+      if (relative.startsWith("db/")) continue;
+      const text = readFileSync(file, "utf8");
+      if (!text.split("\n").some((line) => RAW_SQL.test(line))) continue;
+      const moduleId = `src/${relative.replace(/\.ts$/, "")}`;
+      if (!declarants.has(moduleId)) found.push(moduleId);
+    }
+    return found.sort();
+  }
+
+  test("every module issuing a raw statement is the db layer, a registry declarant, or a dated allowlist entry", () => {
+    // The detector is not vacuous: it fires on a planted raw statement and
+    // stays silent on a registered call site, whose statement is a template
+    // handed to `run` rather than a bare tagged template.
+    expect(RAW_SQL.test("export async function leak(db) { return db`SELECT 1`; }")).toBe(true);
+    expect(RAW_SQL.test("await query.run(db, ...['SELECT 1']);")).toBe(false);
+
+    const allowed = new Set(RAW_SQL_ALLOWLIST);
+    const offenders = rawStatementModules().filter((m) => !allowed.has(m));
+
+    // The message is the deliverable: an operator or a reviewer has to be able
+    // to read which file broke the property, not just that something did.
+    expect(offenders).toEqual([]);
+  });
+
+  test("the allowlist only shrinks — a converted module must be removed from it", () => {
+    // Without this, the list would be a floor rather than a ceiling: a module
+    // moved onto registerQuery would keep its exemption, and the next raw
+    // statement added to that same file would land inside it unnoticed.
+    const stillRaw = new Set(rawStatementModules());
+    const stale = RAW_SQL_ALLOWLIST.filter((m) => !stillRaw.has(m));
+    expect(stale).toEqual([]);
+    expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
+  });
+});

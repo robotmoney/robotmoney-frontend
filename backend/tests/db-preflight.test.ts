@@ -1,5 +1,5 @@
 // The database classification step: empty bootstraps, populated is adopted by
-// an archive boot and refused to a simulation boot.
+// an adopt boot (--twin, or an explicit --initializer=adopt) and refused to a simulation boot.
 //
 // Runs against the suite's ephemeral Postgres (see tests/preload.ts), which is
 // migrated and therefore POPULATED — the adopt/refuse split is exercised for
@@ -31,7 +31,7 @@ test("empty database → bootstrap, on a genuinely fresh (unmigrated) database",
   tmpUrl.pathname = `/${dbName}`;
   const db = postgres(tmpUrl.toString(), { max: 1, onnotice: () => {} });
   try {
-    const r = await classifyDatabase("archive", db);
+    const r = await classifyDatabase("adopt", db);
     expect(r).toEqual({ mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [] });
     // Same result regardless of initializer — EMPTY bootstraps either way,
     // the adopt/refuse split only matters once tables exist.
@@ -49,8 +49,8 @@ test("empty database → bootstrap, on a genuinely fresh (unmigrated) database",
   }
 });
 
-test("populated + archive boot → adopt, with a census the operator can recognise", async () => {
-  const r = await classifyDatabase("archive");
+test("populated + adopt boot → adopt, with a census the operator can recognise", async () => {
+  const r = await classifyDatabase("adopt");
   expect(r.mode).toBe("adopt");
   expect(r.tables).toBeGreaterThan(0);
   expect(r.census.length).toBeGreaterThan(0);
@@ -75,7 +75,7 @@ test("the migrated database passes the handle/id namespace re-check", async () =
   // The REAL migrated schema, not a hand-built table: if 0031 or 0030 ever
   // renames a column this query reads, this is where it goes red.
   expect(await handleNamespaceConflicts()).toEqual([]);
-  const r = await classifyDatabase("archive");
+  const r = await classifyDatabase("adopt");
   expect(r.handleNamespaceConflicts).toEqual([]);
 });
 
@@ -135,15 +135,15 @@ test("a restored violation is DETECTED and the boot is refused, with both member
   expect(trg!.tgenabled).toBe("A");
 });
 
-test("parseInitializer fails closed — only an explicit archive flag can adopt", () => {
-  expect(parseInitializer(["--initializer=archive"])).toBe("archive");
+test("parseInitializer fails closed — only an explicit adopt flag can adopt", () => {
+  expect(parseInitializer(["--initializer=adopt"])).toBe("adopt");
   expect(parseInitializer(["--initializer=simulation"])).toBe("simulation");
   // Missing, misspelled, or malformed all land in the strict branch: adopting
   // a populated database must never be what a forgotten parameter gets you.
   expect(parseInitializer([])).toBe("simulation");
-  expect(parseInitializer(["--initializer=Archive"])).toBe("simulation");
+  expect(parseInitializer(["--initializer=Adopt"])).toBe("simulation");
   expect(parseInitializer(["--initializer="])).toBe("simulation");
-  expect(parseInitializer(["archive"])).toBe("simulation");
+  expect(parseInitializer(["adopt"])).toBe("simulation");
 });
 
 test("the three reports say what will happen, not just what was found", () => {
@@ -151,7 +151,7 @@ test("the three reports say what will happen, not just what was found", () => {
     mode: "bootstrap", tables: 0, census: [], handleNamespaceConflicts: [], appendOnlyProblems: [], analyticsLedgerGuardProblems: [],
   }).join("\n");
   expect(bootstrap).toContain("empty");
-  expect(bootstrap).toContain("migrate + seed + archive restore");
+  expect(bootstrap).toContain("migrate + seed");
 
   const adopt = reportLines("db:5432/x", {
     mode: "adopt",
@@ -178,13 +178,13 @@ test("the three reports say what will happen, not just what was found", () => {
     analyticsLedgerGuardProblems: [],
   }).join("\n");
   expect(refuse).toContain("REFUSING a simulation boot");
-  expect(refuse).toContain("bun run smoke:archive");
+  expect(refuse).toContain("--twin");
   expect(refuse).toContain("Nothing has been written");
 });
 
 test("an ADOPTED database whose append-only guard is disarmed is refused, and the report says why", async () => {
   // The preflight's job is to decide whether the boot's next step — migrate,
-  // seed, archive restore, every one of them a WRITE — should happen at all. A
+  // seed, every one of them a WRITE — should happen at all. A
   // database that records migration 0032 as applied and no longer refuses
   // deletion fails that test for the same reason a namespace violation does:
   // everything written past this point goes into tables that can be silently
@@ -204,7 +204,7 @@ test("an ADOPTED database whose append-only guard is disarmed is refused, and th
   try {
     // Armed first — the control, so "refused" below cannot be a fact about
     // this helper rather than about the guard.
-    const armed = await classifyDatabase("archive", db);
+    const armed = await classifyDatabase("adopt", db);
     expect(armed.appendOnlyProblems).toEqual([]);
     expect(reportLines("db:5432/x", armed).join("\n")).not.toContain("append-only guard");
 
@@ -214,7 +214,7 @@ test("an ADOPTED database whose append-only guard is disarmed is refused, and th
        LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$;`,
     );
 
-    const disarmed = await classifyDatabase("archive", db);
+    const disarmed = await classifyDatabase("adopt", db);
     expect(disarmed.mode).toBe("adopt");
     expect(disarmed.appendOnlyProblems.length).toBeGreaterThan(0);
     const report = reportLines("db:5432/x", disarmed).join("\n");
@@ -238,8 +238,8 @@ test("an ADOPTED database whose analytics ledger guard (issue #979 AC6) is disar
   // scripts/prod-bootstrap.ts are the other two, and both already fail a
   // boot whose Phase A ledger triggers (migrations 0057-0060) are missing or
   // neutered. Without this preflight wired too, the ONE boot path that runs
-  // before either of those — a `--db external`/`--db smoke-twin` archive
-  // adopt — would migrate + seed on top of a ledger a restore already left
+  // before either of those — a `--db external`/`--db smoke-twin` adopt boot
+  // — would migrate + seed on top of a ledger a restore already left
   // unarmed, the same class of gap #602 was for the handle/namespace
   // invariant.
   //
@@ -256,7 +256,7 @@ test("an ADOPTED database whose analytics ledger guard (issue #979 AC6) is disar
   url.pathname = `/${dbName}`;
   const db = postgres(url.toString(), { max: 1, onnotice: () => {} });
   try {
-    const armed = await classifyDatabase("archive", db);
+    const armed = await classifyDatabase("adopt", db);
     expect(armed.analyticsLedgerGuardProblems).toEqual([]);
     expect(reportLines("db:5432/x", armed).join("\n")).not.toContain("analytics ledger immutability guard");
 
@@ -270,7 +270,7 @@ test("an ADOPTED database whose analytics ledger guard (issue #979 AC6) is disar
        LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN COALESCE(NEW, OLD); END IF; RETURN NULL; END $$;`,
     );
 
-    const disarmed = await classifyDatabase("archive", db);
+    const disarmed = await classifyDatabase("adopt", db);
     expect(disarmed.mode).toBe("adopt");
     expect(disarmed.analyticsLedgerGuardProblems.length).toBeGreaterThan(0);
     const report = reportLines("db:5432/x", disarmed).join("\n");

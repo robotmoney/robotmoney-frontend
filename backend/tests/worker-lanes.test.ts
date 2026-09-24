@@ -1,11 +1,15 @@
 // Issue #107 — lane-filtered claiming over the real Postgres queue. Covers:
 //   - fail-loud lane configuration (empty/unknown WORKER_LANE);
-//   - allowlist filtering: a worker NEVER claims kinds outside its lane, and
-//     swarm kinds are reserved (research/analytics/generic can't claim them);
-//   - reserved capacity: with every research slot blocked, a swarm job is
-//     still immediately claimed by the swarm lane;
-//   - starvation: an indefinitely blocked research job cannot prevent swarm
+//   - allowlist filtering: a worker NEVER claims kinds outside its lane;
+//   - starvation: an indefinitely blocked research job cannot prevent analytics
 //     and regime jobs from reaching terminal state;
+//
+// THE RESERVED-LANE CASES ARE GONE, not disabled (issue #1026 W4). Two tests
+// here asserted that `swarm.%` was claimable by one lane and by no other, and
+// that a full research lane could not eat that reserved capacity. There is no
+// swarm lane and nothing enqueues a `swarm.%` kind any more — session work is
+// driven by `system-scheduler` through the API (system-scheduler-spec.md §1) —
+// so the reservation they pinned is not a behaviour that exists to protect.
 //   - exclusive concurrent claims: N workers, each job runs exactly once with
 //     non-overlapping ownership and exactly one terminal job_runs row;
 //   - priority is preserved WITHIN a lane.
@@ -53,7 +57,7 @@ let realRegime: (typeof handlers)[string];
 
 beforeAll(() => {
   realRegime = savedRegime();
-  handlers["swarm.test_fast"] = async (p) => { executed.push(`swarm.test_fast:${p.jobId ?? ""}`); return { ok: true }; };
+  handlers["ops.test_fast"] = async (p) => { executed.push(`ops.test_fast:${p.jobId ?? ""}`); return { ok: true }; };
   handlers["research.test_block"] = async (p) => { executed.push(`research.test_block:${p.jobId ?? ""}`); await researchGate.opened; return { ok: true }; };
   handlers["test.lane_probe"] = async (p) => { executed.push(`test.lane_probe:${p.jobId ?? ""}`); return { ok: true }; };
   // Stub the REAL regime kind so the starvation test never touches live fetchers.
@@ -91,59 +95,46 @@ test("resolveLane: empty or unknown lane configuration fails loudly", () => {
   expect(() => resolveLane("")).toThrow(/WORKER_LANE is required/);
   expect(() => resolveLane("   ")).toThrow(/WORKER_LANE is required/);
   expect(() => resolveLane("bogus")).toThrow(/invalid WORKER_LANE "bogus"/);
-  expect(resolveLane("swarm").name).toBe("swarm");
   expect(resolveLane("analytics").name).toBe("analytics");
   expect(resolveLane("research").name).toBe("research");
   expect(resolveLane("generic").name).toBe("generic");
   expect(describeLane(LANES.analytics)).toContain("except");
 });
 
-test("lane filter: swarm kinds are RESERVED — research/analytics/generic never claim them", async () => {
-  const id = await enqueue("swarm.test_fast");
-  expect(await processOneJob({ lane: LANES.research, workerId: "r1" })).toBe(false);
-  expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false);
-  expect(await processOneJob({ lane: LANES.generic, workerId: "g1" })).toBe(false);
-  expect(await jobStatus(id)).toBe("pending"); // untouched by non-swarm lanes
-  expect(await processOneJob({ lane: LANES.swarm, workerId: "c1" })).toBe(true);
-  expect(await jobStatus(id)).toBe("succeeded");
-});
-
-test("lane filter: research kinds only claimable by the research lane (not analytics/swarm)", async () => {
+test("lane filter: research kinds only claimable by the research lane (not analytics)", async () => {
   researchGate.open(); // don't block — this test only checks claimability
   const id = await enqueue("research.test_block");
   expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false);
-  expect(await processOneJob({ lane: LANES.swarm, workerId: "c1" })).toBe(false);
   expect(await jobStatus(id)).toBe("pending");
   expect(await processOneJob({ lane: LANES.research, workerId: "r1" })).toBe(true);
   expect(await jobStatus(id)).toBe("succeeded");
 });
 
-test("lane filter: analytics lane claims regime/pipeline kinds but neither swarm nor research", async () => {
+test("lane filter: analytics lane claims regime/pipeline kinds but not research", async () => {
   const regime = await enqueue("regime.classify");
   const probe = await enqueue("test.lane_probe");
-  await enqueue("swarm.test_fast");
   researchGate.open();
   await enqueue("research.test_block");
   expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(true);
   expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(true);
-  expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false); // nothing claimable left
+  expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false); // research is not claimable here
   expect(await jobStatus(regime)).toBe("succeeded");
   expect(await jobStatus(probe)).toBe("succeeded");
 });
 
 test("priority is preserved within a lane", async () => {
-  const low = await enqueue("swarm.test_fast", 0);
-  const high = await enqueue("swarm.test_fast", 10);
-  expect(await processOneJob({ lane: LANES.swarm, workerId: "c1" })).toBe(true);
+  const low = await enqueue("ops.test_fast", 0);
+  const high = await enqueue("ops.test_fast", 10);
+  expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(true);
   expect(await jobStatus(high)).toBe("succeeded");
   expect(await jobStatus(low)).toBe("pending"); // higher priority claimed first
 });
 
-test("starvation: a blocked research job cannot prevent swarm or regime work (full lane topology)", async () => {
+test("starvation: a blocked research job cannot prevent analytics or regime work (full lane topology)", async () => {
   const workers: WorkerHandle[] = [];
   try {
     // The configured topology: one worker per lane, all polling fast.
-    for (const lane of [LANES.swarm, LANES.analytics, LANES.research]) {
+    for (const lane of [LANES.analytics, LANES.research]) {
       workers.push(launch({
         lane, workerId: `starve-${lane.name}`, idlePollMs: 25,
         schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
@@ -152,9 +143,9 @@ test("starvation: a blocked research job cannot prevent swarm or regime work (fu
     const research = await enqueue("research.test_block");
     await waitFor(async () => (await jobStatus(research)) === "running", 3000, "research job to block its lane");
 
-    const swarm = await enqueue("swarm.test_fast");
+    const fast = await enqueue("ops.test_fast");
     const regime = await enqueue("regime.classify");
-    await waitFor(async () => (await jobStatus(swarm)) === "succeeded", 5000, "swarm job to complete");
+    await waitFor(async () => (await jobStatus(fast)) === "succeeded", 5000, "analytics job to complete");
     await waitFor(async () => (await jobStatus(regime)) === "succeeded", 5000, "regime job to complete");
     // ... while research is STILL blocked and owned by the research lane.
     const [r] = await sql`SELECT status, locked_by FROM jobs WHERE id = ${research}`;
@@ -166,43 +157,15 @@ test("starvation: a blocked research job cannot prevent swarm or regime work (fu
   }
 });
 
-test("reserved capacity: every research slot full → a swarm job is still immediately claimed", async () => {
-  const workers: WorkerHandle[] = [];
-  try {
-    // Fill EVERY research slot (one research worker = one slot) with blocked work.
-    workers.push(launch({
-      lane: LANES.research, workerId: "cap-research", idlePollMs: 25,
-      schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
-    }));
-    const blocked = await enqueue("research.test_block");
-    await waitFor(async () => (await jobStatus(blocked)) === "running", 3000, "research slot to fill");
-
-    const swarm = await enqueue("swarm.test_fast");
-    // A research worker must NOT claim swarm-reserved capacity...
-    expect(await processOneJob({ lane: LANES.research, workerId: "cap-research-extra" })).toBe(false);
-    expect(await jobStatus(swarm)).toBe("pending");
-    // ...and the reserved swarm lane claims it immediately.
-    workers.push(launch({
-      lane: LANES.swarm, workerId: "cap-swarm", idlePollMs: 25,
-      schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000,
-    }));
-    await waitFor(async () => (await jobStatus(swarm)) === "succeeded", 3000, "reserved lane to claim swarm job");
-    expect(await jobStatus(blocked)).toBe("running"); // research still occupied throughout
-  } finally {
-    researchGate.open();
-    await Promise.all(workers.map((w) => w.stop()));
-  }
-});
-
 test("exclusive claims: N concurrent workers, each job executes once, ownership never overlaps, one job_runs row per job", async () => {
   const JOBS = 8;
   const ids: number[] = [];
-  for (let i = 0; i < JOBS; i++) ids.push(await enqueue("swarm.test_fast"));
+  for (let i = 0; i < JOBS; i++) ids.push(await enqueue("ops.test_fast"));
 
-  // Three concurrent swarm workers racing over the same lane.
+  // Three concurrent analytics workers racing over the same lane.
   const claims = await Promise.all(
     Array.from({ length: JOBS * 3 }, (_, i) =>
-      processOneJob({ lane: LANES.swarm, workerId: `race-${i % 3}` })),
+      processOneJob({ lane: LANES.analytics, workerId: `race-${i % 3}` })),
   );
   expect(claims.filter(Boolean).length).toBe(JOBS); // exactly one claim per job
 
@@ -215,5 +178,5 @@ test("exclusive claims: N concurrent workers, each job executes once, ownership 
     expect(runs[0].status).toBe("succeeded");
   }
   // Each handler body executed exactly once per job.
-  expect(executed.filter((e) => e.startsWith("swarm.test_fast")).length).toBe(JOBS);
+  expect(executed.filter((e) => e.startsWith("ops.test_fast")).length).toBe(JOBS);
 });

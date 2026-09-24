@@ -1,14 +1,14 @@
 // Explicit teardown for the standing local smoke. Reads .agents/smoke-state.json,
 // rebuilds the exact docker compose env, and runs `docker compose down` — WITHOUT
 // `-v` (issue: smoke persistent volumes): containers + network are removed but the
-// postgres data volume (or the `--pg-data` host dir) is KEPT, so a later
+// postgres data volume is KEPT, so a later
 // `bun run smoke` resumes from where it left off.
 //
 // This matches the running smoke's own Ctrl-C / SIGTERM behavior — both now keep
 // data (see scripts/lib/smoke-main.ts onSignal()/cleanup() and docs/architecture.md
 // §(c)). Deleting smoke data is a SEPARATE, explicit act: `bun run smoke:clean`
 // (scripts/smoke-clean.ts) removes the label-namespaced smoke volumes; it never
-// touches a `--pg-data` host directory.
+// touches a volume a running smoke still uses.
 //
 // State-file policy: the state file is KEPT on teardown (the data it points to
 // survives, so the pointer must too) — `smoke:status` reads it, and it stays until
@@ -34,9 +34,9 @@ interface SmokeState {
   // older standing smoke's state file may still carry it.
   mcpPort?: number;
   pgPort?: number;
-  // Did this boot apply docker-compose.stage.yml (`bun run smoke -- --stage`),
+  // Did this boot apply docker-compose.stage.yml (`bun smoke --static-port`),
   // pinning the api to the cloudflared origin? Provenance only. Optional
-  // because a state file written before --stage existed has no such flag.
+  // because a state file written before the pin existed has no such flag.
   stage?: boolean;
   // Environment class + hash (scripts/stack/naming.ts) so the labels compose
   // interpolates here match the ones `up` stamped. Optional for the same
@@ -64,9 +64,8 @@ interface SmokeState {
   dbName: string;
   /** External per-session Docker-secret path; contains no credential value. */
   analyticsTokenFile?: string;
-  // Exactly one is set (issue: smoke persistent volumes): a `--pg-data` host bind
-  // dir, or the fresh-per-run named volume that survives teardown.
-  pgDataDir?: string;
+  // The named volume that survives teardown (issue: smoke persistent volumes),
+  // and the one `--local volume` reattaches.
   pgVolume?: string;
   createdAt: string;
 }
@@ -96,7 +95,7 @@ console.log(
 );
 if (s.stage) {
   // Worth saying out loud: this is the smoke the tunnel points at, so tearing it
-  // down takes stage.robotmoney-labs.dev offline until a `--stage` boot returns.
+  // down takes stage.robotmoney-labs.dev offline until a `--static-port` boot returns.
   console.log(`[smoke:down] this smoke was booted with --static-port (api pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
 }
 
@@ -109,8 +108,9 @@ if (purged.skipped.length > 0) {
   console.log(`[smoke:down] WARNING: failed to purge evaluation container(s): ${purged.skipped.map((sk) => `${sk.name} (${sk.reason})`).join(", ")}`);
 }
 
-// NO `-v`: keep the volume / --pg-data dir.
-const r = Bun.spawnSync(["docker", "compose", "down"], {
+// NO `-v`: keep the volume. `--env-file /dev/null`: compose must not read the
+// checkout's `.env` for interpolation (scripts/stack/config.ts composeArgs()).
+const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "down"], {
   cwd: repoRoot,
   env: dockerEnv,
   stdout: "inherit",
@@ -142,7 +142,7 @@ if (s.smokeTwinContainer) {
 if (mode === "smoke-twin") {
   console.log(`[smoke:down] containers + network removed for ${s.project}; the smoke-twin's restored copy of production is KEPT in volume ${s.smokeTwinVolume ?? "(unrecorded)"}`);
   console.log(`[smoke:down]   that copy holds real credential material — reclaim it with: bun run smoke:clean`);
-  console.log(`[smoke:down]   re-run (restores a FRESH copy from backup ${s.smokeTwinBackupStamp ?? "?"}):  bun smoke -- --db smoke-twin`);
+  console.log(`[smoke:down]   re-run (restores a FRESH copy from backup ${s.smokeTwinBackupStamp ?? "?"}):  bun smoke --local dump`);
 } else if (mode === "external") {
   // No volume, no bind dir, nothing kept — because nothing here ever owned the
   // data. Say which server the (now stopped) stack was writing to so the
@@ -152,13 +152,11 @@ if (mode === "smoke-twin") {
   // (nothing is inferred from the state file at boot), so a hint that dropped
   // --static-port would bring the smoke back on a Docker-assigned port with the
   // tunnel still routed at :48787.
-  console.log(`[smoke:down]   resume:  bun run smoke --${s.stage ? " --static-port" : ""} --db external   (same server; migrate + seed are idempotent)`);
+  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""}   (same server)`);
 } else {
-  const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;
-  console.log(`[smoke:down] containers + network removed for ${s.project}; postgres data kept (${where})`);
-  if (s.pgDataDir) {
-    console.log(`[smoke:down]   resume:  bun run smoke -- --pg-data ${s.pgDataDir}`);
-  }
+  const volume = s.pgVolume ?? `${s.project}_pgdata`;
+  console.log(`[smoke:down] containers + network removed for ${s.project}; postgres data kept (volume ${volume})`);
+  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --local volume=${volume}`);
   console.log(`[smoke:down]   reclaim smoke volumes when done: bun run smoke:clean`);
 }
 console.log(`[smoke:down] state file kept (points to the surviving data): ${stateFile}`);

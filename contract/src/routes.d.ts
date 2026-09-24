@@ -66,6 +66,16 @@ export const ROUTES: {
     register: string;
     regime: string;
     submit: string;
+    scheduler: {
+      fullRead: string;
+      subscribe: string;
+      jobAck: string;
+    };
+    participants: {
+      pending: string;
+      judgeSubscribe: string;
+      judgement: string;
+    };
     admin: {
       action: string;
       activate: string;
@@ -82,6 +92,11 @@ export const ROUTES: {
       subjects: string;
       subjectUpdate: string;
       subjectDeactivate: string;
+      epochOpen: string;
+      epochTurnover: string;
+      epochAggregate: string;
+      epochRequestJudging: string;
+      epochFinalize: string;
       members: string;
       applications: string;
       memberReview: string;

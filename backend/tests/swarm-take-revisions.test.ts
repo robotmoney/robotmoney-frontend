@@ -21,23 +21,18 @@
 //   6. The cap caps, AND the refusal lands BEFORE the Ed25519 verify. The
 //      ordering is the requirement, not an optimisation — see the ordering test
 //      for how it is proved behaviourally rather than by reading a comment.
-import { afterAll, beforeAll, test, expect, beforeEach } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, SWARM_TAKE_REVISION_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as admin from "../src/swarm/admin.ts";
-import { setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-
-// A real judge endpoint, locally served (issue #969): this file drives the
-// judging through judgeSessionAdmin, which has no injectable transport, and the
-// judge no longer fabricates an opinion when it has no model to ask.
-import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
-beforeAll(installJudgeStub);
-afterAll(removeJudgeStub);
+// A session reaches `judged` the way it does in production since issue #1026:
+// a seated judge participant submits a signed judgement (support/stub-judge.ts).
+import { judgeViaParticipant } from "./support/stub-judge.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -300,9 +295,8 @@ test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `agg
   expect((await submit(m, date, subj, { body: "the take of record" })).status).toBe(201);
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
-  const judged = await admin.judgeSessionAdmin(session.id, undefined);
-  expect(judged.ok).toBe(true);
+  const { result: judged } = await judgeViaParticipant(session.id);
+  expect(judged.ok, JSON.stringify(judged)).toBe(true);
   const row = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
   expect(row.state).toBe("judged");
   // The advertised deadline has NOT passed, so this refusal can only come from

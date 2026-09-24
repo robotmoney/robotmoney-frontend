@@ -21,7 +21,7 @@ describe("shared full-stack member-agent prebuild", () => {
     const tokenPath = join(dir, "analytics-token");
     writeFileSync(tokenPath, "test-token\n", { mode: 0o600 });
 
-    const server = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
     try {
       const dockerPath = join(dir, "docker");
       writeFileSync(

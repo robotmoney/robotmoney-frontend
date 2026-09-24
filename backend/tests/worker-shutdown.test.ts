@@ -81,7 +81,7 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 }
 
 test("idle shutdown: all lanes signaled together exit bounded with no orphaned work", async () => {
-  const workers: WorkerHandle[] = [LANES.swarm, LANES.analytics, LANES.research].map((lane) =>
+  const workers: WorkerHandle[] = [LANES.analytics, LANES.research].map((lane) =>
     launch({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
   await sleep(150); // loops spinning idle
 

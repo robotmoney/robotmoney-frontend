@@ -249,7 +249,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the instant the earliest open submission window closes, which is the same instant its subject's next epoch opens, or null when no subject has one open. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
     backs: ["/swarm"],
     params: [
       { name: "subject", in: "query", description: "One subject's sessions, filtered before the page is cut. Cannot be combined with full=1.", example: "robotmoney-allocation" },
@@ -592,6 +592,17 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.regime]: "analytics-provider ingestion boundary",
   [ROUTES.swarm.memberAvatar]: "image bytes; linked from the member payload, not independently useful",
   [ROUTES.swarm.takePermalink]: "an HTML page, not an API resource; it is in sitemap.xml",
+  // Issue #1026 W4. Two credentialed machine surfaces that do not live under
+  // /api/swarm/admin/ and so are not skipped wholesale by the namespace rule.
+  // Neither is a browsable resource and neither answers an anonymous caller:
+  // the first three need the `system-scheduler` automation token, the last two
+  // a judge's participant bearer (system-scheduler-spec.md §7).
+  [ROUTES.swarm.scheduler.fullRead]: "scheduler automation token only; an internal snapshot for one client",
+  [ROUTES.swarm.scheduler.subscribe]: "scheduler automation token only; a long-lived event-stream, not a document",
+  [ROUTES.swarm.scheduler.jobAck]: "scheduler automation token only; a write that retires pushed work",
+  [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
+  [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
+  [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
 };
 
 /** Absolute URL for an endpoint, path params left as :name placeholders. */

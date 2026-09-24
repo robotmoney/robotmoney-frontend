@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
 import { admin, DEMO_MEMBERS, DEMO_SUBJECTS, runRegimeClassify, runSession } from "./lib/swarm/session.ts";
-import { resolveSmokeCadence } from "./lib/smoke-schedule.ts";
+import { resolveSmokeCadence } from "./lib/smoke-cadence.ts";
 import {
   createStack,
   composeArgs,

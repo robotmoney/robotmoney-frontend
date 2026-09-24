@@ -48,9 +48,8 @@ describe("urlFromDiscreteEnv — discrete env-file keys -> a postgres:// URL", (
     const r = urlFromDiscreteEnv({
       host: "db.example.com",
       port: "25060",
-      username: "rm_readonly",
-      password: "s3cr3t",
       database: "defaultdb",
+      rm_readonly: "s3cr3t",
     });
     expect(r).toEqual({ url: "postgres://rm_readonly:s3cr3t@db.example.com:25060/defaultdb?sslmode=require" });
   });
@@ -59,16 +58,15 @@ describe("urlFromDiscreteEnv — discrete env-file keys -> a postgres:// URL", (
     const r = urlFromDiscreteEnv({
       host: "db.example.com",
       port: "25060",
-      username: "rm_readonly",
-      password: "p@ss/word#1?",
       database: "defaultdb",
+      rm_readonly: "p@ss/word#1?",
     });
     expect(r).toEqual({ url: "postgres://rm_readonly:p%40ss%2Fword%231%3F@db.example.com:25060/defaultdb?sslmode=require" });
   });
 
-  test("missing keys are reported by name", () => {
+  test("missing keys are reported by name (connection tokens + the role line)", () => {
     expect(urlFromDiscreteEnv({ host: "db.example.com", database: "defaultdb" })).toEqual({
-      missing: ["port", "username", "password"],
+      missing: ["port", "rm_readonly"],
     });
   });
 });
@@ -84,14 +82,14 @@ describe("runPreflightMain — the guards that must reject BEFORE any connection
 
   function writeReadonlyEnv(lines: string): string {
     dir = mkdtempSync(join(tmpdir(), "rm-preflight-utils-"));
-    const path = join(dir, ".env.readonly");
+    const path = join(dir, "cred.env");
     writeFileSync(path, lines, "utf8");
     return path;
   }
 
   test("no env file at the given path -> exit code 2, no connection attempted", async () => {
     dir = mkdtempSync(join(tmpdir(), "rm-preflight-utils-"));
-    const path = join(dir, ".env.readonly");
+    const path = join(dir, "cred.env");
     const code = await runPreflightMain({
       envPath: path,
       name: "test",
@@ -122,17 +120,15 @@ describe("runPreflightMain — the guards that must reject BEFORE any connection
       [
         `host=${real.hostname}`,
         `port=${real.port || "5432"}`,
-        `username=${decodeURIComponent(real.username)}`,
-        `password=${decodeURIComponent(real.password)}`,
         `database=${real.pathname.replace(/^\//, "")}`,
+        `rm_readonly=${decodeURIComponent(real.password)}`,
       ].join("\n"),
     );
     const resolved = urlFromDiscreteEnv({
       host: real.hostname,
       port: real.port || "5432",
-      username: decodeURIComponent(real.username),
-      password: decodeURIComponent(real.password),
       database: real.pathname.replace(/^\//, ""),
+      rm_readonly: decodeURIComponent(real.password),
     });
     if (!("url" in resolved)) throw new Error("test setup: expected a resolved URL");
     process.env.DATABASE_URL = resolved.url;

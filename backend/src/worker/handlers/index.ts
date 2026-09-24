@@ -3,7 +3,6 @@
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
-import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
@@ -90,21 +89,20 @@ export const handlers: Record<string, JobHandler> = {
   "analytics.parity_sweep": () => triggerParitySweep(),
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
-  // swarm session lifecycle
-  "swarm.open_session": swarm.openSession,
-  "swarm.publish_brief": swarm.publishBrief,
-  "swarm.close_window": swarm.closeWindow,
-  "swarm.aggregate": swarm.aggregateSession,
-  "swarm.judge": swarm.judgeSession,
-  "swarm.publish": swarm.publishSession,
-  // Three notification kinds, one delivery body. They stay separate registry
-  // entries rather than collapsing into a shared "swarm.send_notification"
-  // because `kind` is what an operator greps in `jobs`/`job_runs` when a mail
-  // did not arrive, and "the receipt lane is backed up" is a different incident
-  // from "approvals are not going out".
-  "swarm.send_application_received_notification": swarm.sendApplicationReceivedNotification,
-  "swarm.send_activation_notification": swarm.sendActivationNotification,
-  "swarm.send_seat_open_notification": swarm.sendSeatOpenNotification,
+  // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue
+  // work any more: system-scheduler-spec.md §4 gives the lifecycle a different
+  // shape — the `system-scheduler` container drives a subject's epoch through
+  // the API, and §1/§7 put every step that needs a model in a participant
+  // container, because the scheduler "calls no model, so it has no model key".
+  // A registration here would put one back inside a process that holds the
+  // database credential.
+  // The three swarm email delivery kinds (application receipt, activation
+  // approval, waitlist seat-open) were REMOVED with the swarm email feature
+  // itself — issue #1026 W5, decision D50 reversing D30. Nothing enqueues them
+  // any more and migration 0066 drops the outbox they delivered from; 0066 is
+  // also the one place their names still appear, because it settles any row a
+  // pre-0066 deployment left queued. Leaving the kinds unregistered is the right
+  // end state: loop.ts fails a job whose kind has no handler.
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.
   // discover/refreshCoins/refreshWallets/syncRevenue/fetchVaults each already

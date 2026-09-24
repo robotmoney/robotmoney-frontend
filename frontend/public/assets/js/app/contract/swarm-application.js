@@ -74,8 +74,9 @@ export function canonicalizeApplication(a) {
 // status page as `<host>/committee/apply/<uuid>`; ours is native `/api/swarm/*`,
 // carries the `swarm-token-claim-v1` envelope and the `state == claimed`
 // completion gate, and prints `<host>/swarm/apply/<uuid>`. That status URL is
-// load-bearing right now: approval email is not yet wired, so the status page is
-// the ONLY way an applicant can watch their application progress.
+// load-bearing: no approval email is ever sent (decision D50 removed the
+// feature), so the status page is the ONLY way an applicant can watch their
+// application progress.
 //
 // The cost of self-hosting is two copies of the procedure with no drift guard
 // between them. Core keeps its copy for its own plugin consumers; if it is ever

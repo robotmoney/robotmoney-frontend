@@ -76,7 +76,7 @@ interface PostflightRunCtx {
 /**
  * The boilerplate every numbered postflight script needs: require
  * DATABASE_URL (already loaded per §2.0/§8 — this script does not load it
- * itself, unlike preflight's .env.readonly), connect, run the caller's
+ * itself, unlike preflight's $HOME/.env), connect, run the caller's
  * checks, print the verdict, close the connection.
  */
 export async function runPostflightMain(opts: RunPostflightOpts): Promise<number> {

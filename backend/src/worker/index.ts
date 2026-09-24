@@ -1,11 +1,11 @@
 // Always-on worker process entry: resolves this process's execution lane and
 // runs the drain/scheduler/reaper loops via runtime.ts. Run with
-// `WORKER_LANE=<swarm|analytics|research|generic> bun run src/worker/index.ts`.
+// `WORKER_LANE=<analytics|research|generic> bun run src/worker/index.ts`.
 //
 // WORKER_LANE is REQUIRED (issue #107): an empty or unknown lane fails loudly
 // here instead of silently claiming every kind — the compose topology gives
-// each lane its own container (worker-swarm / worker-analytics /
-// worker-research; see docker-compose.yml).
+// each lane its own container (worker-analytics / worker-research; see
+// docker-compose.yml).
 import { warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { closeDb } from "../db/worker-client.ts";
 import { resolveLane } from "./lanes.ts";

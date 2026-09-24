@@ -193,6 +193,36 @@ export const ROUTES = {
     register: "/api/swarm/register", // POST (privileged) — apply+activate shortcut for demo/E2E
     regime: "/api/swarm/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/swarm/submit", // POST (member bearer, ed25519-signed)
+
+    // ── The scheduler's stream (issue #1026 W4.4, system-scheduler-spec.md §6.3)
+    // NOT under `admin`, deliberately. These are the surface of ONE credential:
+    // the automation token §7 issues to `system-scheduler`, carrying the
+    // read_subjects / read_sessions / lifecycle_transitions rights and nothing
+    // else. An operator's admin token does not open them, and they open nothing
+    // an operator would drive by hand.
+    scheduler: {
+      fullRead: "/api/swarm/scheduler/full-read", // GET → §3's four parts + the cursor, one consistent snapshot
+      subscribe: "/api/swarm/scheduler/subscribe", // GET ?cursor=N → text/event-stream: event | keepalive (carries head) | resync | job
+      jobAck: "/api/swarm/scheduler/jobs/ack", // POST { idempotencyKey } — the scheduler reporting one pushed job done
+    },
+
+    // ── Participants (smoke-production-spec.md §6.2)
+    // The judge's own contract, authenticated by the judge's member bearer.
+    // `judgeSubscribe` serves STATE — every session in `judging` this judge has
+    // not submitted — on every connect, so it carries no cursor and no sequence
+    // and is not the scheduler's stream above.
+    participants: {
+      // The AGENT's side of §6.2: agents poll, judges subscribe. This path was
+      // a literal inside scripts/agent/participant/main.ts, which is why a
+      // standing participant could poll a 404 for ever and read it as "no
+      // work" — a client-side constant cannot be compared against the server's
+      // route table, and nothing did. It belongs here, where both sides read
+      // the same string.
+      pending: "/api/swarm/participants/pending", // GET ?member=<id> (member bearer) → { pending: PendingWork | null }
+      judgeSubscribe: "/api/swarm/participants/judge/subscribe", // GET (judge bearer) → text/event-stream: pending | keepalive
+      judgement: "/api/swarm/participants/judgement", // POST (judge bearer) { sessionId, opinion, … }
+    },
+
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
     // drivers can reference them without re-hardcoding the path.
@@ -221,6 +251,19 @@ export const ROUTES = {
       subjects: "/api/swarm/admin/subjects", // GET list (all statuses) / POST create
       subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
       subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
+
+      // ── The epoch lifecycle (issue #1026 W4.2, system-scheduler-spec.md §4)
+      // Every one of these is a STATE-GUARDED transition that `system-scheduler`
+      // calls at an instant it already holds. They are POSTs under the admin
+      // namespace because an operator drives the same transitions by hand
+      // (§4.3: "An operator ending a window early does it through the same
+      // endpoint with the same `expected_session_id`"), and because the API
+      // decides nothing about timing on its own.
+      epochOpen: "/api/swarm/admin/epochs/open", // POST { subjectId } — create+brief+window, one transaction
+      epochTurnover: "/api/swarm/admin/epochs/turnover", // POST { subjectId, expectedSessionId } — close N, open N+1
+      epochAggregate: "/api/swarm/admin/epochs/aggregate", // POST { sessionId } — deterministic rollup
+      epochRequestJudging: "/api/swarm/admin/epochs/request-judging", // POST { sessionId } — stores the absolute deadline
+      epochFinalize: "/api/swarm/admin/epochs/finalize", // POST { sessionId } — decide the outcome from stored instants
 
       // GET list (all statuses, redacted) / POST manual add.
       // POST body is { name, publicKey, lens?, contact? } — issue #690: the id is

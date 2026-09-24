@@ -252,6 +252,13 @@ export const APPEND_ONLY_TABLES = [
   "regime_snapshots",
   "schema_migrations",
   "analytics_overwrite_events",
+  // Issue #1026 W4: the epoch scheduler's two logs. `swarm_stream_events` is
+  // the log §6.3's gap rule rests on — a deleted row IS a gap, and one the
+  // scheduler cannot tell from a lost frame. `swarm_scheduler_jobs` holds the
+  // idempotency keys, and a guarantee that disappears when the work finishes
+  // lets the same key back in as fresh work (migration 0070's header).
+  "swarm_stream_events",
+  "swarm_scheduler_jobs",
 ] as const;
 
 export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
@@ -275,6 +282,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0050_swarm_member_keys_append_only.sql",
   "0056_analytics_overwrite_events.sql",
+  "0072_drop_swarm_schedules.sql",
 ] as const;
 
 /**
@@ -320,7 +328,16 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
   swarm_session_judgements: "0040_swarm_judgements_append_only.sql",
   swarm_consensus_receipts: "0042_swarm_consensus_receipts.sql",
   swarm_member_keys: "0050_swarm_member_keys_append_only.sql",
+  // Added with the remote 0056 work, which landed after this map was first
+  // written: 0056 both CREATES this table and installs its own ENABLE ALWAYS
+  // triggers, so it is its own opt-in migration.
   analytics_overwrite_events: "0056_analytics_overwrite_events.sql",
+  // 0068 and 0070 CREATED these two; 0072 is what opts them in, so 0072 is the
+  // migration a database must have reached before the guard expects triggers on
+  // them. Pointing at their creating migration instead would make every
+  // database between 0068 and 0072 report a disarmed guard.
+  swarm_stream_events: "0072_drop_swarm_schedules.sql",
+  swarm_scheduler_jobs: "0072_drop_swarm_schedules.sql",
 };
 
 /** The two trigger names migration 0032 installs on each protected table. */
@@ -789,7 +806,9 @@ export async function checkAppendOnlyGuard(db: AppendOnlyDb = sql): Promise<Appe
     // existed since long before 0050 protected it, so a database that has not
     // reached 0050 yet — an ordinary mid-rollout state — must not be graded
     // against it, the same way `applied` above excuses a database that has
-    // not reached 0032 yet.
+    // not reached 0032 yet. LEDGER_IMMUTABLE_FAMILIES already does the
+    // equivalent for itself (checkLedgerFamily's first line); this is the same
+    // rule for the 0032 family, which had only ever gated on 0032 itself.
     const appliedMigrations = await appliedAppendOnlyMigrations(db);
     const tables = tablesExpectedProtected(existing, appliedMigrations);
     const problems = [

@@ -1,4 +1,4 @@
-// `bun run smoke:smoke:capture` — produce the encrypted backup a digital smoke-twin restores.
+// `bun run smoke:capture` — produce the encrypted backup a digital smoke-twin restores.
 //
 // THE OTHER HALF OF `--db smoke-twin`. scripts/lib/restore-container.ts consumes four
 // files from a backup directory; until now nothing PRODUCED them. The procedure
@@ -10,7 +10,21 @@
 // ⛔ READ-ONLY, AGAINST THE REPLICA. Every guard below exists because a dump is
 // a long, heavy read, and pointing it at the PRIMARY is the mistake that is easy
 // to make and expensive to discover. The role is rm_readonly; the target is the
-// read-only node; both are proven, not assumed.
+// read-only node; both are proven, not assumed. There is NO override: D53
+// decision 5 removed `--allow-primary`, because an override "recorded in the
+// manifest" still takes the dump (smoke-production-spec.md §5, `dump`).
+//
+// "Read-only" is enforced three ways, each independent of the others:
+//   1. the probe session opens with default_transaction_read_only=on
+//      (connectReadOnly) and is PROVEN with `SHOW transaction_read_only`;
+//   2. pg_dump and pg_dumpall run with PGOPTIONS=-c default_transaction_read_only=on,
+//      so the dump's own sessions carry the same belt;
+//   3. the credential must be rm_readonly and hold none of the write or DDL
+//      capabilities probeCaptureTarget() lists (table/column write grants,
+//      TRIGGER, MAINTAIN, ownership, sequence, schema and database CREATE, any
+//      non-read role membership), so the belt is never the only thing between
+//      the capture and a write. EXECUTE on a SECURITY DEFINER function is NOT
+//      probed: the read-only session (1, 2) is what stops a write through one.
 //
 // WHAT IT WRITES, and nothing else — exactly what resolveBackupFiles() requires:
 //   .last-stamp                      the stamp the restore half reads
@@ -27,7 +41,15 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadEnvFile, redactedTarget, urlFromDiscreteEnv } from "./lib/preflight-utils.ts";
+import {
+  connectReadOnly,
+  homeEnvFilePath,
+  loadEnvFile,
+  READONLY_ROLE,
+  redactedTarget,
+  urlFromDiscreteEnv,
+} from "./lib/preflight-utils.ts";
+import type { Db } from "./lib/preflight-utils.ts";
 
 const NAME = "smoke:capture";
 const log = (m: string) => console.log(`[${NAME}] ${m}`);
@@ -37,14 +59,21 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 // backend/scripts/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..");
 
-/** The default backup directory — the SAME default resolveBackupFiles() uses, so
- *  capture and restore agree by construction rather than by runbook prose. */
-const DEFAULT_OUT = join(process.env.HOME ?? "/root", "rm-backup-v022");
+/**
+ * The default output directory, in the same precedence as every other backup
+ * consumer: the release's `RM_BACKUP_DIR` when exported (restore-check.ts,
+ * stage-rehearsal.ts and restore-container.ts's resolveBackupFiles() all read
+ * it), else v0.2.2's literal directory. Before this, capture silently ignored
+ * RM_BACKUP_DIR and wrote to ~/rm-backup-v022 while restore-check read
+ * $RM_BACKUP_DIR — the runbook's documented sequence could not pass.
+ */
+export function defaultOutDir(): string {
+  return process.env.RM_BACKUP_DIR?.trim() || join(process.env.HOME ?? "/root", "rm-backup-v022");
+}
 
 interface Args {
   out: string;
   envFile: string;
-  allowPrimary: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
@@ -57,14 +86,13 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   for (const flag of ["--out", "--env-file"]) {
     if (argv.includes(flag) && !val(flag)) return { error: `${flag} requires a value.` };
   }
-  const known = new Set(["--out", "--env-file", "--allow-primary"]);
+  const known = new Set(["--out", "--env-file"]);
   for (const a of argv) {
     if (a.startsWith("--") && !known.has(a)) return { error: `unknown flag "${a}".` };
   }
   return {
-    out: resolve(val("--out") ?? DEFAULT_OUT),
-    envFile: resolve(val("--env-file") ?? join(repoRoot, ".env.readonly")),
-    allowPrimary: argv.includes("--allow-primary"),
+    out: resolve(val("--out") ?? defaultOutDir()),
+    envFile: resolve(val("--env-file") ?? homeEnvFilePath()),
   };
 }
 
@@ -81,7 +109,7 @@ export function assertOutsideRepo(out: string, root: string): void {
     throw new Error(
       `--out ${out} is inside the checkout (${root}). This directory holds a complete copy of ` +
         `production AND the passphrase that decrypts it; it must live outside any git working tree. ` +
-        `Use ${DEFAULT_OUT} or another path outside the repo.`,
+        `Export RM_BACKUP_DIR or pass --out with a path outside the repo.`,
     );
   }
 }
@@ -110,19 +138,264 @@ export function clientVersionComplaint(clientMajor: number | null, serverMajor: 
   );
 }
 
+/**
+ * The startup option every dump session carries. pg_dump already opens its
+ * snapshot transaction READ ONLY; this makes every transaction on the
+ * connection read-only at the server, so the rule does not rest on how one
+ * client version happens to open its transaction.
+ */
+export const READ_ONLY_PGOPTIONS = "-c default_transaction_read_only=on";
+
+/** The environment overlay for pg_dump and pg_dumpall. It REPLACES any
+ *  PGOPTIONS the operator exported: an inherited
+ *  `-c default_transaction_read_only=off` must not reach the dump. */
+export function readOnlyDumpEnv(): Record<string, string> {
+  return { PGOPTIONS: READ_ONLY_PGOPTIONS };
+}
+
+/** What the probe session learned about the credential and the node. */
+export interface CaptureProbe {
+  /** `SHOW transaction_read_only` on the probe session: "on" or "off". */
+  transactionReadOnly: string;
+  role: string;
+  inRecovery: boolean;
+  serverVersion: string;
+  /** Role attributes that make a role more than a reader (SUPERUSER, …). */
+  attributes: string[];
+  /** Every write or DDL capability the role holds, one line each. */
+  writeCapabilities: string[];
+}
+
+/**
+ * The only role memberships a read-only credential may hold: the predefined
+ * roles that grant reads and nothing else. Any other membership is refused.
+ */
+export const READ_ROLE_ALLOWLIST = [
+  "pg_monitor",
+  "pg_read_all_data",
+  "pg_read_all_settings",
+  "pg_read_all_stats",
+  "pg_stat_scan_tables",
+] as const;
+
+/** Relation owner / schema owner test, shared by the queries below. */
+const IS_ME = "(SELECT oid FROM pg_roles WHERE rolname = current_user)";
+
+/**
+ * Read everything the refusal rule needs, in the one read-only session. Only
+ * catalog reads: nothing here writes, and nothing here TRIES a write to find
+ * out whether it would succeed.
+ *
+ * WRITE CAPABILITY is anything that lets the credential change the database:
+ *   - INSERT/UPDATE (table-wide OR on any single column), DELETE, TRUNCATE,
+ *     TRIGGER or (PG17+) MAINTAIN on any relation outside the system schemas,
+ *     or ownership of one (an owner can grant itself the rest);
+ *   - UPDATE or USAGE on a sequence (both allow nextval, which writes);
+ *   - CREATE on, or ownership of, any schema; CREATE on the database;
+ *   - membership in any role outside READ_ROLE_ALLOWLIST. A NOINHERIT
+ *     member (0053 creates rm_readonly NOINHERIT) reports no inherited grant
+ *     through has_table_privilege, yet can still `SET ROLE` into its writer.
+ */
+export async function probeCaptureTarget(db: Db): Promise<CaptureProbe> {
+  const [ro] = (await db.unsafe("SHOW transaction_read_only")) as unknown as { transaction_read_only: string }[];
+  const [who] = (await db`
+    SELECT current_user::text  AS role,
+           pg_is_in_recovery() AS in_recovery,
+           version()           AS version,
+           r.rolsuper, r.rolcreaterole, r.rolcreatedb, r.rolreplication, r.rolbypassrls
+    FROM pg_roles r
+    WHERE r.rolname = current_user
+  `) as unknown as {
+    role: string;
+    in_recovery: boolean;
+    version: string;
+    rolsuper: boolean;
+    rolcreaterole: boolean;
+    rolcreatedb: boolean;
+    rolreplication: boolean;
+    rolbypassrls: boolean;
+  }[];
+  const attributes = (
+    [
+      ["rolsuper", "SUPERUSER"],
+      ["rolcreaterole", "CREATEROLE"],
+      ["rolcreatedb", "CREATEDB"],
+      ["rolreplication", "REPLICATION"],
+      ["rolbypassrls", "BYPASSRLS"],
+    ] as const
+  )
+    .filter(([k]) => who?.[k] === true)
+    .map(([, label]) => label);
+
+  // MAINTAIN (REFRESH MATERIALIZED VIEW, LOCK, CLUSTER, REINDEX, VACUUM) is a
+  // PG17 privilege: has_table_privilege(…, 'MAINTAIN') is an error on older
+  // servers, so it is only asked where it exists.
+  const [ver] = (await db`
+    SELECT current_setting('server_version_num')::int AS num
+  `) as unknown as { num: number }[];
+  const hasMaintain = Number(ver?.num ?? 0) >= 170000;
+  // INSERT and UPDATE can be granted per COLUMN. has_table_privilege sees only
+  // the table-level grant, so a role holding `UPDATE (note)` would read as
+  // clean; has_any_column_privilege sees the table grant OR any column grant.
+  // DELETE, TRUNCATE, TRIGGER and MAINTAIN exist only at table level. TRIGGER
+  // counts as write capability: a trigger attached to a table runs whenever a
+  // writer touches it, with that writer's rights.
+  const maintainCol = hasMaintain ? "has_table_privilege(c.oid, 'MAINTAIN')" : "false";
+  const relations = (await db.unsafe(`
+    SELECT format('%I.%I', n.nspname, c.relname)     AS object,
+           c.relowner = ${IS_ME}                     AS owned,
+           has_any_column_privilege(c.oid, 'INSERT') AS ins,
+           has_any_column_privilege(c.oid, 'UPDATE') AS upd,
+           has_table_privilege(c.oid, 'DELETE')      AS del,
+           has_table_privilege(c.oid, 'TRUNCATE')    AS trunc,
+           has_table_privilege(c.oid, 'TRIGGER')     AS trig,
+           ${maintainCol}                            AS maint
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND (c.relowner = ${IS_ME}
+        OR has_any_column_privilege(c.oid, 'INSERT')
+        OR has_any_column_privilege(c.oid, 'UPDATE')
+        OR has_table_privilege(c.oid, 'DELETE')
+        OR has_table_privilege(c.oid, 'TRUNCATE')
+        OR has_table_privilege(c.oid, 'TRIGGER')
+        OR ${maintainCol})
+    ORDER BY 1
+  `)) as unknown as {
+    object: string;
+    owned: boolean;
+    ins: boolean;
+    upd: boolean;
+    del: boolean;
+    trunc: boolean;
+    trig: boolean;
+    maint: boolean;
+  }[];
+
+  const sequences = (await db.unsafe(`
+    SELECT format('%I.%I', n.nspname, c.relname) AS object
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+      AND c.relkind = 'S'
+      AND (has_sequence_privilege(c.oid, 'UPDATE') OR has_sequence_privilege(c.oid, 'USAGE'))
+    ORDER BY 1
+  `)) as unknown as { object: string }[];
+
+  const schemas = (await db.unsafe(`
+    SELECT format('%I', n.nspname) AS object, n.nspowner = ${IS_ME} AS owned
+    FROM pg_namespace n
+    WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
+      AND (has_schema_privilege(n.oid, 'CREATE') OR n.nspowner = ${IS_ME})
+    ORDER BY 1
+  `)) as unknown as { object: string; owned: boolean }[];
+
+  const [database] = (await db`
+    SELECT current_database()::text AS name,
+           has_database_privilege(current_database(), 'CREATE') AS can_create
+  `) as unknown as { name: string; can_create: boolean }[];
+
+  // An ALLOWLIST, not a denylist: every membership refuses except the
+  // predefined roles that only read. A denylist of named writer roles lets
+  // through whatever it forgot (pg_maintain, pg_signal_backend,
+  // pg_create_subscription, pg_checkpoint, …) and every role a future server adds.
+  const memberships = (await db.unsafe(`
+    SELECT r.rolname::text AS name
+    FROM pg_roles r
+    WHERE r.rolname <> current_user
+      AND pg_has_role(current_user, r.oid, 'MEMBER')
+      AND r.rolname NOT IN (${READ_ROLE_ALLOWLIST.map((n) => `'${n}'`).join(", ")})
+    ORDER BY 1
+  `)) as unknown as { name: string }[];
+
+  const writeCapabilities = [
+    ...relations.map((r) => {
+      const held = [
+        r.ins && "INSERT",
+        r.upd && "UPDATE",
+        r.del && "DELETE",
+        r.trunc && "TRUNCATE",
+        r.trig && "TRIGGER",
+        r.maint && "MAINTAIN",
+        r.owned && "OWNER",
+      ];
+      return `table ${r.object}: ${held.filter(Boolean).join(", ")}`;
+    }),
+    ...sequences.map((s) => `sequence ${s.object}: UPDATE/USAGE (nextval writes)`),
+    ...schemas.map((s) => `schema ${s.object}: ${s.owned ? "OWNER" : "CREATE"}`),
+    ...(database?.can_create ? [`database ${database.name}: CREATE`] : []),
+    ...memberships.map((m) => `member of ${m.name}`),
+  ];
+
+  return {
+    transactionReadOnly: String(ro?.transaction_read_only ?? ""),
+    role: String(who?.role ?? ""),
+    inRecovery: who?.in_recovery === true,
+    serverVersion: String(who?.version ?? ""),
+    attributes,
+    writeCapabilities,
+  };
+}
+
+/**
+ * The refusal rule, a pure decision over the probe: the reason to refuse, or
+ * undefined when the capture may proceed. The credential checks run BEFORE the
+ * node check on purpose. A writer credential is refused as a writer credential
+ * whatever node it points at, so the operator fixes the right thing first.
+ */
+export function captureRefusal(p: CaptureProbe): string | undefined {
+  if (p.transactionReadOnly !== "on") {
+    return (
+      `SHOW transaction_read_only = '${p.transactionReadOnly}' — the probe session is WRITEABLE. ` +
+      `The capture runs only in a session the server itself holds read-only. Refusing.`
+    );
+  }
+  if (p.role !== READONLY_ROLE) {
+    return (
+      `connected as current_user '${p.role}', not '${READONLY_ROLE}'. The capture runs only as the ` +
+      `read-only backup role; any other credential is refused.`
+    );
+  }
+  if (p.attributes.length > 0) {
+    return (
+      `${p.role} carries ${p.attributes.join(", ")} — that is not a read-only credential. ` +
+      `Strip the attribute before capturing. Refusing.`
+    );
+  }
+  if (p.writeCapabilities.length > 0) {
+    const shown = p.writeCapabilities.slice(0, 5).map((w) => `  ${w}`);
+    const more = p.writeCapabilities.length > 5 ? [`  …and ${p.writeCapabilities.length - 5} more`] : [];
+    return [
+      `${p.role} holds ${p.writeCapabilities.length} write capability(ies), so it is not a read-only credential. Refusing:`,
+      ...shown,
+      ...more,
+      `REVOKE them so ${p.role} holds SELECT only, then capture again.`,
+    ].join("\n");
+  }
+  if (!p.inRecovery) {
+    return (
+      "pg_is_in_recovery() is FALSE — this is the PRIMARY, not the read-only replica. A dump is a long, " +
+      "heavy read, and the backup path is one read-only role against a node that serves reads. There is " +
+      "no override: point host/port in the env file at the replica."
+    );
+  }
+  return undefined;
+}
+
 function run(cmd: string[], env?: Record<string, string>): { code: number; stdout: string; stderr: string } {
   const p = Bun.spawnSync(cmd, { env: env ? { ...process.env, ...env } : process.env });
   const dec = new TextDecoder();
   return { code: p.exitCode ?? 1, stdout: dec.decode(p.stdout).trim(), stderr: dec.decode(p.stderr).trim() };
 }
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if ("error" in parsed) {
     err(parsed.error);
     return 2;
   }
-  const { out, envFile, allowPrimary } = parsed;
+  const { out, envFile } = parsed;
 
   // umask 077 for everything this process creates, the way §5.2's shell does.
   // pg_dump and gpg create their own output files, so per-write `mode` options
@@ -141,7 +414,7 @@ async function main(argv: string[]): Promise<number> {
 
   const env = loadEnvFile(envFile);
   if (!env) {
-    err(`no readable ${envFile}. Copy .env.readonly.example and fill in the rm_readonly role's details.`);
+    err(`no readable ${envFile}. Add host/port/database + a rm_readonly= line to $HOME/.env (see .env.example).`);
     return 2;
   }
   const resolved = urlFromDiscreteEnv(env);
@@ -158,37 +431,32 @@ async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
-  // GUARD 2 — this must be a REPLICA. A streaming replica answers true; the
-  // primary answers false. This is the check that makes "against the replica,
-  // never the primary" enforceable instead of merely written down.
-  const { default: postgres } = await import("postgres");
-  const db = postgres(url, { max: 1, idle_timeout: 10, connection: { application_name: "smoke-twin-capture" } });
-  let inRecovery: boolean;
-  let serverVersion: string;
-  let roleName: string;
+  // GUARD 2 — a read-only session, as rm_readonly holding nothing but reads,
+  // on a node that serves reads and is not the primary. A streaming replica
+  // answers pg_is_in_recovery() = true; the primary answers false. Every input
+  // is read off the live connection, and captureRefusal decides.
+  let probe: CaptureProbe;
   try {
-    const [row] = await db`select pg_is_in_recovery() as rec, version() as v, current_user as who`;
-    inRecovery = Boolean(row?.rec);
-    serverVersion = String(row?.v ?? "");
-    roleName = String(row?.who ?? "");
+    const { db } = await connectReadOnly(url, "smoke-twin-capture");
+    try {
+      probe = await probeCaptureTarget(db);
+    } finally {
+      await db.end({ timeout: 5 }).catch(() => {});
+    }
   } catch (e) {
     err(`could not reach the database: ${e instanceof Error ? e.message : e}`);
     return 2;
-  } finally {
-    await db.end({ timeout: 5 }).catch(() => {});
   }
-
+  const { role: roleName, inRecovery, serverVersion } = probe;
   const serverMajor = majorOf(serverVersion.replace(/^PostgreSQL\s+/, ""));
-  log(`connected as ${roleName}; server major ${serverMajor ?? "?"}; pg_is_in_recovery()=${inRecovery}`);
-  if (!inRecovery) {
-    const msg =
-      "pg_is_in_recovery() is FALSE — this is the PRIMARY, not the read-only replica. A dump is a long, " +
-      "heavy read and the runbook's whole backup path is deliberately one read-only role against a replica.";
-    if (!allowPrimary) {
-      err(`${msg} Pass --allow-primary only if you genuinely mean it (it is recorded in the manifest).`);
-      return 2;
-    }
-    log(`WARNING: ${msg} Proceeding because --allow-primary was passed; this is recorded in manifest.json.`);
+  log(
+    `connected as ${roleName}; server major ${serverMajor ?? "?"}; ` +
+      `transaction_read_only=${probe.transactionReadOnly}; pg_is_in_recovery()=${inRecovery}`,
+  );
+  const refusal = captureRefusal(probe);
+  if (refusal) {
+    err(refusal);
+    return 2;
   }
 
   // GUARD 3 — client not older than server, checked before the expensive read.
@@ -238,6 +506,7 @@ async function main(argv: string[]): Promise<number> {
     log(`dumping (this is the long step) -> ${dumpPlain}`);
     const dump = run(
       ["pg_dump", "--dbname", url, "--format=custom", "--compress=9", "--no-owner", "--no-privileges", `--file=${dumpPlain}`],
+      readOnlyDumpEnv(),
     );
     if (dump.code !== 0) {
       err(`pg_dump exited ${dump.code}: ${dump.stderr}`);
@@ -262,6 +531,7 @@ async function main(argv: string[]): Promise<number> {
     log(`dumping globals (through ${database}, never template1) -> ${globalsPlain}`);
     const globals = run(
       ["pg_dumpall", "--dbname", url, "-l", database, "--globals-only", "--no-role-passwords", `--file=${globalsPlain}`],
+      readOnlyDumpEnv(),
     );
     if (globals.code !== 0) {
       err(`pg_dumpall exited ${globals.code}: ${globals.stderr}`);
@@ -302,7 +572,8 @@ async function main(argv: string[]): Promise<number> {
     target: redactedTarget(url, "(unset)"),
     role: roleName,
     pgIsInRecovery: inRecovery,
-    allowPrimaryOverride: allowPrimary && !inRecovery,
+    transactionReadOnly: probe.transactionReadOnly,
+    dumpPgOptions: READ_ONLY_PGOPTIONS,
     serverVersion,
     clientVersion,
     files: {
@@ -317,7 +588,7 @@ async function main(argv: string[]): Promise<number> {
   writeFileSync(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 
   log(`captured ${stamp}: dump ${manifest.bytes.dump} bytes, globals ${manifest.bytes.globals} bytes`);
-  log(`restore it with:  bun smoke -- --db smoke-twin${out === DEFAULT_OUT ? "" : ` --backup-dir ${out}`}`);
+  log(`restore it with:  bun smoke -- --db smoke-twin${out === defaultOutDir() ? "" : ` --backup-dir ${out}`}`);
   return 0;
 }
 

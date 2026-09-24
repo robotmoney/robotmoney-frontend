@@ -18,9 +18,11 @@
 // a missing docker CLI fails this test loudly — never a silent skip
 // (test-coverage policy).
 import { beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSmokeEnv } from "../../smoke.ts";
-import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-schedule.ts";
+import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
 import { scenarioPlan } from "../../lib/smoke-mode.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -140,7 +142,11 @@ function renderComposeConfig(
 ): string {
   const r = Bun.spawnSync(
     [
-      "docker", "compose",
+      // Same `--env-file /dev/null` the stack's own composeArgs() passes, so this
+      // dump is the config a boot actually gets — not one coloured by whatever
+      // `.env` the checkout this suite runs in happens to carry (a staging
+      // checkout carries the deployment's).
+      "docker", "compose", "--env-file", "/dev/null",
       ...profiles.flatMap((profile) => ["--profile", profile]),
       ...composeFiles.flatMap((file) => ["-f", file]),
       "config", "--format", "json",
@@ -281,10 +287,16 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 }
 
 // Every service whose process reads the Base RPC / analytics knobs: the api and
-// all three worker lanes (issue #107 topology — swarm/analytics/research).
-const RPC_CONSUMERS = ["api", "worker-swarm", "worker-analytics", "worker-research"] as const;
+// both worker lanes (issue #107 topology — analytics/research). NOT
+// `system-scheduler`: it reads no data-path knob and holds no provider
+// credential (system-scheduler-spec.md §7).
+const RPC_CONSUMERS = ["api", "worker-analytics", "worker-research"] as const;
 const HTTP_CACHE_CONSUMERS = [...RPC_CONSUMERS, "analytics-producer"] as const;
-const BACKEND_IMAGE_BUILDS = [...RPC_CONSUMERS, "analytics-producer"] as const;
+// Every service built from backend/Dockerfile. `system-scheduler` is here and
+// NOT in RPC_CONSUMERS above: it ships from the same image (so the identity
+// build args must reach it) while reading none of that image's data-path
+// configuration.
+const BACKEND_IMAGE_BUILDS = [...RPC_CONSUMERS, "system-scheduler", "analytics-producer"] as const;
 
 describe("AUM producer revision reaches every backend image build", () => {
   // The same three file lists PREWARM renders — shared so a case can never ask
@@ -467,7 +479,7 @@ describe("docker compose config — smoke data path resolution", () => {
 
 // Issue #371: the smoke's cadence PROFILE reaches the analytics-producer through
 // resolveSmokeEnv's composeEnv, so swarm cadence and research cadence are
-// stated in one file (scripts/lib/smoke-schedule.ts). These cases run the real
+// stated in one file (scripts/lib/smoke-cadence.ts). These cases run the real
 // `docker compose config` interpolation, which is the only thing that proves the
 // container would actually receive those cron strings.
 describe("analytics-producer cron resolution — the smoke cadence profile (issue #371)", () => {
@@ -568,19 +580,30 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     const smoke = scenarioPlan(false);
     const twin = scenarioPlan(true);
 
-    expect(smoke.initializer).toBe("simulation");
     expect(smoke.migrateEnv).toEqual({ SMOKE_SEED_PROJECTS: "1" });
-    expect(smoke.migrateScriptArgs).toEqual(["--seed-smoke-schedules"]);
-    expect(twin.initializer).toBe("archive");
     expect(twin.migrateEnv).toEqual({});
-    expect(twin.migrateScriptArgs).toEqual([]);
+    // `--seed-smoke-schedules` is gone: backend/src/db/migrate.ts has parsed no
+    // such flag since 17e978bf, so every simulation boot passed an argument
+    // that reached nothing (issue #1026). No scenario carries script args now.
+    expect("migrateScriptArgs" in smoke).toBe(false);
+    expect("migrateScriptArgs" in twin).toBe(false);
 
     const smokeMain = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
     expect(smokeMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);
     expect(smokeMain).toContain("migrateEnv: scenario.migrateEnv");
-    expect(smokeMain).toContain("migrateScriptArgs: [...scenario.migrateScriptArgs]");
-    expect(smokeMain).toContain("initialize: initializeScenario");
-    expect(smokeMain).toContain('"--already-migrated"');
+    expect(smokeMain).not.toContain("migrateScriptArgs");
+    expect(smokeMain).not.toContain("--seed-smoke-schedules");
+    // No local mode implies --migrate or --seed (spec §4.3, §5): both are the
+    // operator's explicit flags on every data path.
+    expect(smokeMain).toContain("migrate: migrates,");
+    expect(smokeMain).toContain("const migrates = requestsMigrate(process.argv);");
+    expect(smokeMain).toContain("const seeds = shouldSeed(process.argv);");
+    expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
+    // Retired: smoke no longer calls prod-bootstrap.ts's archive-adopt pipeline
+    // for any boot, twin included — a twin is already fully populated by its
+    // restore and has nothing for an initializer to create.
+    expect(smokeMain).not.toContain("prod-bootstrap.ts");
+    expect(smokeMain).not.toContain("--already-migrated");
     expect(smokeMain).toContain('"src/producer/index.ts", "seed"');
     expect(smokeMain).not.toContain("v0-seed-bootstrap");
     // `staticPortMode` still reaches the resolvers as the `stage` fact — but it
@@ -695,12 +718,33 @@ describe("every long-running service reports its own health", () => {
 
   test("the lanes and the producer all run the heartbeat check, not a process-existence probe", () => {
     const cfg = composeConfig({});
-    for (const name of ["worker-swarm", "worker-analytics", "worker-research", "analytics-producer"]) {
+    for (const name of ["worker-analytics", "worker-research", "analytics-producer"]) {
       const test_ = cfg.services[name]?.healthcheck?.test ?? [];
       // Pinning the command is the point: `CMD true` / `pgrep bun` would satisfy
       // the "declares a healthcheck" test above while proving nothing.
       expect(`${name}:${test_.join(" ")}`).toBe(`${name}:CMD bun run src/ops/healthcheck.ts`);
     }
+  });
+
+  // Criterion 25 (the compose half): Docker, not `bun smoke`, keeps the stack
+  // up (spec §1). Every standing service restarts itself after a crash or a
+  // daemon restart; postgres was the one that did not, so a reboot brought the
+  // services back against no database. Asserted over EVERY resolved service in
+  // every composition the smoke renders, not a named list, so a new service
+  // that omits the policy goes red on arrival.
+  test("every standing service carries `restart: unless-stopped`, in every composition", () => {
+    for (const files of ALL_COMPOSITIONS) {
+      const cfg = composeConfig({}, files);
+      const services = Object.entries(cfg.services);
+      expect(services.length).toBeGreaterThan(3);
+      for (const [name, svc] of services) {
+        expect({ files: files.join("+"), name, restart: svc.restart }).toEqual({ files: files.join("+"), name, restart: "unless-stopped" });
+      }
+    }
+  });
+
+  test("postgres in particular restarts itself: the stack is not up if its database is not", () => {
+    expect(composeConfig({}).services.postgres?.restart).toBe("unless-stopped");
   });
 
   test("the one-shot member-agent template is exempt BY PROFILE GATING, not by being forgotten", () => {
@@ -731,8 +775,8 @@ describe("every long-running service reports its own health", () => {
 // an `env_file:` and backend/Dockerfile sets no ENV — so a variable that block
 // does not name is never delivered to the container, and the failure is
 // perfectly silent: an override that was never delivered and one that was never
-// set produce byte-identical output, while docs/runbooks/deployment.md §2.1
-// tells a paged operator to set it and redeploy. That is the gap these cases
+// set produce byte-identical output, while the then-current deployment runbook
+// told a paged operator to set it and redeploy. That is the gap these cases
 // close, and they close it the only way it can be closed — against the RENDERED
 // compose configuration, over every composition the repo actually boots.
 describe("boot-guard operator controls reach the api container (issue #602)", () => {
@@ -846,32 +890,40 @@ describe("TRUST_PROXY reaches the api container in every composition (issue #892
   }
 });
 
-// Exactly one swarm-lane worker requirement (docs/architecture.md, issue #806 / #891).
-// `FOR UPDATE SKIP LOCKED` hands `swarm.judge` to one worker and `swarm.publish` to
-// another the instant both are due, and the judge holds its worker for up to 60s
-// on the model call — so with two `worker-swarm` containers the publish overtakes
-// the judging on the ADMIN cadence. No compose file may declare replicas > 1 or
-// scale > 1 for worker-swarm.
-export function assertSingleSwarmWorker(cfg: ComposeConfig, label = "config"): void {
-  const worker = cfg.services?.["worker-swarm"];
-  if (!worker) return;
-
-  const replicas = worker.deploy?.replicas;
-  if (replicas !== undefined && replicas > 1) {
-    throw new Error(
-      `[${label}] worker-swarm has deploy.replicas=${replicas}; docs/architecture.md requires exactly 1 swarm-lane worker`,
-    );
-  }
-
-  const scale = worker.scale;
-  if (scale !== undefined && scale > 1) {
-    throw new Error(
-      `[${label}] worker-swarm has scale=${scale}; docs/architecture.md requires exactly 1 swarm-lane worker`,
-    );
+// NO COMPOSE FILE MAY MULTIPLY A SERVICE (issue #891, restated by #1026).
+//
+// The original rule was narrower and named one service: `FOR UPDATE SKIP
+// LOCKED` handed the judge job to one swarm-lane worker and the publish job to
+// another the instant both were due, and the judge held its worker for up to
+// 60s on a model call, so a second container let the publish overtake the
+// judging. That lane no longer exists, and the process that replaced it is
+// explicitly NOT single-instance: system-scheduler-spec.md §1 — "Correctness
+// does not depend on there being exactly one: two schedulers briefly
+// overlapping during a deploy must produce the same results as one."
+//
+// So the check is not deleted with its old subject, it is GENERALISED. No
+// service in any composition may carry `deploy.replicas` or `scale` above 1.
+// That is strictly stronger than the rule it replaces: it covered one service
+// and this covers every one, including any future lane whose handler turns out
+// to be order-sensitive, and including `system-scheduler`, for which a
+// deliberate multiplication would be a decision to make in the open rather
+// than a number in a YAML file.
+export function assertNoReplicaMultipliers(cfg: ComposeConfig, label = "config"): void {
+  for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+    const replicas = svc?.deploy?.replicas;
+    if (replicas !== undefined && replicas > 1) {
+      throw new Error(
+        `[${label}] ${name} has deploy.replicas=${replicas}; no compose file may multiply a service`,
+      );
+    }
+    const scale = svc?.scale;
+    if (scale !== undefined && scale > 1) {
+      throw new Error(`[${label}] ${name} has scale=${scale}; no compose file may multiply a service`);
+    }
   }
 }
 
-describe("single-swarm-worker requirement is enforced across compose files (issue #891)", () => {
+describe("no composition multiplies a service (issue #891, generalised by #1026)", () => {
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],
     ["smoke", DEMO_COMPOSE_FILES],
@@ -879,77 +931,84 @@ describe("single-swarm-worker requirement is enforced across compose files (issu
   ];
 
   for (const [label, files] of COMPOSITIONS) {
-    test(`the ${label} composition declares at most 1 replica/scale for worker-swarm`, () => {
+    test(`the ${label} composition declares at most 1 replica/scale for every service`, () => {
       const cfg = composeConfig({}, files);
-      const worker = cfg.services?.["worker-swarm"];
-      expect(worker).toBeDefined();
-
-      const replicas = worker?.deploy?.replicas;
-      if (replicas !== undefined) {
-        expect(replicas).toBeLessThanOrEqual(1);
-      } else {
-        expect(replicas).toBeUndefined();
+      // The sweep is only meaningful if it saw the real topology, so name the
+      // services it must have found rather than trusting a possibly-empty map.
+      for (const name of ["api", "worker-analytics", "worker-research", "system-scheduler"]) {
+        expect({ label, name, present: cfg.services?.[name] !== undefined })
+          .toEqual({ label, name, present: true });
       }
-
-      const scale = worker?.scale;
-      if (scale !== undefined) {
-        expect(scale).toBeLessThanOrEqual(1);
-      } else {
-        expect(scale).toBeUndefined();
+      for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+        const replicas = svc?.deploy?.replicas;
+        if (replicas !== undefined) expect({ name, replicas }).toEqual({ name, replicas: Math.min(replicas, 1) });
+        const scale = svc?.scale;
+        if (scale !== undefined) expect({ name, scale }).toEqual({ name, scale: Math.min(scale, 1) });
       }
-
-      expect(() => assertSingleSwarmWorker(cfg, label)).not.toThrow();
+      expect(() => assertNoReplicaMultipliers(cfg, label)).not.toThrow();
     });
   }
 
-  test("assertion helper rejects replicas > 1 and scale > 1", () => {
+  test("assertion helper rejects replicas > 1 and scale > 1, on ANY service", () => {
     expect(() =>
-      assertSingleSwarmWorker({
-        services: {
-          "worker-swarm": {
-            deploy: { replicas: 2 },
-          },
-        },
-      }),
-    ).toThrow(/worker-swarm has deploy\.replicas=2/);
+      assertNoReplicaMultipliers({ services: { "worker-analytics": { deploy: { replicas: 2 } } } }),
+    ).toThrow(/worker-analytics has deploy\.replicas=2/);
 
     expect(() =>
-      assertSingleSwarmWorker({
-        services: {
-          "worker-swarm": {
-            scale: 3,
-          },
-        },
-      }),
-    ).toThrow(/worker-swarm has scale=3/);
+      assertNoReplicaMultipliers({ services: { "system-scheduler": { scale: 3 } } }),
+    ).toThrow(/system-scheduler has scale=3/);
 
     expect(() =>
-      assertSingleSwarmWorker({
-        services: {
-          "worker-swarm": {
-            deploy: { replicas: 1 },
-            scale: 1,
-          },
-        },
-      }),
+      assertNoReplicaMultipliers({ services: { api: { deploy: { replicas: 1 }, scale: 1 } } }),
     ).not.toThrow();
 
-    expect(() =>
-      assertSingleSwarmWorker({
-        services: {
-          "worker-swarm": {},
-        },
-      }),
-    ).not.toThrow();
+    expect(() => assertNoReplicaMultipliers({ services: { api: {} } })).not.toThrow();
   });
 
-  test("raw compose source files contain no scale or replica multipliers for worker-swarm", async () => {
+  test("raw compose source files contain no scale or replica multipliers at all", async () => {
     for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"]) {
       const text = await Bun.file(join(repoRoot, file)).text();
       expect(`${file}:replicas:${/replicas\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:replicas:false`);
       expect(`${file}:scale:${/scale\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:scale:false`);
     }
   });
+});
+
+
+// Criterion 122, the compose half, proven against the real CLI: compose loads
+// `<project dir>/.env` for interpolation by itself, whatever environment it is
+// handed, and `--env-file /dev/null` is what stops it. A planted `.env` in a
+// scratch project directory carries a value docker-compose.yml interpolates
+// into `api`; the render WITH the flag must not see it, and the render without
+// it (the red control) must — or the check proves nothing about the flag.
+// These two renders are deliberately one-off (not in PREWARM): they use their
+// own project directory, and carry an explicit budget.
+describe("compose never reads the project directory's .env (criterion 122)", () => {
+  const PLANTED = "planted-from-dotenv";
+  function renderWithPlantedDotenv(withFlag: boolean): string {
+    const dir = mkdtempSync(join(tmpdir(), "rm-compose-dotenv-"));
+    writeFileSync(join(dir, ".env"), `SWARM_JUDGE_FAULT_INJECTION=${PLANTED}\n`);
+    const r = Bun.spawnSync(
+      [
+        "docker", "compose",
+        ...(withFlag ? ["--env-file", "/dev/null"] : []),
+        "--project-directory", dir,
+        "-f", join(repoRoot, "docker-compose.yml"),
+        "config", "--format", "json",
+      ],
+      { cwd: dir, env: baseEnv(), stdout: "pipe", stderr: "pipe" },
+    );
+    if (r.exitCode !== 0) throw new Error(`docker compose config failed: ${new TextDecoder().decode(r.stderr)}`);
+    return JSON.stringify((JSON.parse(new TextDecoder().decode(r.stdout)) as ComposeConfig).services.api?.environment ?? {});
+  }
+
+  test("with --env-file /dev/null the planted value never reaches a container", () => {
+    expect(renderWithPlantedDotenv(true)).not.toContain(PLANTED);
+  }, 120_000);
+
+  test("red control: without the flag, compose DOES read the planted .env", () => {
+    expect(renderWithPlantedDotenv(false)).toContain(PLANTED);
+  }, 120_000);
 });
 
 

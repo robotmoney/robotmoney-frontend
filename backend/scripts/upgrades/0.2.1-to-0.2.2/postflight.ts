@@ -206,25 +206,12 @@ async function checkAdminCredentialUntouched(db: Db, { record }: Checker): Promi
   record("admin-credential-untouched", "PASS", `${total} row(s) as expected, none carrying a recovery_hash — the boot did not touch this table`);
 }
 
-// check 12 — swarm schedules state (compare against §5.4's captured file by hand)
-async function checkSwarmSchedules(db: Db, { record }: Checker): Promise<void> {
-  const rows = (await db`
-    SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'swarm.%' ORDER BY 1
-  `) as unknown as { kind: string; enabled: boolean }[];
-  if (rows.length !== 5) {
-    record("swarm-schedules", "WARN", `${rows.length} swarm.* row(s), expected 5`);
-    return;
-  }
-  const allDisabled = rows.every((r) => !r.enabled);
-  record(
-    "swarm-schedules",
-    allDisabled ? "WARN" : "PASS",
-    [
-      `${rows.length} rows: ${rows.map((r) => `${r.kind}=${r.enabled ? "on" : "off"}`).join(", ")}`,
-      allDisabled ? "all disabled, as every bun smoke boot forces (§6.5) — compare against §5.4's captured file; drive sessions manually." : "",
-    ].filter(Boolean),
-  );
-}
+// Check 12 asserted the five session-cadence rows were present and disabled.
+// It is gone with the rows: system-scheduler-spec.md §2.2 makes a subject's
+// epoch duration its whole schedule, so job_schedules holds nothing about a
+// session and a historical release script must not fail a target for the
+// absence of rows the schema no longer creates. Everything else this postflight
+// checks is unaffected.
 
 // check 3 — namespace guard ran and was clean (HTTP)
 async function checkHealthEndpoint(_db: Db, { record }: Checker): Promise<void> {
@@ -548,7 +535,6 @@ async function runChecks(db: Db, checker: Checker): Promise<void> {
   await checkArchiveAdopted(db, checker);
   await checkAdminCredentialUntouched(db, checker);
   await checkPrerenderedRoute(db, checker);
-  await checkSwarmSchedules(db, checker);
   // §8.1 — the release's objective. Last, so a reader sees the mechanism
   // checks resolve before the criteria that decide whether v0.2.2 shipped.
   await checkAc1MemberIdsAreUuids(db, checker);

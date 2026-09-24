@@ -5,7 +5,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql, closeDb, setDatabase } from "./client.ts";
-import { seed, seedSmokeJobSchedules } from "./seed.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -27,7 +26,7 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
   }
 }
 
-export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): Promise<void> {
+export async function migrate(): Promise<void> {
   // Deploy-time migrations have their own credential.  It is deliberately not
   // inherited from a long-lived API process.  Local/ephemeral environments
   // retain DATABASE_URL for bootstrap compatibility.
@@ -62,17 +61,17 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
     console.log(`migrated: ${file}`);
   }
   console.log(`migrations up to date (${files.length} total)`);
-
-  // Seed required rows (job_schedules etc.) after schema is current. Idempotent,
-  // so safe on every boot — gives the worker recurring work without a manual
-  // admin trigger. See seed.ts.
-  await seed();
-  if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
 }
+
+// migrate() MIGRATES, and nothing else. Seeding is a separate concern with its
+// own tool (backend/src/db/seed.ts, run as `bun run src/db/seed.ts`) and its own
+// callers — the test template (backend/tests/preload.ts) and the boot's seed
+// step both invoke it explicitly. Keeping seed out of here is what makes
+// `bun run migrate` a schema-only operation safe to run against production.
 
 // Run directly: `bun run src/db/migrate.ts`
 if (import.meta.url === `file://${process.argv[1]}`) {
-  migrate({ seedSmokeSchedules: process.argv.includes("--seed-smoke-schedules") })
+  migrate()
     .then(closeDb)
     .catch((err) => {
       console.error(err);

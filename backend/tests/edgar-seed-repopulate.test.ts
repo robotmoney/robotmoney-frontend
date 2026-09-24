@@ -45,7 +45,7 @@ const origAllowInsecure = config.allowInsecure;
 beforeEach(async () => {
   ({ dir: fixtureDir } = installSeedFixture());
   server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       const r = await handleAnalytics(req, url);

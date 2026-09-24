@@ -2,10 +2,26 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
 
+// Server-side timeouts, applied as startup parameters so EVERY statement and
+// transaction on this pool inherits them. The API pool is small (default
+// max 10) and shared by every route, so one leaked transaction — a hung
+// query, a lock wait, a handler that opened a transaction and never closed
+// it — starves every other request behind it: requests queue on the pool,
+// the reverse proxy times them out, and clients see 502s. This mirrors the
+// worker pool's posture (db/worker-client.ts): make the DATABASE, not the
+// proxy's patience, the thing that gives up. Generous by default and
+// overridable per deployment.
+const STATEMENT_TIMEOUT_MS = Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 300_000); // 5 min
+const IDLE_IN_TXN_TIMEOUT_MS = Number(process.env.PG_IDLE_IN_TXN_TIMEOUT_MS ?? 600_000); // 10 min
+
 function makePool(url: string): postgresTypes.Sql<{}> {
   return postgres(url, {
     max: Number(process.env.PG_POOL_MAX ?? 10),
     onnotice: () => {}, // silence NOTICE spam (e.g. "table already exists")
+    connection: {
+      statement_timeout: STATEMENT_TIMEOUT_MS,
+      idle_in_transaction_session_timeout: IDLE_IN_TXN_TIMEOUT_MS,
+    },
   });
 }
 

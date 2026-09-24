@@ -80,6 +80,15 @@ export interface StackUpOptions {
   migrateEnv?: Record<string, string>;
   migrateScriptArgs?: string[];
   /**
+   * Run the one-shot migrate container at all. Defaults to `true` — unchanged
+   * behaviour for ephemeral/smoke-twin, which own their data and always
+   * migrate. `--db external` passes `false` unless the operator opted in with
+   * `--migrate` (scripts/lib/smoke-db-mode.ts): rm_app cannot `SET LOCAL ROLE
+   * rm_owner`, so an unopted migrate() against a production server with
+   * pending migrations would die mid-boot rather than serve today's schema.
+   */
+  migrate?: boolean;
+  /**
    * Last chance to refuse BEFORE anything is written.
    *
    * Runs after build() and the postgres phase — so images exist and the server
@@ -509,7 +518,20 @@ export function createStack(
     // write — it does not only migrate, it seeds.
     if (upOpts.preflight) await upOpts.preflight();
 
-    await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
+    if (upOpts.migrate ?? true) {
+      try {
+        await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
+      } finally {
+        // A caller that set MIGRATE_DATABASE_URL for this one run (an
+        // interactively-typed doadmin credential, or a rehearsal's
+        // twinMigrationCredential()) never wants it outliving the call it was
+        // for — this process keeps running long after migrate() returns.
+        delete process.env.MIGRATE_DATABASE_URL;
+      }
+    } else {
+      emit({ phase: "migrate", status: "start", detail: "skipped — pass --migrate to run it" });
+      emit({ phase: "migrate", status: "done", detail: "skipped" });
+    }
 
     // Named explicitly from the profile — never a bare `docker compose up -d` —
     // so a compose service added later can never leak into `core`.

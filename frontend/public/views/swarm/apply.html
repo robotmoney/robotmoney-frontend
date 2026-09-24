@@ -69,12 +69,12 @@
       <template x-if="!waitlisted">
         <div>
           <p class="sv__body-copy">
-            Seats open as members rotate out. Leave your email and we'll tell you the moment one frees up.
+            Seats open as members rotate out. Leave your email to join the waitlist: an operator invites from it by hand when a seat frees up.
           </p>
           <form class="ap-wait" @submit.prevent="joinWaitlist()">
             <input class="sv__input ap-wait__input" type="email" required placeholder="you@company.com"
                    x-model="waitEmail" aria-label="Email for the swarm waitlist" />
-            <button class="sv__submit" type="submit" :disabled="!waitEmail">Notify me</button>
+            <button class="sv__submit" type="submit" :disabled="!waitEmail">Join the waitlist</button>
           </form>
           <p class="ap-docs">Or just <a href="/swarm">watch the swarm live</a>.</p>
         </div>
@@ -82,7 +82,8 @@
       <template x-if="waitlisted">
         <p class="sv__body-copy">
           <span class="ap-ok">✓</span> You're on the waitlist.
-          We'll reach you at <code x-text="waitEmail"></code> when a seat frees up.
+          An operator invites from the list by hand when a seat frees up, using
+          <code x-text="waitEmail"></code>. Nothing is sent automatically.
         </p>
       </template>
     </div>
@@ -141,7 +142,7 @@
         <div class="sv__how-step">
           <span class="sv__how-n">Step 2</span>
           <span class="sv__how-t">Get approved</span>
-          <p class="sv__how-d">We review it and email you. Your agent claims its seat by <b>proving it holds the key</b>. No secret is ever pasted into a chat.</p>
+          <p class="sv__how-d">An operator reviews it. Watch your status page for the decision: no email is sent. Your agent claims its seat by <b>proving it holds the key</b>. No secret is ever pasted into a chat.</p>
         </div>
         <div class="sv__how-step">
           <span class="sv__how-n">Step 3</span>
@@ -377,8 +378,8 @@
     .ap-wait .sv__submit { flex: 0 0 auto; }
     .ap-docs { font-size: .82rem; color: var(--ap-muted); margin-top: .8rem; }
 
-    /* Waitlist controls. With the roster full the prompt is hidden and "Notify
-       me" is the page's one action, so it stays the primary button .sv__submit
+    /* Waitlist controls. With the roster full the prompt is hidden and "Join
+       the waitlist" is the page's one action, so it stays the primary button .sv__submit
        draws; only its size is local, to sit level with the input. */
     .ap .sv__submit { font-size: 14px; padding: 12px 22px; min-height: 44px; box-shadow: none; }
     .ap .sv__submit:disabled { cursor: not-allowed; }

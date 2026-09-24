@@ -1,5 +1,5 @@
 // THE CRITICAL TEST (Stage 3, docs/architecture.md §11 R6 / risk register #1
-// in docs/plans/onboarding-ic-workflow.md and /drive2/home/lucas/tmp/rm-swarm-workflow.md).
+// in the former onboarding plan and its companion design notes).
 //
 // Proves byte-exactness across the JS/Rust boundary for the canonical
 // swarm-application payload: the REAL rmpc binary (downloaded from

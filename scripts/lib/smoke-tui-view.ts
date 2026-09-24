@@ -17,7 +17,7 @@
 // stitch this module's pieces together with smoke-main-only context (the TUI
 // handle, the compose project name, boot uptime, the admin password, the
 // readiness-polling instance) that has no reason to live anywhere else.
-import { color, spinner, truncate, visibleLen } from "./tui.ts";
+import { color, hr, spinner, truncate, visibleLen } from "./tui.ts";
 import type { ContainerLogLine, ContainerTelemetry } from "./smoke-telemetry.ts";
 
 export type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
@@ -271,5 +271,43 @@ export function columns(panes: string[][], width: number): string[] {
     });
     out.push(cells.join(gap));
   }
+  return out;
+}
+
+// ── How a startup failure is painted ─────────────────────────────────────────
+// Moved here from smoke-failure.ts (issue #1026) so the module `bun smoke`
+// imports for its failure DECISIONS carries no TUI dependency.
+
+/**
+ * One line stating, plainly, whether the database is still being written to.
+ *
+ * The operator's next decision depends on this more than on the error text, so
+ * it is never implied — a failed quiesce says so in as many words, because the
+ * writes it could not stop are the ones no teardown can roll back.
+ */
+export function writerQuiesceLine(w: WriterQuiesce): string {
+  switch (w) {
+    case "stopped": return `${color("32", "✓")} database writers stopped — nothing is still writing`;
+    case "pending": return `${color("33", "…")} stopping database writers…`;
+    case "none": return `${color("2", "·")} no database writers were running`;
+    case "failed": return color("1;31", "! could NOT stop the database writers — they may STILL be writing; run `bun run smoke:down`");
+  }
+}
+
+/**
+ * The failure pane.
+ *
+ * The boot is over, but the TUI stays up and keeps painting this, so the cause
+ * is readable on the screen that was already showing the run — rather than
+ * printed to a terminal the process just abandoned. Rendered directly under the
+ * Startup pane so the ✗ step above and the reason here read together.
+ */
+export function renderFailurePane(fatal: FatalState, width: number, project: string): string[] {
+  const out = [hr(width, "STARTUP FAILED")];
+  const where = fatal.step ? `${fatal.step}: ` : "";
+  out.push(truncate(`  ${color("1;31", "✗")} ${color("1", where)}${fatal.message}`, width));
+  for (const d of fatal.detail) out.push(truncate(color("2", `      ${d}`), width));
+  out.push(truncate(`  ${writerQuiesceLine(fatal.writers)}`, width));
+  out.push(truncate(color("2", `  inspect: bun run smoke:status   ·   logs: docker compose -p ${project} logs -f`), width));
   return out;
 }

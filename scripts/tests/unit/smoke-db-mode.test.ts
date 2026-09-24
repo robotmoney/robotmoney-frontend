@@ -1,34 +1,49 @@
-// Unit tests for the `--db` data-path resolver and the argv allowlist
+// Unit tests for the `--local <mode>` data-path resolver and the argv allowlist
 // (scripts/lib/smoke-db-mode.ts).
 //
-// Imported from scripts/smoke.ts — the `bun run smoke` entrypoint re-exports the
+// Imported from scripts/smoke.ts — the `bun smoke` entrypoint re-exports the
 // module and only triggers the side-effectful bring-up under `import.meta.main`,
 // so this import is safe and proves the tested resolver is exactly the one the
-// smoke consumes (same arrangement as smoke-env.test.ts and ).
+// smoke consumes (same arrangement as smoke-env.test.ts).
 //
-// Contract under test:
-//   - THREE named modes, one flag. Default is ephemeral; no env var can change it.
-//   - Every invalid combination is refused AT PARSE TIME, before any restore
-//     work — a smoke-twin that discovers its own invalidity after a multi-minute
-//     pg_restore has already wasted the window it exists to protect.
+// Contract under test (smoke-production-spec §1, §5):
+//   - No flag is the remote database; `--local` takes a REQUIRED mode:
+//     blank | dump[=<dir>] | volume[=<name>]. A bare `--local` or a path refuses.
+//   - Every flag §1 retires with no alias, and SMOKE_PROJECT, is REFUSED by
+//     name, never warned about and never accepted.
+//   - No mode implies `--seed` (or `--migrate`); `--seed` refuses a populated
+//     database, which a dump and a reattached volume are.
 //   - Unknown flags are ERRORS. They used to be ignored, which booted the
 //     default data path while looking like the one that was asked for.
-//   - `--external-pg` still works, and says it is deprecated.
-//   - ownsData() and usesComposePostgres() are DIFFERENT questions; the smoke-twin is
+//   - ownsData() and usesComposePostgres() are DIFFERENT questions; the dump is
 //     the case that proves it.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   bannerFor,
+  bootPreflightPlan,
   cadenceOverride,
-  DB_FLAG,
   keptDataDescription,
-  DB_MODES,
   dataPathOverlayYaml,
+  LOCAL_MODES,
+  localModeOf,
+  MIGRATE_FLAG,
   ownsData,
   parseDataPath,
+  parseLocalMode,
+  parseVolumeHolders,
+  reattachOverlayYaml,
+  refuseRetiredEnv,
+  refuseVolumeInUse,
+  requestsDump,
+  requestsMigrate,
+  requestsSeed,
+  RETIRED_ENV,
+  RETIRED_FLAGS,
+  SEED_FLAG,
+  shouldSeed,
   usesComposePostgres,
   validateArgv,
   type ResolvedDataPath,
@@ -44,85 +59,170 @@ function envFileWith(contents: string): string {
   return path;
 }
 
-const REAL_ENV = envFileWith("DATABASE_URL=postgres://u:hunter2secret@db.example.com:25060/defaultdb\n");
+const REAL_ENV = envFileWith(
+  "host = db.example.com\nport = 25060\ndatabase = defaultdb\nrm_app = hunter2secret\n",
+);
 const NO_ENV = join(tmpdir(), "rm-db-mode-absent", ".env");
 const parse = (a: string[], envFilePath = REAL_ENV) => parseDataPath(a, { envFilePath });
 
-describe("default and the three modes", () => {
-  test("no flag → ephemeral, and no warning", () => {
-    const { dataPath, warnings } = parse(argv());
-    expect(dataPath).toEqual({ kind: "ephemeral" });
-    expect(warnings).toEqual([]);
+describe("the default and the three local modes", () => {
+  test("no flag → the remote database (the default), resolved from the $HOME/.env FILE", () => {
+    const { dataPath } = parse(argv());
+    expect(dataPath).toMatchObject({ kind: "external", host: "db.example.com", source: "discrete keys" });
   });
 
-  for (const mode of DB_MODES) {
-    test(`--db ${mode} parses`, () => {
-      const extra = mode === "smoke-twin" ? ["--smoke"] : [];
-      expect(parse(argv(DB_FLAG, mode, ...extra)).dataPath.kind).toBe(mode);
-    });
-  }
-
-  test("--db=smoke-twin (inline form) parses the same as --db smoke-twin", () => {
-    expect(parse(argv(`${DB_FLAG}=smoke-twin`, "--smoke")).dataPath.kind).toBe("smoke-twin");
+  test("--local blank → a fresh local database", () => {
+    expect(parse(argv("--local", "blank")).dataPath).toEqual({ kind: "ephemeral" });
+    expect(parse(argv("--local=blank")).dataPath).toEqual({ kind: "ephemeral" });
   });
 
-  test("--db external resolves the address from the .env FILE", () => {
-    const dp = parse(argv(DB_FLAG, "external")).dataPath;
-    expect(dp).toMatchObject({ kind: "external", host: "db.example.com", source: "DATABASE_URL" });
+  test("--local dump → a restored dump (today's smoke-twin path), with an optional directory", () => {
+    expect(parse(argv("--local", "dump")).dataPath).toEqual({ kind: "smoke-twin" });
+    expect(parse(argv("--local", "dump=/srv/backups")).dataPath).toEqual({ kind: "smoke-twin", backupDir: "/srv/backups" });
+    expect(parse(argv("--local=dump=/srv/backups")).dataPath).toEqual({ kind: "smoke-twin", backupDir: "/srv/backups" });
   });
 
-  test("--db smoke-twin carries the backup dir when one is named", () => {
-    const dp = parse(argv(DB_FLAG, "smoke-twin", "--smoke", "--backup-dir", "/srv/backups")).dataPath;
-    expect(dp).toEqual({ kind: "smoke-twin", backupDir: "/srv/backups" });
-  });
-
-  test("--pg-data rides on the ephemeral variant", () => {
-    expect(parse(argv("--pg-data", "/srv/pg")).dataPath).toEqual({
+  test("--local volume → the compose postgres reattached to a saved volume, named or not", () => {
+    expect(parse(argv("--local", "volume")).dataPath).toEqual({ kind: "ephemeral", reattach: {} });
+    expect(parse(argv("--local", "volume=rm_smoke_stack_ab_pgdata")).dataPath).toEqual({
       kind: "ephemeral",
-      pgDataDir: "/srv/pg",
+      reattach: { volume: "rm_smoke_stack_ab_pgdata" },
     });
+  });
+
+  test("the modes are exactly the spec's three", () => {
+    expect([...LOCAL_MODES]).toEqual(["blank", "dump", "volume"]);
+  });
+
+  test("requestsDump answers from argv alone and never throws on a bad value", () => {
+    expect(requestsDump(argv("--local", "dump"))).toBe(true);
+    expect(requestsDump(argv("--local", "dump=/x"))).toBe(true);
+    expect(requestsDump(argv("--local", "blank"))).toBe(false);
+    expect(requestsDump(argv())).toBe(false);
+    expect(requestsDump(argv("--local", "/srv/pg"))).toBe(false);
+  });
+});
+
+describe("--local takes a mode, never a path (criterion 28's parse half)", () => {
+  test("a bare --local refuses and names the three modes", () => {
+    expect(() => parse(argv("--local"))).toThrow(/requires a mode: one of blank \| dump \| volume/);
+    expect(() => parse(argv("--local", SEED_FLAG))).toThrow(/requires a mode/);
+  });
+
+  test("--local <path> refuses — it used to bind-mount a directory named after the token", () => {
+    // RED CONTROL for the old reading: `blank` and `volume` WERE read as paths,
+    // so the spec's own spelling booted a relative bind called `blank`. Now a
+    // path is the thing that refuses, and the spec's words are modes.
+    for (const path of ["/srv/pg", "./pgdata", "blank-dir"]) {
+      expect(() => parse(argv("--local", path))).toThrow(/not a local mode/);
+      expect(() => parse(argv(`--local=${path}`))).toThrow(/not a local mode/);
+    }
+  });
+
+  test("a near-miss mode gets a suggestion", () => {
+    expect(() => parseLocalMode("volum")).toThrow(/Did you mean "volume"/);
+  });
+
+  test("blank takes no value; dump= and volume= require one", () => {
+    expect(() => parseLocalMode("blank=x")).toThrow(/takes no value/);
+    expect(() => parseLocalMode("dump=")).toThrow(/requires a value/);
+    expect(() => parseLocalMode("volume=")).toThrow(/requires a value/);
+  });
+
+  test("a reattach overlay names the volume as external and refuses a non-volume name", () => {
+    const yaml = reattachOverlayYaml("rm_smoke_stack_ab_pgdata");
+    expect(yaml).toContain("external: true");
+    expect(yaml).toContain("name: rm_smoke_stack_ab_pgdata");
+    expect(yaml).toContain(":/var/lib/postgresql/data");
+    expect(() => reattachOverlayYaml("../etc")).toThrow(/not a Docker volume name/);
+  });
+});
+
+describe("retired flags and SMOKE_PROJECT are REFUSED by name (criterion 4)", () => {
+  const SPEC_RETIRED = ["--no-tui", "--agents", "--smoke", "--db", "--pg-data", "--twin"];
+
+  test("every flag spec §1 retires is on the refusal list", () => {
+    const listed = RETIRED_FLAGS.map((r) => r.flag);
+    for (const f of SPEC_RETIRED) expect(listed).toContain(f);
+  });
+
+  test.each([
+    [["--twin"], "--twin"],
+    [["--agents", "athena"], "--agents"],
+    [["--agents=athena,themis"], "--agents"],
+    [["--no-tui"], "--no-tui"],
+    [["--db", "external"], "--db"],
+    [["--db=smoke-twin"], "--db"],
+    [["--pg-data", "/srv/pg"], "--pg-data"],
+    [["--smoke"], "--smoke"],
+    [["--backup-dir", "/srv/b"], "--backup-dir"],
+    [["--stage"], "--stage"],
+  ] as const)("%j is refused naming %s, as one error with no stray positional", (flags, name) => {
+    const errors = validateArgv(argv(...flags));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`${name} is retired with no alias`);
+    expect(() => parse(argv(...flags))).toThrow(new RegExp(`${name} is retired with no alias`));
+  });
+
+  test("a retired flag alongside valid ones still refuses the whole boot", () => {
+    expect(() => parse(argv("--local", "blank", "--no-tui", SEED_FLAG))).toThrow(/--no-tui is retired/);
+  });
+
+  test("SMOKE_PROJECT set to anything, even empty, is refused naming it", () => {
+    for (const value of ["rm_prod", "", "rm_ci_stack_1_1"]) {
+      const refusal = refuseRetiredEnv({ [RETIRED_ENV]: value });
+      expect(refusal).toContain("SMOKE_PROJECT is retired with no alias");
+    }
+  });
+
+  test("an environment without SMOKE_PROJECT is not refused", () => {
+    expect(refuseRetiredEnv({ PATH: "/usr/bin", RM_ENV: "stage" })).toBeNull();
+  });
+
+  test("red control: the refusal is the retired list's, not the unknown-flag path", () => {
+    // `--fixed-ports` never existed, so it is UNKNOWN, not retired: the two
+    // paths must stay distinguishable or the retired message proves nothing.
+    expect(validateArgv(argv("--fixed-ports")).join(" ")).toMatch(/unknown flag "--fixed-ports"/);
+    expect(validateArgv(argv("--fixed-ports")).join(" ")).not.toMatch(/retired/);
   });
 });
 
 describe("loud refusals — every one before any restore work", () => {
-  test("--db with no value names the three modes", () => {
-    expect(() => parse(argv(DB_FLAG))).toThrow(/requires a value/);
+  test("--seed with a dump is refused — a restored dump is populated", () => {
+    expect(() => parse(argv("--local", "dump", SEED_FLAG))).toThrow(/refuses a populated database/);
   });
 
-  test("a typo'd mode is refused and suggests the real one", () => {
-    expect(() => parse(argv(DB_FLAG, "twni", "--smoke"))).toThrow(/smoke-twin/);
+  test("--seed with a reattached volume is refused — it is populated too", () => {
+    expect(() => parse(argv("--local", "volume", SEED_FLAG))).toThrow(/refuses a populated database/);
   });
 
-  test("--db smoke-twin without --smoke is refused, with the reason", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin"))).toThrow(/requires --smoke/);
-    expect(() => parse(argv(DB_FLAG, "smoke-twin"))).toThrow(/POPULATED/);
+  test("the remote database with an unreadable ~/.env fails loudly, never falls back", () => {
+    expect(() => parse(argv(), NO_ENV)).toThrow(/no readable \$HOME\/\.env/);
   });
 
-  test("--db smoke-twin + --pg-data is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "smoke-twin", "--smoke", "--pg-data", "/srv/pg"))).toThrow(
-      /mutually exclusive/,
-    );
+  test("--migrate parses cleanly on every data path", () => {
+    expect(parse(argv(MIGRATE_FLAG)).dataPath.kind).toBe("external");
+    expect(parse(argv("--local", "dump", MIGRATE_FLAG)).dataPath.kind).toBe("smoke-twin");
+    expect(parse(argv("--local", "blank", MIGRATE_FLAG)).dataPath.kind).toBe("ephemeral");
   });
 
-  test("--db external + --pg-data is refused", () => {
-    expect(() => parse(argv(DB_FLAG, "external", "--pg-data", "/srv/pg"))).toThrow(
-      /mutually exclusive/,
-    );
+  test("--seed parses cleanly on the remote and blank databases", () => {
+    expect(parse(argv(SEED_FLAG)).dataPath.kind).toBe("external");
+    expect(parse(argv("--local", "blank", SEED_FLAG)).dataPath).toEqual({ kind: "ephemeral" });
   });
 
-  test("--backup-dir without a smoke-twin is refused", () => {
-    expect(() => parse(argv("--backup-dir", "/srv/backups"))).toThrow(/only applies/);
+  test("--migrate and --seed are independent, and combine", () => {
+    expect(parse(argv("--local", "blank", MIGRATE_FLAG, SEED_FLAG)).dataPath.kind).toBe("ephemeral");
+    expect(requestsMigrate(argv(SEED_FLAG))).toBe(false);
+    expect(requestsSeed(argv(MIGRATE_FLAG))).toBe(false);
   });
 
-  test("--db external with an unreadable .env fails loudly, never falls back", () => {
-    expect(() => parse(argv(DB_FLAG, "external"), NO_ENV)).toThrow(/no readable \.env/);
-  });
-
-  test("no env var can select a data path", () => {
+  test("no env var can select a data path — only the flags do", () => {
     const before = process.env.DB;
     process.env.DB = "smoke-twin";
     try {
-      expect(parse(argv()).dataPath.kind).toBe("ephemeral");
+      expect(parse(argv()).dataPath.kind).toBe("external");
+      expect(parse(argv("--local", "blank")).dataPath.kind).toBe("ephemeral");
     } finally {
       if (before === undefined) delete process.env.DB;
       else process.env.DB = before;
@@ -130,23 +230,24 @@ describe("loud refusals — every one before any restore work", () => {
   });
 });
 
-
 describe("validateArgv — unknown flags are errors, not silence", () => {
   test("--fixed-ports is rejected (the flag that never existed and booted green)", () => {
-    const errors = validateArgv(argv("--smoke", "--fixed-ports"));
-    expect(errors).not.toHaveLength(0);
+    const errors = validateArgv(argv("--local", "blank", "--fixed-ports"));
+    expect(errors).toHaveLength(1);
     expect(errors.join(" ")).toMatch(/unknown flag "--fixed-ports"/);
   });
 
   test("a near-miss flag gets a suggestion", () => {
-    expect(validateArgv(argv("--no-tui2")).join(" ")).toMatch(/--no-tui/);
+    expect(validateArgv(argv("--migrat")).join(" ")).toMatch(/--migrate/);
   });
 
   test("a clean invocation passes", () => {
-    expect(validateArgv(argv("--smoke", DB_FLAG, "smoke-twin", "--no-tui"))).toEqual([]);
+    expect(validateArgv(argv("--local", "blank", MIGRATE_FLAG, SEED_FLAG))).toEqual([]);
+    expect(validateArgv(argv("--static-port"))).toEqual([]);
+    expect(validateArgv(argv("--local", "dump=/srv/b", "--static-port", "--cadence", "fast"))).toEqual([]);
   });
 
-  test("--cadence is a known arity-1 flag (the fast smoke-twin's override)", () => {
+  test("--cadence is a known arity-1 flag (the fast dump's override)", () => {
     expect(validateArgv(argv("--cadence", "fast"))).toEqual([]);
     expect(validateArgv(argv("--cadence=realistic"))).toEqual([]);
     expect(validateArgv(argv("--cadence")).join(" ")).toMatch(/requires a value/);
@@ -155,27 +256,23 @@ describe("validateArgv — unknown flags are errors, not silence", () => {
   test("cadenceOverride reads the value and THROWS on anything but fast|realistic", () => {
     expect(cadenceOverride(argv("--cadence", "fast"))).toBe("fast");
     expect(cadenceOverride(argv("--cadence=realistic"))).toBe("realistic");
-    expect(cadenceOverride(argv("--smoke"))).toBeUndefined();
+    expect(cadenceOverride(argv("--local", "blank"))).toBeUndefined();
     expect(() => cadenceOverride(argv("--cadence", "overnight"))).toThrow(/--cadence accepts "fast" or "realistic"/);
   });
 
   test("parseDataPath surfaces the cadence override, and a bad value fails at parse time", () => {
     expect(parse(argv("--cadence", "fast")).cadence).toBe("fast");
     expect(parse(argv("--cadence=realistic")).cadence).toBe("realistic");
-    expect(parse(argv("--smoke")).cadence).toBeUndefined();
+    expect(parse(argv("--local", "blank")).cadence).toBeUndefined();
     expect(() => parse(argv("--cadence", "overnight"))).toThrow(/--cadence accepts "fast" or "realistic"/);
   });
 
   test("an arity-1 flag's value is consumed, not read as a positional", () => {
-    expect(validateArgv(argv("--pg-data", "/srv/pg"))).toEqual([]);
-  });
-
-  test("an arity-1 flag with no value is an error", () => {
-    expect(validateArgv(argv("--pg-data")).join(" ")).toMatch(/requires a value/);
+    expect(validateArgv(argv("--images-override", "/srv/o.yml"))).toEqual([]);
   });
 
   test("a switch given a value is an error", () => {
-    expect(validateArgv(argv("--smoke=yes")).join(" ")).toMatch(/takes no value/);
+    expect(validateArgv(argv("--migrate=yes")).join(" ")).toMatch(/takes no value/);
   });
 
   test("positional arguments are refused", () => {
@@ -201,8 +298,31 @@ describe("ownsData vs usesComposePostgres — two questions, not one", () => {
     expect(usesComposePostgres({ kind })).toBe(compose);
   });
 
-  test("the smoke-twin is the case that proves they differ", () => {
+  test("the dump is the case that proves they differ", () => {
     expect(ownsData({ kind: "smoke-twin" })).not.toBe(usesComposePostgres({ kind: "smoke-twin" }));
+  });
+});
+
+describe("requestsMigrate / requestsSeed — bare switches, argv-only", () => {
+  test("true only when present", () => {
+    expect(requestsMigrate(argv(MIGRATE_FLAG))).toBe(true);
+    expect(requestsMigrate(argv())).toBe(false);
+    expect(requestsSeed(argv(SEED_FLAG))).toBe(true);
+    expect(requestsSeed(argv())).toBe(false);
+  });
+});
+
+describe("shouldSeed — no mode implies --seed (criterion 52)", () => {
+  test.each([[[]], [["--local", "blank"]], [["--local", "dump"]], [["--local", "volume"]]] as const)(
+    "%j without --seed does not seed",
+    (flags) => {
+      expect(shouldSeed(argv(...flags))).toBe(false);
+    },
+  );
+
+  test("--seed seeds", () => {
+    expect(shouldSeed(argv(SEED_FLAG))).toBe(true);
+    expect(shouldSeed(argv("--local", "blank", SEED_FLAG))).toBe(true);
   });
 });
 
@@ -216,10 +336,10 @@ const TWIN: ResolvedDataPath = {
 };
 const EXTERNAL: ResolvedDataPath = {
   kind: "external",
-  url: "postgres://u:hunter2secret@db.example.com:25060/defaultdb",
-  redactedUrl: "postgres://u:***@db.example.com:25060/defaultdb",
+  url: "postgres://rm_app:hunter2secret@db.example.com:25060/defaultdb",
+  redactedUrl: "postgres://rm_app:***@db.example.com:25060/defaultdb",
   host: "db.example.com",
-  source: "DATABASE_URL",
+  source: "discrete keys",
 };
 
 describe("the generated overlay", () => {
@@ -227,13 +347,16 @@ describe("the generated overlay", () => {
     const yaml = dataPathOverlayYaml(dp);
     expect(yaml).toContain("  postgres: !reset null");
     expect(yaml).toContain("  pgdata: !reset null");
-    for (const s of ["api", "worker-swarm", "worker-analytics", "worker-research"]) {
+    // Exactly the services that HOLD a database connection. `system-scheduler`
+    // is not among them and must not be: it has no `depends_on: postgres` to
+    // reset because it has no database at all (system-scheduler-spec.md §1).
+    for (const s of ["api", "worker-analytics", "worker-research"]) {
       expect(yaml).toContain(`  ${s}:\n    depends_on: !reset null`);
     }
   });
 
-  test("the smoke-twin overlay names itself, so a stray file on disk is attributable", () => {
-    expect(dataPathOverlayYaml(TWIN)).toContain(`${DB_FLAG} smoke-twin`);
+  test("the dump overlay names itself, so a stray file on disk is attributable", () => {
+    expect(dataPathOverlayYaml(TWIN)).toContain("--local dump");
     expect(dataPathOverlayYaml(TWIN)).toContain(TWIN.container);
   });
 
@@ -271,16 +394,16 @@ describe("the banner states the consequence of THIS mode", () => {
 });
 
 describe("keptDataDescription — what teardown actually kept", () => {
-  test("ephemeral names the compose volume", () => {
+  test("a blank boot names the compose volume", () => {
     expect(keptDataDescription({ kind: "ephemeral" }, "p")).toBe("volume p_pgdata");
   });
 
-  test("--pg-data names the bind dir instead", () => {
-    expect(keptDataDescription({ kind: "ephemeral" }, "p", "/srv/pg")).toBe("--pg-data dir /srv/pg");
+  test("a reattached boot names the volume it reattached instead", () => {
+    expect(keptDataDescription({ kind: "ephemeral", reattach: { volume: "saved_pgdata" } }, "p")).toBe("volume saved_pgdata");
   });
 
-  test("smoke-twin names its OWN volume, never a pgdata it never created", () => {
-    expect(keptDataDescription(TWIN, "p")).toBe(`smoke-twin volume ${TWIN.volume}`);
+  test("a dump names its OWN volume, never a pgdata it never created", () => {
+    expect(keptDataDescription(TWIN, "p")).toBe(`dump volume ${TWIN.volume}`);
     expect(keptDataDescription(TWIN, "p")).not.toContain("pgdata");
   });
 
@@ -289,5 +412,125 @@ describe("keptDataDescription — what teardown actually kept", () => {
     // boot reported keeping a volume it had never created and sent smoke:clean
     // after storage that does not exist.
     expect(keptDataDescription(EXTERNAL, "p")).toBeUndefined();
+  });
+});
+
+describe("remote-database refusals never name the retired --db flag (criterion 4)", () => {
+  // Plain `bun smoke` (no --local) reaches the remote resolver through a
+  // synthetic argv; every refusal it can throw is exercised here.
+  const cases: Array<[string, string]> = [
+    ["no ~/.env", NO_ENV],
+    ["no rm_app role line", envFileWith("host = db.example.com\nport = 25060\ndatabase = defaultdb\n")],
+    ["host is the compose service", envFileWith("host = postgres\nport = 5432\ndatabase = defaultdb\nrm_app = x\n")],
+    ["host is loopback", envFileWith("host = localhost\nport = 5432\ndatabase = defaultdb\nrm_app = x\n")],
+  ];
+  const messageOf = (envFile: string): string => {
+    try {
+      parse(argv(), envFile);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "";
+  };
+
+  for (const [name, envFile] of cases) {
+    test(`${name}: refused, naming the remote database and not --db`, () => {
+      const msg = messageOf(envFile);
+      expect(msg).toContain("remote database (no --local flag)");
+      expect(msg).not.toContain("--db");
+      expect(msg).not.toMatch(/this flag/i);
+    });
+  }
+
+  test("red control: the retired prefix would be caught", () => {
+    expect("--db external: no readable $HOME/.env").toContain("--db");
+  });
+});
+
+describe("bootPreflightPlan — schema currency on every path that skips migrate (criterion 28)", () => {
+  const plan = (dp: ResolvedDataPath | Parameters<typeof usesComposePostgres>[0], ...flags: string[]) =>
+    bootPreflightPlan({
+      composePostgres: usesComposePostgres(dp),
+      seeds: shouldSeed(argv(...flags)),
+      migrates: requestsMigrate(argv(...flags)),
+    });
+  const DUMP: ResolvedDataPath = { kind: "smoke-twin", url: "postgres://u:p@172.17.0.1:5555/d", redactedUrl: "x", container: "c", volume: "v", stamp: "s" };
+
+  test("a dump without --migrate checks schema currency (it is on production's older schema)", () => {
+    expect(plan(DUMP).schemaCurrent).toBe(true);
+  });
+
+  test("a reattached volume without --migrate checks schema currency", () => {
+    expect(plan({ kind: "ephemeral", reattach: { volume: "v" } }).schemaCurrent).toBe(true);
+  });
+
+  test("the remote database without --migrate checks schema currency", () => {
+    expect(plan({ kind: "external" } as ResolvedDataPath).schemaCurrent).toBe(true);
+  });
+
+  test("a blank database without --migrate checks too: it has no schema yet", () => {
+    expect(plan({ kind: "ephemeral" }).schemaCurrent).toBe(true);
+  });
+
+  test("red control: --migrate on any path drops the check (migrate() makes it current itself)", () => {
+    for (const dp of [DUMP, { kind: "ephemeral" as const }, { kind: "ephemeral" as const, reattach: { volume: "v" } }]) {
+      expect(plan(dp, MIGRATE_FLAG).schemaCurrent).toBe(false);
+    }
+  });
+
+  test("classify guards --seed on a database this boot did not create, and nothing else", () => {
+    expect(plan({ kind: "external" } as ResolvedDataPath, SEED_FLAG).classify).toBe(true);
+    expect(plan({ kind: "external" } as ResolvedDataPath).classify).toBe(false);
+    expect(plan({ kind: "ephemeral" }, SEED_FLAG, MIGRATE_FLAG).classify).toBe(false);
+  });
+
+  test("the CI boot (--local blank --migrate --seed) runs no preflight step", () => {
+    expect(plan({ kind: "ephemeral" }, "--local", "blank", MIGRATE_FLAG, SEED_FLAG)).toEqual({ classify: false, schemaCurrent: false });
+  });
+
+  test("localModeOf names the mode a refusal should speak about", () => {
+    expect(localModeOf(DUMP)).toBe("dump");
+    expect(localModeOf({ kind: "ephemeral", reattach: { volume: "v" } })).toBe("volume");
+    expect(localModeOf({ kind: "ephemeral" })).toBe("blank");
+    expect(localModeOf({ kind: "external" } as ResolvedDataPath)).toBeNull();
+  });
+});
+
+describe("refuseVolumeInUse — no second postgres on a mounted volume (criterion 28)", () => {
+  test("no running holder: allowed", () => {
+    expect(refuseVolumeInUse("rm_smoke_stack_abc_pgdata", [])).toBeNull();
+    expect(refuseVolumeInUse("rm_smoke_stack_abc_pgdata", parseVolumeHolders(""))).toBeNull();
+  });
+
+  test("a running holder: refused, naming the container, its project and how to stop it", () => {
+    const holders = parseVolumeHolders("rm_smoke_stack_abc-postgres-1\trm_smoke_stack_abc\n");
+    expect(holders).toEqual([{ container: "rm_smoke_stack_abc-postgres-1", project: "rm_smoke_stack_abc" }]);
+    const msg = refuseVolumeInUse("rm_smoke_stack_abc_pgdata", holders);
+    expect(msg).not.toBeNull();
+    expect(msg!).toContain("rm_smoke_stack_abc-postgres-1");
+    expect(msg!).toContain("project rm_smoke_stack_abc");
+    expect(msg!).toContain("bun smoke:down");
+    expect(msg!).toContain("docker compose -p rm_smoke_stack_abc down");
+    expect(msg!).toContain("never with -v");
+  });
+
+  test("a holder outside compose (no project label) is still refused", () => {
+    const msg = refuseVolumeInUse("v", parseVolumeHolders("stray-pg\t\n"));
+    expect(msg).toContain("stray-pg");
+    expect(msg).toContain("docker stop <container>");
+  });
+
+  test("red control: blank lines in docker's output are not holders", () => {
+    expect(parseVolumeHolders("\n  \n")).toEqual([]);
+  });
+
+  test("smoke-main.ts asks Docker, and refuses, before writing the reattach overlay", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
+    const ask = src.indexOf("refuseVolumeInUse(volume, parseVolumeHolders(");
+    const overlay = src.indexOf("writeFileSync(overrideFile, reattachOverlayYaml(");
+    expect(ask).toBeGreaterThan(0);
+    expect(overlay).toBeGreaterThan(0);
+    expect(ask).toBeLessThan(overlay);
+    expect(src).toContain('"docker", "ps", "--filter", `volume=${volume}`');
   });
 });

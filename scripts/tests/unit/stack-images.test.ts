@@ -38,17 +38,17 @@ import { createStack, type StackRuntime } from "../../stack/stack.ts";
 const TAG = "v0.5.0-rc.3";
 
 describe("shipped image plan (pure)", () => {
-  test("names exactly the seven services this repo builds", () => {
+  test("names exactly the six services this repo builds", () => {
     expect([...SHIPPED_IMAGE_SERVICES]).toEqual([
       "api",
-      "worker-swarm",
       "worker-analytics",
       "worker-research",
+      // The clock, shipped like the rest (issue #1026): it replaces
+      // `worker-swarm` and runs from the same backend/Dockerfile image, so a
+      // staging host still compiles nothing (AC-ID-05).
+      "system-scheduler",
       "analytics-producer",
       "member-agent",
-      // Issue #1012. Unshipped, a staging host cannot judge at all: every
-      // judging starts its container through this service.
-      "agent-launcher",
     ]);
   });
 

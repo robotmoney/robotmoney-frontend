@@ -75,12 +75,12 @@ function runCheck(argv: string[], heartbeatFile: string): { exitCode: number; st
 }
 
 describe("the healthcheck command docker-compose.yml declares actually runs", () => {
-  const argv = resolvedHealthcheckCommand("worker-swarm");
+  const argv = resolvedHealthcheckCommand("worker-analytics");
   const dir = mkdtempSync(join(tmpdir(), "rm-hc-wiring-"));
 
   test("the lanes and the producer are wired to the same command", () => {
     expect(resolvedHealthcheckCommand("analytics-producer")).toEqual(argv);
-    for (const lane of ["worker-analytics", "worker-research"]) {
+    for (const lane of ["worker-research"]) {
       expect(resolvedHealthcheckCommand(lane)).toEqual(argv);
     }
   });

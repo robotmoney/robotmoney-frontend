@@ -18,13 +18,10 @@ import { planAdoptions } from "./swarm/roster-plan.ts";
 import type { RosterMember } from "./swarm/session.ts";
 import { demoAttends } from "@robotmoney/contract";
 
-/** The one argv flag that selects a smoke boot. */
-export const SMOKE_MODE_FLAG = "--smoke";
-
-/** Is this argv a smoke boot? (`bun smoke` → `bun scripts/smoke.ts --smoke`.) */
-export function isSmokeMode(argv: readonly string[]): boolean {
-  return argv.includes(SMOKE_MODE_FLAG);
-}
+// NO `--smoke` FLAG. Smoke spec §1 retires it with no alias: the
+// production-shaped scenario is implied by the data, not by a switch — a
+// `--local dump` boot restores production and is the only boot that runs it
+// (scripts/lib/smoke-db-mode.ts's requestsDump()).
 
 /**
  * The migrate/seed one-shot's extra env for a SMOKE boot: empty.
@@ -42,9 +39,10 @@ export const SMOKE_MIGRATE_ENV: Readonly<Record<string, string>> = Object.freeze
 export const DEMO_MIGRATE_ENV: Readonly<Record<string, string>> =
   Object.freeze({ SMOKE_SEED_PROJECTS: "1" });
 
-/** Demo schedules are an explicit migration action, not environment state. */
-export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-smoke-schedules"]);
-export const SMOKE_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze([]);
+// NO MIGRATE SCRIPT ARGUMENTS. `--seed-smoke-schedules` used to ride here, but
+// backend/src/db/migrate.ts has parsed no such flag since 17e978bf, so every
+// simulation boot passed an argument that reached nothing (issue #1026).
+// Bootstrap data seeds the pipeline worker's schedule rows (smoke spec §8.1).
 
 export interface ScenarioSubject { id: string; name: string }
 export interface ScenarioMember {
@@ -54,16 +52,20 @@ export interface ScenarioMember {
   bias: number;
   present: boolean;
 }
-export type ScenarioInitializer = "simulation" | "archive";
-export type ScenarioAssertion = "smoke" | "archive-continuity";
 export interface ScenarioPlan {
-  kind: "simulation" | "archive-restore";
-  initializer: ScenarioInitializer;
+  // C-26. This union WAS collapsed to `"smoke" | "smoke"` by the blind
+  // demo→smoke literal rename, which made `plan.kind === "smoke"` true for a
+  // plain simulation boot as well and ran the archive-continuity check against
+  // a roster nothing had restored. The two boots are genuinely different
+  // scenarios and the type has to say so: `"smoke"` is the production-shaped
+  // `--smoke` boot that restores a roster, `"simulation"` is the seeded demo
+  // boot that does not. Restored 2026-09-23 after the merge dropped the
+  // upstream fix (which spelled the same distinction
+  // `"simulation" | "archive-restore"`).
+  kind: "smoke" | "simulation";
   migrateEnv: Readonly<Record<string, string>>;
-  migrateScriptArgs: readonly string[];
   subjects: readonly ScenarioSubject[];
   members: readonly ScenarioMember[];
-  assertion: ScenarioAssertion;
   runsNewcomerOnboarding: boolean;
 }
 
@@ -85,12 +87,6 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
 
-/** The boot-step names the TUI/step list carries, per mode. Smoke runs ONE
- *  bootstrap step (the production orchestrator); the smoke runs its two. */
-export function bootstrapStepNames(smoke: boolean): readonly string[] {
-  return smoke ? ["archive restore"] : ["simulation seed"];
-}
-
 /**
  * The four subjects `backend/seed-data/v0-committee-archive.json.gz` restores,
  * under their RELEASE names (backend/scripts/v0-seed-bootstrap.ts maps two of
@@ -105,52 +101,54 @@ export const SMOKE_SUBJECTS: readonly { id: string; name: string }[] = Object.fr
 ]);
 
 /**
- * The three personas the archive restores, by public HANDLE and display name —
- * the ONLY members a smoke session may seat.
+ * The four in-house committee agents — the ONLY members a twin session may
+ * seat by name, and the only names `--agents` accepts (see
+ * scripts/lib/smoke-db-mode.ts's AGENTS_FLAG). Every other real committee
+ * member runs their own agent independently; smoke never seats or starts one
+ * on their behalf.
  *
- * This is an allowlist, not a cap: a persistent database can carry members from
- * an earlier smoke boot or from a real onboarding, and a smoke boot must seat
- * NONE of them. Their names are the archive's own (the archive's `woon` is
- * displayed as "Noop analyst" after import), so the list is a fact about the
- * archive rather than a preference.
+ * Three of the four (`athena`, `robot-money`, `themis`) are
+ * `backend/src/swarm/roster-seed.ts`'s `LIVE_ROSTER`, every one `operator:
+ * "robotmoney"`. `noop-analyst` is NOT a smoke-only fixture or an archive
+ * leftover to retire: it is `woon`, one of the four subjects/personas the
+ * (now-retired) v0 archive import wrote into REAL production as a permanent
+ * row, and it has been a real, currently-active in-house committee member
+ * ever since — production runs it same as the other three.
  *
- * HANDLE, NOT ID (issue #685). These used to be the ids `athena`, `robotmoney`
- * and `woon` — the archive's own slugs, which the importer wrote straight into
- * the primary key. Member ids are generated per deployment now
- * (`crypto.randomUUID()`), so a smoke boot has no way to know one in advance
- * and a hardcoded slug matches nothing: the allowlist has to name members by
- * the one key that IS stable across deployments. The handles are derived from
- * the display names by the single `slugifyMemberName` algorithm, which is why
- * "Robot Money" is `robot-money` and not `robotmoney`, and why the archive's
- * `woon` is `noop-analyst` — leaving the bare `woon` handle for the member
- * actually named Woon.
+ * This is an allowlist, not a cap: a persistent database can carry members
+ * from an earlier boot or from a real onboarding, and a twin session must
+ * seat NONE of them by this name — only the four named here.
+ *
+ * HANDLE, NOT ID (issue #685). Member ids are generated per deployment
+ * (`crypto.randomUUID()`), so a boot has no way to know one in advance and a
+ * hardcoded id matches nothing: the allowlist has to name members by the one
+ * key that IS stable across deployments. Handles are derived from display
+ * names by the single `slugifyMemberName` algorithm, which is why "Robot
+ * Money" is `robot-money` and not `robotmoney`, and why the archive's `woon`
+ * is `noop-analyst` — leaving the bare `woon` handle for the member actually
+ * named Woon.
  */
 export const SMOKE_MEMBERS: readonly { handle: string; name: string }[] = Object.freeze([
   Object.freeze({ handle: "athena", name: "Athena" }),
   Object.freeze({ handle: "robot-money", name: "Robot Money" }),
   Object.freeze({ handle: "noop-analyst", name: "Noop analyst" }),
+  Object.freeze({ handle: "themis", name: "Themis" }),
 ]);
 
 export function scenarioPlan(smoke: boolean): ScenarioPlan {
   return smoke
     ? {
-        kind: "archive-restore",
-        initializer: "archive",
+        kind: "smoke",
         migrateEnv: SMOKE_MIGRATE_ENV,
-        migrateScriptArgs: SMOKE_MIGRATE_SCRIPT_ARGS,
         subjects: SMOKE_SUBJECTS,
         members: [],
-        assertion: "archive-continuity",
         runsNewcomerOnboarding: false,
       }
     : {
         kind: "simulation",
-        initializer: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
-        migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
         subjects: DEMO_SUBJECTS,
         members: DEMO_MEMBERS,
-        assertion: "smoke",
         runsNewcomerOnboarding: true,
       };
 }
@@ -217,13 +215,78 @@ export function resolveSeatAllRestored(boot: {
  */
 export function adoptionFilter(
   smoke: boolean,
-  opts: Partial<RosterAdoptionOpts> = {},
+  // TWO SPELLINGS OF ONE QUESTION, both accepted. `true` is the twin's own
+  // shorthand (`adoptionFilter(smoke, twin)`); `{ seatAllActive }` is the
+  // generalized boot-level gate resolveSeatAllRestored() answers, which covers
+  // the pinned-port stage boot as well as the twin. They mean the same thing
+  // here and are deliberately not two behaviours.
+  opts: boolean | Partial<RosterAdoptionOpts> = false,
 ): (name: string) => boolean {
-  if (opts.seatAllActive) return () => true;
+  const seatAll = opts === true || (typeof opts === "object" && opts.seatAllActive === true);
+  // A TWIN (or a pinned-port production-shaped boot) seats the WHOLE restored
+  // roster, fixture or not.
+  //
+  // Both rules above exist to protect a PERSISTENT database: a member whose key
+  // the smoke invented would be a real member re-keyed by us, and a per-boot
+  // container key cannot sign again after a restart. A `--twin` boot has
+  // neither hazard. Its database is a throwaway copy of production, restored
+  // fresh for this boot and thrown away with it (legacy boot behavior), so
+  // nothing we re-key here outlives the boot and nothing we write can
+  // reach the real member. What the old rules bought there was a session with 3
+  // seats on a roster of 7 — the twin silently exercising less than half the
+  // swarm it exists to rehearse.
+  //
+  // So: under seat-all, every ACTIVE restored member is adoptable. The three
+  // with committed keys still sign as themselves; everyone else signs with a key
+  // their container generates for this boot alone, which the harness registers
+  // through the same privileged shortcut adoption already uses. That is a
+  // SIMULATED member — real name, real lens, real history, a signature that is
+  // ours and not theirs — and `simulatedSigners()` below is what makes the boot
+  // say so out loud rather than leaving it to be inferred from a roster count.
+  if (seatAll) return () => true;
   return (name: string) => {
     if (smoke && !SMOKE_MEMBER_NAMES.has(name.trim().toLowerCase())) return false;
     return Boolean(personaIdentity(name));
   };
+}
+
+/**
+ * Of the members about to be seated, which will sign with a key this boot
+ * invented rather than with their own committed identity.
+ *
+ * Pure, and deliberately name-based: it answers the question the session page
+ * cannot ("is this take really theirs?"), so the boot can print it.
+ */
+export function simulatedSigners(members: readonly { name: string }[]): string[] {
+  return members.filter((m) => !personaIdentity(m.name)).map((m) => m.name);
+}
+
+/**
+ * Active characters on `roster` that nobody is seating — the twin's invariant,
+ * as a value rather than as an inline check.
+ *
+ * A twin exists to rehearse the swarm it restored, so a seat count below the
+ * roster count is a defect, and a SILENT one: a session that runs with three of
+ * seven members is indistinguishable, on the page, from a session where four
+ * members had nothing to say. That is exactly how a 3-of-7 twin ran unnoticed.
+ *
+ * Distinct by NAME, matching planAdoptions: several active rows for one
+ * character are the duplicate-admission residue, and seating that character
+ * once covers all of them.
+ */
+export function unseatedActiveCharacters(
+  roster: readonly { name: string; status: string }[],
+  seated: readonly { name: string }[],
+): string[] {
+  const covered = new Set(seated.map((m) => m.name.trim().toLowerCase()));
+  const missing = new Map<string, string>();
+  for (const m of roster) {
+    if (m.status !== "active") continue;
+    const key = m.name.trim().toLowerCase();
+    if (covered.has(key) || missing.has(key)) continue;
+    missing.set(key, m.name);
+  }
+  return [...missing.values()];
 }
 
 /** Return a fresh roster for this run; never mutate module-global members. */
@@ -231,13 +294,13 @@ export function adoptRestoredRoster(
   plan: ScenarioPlan,
   roster: readonly RosterMember[],
   seated: readonly ScenarioMember[] = plan.members,
-  opts: Partial<RosterAdoptionOpts> = {},
+  opts: { twin?: boolean } & Partial<RosterAdoptionOpts> = {},
 ): ScenarioMember[] {
-  const seatAll = opts.seatAllActive === true;
+  const seatAll = opts.twin === true || opts.seatAllActive === true;
   const result = planAdoptions(
     [...roster],
     new Set(seated.map((m) => m.memberId)),
-    adoptionFilter(plan.kind === "archive-restore", { seatAllActive: seatAll }),
+    adoptionFilter(plan.kind === "smoke", { seatAllActive: seatAll }),
   );
   const adopted = result.adopt.map((m) => ({
     memberId: m.id,
@@ -246,7 +309,13 @@ export function adoptRestoredRoster(
     bias: 0,
     present: true,
   }));
-  if (plan.kind === "archive-restore") {
+  if (seatAll) {
+    const missing = unseatedActiveCharacters(roster, [...seated, ...adopted]);
+    if (missing.length) {
+      throw new Error(`twin boot left ${missing.length} active roster character(s) unseated: ${missing.join(", ")}`);
+    }
+  }
+  if (plan.kind === "smoke") {
     // Compared by HANDLE (issue #685). The adopted rows carry whatever id this
     // deployment generated, so an id comparison could only ever be satisfied by
     // a seed that hardcoded slug ids — the thing this issue removes. The handle
@@ -254,7 +323,17 @@ export function adoptRestoredRoster(
     // API's `handle` field alongside the id it seats members with. seat-all
     // relents from "exactly these handles" to "these three ARE present": other
     // active restored members are legitimately seated and re-keyed too.
-    const expected = SMOKE_MEMBERS.map((m) => m.handle).sort().join(",");
+    //
+    // ADOPTABLE, not merely allowlisted. Without seat-all, adoptionFilter()
+    // refuses any persona with no committed key in
+    // scripts/lib/swarm/fixtures/persona-keys.json — `themis`, the judge
+    // persona added to the allowlist by issue #922, is one. Comparing the
+    // adopted handles against the WHOLE allowlist therefore asserted a set the
+    // filter can never produce, so every plain smoke restore threw. The
+    // seat-all branch keeps the full list: it seats everyone active, so all
+    // four committed personas really must be in the restore.
+    const adoptable = SMOKE_MEMBERS.filter((m) => Boolean(personaIdentity(m.name)));
+    const expected = adoptable.map((m) => m.handle).sort().join(",");
     const actualSet = new Set(result.adopt.map((m) => m.handle ?? m.id));
     const missing = SMOKE_MEMBERS.filter((m) => !actualSet.has(m.handle)).map((m) => m.handle);
     if (seatAll) {
@@ -272,33 +351,6 @@ export function adoptRestoredRoster(
     }
   }
   return [...seated.map((m) => ({ ...m })), ...adopted];
-}
-
-// ── Judge role live-stack coverage on a `--smoke` boot (issue #845) ─────────
-// `--db smoke-twin` requires `--smoke`, so smoke-main.ts's `process.env.CI &&
-// smokeMode` branch — not scripts/lib/swarm/session.ts's `main()` — is what a
-// twin boot actually runs. `noop-analyst` is one of the three restored
-// personas (SMOKE_MEMBERS), selected by its stable HANDLE (never by roster
-// position, which the DB query does not promise).
-
-/** The persona granted the judge role for issue #845's smoke-twin coverage. */
-export const JUDGE_COVERAGE_HANDLE = "noop-analyst";
-
-/** The restored persona to grant the judge role to; throws on a stale/mismatched restore rather than silently skipping. */
-export function judgeCoverageCandidate(roster: readonly RosterMember[]): RosterMember {
-  const found = roster.find((m) => m.handle === JUDGE_COVERAGE_HANDLE);
-  if (!found) {
-    throw new Error(
-      `smoke initializer restored no '${JUDGE_COVERAGE_HANDLE}' persona to grant the judge role to (issue #845) — ` +
-        `roster handles: ${roster.map((m) => m.handle).join(", ")}`,
-    );
-  }
-  return found;
-}
-
-/** `members` with `candidateId` marked absent — a local copy; never mutates the shared array. */
-export function withMemberAbsent(members: readonly ScenarioMember[], candidateId: string): ScenarioMember[] {
-  return members.map((m) => (m.memberId === candidateId ? { ...m, present: false } : m));
 }
 
 export interface ScenarioLifecycleHooks<Context, SessionResult> {

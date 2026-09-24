@@ -117,13 +117,17 @@ no import map are needed. Keeps the runtime dependency to plain static files.
 
 ## D8 — One Postgres, run in Docker (not Supabase)
 
-> **Prod mode refined by D13:** production is a DigitalOcean Managed Postgres HA
-> cluster; the ephemeral (CI) and smoke (Docker) modes are unchanged.
+> **Environment selection superseded by D47.** The one-Postgres principle
+> remains. The old `ephemeral`/`smoke`/`prod` mode selection and volume rules
+> below describe the earlier implementation; use the adopted
+> [smoke production spec](technical/smoke-production-spec.md) for target
+> policy, identity, and local database modes.
 
 **Decision.** Consolidate comments (was Upstash), committee (was GitHub-as-DB),
-and dashboard data (was committed CSV/JSON) into a single self-hosted Postgres in
-Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), smoke
-(persistent volume), prod (external/managed URL).
+and dashboard data (was committed CSV/JSON) into a single Postgres owned by the
+backend. CI and local rehearsal may use Docker; production uses a managed
+Postgres cluster. The adopted deployment design defines target selection and
+identity checks.
 
 **Why.** One datastore, owned by the backend, portable across environments. Self-
 hosted fits the single-box deployment (D11). Supabase was rejected to avoid a
@@ -155,21 +159,18 @@ single versioned seam (the contract) that makes the eventual split mechanical.
 
 ## D11 — Single box, no reverse proxy
 
-> **Superseded for production by D13** (vendor-split tiered topology: Cloudflare
-> DNS+observability, DO compute+storage, surfaces on subdomains). The single-box
-> `docker-compose` remains the **CI and smoke** deployment; same-origin/no-CORS is
-> preserved *within* each surface because the Bun `api` co-serves its SPA assets at
-> the subdomain root.
+> **Deployment lifecycle superseded by D47.** D13 records production's
+> vendor-split topology; D29 records the static `website-server` boundary.
+> This entry preserves the no-reverse-proxy decision, not smoke commands or
+> service boot behavior.
 
-**Decision.** Deploy on one box (e.g. a DigitalOcean droplet). The Bun `api`
-process serves both the JSON API and the static frontend (`STATIC_DIR`).
+**Decision.** The application services can run on one host with host-based DNS
+routing and no application-level reverse proxy. API and static frontend assets
+may be separate services while remaining same-origin within each surface.
 
-**Why.** Same origin → no CORS, nothing to run in front of the app. No
-Caddy/nginx, no third-party hosting platform. TLS, if wanted, is terminated on the
-box however preferred.
-
----
-
+**Why.** Avoid adding routing software where the DNS/service boundaries already
+provide the required separation. Production placement is described by D13 and
+current deployment requirements by the [smoke production spec](technical/smoke-production-spec.md).
 ## D12 — Bun for the backend (not Node + a framework)
 
 **Decision.** Run the backend on **Bun** with `Bun.serve` — no HTTP framework. Bun
@@ -186,7 +187,7 @@ static server are unnecessary. Fewer dependencies, one runtime.
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
 anywhere**. The full map is
-[architecture.md § Network topology](architecture.md#network-topology--dns-origins--vendors):
+[architecture.md § Network topology](architecture/network-topology.md#network-topology--dns-origins--vendors):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -267,8 +268,8 @@ important check is that the **fields** are correct, not the numbers.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run smoke` (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
-See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
+See [architecture.md § Preview mode](architecture/frontend.md#preview-mode-goldens-backed-no-backend)
 for the full design (revised by D19: the replay engine is now the client-side
 wrapper, not a server).
 
@@ -394,7 +395,7 @@ placeholder-form env override still flips an adapter back to
 `configured: false`), and `base-rpc-client.ts` becomes the **single RPC
 transport** for every chain read. The shared endpoint contract the feeds were
 built against (DTOs, provenance fields, degrade rules) is
-[architecture.md § Live-data contract](architecture.md#live-data-contract--4-new-dashboard-endpoints);
+[architecture.md § Live-data contract](architecture/dashboards-live-data.md#live-data-contract--4-new-dashboard-endpoints);
 the frontend binds via
 boot-registered factories in `alpine/views.js` (e.g. `buybackSummary`).
 
@@ -433,11 +434,11 @@ fixed constant — both flagged in #112 for a later pass.
 instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
 (staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
 `committee.`/`app.`
-([architecture.md topology §3.1](architecture.md#31-mcp-hostname-and-port-d18)).
+([architecture.md topology §3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)).
 It is deployed to the **same DO
 droplet** as `committee.` (it is this repo's surface, and the `/health`
 contract already couples IC health to MCP reachability —
-[architecture.md topology §9](architecture.md#9-seamless-without-a-single-origin-and-observability)), but
+[architecture.md topology §9](architecture/network-topology.md#9-seamless-without-a-single-origin-and-observability)), but
 runs as its **own container** (`mcp` service in `docker-compose.yml`) on its
 **own port**, so it cannot share `committee.`'s proxied port `443`. It uses
 Cloudflare's alternate proxied-HTTPS port **`8443`** (one of Cloudflare's
@@ -457,7 +458,7 @@ Worker, no reverse proxy, no new vendor permission" property intact instead
 of reaching for Cloudflare Origin Rules or a second droplet.
 
 **Relationship.** Refines D13 (architecture.md topology
-[§3](architecture.md#3-the-surfaces--subdomain-map)/[§3.1](architecture.md#31-mcp-hostname-and-port-d18)):
+[§3](architecture/network-topology.md#3-the-surfaces--subdomain-map)/[§3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)):
 the surface table gains a
 fourth row; the "no reverse proxy" and "no routing software" properties are
 unchanged. No code change — `mcp/src/server.ts` and `docker-compose.yml`
@@ -481,6 +482,11 @@ a docs-only, config-value decision.
 ---
 
 ## D19 — Hosted preview URLs on Cloudflare Pages (revises D14 and D13)
+
+> Superseded by D20 before activation. No hosted preview deployment was
+> established; the current preview is local-only under
+> [architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
+> The mechanism below is retained as decision history, not operating guidance.
 
 **Decision.** Ship a **hosted, per-branch preview URL** on Cloudflare Pages
 (via `wrangler pages deploy --branch`) for every push to `preview/**` branches.
@@ -562,7 +568,7 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run smoke` for realistic
 data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -621,7 +627,7 @@ same PR.
 **Fidelity caveat.** Unchanged from D14/D19: preview is for
 layout/copy/components/navigation; values are mock/point-in-time. Run
 `bun run smoke` for realistic data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -630,7 +636,7 @@ layout/copy/components/navigation; values are mock/point-in-time. Run
 **Decision.** Abandon the hosted MCP transport (`mcp/`) as a member-facing
 surface. Committee members participate over **REST/JSON only**
 (`ROUTES.committee`, already the "REST sibling" of every MCP tool — see
-[architecture.md §9.5](architecture.md#95-surfaces--one-core-one-transport)).
+[architecture.md §9.5](architecture/investment-swarm.md#95-surfaces--one-core-one-transport)).
 Everywhere the architecture previously described "MCP or REST" as parallel
 transports, REST is now the only one. The new flow has three steps, each
 already backed by something this project maintains or already ships:
@@ -681,7 +687,7 @@ secure.
 
 **Relationship.**
 - **Supersedes D18** in full: the `mcp.` subdomain row leaves the surface map
-  ([architecture.md §3](architecture.md#3-the-surfaces--subdomain-map)); §3.1
+  ([architecture.md §3](architecture/network-topology.md#3-the-surfaces--subdomain-map)); §3.1
   is retired.
 - **Revises architecture.md §9** (IC feature architecture): §9.1 drops the
   `mcp/` layer row and repo-layout entry; §9.2's actor identity mechanism is
@@ -724,8 +730,8 @@ secure.
   nothing requires it.
 - **Wait and see — leave MCP deployed but stop building on it.** Rejected: an
   undeprecated surface with a live subdomain, port, and OAuth server invites
-  new work to target it by default (as the onboarding-ic-workflow plan was
-  about to do in Phase 3) and keeps paying the CI/ops cost with no offsetting
+  new work to target it by default (as the former onboarding plan proposed in
+  Phase 3) and keeps paying the CI/ops cost with no offsetting
   signal that waiting produces a different answer.
 - **Retire the code in the same change as this decision.** Rejected for scope
   control: this entry and the architecture.md/spec edits are reviewable as a
@@ -737,6 +743,10 @@ secure.
 ---
 
 ## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the smoke's stack
+
+> The eval's reuse of local test-stack code is eval architecture only. D47
+> retires the smoke-host onboarding/session driver as a production mechanism;
+> nothing in this decision defines deployment participants or their lifecycle.
 
 **Local suite refinement (2026-07-29).** Development evals are registered as
 native Bun tests under `evals/` and run through the separate `bun run eval`
@@ -781,7 +791,7 @@ selector.
    A single sample is a coin flip reported as a verdict.
 
 Rules 3 and 4 are specified normatively in
-[architecture.md §11.3](architecture.md#113-onboarding-eval-normative) (E3, E4) —
+[architecture.md §11.3](architecture/member-onboarding.md#113-onboarding-eval-normative) (E3, E4) —
 the layer table, the observation mechanism, the outcome classes, and the CI
 placement live there, not here.
 
@@ -1046,7 +1056,7 @@ default, opt-in per PR, nightly for the trend.
 
 Dependency direction is fixed and enforced: tests and evals may import runtime
 and shared code; **runtime must never import test or eval code**. The full target
-layout is [architecture.md §3](architecture.md#test-eval-and-tooling-layout).
+layout is [architecture.md §3](architecture/repository-layout.md#test-eval-and-tooling-layout).
 
 **Migration is incremental and bounded to three moves:** create `evals/`; land
 D22's extractions directly in `stack/` and `agent/` rather than as more flat
@@ -1605,7 +1615,7 @@ correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 
 ## D29 — The api process (`STATIC_DIR`) is the cutover host for `robotmoney.net`, and its deploy path prerenders per-route HTML (issue #480)
 
-*(Runbook: [deployment.md](./runbooks/deployment.md) §2.1.)*
+*(Deployment authority: [smoke production spec](./technical/smoke-production-spec.md); network topology: [architecture §8](./architecture/deployment.md#8-deployment).)*
 
 **Decision.** Two questions, answered together because the first determines the
 second.
@@ -1613,16 +1623,13 @@ second.
 **1. Which host serves `robotmoney.net` after cutover? The `api` process,
 serving an assembled `STATIC_DIR`.** It is what the cutover origin already
 does — `robotmoney.network` is a `cloudflared` connector onto the single-box
-stack (`docs/runbooks/deployment.md` §3.3), and `docker-compose.yml` sets
+stack (see [`cloudflared.config.example.yml`](../cloudflared.config.example.yml)), and `docker-compose.yml` sets
 `STATIC_DIR: /srv/frontend` so the api co-serves the marketing SPA with no
 reverse proxy (D11, D13). **Cloudflare Pages is not a candidate for
 production**: D13 confines Cloudflare to DNS + observability with no software
-to deploy, `docs/runbooks/deployment.md` §1 disables Cloudflare git integration
-outright, `CF_API_TOKEN` carries no Pages permission, and the one Pages project
-(`robotmoney-preview`, D20) has automatic production deploys **disabled** with
-previews limited to `preview/*`. Pointing production at Pages would reverse
-three decisions to obtain a prerenderer that can equally be run on the host we
-already have.
+to deploy, and D20's hosted-preview proposal was never activated. Pointing
+production at Pages would reverse the vendor split to obtain a prerenderer
+that can equally be run on the host we already have.
 
 **2. The prerender runs in that host's deploy path.** `STATIC_DIR` is now an
 **assembled** directory, not the raw source tree: `scripts/static-assembly.sh`
@@ -1659,16 +1666,17 @@ cannot disagree with the JS path.
 
 **Relationship.** Refines D13's static tier for the cutover: D13 assigns
 marketing on the apex/`www` to a **DO Spaces CDN**, which remains the intended
-end-state tier and is unimplemented in this repo (no upload path, no workflow,
-no credential wiring beyond the inventory in `docs/runbooks/deployment.md` §4).
+end-state tier and is unimplemented in this repo (no upload path or workflow;
+verify current host state at the release commit).
 This decision does not foreclose it — `_static/` is a plain static assembly, so
 the Spaces migration, when it happens, uploads exactly this directory and
-inherits the prerender for free. Supersedes nothing; D20 keeps Cloudflare Pages
-for `preview/*` hosting, unchanged.
+inherits the prerender for free. Supersedes nothing. D20's proposed Pages Git
+hosting was never activated; preview is local-only under
+[architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
 
 **Alternatives rejected.**
-- **Enable production deploys on the Cloudflare Pages project** — reverses D13
-  (Cloudflare = DNS + observability), D20 (`preview/*` only) and the GitOps
+- **Enable production deploys on Cloudflare Pages** — reverses D13
+  (Cloudflare = DNS + observability), the unactivated D20 proposal, and the GitOps
   principle that no vendor watches the repo, and would still leave
   `robotmoney.network`'s api-served origin unfixed.
 - **Prerender into `frontend/public/` in place** — build output in the source
@@ -1699,6 +1707,8 @@ changed either — deleting it removed dead request-time code, not a feature.
 ---
 
 ## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
+
+> **Superseded by [D50](#d50) on 2026-09-23.** Swarm onboarding email is removed outright, vendor and all. Kept for the history of the DNS delegation this entry authorised.
 
 **Decision.** Two questions, resolved together since the vendor choice drives
 the DNS shape.
@@ -1858,60 +1868,32 @@ and still survives. No credential column and neither `applied_at` nor
 
 ---
 
-## D32 — One-time claim makes the admin credential durable; the per-boot token is superseded, not revoked (issue #553)
+## D32 — One-time claim makes the admin credential durable (issue #553)
 
-**Decision.** The admin credential can be claimed exactly once:
-`POST /api/admin/claim`, authorized by the *current* admin credential (on a
-first-ever boot, the per-boot token the interactive TUI displays), persists
-the sha256 hex of an operator-chosen password (≥ 12 characters) into the new
-one-row `admin_credential` table (migration
-`backend/migrations/0028_admin_credential.sql`). While that row exists,
-`backend/src/api/auth.ts`'s `isPrivileged()` treats the stored hash as the
-durable operator credential: it survives every restart, so `bun run smoke` /
-`bun run smoke:stage` re-boots stop rotating the operator out — the lockout
-this issue is about. A public boolean probe, `GET /api/admin/is-claimed`,
-lets the smoke boot decide whether the TUI may display the per-boot token.
+> **Product/API behavior only.** The old per-boot token display, TUI, and
+> smoke-driver details are implementation history superseded by D47 and the
+> [smoke production spec](technical/smoke-production-spec.md). This entry does
+> not define how a future deployment provisions an admin credential.
 
-**Superseded, not revoked.** After a claim, the per-boot `ADMIN_TOKEN` env
-mint *remains valid* — but only as the stack-internal automation credential,
-and it is never displayed again (the TUI shows the `Admin pass` line only
-once the post-ready probe confirms *unclaimed*). This is deliberate, and is
-the refinement of the issue's "stop minting" sketch: the smoke's own drivers
-(swarm session runner, onboarding driver, e2e children) authenticate against
-`X-Admin-Token`-guarded routes with the per-boot token threaded through
-in-process, and the server holds only a *hash* of the claimed password, so it
-cannot hand the claimed secret to that automation. Revoking the env token on
-claim would kill the standing smoke's core loops on the next boot. The issue's
-test plan anticipates exactly this shape ("or is superseded, per the chosen
-design").
+**Decision.** An admin credential can be claimed once through
+`POST /api/admin/claim`. The API stores a SHA-256 hash in the one-row
+`admin_credential` table (migration `0028_admin_credential.sql`); subsequent
+privileged requests compare credentials against that durable hash. The credential
+is never stored in plaintext in the database. Failure to read the credential
+state fails closed.
 
-**`RM_ALLOW_INSECURE` stops opening the gate once claimed.** A claim is an
-explicit security opt-in; after it, only the claimed password or the current
-boot's own token authorizes — never the insecure-mode bypass.
+The login credential is an application/admin concern, separate from PostgreSQL
+roles and participant keys. The adopted smoke spec governs deployment credentials
+and does not specify the admin credential's provisioning flow. Any future
+provisioning mechanism must be documented in that design before production use.
 
-**Hashing scheme.** sha256 hex via the existing `hashKey()`
-(`backend/src/lib/keys.ts`) — the same never-plaintext posture already used
-for swarm member access keys — compared constant-time (`timingSafeEqual`),
-like every other credential in `auth.ts`. Not argon2/bcrypt: `isPrivileged()`
-runs on every admin/swarm-admin request (the dashboard polls), a KDF per
-request is a hot-path cost, and the credential is bearer-token-shaped
-(`X-Admin-Token`), with the 12-character minimum bounding the offline-crack
-exposure. The migration also `REVOKE`s the queue worker role's default grant
-on the table so a worker-role compromise cannot read the hash at all.
-
-**Fail closed and loud.** A database failure inside `isPrivileged()`
-propagates to the router's sanitized 500 — it never silently falls back to
-the env token while a claim might exist.
-
-**Recovery path.** There is no self-serve reset for the single smoke admin. A
-forgotten claimed password is an explicit operator action against the
-database — `DELETE FROM admin_credential;` (or `bun run smoke:clean` for a
-full wipe) — which re-arms the first-boot one-time-claim state, restoring
-today's "restart shows a fresh TUI token" behaviour.
-
----
+**Scope.** This decision preserves the one-time durable claim and API
+authorization behavior. It does not authorize a TUI, automatic token display,
+a host-side session driver, or direct SQL as a recovery procedure.
 
 ## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
+
+> **Superseded by [D49](#d49) on 2026-09-23, which [D51](#d51) superseded on 2026-09-24.** Amendments are allowed again: each is its own signed row and the newest is marked final. Kept for the history of the revision rows that exist.
 
 **Decision.** A seated swarm member may amend and resubmit its take inside a
 session. Amendment is **append-only**: each revision is its own immutable row in
@@ -2138,14 +2120,13 @@ leaves it on.
 
 **Consequences.**
 
-- `docs/runbooks/deployment.md` §2.1 carries the operator surface: the exact
-  repair statement (one per refusal line, always the holder's handle), how to
-  get a `psql` session in both topologies, the override, the rollback pointer,
-  and the `/health` field.
+- [D34](#d34--the-apis-handleid-namespace-boot-gate-is-fail-closed-bounded-observable-and-overridable-issue-602)
+  records this guard's behavior and controls; implementation is in
+  `backend/src/db/handle-namespace.ts`. The adopted smoke specification owns
+  future deployment preflight and recovery behavior.
 - The guard is a **boot-time snapshot**. There is no periodic re-check, so a
   `pg_restore` into a live database is not re-validated until the api restarts;
-  the runbook and `src/db/handle-namespace.ts` both say so rather than leaving
-  the limit implied.
+  D34 and `src/db/handle-namespace.ts` record that limit.
 
 **Rejected alternatives.**
 
@@ -2187,10 +2168,9 @@ split between them is deliberate rather than unfinished work:
   already locked out or already hitting an API error.
 - **Deploy and ingress subdomains stay `.net`.** `site.`, `swarm.`, `app.` and
   `staging.` are on the `.net` zone under D13's host-based routing, with D29's
-  api process serving the cutover host. The Cloudflare API token is scoped to
-  the `robotmoney.net` zone (`docs/runbooks/deployment.md`). Rewriting these in
-  a runbook produces hostnames that do not resolve, so the runbook and
-  `cloudflared.config.example.yml` keep them.
+  api process serving the cutover host. The tunnel hostname mappings remain in
+  `cloudflared.config.example.yml`; changing the canonical web domain does not
+  rename those ingress hosts.
 
 **Why this needs writing down.** `robotmoney.net` is a strict substring of
 `robotmoney.network`. Two consequences, both of which have already bitten:
@@ -3583,3 +3563,376 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
   exists to remove.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
+
+<a id="d46"></a>
+
+## D46 — Prior smoke migration design (superseded by D47)
+
+> **Historical decision, not current instruction.** D47 supersedes D46's
+> deployment mechanism in full, including its `rm_migrator` credential,
+> external-migration step, phase plan, and smoke environment model.
+
+On 2026-09-21, D46 proposed separating application startup from production
+migration and limiting each tool to one credentialed job. Those goals motivated
+the subsequent design review. Its detailed mechanism and rationale are retained
+in Git history; do not implement any part of D46 as an independent phase.
+
+Recover the original entry with
+`git show 74b22147ddd5cf1bad1db13ca80a8d45f2a53c3c:docs/decisions.md`.
+D47 is the current decision record.
+
+
+<a id="d47"></a>
+
+## D47 — Smoke production spec is the sole adopted deployment design; supersedes D46's mechanism (Lucas, 2026-09-22)
+
+**Status.** Adopted 2026-09-22; recorded 2026-09-23 during documentation
+consolidation. Approved for implementation, not yet shipped. This records the
+accepted design and does not authorize a production cutover.
+
+**Decision.** [Smoke production spec](technical/smoke-production-spec.md) is the
+single source of deployment-design requirements. It replaces D46's credential
+model and tool mechanics, the former upgrade-deployment specification, and its
+engineering plan in full as implementation authority. Their full bodies were
+removed from the documentation tree on 2026-09-23; use Git history when their
+historical rationale is needed. No residual phase remains an active
+implementation instruction.
+
+The adopted design uses `rm_owner LOGIN` for prompted migration access, never a
+new `rm_migrator` role. Production migration and initialization are separate from
+boot. Smoke reconciles a named instance, checks target enrollment and schema
+compatibility, writes a journal and receipt, and exits after readiness. The
+credential file defines standing HTTP participant containers; the host session
+driver, inline judge and Docker-socket participant launcher are not the target.
+The specification owns the exact interfaces, transition and W1/W2/W3 gates.
+
+**Authority.** [Release-runbook policy](technical/release-runbooks.md) remains in
+force for gates, phases, evidence and approval. Standing and per-release runbooks
+retain dated operational evidence but must not override the adopted mechanism or
+be reused as new-design templates. No historical per-release runbook remains in
+the documentation tree; a future one is created only after a release is
+scheduled and its tools exist at the target commit. D48 records the separate
+accepted judge-mode decision and replay prerequisite.
+
+**Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
+and associated reconciliation/field guide were not adopted. Their proposal
+bodies were removed from the documentation tree and can be recovered from Git.
+They are distinct from this repo's `scripts/stack/` Compose library.
+
+**Implementation boundary.** Existing code can still implement the old flags and
+credential paths. Adoption does not mean the replacement has shipped. Any
+operation on legacy code must be checked at the exact release SHA. Implementation
+and production cutover must satisfy the adopted specification and standing
+release gates; the deprecated engineering plan does not schedule that work.
+
+
+<a id="d48"></a>
+
+## D48 — Judge mode is `off | enforce`; `shadow` is not a go-forward mode (Lucas, 2026-09-22)
+
+> **Implementation prerequisite waived by [D53](#d53) on 2026-09-24.** The replay makes no judge call, and under D52 the judge is a participant. `shadow` leaves the write path without the soak.
+
+**Status.** Accepted 2026-09-22; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** The go-forward operator choices are only `off` or `enforce`. The
+system must not create new `shadow` judgements. This product decision does not
+change the deployment lifecycle or participant boundary owned by D47 and the
+[smoke production spec](technical/smoke-production-spec.md).
+
+**Historical data.** Existing judgement rows and signed receipts containing
+`shadow` remain readable; history is not rewritten.
+
+**Implementation prerequisite.** Before removing `shadow` from the write path,
+verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
+the observe-before-enforce soak. The decision remains unimplemented until that
+prerequisite is met. The former long-form specification was removed from the
+documentation tree; recover it from Git only for historical context.
+
+## D49 — One immutable take per member per epoch; supersedes D33's amendments (Lucas, 2026-09-23)
+
+> **Superseded by [D51](#d51) on 2026-09-24.** The product rule (one take counts) was right; the storage rule (one row exists) was not. Amendments return, with an explicit final flag.
+
+**Status.** Accepted 2026-09-23; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** A member submits exactly one take per session (epoch). Take
+identity is `(session, member)`, unique server-side. A second submission on
+that key returns the existing record and is treated by the participant as
+success; it never creates a second row and never replaces the first. There is
+no amendment, no revision, no cap, and no latest-per-member read. What a
+member said in an epoch is what it said. This is the wording already adopted
+in the [smoke production spec](technical/smoke-production-spec.md) §6.2 under
+"Idempotent submission"; this entry makes it a product decision rather than a
+side effect of that spec.
+
+**Why.** Epochs are short and continuous (scheduler spec §2). A member that
+changes its mind states the new view in the next epoch, on the record, with a
+timestamp. Amendments inside a window bought little once windows became short
+and gave up the simplest possible story for a signed track record: one
+signature, one take, one epoch. The retry story the amendment machinery was
+also serving (a crash after submit, an old/new container overlap) is fully
+served by idempotent `(session, member)` submission.
+
+**What this supersedes.** D33's append-only revisions, the
+`SWARM_TAKE_REVISION_CAP`, and the `UNIQUE (session_id, member_id, revision)`
+key from migration 0028. D33's other statements stand: an accepted take's
+content is never `UPDATE`d, nothing is deleted, no admin endpoint writes
+`swarm_recommendations`.
+
+**Historical data.** Existing rows with `revision > 1` remain readable and
+their permalinks stay valid; history is not rewritten. Reads of a legacy
+session with several revisions for one member keep resolving latest-per-member
+for that session only. New sessions never have more than one row per member.
+
+**Implementation.** Restore server-side `(session_id, member_id)` uniqueness
+for new sessions and make resubmission return the existing record; remove the
+cap and the revision write path; retire `swarm-take-revisions.test.ts` in
+favour of an idempotent-submission test. Tracked under the deployment refactor
+issue (#1026), W3.
+
+## D50 — Swarm onboarding email is removed; reverses D30 (Lucas, 2026-09-23)
+
+**Status.** Accepted 2026-09-23. Implemented in the same change as this entry
+(issue #1026, W5).
+
+**Decision.** The swarm sends no email, to anybody, ever. The whole feature is
+deleted rather than disabled: the notification module, the AgentMail worker
+adapter, the three `swarm.send_*_notification` job kinds, the triggers on apply,
+on activation and on a seat opening, the `SWARM_NOTIFICATION_EMAIL_FROM` /
+`_TRANSPORT_URL` / `_TRANSPORT_TOKEN` settings with their compose and stack
+passthroughs, the outbox table and the waitlist's "notified" stamp. There is no
+flag that turns it back on and no vendor left to bill. Migration
+`0066_drop_swarm_notifications.sql` drops the schema.
+
+**Why.** Three emails were ever sent — an application receipt, an approval
+notice and a seat-open notice to the waitlist — and none of them was the only
+way to learn what it said. The application receipt carried a member id the API
+already returns in the `POST /api/swarm/apply` response body, which is where the
+onboarding skill reads it from; the approval notice announced a `status` the
+applicant's own status page shows; the seat-open notice went to a waitlist an
+operator reads by hand anyway. Against that, the feature was carrying a
+third-party mail vendor, an API token, a Cloudflare Worker deployed outside this
+repository's build, a cross-account NS delegation for `notify.robotmoney.net`,
+a durable outbox holding contact addresses, and three worker job kinds with
+their own retry semantics. The cost was entirely in the parts nobody watches:
+deployment surface, a live credential, and PII at rest. Removing it is the
+larger simplification available to the onboarding path.
+
+**What this reverses.** All of [D30](#d30): the AgentMail vendor selection, the
+isolated-subdomain sending design, and the one-time cross-account NS
+delegation's purpose. The delegation itself is a DNS fact this repository does
+not control and this entry does not undo; D30 stays readable for that history.
+D30's rejected alternatives are moot — there is no sender to choose.
+
+**What stays.** `swarm_waitlist` keeps collecting addresses through
+`POST /api/swarm/waitlist`; the table is not dropped, because an address given
+on purpose is still worth having and an operator invites from it by hand.
+`SWARM_PUBLIC_BASE_URL` and `resolveSwarmPublicBaseUrl()` stay: the applicant
+status page is now the only channel an applicant has, and the origin its links
+are built from matters more, not less.
+
+**Enforcement.** `scripts/tests/unit/no-swarm-email.test.ts` fails if the
+feature returns under any of its old names.
+
+## D51 — A member's newest take is the final one; submitting unsets the prior (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Supersedes [D49](#d49),
+which was wrong about the storage rule. Restores the substance of
+[D33](#d33) with an explicit marker in place of an implicit read.
+
+**Decision.** A member may submit more than once while its session's
+submission window is open. Every submission is a new immutable row in
+`swarm_recommendations` with its own content, nonce, signature and permalink.
+Each take carries a **final** flag. Accepting a new take sets that take final
+and unsets the member's previous one, so at every instant a member has exactly
+one final take in a session. Every read that means "the session's takes"
+selects the final ones. When the submission window closes, submissions are
+refused by instant (`system-scheduler-spec.md` §4.2), so whatever was final at
+the close stays final for aggregation, judging and the receipt.
+
+**Why this shape.** The product rule is "one take counts", not "one row
+exists". D49 mistook the second for the first and tried to enforce it with a
+uniqueness constraint, which cannot be added to a table that already holds
+several rows per member and cannot be scoped to new sessions, because a
+partial index can only test the row in front of it. A flag on the take needs
+no such distinction: legacy rows get their newest marked final and the rule
+applies everywhere at once.
+
+**What stays append-only.** A take's content, nonce and signature are never
+`UPDATE`d, nothing is deleted, and no admin endpoint writes the table. The
+final flag is metadata about which row counts, not a rewrite of what a member
+said, and the table's guard triggers block only `DELETE` and `TRUNCATE`, so
+setting it is permitted as written.
+
+**Revisions and the cap.** The `revision` column stays. It is inside the
+signed consensus receipt and hashed into `inputs_digest`, and the published
+contract requires the field, so removing it would be a receipt format change
+for no gain. `SWARM_TAKE_REVISION_CAP` stays at 5 and continues to bound how
+many rows one member can add to one session.
+
+**A live bug this exposes.** Two paths already default `revision` differently,
+`?? 0` in `judge-session.ts` and `?? 1` in `projections.ts` and
+`consensus-receipt.ts`. The same take set can therefore produce two different
+digests. Fix that to a single default as part of this work; it is independent
+of the decision.
+
+**What D49 got right and this keeps.** Idempotent submission: a retry of the
+same submission returns the existing record rather than creating a second row,
+so a crash after submit or an old and new container overlapping during a
+roster change produces at most a redundant request. That is retry
+deduplication, and it is a different thing from an intentional amendment.
+
+**Implementation.** Add the final flag with a migration that backfills each
+legacy session's newest revision per member as final; set and unset it inside
+the accepting transaction; resolve reads and `loadFrozenTakeSet` from the flag
+instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
+extend it for the flag. Tracked under the deployment refactor issue (#1026),
+W3.
+
+## D52 — File credentials are final, the smoke spec governs the whole stack, and epochs close on a grid (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from a three-question
+decision session on issue #1026. The specifications carry the detail:
+[`smoke-production-spec.md`](technical/smoke-production-spec.md) §12 and
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13.
+
+**Decision 1: D47's file credentials are the lasting design.** Secrets live in
+files outside every checkout: runtime role passwords in the deploying user's
+`~/.env`, each participant's signing key, bearer token and model key in its
+`credential.json` entry, and the three service tokens (scheduler, analytics
+producer, operator admin) as per-instance files whose hashes and rights sit in
+the API's token store. The `ADMIN_TOKEN` environment variable and the shared
+analytics secret are retired into that one model. No secret or env file lives
+in repository source. This retires the 2026-09-18 in-memory lease direction.
+
+**Decision 2: the smoke spec governs every service in the stack.** That brings
+`analytics-producer` and the pipeline worker into its credentials, bootstrap
+data and readiness. The ban on schedule rows covers sessions only: bootstrap
+data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
+`rm_worker` and runs preflight checks 1-3; the research lane, which serves only
+retired rows, is removed.
+
+**Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
+close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
+windows, downtime skips to the next future grid instant, and a duration change
+re-anchors the grid at the current window's close. The judging duration becomes
+a subject column captured at turnover.
+
+**Defaults taken with these decisions.** Event sequence numbers come from one
+counter row, gapless and in commit order; job
+pushes are cut; every instant comparison uses the database clock; a judge whose
+member operator is `robotmoney` passes the third-party gate; production key
+rotation uses the existing `rotate-key` admin route; a roster role that
+disagrees with the database refuses the boot; the target lock uses one constant
+key over a direct connection.
+
+**Refined the same day, after review.** Five points were tightened before any of
+this was built:
+
+- **The judge of record, not a race.** A session has one judge of record and its
+  judgement is the session's consensus. Today one judge is seated, so it is that
+  judge. With several seated, the judge of record is chosen by member id, never
+  by which judgement arrived first, so nothing wins by being fastest. Other
+  judgements are recorded and change no outcome. Agreement among several judges
+  remains a later amendment.
+- **A first epoch's window has a floor** of half an `epoch_duration`. Without
+  one, a subject activated moments before a grid instant opened a window nobody
+  could submit into, then published a session recording every seated member
+  absent — a permanent record of an artefact of activation timing.
+- **The clock rule is narrowed.** A comparison of the present reads
+  `clock_timestamp()` at the comparison; a derived instant such as the next grid
+  close is read once per transaction and reused, so one transaction never acts
+  on two different presents.
+- **A transition transaction never spans a network or model call.** The event
+  counter therefore serializes only database work. Without this, the counter's
+  row lock and the isolation gate contradicted each other outright.
+- **The event log is retained past the oldest cursor the API may still be asked
+  to serve**, rather than never pruned. Pruning above that point is permitted;
+  below it is forbidden. "Never" foreclosed a retention policy that will be
+  needed.
+
+
+## D53 — Seven owner calls that unblock the deployment refactor (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from the
+verified audit of issue #1026, where each point was a place the criteria, the
+specifications and the earlier decisions disagreed. Each call below names the
+rule that wins, so the implementation waves do not have to guess.
+
+**Decision 1: D48's replay prerequisite is waived.** [D48](#d48) said `shadow`
+could leave the write path only after the judge replay covered the real
+recorded inputs of an observe-before-enforce soak. That coverage does not
+exist: `backend/src/swarm/judge-replay.ts` makes no judge call, so it cannot
+prove anything about a judge. The prerequisite is waived rather than built.
+`shadow` is removed from every write path and the judge-mode `CHECK` tightens
+to `off | enforce`. Existing rows and signed receipts that say `shadow` stay
+readable, as D48 already promised.
+*Why.* Under [D52](#d52) the judge is a participant, not a backend function,
+and `currentJudgeMode` already turns `shadow` into `off` for every new session.
+A soak against the retired backend judge would measure code that no longer
+decides anything.
+
+**Decision 2: D52's retention rule beats migration 0072's triggers.** A forward
+migration drops the `DELETE` and `TRUNCATE` guard triggers on
+`swarm_stream_events`. `DELETE` and `TRUNCATE` stay revoked from `rm_app` and
+`rm_worker`, so only `rm_owner` can prune, and only rows older than the oldest
+cursor the API may still be asked to serve. The table leaves
+`APPEND_ONLY_TABLES`. The criterion that asked for the triggers now reads
+"protected by grant, prunable only by `rm_owner`".
+*Why.* D52 refined "never pruned" into "retained past the oldest servable
+cursor", because a log that can never shrink forecloses a retention policy the
+system will need. A trigger that refuses every `DELETE` makes that policy
+impossible. The grant keeps the part that matters: no runtime role can open a
+gap.
+
+**Decision 3: compat headers start after a baseline of 0063.** The migration
+runner refuses a pending migration with no `-- compat: additive` or
+`-- compat: breaking` header, except one numbered at or below the baseline
+constant `0063`, which it accepts as pre-compat. A test proves every migration
+above `0063` carries a header. Files `0001` to `0063` are not backfilled.
+*Why.* Production still runs a release whose pending set includes header-less
+files, so a strict rule would refuse `bun run migrate` and a `--local` dump of
+production outright. Backfilling 63 headers by hand would write compatibility
+claims nobody verified, and a header is a claim the rollout trusts.
+
+**Decision 4: the judge-path criterion moves to the participant.** The Phase 0
+criterion about the judge's direct transport now names the participant path:
+the participant judge-client classifies failures with the D-A7 refusal
+taxonomy on the direct transport, and the salvaged runner works with no
+container or network. The dead backend `judge()`, `judgeSession` and
+`templateOpinion` are deleted with their tests. Coverage from `swarm-judge` and
+`consensus-receipt-judge-roundtrip` that still matters moves into
+`participant-judge-runner` and `no-inline-judge`.
+*Why.* Nothing calls the backend judge any more, and the scheduler spec puts
+judging in a participant. Keeping tests green on a path that never runs proves
+nothing about the path that does. Deleting `templateOpinion` also removes the
+last templated-consensus code, which the no-fake-judge rule forbids anyway.
+
+**Decision 5: `bun smoke:capture` loses `--allow-primary`.** Capture always
+refuses a primary node or a credential that is not `rm_readonly`. There is no
+override.
+*Why.* A dump taken from a primary breaks the read-only rule the capture exists
+to keep, and a replica is always available to capture from. An override that
+is "recorded in the manifest" still takes the dump.
+
+**Decision 6: immutable analytics ledgers count as append-only for preflight.**
+Preflight check 2's rule against `DELETE` and `TRUNCATE` covers the tables in
+`LEDGER_IMMUTABLE_FAMILIES` as well as those in `APPEND_ONLY_TABLES`.
+*Why.* Losing a ledger row is the same harm as losing a history row, and the
+preflight module's own documentation already claimed they counted. This makes
+the check do what its comment says.
+
+**Decision 7: subject columns keep the `_seconds` suffix.**
+`epoch_duration_seconds` already exists and stays. The new columns are
+`epoch_anchor` and `judging_duration_seconds`.
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §2.2 notes
+that duration columns carry the unit suffix.
+*Why.* The spec's bare names were shorthand. Renaming a shipped column would
+break the wire contract for no gain, and a unit in the name stops a reader
+guessing seconds from milliseconds.
+
+**What stays.** D48's decision itself (`off | enforce`, history readable),
+D51's amendments with the `revision` column, and D52's no-fallback judge are
+unchanged. None of these calls adds a judge fallback, a templated consensus or
+a Docker socket.

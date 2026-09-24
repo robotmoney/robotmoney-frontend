@@ -6,9 +6,11 @@
 // that guard BEFORE parsing the request body or touching the database, so an
 // unauthenticated caller never causes SQL work (issue #152 AC7).
 import * as admin from "../../swarm/admin.ts";
+import * as epoch from "../../swarm/domain.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
+import { JUDGE_MODES, type JudgeMode } from "../../swarm/judge-config.ts";
 import { config as globalConfig } from "../../config.ts";
-import { isPrivileged, hasAutomationRole } from "../auth.ts";
+import { isPrivileged, hasAutomationRole, hasAutomationRight } from "../auth.ts";
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import {
   optionalString,
@@ -28,6 +30,7 @@ function ownsPath(p: string): boolean {
   if (!p.startsWith(PREFIX)) return false;
   const rest = p.slice(PREFIX.length);
   return (
+    rest.startsWith("epochs/") ||
     rest === "subjects" || rest.startsWith("subjects/") ||
     rest === "members" || rest.startsWith("members/") ||
     rest === "applications" ||
@@ -55,6 +58,87 @@ export interface AdminAuthConfig {
 // the ephemeral test DB, which otherwise runs with RM_ENV=ephemeral →
 // allowInsecure=true. swarm.ts's live mount omits it (defaults to the
 // real global config).
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finalize, and attest — issue #1026 W4
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// §4.4: "Publish — the session goes public, WITH ITS CONSENSUS CERTIFICATE WHEN
+// ONE EXISTS."
+//
+// THIS EXISTS BECAUSE THE REMOVAL ALMOST DROPPED IT. The retired `swarm.publish`
+// queue handler assembled the receipt straight after publishing, and deleting
+// that handler took the behaviour with it: `finalizeEpoch` publishes and
+// assembles nothing, so an `enforce` session with an adopted judgement would
+// have gone public with no certificate and nothing calling it a failure. Every
+// layer would have behaved correctly, which is exactly the shape of the
+// v0.5.0-rc.1 hole `swarm-analyst-weights-receipt.test.ts` was written for.
+//
+// IT IS HERE, NOT IN `finalizeEpoch`. A receipt is not a state transition, and
+// domain.ts cannot reach the assembler anyway — `consensus-receipt.ts` imports
+// domain.ts, so the dependency only runs one way. The retired handler made the
+// same call from the same side for the same reason.
+//
+// THE ALLOWLIST IS CARRIED OVER VERBATIM, and it is an allowlist rather than a
+// failure list on purpose: a refusal reason added later degrades loudly instead
+// of being absorbed into a clean publish.
+const EXPECTED_RECEIPT_REFUSALS = new Set([
+  // The judge is off, which is the production default.
+  "not_judged",
+  // Judging was requested and no eligible consensus was recorded by the
+  // deadline: §4.4 publishes the session with no certificate, by design.
+  "no_consensus",
+  // Judgements are on file but none reached the session: they came from a judge
+  // that is not the judge of record, or after publication (late evidence).
+  "judgement_not_adopted",
+  // A member filed a first take after aggregation — consensus-receipt.ts calls
+  // this "ordinary product behaviour rather than corruption".
+  "session_not_reaggregated",
+  // An amendment landed between judging and publishing.
+  "judgement_stale",
+]);
+
+/**
+ * What replaced the missing-receipt alert, and why nothing is lost.
+ *
+ * The retired handler had a second job here: `not_judged` meant two different
+ * things — "the judge is off" and "the judge was asked and never answered" —
+ * and it told them apart by reading the session's own `swarm.judge` job's
+ * `last_error`, so an eligible session could not lose its receipt in silence.
+ *
+ * There is no `swarm.judge` job any more, and there does not need to be: under
+ * §4.4 finalize records the distinction ITSELF, as the session's judging
+ * outcome. `not_judged` means the mode was `off`; `no_consensus` means judging
+ * was requested and no eligible consensus arrived. The condition the alert
+ * existed to surface is now a stored column on the published session rather
+ * than an inference from a queue row, which is strictly better — but it is a
+ * DIFFERENT mechanism, so it is written down rather than assumed.
+ */
+async function finalizeAndAttest(sessionId: string) {
+  const finalized = await epoch.finalizeEpoch(sessionId);
+  if (!finalized.ok) return finalized;
+
+  const receipt = await admin.publishConsensusReceiptAdmin(sessionId, "system-scheduler");
+  if (receipt.ok) return { ...finalized, consensusReceipt: { published: true } };
+
+  const consensusReceipt = { published: false, reason: receipt.error };
+  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) {
+    return { ...finalized, consensusReceipt };
+  }
+  // An assembly FAILURE — `no_takes`, `schema_invalid`, the `weights_*` family,
+  // `signing_key_unresolved`, `nonce_replayed`. The session is published either
+  // way (finalize already committed and §4.4 makes that outcome final), so this
+  // reports the failure beside the outcome rather than pretending the publish
+  // did not happen. The scheduler treats a 200 as success and moves on, which
+  // is correct: there is nothing for it to retry, and the refusal is recorded.
+  return {
+    ...finalized,
+    consensusReceipt,
+    receiptFailed: true,
+    receiptError: `consensus receipt refused: ${receipt.error}`,
+  };
+}
+
 export async function handleSwarmAdmin(
   req: Request,
   url: URL,
@@ -64,11 +148,74 @@ export async function handleSwarmAdmin(
   const m = req.method;
   if (!ownsPath(p)) return null;
 
-  // Auth FIRST — before any body parsing or DB query (AC7).
-  if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) return FORBIDDEN;
-
   const rest = p.slice(PREFIX.length);
   const segs = rest.split("/").filter(Boolean);
+
+  // Auth FIRST — before any body parsing or DB query (AC7).
+  //
+  // The epoch-lifecycle routes ask for a RIGHT, not merely for the automation
+  // role (issue #1026 W4.5, smoke spec §3): `system-scheduler` presents a
+  // per-instance token whose row names what it may do, and a token provisioned
+  // to read subjects and sessions must not be able to turn an epoch over. Every
+  // other admin route keeps exactly the guard it had.
+  if (segs[0] === "epochs") {
+    if (!(await isPrivileged(req, cfg) || await hasAutomationRight(req, "lifecycle_transitions", cfg))) {
+      return FORBIDDEN;
+    }
+  } else if (!(await isPrivileged(req, cfg) || hasAutomationRole(req, cfg))) {
+    return FORBIDDEN;
+  }
+
+  // ── The epoch lifecycle (scheduler spec §4) ───────────────────────────
+  //
+  // Thin transport, exactly like the rest of this file: each route parses its
+  // body, calls one state-guarded transition, and passes the domain layer's own
+  // {ok, status, ...} envelope straight through. No route here decides
+  // anything — a refusal's reason comes from the transition, because the
+  // transition is the only thing that saw the stored state.
+  if (segs[0] === "epochs" && m === "POST" && segs.length === 2) {
+    const b = (await readJsonObject(req)) ?? {};
+    const str = (k: string) => (typeof b[k] === "string" && b[k] ? (b[k] as string) : null);
+    switch (segs[1]) {
+      case "open": {
+        const subjectId = str("subjectId");
+        if (!subjectId) return { status: 400, body: { error: "subjectId required" } };
+        return fromResult(await epoch.openEpoch(subjectId));
+      }
+      case "turnover": {
+        const subjectId = str("subjectId");
+        const expectedSessionId = str("expectedSessionId");
+        if (!subjectId || !expectedSessionId) {
+          return { status: 400, body: { error: "subjectId and expectedSessionId required" } };
+        }
+        return fromResult(await epoch.turnOverEpoch(subjectId, expectedSessionId));
+      }
+      case "aggregate": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await epoch.aggregateEpoch(sessionId));
+      }
+      case "request-judging": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await epoch.requestJudging(sessionId));
+      }
+      // THERE IS NO `consensus` ROUTE. A consensus is recorded by exactly one
+      // path: `submitJudgement`, in the transaction that writes the judge of
+      // record's signed, applied judgement (§4.4, criterion 102: "through part
+      // 1's transition rather than a second copy"). A route that took a bare
+      // judgement id would let a scheduler token record ANY row — a second
+      // judge's, or one that never reached the session — as the consensus, and
+      // finalize would then publish `judged` over a session carrying no adopted
+      // opinion. `epochs/consensus` therefore falls through to the 404 below.
+      case "finalize": {
+        const sessionId = str("sessionId");
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        return fromResult(await finalizeAndAttest(sessionId));
+      }
+    }
+  }
+  if (segs[0] === "epochs") return { status: 404, body: { error: "unknown epochs admin route" } };
 
   // ── Topics ────────────────────────────────────────────────────────────
   if (segs[0] === "subjects") {
@@ -197,11 +344,11 @@ export async function handleSwarmAdmin(
       return fromResult(await admin.createSessionAdmin(parsed));
     }
     const sessionId = segs[1] ? decodeURIComponent(segs[1]) : undefined;
-    // The shadow soak's read path (issue #767, folded from #768). Privileged
-    // like every other route here — a `shadow` opinion is model-authored prose
-    // about named members that the mode deliberately keeps off the public
-    // session page, so serving it unauthenticated would publish exactly what
-    // shadow exists to withhold.
+    // Every judgement a session received (issue #767, folded from #768).
+    // Privileged like every other route here — a judgement that never reached
+    // the session is model-authored prose about named members that the public
+    // session page does not show, so serving it unauthenticated would publish
+    // exactly what the lifecycle kept off the session.
     if (sessionId && segs.length === 3 && segs[2] === "judgements" && m === "GET") {
       const limitRaw = Number(url.searchParams.get("limit") ?? NaN);
       return fromResult(await admin.getSessionJudgementsAdmin(sessionId, Number.isFinite(limitRaw) ? limitRaw : 50));
@@ -235,16 +382,30 @@ export async function handleSwarmAdmin(
     if (sessionId && segs.length === 3 && segs[2] === "consensus-receipt" && m === "POST") {
       return fromResult(await admin.publishConsensusReceiptAdmin(sessionId));
     }
-    if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish", "judge"].includes(segs[2]!) && m === "POST") {
+    // THE API DOES NOT JUDGE (issue #1026 W4). `judge` is answered here rather
+    // than left to fall through to the 404 below, because a 404 would read as
+    // "you got the URL wrong" for a verb that was real and is deliberately
+    // gone. system-scheduler-spec.md §1 puts judging in a participant — a
+    // container of its own with its own model key — and §7 keeps that key out
+    // of every process holding a database credential, which this one is. The
+    // judge CONFIG routes further down are untouched: they set a row, they do
+    // not call a model.
+    if (sessionId && segs.length === 3 && segs[2] === "judge" && m === "POST") {
+      return {
+        status: 410,
+        body: {
+          error: "this API does not judge: judging is a participant that subscribes over HTTP with its own " +
+            "model key (system-scheduler-spec.md §1, §7). Use the epoch judging request, not this route",
+        },
+      };
+    }
+    if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish"].includes(segs[2]!) && m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
       const expectedVersion = parseExpectedVersion(b) ?? undefined;
       const fn = {
         cancel: admin.cancelSessionAdmin, close: admin.closeSessionAdmin, reopen: admin.reopenSessionAdmin,
         aggregate: admin.aggregateSessionAdmin, publish: admin.publishSessionAdmin,
-        // Issue #752. 409 `judge_disabled` while the runtime mode is off, which
-        // is the shipped default — the judge is opt-in on a live swarm.
-        judge: admin.judgeSessionAdmin,
-      }[segs[2] as "cancel" | "close" | "reopen" | "aggregate" | "publish" | "judge"];
+      }[segs[2] as "cancel" | "close" | "reopen" | "aggregate" | "publish"];
       return fromResult(await fn(sessionId, expectedVersion));
     }
     return { status: 404, body: { error: "unknown sessions admin route" } };
@@ -255,16 +416,24 @@ export async function handleSwarmAdmin(
   // judge misbehave on live sessions needs `mode: "off"` to take effect on the
   // next session, not on the next deploy. Hence a database row behind a POST,
   // rather than an environment variable behind a container restart.
+  //
+  // THIS ROUTE IS THE ONLY WRITER of `swarm_judge_config` (smoke-production-spec.md
+  // §6.2). The two statements it reaches are registered queries whose declared
+  // caller is this module (swarm/judge-config.ts), and
+  // tests/swarm-judge-config-registry.test.ts asserts that from the registry.
+  //
+  // TWO MODES. `shadow` is refused like any other unknown value: D48's replay
+  // prerequisite was waived by D53, and no write path accepts it.
   if (segs[0] === "judge" && segs.length === 1) {
     if (m === "GET") return fromResult(await admin.getJudgeConfigAdmin());
     if (m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
-      const patch: { mode?: "off" | "shadow" | "enforce"; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean } = {};
+      const patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean } = {};
       if (b.mode !== undefined) {
-        if (b.mode !== "off" && b.mode !== "shadow" && b.mode !== "enforce") {
-          return { status: 400, body: { error: "mode must be off|shadow|enforce" } };
+        if (!JUDGE_MODES.includes(b.mode as JudgeMode)) {
+          return { status: 400, body: { error: "mode must be off|enforce" } };
         }
-        patch.mode = b.mode;
+        patch.mode = b.mode as JudgeMode;
       }
       if (b.minTakes !== undefined) {
         const minTakes = Number(b.minTakes);

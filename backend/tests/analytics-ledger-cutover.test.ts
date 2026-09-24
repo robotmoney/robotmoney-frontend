@@ -732,7 +732,7 @@ describe("issue #979 AC9: legacy row counts and PK checksums survive cutover and
       expect(await snapshot(), "no Phase A migration may alter a legacy table").toEqual(beforeMigration);
     } finally {
       await db.end({ timeout: 5 }).catch(() => {});
-      Bun.spawnSync(["docker", "rm", "-f", container]);
+      Bun.spawnSync(["docker", "rm", "-f", "-v", container]);
     }
   }, 180_000);
 });

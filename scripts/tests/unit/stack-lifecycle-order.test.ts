@@ -111,6 +111,61 @@ test("up() runs exactly one migration, and it precedes initialization", async ()
   expect(composeCalls.filter((a) => a.some((s) => s.includes("migrate")))).toHaveLength(1);
 });
 
+test("up({ migrate: false }) skips the compose call but still emits the migrate phase", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const composeCalls: string[][] = [];
+
+  await stackFor(rec, {
+    async run(argv) {
+      composeCalls.push(argv);
+      return 0;
+    },
+  }).up({ migrate: false, initialize: async () => { composeCalls.push(["<initialize>"]); } });
+
+  expect(composeCalls.some((a) => a.some((s) => s.includes("migrate")))).toBe(false);
+  expect(rec.events).toContain("migrate:start");
+  expect(rec.events).toContain("migrate:done");
+
+  const order = rec.events.filter((e) => e.endsWith(":done")).map((e) => e.split(":")[0]);
+  expect(order).toEqual([
+    "docker-preflight",
+    "build",
+    "postgres",
+    "migrate",
+    "services",
+    "ports",
+    "health",
+    "initialize",
+  ]);
+});
+
+test("up({ migrate: true }) still runs exactly one migration (same as the default)", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const composeCalls: string[][] = [];
+
+  await stackFor(rec, {
+    async run(argv) {
+      composeCalls.push(argv);
+      return 0;
+    },
+  }).up({ migrate: true, initialize: async () => { composeCalls.push(["<initialize>"]); } });
+
+  expect(composeCalls.filter((a) => a.some((s) => s.includes("migrate")))).toHaveLength(1);
+});
+
+test("up() deletes MIGRATE_DATABASE_URL after migrate() runs, however it got set", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const before = process.env.MIGRATE_DATABASE_URL;
+  process.env.MIGRATE_DATABASE_URL = "sentinel-for-test";
+  try {
+    await stackFor(rec).up();
+    expect(process.env.MIGRATE_DATABASE_URL).toBeUndefined();
+  } finally {
+    if (process.env.MIGRATE_DATABASE_URL !== undefined) delete process.env.MIGRATE_DATABASE_URL;
+    if (before !== undefined) process.env.MIGRATE_DATABASE_URL = before;
+  }
+});
+
 test("a deferred provider service starts after initialization and waits for health", async () => {
   const rec: Recorded = { events: [], probes: 0 };
   const composeCalls: string[][] = [];

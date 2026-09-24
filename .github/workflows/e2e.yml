@@ -356,36 +356,33 @@ jobs:
       # infrastructure behind it any more.
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v3
+      # The compose project this job's boot will use. NOT chosen here: `bun
+      # smoke` derives it from the job's own identity (scripts/stack/naming.ts,
+      # `class: "ci"`, hashed from GITHUB_WORKFLOW/RUN_ID/RUN_ATTEMPT/JOB, stable
+      # for every step of one job), and refuses an exported SMOKE_PROJECT (spec
+      # §1 retires it with no alias). This step asks the same helper the boot
+      # asks, BEFORE the boot runs, so the billing diagnostic and the always()
+      # teardown below can name the project even when the boot is killed.
+      # The `rm_ci_` prefix is the single fact a reaper needs before it touches
+      # anything on this shared host; scripts/tests/unit/stack-naming.test.ts
+      # asserts this step resolves through the helper and that the boot step
+      # pins nothing.
+      - name: Resolve this run's smoke project
+        id: smoke-project
+        run: bun --no-env-file scripts/stack/print-project-name.ts >> "$GITHUB_OUTPUT"
       - name: Full-stack smoke (smoke readiness gate)
         # Keep the complete transcript locally until the next step. `pipefail`
         # preserves smoke's exit status through tee, so capturing evidence can
-        # never turn a failed readiness gate green.
+        # never turn a failed readiness gate green. `--local blank --migrate
+        # --seed`: no local mode implies either preparation step (spec §4.3,
+        # §5), so this job asks for both — its own fresh local stack, migrated,
+        # with demo data, never production. `--no-env-file`: the boot refuses an
+        # environment bun filled from the checkout's `.env`.
         run: |
           set -o pipefail
-          bun run scripts/smoke.ts 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
         env:
           CI: "true"
-          # Pin a deterministic, per-run compose project name (issue: smoke
-          # persistent volumes). Teardown now keeps the postgres volume by default,
-          # so this required boot on the SHARED self-hosted runner must reclaim its
-          # OWN volume and no one else's. A pinned name makes the volume label
-          # (robotmoney.smoke.project=<this>) unique per run+attempt, so both the
-          # in-process cleanup (smoke-main.ts cleanCiVolume) and the always() backstop
-          # step below can scope the delete to exactly this run — never the co-tenant
-          # standing smoke. run_attempt makes reruns collision-free.
-          #
-          # The `rm_ci_` prefix is the CI half of the environment-scoped naming
-          # scheme (scripts/stack/naming.ts, CI_PROJECT_PREFIX) — the single fact
-          # a reaper needs before it touches anything on this shared host: a
-          # `rm_smoke_*` container belongs to the standing stage smoke or to an
-          # operator's shell and must never be swept by CI. Spelled from the
-          # GitHub context rather than left to the helper's default because the
-          # `always()` teardown step below has to name the same project from
-          # YAML; scripts/tests/unit/stack-naming.test.ts asserts both values
-          # here carry the prefix. Every container ALSO carries
-          # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
-          # is the channel tooling should select on.
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
           # Swarm takes are always live-authored through opencode. A missing
           # credential, CLI, or model response fails this required gate loudly;
           # there is no deterministic memo fallback.
@@ -465,7 +462,7 @@ jobs:
       - name: Diagnose OpenCode billing exhaustion
         if: ${{ failure() }}
         env:
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: ${{ steps.smoke-project.outputs.name }}
         run: |
           set -euo pipefail
           diagnostic_paths=("$RUNNER_TEMP/e2e-smoke.log")
@@ -502,8 +499,9 @@ jobs:
       # given (scripts/smoke-clean.ts's header), so this step can no longer be
       # green while a leak survives.
       #
-      # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` (byte-identical to the
-      # boot step's SMOKE_PROJECT above) and the same project label on the volume.
+      # Strictly scoped to THIS run: `-p "$SMOKE_PROJECT"` (the name the
+      # "Resolve this run's smoke project" step read from the same helper the
+      # boot uses) and the same project label on the volume.
       # This runner is shared with the standing stage smoke, which must never be
       # touched — hence no bare `docker compose down`, no `docker system prune`,
       # no name globbing. `--remove-orphans` is what kills the dynamically
@@ -557,12 +555,13 @@ jobs:
           set -u
           echo "::group::docker compose -p $SMOKE_PROJECT down -v --remove-orphans"
           docker compose -p "$SMOKE_PROJECT" \
+            --env-file /dev/null \
             -f docker-compose.yml -f docker-compose.smoke.yml \
             down -v --remove-orphans || echo "compose down exited non-zero — smoke-clean below is the gate"
           echo "::endgroup::"
           bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT"
         env:
-          SMOKE_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          SMOKE_PROJECT: ${{ steps.smoke-project.outputs.name }}
           WEB_PORT: "1"
           POSTGRES_PORT: "1"
       # Cross-run orphan reaper (the third gap behind run 30406428674): even a

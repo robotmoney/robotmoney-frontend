@@ -1190,7 +1190,7 @@ export function registerStaticViews(Alpine) {
       if (this.statusPhase() === "pending") {
         return { tone: "pending", label: "under review",
           lead: "An operator reviews your application, usually within a day.",
-          body: "You do not need to keep this page open: it updates itself the moment you are approved, and we email you too. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
+          body: "You do not need to keep this page open: it updates itself the moment you are approved. No email is sent, so check back here. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
       }
       if (state === "approved") {
         return { tone: "pending", label: "not filing yet",

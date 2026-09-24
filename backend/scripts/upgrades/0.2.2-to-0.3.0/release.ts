@@ -360,6 +360,13 @@ export const APPEND_ONLY_TABLES = [
   // historical release's delta, but postflight's live-schema roster is kept
   // byte-identical to the runtime guard as the drift test requires.
   "analytics_overwrite_events",
+  // Opted in by migration 0072 (issue #1026 W4, the epoch scheduler's two
+  // logs). Outside this historical release's delta on the same terms as
+  // analytics_overwrite_events above: the roster follows the runtime guard,
+  // and leaves it when the guard does (D53 takes `swarm_stream_events` out
+  // in favour of grant-only protection, and this entry goes with it).
+  "swarm_stream_events",
+  "swarm_scheduler_jobs",
 ] as const;
 
 /** Exact custom guards added by the AUM P0/P1 migrations. Unlike the shared

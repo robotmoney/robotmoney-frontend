@@ -533,12 +533,15 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
   });
 
   test("source is carried, so a receipt is attributable to what produced it", () => {
-    // runJudge() spreads one `base` — same promptHash, same inputsDigest — into
-    // both the model return and the template-fallback return, and
-    // templateOpinion() calls the same prose builders the aggregator uses. So
-    // WITHOUT this field nothing in a published receipt separates "a model read
-    // the takes" from "the model timed out". prompt_hash does not: its
-    // description no longer claims otherwise.
+    // HISTORY ONLY. The judge that wrote the pre-#969 receipts stamped the same
+    // promptHash and inputsDigest on its model return and on its
+    // template-fallback return, and the fallback used the same prose builders
+    // as the aggregator. So WITHOUT this field nothing in such a receipt
+    // separates "a model read the takes" from "the model timed out". Nothing
+    // produces a fallback now — the judge refuses rather than fakes (D-A7) and
+    // its code is deleted (D53) — but published receipts keep validating, which
+    // is why `fallback` stays in the enum. prompt_hash does not separate the
+    // two: its description no longer claims otherwise.
     expect(schema.properties.judge.properties.source.enum).toEqual(["model", "fallback"]);
     expect(valid.judge.source).toBe("model");
     expect(validNoWeights.judge.source).toBe("fallback");

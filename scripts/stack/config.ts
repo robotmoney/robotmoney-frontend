@@ -31,7 +31,8 @@ import {
 // origin every browser- and BACKEND_URL-based consumer of this stack loads
 // pages from (issue #892 — website-server/nginx.conf proxies /api/ and
 // /health to api, so the two together still present as one origin). `full`
-// adds the three worker execution lanes that the standing smoke drives. The
+// adds the two worker execution lanes the standing smoke drives, the
+// `system-scheduler` clock (issue #1026) and the independent producer. The
 // member-agent service is deliberately in NEITHER *running* list: it is
 // compose-profile gated (docker-compose.smoke.yml `profiles:
 // ["member-agent"]`) and is only ever started one-shot via `docker compose
@@ -39,18 +40,20 @@ import {
 export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
-export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
+export const WORKER_LANE_SERVICES = ["worker-analytics", "worker-research"] as const;
+// The clock (issue #1026). NOT a worker lane and deliberately its own list: it
+// claims no jobs, holds no database credential and shares none of the lanes'
+// wiring — system-scheduler-spec.md §1 gives it a database connection of
+// "**No.** Never." Anything that reasons about lanes (external-pg's
+// depends_on surgery, the lane telemetry tiles) must not pick it up by
+// accident, and anything that reasons about "the full stack" must.
+export const SCHEDULER_SERVICES = ["system-scheduler"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
-// The one service that holds the Docker socket (issue #1012). It belongs to
-// `full` and NOT to `core` for the same reason the worker lanes do: `core` is
-// postgres + api + the static origin, which never judges a session and so never
-// needs a container started on its behalf. A `full` stack DOES judge, and a
-// judge with no launcher fails closed with `launcher_unavailable` on every
-// session — so leaving it out of this list would make the stack's own judging
-// permanently broken rather than merely unconfigured.
-export const LAUNCHER_SERVICES = ["agent-launcher"] as const;
 export const FULL_SERVICES = [
-  ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
+  ...CORE_SERVICES,
+  ...WORKER_LANE_SERVICES,
+  ...SCHEDULER_SERVICES,
+  ...PRODUCER_SERVICES,
 ] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
@@ -335,8 +338,23 @@ export function buildSpawnEnv(cfg: StackConfig, hostEnv: Record<string, string |
 }
 
 // ── argv builders (PURE — every command shape is testable without Docker) ───
+// `--env-file /dev/null` is the third lock on the same door, and the only one
+// that closes it. buildSpawnEnv() hands the compose child an allowlisted
+// environment precisely so an ambient value cannot reach a container — but
+// compose ALSO loads `<project directory>/.env` by itself, for interpolation,
+// with no involvement from the environment we built. On a host whose checkout
+// carries a deployment `.env` that is not a theoretical leak: it put the
+// persistent stack's WORKER_DATABASE_URL (`…@postgres:5432`) into all three
+// worker lanes of a `--db smoke-twin` boot, which has no `postgres` service at
+// all, and every lane then died in DNS while the boot reported only unhealthy
+// workers. Dropping the name from the smoke's passthrough allowlist did NOT
+// fix it, because that allowlist was never the path — compose read the file.
+// Pointed at /dev/null, `${VAR:-default}` resolves from what buildComposeEnv()
+// put in the child's environment and from nothing else, which is what this
+// module has always claimed. Values we DO pass still win (an environment
+// variable outranks an env file), so nothing the stack owns changes.
 export function composeArgs(project: string, files: string[] = DEFAULT_COMPOSE_FILES): string[] {
-  return ["compose", "-p", project, ...files.flatMap((f) => ["-f", f])];
+  return ["compose", "--env-file", "/dev/null", "-p", project, ...files.flatMap((f) => ["-f", f])];
 }
 
 export function buildArgs(services: string[] = []): string[] {
@@ -370,12 +388,35 @@ export function composeFilesWithImagesOverride(files: string[], imagesOverride?:
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready
 // BEFORE migrating; if that ordering is ever rearranged, migrate fails loudly
 // with a connection error instead of implicitly starting postgres.
+//
+// THE MIGRATION CREDENTIAL BELONGS TO THIS EPHEMERAL CHILD, NOT TO A SERVICE.
+// `docker compose run` inherits the named service's `environment:` block, which
+// is why docker-compose.yml used to declare MIGRATE_DATABASE_URL on `api` — and
+// compose cannot scope that to the run-child, so the LONG-RUNNING api container
+// got it too, along with three worker lanes, analytics-producer and (meaning
+// nothing at all) postgres. Six persistent processes carrying a bootstrap login
+// that holds CREATEROLE and rm_owner membership, none of which ever read it:
+// `src/api/index.ts:51` says outright that the api process "invokes neither
+// migrate nor scripts/db-preflight.ts", and the worker lanes never did either.
+// That contradicts 0053's own rule -- "Runtime processes authenticate only as
+// rm_app or rm_worker" -- and deployment.md §4.3's "supply MIGRATE_DATABASE_URL
+// only to that command".
+//
+// Naming it BARE (`-e VAR`, no `=value`) rather than as a pair: docker then
+// reads the value from its own environment, which buildComposeEnv() already
+// populates through the MIGRATE_DATABASE_URL passthrough. A `-e VAR=secret`
+// pair would put the credential in the `docker compose` process's argv, where
+// `ps` shows it to every local user -- the same defect the provisioning script
+// was carrying until 2026-09-21.
+const MIGRATION_CREDENTIAL_VARS = ["MIGRATE_DATABASE_URL"] as const;
+
 export function migrateArgs(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): string[] {
   return [
     "run",
     "--rm",
     "--no-deps",
     "-T",
+    ...MIGRATION_CREDENTIAL_VARS.flatMap((k) => ["-e", k]),
     ...Object.entries(extraEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "api",
     "bun",
