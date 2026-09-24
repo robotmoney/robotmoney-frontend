@@ -21,6 +21,14 @@
 //                     pin alone would select. Nothing here touches the judge:
 //                     the judge is a participant (smoke spec §6.2), and no
 //                     boot writes judge mode (D48, D53).
+//   4. --migrate      ALWAYS. No mode implies it (spec §4.3, §5), and a dump
+//                     carries production's schema, which the checkout is
+//                     usually ahead of. Absent, the boot refuses the stale
+//                     schema rather than serving it.
+//
+// It runs as `bun --no-env-file` (package.json) and refuses otherwise, exactly
+// as the boot does: bun would load the checkout's `.env` into THIS process, and
+// the child inherits this process's environment (criterion 122).
 //
 // HOW IT DIFFERS FROM ITS NEIGHBOURS:
 //   bun smoke --static-port  standing smoke against the remote database
@@ -46,6 +54,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveZenKey } from "./lib/smoke-twin-rehearsal.ts";
+import { refuseCheckoutEnvFile } from "./smoke.ts";
 
 const NAME = "smoke-twin";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -86,12 +95,20 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
   // mode), the second is what makes this the tunnel's boot, and the third is
   // what keeps this a TEST boot (short windows) rather than the 6 h cadence the
   // pin alone would select. The dump's directory rides on the mode itself.
-  const args = ["--local", backupDir ? `dump=${backupDir}` : "dump", "--static-port", "--cadence", "fast"];
+  // `--migrate` is explicit for the same reason: no mode implies it, and a
+  // fresh dump is on production's schema, which the checkout is usually ahead
+  // of. Without it the boot refuses the stale schema instead of serving it.
+  const args = ["--local", backupDir ? `dump=${backupDir}` : "dump", "--migrate", "--static-port", "--cadence", "fast"];
 
   return { capture: !passthrough.includes("--reuse"), args, ...(backupDir ? { backupDir } : {}) };
 }
 
 if (import.meta.main) {
+  const envFileRefusal = refuseCheckoutEnvFile(process.execArgv, { script: "smoke:twin", file: "scripts/smoke-twin.ts" });
+  if (envFileRefusal) {
+    console.error(`[${NAME}] FATAL: ${envFileRefusal}`);
+    process.exit(1);
+  }
   const plan = planTwin(process.argv.slice(2));
   if ("error" in plan) {
     console.error(`[${NAME}] ${plan.error}`);

@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, ownsData, parseDataPath, reattachOverlayYaml, refuseRetiredEnv, requestsDump, requestsMigrate, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, bootPreflightPlan, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { refuseIfSchemaBehind, resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
-import { shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
@@ -158,6 +158,13 @@ for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] $
 // to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
 // does not have — see smoke-compose-env.ts.
 for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
+// And the migration credential: only this process may set it, for one migrate
+// run (below). An exported one is dropped HERE, before twinMigrationCredential()
+// or the remote prompt assigns the real one, and before extraComposeEnv reads it.
+{
+  const dropped = dropShellMigrationCredential(process.env);
+  if (dropped) console.warn(`[smoke] ${dropped}`);
+}
 
 if (staticPortMode) {
   console.warn(
@@ -229,6 +236,26 @@ if (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach && !req
     process.exit(1);
   }
   requestedDataPath = { kind: "ephemeral", reattach: { volume: saved } };
+}
+// …and refused while a running container still mounts it, named or saved: the
+// saved one is usually the previous boot's, which is usually still up. Checked
+// before any overlay is written or container created. Fails closed when the
+// daemon cannot be asked: an unknown holder is not an absent one.
+if (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach?.volume) {
+  const volume = requestedDataPath.reattach.volume;
+  const ps = Bun.spawnSync(
+    ["docker", "ps", "--filter", `volume=${volume}`, "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}'],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (ps.exitCode !== 0) {
+    console.error(`[smoke] FATAL: ${LOCAL_FLAG} volume=${volume}: could not ask Docker which containers mount it: ${ps.stderr.toString().trim()}`);
+    process.exit(1);
+  }
+  const inUse = refuseVolumeInUse(volume, parseVolumeHolders(ps.stdout.toString()));
+  if (inUse) {
+    console.error(`[smoke] FATAL: ${inUse}`);
+    process.exit(1);
+  }
 }
 
 if (staticPortMode) await stagePreflight();
@@ -850,17 +877,38 @@ async function main(): Promise<void> {
   const seeds = shouldSeed(process.argv);
   const migrates = requestsMigrate(process.argv);
   if (!seeds) console.warn(`[smoke] no --seed: no simulation init. Schema currency is still checked.`);
+  // Which read-only checks run between postgres and migrate(): the decision and
+  // its reasoning are bootPreflightPlan() in smoke-db-mode.ts. Schema currency
+  // runs on EVERY path that skips migrate, local ones included.
+  const preflightPlan = bootPreflightPlan({ composePostgres, seeds, migrates });
 
   async function classifyDatabase(): Promise<void> {
     log(`${DB_PREFLIGHT_STEP}…`);
-    if (seeds) { await stack.composeAsync(dbPreflightArgv("simulation"), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
-    if (dataPath.kind === "external" && !migrates) refuseIfSchemaBehind(stack.compose, log);
+    if (preflightPlan.classify) { await stack.composeAsync(dbPreflightArgv("simulation"), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
+    if (preflightPlan.schemaCurrent) refuseStaleSchema();
+  }
+
+  // refuseIfSchemaBehind()'s own message is about the remote path (a doadmin
+  // prompt). A local mode migrates with its own container's credential, so it
+  // gets its own remedy rather than a prompt it will never see.
+  function refuseStaleSchema(): void {
+    const mode = localModeOf(dataPath);
+    try {
+      refuseIfSchemaBehind(stack.compose, log);
+    } catch (err) {
+      if (mode === null) throw err;
+      throw new Error(
+        `${LOCAL_FLAG} ${mode}: --migrate was not passed and the schema is not current (named above). ` +
+          `No mode implies --migrate (spec §4.3, §5), and serving this boot would run current code on a stale schema. ` +
+          `Re-run with --migrate; a local mode needs no password.`,
+      );
+    }
   }
 
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrate: migrates,
-    preflight: composePostgres ? undefined : classifyDatabase,
+    preflight: preflightPlan.classify || preflightPlan.schemaCurrent ? classifyDatabase : undefined,
     initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
   }));
 

@@ -48,6 +48,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homeEnvFilePath } from "./env-role.ts";
 import { smokeTwinUrlFromContainer } from "./smoke-twin.ts";
+import { refuseCheckoutEnvFile } from "../smoke.ts";
 
 /**
  * How long the boot gets to reach readiness. Generous on purpose: a cold run
@@ -215,6 +216,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
   const log = (m: string) => console.log(`[${opts.name}] ${m}`);
   const err = (m: string) => console.error(`[${opts.name}] ${m}`);
 
+  // No env file from the checkout (criterion 122). The boot below inherits this
+  // process's environment, so a `.env` bun loaded HERE would reach it even
+  // though the child itself runs with --no-env-file. package.json runs this as
+  // `bun --no-env-file`; a hand-typed run without it is refused, not trusted.
+  const envFileRefusal = refuseCheckoutEnvFile(process.execArgv, { script: "smoke:twin:once", file: "scripts/smoke-twin-rehearse.ts" });
+  if (envFileRefusal) {
+    err(`FATAL: ${envFileRefusal}`);
+    return 2;
+  }
+
   // Resolve the credential BEFORE the expensive work. Discovering a missing key
   // after a restore and a multi-minute image build is a wasted window.
   const zen = resolveZenKey();
@@ -232,7 +243,12 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
   const bootStartedAt = Date.now();
 
   try {
-    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump"];
+    // `--migrate` is explicit because no mode implies it (spec §4.3, §5): a
+    // restored dump sits on the schema production had when it was taken, and
+    // the non-superuser migration RM_TWIN_PRODUCTION_PRIVILEGES shapes below is
+    // the thing this rehearsal exists to run. Without it the boot refuses a
+    // stale schema rather than serving it (smoke-main.ts's preflight).
+    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate"];
     log(`booting: ${args.slice(2).join(" ")}  (this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 

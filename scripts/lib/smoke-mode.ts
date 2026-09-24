@@ -87,12 +87,6 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
 
-/** The boot-step names the TUI/step list carries, per mode: a twin (`smoke`)
- *  starts its requested agents; everything else runs the simulation seed. */
-export function bootstrapStepNames(smoke: boolean): readonly string[] {
-  return smoke ? ["start agents"] : ["simulation seed"];
-}
-
 /**
  * The four subjects `backend/seed-data/v0-committee-archive.json.gz` restores,
  * under their RELEASE names (backend/scripts/v0-seed-bootstrap.ts maps two of

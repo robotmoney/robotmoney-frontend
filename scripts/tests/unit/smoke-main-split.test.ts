@@ -239,3 +239,32 @@ describe("red control: the graders catch the pre-#456 shape", () => {
     expect(/process\.env\.ADMIN_TOKEN\s*=[^=]/.test("const t = process.env.ADMIN_TOKEN;")).toBe(false);
   });
 });
+
+describe("schema currency is checked on every path that skips migrate (criterion 28)", () => {
+  // The decision is bootPreflightPlan() in smoke-db-mode.ts, executed by
+  // smoke-db-mode.test.ts. What is pinned here is that the boot USES it: the
+  // preflight hook is installed whenever the plan has a step, compose-postgres
+  // paths included, and nothing keys the schema check on the remote path.
+  const remoteOnlySchemaCheck = (src: string) => /kind === "external" && !migrates\) refuseIfSchemaBehind/.test(src);
+  const preflightFromPlan = (src: string) =>
+    /preflight: preflightPlan\.classify \|\| preflightPlan\.schemaCurrent \? classifyDatabase : undefined/.test(src);
+
+  test("the preflight hook comes from bootPreflightPlan, not from composePostgres", () => {
+    expect(smokeMain).toContain("bootPreflightPlan({ composePostgres, seeds, migrates })");
+    expect(preflightFromPlan(smokeMain)).toBe(true);
+    expect(smokeMain).not.toContain("preflight: composePostgres ? undefined");
+  });
+
+  test("the schema check is not keyed on the remote path", () => {
+    expect(remoteOnlySchemaCheck(smokeMain)).toBe(false);
+    expect(smokeMain).toContain("if (preflightPlan.schemaCurrent) refuseStaleSchema();");
+  });
+
+  test("red control: the pre-fix wiring is caught", () => {
+    const prefix =
+      '    if (dataPath.kind === "external" && !migrates) refuseIfSchemaBehind(stack.compose, log);\n' +
+      "    preflight: composePostgres ? undefined : classifyDatabase,\n";
+    expect(remoteOnlySchemaCheck(prefix)).toBe(true);
+    expect(preflightFromPlan(prefix)).toBe(false);
+  });
+});

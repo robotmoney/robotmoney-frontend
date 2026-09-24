@@ -424,6 +424,90 @@ export function shouldSeed(argv: readonly string[]): boolean {
   return requestsSeed(argv);
 }
 
+/** What the boot's read-only preflight runs, between postgres and migrate(). */
+export interface BootPreflightPlan {
+  /** scripts/db-preflight.ts: classifies a database `--seed` is about to write. */
+  classify: boolean;
+  /** backend/scripts/schema-current.ts: refuses a schema this code is ahead of. */
+  schemaCurrent: boolean;
+}
+
+/**
+ * Decide the boot's preflight from the data path and the two mutation flags.
+ *
+ * SCHEMA CURRENCY ON EVERY PATH THAT SKIPS MIGRATE. No mode implies `--migrate`
+ * (spec §4.3, §5), so a boot without it runs on whatever schema the database
+ * already holds. Spec §7 check 3 asks, "against any database", whether the
+ * booting code supports that schema, and refuses if not. A restored dump is on
+ * production's schema from when it was taken, and a reattached volume is on
+ * whatever the last boot left: both are usually behind this checkout. Keying
+ * the check on the remote path alone (as it once was) let a stale dump boot
+ * current code on an old schema, with no refusal. A blank database has no
+ * schema at all until the snapshot bootstrap lands, so it refuses too.
+ *
+ * The classify step is unchanged: it guards `--seed`, and only a database this
+ * boot did not create itself needs classifying.
+ */
+export function bootPreflightPlan(opts: { composePostgres: boolean; seeds: boolean; migrates: boolean }): BootPreflightPlan {
+  return {
+    classify: opts.seeds && !opts.composePostgres,
+    schemaCurrent: !opts.migrates,
+  };
+}
+
+/** The `--local` mode a resolved data path came from, or null for the remote database. */
+export function localModeOf(dp: DataPathRequest | ResolvedDataPath): LocalMode | null {
+  if (dp.kind === "smoke-twin") return "dump";
+  if (dp.kind === "ephemeral") return dp.reattach ? "volume" : "blank";
+  return null;
+}
+
+/** One running container that mounts a volume: `docker ps --filter volume=…`. */
+export interface VolumeHolder {
+  container: string;
+  /** The `com.docker.compose.project` label, empty when the container has none. */
+  project: string;
+}
+
+/** Parse `docker ps --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}'`. */
+export function parseVolumeHolders(stdout: string): VolumeHolder[] {
+  return stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .map((l) => {
+      const [container = "", project = ""] = l.split("\t");
+      return { container: container.trim(), project: project.trim() };
+    });
+}
+
+/**
+ * Refuse `--local volume` while a running container still mounts the volume.
+ *
+ * The saved volume is usually the LAST boot's, and that boot is usually still
+ * up: the state file is rewritten by every boot, not by teardown. A second
+ * postgres on the same data directory is two writers on one cluster. Both run
+ * postgres as PID 1 in their own PID namespace, so postmaster.pid does not
+ * reliably stop the second one. Refused, with the holder named, before any
+ * overlay is written or container created.
+ */
+export function refuseVolumeInUse(volume: string, holders: readonly VolumeHolder[]): string | null {
+  if (holders.length === 0) return null;
+  const named = holders
+    .map((h) => (h.project ? `${h.container} (project ${h.project})` : h.container))
+    .join(", ");
+  const projects = [...new Set(holders.map((h) => h.project).filter((p) => p.length > 0))];
+  const other = projects.length > 0
+    ? projects.map((p) => `\`docker compose -p ${p} down\``).join(" / ")
+    : "`docker stop <container>`";
+  return (
+    `${LOCAL_FLAG} volume=${volume}: the volume is still mounted by a running container: ${named}. ` +
+    `A second postgres on the same data directory is two writers on one cluster. Stop the holder first: ` +
+    `\`bun smoke:down\` if it is the boot this checkout last recorded, otherwise ${other} ` +
+    `(never with -v, which deletes the volume). Then re-run.`
+  );
+}
+
 /**
  * Resolve the data path this argv asks for.
  *

@@ -233,8 +233,67 @@ describe("bun never fills the boot from the checkout's .env (criterion 122)", ()
 
   test("the package scripts that boot or observe a stack all pass --no-env-file", () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    for (const name of ["smoke", "smoke:down", "smoke:status", "smoke:tui"]) {
+    // The twin wrappers are here because they spawn the boot with their OWN
+    // environment: a `.env` bun loaded into the wrapper reaches the boot even
+    // though the boot itself runs with --no-env-file. smoke:clean and smoke:reap
+    // act on the same stacks and have no reason to read the checkout either.
+    for (const name of ["smoke", "smoke:down", "smoke:status", "smoke:tui", "smoke:twin", "smoke:twin:once", "smoke:clean", "smoke:reap"]) {
       expect({ name, cmd: pkg.scripts[name]?.startsWith("bun --no-env-file ") }).toEqual({ name, cmd: true });
     }
   });
+});
+
+describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () => {
+  // The wrapper spawns the boot with its own process.env. So the boot's
+  // --no-env-file proves nothing unless the WRAPPER also ran without the file:
+  // a planted value bun loaded into the wrapper would ride into the child.
+  //
+  // The run is stopped before any work: RM_ENV=bogus makes the boot refuse at
+  // its RM_ENV check, which comes AFTER the SMOKE_PROJECT refusal and before
+  // any port probe, restore or container. So which of the two refusals fires
+  // says whether the planted SMOKE_PROJECT reached the boot. `--reuse` skips
+  // the capture, and the key is a dummy the boot never gets to use.
+  const planted = mkdtempSync(join(tmpdir(), "rm-planted-twin-dotenv-"));
+  writeFileSync(join(planted, ".env"), "SMOKE_PROJECT=planted-project\n");
+  const twin = join(repoRoot, "scripts", "smoke-twin.ts");
+  const rehearse = join(repoRoot, "scripts", "smoke-twin-rehearse.ts");
+  const run = (argv: string[], extra: Record<string, string> = {}) => {
+    const r = Bun.spawnSync(["bun", ...argv], {
+      cwd: planted,
+      env: { PATH: process.env.PATH ?? "", HOME: planted, OPENCODE_API_KEY: "zen-dummy", RM_ENV: "bogus", ...extra },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { code: r.exitCode, out: `${r.stdout.toString()}${r.stderr.toString()}` };
+  };
+
+  test("smoke:twin as package.json runs it: the boot never sees the planted SMOKE_PROJECT", () => {
+    const r = run(["--no-env-file", twin, "--reuse"]);
+    expect(r.out).toContain("equivalent: bun smoke --local dump --migrate");
+    expect(r.out).toContain('invalid RM_ENV "bogus"');
+    expect(r.out).not.toContain("SMOKE_PROJECT is retired");
+    expect(r.code).toBe(1);
+  }, 30_000);
+
+  test("red control: the same value in the real environment DOES reach the boot, and is refused", () => {
+    const r = run(["--no-env-file", twin, "--reuse"], { SMOKE_PROJECT: "planted-project" });
+    expect(r.out).toContain("SMOKE_PROJECT is retired with no alias");
+    expect(r.code).toBe(1);
+  }, 30_000);
+
+  test("smoke:twin without --no-env-file is refused before it does anything", () => {
+    const r = run([twin, "--reuse"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("auto-loaded this checkout's .env");
+    expect(r.out).toContain("bun run smoke:twin");
+    expect(r.out).not.toContain("equivalent:");
+  }, 30_000);
+
+  test("smoke:twin:once without --no-env-file is refused before it does anything", () => {
+    const r = run([rehearse]);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("auto-loaded this checkout's .env");
+    expect(r.out).toContain("bun run smoke:twin:once");
+    expect(r.out).not.toContain("booting:");
+  }, 30_000);
 });

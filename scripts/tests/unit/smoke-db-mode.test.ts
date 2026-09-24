@@ -18,21 +18,25 @@
 //   - ownsData() and usesComposePostgres() are DIFFERENT questions; the dump is
 //     the case that proves it.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   bannerFor,
+  bootPreflightPlan,
   cadenceOverride,
   keptDataDescription,
   dataPathOverlayYaml,
   LOCAL_MODES,
+  localModeOf,
   MIGRATE_FLAG,
   ownsData,
   parseDataPath,
   parseLocalMode,
+  parseVolumeHolders,
   reattachOverlayYaml,
   refuseRetiredEnv,
+  refuseVolumeInUse,
   requestsDump,
   requestsMigrate,
   requestsSeed,
@@ -408,5 +412,125 @@ describe("keptDataDescription — what teardown actually kept", () => {
     // boot reported keeping a volume it had never created and sent smoke:clean
     // after storage that does not exist.
     expect(keptDataDescription(EXTERNAL, "p")).toBeUndefined();
+  });
+});
+
+describe("remote-database refusals never name the retired --db flag (criterion 4)", () => {
+  // Plain `bun smoke` (no --local) reaches the remote resolver through a
+  // synthetic argv; every refusal it can throw is exercised here.
+  const cases: Array<[string, string]> = [
+    ["no ~/.env", NO_ENV],
+    ["no rm_app role line", envFileWith("host = db.example.com\nport = 25060\ndatabase = defaultdb\n")],
+    ["host is the compose service", envFileWith("host = postgres\nport = 5432\ndatabase = defaultdb\nrm_app = x\n")],
+    ["host is loopback", envFileWith("host = localhost\nport = 5432\ndatabase = defaultdb\nrm_app = x\n")],
+  ];
+  const messageOf = (envFile: string): string => {
+    try {
+      parse(argv(), envFile);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "";
+  };
+
+  for (const [name, envFile] of cases) {
+    test(`${name}: refused, naming the remote database and not --db`, () => {
+      const msg = messageOf(envFile);
+      expect(msg).toContain("remote database (no --local flag)");
+      expect(msg).not.toContain("--db");
+      expect(msg).not.toMatch(/this flag/i);
+    });
+  }
+
+  test("red control: the retired prefix would be caught", () => {
+    expect("--db external: no readable $HOME/.env").toContain("--db");
+  });
+});
+
+describe("bootPreflightPlan — schema currency on every path that skips migrate (criterion 28)", () => {
+  const plan = (dp: ResolvedDataPath | Parameters<typeof usesComposePostgres>[0], ...flags: string[]) =>
+    bootPreflightPlan({
+      composePostgres: usesComposePostgres(dp),
+      seeds: shouldSeed(argv(...flags)),
+      migrates: requestsMigrate(argv(...flags)),
+    });
+  const DUMP: ResolvedDataPath = { kind: "smoke-twin", url: "postgres://u:p@172.17.0.1:5555/d", redactedUrl: "x", container: "c", volume: "v", stamp: "s" };
+
+  test("a dump without --migrate checks schema currency (it is on production's older schema)", () => {
+    expect(plan(DUMP).schemaCurrent).toBe(true);
+  });
+
+  test("a reattached volume without --migrate checks schema currency", () => {
+    expect(plan({ kind: "ephemeral", reattach: { volume: "v" } }).schemaCurrent).toBe(true);
+  });
+
+  test("the remote database without --migrate checks schema currency", () => {
+    expect(plan({ kind: "external" } as ResolvedDataPath).schemaCurrent).toBe(true);
+  });
+
+  test("a blank database without --migrate checks too: it has no schema yet", () => {
+    expect(plan({ kind: "ephemeral" }).schemaCurrent).toBe(true);
+  });
+
+  test("red control: --migrate on any path drops the check (migrate() makes it current itself)", () => {
+    for (const dp of [DUMP, { kind: "ephemeral" as const }, { kind: "ephemeral" as const, reattach: { volume: "v" } }]) {
+      expect(plan(dp, MIGRATE_FLAG).schemaCurrent).toBe(false);
+    }
+  });
+
+  test("classify guards --seed on a database this boot did not create, and nothing else", () => {
+    expect(plan({ kind: "external" } as ResolvedDataPath, SEED_FLAG).classify).toBe(true);
+    expect(plan({ kind: "external" } as ResolvedDataPath).classify).toBe(false);
+    expect(plan({ kind: "ephemeral" }, SEED_FLAG, MIGRATE_FLAG).classify).toBe(false);
+  });
+
+  test("the CI boot (--local blank --migrate --seed) runs no preflight step", () => {
+    expect(plan({ kind: "ephemeral" }, "--local", "blank", MIGRATE_FLAG, SEED_FLAG)).toEqual({ classify: false, schemaCurrent: false });
+  });
+
+  test("localModeOf names the mode a refusal should speak about", () => {
+    expect(localModeOf(DUMP)).toBe("dump");
+    expect(localModeOf({ kind: "ephemeral", reattach: { volume: "v" } })).toBe("volume");
+    expect(localModeOf({ kind: "ephemeral" })).toBe("blank");
+    expect(localModeOf({ kind: "external" } as ResolvedDataPath)).toBeNull();
+  });
+});
+
+describe("refuseVolumeInUse — no second postgres on a mounted volume (criterion 28)", () => {
+  test("no running holder: allowed", () => {
+    expect(refuseVolumeInUse("rm_smoke_stack_abc_pgdata", [])).toBeNull();
+    expect(refuseVolumeInUse("rm_smoke_stack_abc_pgdata", parseVolumeHolders(""))).toBeNull();
+  });
+
+  test("a running holder: refused, naming the container, its project and how to stop it", () => {
+    const holders = parseVolumeHolders("rm_smoke_stack_abc-postgres-1\trm_smoke_stack_abc\n");
+    expect(holders).toEqual([{ container: "rm_smoke_stack_abc-postgres-1", project: "rm_smoke_stack_abc" }]);
+    const msg = refuseVolumeInUse("rm_smoke_stack_abc_pgdata", holders);
+    expect(msg).not.toBeNull();
+    expect(msg!).toContain("rm_smoke_stack_abc-postgres-1");
+    expect(msg!).toContain("project rm_smoke_stack_abc");
+    expect(msg!).toContain("bun smoke:down");
+    expect(msg!).toContain("docker compose -p rm_smoke_stack_abc down");
+    expect(msg!).toContain("never with -v");
+  });
+
+  test("a holder outside compose (no project label) is still refused", () => {
+    const msg = refuseVolumeInUse("v", parseVolumeHolders("stray-pg\t\n"));
+    expect(msg).toContain("stray-pg");
+    expect(msg).toContain("docker stop <container>");
+  });
+
+  test("red control: blank lines in docker's output are not holders", () => {
+    expect(parseVolumeHolders("\n  \n")).toEqual([]);
+  });
+
+  test("smoke-main.ts asks Docker, and refuses, before writing the reattach overlay", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
+    const ask = src.indexOf("refuseVolumeInUse(volume, parseVolumeHolders(");
+    const overlay = src.indexOf("writeFileSync(overrideFile, reattachOverlayYaml(");
+    expect(ask).toBeGreaterThan(0);
+    expect(overlay).toBeGreaterThan(0);
+    expect(ask).toBeLessThan(overlay);
+    expect(src).toContain('"docker", "ps", "--filter", `volume=${volume}`');
   });
 });

@@ -23,6 +23,7 @@ export {
 // rather than the lib, which proves the tested module is the one that boots.
 export {
   bannerFor,
+  bootPreflightPlan,
   cadenceOverride,
   DEMO_FLAGS,
   dataPathOverlayYaml,
@@ -30,12 +31,15 @@ export {
   keptDataDescription,
   LOCAL_FLAG,
   LOCAL_MODES,
+  localModeOf,
   MIGRATE_FLAG,
   ownsData,
   parseDataPath,
   parseLocalMode,
+  parseVolumeHolders,
   reattachOverlayYaml,
   refuseRetiredEnv,
+  refuseVolumeInUse,
   requestsDump,
   requestsMigrate,
   requestsSeed,
@@ -64,11 +68,15 @@ export {
  * did not is refused rather than trusted, because by now it cannot tell which
  * values came from the file.
  */
-export function refuseCheckoutEnvFile(execArgv: readonly string[]): string | null {
+export function refuseCheckoutEnvFile(
+  execArgv: readonly string[],
+  entry: { script: string; file: string } = { script: "smoke", file: "scripts/smoke.ts" },
+): string | null {
   if (execArgv.includes("--no-env-file")) return null;
+  const run = entry.script === "smoke" ? "bun smoke" : `bun run ${entry.script}`;
   return (
-    "bun auto-loaded this checkout's .env into the boot's environment. Run `bun smoke …` " +
-    "(it passes --no-env-file), or `bun --no-env-file scripts/smoke.ts …`."
+    `bun auto-loaded this checkout's .env into the boot's environment. Run \`${run} …\` ` +
+    `(it passes --no-env-file), or \`bun --no-env-file ${entry.file} …\`.`
   );
 }
 

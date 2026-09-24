@@ -1,4 +1,4 @@
-// BRINGING UP A DIGITAL TWIN for `bun smoke -- --db smoke-twin`.
+// BRINGING UP A DIGITAL TWIN for `bun smoke --local dump`.
 //
 // WHAT A TWIN IS. A local Postgres container holding a restored copy of the
 // production database, which the stack then boots against. It exists so an
@@ -57,7 +57,7 @@ function bridgeGateway(): string {
     "docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}",
   ]);
   const gw = new TextDecoder().decode(out.stdout).trim();
-  if (!gw) throw new Error("--db smoke-twin: could not determine the Docker bridge gateway (docker network inspect bridge)");
+  if (!gw) throw new Error("--local dump: could not determine the Docker bridge gateway (docker network inspect bridge)");
   return gw;
 }
 
@@ -80,10 +80,10 @@ export async function bringUpTwin(opts: {
   log: (m: string) => void;
 }): Promise<SmokeTwinHandle> {
   const backup = resolveBackupFiles(opts.backupDir);
-  if ("error" in backup) throw new Error(`--db smoke-twin: ${backup.error}`);
+  if ("error" in backup) throw new Error(`--local dump: ${backup.error}`);
 
   const volume = smokeTwinVolumeName(opts.project, backup.stamp);
-  opts.log(`--db smoke-twin: restoring backup ${backup.stamp} into a local container (this takes a few minutes)`);
+  opts.log(`--local dump: restoring backup ${backup.stamp} into a local container (this takes a few minutes)`);
   const restored = await restoreBackupIntoContainer(backup, opts.log, {
     bindHost: bridgeGateway(),
     project: opts.project,
@@ -93,7 +93,7 @@ export async function bringUpTwin(opts: {
     // Tear the half-built container down here: it is not yet recorded anywhere
     // the normal cleanup path can find it.
     if (restored.container) teardownContainer(restored.container, opts.log);
-    throw new Error(`--db smoke-twin: ${restored.error}`);
+    throw new Error(`--local dump: ${restored.error}`);
   }
 
   const url = `postgres://${restored.username}:${restored.password}@${restored.host}:${restored.port}/${restored.database}`;
@@ -135,7 +135,7 @@ export async function bringUpTwin(opts: {
 export function assertSmokeTwinIsTarget(spawnEnv: Record<string, string>, smokeTwinUrl: string): void {
   if (spawnEnv.DATABASE_URL !== smokeTwinUrl) {
     throw new Error(
-      `--db smoke-twin: the compose environment's DATABASE_URL is NOT the smoke-twin's — refusing to boot. ` +
+      `--local dump: the compose environment's DATABASE_URL is NOT the smoke-twin's — refusing to boot. ` +
         `The stack would have migrated and written to ${redactPostgresUrl(spawnEnv.DATABASE_URL ?? "(unset)")} ` +
         `instead of the restored copy. (The repo-root .env is auto-loaded by compose; the stack config must win.)`,
     );
@@ -185,7 +185,7 @@ export function smokeTwinResumeHint(dp: ResolvedDataPath): string[] {
   if (dp.kind !== "smoke-twin") return [];
   return [
     `the smoke-twin's restored copy of production is KEPT in volume ${dp.volume}.`,
-    `  re-run (restores a FRESH copy):  bun smoke -- --db smoke-twin`,
+    `  re-run (restores a FRESH copy):  bun smoke --local dump --migrate`,
     `  reclaim the copy:                bun run smoke:clean`,
   ];
 }

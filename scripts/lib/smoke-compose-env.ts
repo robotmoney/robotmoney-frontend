@@ -79,6 +79,34 @@ export const DEMO_COMPOSE_PASSTHROUGH: readonly string[] = Object.freeze([
   "MIGRATE_DATABASE_URL",
 ]);
 
+/**
+ * The migration credential an operator's shell may not supply.
+ *
+ * MIGRATE_DATABASE_URL is in the passthrough above for ONE reason: this process
+ * assigns it itself, for one migrate run (restore-container.ts's
+ * twinMigrationCredential() for a dump, the interactive prompt for the remote
+ * database). An EXPORTED value is a different thing: `--local blank --migrate`
+ * with a remote MIGRATE_DATABASE_URL in the shell would have run migrate.ts
+ * against that remote database, which is exactly the remote connection a local
+ * mode must never open (criterion 32, spec §3). So the shell's value is removed
+ * from `env` before anything reads it, and the caller says so out loud.
+ *
+ * Mutates `env` (the caller passes process.env, at the very top of the boot)
+ * and returns the warning to print, or null when nothing was exported.
+ */
+export function dropShellMigrationCredential(env: Record<string, string | undefined>): string | null {
+  const raw = env.MIGRATE_DATABASE_URL;
+  if (raw === undefined) return null;
+  delete env.MIGRATE_DATABASE_URL;
+  if (raw.trim() === "") return null;
+  return (
+    "WARNING: MIGRATE_DATABASE_URL is set in the environment and is being IGNORED for this boot. " +
+    "A boot builds its own migration credential for the one migrate run that needs it (a local mode " +
+    "from its container, the remote database from the interactive prompt); a shell value would point " +
+    "migrate.ts at whatever database it names. This message means the smoke did NOT forward it."
+  );
+}
+
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of DEMO_COMPOSE_PASSTHROUGH) {

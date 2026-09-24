@@ -31,14 +31,14 @@
     "smoke:down": "bun --no-env-file scripts/smoke-down.ts",
     "smoke:status": "bun --no-env-file scripts/smoke-status.ts",
     "smoke:tui": "bun --no-env-file scripts/smoke-tui.ts",
-    "smoke:clean": "bun scripts/smoke-clean.ts",
-    "smoke:reap": "bun scripts/smoke-reap.ts",
+    "smoke:clean": "bun --no-env-file scripts/smoke-clean.ts",
+    "smoke:reap": "bun --no-env-file scripts/smoke-reap.ts",
     "verify:live": "bun run scripts/verify-live.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check",
-    "smoke:twin": "bun scripts/smoke-twin.ts",
-    "smoke:twin:once": "bun scripts/smoke-twin-rehearse.ts"
+    "smoke:twin": "bun --no-env-file scripts/smoke-twin.ts",
+    "smoke:twin:once": "bun --no-env-file scripts/smoke-twin-rehearse.ts"
   },
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",
