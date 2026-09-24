@@ -74,34 +74,43 @@ export async function hiddenPrompt(question: string): Promise<string> {
         `interactively — it is never read from an environment variable, a file, or a pipe.`,
     );
   }
-  process.stdout.write(`${question}: `);
   const stdin = process.stdin;
   const wasRaw = stdin.isRaw ?? false;
+  // Raw mode BEFORE the question: a key typed the instant the question appears
+  // would otherwise be echoed by the terminal's cooked mode.
   stdin.setRawMode?.(true);
+  process.stdout.write(`${question}: `);
   stdin.resume();
   try {
     return await new Promise<string>((resolvePrompt) => {
       let input = "";
+      const finish = (): void => {
+        stdin.setRawMode?.(wasRaw);
+        stdin.pause();
+        stdin.off("data", onData);
+        process.stdout.write("\n");
+      };
+      // One chunk is NOT one key. A pasted password arrives as a single
+      // multi-character chunk, often ending in the Enter that submits it, so
+      // every character is handled on its own.
       const onData = (data: Buffer) => {
-        const char = data.toString();
-        if (char === "\r" || char === "\n") {
-          stdin.setRawMode?.(wasRaw);
-          stdin.pause();
-          stdin.off("data", onData);
-          process.stdout.write("\n");
-          resolvePrompt(input);
-        } else if (char === "\x03") {
-          // Ctrl-C: restore the terminal before this process dies, or the
-          // operator's shell is left with raw mode still on and echo off.
-          stdin.setRawMode?.(wasRaw);
-          stdin.pause();
-          stdin.off("data", onData);
-          process.stdout.write("\n");
-          process.exit(130);
-        } else if (char === "\x7f" || char === "\b") {
-          if (input.length > 0) input = input.slice(0, -1);
-        } else if (char.length === 1 && char >= " ") {
-          input += char;
+        for (const char of data.toString()) {
+          if (char === "\r" || char === "\n") {
+            finish();
+            resolvePrompt(input);
+            return;
+          }
+          if (char === "\x03") {
+            // Ctrl-C: restore the terminal before this process dies, or the
+            // operator's shell is left with raw mode still on and echo off.
+            finish();
+            process.exit(130);
+          }
+          if (char === "\x7f" || char === "\b") {
+            input = input.slice(0, -1);
+          } else if (char >= " ") {
+            input += char;
+          }
         }
       };
       stdin.on("data", onData);

@@ -298,9 +298,12 @@ DECLARE
   r record;
   n int;
 BEGIN
-  -- 1. The four roles exist with 0053's attributes.
+  -- 1. The four roles exist with 0053's attributes. rm_owner is LOGIN: it is
+  --    the migration login (spec §3), and 0053 now creates and re-asserts it
+  --    that way. It still holds no password until the operator types one
+  --    (spec §9.1 step 1). CREATEROLE is checked in 1b.
   FOR r IN SELECT * FROM (VALUES
-      ('rm_owner', false), ('rm_app', true), ('rm_worker', true), ('rm_readonly', true)
+      ('rm_owner', true), ('rm_app', true), ('rm_worker', true), ('rm_readonly', true)
     ) AS want(rolname, should_login)
   LOOP
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r.rolname) THEN
@@ -314,6 +317,12 @@ BEGIN
       END IF;
     END IF;
   END LOOP;
+
+  -- 1b. rm_owner never holds CREATEROLE (spec §3). Now that it can log in, a
+  --     CREATEROLE on it would let the migration login mint new logins.
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'rm_owner' AND rolcreaterole) THEN
+    problems := problems || 'rm_owner holds CREATEROLE — spec §3 forbids it';
+  END IF;
 
   -- 2. A LOGIN role may assume rm_owner; neither runtime role may.
   SELECT count(*) INTO n FROM pg_auth_members am
@@ -480,7 +489,13 @@ VERIFY
 
 echo
 echo "Roles provisioned and VERIFIED."
-echo "Next: run the ordinary migration command once with MIGRATE_DATABASE_URL set for that command only."
+# rm_owner is LOGIN now, but this script never gives it a password: spec §3
+# keeps that password out of every file, so it is set by hand, once.
+echo "Next (spec §9.1 step 1): rm_owner is LOGIN but has no password from this script."
+echo "  Through doadmin, run: ALTER ROLE rm_owner LOGIN PASSWORD '<password>';"
+echo "  then verify one login as rm_owner. Store the password nowhere on this host."
+echo "Then remove any doadmin line from \$HOME/.env and run \`bun run migrate\` from the repo root."
+echo "  It prompts for the rm_owner password and refuses a \$HOME/.env that holds a doadmin or rm_owner line."
 if [[ "$set_passwords" -eq 1 ]]; then
   echo "You rotated passwords: update each host's \$HOME/.env with a '<role> = <password>' line"
   echo "(see .env.example) or that host's next backup will fail to authenticate."

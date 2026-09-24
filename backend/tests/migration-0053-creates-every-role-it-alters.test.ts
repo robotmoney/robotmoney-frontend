@@ -23,9 +23,16 @@
 //
 // Read as TEXT, because the subject is what the file says -- and because the
 // database that would prove it is a cluster that has never been migrated.
+//
+// rm_owner IS LOGIN (spec §3, D47, §9.1 step 1). It is the migration login, so
+// 0053 creates it LOGIN on a fresh cluster and re-asserts LOGIN when applied.
+// That half is proved twice: as text, and against the suite's own cluster,
+// which tests/preload.ts built by applying every migration to an empty
+// Postgres, so its rm_owner is exactly the role 0053 created.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sql } from "../src/db/client.ts";
 
 const SQL = readFileSync(
   join(import.meta.dir, "..", "migrations", "0053_database_role_taxonomy.sql"),
@@ -54,6 +61,21 @@ describe("0053 can be applied to a cluster no migration has touched", () => {
     expect(missing).toEqual([]);
   });
 
+  test("rm_owner is created LOGIN and re-asserted LOGIN, never NOLOGIN, and never with CREATEROLE", () => {
+    const statements = [...SQL.matchAll(/^\s*(CREATE|ALTER) ROLE rm_owner\b([^;]*);/gm)];
+    // RED CONTROL: one CREATE and one ALTER, or the assertions below say nothing.
+    expect(statements.map((m) => m[1])).toEqual(["CREATE", "ALTER"]);
+    for (const [, verb, attributes] of statements) {
+      const words = (attributes ?? "").trim().split(/\s+/);
+      expect({ verb, login: words.includes("LOGIN"), nologin: words.includes("NOLOGIN") }).toEqual({
+        verb,
+        login: true,
+        nologin: false,
+      });
+      expect({ verb, nocreaterole: words.includes("NOCREATEROLE") }).toEqual({ verb, nocreaterole: true });
+    }
+  });
+
   test("every CREATE ROLE is guarded, so an existing role keeps its password", () => {
     // The script's header promises this: provisioning is idempotent and safe
     // to re-run, and a re-run must never drop a live credential on the floor.
@@ -63,5 +85,13 @@ describe("0053 can be applied to a cluster no migration has touched", () => {
       );
       expect({ role, guarded: guard.test(SQL) }).toEqual({ role, guarded: true });
     }
+  });
+});
+
+describe("0053 applied to an empty cluster — the suite's own", () => {
+  test("rm_owner can log in, holds no CREATEROLE and is no superuser", async () => {
+    const [owner] = await sql<{ rolcanlogin: boolean; rolcreaterole: boolean; rolsuper: boolean }[]>`
+      SELECT rolcanlogin, rolcreaterole, rolsuper FROM pg_roles WHERE rolname = 'rm_owner'`;
+    expect(owner).toEqual({ rolcanlogin: true, rolcreaterole: false, rolsuper: false });
   });
 });

@@ -1,16 +1,21 @@
 // The migrate RUN — the four-step sequence spec §8.3 defines, plus the gates
 // spec §8.5 puts in front of it.
 //
-// STUB. Every function throws `NOT IMPLEMENTED`; nothing imports this module
-// yet, and it has no `import.meta.url` entry point on purpose. Step 1 of issue
-// #1026's W2 workstream.
+// It has no `import.meta.url` entry point on purpose. `bun run migrate`
+// (backend/scripts/migrate.ts) is the operator's command: it reads the target
+// from `~/.env`, runs `checkMigrateGates`, prompts for `rm_owner` through
+// `promptOwnerPassword`, connects AS `rm_owner`, confirms a remote target, calls
+// `runMigrate` and writes the receipt with `writeMigrateReceipt`. It never
+// connects as `doadmin` and never reads an owner password from a file.
 //
-// IT DOES NOT REPLACE ANYTHING YET. `backend/scripts/migrate.ts` is untouched
-// and keeps being what `bun run migrate` invokes. This module documents the
-// TARGET run and absorbs migrate.ts in step 3 of #1026's W2, at which point
-// migrate.ts's argv/`$HOME/.env`/prompt handling moves here and the old file
-// goes. Until then the two describe the same command at two different versions,
-// and the shipped one is the old one.
+// NOT YET WIRED: smoke's `--migrate` still runs the legacy runner
+// (backend/src/db/migrate.ts) through scripts/lib/smoke-external-migrate.ts.
+// Moving it onto this module is the smoke-lifecycle work of issue #1026, not
+// this file's.
+//
+// NOT YET POSSIBLE: publishing a database's FIRST manifest from the operator's
+// command. Spec §9.1 step 2 requires a baseline comparison first, and none
+// exists, so `assertBaselineForOperator` refuses that case outright.
 //
 // Governed by smoke-production-spec.md §8.3 (the run), §8.5 (`--migrate` and
 // production upgrades), §2 (the fence), §3 (the credential), §4.3 (the policy
@@ -66,16 +71,13 @@
 // the current `SET LOCAL ROLE rm_owner` bootstrap in
 // `backend/src/db/migrate.ts:57` goes with it.
 //
-// `rm_owner` is NOLOGIN in this checkout, twice over: migration 0053 line 10
-// creates it (`CREATE ROLE rm_owner NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB
-// NOCREATEROLE NOREPLICATION NOBYPASSRLS`) and line 49 re-asserts it
-// (`ALTER ROLE rm_owner NOLOGIN NOINHERIT NOCREATEDB NOCREATEROLE`) on every
-// apply. W2.1 changes both lines for FRESH databases. Existing ones are not
-// reached by that edit — the runner skips files it has already recorded — so
-// spec §9.1 step 1 makes them a one-time `doadmin` step:
+// Migration 0053 creates `rm_owner` LOGIN and re-asserts LOGIN on apply, so a
+// FRESH cluster needs only a password for it. An EXISTING database recorded
+// 0053 back when it said NOLOGIN, and the runner never re-applies a recorded
+// file, so spec §9.1 step 1 is a one-time `doadmin` step there:
 // "`ALTER ROLE rm_owner LOGIN PASSWORD …`, then a verification login."
 //
-// Until that step has run on a given database, this tool cannot connect at all,
+// Until that step has run on such a database, this tool cannot connect at all,
 // and the refusal has to say which of the two situations it is in. "Password
 // authentication failed" against a NOLOGIN role is the least useful sentence
 // available.
@@ -95,7 +97,7 @@
 // and may not — §4.3: "**Rehearsal-only preparation:** `--migrate`, `--seed`,
 // `--spoof-keys` require `rehearsal` in addition to their own guards."
 import { randomBytes } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -103,10 +105,16 @@ import type postgresTypes from "postgres";
 import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
 import { config } from "../src/config.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
-import { parseMigrationHeader, recordMigrationCompat } from "../src/db/schema-compat.ts";
+import {
+  COMPAT_COLUMNS,
+  parsePendingHeader,
+  recordMigrationCompat,
+  requiresCompatHeader,
+  type MigrationHeader,
+} from "../src/db/schema-compat.ts";
 import {
   MANIFEST_FORMAT_VERSION,
-  MANIFEST_TABLE,
+  detectManifestState,
   hashManifest,
   resumePlan,
   writeManifest,
@@ -156,6 +164,23 @@ export interface MigrateRunOptions {
   readonly nonInteractive: boolean;
 }
 
+/**
+ * Seams a test uses to drive the REAL run into a state it cannot otherwise
+ * reach. No operator path sets them; `bun run migrate` passes none.
+ */
+export interface MigrateRunSeams {
+  /** Where the migration files are read from. Defaults to backend/migrations/.
+   *  A test points it at a directory holding the real files plus a planted
+   *  one, so a refusal or an interruption happens inside the real apply loop
+   *  rather than in a hand-built database state. */
+  readonly migrationsDir?: string;
+  /** Called after each migration's transaction has COMMITTED and before the
+   *  next one begins. A throw here is a real interruption between two commits:
+   *  the run stops exactly where a killed process would, with the ledger ahead
+   *  of the manifest (§8.3's *in progress*). */
+  readonly afterCommit?: (file: string) => void | Promise<void>;
+}
+
 /** What the run committed, for the receipt (§1.4) and the journal (§1.3). */
 export interface MigrateRunResult {
   /** Migrations applied by THIS run, in apply order. Empty is an ordinary
@@ -164,8 +189,12 @@ export interface MigrateRunResult {
   /** Migrations that were already committed but unmanifested when this run
    *  started, and were re-validated rather than re-applied (§8.3's resume). */
   readonly resumedAndVerified: readonly string[];
-  /** Always true — reconciliation runs "always, even with nothing pending". */
-  readonly grantsReconciled: true;
+  /** Relations whose privileges reconciliation CHANGED, by name, in order.
+   *  Reconciliation runs every time ("always, even with nothing pending"), so
+   *  what the receipt can usefully say is what it had to repair. Empty means
+   *  the grants already matched the snapshot; a name here is drift that a hand
+   *  edit introduced and this run removed. */
+  readonly grantsRepaired: readonly string[];
   /** The manifest published in the reconciliation transaction. */
   readonly manifest: SchemaManifest;
 }
@@ -188,10 +217,12 @@ export interface MigrateRunResult {
  *      in-progress database, verifies committed-but-unmanifested work against
  *      each migration's expected post-state, and names the first unapplied
  *      step. Nothing is replayed and no drift is accepted (§8.3).
- *   4. Apply — each pending migration in its own transaction, with
+ *   4. Headers — every pending file's §8.2 header is parsed before the first
+ *      commit, so a missing declaration refuses with nothing applied.
+ *   5. Apply — each pending migration in its own transaction, with
  *      `recordMigrationCompat()` writing `compat`/`metadata_version` inside
  *      that same transaction (../src/db/schema-compat.ts).
- *   5. Reconcile and publish — the snapshot's grants part, then
+ *   6. Reconcile and publish — the snapshot's grants part, then
  *      `writeManifest()`, in one transaction.
  *
  * Refusals:
@@ -205,7 +236,13 @@ export interface MigrateRunResult {
  *   - `resumePlan` refused (inconsistent manifest, unknown format version, a
  *     ledger row naming a file this checkout does not have, or committed work
  *     that fails its post-state check).
- *   - A migration has no parseable compat header (§8.2).
+ *   - The database is blank (no ledger). A blank database is the snapshot's
+ *     bootstrap (§8.1), never a replay (§8.2).
+ *   - `caller: "operator"` against a database with no manifest. §9.1 step 2's
+ *     baseline comparison must gate the first publish, and this run has none.
+ *   - A pending migration above the pre-compat baseline (0063, D53) has no
+ *     parseable compat header, or any pending file declares one badly (§8.2).
+ *     The refusal names the file.
  *   - The connection is lost at a phase boundary: journal the phase and exit
  *     non-zero. §2: "No phase proceeds on a lock the tool cannot prove it still
  *     holds."
@@ -214,7 +251,13 @@ export interface MigrateRunResult {
  * reconciliation; rerun reaches a verified final state" and, with W1.7, "Kill
  * the lock connection mid-migration, start a second mutation tool: no overlap."
  */
-export async function runMigrate(db: MigrateDb, options: MigrateRunOptions): Promise<MigrateRunResult> {
+export async function runMigrate(
+  db: MigrateDb,
+  options: MigrateRunOptions,
+  seams: MigrateRunSeams = {},
+): Promise<MigrateRunResult> {
+  const migrationsDir = seams.migrationsDir ?? MIGRATIONS_DIR;
+
   // 1. FENCE. The session lock comes first and on a DEDICATED connection,
   //    because a session-level advisory lock belongs to the connection that
   //    took it: taken on a pooled handle it would be released by whichever
@@ -238,47 +281,56 @@ export async function runMigrate(db: MigrateDb, options: MigrateRunOptions): Pro
     if (refusals.length > 0) {
       throw new Error(`Refusing the migrate run: ${refusals.map((r) => r.message).join(" ")}`);
     }
+    await assertNotBlank(session.handle);
+    await assertBaselineForOperator(session.handle, options);
 
-    // 3. METADATA OBJECTS. §8.3's manifest table and §8.2's two ledger columns
-    //    are reconciled, not migrated — see the note on `reconcileMetadataObjects`.
-    //    They land BEFORE the apply loop because `recordMigrationCompat` writes
-    //    into those columns inside each migration's own transaction.
-    await withFence(session.handle, options.lockKey, async (tx) => {
-      await tx.unsafe("SET LOCAL ROLE rm_owner");
-      await reconcileMetadataObjects(tx);
-    });
-
-    // 4. RESUME. The append-only trigger inventory is checked first: it is the
+    // 3. RESUME. The append-only trigger inventory is checked first: it is the
     //    one post-state this repository declares machine-readably, and a
     //    database that lost a guard has not reached the post-state of the
     //    migration that installed it, whatever its ledger says. §8.3 forbids
     //    "accepting drift", and a resume is when accepting it is most tempting.
     await assertCommittedPostState(session.handle);
-    const onDisk = await migrationFilenames();
+    const onDisk = await migrationFilenames(migrationsDir);
     const plan = await resumePlan(session.handle, onDisk);
+
+    // 4. HEADERS, ALL OF THEM, BEFORE THE FIRST COMMIT. §8.2: every migration
+    //    "declares itself `additive` or `breaking` in a header the runner
+    //    parses". Parsing each file just before applying it would refuse the
+    //    bad one only after every file ahead of it had committed, leaving an
+    //    in-progress database for a defect that was visible on disk from the
+    //    start. Files at or below the pre-compat baseline may carry none
+    //    (`parsePendingHeader`, D53).
+    const pending: { file: string; ddl: string; header: MigrationHeader | null }[] = [];
+    for (const file of plan.pending) {
+      const ddl = await readFile(join(migrationsDir, file), "utf8");
+      pending.push({ file, ddl, header: parsePendingHeader(file, ddl) });
+    }
 
     // 5. APPLY, one transaction each, each fenced, each recording its own
     //    declaration so the row and the DDL commit together (§8.2).
     const applied: string[] = [];
-    for (const file of plan.pending) {
-      const ddl = await readFile(join(MIGRATIONS_DIR, file), "utf8");
-      const header = parseMigrationHeader(file, ddl);
+    for (const { file, ddl, header } of pending) {
       await withFence(session.handle, options.lockKey, async (tx) => {
         await tx.unsafe("SET LOCAL ROLE rm_owner");
         await tx.unsafe(ddl);
         await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-        await recordMigrationCompat(tx, header);
+        if (header !== null) await recordDeclaration(tx, header);
       });
       applied.push(file);
+      if (seams.afterCommit) await seams.afterCommit(file);
     }
 
     // 6. RECONCILE AND PUBLISH, in ONE transaction, so "manifest published"
-    //    means "grants reconciled" (§8.3).
+    //    means "grants reconciled" (§8.3). The manifest table is 0064's, not
+    //    this run's: every checkout this code ships in contains 0064, so by
+    //    here it is either recorded or was applied above, and a database that
+    //    lost it has drifted and refuses at the write.
     const snapshot = await loadSnapshot();
-    const manifest = await withFence(session.handle, options.lockKey, async (tx) => {
+    const { manifest, grantsRepaired } = await withFence(session.handle, options.lockKey, async (tx) => {
       await tx.unsafe("SET LOCAL ROLE rm_owner");
-      await reconcileMetadataObjects(tx);
+      const before = await relationAcls(tx);
       await tx.unsafe(snapshot.grantsSql);
+      const after = await relationAcls(tx);
       const filenames = (
         (await tx.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
       ).map((row) => row.name);
@@ -289,18 +341,111 @@ export async function runMigrate(db: MigrateDb, options: MigrateRunOptions): Pro
         contentHash: hashManifest(snapshot.manifest.declaration, filenames),
       };
       await writeManifest(tx, published);
-      return published;
+      return { manifest: published, grantsRepaired: changedAcls(before, after) };
     });
 
     return {
       applied,
       resumedAndVerified: plan.committedToVerify,
-      grantsReconciled: true,
+      grantsRepaired,
       manifest,
     };
   } finally {
     await session.release();
   }
+}
+
+/**
+ * Record one migration's declaration, inside that migration's transaction.
+ *
+ * The ledger's `compat`/`metadata_version` columns arrive with migration 0064.
+ * A file ABOVE the pre-compat baseline always runs after 0064, so a missing
+ * column there is drift (someone dropped it) and refuses. A pre-compat file
+ * that happens to declare itself (0053 does) may run on a database 0064 has
+ * not reached yet; its row then stays NULL, which is what every other
+ * pre-compat row holds and what §8.4 reads it as.
+ */
+async function recordDeclaration(tx: MigrateDb, header: MigrationHeader): Promise<void> {
+  const [row] = (await tx`
+    SELECT COUNT(*)::int AS present FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+      AND column_name = ANY(${[...COMPAT_COLUMNS]})`) as unknown as { present: number }[];
+  if ((row?.present ?? 0) === COMPAT_COLUMNS.length) {
+    await recordMigrationCompat(tx, header);
+    return;
+  }
+  if (requiresCompatHeader(header.filename)) {
+    throw new Error(
+      `Refusing the migrate run: ${header.filename} must record its compat declaration, and schema_migrations ` +
+        "has no compat/metadata_version columns. Migration 0064 adds them; a database without them after 0064 " +
+        "has drifted (spec §8.2).",
+    );
+  }
+}
+
+/** Every public relation's ACL, as text, by name. Read before and after the
+ *  grants part so the result can say what reconciliation actually changed. */
+async function relationAcls(tx: MigrateDb): Promise<Map<string, string>> {
+  const rows = (await tx.unsafe(`
+    SELECT c.relname AS name, coalesce(c.relacl::text, '') AS acl
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S')`)) as unknown as { name: string; acl: string }[];
+  return new Map(rows.map((row) => [row.name, row.acl]));
+}
+
+function changedAcls(before: Map<string, string>, after: Map<string, string>): string[] {
+  return [...after.keys()].filter((name) => before.get(name) !== after.get(name)).sort();
+}
+
+/**
+ * The operator's command never publishes a database's FIRST manifest.
+ *
+ * Spec §9.1 step 2: "Baseline — compare production's live schema with the
+ * snapshot for its installed filename list. Any difference is repaired by a
+ * migration first; the first `bun run migrate` publishes a manifest only when
+ * the live schema matches." This run compares nothing: its resume check reads
+ * the append-only trigger inventory and no more (`verifyCommittedPostState`).
+ * A first manifest published here would claim a schema nobody compared, and
+ * every later boot's check 3a would trust that claim.
+ *
+ * So `caller: "operator"` refuses a database with no manifest, before anything
+ * is applied, until a baseline comparison exists to gate the first publish.
+ * `--migrate` (`smoke_flag`) is unaffected: it runs only against a rehearsal
+ * identity, whose database smoke bootstrapped from the snapshot itself or
+ * restored as a disposable copy.
+ *
+ * This is a BLOCKER for the production transition, stated as a refusal rather
+ * than left as a silent publish.
+ */
+async function assertBaselineForOperator(db: MigrateDb, options: MigrateRunOptions): Promise<void> {
+  if (options.caller !== "operator") return;
+  const state = await detectManifestState(db);
+  if (state.kind !== "absent") return;
+  throw new Error(
+    "Refusing the migrate run: this database has no schema manifest, and `bun run migrate` does not publish a " +
+      "first one. Spec §9.1 step 2 publishes the first manifest only after production's live schema has been " +
+      "compared with the snapshot for its installed filename list, and this command performs no such " +
+      "comparison. Nothing was applied.",
+  );
+}
+
+/**
+ * A database with no ledger is BLANK, and a blank database is the snapshot's
+ * job, not the runner's. Spec §8.2: "Blank bootstrap writes ledger rows for the
+ * snapshot's filename list, so `--migrate` never replays history." Replaying
+ * 0001 onwards as `rm_owner` would also fail partway, because 0053 alters roles
+ * and that needs the provisioning login. So the refusal names the path that
+ * works instead of a missing relation.
+ */
+async function assertNotBlank(db: MigrateDb): Promise<void> {
+  const [row] = (await db.unsafe(
+    "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present",
+  )) as unknown as { present: boolean }[];
+  if (row?.present === true) return;
+  throw new Error(
+    "Refusing the migrate run: this database has no schema_migrations ledger, so it is blank. A blank database " +
+      "is bootstrapped from the snapshot (spec §8.1, `bun smoke --local blank`), never by replaying migrations (§8.2).",
+  );
 }
 
 /** A handle that holds the session lock, and the release that must happen on
@@ -426,34 +571,6 @@ async function assertOwnerCapable(db: MigrateDb): Promise<void> {
 }
 
 /**
- * `schema_manifest` (§8.3) and the ledger's `compat` / `metadata_version`
- * columns (§8.2) are reconciled on every run rather than installed by a
- * numbered migration.
- *
- * Reconciliation, not migration, for the same reason §8.3 runs the grants part
- * "always, even with nothing pending": these three objects are what preflight's
- * boot decisions read, and an object that a one-shot migration installed is an
- * object a hand-run `DROP` removes permanently. Re-asserting them costs two
- * `IF NOT EXISTS` statements per run and makes the loss self-healing.
- *
- * Idempotent, and owned by `rm_owner` — the caller has already done
- * `SET LOCAL ROLE rm_owner`, so the table this creates is owned by the only
- * role §8.3 permits to write it.
- */
-async function reconcileMetadataObjects(tx: MigrateDb): Promise<void> {
-  await tx.unsafe(`
-    CREATE TABLE IF NOT EXISTS ${MANIFEST_TABLE} (
-      format_version integer NOT NULL,
-      declaration    text    NOT NULL,
-      filenames      text[]  NOT NULL,
-      content_hash   text    NOT NULL,
-      singleton      boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
-    )`);
-  await tx.unsafe("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS compat text");
-  await tx.unsafe("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS metadata_version integer");
-}
-
-/**
  * The committed work's expected post-state, checked before the resume plan is
  * built.
  *
@@ -474,8 +591,8 @@ async function assertCommittedPostState(db: MigrateDb): Promise<void> {
   );
 }
 
-async function migrationFilenames(): Promise<readonly string[]> {
-  return (await readdir(MIGRATIONS_DIR)).filter((file) => file.endsWith(".sql")).sort();
+async function migrationFilenames(dir: string): Promise<readonly string[]> {
+  return (await readdir(dir)).filter((file) => file.endsWith(".sql")).sort();
 }
 
 /**
@@ -496,15 +613,14 @@ async function migrationFilenames(): Promise<readonly string[]> {
  *
  * Refusals:
  *   - `nonInteractive` and a prompt would be needed. Failing fast beats a CI
- *     job hanging on an invisible prompt, which is the shape
- *     backend/scripts/migrate.ts already refuses today (`stdin is not a
- *     terminal`).
+ *     job hanging on an invisible prompt. backend/scripts/migrate.ts passes
+ *     `nonInteractive` whenever stdin is not a terminal.
  *   - An empty password.
  *   - The resulting login fails AND `pg_roles` says `rm_owner` is `NOLOGIN` —
  *     reported as "this database has not had spec §9.1 step 1 applied", naming
- *     the `doadmin` `ALTER ROLE rm_owner LOGIN PASSWORD …` step, because 0053
- *     line 10 creates the role NOLOGIN and line 49 re-asserts it, and the
- *     runner will never re-apply 0053 to a database that has recorded it.
+ *     the `doadmin` `ALTER ROLE rm_owner LOGIN PASSWORD …` step. 0053 now
+ *     creates the role LOGIN, but a database that recorded 0053 when it said
+ *     NOLOGIN is never re-applied, so only that step can change it.
  *
  * Serves spec §10 W2 (plan row W2.1's "migrate as `rm_owner` on a fresh and on
  * a migrated database").
@@ -562,15 +678,15 @@ const LOCAL_OWNER_GENERATION = new Map<string, string>();
  * Verify the owner login, and tell the two failures apart.
  *
  * "Password authentication failed" against a NOLOGIN role is the least useful
- * sentence available. Migration 0053 line 10 creates `rm_owner` NOLOGIN and line
- * 49 re-asserts it on every apply, and the runner never re-applies a file it has
- * recorded — so on every database that has already run 0053, the role cannot log
- * in until spec §9.1 step 1 has been performed through `doadmin`.
+ * sentence available. Migration 0053 creates `rm_owner` LOGIN today, but it
+ * said NOLOGIN when every existing database recorded it, and the runner never
+ * re-applies a recorded file. On those databases the role cannot log in until
+ * spec §9.1 step 1 has been performed through `doadmin`.
  */
 async function assertOwnerLoginWorks(password: string): Promise<void> {
   const target = new URL(config.databaseUrl);
   target.username = "rm_owner";
-  target.password = password;
+  target.password = encodeURIComponent(password);
   const attempt = postgres(target.toString(), { max: 1, onnotice: () => {}, connect_timeout: 5 });
   try {
     await attempt.unsafe("SELECT 1");
@@ -580,8 +696,8 @@ async function assertOwnerLoginWorks(password: string): Promise<void> {
       throw new Error(
         "Refusing: rm_owner cannot log in to this database — spec §9.1 step 1 has not been applied here. " +
           "Through doadmin, run `ALTER ROLE rm_owner LOGIN PASSWORD '<password>'` and verify the login, then " +
-          "retry. Migration 0053 creates the role NOLOGIN and the runner will never re-apply it to a " +
-          "database that has recorded it, so no migration can perform this step.",
+          "retry. This database recorded migration 0053 when it created the role NOLOGIN, and the runner " +
+          "never re-applies a recorded file, so no migration can perform this step.",
       );
     }
     throw new Error(
@@ -828,4 +944,62 @@ async function readDeploymentIdentity(db: MigrateDb): Promise<IdentityRead> {
   if (rows.length === 0) return { kind: "missing" };
   if (rows.length > 1) return { kind: "ambiguous", count: rows.length };
   return { kind: "present", value: rows[0]?.value ?? "" };
+}
+
+/** Who ran what against which target, for the receipt. Never a credential. */
+export interface MigrateReceiptContext {
+  readonly caller: MigrateCaller;
+  readonly env: MigrateRunOptions["env"];
+  /** host:port/dbname, the password-free form (`redactedTarget`). */
+  readonly target: string;
+  readonly startedAt: Date;
+}
+
+/** The receipt's filename inside an instance's state directory. One file per
+ *  run, stamped with its start time, so a later run never overwrites the record
+ *  of an earlier one. */
+export function migrateReceiptPath(stateDir: string, startedAt: Date): string {
+  return join(stateDir, `migrate-receipt-${startedAt.toISOString().replace(/[:.]/g, "-")}.json`);
+}
+
+/**
+ * Write the durable record of a completed run.
+ *
+ * Spec §8.5: a production upgrade is "planned per release, receipted". The
+ * receipt is the `MigrateRunResult` plus who ran it and against what. It holds
+ * the manifest's identity (format version, content hash, filename list) rather
+ * than the declaration text, which is the snapshot's own file and would only
+ * make the receipt a second copy of it.
+ *
+ * It holds no credential. The owner password never reaches this function, and
+ * `target` is the redacted form. The file is owner-readable only anyway,
+ * because it names the production target. An existing file refuses (`wx`):
+ * a receipt is a record, and a record is never silently replaced.
+ *
+ * Output: the path written.
+ */
+export async function writeMigrateReceipt(
+  path: string,
+  result: MigrateRunResult,
+  context: MigrateReceiptContext,
+): Promise<string> {
+  const receipt = {
+    kind: "migrate-receipt",
+    startedAt: context.startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    caller: context.caller,
+    env: context.env,
+    target: context.target,
+    applied: result.applied,
+    resumedAndVerified: result.resumedAndVerified,
+    grantsRepaired: result.grantsRepaired,
+    manifest: {
+      formatVersion: result.manifest.formatVersion,
+      contentHash: result.manifest.contentHash,
+      filenames: result.manifest.filenames,
+    },
+  };
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(receipt, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  return path;
 }

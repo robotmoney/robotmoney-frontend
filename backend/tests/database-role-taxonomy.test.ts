@@ -42,14 +42,19 @@ afterAll(async () => {
   await Promise.all([app?.end({ timeout: 5 }), worker?.end({ timeout: 5 }), readonly?.end({ timeout: 5 })]);
 });
 
-test("rm_owner is non-login owner of every protected table", async () => {
+test("rm_owner owns every protected table, and is a LOGIN role without CREATEROLE", async () => {
   const roles = await sql<{ tablename: string; tableowner: string }[]>`
     SELECT tablename, tableowner FROM pg_catalog.pg_tables
     WHERE schemaname = 'public' AND tablename = ANY(${APPEND_ONLY_TABLES as unknown as string[]})`;
   expect(roles).toHaveLength(APPEND_ONLY_TABLES.length);
   expect(roles.every((row) => row.tableowner === "rm_owner")).toBe(true);
-  const [owner] = await sql<{ rolcanlogin: boolean }[]>`SELECT rolcanlogin FROM pg_roles WHERE rolname = 'rm_owner'`;
-  expect(owner.rolcanlogin).toBe(false);
+  // rm_owner is the migration login (spec §3, D47): 0053 creates it LOGIN.
+  // Its password is typed per run and never stored, and it never holds
+  // CREATEROLE.
+  const [owner] = await sql<{ rolcanlogin: boolean; rolcreaterole: boolean }[]>`
+    SELECT rolcanlogin, rolcreaterole FROM pg_roles WHERE rolname = 'rm_owner'`;
+  expect(owner.rolcanlogin).toBe(true);
+  expect(owner.rolcreaterole).toBe(false);
 });
 
 test("rm_app and rm_worker cannot disable, drop triggers, or drop protected tables", async () => {

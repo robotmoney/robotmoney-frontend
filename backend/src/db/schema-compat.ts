@@ -1,10 +1,10 @@
 // Compatibility — how an image built for snapshot N decides whether it may
 // boot against a database that has moved on to M > N.
 //
-// STUB. Every function throws `NOT IMPLEMENTED`; nothing imports this module
-// yet. Step 1 of issue #1026's W2 workstream. Governed by
-// smoke-production-spec.md §8.2 (the migration header and the ledger columns)
-// and §8.4 (the rule), consumed by §7 check 3b in ./preflight.ts.
+// Governed by smoke-production-spec.md §8.2 (the migration header and the
+// ledger columns) and §8.4 (the rule). Preflight check 3b (./preflight.ts)
+// calls `checkCompatibility`; the migrate run (../../scripts/migrate-run.ts)
+// parses each pending file's header and records it with `recordMigrationCompat`.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE PROBLEM
@@ -107,6 +107,58 @@ export type MigrationCompat = "additive" | "breaking";
  * refuses instead of assuming the promise it happens to remember.
  */
 export const COMPAT_METADATA_VERSION = 1;
+
+/**
+ * The last migration written before the header scheme existed (D53, decision 3).
+ *
+ * Files 0001-0063 predate §8.2's header. They are accepted without one as
+ * PRE-COMPAT and are not backfilled: a header added years later would be a
+ * reviewed claim nobody reviewed, and every image that could boot against
+ * those files already ships them, so §8.4 never evaluates them as surplus.
+ * Every file ABOVE this number must declare itself, and
+ * backend/tests/schema-compat.test.ts proves each one does.
+ *
+ * A number, not a filename, because it bounds a RANGE. A range alone would
+ * let a new header-less file slip in under a repeated low number (this repo
+ * already has two or three files at several numbers), so
+ * backend/tests/schema-compat.test.ts also pins the exact set of header-less
+ * files at or below it. Anything new gets a number above it.
+ */
+export const COMPAT_HEADER_BASELINE = 63;
+
+/** The migration number a filename starts with, or a refusal. */
+export function migrationNumber(filename: string): number {
+  const match = /^(\d+)_/.exec(filename);
+  if (!match) {
+    throw new Error(`${filename}: a migration filename starts with its number and an underscore (0073_name.sql).`);
+  }
+  return Number(match[1]);
+}
+
+/** True when §8.2's header is mandatory for this file (it is above the baseline). */
+export function requiresCompatHeader(filename: string): boolean {
+  return migrationNumber(filename) > COMPAT_HEADER_BASELINE;
+}
+
+/**
+ * The header of a migration the runner is about to apply, or `null` for a
+ * pre-compat file that has none.
+ *
+ * Above {@link COMPAT_HEADER_BASELINE} this is exactly `parseMigrationHeader`,
+ * refusal included, and the refusal names the file. At or below it, a file with
+ * NO declaration at all is pre-compat and yields `null`: the runner applies it
+ * and records no compat, which §8.4 reads as the NULL it is. A pre-compat file
+ * that does declare something (0053 does) is parsed strictly, because a
+ * malformed declaration is still a malformed declaration.
+ */
+export function parsePendingHeader(filename: string, text: string): MigrationHeader | null {
+  if (!requiresCompatHeader(filename)) {
+    const block = readHeaderBlock(text);
+    const declares = block.some((line) => /^--\s*(compat|metadata_version)\s*:/i.test(line));
+    if (!declares) return null;
+  }
+  return parseMigrationHeader(filename, text);
+}
 
 /** The two ledger columns §8.2 adds to `schema_migrations`. Named here so the
  *  privilege check, the migrate run and a refusal message agree. Spec §8.3:
@@ -345,7 +397,14 @@ export async function checkCompatibility(
       reasons.push(`${row.filename}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`);
       continue;
     }
-    if (row.metadataVersion === null || row.metadataVersion > COMPAT_METADATA_VERSION) {
+    // Below 1 is as unknown as above the current version: no release ever wrote
+    // metadata version 0 or a negative one, so no release can say what
+    // `additive` promised under it.
+    if (
+      row.metadataVersion === null ||
+      row.metadataVersion < 1 ||
+      row.metadataVersion > COMPAT_METADATA_VERSION
+    ) {
       reasons.push(
         `${row.filename}: metadata_version ${row.metadataVersion ?? "NULL"} is not one this release understands ` +
           `(it knows ${COMPAT_METADATA_VERSION}), so it cannot know what 'additive' promised.`,
