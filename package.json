@@ -38,6 +38,7 @@
     "credentials:check": "bun scripts/gitops-credentials.ts --check",
     "smoke:twin": "bun scripts/smoke-twin.ts",
     "smoke:twin:once": "bun scripts/smoke-twin-rehearse.ts",
+    "twin:gate": "bun scripts/twin-gate.ts",
     "smoke:twin --once": "bun scripts/smoke-twin-rehearse.ts"
   },
   "dependencies": {
