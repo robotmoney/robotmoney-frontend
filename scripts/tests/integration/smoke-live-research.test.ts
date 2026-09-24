@@ -41,6 +41,10 @@ function composeConfig(): ComposeConfig {
   env.WEB_PORT = "18788";
   env.POSTGRES_PORT = "15433";
   env.ANALYTICS_TOKEN_FILE_HOST = "/dev/null"; // compose-config only; no producer launch
+  // docker-compose.yml requires the instance and its state directory (`${RM_INSTANCE_STATE_DIR:?…}`, no
+  // checkout fallback; smoke spec §1.1). Nothing is mounted by `config`, so any absolute path renders.
+  env.RM_INSTANCE = "rm_local_lanetopo";
+  env.RM_INSTANCE_STATE_DIR = "/var/empty/rm_local_lanetopo";
   const r = Bun.spawnSync(
     ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml", "config", "--format", "json"],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },

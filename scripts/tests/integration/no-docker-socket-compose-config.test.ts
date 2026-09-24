@@ -231,6 +231,10 @@ function baseEnv(): Record<string, string> {
   env.SMOKE_PROJECT = "no-docker-socket-test";
   env.RM_STACK_ENV_CLASS = "local";
   env.RM_STACK_ENV_HASH = "nosocket000";
+  // docker-compose.yml requires the instance and its state directory (`${RM_INSTANCE_STATE_DIR:?…}`, no
+  // checkout fallback; smoke spec §1.1). Nothing is mounted by `config`, so any absolute path renders.
+  env.RM_INSTANCE = "rm_local_nosocket";
+  env.RM_INSTANCE_STATE_DIR = "/var/empty/rm_local_nosocket";
   env.WEB_PORT = "18787";
   env.POSTGRES_PORT = "15432";
   return env;

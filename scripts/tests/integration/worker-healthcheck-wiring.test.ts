@@ -36,7 +36,9 @@ function composeServices(): Record<string, { healthcheck?: { test?: string[] } }
       cwd: repoRoot,
       // The two published-port lines are `${VAR:?…}`; compose refuses to resolve
       // without them. Values are arbitrary — nothing is published here.
-      env: { ...process.env, WEB_PORT: "18787", POSTGRES_PORT: "15432" },
+      // RM_INSTANCE / RM_INSTANCE_STATE_DIR are required the same way (smoke spec §1.1: no checkout
+      // fallback for the instance's state directory); nothing is mounted by `config`.
+      env: { ...process.env, WEB_PORT: "18787", POSTGRES_PORT: "15432", RM_INSTANCE: "rm_local_healthcheck", RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_healthcheck" },
       stdout: "pipe",
       stderr: "pipe",
     },

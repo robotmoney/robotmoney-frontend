@@ -29,13 +29,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertPlanRedacted,
+  closeOpenJournal,
   computePlanId,
   credentialShape,
   decideResume,
+  expectationMismatch,
   JOURNAL_FORMAT_VERSION,
   DEPLOYMENT_PHASES,
   openJournal,
   planHashMaterial,
+  projectExpectations,
   publicKeyFingerprint,
   readArchivedJournals,
   readJournal,
@@ -54,6 +57,7 @@ import {
 } from "../../lib/smoke-journal.ts";
 import { generateRolePasswords, instancePaths, type InstancePaths } from "../../lib/smoke-state.ts";
 import { gitRunner, resolveSourceIdentities } from "../../stack/source-identity.ts";
+import { readFileSync } from "node:fs";
 
 const DIGEST_A = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const DIGEST_B = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
@@ -1171,5 +1175,76 @@ describe("summarizeProgress — §1.4, receipt when present, journal when not", 
 
   test("with neither a journal nor a receipt it says so rather than inventing a phase", () => {
     expect(summarizeProgress(null, null)).toContain("no recorded run");
+  });
+});
+
+// ── Wiring helpers the boot uses (issue #1026, W2) ──────────────────────────
+describe("closeOpenJournal — the operator stopped the deployment (`smoke:down`)", () => {
+  test("closes an open journal with its reason, and a later run fresh-starts instead of refusing over the stop", async () => {
+    const paths = freshPaths();
+    const journal = await journalWithCommittedPreparation(paths);
+    expect(closeOpenJournal(paths, "stopped by bun smoke:down")).toBe(true);
+    const closed = readJournal(paths)!;
+    expect(closed.closedAt).not.toBeNull();
+    expect(closed.closeReport).toBe("stopped by bun smoke:down");
+    // The services it expected are gone; a closed journal is a fresh start, not a refusal.
+    expect(decideResume(closed, journal.planId, expectations({ services: {} })).kind).toBe("fresh-start");
+  });
+
+  test("no journal, or an already-closed one, is a no-op", async () => {
+    const paths = freshPaths();
+    expect(closeOpenJournal(paths, "x")).toBe(false);
+    await journalWithCommittedPreparation(paths);
+    closeOpenJournal(paths, "first");
+    expect(closeOpenJournal(paths, "second")).toBe(false);
+    expect(readJournal(paths)!.closeReport).toBe("first");
+  });
+
+  test("red control: without the close, the same stop IS a refusal — the expected services are missing", async () => {
+    const paths = freshPaths();
+    const journal = await journalWithCommittedPreparation(paths);
+    expect(decideResume(readJournal(paths), journal.planId, afterPreparation({ services: {} })).kind).toBe("refuse");
+  });
+});
+
+describe("expectationMismatch — the schema check a run makes the moment the database can be asked", () => {
+  test("the journal's own projected ledger passes; another migration is named", async () => {
+    const paths = freshPaths();
+    const journal = await journalWithCommittedPreparation(paths);
+    const expected = projectExpectations(journal)!;
+    expect(expectationMismatch(expected, { ledger: afterPreparation().ledger, manifestHash: "manifest-bbb" })).toBeNull();
+    const extra = expectationMismatch(expected, { ledger: [...afterPreparation().ledger, "0099_someone_else.sql"], manifestHash: "manifest-bbb" });
+    expect(extra).toContain("0099_someone_else.sql");
+    expect(expectationMismatch(expected, { ledger: afterPreparation().ledger, manifestHash: "manifest-zzz" })).toContain("manifest-zzz");
+  });
+});
+
+// Criterion 38's risk, checked: a roster fingerprint taken from a SPOOFED key
+// would move the plan id when a `--spoof-keys` phase writes its generation
+// (§6.4 step 1), and the rerun would supersede its own journal. The plan id
+// excludes "any state a journaled phase itself changes" (§1.2), so the boot
+// fingerprints the credential file's keys and never reads the generation.
+describe("the boot's roster fingerprints come from the credential file, never a spoof generation (criterion 38)", () => {
+  const smokeMain = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
+
+  test("hashing a spoofed key instead WOULD change the plan id — the risk is real", () => {
+    const fromFile = plan();
+    const spoofed = plan({
+      roster: { ...fromFile.roster, agents: fromFile.roster.agents.map((m) => (m.name === "athena" ? { ...m, keyFingerprint: publicKeyFingerprint("spoofed-generation-key") } : m)) },
+    });
+    expect(computePlanId(spoofed)).not.toBe(computePlanId(fromFile));
+  });
+
+  test("smoke-main fingerprints loadCredentialFile's keys and reads no spoof generation", () => {
+    expect(smokeMain).toContain("loadCredentialFile(resolution.path)");
+    expect(smokeMain).toContain("publicKeyFingerprint(entry.publicKeyB64)");
+    for (const forbidden of ["readSpoofGeneration(", "effectiveRoster(", "spoofGenerationFile"]) {
+      expect({ forbidden, present: smokeMain.includes(forbidden) }).toEqual({ forbidden, present: false });
+    }
+  });
+
+  test("and it hashes each image's SOURCE: the boot's plan carries source identities with no digest", () => {
+    expect(smokeMain).toContain("resolveSourceIdentities(gitRunner(repoRoot), buildContextsFor(");
+    expect(smokeMain).toMatch(/\[service, \{ source, digest: null \}\]/);
   });
 });

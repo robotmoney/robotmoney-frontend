@@ -268,6 +268,38 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
     expect(Array.isArray(frame.notes)).toBe(true);
     expect(frame.phase).toBe("preflight");
   });
+
+  // The containers are the instance's COMPOSE PROJECT, which `bun smoke`
+  // records in the instance's stack record: the project is derived from, but
+  // is not, the instance name. An observer that filtered by the instance name
+  // would show an empty stack for every real run.
+  test("with no stack record yet, the frame says there are no containers to show rather than guessing a project", async () => {
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, plan);
+    const frame = await observe(paths);
+    expect(frame.notes).toContain("this instance has no stack record yet; no containers to show.");
+  });
+
+  test("with a stack record, the observer asks Docker about the recorded project (a dead daemon is a note)", () => {
+    const root = freshRoot();
+    const paths = instancePaths(root, "alpha", { create: true });
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, plan);
+    writeFileSync(paths.stackStateFile, JSON.stringify({ project: "rm_smoke_stack_0123456789", composeFiles: "docker-compose.yml" }));
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(import.meta.dir, "..", "..", "smoke-tui.ts"), "--instance", "alpha", "--once"], {
+      env: { PATH: process.env.PATH ?? "", HOME: root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain("docker is unreachable; container state is unknown.");
+  }, 30_000);
+
+  test("the observer's container filter is the recorded project, never the instance name", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "..", "smoke-tui.ts"), "utf8");
+    expect(src).toContain("readStackState(paths)?.project");
+    expect(src).toContain("label=com.docker.compose.project=${project}");
+    expect(src).not.toContain("label=com.docker.compose.project=${instance}");
+  });
 });
 
 describe("renderFrame — §1, the source label and the redaction promise", () => {
