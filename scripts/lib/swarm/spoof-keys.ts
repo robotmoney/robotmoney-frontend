@@ -445,7 +445,8 @@ export function readSpoofGeneration(stateRoot: string, instance: string): SpoofG
  * With no generation the file is returned unchanged. The generation never ADDS
  * a member: the credential file stays the roster (spec §6.1), and the
  * generation only decides which key and bearer a listed member boots with.
- * Names match the way `reconcileRoster` matches them (trimmed, case-folded).
+ * Names match the way the credential file's roster reconciliation matches them
+ * (trimmed, case-folded; credential-file.ts).
  *
  * Refusals: none; `readSpoofGeneration` already refused a malformed file.
  */

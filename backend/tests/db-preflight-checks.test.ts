@@ -252,6 +252,10 @@ const REQUIRED_FIXTURE = registerQuery({
   privileges: ["SELECT"],
   site: "tests/db-preflight-checks:requiredHalfFixture",
   purpose: "Fixture declaration giving check 2's required half something real to test.",
+  // `callers` is mandatory since the registry started pinning who may reach a
+  // statement (w1-judge-server). Check 2 never reads it; this names the same
+  // fictitious entry module db-registry.test.ts's fixtures use.
+  callers: ["src/api/routes/fixture"],
 }).declaration;
 
 // ───────────────────────────────────────────────────────────────────────────

@@ -105,7 +105,7 @@ process.env.DATABASE_URL = readonlyUrl;
 if (process.env.RM_ENV === "stage") process.env.RM_ENV = "smoke";
 
 const postgres = (await import("postgres")).default;
-const { targetLockKey } = await import("../src/db/target-lock.ts");
+const { TARGET_LOCK_KEY } = await import("../src/db/target-lock.ts");
 const {
   checkMigrateGates,
   confirmRemoteTarget,
@@ -119,19 +119,15 @@ const receiptPath = receiptFlag ?? migrateReceiptPath(receiptDir ?? "", startedA
 const reader = postgres(readonlyUrl, { max: 1, onnotice: () => {} });
 let owner: ReturnType<typeof postgres> | null = null;
 try {
-  const [identity] = (await reader.unsafe(
-    "SELECT (SELECT system_identifier::text FROM pg_control_system()) AS system_identifier, current_database() AS database_name",
-  )) as unknown as { system_identifier: string; database_name: string }[];
   const options = {
     caller: "operator" as const,
     env: rmEnv,
     // `bun run migrate` never targets a Postgres smoke owns: that is
     // `bun smoke --migrate`, which uses smoke's generated password (§8.5).
     connection: "remote" as const,
-    lockKey: targetLockKey({
-      systemIdentifier: identity?.system_identifier ?? "",
-      databaseName: identity?.database_name ?? "",
-    }),
+    // D52 §2: ONE constant key for every tool and every database, so this
+    // run contends with smoke's session lock and every other fenced mutation.
+    lockKey: TARGET_LOCK_KEY,
     sessionLockHeld: false,
     nonInteractive: !process.stdin.isTTY,
   };
