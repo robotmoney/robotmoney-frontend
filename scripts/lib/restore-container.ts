@@ -340,6 +340,12 @@ export async function restoreBackupIntoContainer(
       `POSTGRES_DB=${LOCAL_DB}`,
       "-p",
       `${bindHost}::5432`,
+      // Docker's default /dev/shm is 64 MB. Postgres sizes parallel-query
+      // shared memory there, and the 2026-09-24 stage twin's api died on
+      // `could not resize shared memory segment ... No space left on device`
+      // against a 6 GB restore. Production's managed primary has no such cap.
+      "--shm-size",
+      "1g",
       ...labelFlags,
       ...volumeArgs,
       IMAGE,
