@@ -12,17 +12,15 @@
 
 /** @type {Array<{ key: string, prefixes: string[] }>} */
 export const NAV_SECTIONS = [
-  {
-    key: "vaults",
-    prefixes: ["/vault", "/allocation", "/performance", "/smart-contract-risks", "/swarm/subjects/robotmoney-vault"],
-  },
+  { key: "vaults", prefixes: ["/vault", "/allocation", "/performance", "/swarm/subjects/robotmoney-vault"] },
   { key: "swarm", prefixes: ["/swarm", "/committee"] },
   {
     key: "research",
-    prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/media"],
+    prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks"],
   },
   { key: "token", prefixes: ["/tokenomics"] },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
+  { key: "about", prefixes: ["/media"] },
 ];
 
 /** @param {string} pathname */

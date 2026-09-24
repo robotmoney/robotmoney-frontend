@@ -3,6 +3,8 @@
 // JavaScript. The markup, the sections and the vault list are pinned in
 // scripts/tests/unit/site-nav.test.ts; this is what a reader does with them.
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { navigate } from "./navigation.ts";
 
 const top = (page: Page, key: string) => page.locator(`.nav__group[data-nav-section="${key}"] > .nav__top`);
@@ -119,7 +121,7 @@ test.describe("desktop", () => {
     await page.keyboard.press("Escape");
     await expect(panel(page, "swarm")).toBeHidden();
     await page.keyboard.press("End");
-    await expect(top(page, "docs")).toBeFocused();
+    await expect(top(page, "about")).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(top(page, "vaults")).toBeFocused();
 
@@ -143,6 +145,44 @@ test.describe("desktop", () => {
     await expect(panel(page, "vaults")).toBeVisible();
     await expect(page.locator("#view h1")).toBeVisible();
     await expect(panel(page, "vaults")).toBeVisible();
+  });
+
+  test("the page behind an open card steps back, and a click on it closes the card", async ({ page }) => {
+    await page.goto("/");
+    const scrim = page.locator(".nav__scrim");
+    await expect(scrim).toBeHidden();
+    await top(page, "docs").click();
+    await expect(scrim).toBeVisible();
+    await expect(scrim).toHaveCSS("opacity", "1");
+    // A flat shade: the covenant allows no gradient here.
+    await expect(scrim).toHaveCSS("background-image", "none");
+    await page.mouse.click(700, 700);
+    await expect(panel(page, "docs")).toBeHidden();
+    await expect(scrim).toBeHidden();
+  });
+
+  // RM-127: the swarm page draws its sections only once its data lands, so a
+  // link to one of them from another page used to land at the top and stay.
+  test("a link to a section of a page that draws late lands on that section", async ({ page }) => {
+    const goldens = JSON.parse(readFileSync(join(process.cwd(), "goldens/api-goldens.json"), "utf8")).routes;
+    await page.route("**/api/**", async (route) => {
+      const { pathname } = new URL(route.request().url());
+      if (pathname.startsWith("/api/swarm")) await new Promise((resolve) => setTimeout(resolve, 1200));
+      if (pathname in goldens) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(goldens[pathname]) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not_found"}' });
+    });
+    await page.goto("/tokenomics");
+    await expect(page.locator("#view h1")).toBeVisible();
+    await top(page, "swarm").click();
+    await panel(page, "swarm").locator('a[href="/swarm#history"]').click();
+    const history = page.locator("#history");
+    await expect(history).toBeVisible({ timeout: 10_000 });
+    // Held under the bar once the sections above it have filled in: the
+    // section's own scroll-margin-top (6rem) from the top of the window.
+    await expect.poll(async () => Math.round((await history.boundingBox())!.y), { timeout: 10_000 }).toBe(96);
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(200);
   });
 
   test("following a link closes the panel, a link to a section of this page too", async ({ page }) => {
@@ -174,12 +214,12 @@ test.describe("phone", () => {
     await expect(page.locator(".nav__menu")).toBeVisible();
     // Every group open under a heading; the desktop buttons, which would do
     // nothing here, are not in the sheet at all.
-    for (const key of ["vaults", "swarm", "research", "docs"]) {
+    for (const key of ["vaults", "swarm", "research", "docs", "about"]) {
       await expect(panel(page, key)).toBeVisible();
       await expect(top(page, key)).toBeHidden();
     }
-    await expect(page.locator(".nav__head")).toHaveText(["Vaults", "Swarm", "Research", "Docs"]);
-    await expect(page.locator(".nav").getByRole("heading", { level: 2 })).toHaveCount(4);
+    await expect(page.locator(".nav__head")).toHaveText(["Vaults", "Swarm", "Research", "Docs", "About"]);
+    await expect(page.locator(".nav").getByRole("heading", { level: 2 })).toHaveCount(5);
     await expect(top(page, "token")).toBeVisible();
     await expect(page.locator(".nav").getByRole("link", { name: "Token", exact: true })).toBeVisible();
 
@@ -188,7 +228,7 @@ test.describe("phone", () => {
     await page.keyboard.press("Tab");
     await expect(page.locator(".nav__menu a").first()).toBeFocused();
     const ctaTop = (await page.locator(".nav__ctas").boundingBox())!.y;
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 40; i++) {
       await page.keyboard.press("Tab");
       const b = await page.evaluate(() => document.activeElement!.getBoundingClientRect().bottom);
       if (await page.locator(".nav__cta").evaluate((el) => el === document.activeElement)) break;
@@ -196,7 +236,7 @@ test.describe("phone", () => {
     }
 
     const cta = page.locator(".nav__cta");
-    await expect(cta).toHaveText("Get the skill");
+    await expect(cta).toHaveText("Deposit");
     const box = await cta.boundingBox();
     expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     // The page behind does not scroll, and nothing runs off the side.
