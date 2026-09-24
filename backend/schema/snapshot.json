@@ -88,7 +88,13 @@
     "0068_session_epoch_lifecycle.sql",
     "0069_automation_tokens.sql",
     "0070_swarm_scheduler_jobs.sql",
-    "0072_drop_swarm_schedules.sql"
+    "0072_drop_swarm_schedules.sql",
+    "0073_subject_grid_columns.sql",
+    "0074_session_judging_duration.sql",
+    "0075_swarm_recommendations_final.sql",
+    "0076_ledger_write_revoke.sql",
+    "0077_immutable_ledger_grants.sql",
+    "0078_automation_token_holders.sql"
   ],
-  "contentHash": "027990f8ebe07ad6e8ba2565566309599773886012660ac2e13efdbb72969c7c"
+  "contentHash": "3962a625111e8933bf7e1dd4362a83c723e3eeb2f63318ab5be36c307f8985df"
 }

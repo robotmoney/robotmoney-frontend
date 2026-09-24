@@ -37,9 +37,10 @@ DECLARE
     'swarm_subject_snapshots', 'swarm_session_judgements', 'swarm_consensus_receipts',
     'swarm_member_keys', 'swarm_applications', 'audit_log', 'agent_activity_log',
     'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events',
-    -- Issue #1026 W4, migration 0072: the epoch scheduler's event log and its
-    -- pushed-job ledger. Both are append-only for the same reason — a removed
-    -- row destroys the guarantee the other side reads (a gapless sequence, a
+    -- Issue #1026 W4: the epoch scheduler's event log (created by migration
+    -- 0068) and its pushed-job ledger (created by 0070), both made append-only
+    -- by 0072. Both are append-only for the same reason — a removed row
+    -- destroys the guarantee the other side reads (a gapless sequence, a
     -- durable idempotency key).
     'swarm_stream_events', 'swarm_scheduler_jobs'
   ];
@@ -60,7 +61,39 @@ DECLARE
   -- provisioned by rm_owner and only ever READ at runtime. The rows hold a sha256
   -- hash and a rights list, never a secret, so SELECT is no wider a capability than
   -- the reader roles already hold over `admin_credential`.
-  read_only_for_runtime text[] := ARRAY['analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens'];
+  -- 0076 narrowed `schema_migrations`, the ledger, for `schema_manifest`'s reason:
+  -- §8.3 says "Only `rm_owner` may write it or the ledger's `compat`/
+  -- `metadata_version` columns; they are trusted inputs to boot decisions". The
+  -- sweep used to hand rm_app INSERT and UPDATE on it every run, so a runtime role
+  -- could have recorded a migration that never ran or relabelled a breaking one
+  -- additive. Every ledger writer is the migrate step, as rm_owner.
+  read_only_for_runtime text[] := ARRAY[
+    'analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens',
+    'schema_migrations'
+  ];
+  -- The subset of `read_only_for_runtime` whose SELECT is restored to rm_app and
+  -- rm_worker after the REVOKE ALL below. Not optional for `schema_migrations`: the
+  -- api's append-only guard reads the ledger at boot (src/db/append-only-guard.ts),
+  -- and §7.2 has every database-holding container run preflight check 3, which
+  -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
+  -- credential. Dropping a name from this list stops those boots.
+  select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations'];
+  -- The immutable analytics ledgers (LEDGER_FAMILIES in
+  -- src/db/analytics-ledger-guard.ts). Their migrations granted rm_app exactly
+  -- `SELECT, INSERT` (0057:108, 0058:137, 0059:113, 0060:76), and each family's
+  -- trigger refuses UPDATE, DELETE and TRUNCATE. The ordinary sweep handed rm_app
+  -- UPDATE on every one of them on every run, which left the trigger as the only
+  -- protection; 0077 took that back. Listed here so reconciliation re-asserts the
+  -- migrations' grant instead of undoing it. DELETE and TRUNCATE are revoked too:
+  -- D53 decision 6 counts these ledgers as append-only for preflight check 2.
+  insert_only_for_runtime text[] := ARRAY[
+    'source_acquisitions', 'source_acquisition_events', 'source_payloads', 'source_fetches',
+    'source_value_versions',
+    'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
+    'analytics_data_vintages', 'analytics_vintage_members',
+    'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
+    'analytics_parity_observations'
+  ];
   rel record;
   usurped text;
 BEGIN
@@ -101,9 +134,24 @@ BEGIN
       -- back to rm_app would quietly widen the tables whose whole point is that the
       -- application cannot write them, and it would do so on every run.
       EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
-      IF rel.name IN ('deployment_identity', 'schema_manifest', 'automation_tokens') THEN
+      IF rel.name = ANY(select_for_runtime) THEN
         EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
       END IF;
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    ELSIF rel.name = ANY(insert_only_for_runtime) THEN
+      -- rm_worker's SELECT on these (0062) is its allowlist's business and is
+      -- left alone; only the write privileges no migration granted are taken.
+      EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
+      EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
+    ELSIF rel.name = 'swarm_recommendations' THEN
+      -- D51 (migration 0075): a take's content is never UPDATEd, and the final
+      -- flag is the one column the accepting transaction sets and unsets. The
+      -- table-level REVOKE also drops column grants, so it runs first and the
+      -- column GRANT second — every run, so a hand-widened UPDATE does not survive.
+      EXECUTE format('REVOKE UPDATE ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
+      EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
