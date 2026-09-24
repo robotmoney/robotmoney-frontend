@@ -351,7 +351,7 @@ const ANALYTICS_LEDGER_GUARD_STEP: Step = { name: "analytics-ledger-guard", run:
 
 const initializationSteps: Step[] = [
   APPEND_ONLY_STEP,
-  // ANALYTICS_LEDGER_GUARD_STEP,
+  ANALYTICS_LEDGER_GUARD_STEP,
   { name: "v0-seed:bootstrap", run: runV0SeedStep },
   { name: "edgar-seed:bootstrap", run: runEdgarSeedStep },
   { name: "seed-provenance:verify", run: runSeedProvenanceStep },

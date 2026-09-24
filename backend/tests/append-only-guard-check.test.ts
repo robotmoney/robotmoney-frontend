@@ -32,6 +32,7 @@ import {
   ledgerTriggerNames,
   triggerNames,
 } from "../src/db/append-only-guard.ts";
+import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 const MEMBER_KEYS_MIGRATION = "0050_swarm_member_keys_append_only.sql";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
@@ -479,5 +480,51 @@ describe("the runtime check under the PRODUCTION role (rm_app), which holds no D
       );
       await sql.unsafe(`ALTER TABLE public.source_payloads ENABLE ALWAYS TRIGGER ${names.row}`);
     }
+  });
+});
+
+describe("a READ-ONLY session — a managed-Postgres failover in progress", () => {
+  // Production, 2026-09-24 14:27 UTC: the primary was briefly read-only, every
+  // probe came back 25006, the check graded that "disarmed", and the api
+  // refused four boots in a row. A session that cannot write has said nothing
+  // about the guard, so the answer must be "unavailable" (serve, unchecked),
+  // never "disarmed" (refuse). The guard itself is armed throughout.
+  let ro: postgres.Sql<{}>;
+
+  beforeAll(() => {
+    ro = postgres(process.env.DATABASE_URL!, {
+      max: 1,
+      onnotice: () => {},
+      connection: { default_transaction_read_only: true },
+    });
+  });
+
+  afterAll(async () => {
+    await ro?.end({ timeout: 5 });
+  });
+
+  test("the session really is read-only (25006 on a DELETE)", async () => {
+    let raised: { code?: string } | null = null;
+    try {
+      await ro.unsafe(`DELETE FROM public.swarm_members WHERE false`);
+    } catch (e) {
+      raised = e as { code?: string };
+    }
+    expect(raised?.code).toBe("25006");
+  });
+
+  test("checkAppendOnlyGuard answers 'unavailable', not 'disarmed'", async () => {
+    const result = await checkAppendOnlyGuard(ro);
+    expect(result.status).toBe("unavailable");
+    expect(result.problems).toEqual([]);
+  });
+
+  test("checkAnalyticsLedgerGuard answers 'unavailable', not 'disarmed'", async () => {
+    const result = await checkAnalyticsLedgerGuard(ro);
+    expect(result.status).not.toBe("disarmed");
+  });
+
+  test("and the owner's own session still grades the same database 'armed'", async () => {
+    expect((await checkAppendOnlyGuard(sql)).status).toBe("armed");
   });
 });

@@ -633,8 +633,16 @@ class GuardCheckInconclusive extends Error {}
  * `42501 insufficient_privilege` is included for a different reason: a role
  * without DELETE on the table never reaches the trigger stage at all, so the
  * probe learns nothing about the guard either way.
+ *
+ * `25006 read_only_sql_transaction` is included for the same reason as the
+ * 08 class: a session that cannot write has said nothing about triggers. It is
+ * what a managed-Postgres failover looks like from a client for the seconds
+ * the promoted node is still read-only, and production met exactly that on
+ * 2026-09-24 14:27 UTC: every probe came back 25006, the check graded it
+ * "disarmed", and the api refused four boots in a row until the primary was
+ * writable again.
  */
-const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "42501"]);
+const INCONCLUSIVE_CODES = new Set(["57014", "55P03", "57P01", "57P02", "57P03", "53300", "42501", "25006"]);
 
 function isInconclusive(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
