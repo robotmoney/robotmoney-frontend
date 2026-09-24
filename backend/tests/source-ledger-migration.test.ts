@@ -82,6 +82,6 @@ test("0057 backfills one legacy baseline per current raw row at one migration kn
     expect({ acquisitions, fetches, payloads }).toEqual({ acquisitions: 0, fetches: 0, payloads: 0 });
   } finally {
     await db.end({ timeout: 5 });
-    Bun.spawnSync(["docker", "rm", "-f", container]);
+    Bun.spawnSync(["docker", "rm", "-f", "-v", container]);
   }
 }, 120_000);

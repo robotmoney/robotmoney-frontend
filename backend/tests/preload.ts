@@ -116,7 +116,7 @@ const up = Bun.spawnSync([
   "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
   "-p", `${port}:5432`, POSTGRES_IMAGE,
   // Durability off. This database exists for the length of one `bun test` and
-  // is `docker rm -f`d afterwards, so crash recovery has nothing to recover;
+  // is `docker rm -f -v`d afterwards, so crash recovery has nothing to recover;
   // what these buy is the checkpoint. CREATE/DROP DATABASE each force one, and
   // tests/support/clean-db.ts issues a CREATE per test file — with fsync on,
   // a single DROP DATABASE was observed taking 10s once the run had built up
@@ -138,7 +138,7 @@ const up = Bun.spawnSync([
 if (up.exitCode !== 0) {
   throw new Error(`tests require Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`);
 }
-process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", name]); } catch { /* ignore */ } });
+process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", "-v", name]); } catch { /* ignore */ } });
 
 // §7.3 CI ISOMORPHISM IS NOT IMPLEMENTED HERE, AND THIS IS WHY (issue #1026 W2).
 //
@@ -221,5 +221,5 @@ console.log(
 
 afterAll(async () => {
   await client.closeDb();
-  Bun.spawnSync(["docker", "rm", "-f", name]);
+  Bun.spawnSync(["docker", "rm", "-f", "-v", name]);
 });

@@ -118,7 +118,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try { await db?.end({ timeout: 5 }); } catch { /* closing a dead pool is not a failure */ }
-  if (containerName) Bun.spawnSync(["docker", "rm", "-f", containerName]);
+  if (containerName) Bun.spawnSync(["docker", "rm", "-f", "-v", containerName]);
 });
 
 test("AC1: legacy member id is converted to a UUID", async () => {

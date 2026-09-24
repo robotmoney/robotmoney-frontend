@@ -229,7 +229,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db?.end({ timeout: 5 });
-  if (containerName) Bun.spawnSync(["docker", "rm", "-f", containerName]);
+  if (containerName) Bun.spawnSync(["docker", "rm", "-f", "-v", containerName]);
 });
 
 // ── SOURCE-ONLY ─────────────────────────────────────────────────────────────

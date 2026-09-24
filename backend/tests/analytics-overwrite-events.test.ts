@@ -288,6 +288,6 @@ test("0056 installs over pre-existing current rows without fabricating historica
     expect(currentRows).toBe(3);
   } finally {
     await db.end({ timeout: 5 });
-    Bun.spawnSync(["docker", "rm", "-f", container]);
+    Bun.spawnSync(["docker", "rm", "-f", "-v", container]);
   }
 }, 120_000);
