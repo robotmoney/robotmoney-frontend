@@ -44,6 +44,7 @@ import { join } from "node:path";
 import {
   assertNoDockerSocket,
   defaultDockerSocketProbes,
+  mountPointsOf,
   pollForWork,
   readParticipantConfig,
   runStartupDiagnostic,
@@ -67,6 +68,7 @@ const ENV = {
   RM_MEMBER_TOKEN: "member-bearer-token",
   RM_MEMBER_IDENTITY: JSON.stringify(IDENTITY),
   RM_TAKE_COMMAND: JSON.stringify(TAKE_COMMAND),
+  RM_INFERENCE_KEY: "athena-own-model-key",
   RM_POLL_INTERVAL_MS: "5000",
   RM_TAKE_TIMEOUT_MS: "600000",
   RM_WORKSPACE_ROOT: "/var/lib/rm/takes",
@@ -79,6 +81,7 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   memberId: "m-athena",
   token: "member-bearer-token",
   identity: IDENTITY,
+  modelKey: "athena-own-model-key",
   takeCommand: TAKE_COMMAND,
   pollIntervalMs: 5_000,
   takeTimeoutMs: 600_000,
@@ -160,6 +163,20 @@ describe("readParticipantConfig — every value is an explicit injection", () =>
     expect(read(env).takeCommand).toEqual([]);
   });
 
+  test("an AGENT without its own RM_INFERENCE_KEY refuses at boot — D52: it authors on its own key or not at all", () => {
+    const env: Record<string, string | undefined> = { ...ENV };
+    delete env.RM_INFERENCE_KEY;
+    expect(() => read(env)).toThrow(/RM_INFERENCE_KEY/);
+    expect(() => read({ ...ENV, RM_INFERENCE_KEY: "  " })).toThrow(/RM_INFERENCE_KEY/);
+    expect(read({ ...ENV }).modelKey).toBe("athena-own-model-key");
+  });
+
+  test("a JUDGE needs no RM_INFERENCE_KEY from this loop — its model work is not dispatched here", () => {
+    const env: Record<string, string | undefined> = { ...ENV, RM_PARTICIPANT_KIND: "judge" };
+    delete env.RM_INFERENCE_KEY;
+    expect(read(env).modelKey).toBe("");
+  });
+
   test("RM_TAKE_COMMAND reads as a JSON argv or a plain command, and a broken array refuses", () => {
     expect(read({ ...ENV, RM_TAKE_COMMAND: "/usr/local/bin/author --once" }).takeCommand).toEqual([
       "/usr/local/bin/author",
@@ -188,6 +205,15 @@ describe("readParticipantConfig — a database credential by any name or value r
   test("an INNOCUOUS key holding a postgres URL refuses — the value is the credential, not the name", () => {
     expect(() => read({ ...ENV, FOO: "postgres://rm_app:x@db/rm" })).toThrow(/FOO/);
     expect(() => read({ ...ENV, FOO: "  postgresql://rm_app:x@db:5432/rm  " })).toThrow(/FOO/);
+  });
+
+  test.each([
+    "jdbc:postgresql://db/rm?user=a&password=b",
+    "url=postgres://a:b@db/rm",
+    "--db postgres://a:b@db/rm",
+    "postgres+asyncpg://a:b@db/rm",
+  ])("a postgres URL ANYWHERE in a value refuses, not only at its start: %s", (value) => {
+    expect(() => read({ ...ENV, FOO: value })).toThrow(/FOO/);
   });
 
   test("a libpq keyword DSN under an innocuous key refuses — no URL scheme is needed to be a credential", () => {
@@ -270,7 +296,7 @@ describe("assertNoDockerSocket — a participant given a socket by ANY route ref
     expect(() => read({ ...ENV, DOCKER_HOST: "tcp://h:2375" })).toThrow(/DOCKER_HOST/);
   });
 
-  test.each(["DOCKER_CONTEXT", "DOCKER_SOCK", "DOCKER_SOCKET", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "CONTAINER_HOST"])(
+  test.each(["DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_SOCK", "DOCKER_SOCKET", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "CONTAINER_HOST"])(
     "%s refuses — a daemon setting reaches a daemon",
     (key) => {
       expect(() => read({ ...ENV, [key]: "anything" })).toThrow(new RegExp(key));
@@ -280,6 +306,7 @@ describe("assertNoDockerSocket — a participant given a socket by ANY route ref
   test("a value naming docker.sock under an innocuous key refuses", () => {
     expect(() => read({ ...ENV, SOME_MOUNT: "/var/run/docker.sock" })).toThrow(/SOME_MOUNT/);
     expect(() => read({ ...ENV, SOME_MOUNT: "/run/user/1000/podman/podman.sock" })).toThrow(/SOME_MOUNT/);
+    expect(() => read({ ...ENV, SOME_MOUNT: "/run/containerd/containerd.sock" })).toThrow(/SOME_MOUNT/);
   });
 
   test("a REAL unix socket at a probe path refuses the boot, naming the path", async () => {
@@ -313,13 +340,54 @@ describe("assertNoDockerSocket — a participant given a socket by ANY route ref
     expect(Object.keys(cfg)).not.toContain("dockerSocket");
   });
 
-  test("the default probes cover the system paths and the rootless daemon's", () => {
-    expect(defaultDockerSocketProbes({})).toEqual(["/var/run/docker.sock", "/run/docker.sock"]);
-    expect(defaultDockerSocketProbes({ XDG_RUNTIME_DIR: "/run/user/1000" })).toEqual([
+  const SYSTEM_PROBES = [
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/run/podman/podman.sock",
+    "/var/run/podman/podman.sock",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+  ];
+
+  test("the default probes cover Docker, Podman and containerd, and the rootless daemons' paths", () => {
+    expect(defaultDockerSocketProbes({}, "")).toEqual(SYSTEM_PROBES);
+    expect(defaultDockerSocketProbes({ XDG_RUNTIME_DIR: "/run/user/1000" }, "")).toEqual([
       "/run/user/1000/docker.sock",
-      "/var/run/docker.sock",
-      "/run/docker.sock",
+      "/run/user/1000/podman/podman.sock",
+      ...SYSTEM_PROBES,
     ]);
+  });
+
+  test("every MOUNT POINT is probed, with the kernel's octal escapes decoded", () => {
+    const mountInfo = [
+      "22 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw",
+      "300 22 0:5 /docker.sock /srv/custom\\040dir/daemon.sock rw - tmpfs tmpfs rw",
+      "",
+    ].join("\n");
+    expect(mountPointsOf(mountInfo)).toEqual(["/", "/srv/custom dir/daemon.sock"]);
+    expect(defaultDockerSocketProbes({}, mountInfo)).toEqual([...SYSTEM_PROBES, "/", "/srv/custom dir/daemon.sock"]);
+  });
+
+  test("a socket BIND-MOUNTED at a custom path no variable names is found through the mount table", async () => {
+    // A real socket at an arbitrary path, listed as a mount point the way a
+    // `-v /var/run/docker.sock:/srv/anything.sock` bind mount appears.
+    const { dir } = await realSocket();
+    const custom = join(dir, "anything.sock");
+    const server: Server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(custom, () => resolve());
+    });
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const mountInfo = `412 22 0:5 /docker.sock ${custom} rw,nosuid - tmpfs tmpfs rw\n`;
+    // Probed through the mount-table half of the defaults alone: the fixed
+    // system paths may hold THIS host's own daemon socket, which would answer
+    // first and prove nothing about the mount table.
+    const probes = mountPointsOf(mountInfo);
+    expect(defaultDockerSocketProbes({}, mountInfo)).toContain(custom);
+    expect(() => assertNoDockerSocket({}, probes)).toThrow(
+      new RegExp(custom.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
   });
 
   test("with no injected probe list, readParticipantConfig probes the defaults", async () => {
@@ -378,6 +446,20 @@ describe("runStartupDiagnostic — three HTTP questions, and no database questio
       const d = await runStartupDiagnostic(config());
       expect({ status, apiReachable: d.apiReachable }).toEqual({ status, apiReachable: false });
     }
+  });
+
+  test("a 200 that is NOT JSON (a proxy page) is the API failing, not an invalid token", async () => {
+    api(() => new Response("<html>502 bad gateway</html>", { status: 200 }));
+    const d = await runStartupDiagnostic(config());
+    expect(d.apiReachable).toBe(false);
+    expect(d.tokenValid).toBe(false);
+  });
+
+  test("a 200 JSON naming no member is not a token verdict either", async () => {
+    api(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const d = await runStartupDiagnostic(config());
+    expect(d.apiReachable).toBe(false);
+    expect(d.tokenValid).toBe(false);
   });
 
   test("a 404 on the verify route is not a token verdict either", async () => {
@@ -490,6 +572,21 @@ describe("pollForWork — at most ONE item, a 401 is terminal, a 404 is an error
     globalThis.fetch = (async (_input?: any): Promise<Response> =>
       new Response("<html>proxy error</html>", { status: 200 })) as typeof fetch;
     await expect(pollForWork(config())).rejects.toThrow(/pending/);
+  });
+
+  test("a pending ITEM this client cannot read is an error too, never 'no work' or a take with empty coordinates", async () => {
+    // snake_case: the item has no `sessionId` at all.
+    respond({ pending: [{ session_id: "s-1", subject_id: "woon", date: "2026-09-23" }] });
+    await expect(pollForWork(config())).rejects.toThrow(/sessionId/);
+    // A sessionId alone would otherwise run a take with empty RM_SUBJECT_ID / RM_SESSION_DATE.
+    respond({ pending: [{ sessionId: "s-1" }] });
+    await expect(pollForWork(config())).rejects.toThrow(/subjectId/);
+    respond({ pending: [{ sessionId: "s-1", subjectId: "woon" }] });
+    await expect(pollForWork(config())).rejects.toThrow(/date/);
+    respond({ pending: [{ sessionId: "", subjectId: "woon", date: "2026-09-23" }] });
+    await expect(pollForWork(config())).rejects.toThrow(/sessionId/);
+    respond({ pending: [null] });
+    await expect(pollForWork(config())).rejects.toThrow(/sessionId/);
   });
 
   test("a TRANSPORT error is not a refusal — the API restarting during a deploy must not kill the container", async () => {

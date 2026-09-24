@@ -55,10 +55,12 @@
 //
 // So the workspace is disposed only when the take is SETTLED: the server
 // confirmed it (`submitted` or `alreadySubmitted: true`), refused it with a
-// definitive 4xx (resending the same bytes would be refused the same way), or
-// it never produced a signed submission at all (a timeout, a crash, a draft
-// that did not parse). A transport failure or a 5xx after the bytes were
-// written leaves the workspace in place, and the loop resends it.
+// VERDICT on the bytes (400/403/404/409/410/422 — resending the same bytes
+// would be refused the same way), or it never produced a signed submission at
+// all (a timeout, a crash, a draft that did not parse). A transport failure, a
+// 5xx, or a 4xx that is not a verdict (401 during a token rotation, 408, 429)
+// after the bytes were written leaves the workspace in place, and the loop
+// resends it.
 //
 // ── GOVERNING SPEC SECTIONS ─────────────────────────────────────────────────
 // §6.2 (one-shot per take, fresh workspace, timeout, process-group cleanup,
@@ -91,6 +93,19 @@ import type { ParticipantConfig, PendingWork } from "./main.ts";
  * rather than guessing a binary to run as the member.
  */
 export const TAKE_COMMAND_ENV = "RM_TAKE_COMMAND";
+
+/**
+ * The environment name this participant's OWN model key is injected under,
+ * from the `modelKey` field of its D52 credential-file entry. The container
+ * reads it into `ParticipantConfig.modelKey` and forwards it, under the SAME
+ * name, to the one-shot that authors a take — and to nothing else. The name
+ * carries `KEY`, so `redact` keeps the value out of captured output.
+ *
+ * The name says INFERENCE, not MODEL, on purpose: this is a credential, not a
+ * model selector, and every env name containing MODEL is reserved for the one
+ * selection signal (scripts/tests/unit/model-selection-single-signal.test.ts).
+ */
+export const INFERENCE_KEY_ENV = "RM_INFERENCE_KEY";
 
 /** The single stdout tag the one-shot prints its authored draft on. */
 export const TAKE_DRAFT_TAG = "RM_TAKE_DRAFT";
@@ -299,12 +314,29 @@ function redact(text: string, env: Record<string, string>): string {
  * - `submitted`         — the server recorded this nonce as a new row.
  * - `already_submitted` — the server already held this nonce for this member
  *                         and answered with that row: a retry, and SUCCESS.
- * - `refused`           — a definitive refusal (4xx), carrying the reason.
+ * - `refused`           — a definitive VERDICT on these bytes
+ *                         (`REFUSAL_VERDICT_STATUSES`: a bad signature or
+ *                         shape, a member not on the roster, a closed window),
+ *                         carrying the reason. Resending the same bytes would
+ *                         be refused the same way.
  * - `unconfirmed`       — the signed bytes are in the workspace but the server
- *                         has not confirmed them (transport failure or 5xx).
- *                         They are resent as they are.
+ *                         has not settled them: a transport failure, a 5xx, or
+ *                         a 4xx that is not a verdict on the bytes (401 during
+ *                         a token rotation, 408, 429, …), or a 2xx this client
+ *                         cannot read. They are resent as they are.
  */
 export type SubmissionStatus = "submitted" | "already_submitted" | "refused" | "unconfirmed";
+
+/**
+ * The 4xx statuses that are a VERDICT on the submitted bytes, per the submit
+ * handler (backend/src/swarm/domain.ts `submitRecommendation`): 400 malformed
+ * or bad signature, 403 not this member / not on the roster / excused / judge
+ * role, 404 no session for the subject, 409 window closed / date or snapshot
+ * mismatch / nonce conflict, 410 gone, 422 unprocessable. Every OTHER 4xx
+ * (401, 408, 425, 429, …) says nothing about the bytes, so the workspace is
+ * kept and they are resent.
+ */
+export const REFUSAL_VERDICT_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 410, 422]);
 
 export interface SubmissionResult {
   status: SubmissionStatus;
@@ -333,7 +365,8 @@ export interface PersistedSubmission {
 /**
  * Write the signed submission into its workspace, durably, BEFORE it is sent.
  *
- * Written to a temporary name, flushed to disk, then renamed: a crash leaves
+ * Written to a temporary name, flushed to disk, renamed, and the directory
+ * flushed so the rename itself is durable: a crash leaves
  * either no file (the take was never sent, so re-authoring it is safe) or the
  * whole file (the take may have been sent, so it is resent), never half of one.
  */
@@ -348,6 +381,15 @@ export function persistSignedSubmission(workspace: TakeWorkspace, record: Persis
     closeSync(fd);
   }
   renameSync(temp, target);
+  // The rename lives in the DIRECTORY: until the directory is flushed, a host
+  // crash or power loss can lose it after the POST went out, and the restart
+  // would re-author with a new nonce. Flush it before anything is sent.
+  const dirFd = openSync(workspace.path, "r");
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync(dirFd);
+  }
 }
 
 /** The persisted submission in a workspace, or `null` when there is none. */
@@ -465,8 +507,11 @@ export async function submitTake(
  * Input: the configuration and the persisted request body. Output: a
  * `SubmissionResult` — `submitted`, `already_submitted` (the server holds this
  * nonce already and returns that row: SUCCESS, with no retry and no second
- * authoring), or `refused` for a definitive 4xx, which is exactly what a
- * superseded spoof-keys generation produces (spec §6.4).
+ * authoring), `refused` for a verdict status (`REFUSAL_VERDICT_STATUSES`),
+ * which is exactly what a superseded spoof-keys generation produces (spec
+ * §6.4), or `unconfirmed` for a 4xx that is not a verdict on the bytes (a 401
+ * during a token rotation, a 408, a 429) and for a 2xx this client cannot
+ * read. `unconfirmed` keeps the workspace, and the bytes are resent.
  *
  * The existing record is the authority, not the wire status: a body carrying
  * `alreadySubmitted: true` is success whatever the status code.
@@ -500,12 +545,19 @@ export async function sendSignedSubmission(
     // The server did not answer the question. The bytes are resent.
     throw new Error(`${ROUTES.swarm.submit} answered HTTP ${submitRes.status}; the signed submission is resent as it is`);
   }
-  return {
-    status: "refused",
-    takeId,
-    verified: false,
-    reason: typeof body?.error === "string" ? body.error.slice(0, 400) : `HTTP ${submitRes.status}`,
-  };
+  const reason = typeof body?.error === "string" ? body.error.slice(0, 400) : `HTTP ${submitRes.status}`;
+  if (!REFUSAL_VERDICT_STATUSES.has(submitRes.status)) {
+    // Not a verdict on these bytes (a token rotation, a rate limit, a timeout,
+    // a 2xx this client cannot read): deleting them would force a re-author
+    // with a new nonce, which D52 forbids. Keep them and resend.
+    return {
+      status: "unconfirmed",
+      takeId,
+      verified: false,
+      reason: `HTTP ${submitRes.status} is not a verdict on the signed submission; it is resent as it is: ${reason}`,
+    };
+  }
+  return { status: "refused", takeId, verified: false, reason };
 }
 
 async function readJson(res: Response): Promise<unknown> {
@@ -581,7 +633,8 @@ function isSettled(status: SubmissionStatus): boolean {
  * Resend one persisted submission and settle its workspace.
  *
  * The workspace is disposed when the server settles the take (confirmed, or
- * refused with a 4xx) and kept, for the next resend, when it does not answer.
+ * refused with a verdict status) and kept, for the next resend, when it does
+ * not answer or answers with a 4xx that is not a verdict on the bytes.
  */
 async function resendPersisted(
   config: ParticipantConfig,
@@ -764,6 +817,8 @@ function oneShotEnv(
     RM_MEMBER_NAME: config.name,
     RM_MEMBER_TOKEN: config.token,
     RM_MEMBER_IDENTITY: JSON.stringify(config.identity),
+    // The member's OWN model key: the one-shot authors on it, or cannot author.
+    ...(config.modelKey === "" ? {} : { [INFERENCE_KEY_ENV]: config.modelKey }),
     RM_SESSION_ID: work.sessionId,
     RM_SUBJECT_ID: work.subjectId,
     RM_SESSION_DATE: work.date,

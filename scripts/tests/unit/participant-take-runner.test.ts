@@ -41,6 +41,8 @@ import { basename, join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import {
   createTakeWorkspace,
+  INFERENCE_KEY_ENV,
+  REFUSAL_VERDICT_STATUSES,
   resendPendingSubmissions,
   runOneShot,
   runTake,
@@ -88,6 +90,7 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   memberId: MEMBER_ID,
   token: "member-bearer-token",
   identity: { publicKeyB64: REAL_PUBLIC_B64, privateJwk: REAL_PRIVATE_JWK },
+  modelKey: "athena-own-model-key-0123456789",
   takeCommand: ["/bin/false"],
   pollIntervalMs: 5_000,
   takeTimeoutMs: 60_000,
@@ -272,6 +275,23 @@ describe("runOneShot — own process group, wall-clock timeout, drained pipes", 
     }
   });
 
+  test("the model key the one-shot is handed never appears in its captured output", async () => {
+    const root = tempDir();
+    try {
+      const ws = createTakeWorkspace(root, SESSION_ID, MEMBER_ID);
+      const result = await runOneShot(
+        ws,
+        ["/bin/sh", "-c", 'printf "key=%s" "$RM_INFERENCE_KEY"; printf "key=%s" "$RM_INFERENCE_KEY" >&2'],
+        { RM_INFERENCE_KEY: "sk-secret-model-key-123" },
+        10_000,
+      );
+      expect(result.stdout).toBe("key=[redacted]");
+      expect(result.stderr).toBe("key=[redacted]");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("the one-shot runs IN its workspace, not in the container's working directory", async () => {
     const root = tempDir();
     try {
@@ -331,6 +351,12 @@ function fakeApi(
     beforeRecord?: (bytes: string) => void;
     /** Called after the row is recorded; a throw here is a response lost in flight. */
     afterRecord?: (bytes: string) => void;
+    /**
+     * Answers the submit INSTEAD of the server when it returns a response: a
+     * rate limiter, a proxy or a token rotation in front of the handler. The
+     * request still counts in `submits`; nothing is recorded.
+     */
+    intercept?: (bytes: string) => Response | undefined;
   } = {},
 ) {
   const rows: Row[] = [];
@@ -351,6 +377,8 @@ function fakeApi(
     }
     if (url.includes(ROUTES.swarm.submit)) {
       submits.push(text);
+      const intercepted = opts.intercept?.(text);
+      if (intercepted) return intercepted;
       opts.beforeRecord?.(text);
       const body = JSON.parse(text) as Record<string, unknown>;
       const verified = verify(
@@ -591,6 +619,30 @@ describe("submitTake — nonce minted once, signed, PERSISTED, then sent", () =>
     expect(existsSync(join(ws.path, SIGNED_SUBMISSION_FILE))).toBe(true);
   });
 
+  test.each([401, 408, 425, 429])(
+    "a %i is NOT a verdict on the signed bytes — `unconfirmed`, so they are kept and resent, never re-authored",
+    async (status) => {
+      globalThis.fetch = (async (_input?: any): Promise<Response> =>
+        new Response(JSON.stringify({ error: "try later" }), { status })) as typeof fetch;
+      const result = await sendSignedSubmission(config(), '{"nonce":"n-1"}');
+      expect(result.status).toBe("unconfirmed");
+      expect(result.reason).toContain(String(status));
+      expect(REFUSAL_VERDICT_STATUSES.has(status)).toBe(false);
+    },
+  );
+
+  test("a 2xx this client cannot read is `unconfirmed` too — an unreadable answer settles nothing", async () => {
+    globalThis.fetch = (async (_input?: any): Promise<Response> =>
+      new Response("<html>proxy</html>", { status: 200 })) as typeof fetch;
+    expect((await sendSignedSubmission(config(), '{"nonce":"n-1"}')).status).toBe("unconfirmed");
+  });
+
+  test.each([400, 403, 404, 409, 410, 422])("a %i IS a verdict on the bytes — `refused`", async (status) => {
+    globalThis.fetch = (async (_input?: any): Promise<Response> =>
+      new Response(JSON.stringify({ ok: false, error: "verdict" }), { status })) as typeof fetch;
+    expect((await sendSignedSubmission(config(), '{"nonce":"n-1"}')).status).toBe("refused");
+  });
+
   test("a TRANSPORT error fetching the canonical bytes throws BEFORE anything is persisted", async () => {
     globalThis.fetch = (async (_input?: any): Promise<Response> => {
       throw new Error("ECONNREFUSED website-server:8080");
@@ -628,6 +680,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
       [
         `echo run >> '${markers}/authored.log'`,
         `echo "$RM_WORKSPACE" > '${markers}/ws'`,
+        `printf '%s' "$RM_INFERENCE_KEY" > '${markers}/model-key'`,
         `printf 'scratch' > "$RM_WORKSPACE/transcript.txt"`,
         `printf 'RM_TAKE_DRAFT {"memberId":"%s","date":"%s","subjectId":"%s","stance":"neutral","confidence":0.5,"body":"a take"}\\n' "$RM_MEMBER_ID" "$RM_SESSION_DATE" "$RM_SUBJECT_ID"`,
         "",
@@ -812,6 +865,64 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
     expect(outcome.submission).toBe("refused");
     expect(outcome.reason).toContain("window closed");
     expect(readdirSync(root)).toEqual([]);
+  }, 30_000);
+
+  test("a resend that gets a 429, then a 401 during a token rotation, KEEPS the bytes — the take is recorded once, never re-authored", async () => {
+    const root = dir();
+    const markers = dir();
+    const cfg = config({ workspaceRoot: root, takeCommand: authoringCommand(markers) });
+    // The first POST never reaches the handler; the next two are answered by a
+    // rate limiter and then by a rotating auth layer, neither a verdict.
+    const answers: (Response | undefined)[] = [
+      undefined,
+      new Response(JSON.stringify({ error: "rate limited" }), { status: 429 }),
+      new Response(JSON.stringify({ error: "unknown member token" }), { status: 401 }),
+    ];
+    let call = 0;
+    const api = fakeApi({
+      beforeRecord: () => {
+        if (call === 1) throw new Error("ECONNREFUSED website-server:8080");
+      },
+      intercept: () => {
+        call += 1;
+        return answers[call - 1];
+      },
+    });
+    const first = await runTake(cfg, work);
+    expect(first.submission).toBe("unconfirmed");
+    expect(readdirSync(root)).toHaveLength(1);
+
+    const throttled = await runTake(cfg, work);
+    expect(throttled.submission).toBe("unconfirmed");
+    expect(throttled.reason).toContain("429");
+    expect(readdirSync(root)).toHaveLength(1);
+
+    const rotated = await resendPendingSubmissions(cfg);
+    expect(rotated.map((o) => o.submission)).toEqual(["unconfirmed"]);
+    expect(rotated[0]?.reason).toContain("401");
+    expect(readdirSync(root)).toHaveLength(1);
+
+    const settled = await runTake(cfg, work);
+    expect(settled.submission).toBe("submitted");
+    expect(settled.nonce).toBe(first.nonce);
+    expect(authoredRuns(markers)).toBe(1);
+    expect(new Set(api.submits).size).toBe(1);
+    expect(api.submits).toHaveLength(4);
+    expect(api.rows).toHaveLength(1);
+    expect(readdirSync(root)).toEqual([]);
+  }, 30_000);
+
+  test("the one-shot receives THIS member's own model key as RM_INFERENCE_KEY — and nothing else of the container's", async () => {
+    const root = dir();
+    const markers = dir();
+    fakeApi();
+    const outcome = await runTake(
+      config({ workspaceRoot: root, modelKey: "athena-key-only-hers-42", takeCommand: authoringCommand(markers) }),
+      work,
+    );
+    expect(outcome.submission).toBe("submitted");
+    expect(INFERENCE_KEY_ENV).toBe("RM_INFERENCE_KEY");
+    expect(readFileSync(join(markers, "model-key"), "utf8")).toBe("athena-key-only-hers-42");
   }, 30_000);
 
   test("authoring RESIDUE of a crashed attempt (no signed submission) is removed, and the take is authored fresh", async () => {

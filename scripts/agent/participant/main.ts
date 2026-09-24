@@ -54,10 +54,10 @@
 // (the roster entry this container was started from), §6.3 (sessions are
 // independent of participants), §7.2 (HTTP-only startup diagnostic), §1
 // (containers stay up under Docker; `smoke:down` is the only stop), §10 W3.
-import { lstatSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
-import { resendPendingSubmissions, runTake, TAKE_COMMAND_ENV } from "./take-runner.ts";
+import { INFERENCE_KEY_ENV, resendPendingSubmissions, runTake, TAKE_COMMAND_ENV } from "./take-runner.ts";
 import type { ParticipantKind, PersonaIdentity } from "../../lib/swarm/credential-file.ts";
 import { isDbCredentialKey, looksLikeConnectionString } from "../../lib/db-credential-keys.ts";
 
@@ -122,23 +122,73 @@ function assertNoDatabaseCredential(env: Record<string, string | undefined>): vo
 }
 
 /**
- * Where a Docker daemon socket lives when one is mounted into a container: the
- * two conventional system paths, and the rootless daemon's path under
- * `XDG_RUNTIME_DIR` when that is set. Probed by `assertNoDockerSocket`.
+ * Where a container-daemon socket lives when one is mounted into a container:
+ * Docker's two conventional system paths, Podman's and containerd's defaults,
+ * the rootless daemons' paths under `XDG_RUNTIME_DIR` when that is set, and
+ * EVERY mount point in the process's mount table. The last is what catches a
+ * socket bind-mounted at a custom path that no environment variable names: a
+ * bind-mounted socket is its own mount point, so `lstat().isSocket()` on each
+ * mount point finds it wherever it was put. Probed by `assertNoDockerSocket`.
+ *
+ * `mountInfo` is the text of `/proc/self/mountinfo`; it is read from there by
+ * default and is injectable so the gates can drive it. An unreadable mount
+ * table (not Linux, or no /proc) adds no probes.
  */
-export function defaultDockerSocketProbes(env: Record<string, string | undefined>): string[] {
+export function defaultDockerSocketProbes(
+  env: Record<string, string | undefined>,
+  mountInfo: string = readMountInfo(),
+): string[] {
   const probes: string[] = [];
   const runtimeDir = (env.XDG_RUNTIME_DIR ?? "").trim();
-  if (runtimeDir !== "") probes.push(join(runtimeDir, "docker.sock"));
-  probes.push("/var/run/docker.sock", "/run/docker.sock");
+  if (runtimeDir !== "") {
+    probes.push(join(runtimeDir, "docker.sock"), join(runtimeDir, "podman", "podman.sock"));
+  }
+  probes.push(
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/run/podman/podman.sock",
+    "/var/run/podman/podman.sock",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+  );
+  for (const mountPoint of mountPointsOf(mountInfo)) {
+    if (!probes.includes(mountPoint)) probes.push(mountPoint);
+  }
   return probes;
 }
 
-/** A Docker (or Podman) client setting that points at a daemon. */
-const DOCKER_KEY_PATTERN = /^(DOCKER_[A-Z0-9_]*(HOST|SOCK|CONTEXT|TLS|CERT)[A-Z0-9_]*|CONTAINER_HOST)$/i;
+function readMountInfo(): string {
+  try {
+    return readFileSync("/proc/self/mountinfo", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The mount points in a `/proc/self/mountinfo` text: the fifth field of each
+ * line, with the kernel's octal escapes (`\040` for a space) decoded.
+ */
+export function mountPointsOf(mountInfo: string): string[] {
+  const points: string[] = [];
+  for (const line of mountInfo.split("\n")) {
+    const fields = line.trim().split(" ");
+    const raw = fields[4];
+    if (raw === undefined || raw === "") continue;
+    points.push(raw.replace(/\\([0-7]{3})/g, (_m, octal: string) => String.fromCharCode(Number.parseInt(octal, 8))));
+  }
+  return points;
+}
+
+/**
+ * A container-daemon client setting that points at a daemon, or selects one:
+ * `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG` (which can carry a current
+ * context), any `DOCKER_*` socket or TLS setting, and Podman's `CONTAINER_HOST`.
+ */
+const DOCKER_KEY_PATTERN = /^(DOCKER_[A-Z0-9_]*(HOST|SOCK|CONTEXT|CONFIG|TLS|CERT)[A-Z0-9_]*|CONTAINER_HOST)$/i;
 
 /** A value naming a daemon socket file, wherever it is. */
-const SOCKET_VALUE_PATTERN = /(docker|podman)\.sock/i;
+const SOCKET_VALUE_PATTERN = /(docker|podman|containerd)\.sock/i;
 
 /**
  * A participant holds NO Docker socket (spec §6.2, §3). A socket is root on the
@@ -146,11 +196,14 @@ const SOCKET_VALUE_PATTERN = /(docker|podman)\.sock/i;
  *
  * Refuses, naming what it found, when:
  *   - `DOCKER_HOST` (any scheme: `unix://`, `tcp://`, `ssh://`), `CONTAINER_HOST`,
- *     or any `DOCKER_*` host, socket, context or TLS setting is set;
- *   - any environment value names a `docker.sock` / `podman.sock` path;
+ *     `DOCKER_CONFIG`, or any `DOCKER_*` host, socket, context or TLS setting
+ *     is set;
+ *   - any environment value names a `docker.sock` / `podman.sock` /
+ *     `containerd.sock` path;
  *   - a probe path is a socket on disk — checked with `lstat().isSocket()`,
  *     and through a symlink with `stat()`, because a bind-mounted socket is
- *     the route that needs no environment at all.
+ *     the route that needs no environment at all. The default probes include
+ *     every mount point, so a socket bind-mounted at a custom path is found.
  *
  * `probePaths` is injectable so the gate can be driven with a real socket in a
  * temp directory; the default is `defaultDockerSocketProbes(env)`. A probe
@@ -219,6 +272,13 @@ export interface ParticipantConfig {
   token: string;
   /** This participant's own key, from its credential-file entry. */
   identity: PersonaIdentity;
+  /**
+   * This participant's OWN model key (`RM_INFERENCE_KEY`), from the `modelKey`
+   * field of its D52 credential-file entry. The one-shot that authors a take
+   * receives it, and nothing else does. Required for an agent; empty for a
+   * judge, whose model work is not dispatched from this loop yet.
+   */
+  modelKey: string;
   /**
    * The argv of the one-shot that authors a take (`RM_TAKE_COMMAND`, a JSON
    * array or a whitespace-separated command). Required for an agent; empty for
@@ -290,6 +350,13 @@ export function readParticipantConfig(
     throw new Error("RM_MEMBER_IDENTITY carries no privateJwk");
   }
 
+  const modelKey = (env[INFERENCE_KEY_ENV] ?? "").trim();
+  if (kindValue === "agent" && modelKey === "") {
+    // An agent without its own model key can be offered work and never author
+    // it: refusing at boot names the gap, failing every take hides it (D52).
+    throw new Error(`${INFERENCE_KEY_ENV} was not injected into this agent participant container`);
+  }
+
   const takeCommand = parseTakeCommand(env[TAKE_COMMAND_ENV]);
   if (kindValue === "agent" && takeCommand.length === 0) {
     // An agent without a take command polls, is offered work, and can never
@@ -305,6 +372,7 @@ export function readParticipantConfig(
     memberId: required(env, "RM_MEMBER_ID"),
     token: required(env, "RM_MEMBER_TOKEN"),
     identity: { publicKeyB64: identity.publicKeyB64, privateJwk: identity.privateJwk },
+    modelKey,
     takeCommand,
     pollIntervalMs: positiveInt(env.RM_POLL_INTERVAL_MS, 5_000),
     takeTimeoutMs: positiveInt(env.RM_TAKE_TIMEOUT_MS, 600_000),
@@ -346,9 +414,11 @@ function positiveInt(raw: string | undefined, fallback: number): number {
  */
 export interface StartupDiagnostic {
   /**
-   * The API ANSWERED the token question: a 2xx, or an authentication refusal
-   * (401/403). A transport failure, a 5xx or any other status is `false` —
-   * a server that cannot answer has said nothing about the token.
+   * The API ANSWERED the token question: a 2xx whose JSON body names a
+   * `memberId`, or an authentication refusal (401/403). A transport failure, a
+   * 5xx, any other status, and a 2xx whose body is not JSON or names no member
+   * (a proxy's error page, a wrong route) are `false` — a server that did not
+   * answer has said nothing about the token.
    */
   apiReachable: boolean;
   /** The API accepted this bearer. Only meaningful when `apiReachable`. */
@@ -406,12 +476,16 @@ export async function runStartupDiagnostic(
   try {
     body = (await res.json()) as { memberId?: unknown };
   } catch {
-    return { ...unreachable, apiReachable: true };
+    // A 2xx that is not JSON is a proxy page or a wrong route: not an answer
+    // about the token, so it must not send an operator to rotate a good one.
+    return unreachable;
   }
   const serverMemberId = typeof body?.memberId === "string" && body.memberId !== "" ? body.memberId : null;
+  // A 2xx naming no member is likewise not a verdict on the token.
+  if (serverMemberId === null) return unreachable;
   return {
     apiReachable: true,
-    tokenValid: serverMemberId !== null,
+    tokenValid: true,
     serverMemberId,
     // Reported, never adopted: a container authenticating as somebody else has
     // been handed the wrong key.
@@ -455,7 +529,10 @@ export interface PendingWork {
  *     participant, and reading that as "no work" is how a participant polled a
  *     missing route for ever in silence;
  *   - a 2xx whose body is not `{ pending: [...] }` THROWS for the same reason:
- *     a contract this client cannot read is a defect, not an empty queue.
+ *     a contract this client cannot read is a defect, not an empty queue;
+ *   - so does a first item that is not `{ sessionId, subjectId, date }`, each a
+ *     non-empty string: a snake_case or partial item is not a take to author
+ *     with empty coordinates.
  */
 export async function pollForWork(config: ParticipantConfig): Promise<PendingWork | null> {
   const url = `${config.apiUrl}${PARTICIPANT_PENDING_PATH}?member=${encodeURIComponent(config.memberId)}`;
@@ -492,13 +569,21 @@ export async function pollForWork(config: ParticipantConfig): Promise<PendingWor
     );
   }
   // AT MOST ONE: spec §6.2 allows one take in flight per participant.
-  const first = body.pending[0] as Partial<PendingWork> | undefined;
-  if (!first || typeof first.sessionId !== "string" || first.sessionId === "") return null;
-  return {
-    sessionId: first.sessionId,
-    subjectId: typeof first.subjectId === "string" ? first.subjectId : "",
-    date: typeof first.date === "string" ? first.date : "",
-  };
+  if (body.pending.length === 0) return null;
+  const first = body.pending[0] as Record<string, unknown> | null | undefined;
+  // An item this client cannot read is the same defect one level down: it is
+  // neither "no work" nor a take to author with empty coordinates.
+  for (const field of ["sessionId", "subjectId", "date"] as const) {
+    const value = first && typeof first === "object" ? first[field] : undefined;
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(
+        `participant poll of ${PARTICIPANT_PENDING_PATH} returned a pending item without a string ${field}; `
+          + "each item must be { sessionId, subjectId, date }",
+      );
+    }
+  }
+  const item = first as { sessionId: string; subjectId: string; date: string };
+  return { sessionId: item.sessionId, subjectId: item.subjectId, date: item.date };
 }
 
 /**

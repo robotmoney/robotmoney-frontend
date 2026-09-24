@@ -70,7 +70,9 @@ const LIBPQ_DECISIVE = new Set(["host", "hostaddr", "dbname", "user", "password"
 
 /**
  * A value that is a Postgres connection string, whatever the key is called:
- * a `postgres://` / `postgresql://` URL, or a libpq keyword/value DSN naming at
+ * a `postgres://` / `postgresql://` URL (with or without a `+driver` suffix)
+ * anywhere in the value — `jdbc:postgresql://…`, `url=postgres://…` and
+ * `--db postgres://…` all count — or a libpq keyword/value DSN naming at
  * least two distinct connection keywords, one of which locates or
  * authenticates the connection (`host=db user=x password=y`,
  * `dbname=rm user=rm_app`).
@@ -78,7 +80,10 @@ const LIBPQ_DECISIVE = new Set(["host", "hostaddr", "dbname", "user", "password"
 export function looksLikeConnectionString(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const text = value.trim();
-  if (/^postgres(ql)?:\/\//i.test(text)) return true;
+  // UNANCHORED: a URL counts wherever it sits in the value — behind a `jdbc:`
+  // prefix, after `url=` or a `--db` flag, or with a driver suffix such as
+  // `postgres+asyncpg://`.
+  if (/\bpostgres(ql)?(\+\w+)?:\/\//i.test(text)) return true;
   const found = new Set<string>();
   const pattern = new RegExp(`(?:^|\\s)(${LIBPQ_KEYWORDS.join("|")})\\s*=\\s*\\S`, "gi");
   for (const match of text.matchAll(pattern)) {

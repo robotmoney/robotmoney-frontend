@@ -334,27 +334,53 @@ describe("planParticipants — resolution → load → reconcile, with unconfigu
     expect(names(plan.start)).toEqual(["athena"]);
   });
 
-  test("RATCHET: outside credential-file.ts, no production code calls reconcileRoster directly", () => {
+  test("RATCHET: outside credential-file.ts, no production code names reconcileRoster or rosterEntries at all", () => {
     // A boot that calls `reconcileRoster` itself chooses its own mapping for an
-    // unconfigured path — the bug above. Boot code calls `planParticipants`.
+    // unconfigured path — the bug above — and so does one that builds its own
+    // stop list from `rosterEntries(...)`. Boot code calls `planParticipants`.
+    //
+    // The rule is the IDENTIFIER, not a call shape: an aliased import
+    // (`import { reconcileRoster as r }`) or a namespace access
+    // (`cf.reconcileRoster(...)`) still names it, so both are caught. Every
+    // production tree is walked: scripts/, backend/ and website-server/.
+    //
+    // This is a SOURCE ratchet. It does not prove a boot calls
+    // `planParticipants`; that proof needs the boot entry itself to be driven
+    // (issue #1026 wave 2/5, smoke-main.ts), and criterion 137 stays PARTIAL
+    // until it is.
     const repo = join(import.meta.dir, "..", "..", "..");
+    const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
     const offenders: string[] = [];
     const walk = (dir: string): void => {
-      for (const name of readdirSync(dir)) {
+      let names: string[];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const name of names) {
         if (name === "node_modules" || name === "tests" || name.startsWith(".")) continue;
         const path = join(dir, name);
         if (statSync(path).isDirectory()) {
           walk(path);
           continue;
         }
-        if (!/\.(ts|js|mjs)$/.test(name)) continue;
+        if (!/\.(ts|js|mjs|cjs)$/.test(name) || /\.test\.(ts|js)$/.test(name)) continue;
         const rel = relative(repo, path);
         if (rel === join("scripts", "lib", "swarm", "credential-file.ts")) continue;
-        if (/\breconcileRoster\s*\(/.test(readFileSync(path, "utf8"))) offenders.push(rel);
+        if (forbidden.test(readFileSync(path, "utf8"))) offenders.push(rel);
       }
     };
-    walk(join(repo, "scripts"));
+    for (const tree of ["scripts", "backend", "website-server"]) walk(join(repo, tree));
     expect(offenders).toEqual([]);
+  });
+
+  test("RATCHET control: the identifier rule catches an aliased import and a namespace call", () => {
+    const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
+    expect(forbidden.test('import { reconcileRoster as r } from "./credential-file.ts";')).toBe(true);
+    expect(forbidden.test("const plan = cf.reconcileRoster(null, running);")).toBe(true);
+    expect(forbidden.test("const stop = diff(rosterEntries(emptyFile), running);")).toBe(true);
+    expect(forbidden.test("const plan = planParticipants(resolution, running, load);")).toBe(false);
   });
 });
 
