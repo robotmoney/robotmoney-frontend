@@ -12,9 +12,11 @@
 //     proposed the role and D47 retired it; a decision log that no longer names
 //     what it reversed stops being a record.
 //   - the single §3 line of docs/technical/smoke-production-spec.md that says
-//     the role does not exist. One line, not the whole section: a second
-//     mention in §3 is a restatement, and restatements are how the old design
-//     crept back into backend.md and two runbooks.
+//     the role does not exist ("There is no rm_migrator"). One line, not the
+//     whole section: a second mention in §3 is a restatement, and restatements
+//     are how the old design crept back into backend.md and two runbooks. The
+//     line must also still SAY the role is gone: a §3 line rewritten to use the
+//     role would otherwise inherit the exemption.
 //
 // The ranges are found by anchor and heading, never by line number, so an edit
 // above them does not silently move what is allowed.
@@ -36,6 +38,9 @@ const SMOKE_SPEC = "docs/technical/smoke-production-spec.md";
 const LINT_DOCS = "scripts/lint-docs.sh";
 
 type Hit = { file: string; line: number; text: string };
+
+/** What the one allowed §3 line has to say. Shared with lint-docs.sh's check 5. */
+const SPEC_DENIAL = /There is no `?rm_migrator`?/;
 
 /** The criterion's grep, verbatim, run in `root`. */
 function grepHits(root: string): Hit[] {
@@ -70,7 +75,8 @@ function disallowed(root: string): Hit[] {
     if (h.file === DECISIONS && d46 !== undefined && d48 !== undefined && h.line > d46 && h.line < d48) {
       return false;
     }
-    if (h.file === SMOKE_SPEC && s3 !== undefined && s4 !== undefined && h.line > s3 && h.line < s4 && !specHitUsed) {
+    if (h.file === SMOKE_SPEC && s3 !== undefined && s4 !== undefined && h.line > s3 && h.line < s4 && !specHitUsed &&
+      SPEC_DENIAL.test(h.text)) {
       specHitUsed = true;
       return false;
     }
@@ -118,7 +124,9 @@ describe("docs name rm_migrator only in D46/D47 history and smoke-production-spe
     // empty scan. The allowed hits are what prove the scan still sees files.
     const files = grepHits(REPO).map((h) => h.file);
     expect(files).toContain(DECISIONS);
-    expect(files.filter((f) => f === SMOKE_SPEC)).toHaveLength(1);
+    const spec = grepHits(REPO).filter((h) => h.file === SMOKE_SPEC);
+    expect(spec).toHaveLength(1);
+    expect(spec[0].text).toMatch(SPEC_DENIAL);
   });
 
   test("scripts/lint-docs.sh exits 0 on the real repository", () => {
@@ -155,6 +163,18 @@ describe("docs name rm_migrator only in D46/D47 history and smoke-production-spe
           /^## 3\. .*$/m,
           (heading) => `${heading}\n\nMigrations run as \`rm_migrator\`.`,
         );
+        writeFileSync(path, text);
+      },
+      SMOKE_SPEC,
+    ],
+    [
+      "the one §3 line rewritten to use the role",
+      (root) => {
+        const path = join(root, SMOKE_SPEC);
+        const before = readFileSync(path, "utf8");
+        const text = before.replace(/There is no `rm_migrator`\./, "Migrations run as `rm_migrator`.");
+        // The plant must have changed something, or this control proves nothing.
+        expect(text).not.toBe(before);
         writeFileSync(path, text);
       },
       SMOKE_SPEC,

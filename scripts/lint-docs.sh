@@ -72,7 +72,9 @@ done
 # 5. `rm_migrator` appears only in D46/D47 history and smoke-production-spec §3.
 #    The allowed ranges are found by anchor and heading, not by line number, so
 #    an edit above them does not move the goalposts. A missing anchor or heading
-#    allows nothing, which fails loudly instead of passing quietly.
+#    allows nothing, which fails loudly instead of passing quietly. In §3 only
+#    one line may name the role, and that line must still say "There is no
+#    rm_migrator": a §3 line rewritten to use the role gets no exemption.
 decisions="docs/decisions.md"
 smoke_spec="docs/technical/smoke-production-spec.md"
 d46="$(grep -n '<a id="d46"></a>' "$decisions" 2>/dev/null | head -1 | cut -d: -f1)"
@@ -82,13 +84,14 @@ s4="$(grep -n '^## 4\. ' "$smoke_spec" 2>/dev/null | head -1 | cut -d: -f1)"
 spec_hits=0
 migrator_hits="$(git grep -n rm_migrator -- docs ':!docs/archive' 2>/dev/null || true)"
 if [ -n "$migrator_hits" ]; then
-  while IFS=: read -r f line _; do
+  while IFS=: read -r f line text; do
     if [ "$f" = "$decisions" ] && [ -n "$d46" ] && [ -n "$d48" ] \
       && [ "$line" -gt "$d46" ] && [ "$line" -lt "$d48" ]; then
       continue
     fi
     if [ "$f" = "$smoke_spec" ] && [ -n "$s3" ] && [ -n "$s4" ] \
-      && [ "$line" -gt "$s3" ] && [ "$line" -lt "$s4" ] && [ "$spec_hits" -eq 0 ]; then
+      && [ "$line" -gt "$s3" ] && [ "$line" -lt "$s4" ] && [ "$spec_hits" -eq 0 ] \
+      && printf '%s\n' "$text" | grep -qE 'There is no `?rm_migrator`?'; then
       spec_hits=1
       continue
     fi
