@@ -15,7 +15,7 @@
 //
 // The model is injected (a fixed transport) wherever the entry point allows it,
 // and the shared local stub serves the entry points that do not.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
@@ -27,12 +27,13 @@ import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+// releases-0.5.x: v0.5.0's judge calls the model in-process (no agent-launcher,
+// #1012 is not on this line), so the in-process stub stands in for it.
+import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
-beforeAll(() => { installJudgeStub(); });
-afterAll(() => { removeJudgeStub(); });
+useStubJudge();
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const IN_HOUSE = "robotmoney-in-house";
