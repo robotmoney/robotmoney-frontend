@@ -1,11 +1,7 @@
 // Unit specification for scripts/lib/smoke-state.ts — deployment instance
 // identity (§1.1), the per-instance state directory, the four generated role
-// passwords (§5) and the instance deployment lock (§1.2) of
-// docs/technical/smoke-production-spec.md.
-//
-// TDD RED PHASE (issue #1026, W1 step 2). Every function under test currently
-// throws `NOT IMPLEMENTED`; every test here fails today by design and is written
-// against the behaviour the module must have once W1.4/W1.6 land.
+// passwords (§5), the service-token files (§3) and the instance deployment lock
+// (§1.2) of docs/technical/smoke-production-spec.md.
 //
 // WHY PERSISTENCE IS TESTED BEHAVIOURALLY. Precedence rule 4 ("the name
 // persisted by a previous local run") is asserted by RESOLVING TWICE against one
@@ -21,10 +17,12 @@
 // Acceptance gates served (spec §10, W1):
 //   - "Concurrent CI jobs plus a standing stage select distinct instances with
 //      prior state present."
-//   - "Second `bun smoke` against a locked instance refuses."
+//   - "Second `bun smoke` against a locked instance refuses." (module half: the
+//      refusal names the holder's pid and plan id; two real `bun smoke`
+//      processes contending is the integration test that later #1026 work adds)
 //   - "`volume` reuse after restart."
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -35,12 +33,16 @@ import {
   PRODUCTION_INSTANCE,
   readRolePasswords,
   resolveInstance,
+  SERVICE_TOKEN_HOLDERS,
   stateRoot,
+  TOKEN_FILE_NAME,
   type InstanceResolutionInput,
 } from "../../lib/smoke-state.ts";
 import type { StackEnvironment } from "../../stack/naming.ts";
 
 const MODULE = join(import.meta.dir, "..", "..", "lib", "smoke-state.ts");
+const PLAN = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
+const OTHER_PLAN = "beef0000beef0000beef0000beef0000beef0000beef0000beef0000beef0000";
 
 const roots: string[] = [];
 function freshRoot(): string {
@@ -211,7 +213,11 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     for (const path of [
       paths.nameFile,
       paths.rolePasswordsFile,
+      paths.tokensDir,
+      ...Object.values(paths.tokenDirs),
+      ...Object.values(paths.tokenFiles),
       paths.journalFile,
+      paths.journalArchiveDir,
       paths.receiptFile,
       paths.lockFile,
       paths.spoofGenerationFile,
@@ -220,12 +226,16 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     }
   });
 
-  test("the six files are six distinct paths", () => {
+  test("every file and directory of the layout is a distinct path", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
     const all = [
       paths.nameFile,
       paths.rolePasswordsFile,
+      paths.tokensDir,
+      ...Object.values(paths.tokenDirs),
+      ...Object.values(paths.tokenFiles),
       paths.journalFile,
+      paths.journalArchiveDir,
       paths.receiptFile,
       paths.lockFile,
       paths.spoofGenerationFile,
@@ -241,6 +251,66 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     expect(a.journalFile).not.toBe(b.journalFile);
     expect(a.lockFile).not.toBe(b.lockFile);
     expect(a.rolePasswordsFile).not.toBe(b.rolePasswordsFile);
+  });
+
+  test("§3: one token directory per holder, each holding exactly one token file, all under the tokens root", () => {
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    expect(Object.keys(paths.tokenFiles).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+    expect(Object.keys(paths.tokenDirs).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+    expect([...SERVICE_TOKEN_HOLDERS].sort()).toEqual(["analytics-producer", "operator", "system-scheduler"]);
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      expect(paths.tokenDirs[holder]).toBe(join(paths.tokensDir, holder));
+      expect(paths.tokenFiles[holder]).toBe(join(paths.tokenDirs[holder], TOKEN_FILE_NAME));
+    }
+    expect(new Set(Object.values(paths.tokenFiles)).size).toBe(SERVICE_TOKEN_HOLDERS.length);
+  });
+
+  test("§3/§5: the path a holder's mount exposes holds its own token and no other holder's", () => {
+    // Compose mounts tokenDirs[holder] into that holder (criterion 113). With
+    // every token and the role passwords written, walk each holder's mount and
+    // prove it reaches exactly one file: its own token.
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    generateRolePasswords(paths);
+    for (const holder of SERVICE_TOKEN_HOLDERS) writeFileSync(paths.tokenFiles[holder], `secret-of-${holder}\n`);
+
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      const mount = paths.tokenDirs[holder];
+      const reachable = readdirSync(mount, { recursive: true }).map(String);
+      expect(reachable).toEqual([TOKEN_FILE_NAME]);
+      expect(readFileSync(join(mount, TOKEN_FILE_NAME), "utf8")).toBe(`secret-of-${holder}\n`);
+      for (const other of SERVICE_TOKEN_HOLDERS.filter((h) => h !== holder)) {
+        expect(paths.tokenFiles[other].startsWith(`${mount}/`)).toBe(false);
+        expect(paths.tokenDirs[other].startsWith(`${mount}/`)).toBe(false);
+      }
+      expect(paths.rolePasswordsFile.startsWith(`${mount}/`)).toBe(false);
+    }
+  });
+
+  test("the tokens directory is separate from the role passwords: mounting a holder's directory hands it no database password", () => {
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    expect(paths.tokensDir).not.toBe(paths.dir);
+    for (const other of [
+      paths.rolePasswordsFile,
+      paths.journalFile,
+      paths.receiptFile,
+      paths.spoofGenerationFile,
+      paths.nameFile,
+      paths.lockFile,
+    ]) {
+      expect(other.startsWith(`${paths.tokensDir}/`)).toBe(false);
+    }
+    expect(paths.dir.startsWith(`${paths.tokensDir}/`)).toBe(false);
+    generateRolePasswords(paths);
+    expect(readdirSync(paths.tokensDir).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+    for (const holder of SERVICE_TOKEN_HOLDERS) expect(readdirSync(paths.tokenDirs[holder])).toEqual([]);
+  });
+
+  test("the tokens directory is created owner-only, like the instance directory", () => {
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    expect(statSync(paths.tokensDir).isDirectory()).toBe(true);
+    expect(statSync(paths.tokensDir).mode & 0o777).toBe(0o700);
+    for (const holder of SERVICE_TOKEN_HOLDERS) expect(statSync(paths.tokenDirs[holder]).mode & 0o777).toBe(0o700);
+    expect(statSync(paths.journalArchiveDir).mode & 0o777).toBe(0o700);
   });
 
   test("the created directory is owner-only, because it holds the four role passwords in the clear", () => {
@@ -347,10 +417,11 @@ describe("generateRolePasswords / readRolePasswords — §5, generate once, reus
 describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked instance refuses", () => {
   test("the first acquisition records this process as the holder", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, PLAN);
     try {
       expect(lock.instance).toBe("alpha");
       expect(lock.holderPid).toBe(process.pid);
+      expect(lock.planId).toBe(PLAN);
       expect(Number.isNaN(Date.parse(lock.acquiredAt))).toBe(false);
     } finally {
       lock.release();
@@ -359,16 +430,18 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
 
   test("a second acquisition on a live holder refuses, naming the holder's pid and pointing at smoke:status", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, PLAN);
     try {
       let message = "";
       try {
-        acquireDeploymentLock(paths);
+        acquireDeploymentLock(paths, OTHER_PLAN);
         throw new Error("expected the second acquisition to refuse");
       } catch (error) {
         message = String(error);
       }
       expect(message).toContain(String(process.pid));
+      expect(message).toContain(`plan ${PLAN}`);
+      expect(message).not.toContain(OTHER_PLAN);
       expect(message).toContain("smoke:status");
     } finally {
       lock.release();
@@ -377,8 +450,8 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
 
   test("the lock is per instance: a second instance on the same host is unaffected", () => {
     const root = freshRoot();
-    const a = acquireDeploymentLock(instancePaths(root, "alpha", { create: true }));
-    const b = acquireDeploymentLock(instancePaths(root, "beta", { create: true }));
+    const a = acquireDeploymentLock(instancePaths(root, "alpha", { create: true }), PLAN);
+    const b = acquireDeploymentLock(instancePaths(root, "beta", { create: true }), PLAN);
     try {
       expect(a.instance).toBe("alpha");
       expect(b.instance).toBe("beta");
@@ -388,17 +461,22 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
     }
   });
 
+  test("a lock is taken FOR a plan: an empty plan id refuses", () => {
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    expect(() => acquireDeploymentLock(paths, "")).toThrow(/plan id/);
+  });
+
   test("release is idempotent, so it is safe to call from a signal handler", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, PLAN);
     lock.release();
     expect(() => lock.release()).not.toThrow();
   });
 
   test("after release the instance can be locked again", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
-    acquireDeploymentLock(paths).release();
-    const second = acquireDeploymentLock(paths);
+    acquireDeploymentLock(paths, PLAN).release();
+    const second = acquireDeploymentLock(paths, PLAN);
     expect(second.holderPid).toBe(process.pid);
     second.release();
   });
@@ -412,7 +490,7 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
       [
         `import { acquireDeploymentLock, instancePaths } from ${JSON.stringify(MODULE)};`,
         `const paths = instancePaths(${JSON.stringify(root)}, "alpha", { create: true });`,
-        `acquireDeploymentLock(paths);`,
+        `acquireDeploymentLock(paths, ${JSON.stringify(PLAN)});`,
         `console.log("locked");`,
         `setInterval(() => {}, 1000);`,
       ].join("\n"),
@@ -443,7 +521,7 @@ describe("acquireDeploymentLock — §1.2, a second `bun smoke` against a locked
     child.kill("SIGKILL");
     await child.exited;
 
-    const taken = acquireDeploymentLock(paths);
+    const taken = acquireDeploymentLock(paths, PLAN);
     expect(taken.holderPid).toBe(process.pid);
     taken.release();
   });
@@ -473,7 +551,7 @@ describe("listInstances — §1.1, attributing this host's state to instances", 
   test("reports whether a run is live on the instance", () => {
     const root = freshRoot();
     const paths = instancePaths(root, "alpha", { create: true });
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, PLAN);
     try {
       expect(listInstances(root)[0]?.locked).toBe(true);
     } finally {

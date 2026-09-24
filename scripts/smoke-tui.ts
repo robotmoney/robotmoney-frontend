@@ -315,16 +315,19 @@ export async function observe(paths: InstancePaths): Promise<ObservedStack> {
 
   const match = (member: string): SeenContainer | undefined => containers.find((c) => c.name.includes(member));
 
-  const services = Object.entries(plan?.images ?? {}).map(([name, digest]) => {
+  const services = Object.entries(plan?.images ?? {}).map(([name, image]) => {
     const container = match(name);
+    // The plan id hashes source identities; the digest to compare against is
+    // the one the receipt recorded, else the one the plan printed.
+    const digest = receipt?.images[name] ?? image.digest;
     const version: "new" | "old" | "unknown" =
-      container === undefined ? "unknown" : container.image.includes(digest) ? "new" : "old";
+      container === undefined || digest === null ? "unknown" : container.image.includes(digest) ? "new" : "old";
     return { name, state: container?.state ?? "absent", version };
   });
 
   const participants = [
-    ...(plan?.roster.agents ?? []).map((name) => ({ name, kind: "agent" as const })),
-    ...(plan?.roster.judges ?? []).map((name) => ({ name, kind: "judge" as const })),
+    ...(plan?.roster.agents ?? []).map(({ name }) => ({ name, kind: "agent" as const })),
+    ...(plan?.roster.judges ?? []).map(({ name }) => ({ name, kind: "judge" as const })),
   ].map((member) => ({ ...member, state: match(member.name)?.state ?? "absent" }));
 
   return { instance, source, phase, runInProgress, services, participants, notes };

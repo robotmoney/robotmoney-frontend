@@ -39,17 +39,22 @@ function freshRoot(): string {
   return mkdtempSync(join(tmpdir(), "rm-smoke-tui-"));
 }
 
+const SOURCE = "1111111111111111111111111111111111111111";
+
 const plan: DeploymentPlan = {
   instance: "alpha",
-  target: { rmEnv: "stage", identity: "rehearsal", database: "db.example.invalid/robotmoney" },
-  images: { api: DIGEST },
-  roster: { agents: ["athena"], judges: ["themis"] },
+  target: { kind: "remote", rmEnv: "stage", identity: "rehearsal", host: "db.example.invalid", port: 25060, dbname: "robotmoney" },
+  images: { api: { source: SOURCE, digest: DIGEST } },
+  roster: {
+    agents: [{ name: "athena", role: "member", keyFingerprint: "fp:0000000000000001" }],
+    judges: [{ name: "themis", role: "judge", keyFingerprint: "fp:0000000000000002" }],
+  },
   configuration: {},
   mutations: [],
 };
 
 const expectations: StateExpectations = {
-  schemaHead: "0054_rm_worker_allowlist.sql",
+  ledger: ["0054_rm_worker_allowlist.sql"],
   manifestHash: "manifest-aaa",
   identity: "rehearsal",
   participants: ["athena"],
@@ -193,6 +198,7 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
       plan,
       instance: "alpha",
       writtenAt: "2026-09-23T10:00:00.000Z",
+      images: { api: DIGEST },
       schema: { manifestHash: "manifest-aaa", migrations: ["0054_rm_worker_allowlist.sql"] },
       preflight: [{ check: "roles authenticate", pass: true, detail: "4/4" }],
       readiness: [{ check: "enabled schedules advanced", pass: true, detail: "5/5" }],
@@ -224,7 +230,7 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
 
     await observe(paths);
     const { acquireDeploymentLock } = await import("./../../lib/smoke-state.ts");
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, computePlanId(plan));
     expect(lock.holderPid).toBe(process.pid);
     lock.release();
   });
@@ -236,7 +242,7 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
     await writer.beginPhase("preflight", null, expectations);
 
     const { acquireDeploymentLock } = await import("./../../lib/smoke-state.ts");
-    const lock = acquireDeploymentLock(paths);
+    const lock = acquireDeploymentLock(paths, computePlanId(plan));
     try {
       const frame = await observe(paths);
       expect(frame.runInProgress).toBe(true);

@@ -3,12 +3,12 @@
 // "Every run acts on one named deployment instance" (spec §1.1). This module
 // decides WHICH instance a run is acting on, and owns the on-disk layout that
 // everything else in W1 persists into: the instance name itself, the role
-// passwords smoke generated for a local Postgres, the journal, the receipt, the
-// deployment lock, and the spoofed-key generation.
+// passwords smoke generated for a local Postgres, the service tokens, the
+// journal and its archive, the receipt, the deployment lock, and the
+// spoofed-key generation.
 //
-// STUB (issue #1026, W1 step 1). Signatures and types are real; every body
-// throws. Nothing imports this module yet, and nothing may import it until the
-// implementation lands — it is additive and behaviour-neutral by construction.
+// STATUS. Implemented and unit-tested (scripts/tests/unit/smoke-state.test.ts).
+// `smoke:tui` reads it; wiring it into `bun smoke` itself is later #1026 work.
 //
 // ── Why instance identity is a separate concern from naming.ts ──────────────
 //
@@ -58,6 +58,8 @@
 //   §6.4  the spoofed-key generation goes to "an instance-scoped file in the
 //         state directory, never the `RM_CREDENTIALS` path (equal paths
 //         refuse)".
+//   §3    each service token is "a file the boot places in the instance's
+//         state directory, named per instance and per holder".
 //
 // Acceptance gates served (spec §10, W1): "Concurrent CI jobs plus a standing
 // stage select distinct instances with prior state present", "`volume` reuse
@@ -291,6 +293,16 @@ export function stateRoot(env: Record<string, string | undefined>): string {
 }
 
 /**
+ * The three holders of a service token (spec §3): `system-scheduler`,
+ * `analytics-producer`, and the operator (the admin routes).
+ */
+export const SERVICE_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
+export type ServiceTokenHolder = (typeof SERVICE_TOKEN_HOLDERS)[number];
+
+/** The one file name inside each holder's token directory. */
+export const TOKEN_FILE_NAME = "token";
+
+/**
  * The per-instance layout. One interface so every W1 module agrees on where its
  * file lives, and so the set of files an instance owns can be read in one place
  * — which is what `smoke:down`, `smoke:clean` and the incident case need.
@@ -313,8 +325,42 @@ export interface InstancePaths {
    * and must refuse rather than prompt.
    */
   readonly rolePasswordsFile: string;
+  /**
+   * The service-token root (§3). It holds one directory per holder and nothing
+   * else, and it is NEVER mounted into a container itself: it contains every
+   * holder's token.
+   */
+  readonly tokensDir: string;
+  /**
+   * Each holder's OWN token directory, `tokens/<holder>/`, holding that
+   * holder's token file and nothing else. This is the path compose mounts into
+   * the holder (read-only), so the mount exposes exactly one credential.
+   *
+   * Why a directory per holder and not one shared `tokens/` directory: §3 and
+   * §5 say `system-scheduler` and `analytics-producer` "each receive only their
+   * API credential". A mount of a shared directory would hand the scheduler the
+   * operator's admin-route token and the producer's token too. A directory per
+   * holder (rather than a single-file bind mount) keeps rotation an atomic
+   * rename inside the mounted directory, which a single-file bind mount does
+   * not see.
+   *
+   * COMPOSE IS NOT YET ON THIS LAYOUT. docker-compose.yml's system-scheduler
+   * still mounts the whole instance directory and reads
+   * `/run/rm-state/${RM_INSTANCE}-scheduler-token`, which would also expose
+   * role-passwords.json. Moving that mount to `tokenDirs["system-scheduler"]`
+   * with `SCHEDULER_TOKEN_FILE=/run/rm-token/token` is owned by the wave-4
+   * service-token package (#1026, criterion 113), which owns docker-compose.yml.
+   */
+  readonly tokenDirs: Readonly<Record<ServiceTokenHolder, string>>;
+  /** Each holder's token file: `tokens/<holder>/token`, the only file in {@link tokenDirs}[holder]. */
+  readonly tokenFiles: Readonly<Record<ServiceTokenHolder, string>>;
   /** The phase journal (§1.3). */
   readonly journalFile: string;
+  /**
+   * Where a superseded journal goes (§1.3, rule 2: "closes the old journal,
+   * reports what it reached"). One file per closed journal, never overwritten.
+   */
+  readonly journalArchiveDir: string;
   /** The readiness receipt (§1.4), written "beside the journal". */
   readonly receiptFile: string;
   /** The deployment lock (§1.2): a second `bun smoke` here refuses. */
@@ -347,15 +393,33 @@ export function instancePaths(root: string, instance: string, options?: { readon
   if (existsSync(dir) && !statSync(dir).isDirectory()) {
     throw new Error(`Refusing: ${dir} exists but is not a directory.`);
   }
+  const tokensDir = join(dir, "tokens");
+  const journalArchiveDir = join(dir, "journals");
   if (options?.create === true) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o700);
+  }
+  const tokenDirs = Object.fromEntries(
+    SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokensDir, holder)]),
+  ) as Record<ServiceTokenHolder, string>;
+  const tokenFiles = Object.fromEntries(
+    SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokenDirs[holder], TOKEN_FILE_NAME)]),
+  ) as Record<ServiceTokenHolder, string>;
+  if (options?.create === true) {
+    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir]) {
+      mkdirSync(inner, { recursive: true, mode: 0o700 });
+      chmodSync(inner, 0o700);
+    }
   }
   return {
     dir,
     nameFile: join(dir, "instance-name"),
     rolePasswordsFile: join(dir, "role-passwords.json"),
+    tokensDir,
+    tokenDirs,
+    tokenFiles,
     journalFile: join(dir, "journal.jsonl"),
+    journalArchiveDir,
     receiptFile: join(dir, "receipt.json"),
     lockFile: join(dir, "deployment.lock"),
     spoofGenerationFile: join(dir, "spoof-generation"),
@@ -479,6 +543,8 @@ export interface DeploymentLock {
   readonly instance: string;
   /** PID of the holder, for the refusal message. */
   readonly holderPid: number;
+  /** The plan id (§1.2) the holder is executing, for the refusal message. */
+  readonly planId: string;
   /** When it was taken, UTC ISO-8601. */
   readonly acquiredAt: string;
   /** Release. Must be idempotent and safe to call from a signal handler. */
@@ -486,11 +552,17 @@ export interface DeploymentLock {
 }
 
 /**
- * Take the deployment lock, or refuse naming the holder.
+ * Take the deployment lock for the run executing `planId`, or refuse naming
+ * the holder.
+ *
+ * The plan id is recorded because "which run holds this" is only half the
+ * operator's question; the other half is "running WHAT". Two runs of one
+ * instance under two plans are exactly the case the journal's supersede rule
+ * (§1.3) exists for, and the refusal is where the operator first learns of it.
  *
  * Refusal cases:
- *  - the lock is held by a LIVE process: refuse, naming its PID and how long it
- *    has held the lock, and point at `smoke:status`.
+ *  - the lock is held by a LIVE process: refuse, naming its PID, its plan id
+ *    and how long it has held the lock, and point at `smoke:status`.
  *  - the lock file exists but its holder is gone (the classic stale lock after
  *    a kill -9): this is recoverable and must be, since §1.4 requires a rerun to
  *    resume an interrupted journal — but the takeover must be REPORTED, not
@@ -501,33 +573,44 @@ export interface DeploymentLock {
  *
  * Serves spec §10 W1: "Second `bun smoke` against a locked instance refuses."
  */
-export function acquireDeploymentLock(paths: InstancePaths): DeploymentLock {
+export function acquireDeploymentLock(paths: InstancePaths, planId: string): DeploymentLock {
   const instance = basename(paths.dir);
   const acquiredAt = new Date().toISOString();
+  if (planId.trim() === "") {
+    throw new Error(`Refusing: a deployment lock on ${instance} needs the plan id of the run taking it.`);
+  }
 
   if (existsSync(paths.lockFile)) {
     let holderPid = 0;
     let heldSince = "";
+    let heldPlan = "";
     try {
-      const held = JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: number; acquiredAt?: string };
+      const held = JSON.parse(readFileSync(paths.lockFile, "utf8")) as {
+        holderPid?: number;
+        acquiredAt?: string;
+        planId?: string;
+      };
       holderPid = typeof held.holderPid === "number" ? held.holderPid : 0;
       heldSince = typeof held.acquiredAt === "string" ? held.acquiredAt : "";
+      heldPlan = typeof held.planId === "string" ? held.planId : "";
     } catch {
       /* an unreadable lock is treated as stale below */
     }
+    const plan = heldPlan === "" ? "an unrecorded plan" : `plan ${heldPlan}`;
     if (holderPid > 0 && processIsAlive(holderPid)) {
       const heldFor = heldSince === "" ? "unknown" : `${Math.round((Date.now() - Date.parse(heldSince)) / 1000)}s`;
       throw new Error(
-        `Refusing: instance ${instance} is locked by pid ${holderPid}, held for ${heldFor}. Run \`bun smoke:status\` to see what it is doing.`,
+        `Refusing: instance ${instance} is locked by pid ${holderPid} running ${plan}, held for ${heldFor}. ` +
+          "Run `bun smoke:status` to see what it is doing.",
       );
     }
     console.warn(
-      `Taking over the stale deployment lock on ${instance}: its holder (pid ${holderPid}) is gone since ${heldSince || "unknown"}.`,
+      `Taking over the stale deployment lock on ${instance}: its holder (pid ${holderPid}, ${plan}) is gone since ${heldSince || "unknown"}.`,
     );
     rmSync(paths.lockFile, { force: true });
   }
 
-  writeFileSync(paths.lockFile, `${JSON.stringify({ instance, holderPid: process.pid, acquiredAt })}\n`, {
+  writeFileSync(paths.lockFile, `${JSON.stringify({ instance, holderPid: process.pid, planId, acquiredAt })}\n`, {
     mode: 0o600,
     flag: "wx",
   });
@@ -536,6 +619,7 @@ export function acquireDeploymentLock(paths: InstancePaths): DeploymentLock {
   return {
     instance,
     holderPid: process.pid,
+    planId,
     acquiredAt,
     release(): void {
       if (released) return;
