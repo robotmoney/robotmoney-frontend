@@ -1,0 +1,294 @@
+{
+  "tag": "v0.5.0",
+  "commit": "ec261867664c75e0502c57908f65f6fb3cd256fc",
+  "migrations": [
+    {
+      "file": "0001_backends.sql",
+      "sha256": "68be8d4cbbbcf46b72952d7e22bc86ccc635092855af2e9d44671f0635518fea"
+    },
+    {
+      "file": "0002_dashboards.sql",
+      "sha256": "8aa8aab07accca1c85b8d2fcdb0ad94fcb155d25febe6b1b4ea056c7a5b74836"
+    },
+    {
+      "file": "0003_task_queue.sql",
+      "sha256": "718ac4a900c32dcb9ace9463bf3f44a7cdc5036b316e7dd647fe36595aed6d4a"
+    },
+    {
+      "file": "0004_committee.sql",
+      "sha256": "772315de731aea25288dfbf2d4d5a59939b06dc47c727d6e497b8467f0070fac"
+    },
+    {
+      "file": "0005_job_schedules_seed.sql",
+      "sha256": "c62b8d76d0ac72a0f68e686b467eb79a3c10e9226498e8430aef9516da852596"
+    },
+    {
+      "file": "0006_committee_reconcile.sql",
+      "sha256": "b1b3e43503c6bc8cf8aee53ceed36322b63022115680382c8d9d04e6a2fe17e0"
+    },
+    {
+      "file": "0007_committee_rls_stub.sql",
+      "sha256": "be3bd011736ac5d2af018084274f0a69e86922c1c8877aaf1d0d82d513d487e2"
+    },
+    {
+      "file": "0008_committee_memos.sql",
+      "sha256": "58bb6878740510fad04190e42438e1ecfd37eb44e16eeca3a42f3cbfd84ba711"
+    },
+    {
+      "file": "0009_analytics_v2.sql",
+      "sha256": "1a8425e9f5238ca65b189e2901600060f54c4e7d8c99489dafd7860c3ca9e2bc"
+    },
+    {
+      "file": "0010_backtest_correlations.sql",
+      "sha256": "3df42f120293bf201b4c5af3ed03e40500c86c9799f2d469fcc9a25165102ef8"
+    },
+    {
+      "file": "0011_regime_dashboard_extras.sql",
+      "sha256": "64d13fbbd0313e47384eb2b98b08534c04b9155904ab7967d9dc42cbad5d2995"
+    },
+    {
+      "file": "0012_vault_share_price_history.sql",
+      "sha256": "802bdfa4c44c46ae7979fa7438fa741709aecd2322f2ee16d864dfb7958ec64a"
+    },
+    {
+      "file": "0013_projects.sql",
+      "sha256": "0c6812d2ae72eb4580f45f853ae5f914143f5a9f59069d5308ec2a5f15cb0727"
+    },
+    {
+      "file": "0014_projects_pipelines.sql",
+      "sha256": "adc2d28e8c0aac1d8aee424e9985c5f49767826a96dc0eed30afed46767024fa"
+    },
+    {
+      "file": "0014_wallet_balance_samples.sql",
+      "sha256": "dc3e32e920c625587dc5838f39ed76187b45f81c74a006bcd234d0b0603b6ab8"
+    },
+    {
+      "file": "0015_buyback_swaps.sql",
+      "sha256": "73a5a1d4da04d4bc8b56a0d7c29010a0d9622409ba90b59222004b19a43d04c6"
+    },
+    {
+      "file": "0016_worker_role.sql",
+      "sha256": "5a7fd0575c79b1adad2f5506f36ae5809a9b7c0b9a101010b560bf66870f642c"
+    },
+    {
+      "file": "0017_admin_surface.sql",
+      "sha256": "32a05a3ea7fe886d98b73d7dff54cea4b621b090f7b7f6269419f4506a7d8870"
+    },
+    {
+      "file": "0018_research_telemetry.sql",
+      "sha256": "6418ba431b54e8841dec1779cc155159982f3c0f66486f35653441b93def93f4"
+    },
+    {
+      "file": "0019_committee_self_serve_claim.sql",
+      "sha256": "d23d5229580042347fbeb194568e426a9690d99a8e3a84136454007b6d11c3ce"
+    },
+    {
+      "file": "0020_committee_agent_health.sql",
+      "sha256": "5a6f907294a0293886fb973f15d52edfdca6cb497eb76f5dfde8f1fb0fb4dbb9"
+    },
+    {
+      "file": "0021_chain_indexer_samples.sql",
+      "sha256": "7025b8a0c2d822aa985c594b19a6cb5213429f71ab7844e423f79d1d08d4b227"
+    },
+    {
+      "file": "0021_committee_waitlist.sql",
+      "sha256": "0d7b6af0151d742233a44bf15e22ae1e727313d4e973e7de3d06e7ce0172d8c6"
+    },
+    {
+      "file": "0022_committee_application_received_notification.sql",
+      "sha256": "cd2d71ebb322f5b1775e5bad7a237d26a97c394bb4c3462e326225d749749f9f"
+    },
+    {
+      "file": "0022_committee_session_convened_at.sql",
+      "sha256": "b748b3db9ac4bf649d6fd257110cfb6dbc2472e87ebbd1c2c0c6d6f278571605"
+    },
+    {
+      "file": "0023_agent_activity_log.sql",
+      "sha256": "bf656d8ab7b420f0b95a9a0b4476c5122cd63ae2234cb9bb593c904102641631"
+    },
+    {
+      "file": "0023_analytics_submissions.sql",
+      "sha256": "83351c2571ffcc97be17641db0f7bc144155ebb627c8dfd8947a8b325b817711"
+    },
+    {
+      "file": "0023_list2_leaderboard.sql",
+      "sha256": "62ebf2804919b69ca1a4fe95c128b5668276b1204e591186d1288e838a4a0ad1"
+    },
+    {
+      "file": "0024_analytics_provenance_source.sql",
+      "sha256": "b1b4b31408e0c1805957a6cfdfd5a0b6d45aafbaaf447c538b6fcfa0079d71ab"
+    },
+    {
+      "file": "0025_swarm_rename.sql",
+      "sha256": "db0a977239fe63f792e16e3c3c4eedeb2f8b57b089ef4976435e904bace5ed72"
+    },
+    {
+      "file": "0026_swarm_sessions_legacy_takes.sql",
+      "sha256": "0e619c54d4178a48050dc0680901e7df39e169c4060f9bb60305095e3b8075e5"
+    },
+    {
+      "file": "0027_drop_swarm_sessions_legacy_takes.sql",
+      "sha256": "b76bfc8fd83c5423d77ece48ca899724707f47baf4d941475517cd7c562790f4"
+    },
+    {
+      "file": "0028_admin_credential.sql",
+      "sha256": "414ad3358f116c41ff8d327b549fcd2280f32f0b5adb7ba119cce6cee8e1b97e"
+    },
+    {
+      "file": "0028_swarm_briefs_session_key.sql",
+      "sha256": "518769a6ededdd9b6066aa16e883afb14c4a70065e8f608f269a3bc5189fa4c8"
+    },
+    {
+      "file": "0028_swarm_take_revisions.sql",
+      "sha256": "1171f173ecca55312203e4d821ca8b8799370eb4fe6b38067562eedd6fc0a3a1"
+    },
+    {
+      "file": "0029_admin_auth_recovery.sql",
+      "sha256": "c4d873c255c4402c332bb2956c2cd7c528d0c8c36416609e6b0661771b137115"
+    },
+    {
+      "file": "0029_admin_passkey.sql",
+      "sha256": "2706fa6f0b6a53a280b9917fab9a88acc90c3274ababd74b090a86ecee98b87c"
+    },
+    {
+      "file": "0030_swarm_member_handle.sql",
+      "sha256": "babcab8737478362796eb976dee154a591d79427135bdb04bd8c97f029d47358"
+    },
+    {
+      "file": "0031_swarm_member_handle_namespace.sql",
+      "sha256": "a91da3172f9fdd28ebf7f1d16f81bcdde510d6ec1378c024427cbb9d8a379257"
+    },
+    {
+      "file": "0032_append_only_history.sql",
+      "sha256": "b1fce3877b4e71825a44e7bfdcb0930af464c7429829a690847f7660ac2d9552"
+    },
+    {
+      "file": "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
+      "sha256": "494610dfab31959bc76e5f0847b82eb4bfda042bd4b215beb7a0b79c15e0fa8b"
+    },
+    {
+      "file": "0033_swarm_member_uuid_ids.sql",
+      "sha256": "d90cdfbfa66cc372fd10ff6f433c876b1ce96b129d17e51cacd0a749f5b32136"
+    },
+    {
+      "file": "0033_wallet_backfill.sql",
+      "sha256": "9320f4cf42848905ed68bc10cb7ff90b5bb6add9884de914a79b4e59a4655835"
+    },
+    {
+      "file": "0034_job_schedules_catchup_policy.sql",
+      "sha256": "000a7ff2695bc266892b07bd75b332cde27224a25b9fe7b03990292af8bd68c6"
+    },
+    {
+      "file": "0035_swarm_member_avatar_bytes.sql",
+      "sha256": "0c0c485903161c4745b1fbb48a0e97e5485fa8afc76663b4e21d73ec06459572"
+    },
+    {
+      "file": "0036_quarantine_backfilled_samples.sql",
+      "sha256": "2a0670bb91205d91b42aa26c87c3f0ff9542dc54f224d357e5fd7b7efa6a24a3"
+    },
+    {
+      "file": "0037_aum_repairable_quarantine.sql",
+      "sha256": "b600cc2b37a4e118b056b434e90e1302268fea64272b5d2a75c0704f9dbc89ee"
+    },
+    {
+      "file": "0038_wallet_aum_snapshot_foundation.sql",
+      "sha256": "5d7fcfe75910f5844ea195e751af4394bd59df27a7790196f3e95e2515cb7bc7"
+    },
+    {
+      "file": "0039_swarm_judge.sql",
+      "sha256": "b1ea977e7542f3b3aaa6dcfbe16cb30745c679fd75dd2829b1fa191a07c7561a"
+    },
+    {
+      "file": "0040_swarm_judgements_append_only.sql",
+      "sha256": "5e60b32725838460a1727a12782330ce8631ef01ebbfa3ea7c9ba5c1f7384911"
+    },
+    {
+      "file": "0041_swarm_judgement_soak_record.sql",
+      "sha256": "f1c9120f4b131b42bcb929e6b51770f34764939eeb08322c2e2db91f297e2c02"
+    },
+    {
+      "file": "0042_swarm_consensus_receipts.sql",
+      "sha256": "27224c0f95cfa961aa783999a8d8cfd2aec8247b91435f4e70e4cc44aec96306"
+    },
+    {
+      "file": "0043_swarm_member_judges.sql",
+      "sha256": "4a2d2e1beaddf055bee83f8142c7257eea4f197ea238199708bb450a84fe8c14"
+    },
+    {
+      "file": "0044_wallet_backfill_leg_terminal.sql",
+      "sha256": "854f67abbe61cc586d025b29aaf6235770321cae7a2b54b3212359de0c1e625e"
+    },
+    {
+      "file": "0045_chain_address_floors.sql",
+      "sha256": "6223bf27042c05509e1bbe23b624b900970a07edabae1e89c7c18323d57439b5"
+    },
+    {
+      "file": "0046_asset_prices.sql",
+      "sha256": "176152acb335efe954d2305fff233d7cc467414efeea1141609704a781f616cd"
+    },
+    {
+      "file": "0047_swarm_session_subject_name_backfill.sql",
+      "sha256": "4b3cbc82b403779a99e060f2ffab7c840c5e6ebc339ff192bcb7c86e7593f972"
+    },
+    {
+      "file": "0048_swarm_judge_third_party_flag.sql",
+      "sha256": "ad833436f06bf1c70393af69cb859e83bc97eb5e9aeb7dd053fdd9948e623337"
+    },
+    {
+      "file": "0049_swarm_recommendations_signing_key.sql",
+      "sha256": "572d5e86d01a3551995e1a86d29a8617202261013c8b2b75bf6390da0b867945"
+    },
+    {
+      "file": "0050_swarm_member_keys_append_only.sql",
+      "sha256": "5762b118b288a63581d60a5fa212e0bc9de181a73332c98d38e39efb89024b21"
+    },
+    {
+      "file": "0051_swarm_vault_recommendation_type_repair.sql",
+      "sha256": "84df1cbf86b1ab857b4699641cf7cc8aef013d1f46b1743249ebed97ef8108ee"
+    },
+    {
+      "file": "0052_swarm_judgement_digest_scheme.sql",
+      "sha256": "30e46a200814a5290003505394e2d489f9beaceba73267aef223fb53311fb209"
+    },
+    {
+      "file": "0053_database_role_taxonomy.sql",
+      "sha256": "b7b33cad8221310dfaaa9839329b59f0bdd5c500e0b21ecd65c18b020fda333b"
+    },
+    {
+      "file": "0054_rm_worker_allowlist.sql",
+      "sha256": "352655749f3e09ae9fb2677c97f00cc8e1d4b0afbc660eee145dd51c75999ac6"
+    },
+    {
+      "file": "0055_swarm_recommendations_member_received_idx.sql",
+      "sha256": "590a73e33829b37605b4b4a68f6c79bdc42d88d9244b8c2362ed6938582e8460"
+    },
+    {
+      "file": "0056_analytics_overwrite_events.sql",
+      "sha256": "942d2506fa92b66dc89f3ae9b4b1edb00acb140c678731e1a0b8ee0d727fea6c"
+    },
+    {
+      "file": "0057_source_acquisition_ledger.sql",
+      "sha256": "2609b33034cfa327c2d05c634d0a51f1967ce30963f63cb96aaba2d4fb7d2688"
+    },
+    {
+      "file": "0058_analytics_run_ledger.sql",
+      "sha256": "2ef7947ec8707686509681ac86db8bf65eff18f8d0541a1db8e071d212bbb604"
+    },
+    {
+      "file": "0059_analytics_output_and_report_snapshots.sql",
+      "sha256": "5bcb7f6a17971c09272a0c3b9a5859126bc6279b835ad44e1530b63aed08c7a3"
+    },
+    {
+      "file": "0059_swarm_framework_subject_snapshot_cleanup.sql",
+      "sha256": "90e4f5d664150773dac9ae7fef9c394670ae99660e4a454c4113249e318ea58b"
+    },
+    {
+      "file": "0060_analytics_ledger_cutover.sql",
+      "sha256": "e6d793e3bfc145e982fefa3bf6cd9a8d6c96b41f264e6c82b8b23f390ca4cfa6"
+    },
+    {
+      "file": "0061_source_value_provenance.sql",
+      "sha256": "6a8cf7d2ae307b424ab8268bba35b2f40acdb6b17ae3a45c01f76a3026a1e343"
+    }
+  ]
+}

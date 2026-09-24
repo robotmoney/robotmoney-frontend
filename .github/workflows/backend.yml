@@ -118,6 +118,24 @@ jobs:
       - name: Typecheck backend
         working-directory: backend
         run: bun run typecheck
+      # Spec §8.4's schema proofs (issue #1026 criterion 50) are ordinary files
+      # under tests/, so the `bun test` below runs them: blank + all migrations
+      # = the snapshot (schema-equivalence.test.ts), and an upgrade from each
+      # supported release (upgrade-from-release.test.ts, reading its release
+      # fixture — no git history, which this shallow checkout does not have).
+      # They are the only thing tying the hand-maintained snapshot to the
+      # migrations, and a proof that silently stops running looks exactly like
+      # one that passes. So this step fails if a file is renamed away or the
+      # suite below is told to ignore it.
+      - name: Schema proofs are in the suite (spec §8.4)
+        working-directory: backend
+        run: |
+          for f in tests/schema-equivalence.test.ts tests/upgrade-from-release.test.ts tests/support/catalog-normalize.ts tests/fixtures/releases/v0.5.0/release.json; do
+            test -f "$f" || { echo "::error::$f is missing: a spec §8.4 schema proof would stop running"; exit 1; }
+          done
+          if grep -nE "path-ignore-patterns=['\"]tests/(schema-equivalence|upgrade-from-release)" ../.github/workflows/backend.yml; then
+            echo "::error::a spec §8.4 schema proof is excluded from the backend suite"; exit 1
+          fi
       - name: Run tests (ephemeral Postgres via Docker)
         working-directory: backend
         # tests/geckoterminal-resilience.test.ts and
