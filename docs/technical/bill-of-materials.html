@@ -1131,12 +1131,11 @@ footer {
   </ul>
 
   <h3>Swarm Service</h3>
-  <p>Location: <span class="file-path">backend/src/swarm/</span> — six files, not one per noun:</p>
+  <p>Location: <span class="file-path">backend/src/swarm/</span> — the core files, not one per noun:</p>
   <ul>
     <li><strong>domain.ts</strong> — member/session/take domain logic</li>
     <li><strong>admin.ts</strong> — privileged lifecycle operations</li>
     <li><strong>projections.ts</strong> — read models for the public API</li>
-    <li><strong>notifications.ts</strong> — durable outbox rows + swarm-lane delivery jobs</li>
     <li><strong>roster-seed.ts</strong> — the <code>SWARM_SEED_ROSTER</code> house-roster seed</li>
     <li><strong>v0-archive.ts</strong> — imported v0 session history</li>
   </ul>
@@ -1408,11 +1407,6 @@ footer {
           dead-letters these kinds, and shared workers get no analytics bearer.</td>
       </tr>
       <tr>
-        <td><strong>swarm.ts</strong></td>
-        <td><code>swarm.open_session</code>, <code>publish_brief</code>, <code>close_window</code>,
-          <code>aggregate</code>, <code>publish</code>, and the four <code>send_*_notification</code> kinds</td>
-      </tr>
-      <tr>
         <td><strong>projects.ts</strong></td>
         <td><code>projects.discover</code>, <code>refresh_coins</code>, <code>refresh_wallets</code>,
           <code>fetch_vaults</code>, <code>sync_revenue</code>, <code>snapshot_daily</code>,
@@ -1437,6 +1431,9 @@ footer {
     it submits through the authenticated <code>/api/analytics/*</code> boundary
     (<code>ANALYTICS_API_URL</code> + <code>ANALYTICS_TOKEN</code>). Its own DB connection is scoped to queue lifecycle
     plus the non-analytics samplers.</p>
+  <p class="note">No swarm kind is registered. The session lifecycle is not queue work: the
+    <code>system-scheduler</code> container drives each subject's epoch through the API
+    (system-scheduler-spec §4), and the swarm email kinds were deleted with the feature (D50).</p>
 
   <h3>Job Lifecycle</h3>
   <p>Status is a CHECK-constrained enum in <span class="file-path">0003_task_queue.sql</span>:
@@ -2088,7 +2085,8 @@ footer {
       </tr>
       <tr>
         <td><code>SWARM_PUBLIC_BASE_URL</code></td>
-        <td>Absolute origin every link inside a notification email is built from</td>
+        <td>Absolute public origin for applicant-facing links. D50 keeps it after removing the swarm email that
+          used it; no backend code reads it today</td>
         <td>Defaults to https://robotmoney.net — set it on staging or testers get sent to production</td>
       </tr>
     </tbody>

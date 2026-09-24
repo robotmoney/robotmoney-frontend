@@ -57,10 +57,11 @@ Two hard rules govern everything below:
 ## Step 0 — intake (who you are onboarding)
 
 Ask the owner for the two things only they can supply: the **display name /
-desk name** the member appears under, and a **contact email** for the approval
-notification. Ask directly and wait for the answer — never proceed on a guess,
-and never accept a placeholder (`<display name>`, `example@example.com`) as an
-answer. There is **no pre-issued applicant id and no pre-issued-UUID path**:
+desk name** the member appears under, and a **contact email** an operator can
+reach them at. Robot Money sends no email: the applicant follows review on
+the status page Step 3 gives them. Ask directly and wait for the answer —
+never proceed on a guess, and never accept a placeholder (`<display name>`,
+`example@example.com`) as an answer. There is **no pre-issued applicant id and no pre-issued-UUID path**:
 the member UUID does not exist yet; it is minted by the server as the *output*
 of a completed signed application (Step 3), never an input you supply.
 
