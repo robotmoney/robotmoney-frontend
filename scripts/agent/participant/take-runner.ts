@@ -18,77 +18,127 @@
 // residue reach the next session's authoring call, which is both a correctness
 // problem (a take influenced by a prior subject) and an unbounded disk growth
 // problem in a container that is supposed to run for weeks. A fresh directory
-// per take, removed in a `finally`, makes both impossible by construction
-// rather than by a cleanup routine somebody has to remember to call.
+// per take, removed once the take is settled, makes both impossible by
+// construction rather than by a cleanup routine somebody has to remember.
 //
 // ── WHY A PROCESS GROUP ─────────────────────────────────────────────────────
-// The authoring call is a CLI that itself spawns children. Killing the direct
-// child on timeout leaves its grandchildren holding the workspace and the
-// model credential. The one-shot therefore runs in its own process group and
-// the timeout kills the GROUP. Without that, a hung take leaks a process per
-// occurrence into a container that never restarts, until the container runs
-// out of memory hours later and the restart looks unrelated to the take that
-// caused it.
+// The authoring CLI spawns children. Killing the direct child on timeout
+// leaves its grandchildren holding the workspace and the model credential. The
+// one-shot therefore runs in its own process group and the timeout kills the
+// GROUP. Without that, a hung take leaks a process per occurrence into a
+// container that never restarts, until the container runs out of memory hours
+// later and the restart looks unrelated to the take that caused it.
 //
-// ── IDEMPOTENT SUBMISSION IS WHAT MAKES ALL OF THIS SAFE (§6.2) ─────────────
-// Take identity is `(session, member)`, UNIQUE SERVER-SIDE (W3.3 adds the
-// index if one is missing). A resubmission on an existing key returns the
-// EXISTING record, and the participant treats that as SUCCESS — not as a
-// conflict, not as an error to retry, not as a reason to author a second take.
+// ── A RETRY IS IDENTIFIED BY ITS SIGNED NONCE (§6.2, D51, D52) ──────────────
+// A take's identity is its signed `nonce`. The rules, in the spec's order:
 //
-// That single rule closes the two failure modes standing containers otherwise
-// have:
+//   1. The participant writes its SIGNED submission — the exact request bytes,
+//      nonce included — into its workspace BEFORE sending it.
+//   2. A crash-restart RESENDS those bytes. It never authors the take again
+//      and never mints a new nonce for it.
+//   3. The server answers a nonce it has already recorded for this member and
+//      session with the EXISTING record (`alreadySubmitted: true`), and the
+//      participant treats that as success.
+//   4. A NEW nonce is an intentional amendment, allowed while the window is
+//      open: its own signed row, marked final, unsetting the member's previous
+//      one (D51). A partial unique index on `(session, member) WHERE final`
+//      makes two final takes impossible.
+//
+// What that closes:
 //
 //   - CRASH AFTER SUBMIT. The container dies between the server committing the
-//     submission and the participant recording that it did. `restart:
-//     unless-stopped` brings it back, it polls, and the session still lists it
-//     as wanted (the API has not yet told it otherwise, or it re-polls before
-//     the state propagates). It authors again and submits again. The server
-//     returns the record that already exists. Result: ONE take, one redundant
-//     request.
-//   - OLD/NEW CONTAINER OVERLAP DURING A ROSTER CHANGE. Reconciliation stops
-//     the old container and starts the new one; for a moment both may be
-//     alive. Both poll, both may submit. Same key, same outcome: ONE take.
+//     submission and the participant learning that it did. The workspace
+//     still holds the signed bytes, so the restarted container resends them;
+//     the server returns the row it already has. ONE row.
+//   - OLD/NEW CONTAINER OVERLAP DURING A ROSTER CHANGE. Both may author, each
+//     with its own nonce. That is an amendment, never a second FINAL take.
 //
-// The cost is a redundant authoring call. The alternative — client-side
-// dedupe, or a "did I already submit?" read before authoring — is a race in
-// both directions and cannot survive a crash between the read and the write.
-// The server-side unique key can.
+// So the workspace is disposed only when the take is SETTLED: the server
+// confirmed it (`submitted` or `alreadySubmitted: true`), refused it with a
+// definitive 4xx (resending the same bytes would be refused the same way), or
+// it never produced a signed submission at all (a timeout, a crash, a draft
+// that did not parse). A transport failure or a 5xx after the bytes were
+// written leaves the workspace in place, and the loop resends it.
 //
 // ── GOVERNING SPEC SECTIONS ─────────────────────────────────────────────────
 // §6.2 (one-shot per take, fresh workspace, timeout, process-group cleanup,
 // idempotent submission, one take in flight), §10 W3 ("Participant crash after
-// submit: one take"; "Roster change with overlapping containers: one take").
+// submit: one take"; "Roster change with overlapping containers: one take"),
+// D51 (amendments, newest final), D52 (a retry is identified by its nonce).
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import type { ParticipantConfig, PendingWork } from "./main.ts";
 
 /**
- * The one-shot's argv, injected like everything else this container receives
- * (spec §6.2: a container inherits nothing). Compose injects the judge's shim
- * — `bun scripts/agent/participant/judge-runner.ts` — for a judge entry and the
- * authoring CLI for an agent entry. A participant with none reports a failed
- * take rather than guessing a binary to run as the member.
+ * The environment name the one-shot's argv is injected under (spec §6.2: a
+ * container inherits nothing). `readParticipantConfig` reads it into
+ * `ParticipantConfig.takeCommand`; an agent entry without one refuses at boot
+ * rather than guessing a binary to run as the member.
  */
 export const TAKE_COMMAND_ENV = "RM_TAKE_COMMAND";
 
 /** The single stdout tag the one-shot prints its authored draft on. */
 export const TAKE_DRAFT_TAG = "RM_TAKE_DRAFT";
 
+/**
+ * The file, inside a take's workspace, that holds its signed submission. It is
+ * written BEFORE the submission is sent, and its presence is what makes a
+ * workspace a pending submission rather than residue.
+ */
+export const SIGNED_SUBMISSION_FILE = "signed-submission.json";
+
 /** Output is a label, not a payload: enough to read, bounded against a flood. */
 const OUTPUT_MAX = 64 * 1024;
 
+/** `mkdtemp` appends exactly six characters to its prefix. */
+const MKDTEMP_SUFFIX_LENGTH = 6;
+
 /**
- * A take's disposable working directory. `dispose()` is called in a `finally`
- * regardless of how the take ended, so a crashed, timed-out, or refused take
- * leaves nothing behind.
+ * A take's working directory. `dispose()` removes it and everything in it; the
+ * runner calls it once the take is settled (see the header).
  */
 export interface TakeWorkspace {
   /** Absolute path, unique to this (session, member) attempt. */
   path: string;
   dispose(): void;
+}
+
+/** The workspace directory-name prefix for one (session, member). */
+function workspacePrefix(sessionId: string, memberId: string): string {
+  return `take-${sessionId}-${memberId}-`;
+}
+
+/**
+ * Whether a directory name is a workspace of EXACTLY this (session, member).
+ * The length check keeps member `m-a` from claiming member `m-a-b`'s workspace.
+ */
+function isWorkspaceOf(dirName: string, sessionId: string, memberId: string): boolean {
+  const prefix = workspacePrefix(sessionId, memberId);
+  return dirName.startsWith(prefix) && dirName.length === prefix.length + MKDTEMP_SUFFIX_LENGTH;
+}
+
+function workspaceAt(path: string): TakeWorkspace {
+  return {
+    path,
+    dispose(): void {
+      rmSync(path, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -111,13 +161,7 @@ export function createTakeWorkspace(
   mkdirSync(root, { recursive: true });
   // `mkdtemp` is what makes two attempts at the SAME (session, member) two
   // directories: a retry never inherits the previous attempt's residue.
-  const path = mkdtempSync(join(root, `take-${sessionId}-${memberId}-`));
-  return {
-    path,
-    dispose(): void {
-      rmSync(path, { recursive: true, force: true });
-    },
-  };
+  return workspaceAt(mkdtempSync(join(root, workspacePrefix(sessionId, memberId))));
 }
 
 /**
@@ -152,7 +196,7 @@ export interface OneShotResult {
  * forever and turns every timeout into the maximum timeout.
  *
  * Refusals: none; a failure is a returned status, not a throw, because the
- * caller must always reach its `finally` and dispose the workspace.
+ * caller must always reach its cleanup.
  */
 export async function runOneShot(
   workspace: TakeWorkspace,
@@ -212,7 +256,7 @@ export async function runOneShot(
 
     child.on("error", (err: Error) => {
       // A failure is a returned STATUS, never a throw: the caller must always
-      // reach its `finally` and dispose the workspace.
+      // reach its cleanup.
       stderr += err.message;
       if (status === "ok") status = "crashed";
       finish(null);
@@ -250,16 +294,21 @@ function redact(text: string, env: Record<string, string>): string {
 }
 
 /**
- * The outcome of the submission call. `already_submitted` is a SUCCESS value,
- * not an error: it is the server reporting that this `(session, member)` key
- * already holds a record, which is exactly what a crash-after-submit or a
- * container overlap produces.
+ * The outcome of the submission call.
+ *
+ * - `submitted`         — the server recorded this nonce as a new row.
+ * - `already_submitted` — the server already held this nonce for this member
+ *                         and answered with that row: a retry, and SUCCESS.
+ * - `refused`           — a definitive refusal (4xx), carrying the reason.
+ * - `unconfirmed`       — the signed bytes are in the workspace but the server
+ *                         has not confirmed them (transport failure or 5xx).
+ *                         They are resent as they are.
  */
-export type SubmissionStatus = "submitted" | "already_submitted" | "refused";
+export type SubmissionStatus = "submitted" | "already_submitted" | "refused" | "unconfirmed";
 
 export interface SubmissionResult {
   status: SubmissionStatus;
-  /** The server's record for `(session, member)` — new or pre-existing. */
+  /** The server's record for this nonce — new or pre-existing. */
   takeId: string | null;
   /** True only when the server verified this submission's signature. */
   verified: boolean;
@@ -268,24 +317,109 @@ export interface SubmissionResult {
 }
 
 /**
- * Submit the authored take, signing the canonical bytes the API returns.
+ * What the workspace holds between signing and confirmation: the exact bytes
+ * of the submission request, and the coordinates that identify it. `bytes` is
+ * sent verbatim on every attempt, so a retry is byte-identical to the first
+ * send and carries the same nonce.
+ */
+export interface PersistedSubmission {
+  sessionId: string;
+  memberId: string;
+  nonce: string;
+  /** The submission request body, exactly as it is POSTed. */
+  bytes: string;
+}
+
+/**
+ * Write the signed submission into its workspace, durably, BEFORE it is sent.
+ *
+ * Written to a temporary name, flushed to disk, then renamed: a crash leaves
+ * either no file (the take was never sent, so re-authoring it is safe) or the
+ * whole file (the take may have been sent, so it is resent), never half of one.
+ */
+export function persistSignedSubmission(workspace: TakeWorkspace, record: PersistedSubmission): void {
+  const target = join(workspace.path, SIGNED_SUBMISSION_FILE);
+  const temp = `${target}.tmp`;
+  const fd = openSync(temp, "w", 0o600);
+  try {
+    writeSync(fd, JSON.stringify(record));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(temp, target);
+}
+
+/** The persisted submission in a workspace, or `null` when there is none. */
+function readPersistedSubmission(workspacePath: string): PersistedSubmission | null {
+  const file = join(workspacePath, SIGNED_SUBMISSION_FILE);
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<PersistedSubmission>;
+    if (
+      typeof parsed.sessionId === "string"
+      && typeof parsed.memberId === "string"
+      && typeof parsed.nonce === "string"
+      && typeof parsed.bytes === "string"
+      && parsed.bytes !== ""
+    ) {
+      return parsed as PersistedSubmission;
+    }
+  } catch {
+    // Unreadable: the rename makes a torn file impossible, so this was not
+    // written by the runner and is not a submission it can vouch for.
+  }
+  return null;
+}
+
+/**
+ * Every workspace under `root` holding a signed, unconfirmed submission for
+ * `memberId`, optionally narrowed to one session.
+ */
+export function findPersistedSubmissions(
+  root: string,
+  memberId: string,
+  sessionId?: string,
+): { workspace: TakeWorkspace; record: PersistedSubmission }[] {
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return [];
+  }
+  const found: { workspace: TakeWorkspace; record: PersistedSubmission }[] = [];
+  for (const name of names.sort()) {
+    const path = join(root, name);
+    const record = readPersistedSubmission(path);
+    if (!record || record.memberId !== memberId) continue;
+    if (sessionId !== undefined && record.sessionId !== sessionId) continue;
+    if (!isWorkspaceOf(name, record.sessionId, record.memberId)) continue;
+    found.push({ workspace: workspaceAt(path), record });
+  }
+  return found;
+}
+
+/**
+ * Submit the authored take: mint its nonce, sign the canonical bytes the API
+ * returns, PERSIST the signed request into the workspace, then send it.
  *
  * Inputs: the participant configuration (for the bearer and the key), the work
- * coordinates, and the authored draft. Output: a `SubmissionResult`.
+ * coordinates, the authored draft, and the take's workspace. Output: a
+ * `SubmissionResult`.
+ *
+ * The nonce is the draft's own when it carries one, and a fresh UUID when it
+ * does not. It is minted ONCE, here, before signing: every later attempt at
+ * this take resends the persisted bytes and so carries the same nonce.
  *
  * The canonical bytes are FETCHED from the signing-payload endpoint and signed
- * exactly as returned — never reconstructed locally. The server's response is
- * the protocol authority, and a locally reconstructed payload that drifts by a
- * byte produces a valid signature over the wrong message.
+ * exactly as returned — never reconstructed locally. A locally reconstructed
+ * payload that drifts by a byte produces a valid signature over the wrong
+ * message.
  *
- * Idempotency: a resubmission on an existing `(session, member)` key returns
- * `already_submitted` with the existing record, and the caller treats it as
- * success. There is no retry-on-conflict branch and no second authoring.
- *
- * Refusals: `refused` for a signature the server rejects — which is exactly
- * what a superseded spoof-keys generation produces (spec §6.4), and the reason
- * that tolerated window is harmless. A transport error throws, and the take is
- * retried on the next poll, where idempotency bounds the outcome to one take.
+ * Refusals: `refused` when the signing-payload endpoint returns no canonical
+ * bytes (nothing was persisted or sent, so the next poll may author again). A
+ * key this container cannot import THROWS before anything is written. After
+ * the bytes are persisted, see `sendSignedSubmission`.
  *
  * Gates (spec §10 W3): "Participant crash after submit: one take"; "Roster
  * change with overlapping containers: one take."
@@ -294,14 +428,17 @@ export async function submitTake(
   config: ParticipantConfig,
   work: PendingWork,
   draft: Record<string, unknown>,
+  workspace: TakeWorkspace,
 ): Promise<SubmissionResult> {
+  const nonce = typeof draft.nonce === "string" && draft.nonce.trim() !== "" ? draft.nonce : randomUUID();
+  const unsigned = { ...draft, nonce };
   // FETCHED, never reconstructed: a locally rebuilt payload that drifts by a
   // byte produces a valid signature over the wrong message. A transport error
-  // here throws, and the next poll retries under the same idempotent key.
+  // here throws before anything is persisted, so the next poll authors again.
   const payloadRes = await fetch(`${config.apiUrl}${ROUTES.swarm.signingPayload}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
-    body: JSON.stringify(draft),
+    body: JSON.stringify(unsigned),
   });
   const payloadBody = (await readJson(payloadRes)) as { canonical?: unknown } | null;
   const canonical = typeof payloadBody?.canonical === "string" ? payloadBody.canonical : "";
@@ -315,10 +452,36 @@ export async function submitTake(
   }
 
   const signature = await signCanonical(canonical, config);
+  const bytes = JSON.stringify({ ...unsigned, signature });
+  // ON DISK BEFORE ON THE WIRE (D52): from here on this take is resent, never
+  // re-authored, until the server settles it.
+  persistSignedSubmission(workspace, { sessionId: work.sessionId, memberId: config.memberId, nonce, bytes });
+  return sendSignedSubmission(config, bytes);
+}
+
+/**
+ * POST a signed submission's exact bytes and read the server's answer.
+ *
+ * Input: the configuration and the persisted request body. Output: a
+ * `SubmissionResult` — `submitted`, `already_submitted` (the server holds this
+ * nonce already and returns that row: SUCCESS, with no retry and no second
+ * authoring), or `refused` for a definitive 4xx, which is exactly what a
+ * superseded spoof-keys generation produces (spec §6.4).
+ *
+ * The existing record is the authority, not the wire status: a body carrying
+ * `alreadySubmitted: true` is success whatever the status code.
+ *
+ * Refusals: a transport error or a 5xx THROWS. The bytes stay in the workspace
+ * and are resent as they are, so the outcome is bounded to one row per nonce.
+ */
+export async function sendSignedSubmission(
+  config: ParticipantConfig,
+  bytes: string,
+): Promise<SubmissionResult> {
   const submitRes = await fetch(`${config.apiUrl}${ROUTES.swarm.submit}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
-    body: JSON.stringify({ ...draft, signature }),
+    body: bytes,
   });
   const body = (await readJson(submitRes)) as
     | { ok?: unknown; alreadySubmitted?: unknown; recommendationId?: unknown; verified?: unknown; error?: unknown }
@@ -326,13 +489,16 @@ export async function submitTake(
   const takeId = typeof body?.recommendationId === "string" ? body.recommendationId : null;
 
   // The EXISTING record is the authority, not the wire status: a crash after
-  // submit, or an old/new container overlap, lands here and is SUCCESS. There
-  // is no retry-on-conflict branch and no second authoring.
+  // submit lands here and is SUCCESS.
   if (body?.alreadySubmitted === true) {
     return { status: "already_submitted", takeId, verified: body.verified === true };
   }
   if (submitRes.ok && body?.ok === true) {
     return { status: "submitted", takeId, verified: body.verified === true };
+  }
+  if (submitRes.status >= 500) {
+    // The server did not answer the question. The bytes are resent.
+    throw new Error(`${ROUTES.swarm.submit} answered HTTP ${submitRes.status}; the signed submission is resent as it is`);
   }
   return {
     status: "refused",
@@ -396,21 +562,112 @@ async function signCanonical(canonical: string, config: ParticipantConfig): Prom
 export interface TakeOutcome {
   sessionId: string;
   memberId: string;
-  oneShot: OneShotStatus;
+  /** How the one-shot ended, or `null` when none ran (a persisted take was resent). */
+  oneShot: OneShotStatus | null;
   submission: SubmissionStatus | null;
+  /** The nonce the submission carried, once one was signed. */
+  nonce?: string;
   durationMs: number;
   /** Bounded operator-facing reason when the take did not submit. */
   reason?: string;
 }
 
+/** A settled submission: the workspace can go. `unconfirmed` keeps it. */
+function isSettled(status: SubmissionStatus): boolean {
+  return status !== "unconfirmed";
+}
+
 /**
- * Run one complete take: fresh workspace → one-shot → submit → dispose.
+ * Resend one persisted submission and settle its workspace.
+ *
+ * The workspace is disposed when the server settles the take (confirmed, or
+ * refused with a 4xx) and kept, for the next resend, when it does not answer.
+ */
+async function resendPersisted(
+  config: ParticipantConfig,
+  pending: { workspace: TakeWorkspace; record: PersistedSubmission },
+): Promise<TakeOutcome> {
+  const started = Date.now();
+  const base = {
+    sessionId: pending.record.sessionId,
+    memberId: pending.record.memberId,
+    oneShot: null,
+    nonce: pending.record.nonce,
+  };
+  let result: SubmissionResult;
+  try {
+    result = await sendSignedSubmission(config, pending.record.bytes);
+  } catch (err) {
+    return { ...base, submission: "unconfirmed", durationMs: Date.now() - started, reason: errorText(err).slice(0, 400) };
+  }
+  if (isSettled(result.status)) disposeQuietly(pending.workspace);
+  return {
+    ...base,
+    submission: result.status,
+    durationMs: Date.now() - started,
+    ...(result.reason === undefined ? {} : { reason: result.reason.slice(0, 400) }),
+  };
+}
+
+/**
+ * Resend EVERY signed submission this participant persisted and the server has
+ * not confirmed, whatever session it belongs to.
+ *
+ * Input: the configuration. Output: one outcome per persisted submission.
+ *
+ * The poll loop calls this before each poll. It is what makes a crash-restart
+ * safe when the server DID record the take before the crash: that session is no
+ * longer offered as pending work, so only this sweep ever resends it, and the
+ * server's `alreadySubmitted` answer is what lets the workspace go.
+ *
+ * Refusals: none propagate; a failed resend is an `unconfirmed` outcome.
+ */
+export async function resendPendingSubmissions(config: ParticipantConfig): Promise<TakeOutcome[]> {
+  const outcomes: TakeOutcome[] = [];
+  for (const pending of findPersistedSubmissions(config.workspaceRoot, config.memberId)) {
+    outcomes.push(await resendPersisted(config, pending));
+  }
+  return outcomes;
+}
+
+/**
+ * Remove this (session, member)'s workspaces that hold no signed submission:
+ * the residue of an attempt that died while authoring. Nothing in them was
+ * sent, so nothing in them is owed to the server.
+ */
+function disposeAuthoringResidue(root: string, sessionId: string, memberId: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!isWorkspaceOf(name, sessionId, memberId)) continue;
+    const path = join(root, name);
+    if (readPersistedSubmission(path) === null) disposeQuietly(workspaceAt(path));
+  }
+}
+
+function disposeQuietly(workspace: TakeWorkspace): void {
+  try {
+    workspace.dispose();
+  } catch {
+    // A workspace that will not delete is not a reason to lose the outcome.
+  }
+}
+
+/**
+ * Run one complete take: resend a persisted one, or fresh workspace →
+ * one-shot → sign → persist → send → dispose.
  *
  * Inputs: the participant configuration and the work item. Output: a
  * `TakeOutcome` the loop logs.
  *
- * The workspace is disposed in a `finally`, on every path including timeout
- * and crash. Disposal never masks the take's own failure.
+ * A signed submission already persisted for this (session, member) is RESENT
+ * and nothing is authored (D52). Otherwise the workspace is disposed once the
+ * take is settled: on a timeout, a crash, a draft that did not parse, or a
+ * settled submission. It survives only an unconfirmed send, for the resend.
  *
  * Refusals: none propagate — a take that fails is a reported outcome, because
  * one bad session must not take down a container that has weeks of later
@@ -421,72 +678,76 @@ export async function runTake(
   config: ParticipantConfig,
   work: PendingWork,
 ): Promise<TakeOutcome> {
+  const persisted = findPersistedSubmissions(config.workspaceRoot, config.memberId, work.sessionId);
+  if (persisted[0]) return resendPersisted(config, persisted[0]);
+
   const started = Date.now();
   const base = { sessionId: work.sessionId, memberId: config.memberId };
   const report = (
-    oneShot: OneShotStatus,
+    oneShot: OneShotStatus | null,
     submission: SubmissionStatus | null,
-    reason?: string,
+    extra: { reason?: string; nonce?: string } = {},
   ): TakeOutcome => ({
     ...base,
     oneShot,
     submission,
+    ...(extra.nonce === undefined ? {} : { nonce: extra.nonce }),
     durationMs: Date.now() - started,
-    ...(reason === undefined ? {} : { reason: reason.slice(0, 400) }),
+    ...(extra.reason === undefined ? {} : { reason: extra.reason.slice(0, 400) }),
   });
 
+  if (config.takeCommand.length === 0) {
+    return report("crashed", null, { reason: `${TAKE_COMMAND_ENV} was not injected into this participant container` });
+  }
+  disposeAuthoringResidue(config.workspaceRoot, work.sessionId, config.memberId);
   let workspace: TakeWorkspace;
   try {
     workspace = createTakeWorkspace(config.workspaceRoot, work.sessionId, config.memberId);
   } catch (err) {
-    return report("crashed", null, `workspace unusable: ${errorText(err)}`);
+    return report("crashed", null, { reason: `workspace unusable: ${errorText(err)}` });
   }
+  let oneShotStatus: OneShotStatus = "crashed";
+  // Set only when signed bytes are on disk and the server has not settled them.
+  let keepForResend = false;
   try {
-    const argv = oneShotArgv(process.env[TAKE_COMMAND_ENV]);
-    if (argv.length === 0) {
-      return report("crashed", null, `${TAKE_COMMAND_ENV} was not injected into this participant container`);
-    }
-    const oneShot = await runOneShot(workspace, argv, oneShotEnv(config, work, workspace), config.takeTimeoutMs);
+    const oneShot = await runOneShot(
+      workspace,
+      config.takeCommand,
+      oneShotEnv(config, work, workspace),
+      config.takeTimeoutMs,
+    );
+    oneShotStatus = oneShot.status;
     if (oneShot.status !== "ok") {
-      return report(oneShot.status, null, oneShot.stderr || `one-shot exited ${oneShot.exitCode}`);
+      return report(oneShot.status, null, { reason: oneShot.stderr || `one-shot exited ${oneShot.exitCode}` });
     }
     const draft = parseDraftLine(oneShot.stdout);
-    if (!draft) return report("ok", null, `the one-shot printed no ${TAKE_DRAFT_TAG} line`);
-    const submission = await submitTake(config, work, draft);
-    return report("ok", submission.status, submission.reason);
+    if (!draft) return report("ok", null, { reason: `the one-shot printed no ${TAKE_DRAFT_TAG} line` });
+    const submission = await submitTake(config, work, draft, workspace);
+    const nonce = readPersistedSubmission(workspace.path)?.nonce;
+    keepForResend = !isSettled(submission.status);
+    return report("ok", submission.status, {
+      ...(submission.reason === undefined ? {} : { reason: submission.reason }),
+      ...(nonce === undefined ? {} : { nonce }),
+    });
   } catch (err) {
     // A take that fails is a REPORTED OUTCOME: one bad session must not take
-    // down a container that has weeks of later sessions to serve.
-    return report("crashed", null, errorText(err));
-  } finally {
-    // On every path, including timeout and crash. Disposal never masks the
-    // take's own failure.
-    try {
-      workspace.dispose();
-    } catch {
-      // A workspace that will not delete is not a reason to lose the outcome.
+    // down a container that has weeks of later sessions to serve. When the
+    // signed bytes were already persisted, the send is merely unconfirmed.
+    const persistedNow = readPersistedSubmission(workspace.path);
+    if (persistedNow) {
+      keepForResend = true;
+      return report(oneShotStatus, "unconfirmed", { reason: errorText(err), nonce: persistedNow.nonce });
     }
+    return report(oneShotStatus, null, { reason: errorText(err) });
+  } finally {
+    // Settled takes leave nothing behind. An unconfirmed signed submission
+    // stays, because it is resent as it is.
+    if (!keepForResend) disposeQuietly(workspace);
   }
 }
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/** The injected argv, as a JSON array or a single command path. */
-function oneShotArgv(raw: string | undefined): string[] {
-  const text = (raw ?? "").trim();
-  if (text === "") return [];
-  if (text.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string");
-    } catch {
-      return [];
-    }
-    return [];
-  }
-  return text.split(/\s+/);
 }
 
 /** Exactly what the one-shot is given: its coordinates, and nothing ambient. */

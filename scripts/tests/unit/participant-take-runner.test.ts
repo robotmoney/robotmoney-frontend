@@ -3,17 +3,20 @@
 //
 // THE GATES THESE EXIST FOR (spec §10 W3): "Participant crash after submit:
 // one take" and "Roster change with overlapping containers: one take."
-// Both are closed by ONE rule — take identity is `(session, member)`, unique
-// server-side, and a resubmission on an existing key returns the EXISTING
-// record which the participant treats as SUCCESS. Not a conflict, not an error
-// to retry, not a reason to author a second take. So a crash after submit
-// costs one redundant request, never a second take.
+// Under D51/D52 both are closed by ONE rule — A RETRY IS IDENTIFIED BY ITS
+// SIGNED NONCE. The participant writes its signed submission into its
+// workspace BEFORE sending it; a crash-restart resends those same bytes, nonce
+// and all, and never authors again; the server answers a recorded nonce with
+// the EXISTING row, which the participant treats as SUCCESS. A NEW nonce is an
+// amendment: its own row, marked final, the previous one unset. So a crash
+// after submit costs one redundant request, and an overlap costs at most an
+// amendment — never a second FINAL take.
 //
-// The other three rules pinned here:
-//   - A FRESH WORKSPACE PER TAKE, disposed in a `finally`. Reusing one
-//     directory lets a prior session's residue reach the next session's
+// The other rules pinned here:
+//   - A FRESH WORKSPACE PER TAKE, disposed once the take is settled. Reusing
+//     one directory lets a prior session's residue reach the next session's
 //     authoring call, and grows without bound in a container meant to run for
-//     weeks.
+//     weeks. Only an UNCONFIRMED signed submission outlives its attempt.
 //   - THE TIMEOUT KILLS THE PROCESS GROUP. The authoring CLI spawns children;
 //     killing only the direct child leaves grandchildren holding the workspace
 //     and the model credential until the container runs out of memory hours
@@ -22,20 +25,27 @@
 //     that drifts by one byte produces a valid signature over the wrong
 //     message.
 //
+// The end-to-end cases run a REAL take command — a shell script injected as
+// `takeCommand` — so the chain workspace → one-shot → submit → disposal is
+// executed, not assumed.
+//
 // Cost class `unit` (docs/architecture.md §3 L1): child processes and a
 // stubbed `fetch` — no Docker, no daemon, no network. A take is a PROCESS, not
 // a container (#1014's `agent-launcher` + `/var/run/docker.sock` is reverted),
 // which is exactly why this runs at the unit tier at all.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, verify } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import {
   createTakeWorkspace,
+  resendPendingSubmissions,
   runOneShot,
   runTake,
+  sendSignedSubmission,
+  SIGNED_SUBMISSION_FILE,
   submitTake,
 } from "../../agent/participant/take-runner.ts";
 import type { ParticipantConfig, PendingWork } from "../../agent/participant/main.ts";
@@ -78,6 +88,7 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
   memberId: MEMBER_ID,
   token: "member-bearer-token",
   identity: { publicKeyB64: REAL_PUBLIC_B64, privateJwk: REAL_PRIVATE_JWK },
+  takeCommand: ["/bin/false"],
   pollIntervalMs: 5_000,
   takeTimeoutMs: 60_000,
   workspaceRoot: "/tmp/rm-participant-workspaces",
@@ -86,7 +97,15 @@ const config = (over: Partial<ParticipantConfig> = {}): ParticipantConfig => ({
 
 const work: PendingWork = { sessionId: SESSION_ID, subjectId: "woon", date: "2026-09-23" };
 
-const draft = { sessionId: SESSION_ID, memberId: MEMBER_ID, stance: "neutral", confidence: 0.5, body: "a take" };
+/** The draft a one-shot authors: the submit route's own fields, no nonce yet. */
+const draft = {
+  memberId: MEMBER_ID,
+  date: "2026-09-23",
+  subjectId: "woon",
+  stance: "neutral",
+  confidence: 0.5,
+  body: "a take",
+};
 
 // ── FRESH WORKSPACE PER TAKE ───────────────────────────────────────────────
 describe("createTakeWorkspace — fresh per take, traceable, and removable", () => {
@@ -276,56 +295,119 @@ describe("runOneShot — own process group, wall-clock timeout, drained pipes", 
   });
 });
 
-// ── IDEMPOTENT SUBMISSION ON (session, member) ─────────────────────────────
-describe("submitTake — canonical bytes fetched, one POST, idempotent on (session, member)", () => {
+// ── A RETRY IS IDENTIFIED BY ITS SIGNED NONCE (D51, D52) ───────────────────
+/**
+ * A server that follows D51/D52, modelled on the real submit route's answers:
+ *
+ *   - identity is `(member, nonce)`: a nonce this member already recorded is a
+ *     RETRY, answered with the EXISTING row (`alreadySubmitted: true`);
+ *   - a NEW nonce for the same session is an AMENDMENT: its own row, marked
+ *     final, and the member's previous final row for that session is unset;
+ *   - every submission's signature is VERIFIED against the member's real
+ *     public key over the canonical bytes, so "the same bytes" is checked, not
+ *     assumed.
+ *
+ * `onSubmit` lets a test observe the moment of the POST (to prove the signed
+ * submission was on disk before it) or lose the response after recording (a
+ * crash after submit).
+ */
+interface Row {
+  id: string;
+  memberId: string;
+  session: string;
+  nonce: string;
+  final: boolean;
+  revision: number;
+}
+
+function canonicalOf(draft: Record<string, unknown>): string {
+  const { signature: _signature, ...rest } = draft;
+  return JSON.stringify(Object.fromEntries(Object.keys(rest).sort().map((k) => [k, rest[k]])));
+}
+
+function fakeApi(
+  opts: {
+    /** Called at the POST, before the server records anything. */
+    beforeRecord?: (bytes: string) => void;
+    /** Called after the row is recorded; a throw here is a response lost in flight. */
+    afterRecord?: (bytes: string) => void;
+  } = {},
+) {
+  const rows: Row[] = [];
+  const submits: string[] = [];
+  const signingDrafts: Record<string, unknown>[] = [];
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: any, init?: any): Promise<Response> => {
+    const url = String(input);
+    requests.push(url);
+    const text = init?.body ? String(init.body) : "";
+    if (url.includes(ROUTES.swarm.signingPayload)) {
+      const draftBody = JSON.parse(text) as Record<string, unknown>;
+      signingDrafts.push(draftBody);
+      return new Response(JSON.stringify({ canonical: canonicalOf(draftBody) }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes(ROUTES.swarm.submit)) {
+      submits.push(text);
+      opts.beforeRecord?.(text);
+      const body = JSON.parse(text) as Record<string, unknown>;
+      const verified = verify(
+        null,
+        Buffer.from(canonicalOf(body)),
+        REAL_KEYPAIR.publicKey,
+        Buffer.from(String(body.signature ?? ""), "base64"),
+      );
+      if (!verified) {
+        return new Response(JSON.stringify({ ok: false, error: "signature did not verify" }), { status: 400 });
+      }
+      const memberId = String(body.memberId);
+      const nonce = String(body.nonce);
+      const session = `${body.subjectId}/${body.date}`;
+      const existing = rows.find((r) => r.memberId === memberId && r.nonce === nonce);
+      if (existing) {
+        return new Response(
+          JSON.stringify({ ok: true, alreadySubmitted: true, recommendationId: existing.id, verified: true }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      const prior = rows.filter((r) => r.memberId === memberId && r.session === session);
+      for (const r of prior) r.final = false;
+      const row: Row = { id: `take-${rows.length + 1}`, memberId, session, nonce, final: true, revision: prior.length + 1 };
+      rows.push(row);
+      opts.afterRecord?.(text);
+      return new Response(JSON.stringify({ ok: true, recommendationId: row.id, verified: true, revision: row.revision }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  return { rows, submits, signingDrafts, requests };
+}
+
+/** The persisted signed submission in a workspace, parsed. */
+function persistedIn(workspacePath: string): { sessionId: string; memberId: string; nonce: string; bytes: string } {
+  return JSON.parse(readFileSync(join(workspacePath, SIGNED_SUBMISSION_FILE), "utf8"));
+}
+
+describe("submitTake — nonce minted once, signed, PERSISTED, then sent", () => {
   const realFetch = globalThis.fetch;
+  const roots: string[] = [];
   afterEach(() => {
     globalThis.fetch = realFetch;
+    while (roots.length) rmSync(roots.pop() as string, { recursive: true, force: true });
   });
-
-  /**
-   * A server that holds AT MOST ONE take per `(session, member)` — the
-   * server-side unique key of §6.2. A second submission on the same key
-   * returns the record that already exists.
-   */
-  function fakeApi() {
-    const takes = new Map<string, string>();
-    const requests: { url: string; body: unknown }[] = [];
-    let nextId = 1;
-    globalThis.fetch = (async (input: any, init?: any): Promise<Response> => {
-      const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) : null;
-      requests.push({ url, body });
-      if (url.includes(ROUTES.swarm.signingPayload)) {
-        return new Response(JSON.stringify({ canonical: `CANONICAL:${SESSION_ID}:${MEMBER_ID}` }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.includes(ROUTES.swarm.submit)) {
-        const key = `${body?.sessionId ?? SESSION_ID}/${body?.memberId ?? MEMBER_ID}`;
-        const existing = takes.get(key);
-        if (existing) {
-          return new Response(
-            JSON.stringify({ ok: true, alreadySubmitted: true, recommendationId: existing, verified: true }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        const id = `take-${nextId++}`;
-        takes.set(key, id);
-        return new Response(JSON.stringify({ ok: true, recommendationId: id, verified: true, revision: 1 }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
-    return { takes, requests };
-  }
+  const workspace = () => {
+    const root = tempDir();
+    roots.push(root);
+    return createTakeWorkspace(root, SESSION_ID, MEMBER_ID);
+  };
 
   test("a first submission reports `submitted`, verified, with the server's record id", async () => {
     fakeApi();
-    const result = await submitTake(config(), work, draft);
+    const result = await submitTake(config(), work, draft, workspace());
     expect(result.status).toBe("submitted");
     expect(result.takeId).toBe("take-1");
     expect(result.verified).toBe(true);
@@ -333,90 +415,110 @@ describe("submitTake — canonical bytes fetched, one POST, idempotent on (sessi
 
   test("the canonical bytes are FETCHED from the signing-payload endpoint before the submit", async () => {
     const api = fakeApi();
-    await submitTake(config(), work, draft);
-    const urls = api.requests.map((r) => r.url);
-    const payloadAt = urls.findIndex((u) => u.includes(ROUTES.swarm.signingPayload));
-    const submitAt = urls.findIndex((u) => u.includes(ROUTES.swarm.submit));
+    await submitTake(config(), work, draft, workspace());
+    const payloadAt = api.requests.findIndex((u) => u.includes(ROUTES.swarm.signingPayload));
+    const submitAt = api.requests.findIndex((u) => u.includes(ROUTES.swarm.submit));
     expect(payloadAt).toBeGreaterThanOrEqual(0);
     expect(submitAt).toBeGreaterThan(payloadAt);
   });
 
-  test("the submit carries a signature — a judgement or take with no author is not a record", async () => {
+  test("the submit carries a REAL signature — the fake verifies it against the member's public key", async () => {
     const api = fakeApi();
-    await submitTake(config(), work, draft);
-    const submit = api.requests.find((r) => r.url.includes(ROUTES.swarm.submit));
-    const signature = (submit?.body as { signature?: unknown })?.signature;
-    expect(typeof signature).toBe("string");
-    // Non-empty, and real: the fixture key is a genuine Ed25519 pair, so an
-    // empty or placeholder signature cannot satisfy this.
-    expect((signature as string).length).toBeGreaterThan(0);
+    const result = await submitTake(config(), work, draft, workspace());
+    // A missing or placeholder signature is refused by the fake, so `submitted`
+    // here means the signature verified over the canonical bytes.
+    expect(result.status).toBe("submitted");
+    const sent = JSON.parse(api.submits[0] ?? "{}") as { signature?: unknown };
+    expect(typeof sent.signature).toBe("string");
   });
 
-  test("an identity whose key cannot be imported REFUSES before the POST — a take is signed by its member or it does not exist", async () => {
+  test("an identity whose key cannot be imported REFUSES before the POST — and nothing is persisted", async () => {
     const api = fakeApi();
+    const ws = workspace();
     const broken = config({
-      // Well-formed JWK shape, unusable `d`. This is what the fixture used to
-      // be for every test in this file, which is precisely why the old
-      // implementation shipped an empty signature and still reported success.
+      // Well-formed JWK shape, unusable `d`: an unusable key is a refusal,
+      // never an empty signature reported as `submitted`.
       identity: { publicKeyB64: "pub-athena", privateJwk: { kty: "OKP", crv: "Ed25519", x: "pub", d: "priv" } },
     });
-    await expect(submitTake(broken, work, draft)).rejects.toThrow(/cannot import its own signing key/);
-    // The REFUSAL IS BEFORE THE WIRE. Nothing was submitted, so no half-authored
-    // record exists for an operator to reconcile, and the reason names the key
-    // rather than a server-side signature complaint to work backwards from.
-    expect(api.requests.some((r) => r.url.includes(ROUTES.swarm.submit))).toBe(false);
-    expect(api.takes.size).toBe(0);
+    await expect(submitTake(broken, work, draft, ws)).rejects.toThrow(/cannot import its own signing key/);
+    expect(api.submits).toEqual([]);
+    expect(api.rows).toHaveLength(0);
+    expect(existsSync(join(ws.path, SIGNED_SUBMISSION_FILE))).toBe(false);
   });
 
-  test("GATE 'crash after submit: ONE take' — the resubmission returns the EXISTING record as SUCCESS", async () => {
+  test("D52: the signed submission is ON DISK before the POST, byte-identical to what is sent, nonce included", async () => {
+    const ws = workspace();
+    let onDiskAtPost: { nonce: string; bytes: string } | null = null;
+    const api = fakeApi({
+      beforeRecord: () => {
+        onDiskAtPost = existsSync(join(ws.path, SIGNED_SUBMISSION_FILE)) ? persistedIn(ws.path) : null;
+      },
+    });
+    await submitTake(config(), work, draft, ws);
+    expect(onDiskAtPost).not.toBeNull();
+    const seen = onDiskAtPost as unknown as { nonce: string; bytes: string };
+    expect(seen.bytes).toBe(api.submits[0] ?? "");
+    expect(JSON.parse(seen.bytes).nonce).toBe(seen.nonce);
+    expect(persistedIn(ws.path)).toMatchObject({ sessionId: SESSION_ID, memberId: MEMBER_ID });
+  });
+
+  test("a draft without a nonce gets ONE minted before signing — the signed bytes and the sent bytes carry it", async () => {
     const api = fakeApi();
-    const first = await submitTake(config(), work, draft);
-    // The container died here, restarted, polled, authored again, submitted again.
-    const second = await submitTake(config(), work, draft);
+    const ws = workspace();
+    await submitTake(config(), work, draft, ws);
+    const minted = persistedIn(ws.path).nonce;
+    expect(minted).toMatch(/^[0-9a-f-]{36}$/);
+    expect(api.signingDrafts[0]?.nonce).toBe(minted);
+    expect(JSON.parse(api.submits[0] ?? "{}").nonce).toBe(minted);
+  });
+
+  test("a draft that carries its own nonce keeps it", async () => {
+    const api = fakeApi();
+    await submitTake(config(), work, { ...draft, nonce: "nonce-from-the-author" }, workspace());
+    expect(JSON.parse(api.submits[0] ?? "{}").nonce).toBe("nonce-from-the-author");
+  });
+
+  test("GATE 'crash after submit: ONE take' — resending the SAME bytes returns the EXISTING row as SUCCESS", async () => {
+    const api = fakeApi();
+    const ws = workspace();
+    const first = await submitTake(config(), work, draft, ws);
+    // The container died here, restarted, and resent what its workspace held.
+    const second = await sendSignedSubmission(config(), persistedIn(ws.path).bytes);
     expect(second.status).toBe("already_submitted");
     expect(second.takeId).toBe(first.takeId);
-    expect(api.takes.size).toBe(1);
+    expect(api.rows).toHaveLength(1);
+    expect(api.submits[1]).toBe(api.submits[0]);
   });
 
-  test("GATE 'roster change with overlapping containers: ONE take' — two containers, one record", async () => {
+  test("D51: a NEW nonce is an AMENDMENT — its own row, marked final, and the previous one unset", async () => {
     const api = fakeApi();
-    const oldContainer = submitTake(config(), work, draft);
-    const newContainer = submitTake(config(), work, draft);
-    const results = await Promise.all([oldContainer, newContainer]);
-    expect(api.takes.size).toBe(1);
-    const ids = new Set(results.map((r) => r.takeId));
-    expect(ids.size).toBe(1);
-    expect(results.filter((r) => r.status === "submitted").length).toBeLessThanOrEqual(1);
+    await submitTake(config(), work, { ...draft, nonce: "n-1" }, workspace());
+    const amended = await submitTake(config(), work, { ...draft, nonce: "n-2", stance: "bullish" }, workspace());
+    expect(amended.status).toBe("submitted");
+    expect(api.rows.map((r) => ({ nonce: r.nonce, final: r.final, revision: r.revision }))).toEqual([
+      { nonce: "n-1", final: false, revision: 1 },
+      { nonce: "n-2", final: true, revision: 2 },
+    ]);
   });
 
-  test("take identity is (session, member): another session for the same member is a SEPARATE take", async () => {
+  test("GATE 'roster change with overlapping containers' — two authors, an amendment, never two FINAL takes", async () => {
     const api = fakeApi();
-    await submitTake(config(), work, draft);
-    const other: PendingWork = { ...work, sessionId: "99999999-2222-3333-4444-555555555555" };
-    const second = await submitTake(config(), other, { ...draft, sessionId: other.sessionId });
-    expect(second.status).toBe("submitted");
-    expect(second.takeId).not.toBe("take-1");
-    expect(api.takes.size).toBe(2);
+    // Old and new container each author and mint their own nonce.
+    const results = await Promise.all([
+      submitTake(config(), work, draft, workspace()),
+      submitTake(config(), work, draft, workspace()),
+    ]);
+    expect(results.every((r) => r.status === "submitted")).toBe(true);
+    expect(api.rows).toHaveLength(2);
+    expect(api.rows.filter((r) => r.final)).toHaveLength(1);
   });
 
-  test("take identity is (session, member): another member in the same session is a SEPARATE take", async () => {
+  test("`already_submitted` is reached with NO retry — exactly one submit request per send", async () => {
     const api = fakeApi();
-    await submitTake(config(), work, draft);
-    const second = await submitTake(config({ memberId: "m-robot-money", name: "robot-money" }), work, {
-      ...draft,
-      memberId: "m-robot-money",
-    });
-    expect(second.status).toBe("submitted");
-    expect(api.takes.size).toBe(2);
-  });
-
-  test("`already_submitted` is reached with NO retry — exactly one submit request", async () => {
-    const api = fakeApi();
-    await submitTake(config(), work, draft);
-    const before = api.requests.filter((r) => r.url.includes(ROUTES.swarm.submit)).length;
-    await submitTake(config(), work, draft);
-    const after = api.requests.filter((r) => r.url.includes(ROUTES.swarm.submit)).length;
-    expect(after - before).toBe(1);
+    const ws = workspace();
+    await submitTake(config(), work, draft, ws);
+    await sendSignedSubmission(config(), persistedIn(ws.path).bytes);
+    expect(api.submits).toHaveLength(2);
   });
 
   test("a conflict status carrying the existing record is STILL success, not an error", async () => {
@@ -427,11 +529,11 @@ describe("submitTake — canonical bytes fetched, one POST, idempotent on (sessi
         return new Response(JSON.stringify({ canonical: "CANONICAL" }), { status: 200 });
       }
       return new Response(
-        JSON.stringify({ ok: false, alreadySubmitted: true, recommendationId: "take-7", error: "take already on file" }),
+        JSON.stringify({ ok: false, alreadySubmitted: true, recommendationId: "take-7", error: "nonce already recorded" }),
         { status: 409, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
-    const result = await submitTake(config(), work, draft);
+    const result = await submitTake(config(), work, draft, workspace());
     expect(result.status).toBe("already_submitted");
     expect(result.takeId).toBe("take-7");
   });
@@ -447,7 +549,7 @@ describe("submitTake — canonical bytes fetched, one POST, idempotent on (sessi
         headers: { "Content-Type": "application/json" },
       });
     }) as typeof fetch;
-    const result = await submitTake(config(), work, draft);
+    const result = await submitTake(config(), work, draft, workspace());
     expect(result.status).toBe("refused");
     expect(result.verified).toBe(false);
     expect(result.reason).toContain("signature");
@@ -461,90 +563,330 @@ describe("submitTake — canonical bytes fetched, one POST, idempotent on (sessi
       }
       return new Response(JSON.stringify({ ok: false, error: "no registered key for member" }), { status: 403 });
     }) as typeof fetch;
-    const result = await submitTake(config(), work, draft);
+    const result = await submitTake(config(), work, draft, workspace());
     expect(result.status).toBe("refused");
   });
 
-  test("a TRANSPORT error throws — the take is retried on the next poll, where idempotency bounds it to one", async () => {
-    globalThis.fetch = (async (_input?: any): Promise<Response> => {
-      throw new Error("ECONNREFUSED website-server:8080");
-    }) as typeof fetch;
-    await expect(submitTake(config(), work, draft)).rejects.toThrow(/ECONNREFUSED/);
-  });
-});
-
-// ── ONE TAKE END TO END ────────────────────────────────────────────────────
-describe("runTake — fresh workspace → one-shot → submit → dispose, on every path", () => {
-  const realFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = realFetch;
+  test("a TRANSPORT error on the submit throws — and the signed bytes are already on disk to resend", async () => {
+    const ws = workspace();
+    fakeApi({
+      beforeRecord: () => {
+        throw new Error("ECONNREFUSED website-server:8080");
+      },
+    });
+    await expect(submitTake(config(), work, draft, ws)).rejects.toThrow(/ECONNREFUSED/);
+    expect(persistedIn(ws.path).bytes).not.toBe("");
   });
 
-  function answeringApi() {
+  test("a 5xx on the submit throws too — the server did not answer, so the bytes are resent, not refused", async () => {
     globalThis.fetch = (async (input: any): Promise<Response> => {
       const url = String(input);
       if (url.includes(ROUTES.swarm.signingPayload)) {
-        return new Response(JSON.stringify({ canonical: "CANONICAL" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(JSON.stringify({ canonical: "CANONICAL" }), { status: 200 });
       }
-      return new Response(JSON.stringify({ ok: true, recommendationId: "take-1", verified: true, revision: 1 }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(JSON.stringify({ error: "upstream" }), { status: 503 });
     }) as typeof fetch;
+    const ws = workspace();
+    await expect(submitTake(config(), work, draft, ws)).rejects.toThrow(/503/);
+    expect(existsSync(join(ws.path, SIGNED_SUBMISSION_FILE))).toBe(true);
+  });
+
+  test("a TRANSPORT error fetching the canonical bytes throws BEFORE anything is persisted", async () => {
+    globalThis.fetch = (async (_input?: any): Promise<Response> => {
+      throw new Error("ECONNREFUSED website-server:8080");
+    }) as typeof fetch;
+    const ws = workspace();
+    await expect(submitTake(config(), work, draft, ws)).rejects.toThrow(/ECONNREFUSED/);
+    expect(existsSync(join(ws.path, SIGNED_SUBMISSION_FILE))).toBe(false);
+  });
+});
+
+// ── ONE TAKE END TO END, WITH A REAL TAKE COMMAND ──────────────────────────
+// Every case here runs a REAL one-shot: a shell script written to a temp
+// directory and injected as `takeCommand`, exactly as `RM_TAKE_COMMAND` is. The
+// script records each authoring run in a marker directory OUTSIDE the take's
+// workspace, so a test can count authoring and watch a grandchild after the
+// workspace is gone.
+describe("runTake — fresh workspace → one-shot → sign → persist → submit → dispose", () => {
+  const realFetch = globalThis.fetch;
+  const dirs: string[] = [];
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
+  });
+  const dir = (): string => {
+    const d = tempDir();
+    dirs.push(d);
+    return d;
+  };
+
+  /** A take command that authors a real draft and counts its own runs. */
+  function authoringCommand(markers: string): string[] {
+    const script = join(markers, "author.sh");
+    writeFileSync(
+      script,
+      [
+        `echo run >> '${markers}/authored.log'`,
+        `echo "$RM_WORKSPACE" > '${markers}/ws'`,
+        `printf 'scratch' > "$RM_WORKSPACE/transcript.txt"`,
+        `printf 'RM_TAKE_DRAFT {"memberId":"%s","date":"%s","subjectId":"%s","stance":"neutral","confidence":0.5,"body":"a take"}\\n' "$RM_MEMBER_ID" "$RM_SESSION_DATE" "$RM_SUBJECT_ID"`,
+        "",
+      ].join("\n"),
+    );
+    return ["/bin/sh", script];
   }
 
-  test("the outcome names the take's identity — the session and the member", async () => {
-    answeringApi();
-    const root = tempDir();
+  const authoredRuns = (markers: string): number =>
+    existsSync(join(markers, "authored.log")) ? readFileSync(join(markers, "authored.log"), "utf8").trim().split("\n").length : 0;
+
+  test("the whole chain runs: a workspace, a one-shot, `ok`, then `submitted`, then disposal", async () => {
+    const root = dir();
+    const markers = dir();
+    const events: string[] = [];
+    const api = fakeApi({
+      beforeRecord: () => {
+        // At the POST the workspace still exists and holds the signed bytes.
+        const ws = readFileSync(join(markers, "ws"), "utf8").trim();
+        events.push(`submit:workspace=${existsSync(join(ws, SIGNED_SUBMISSION_FILE))}`);
+      },
+    });
+    const outcome = await runTake(config({ workspaceRoot: root, takeCommand: authoringCommand(markers) }), work);
+    const ws = readFileSync(join(markers, "ws"), "utf8").trim();
+    events.push(`after:workspace=${existsSync(ws)}`);
+
+    expect(outcome.oneShot).toBe("ok");
+    expect(outcome.submission).toBe("submitted");
+    expect(outcome.sessionId).toBe(SESSION_ID);
+    expect(outcome.memberId).toBe(MEMBER_ID);
+    expect(outcome.nonce).toBe(api.rows[0]?.nonce);
+    expect(authoredRuns(markers)).toBe(1);
+    // The workspace was REAL (under the root) and is gone now.
+    expect(ws.startsWith(root)).toBe(true);
+    expect(events).toEqual(["submit:workspace=true", "after:workspace=false"]);
+    expect(readdirSync(root)).toEqual([]);
+    expect(api.rows).toHaveLength(1);
+  }, 30_000);
+
+  test("a TIMED-OUT take is EXACTLY `timeout`: its grandchild is frozen, its workspace is gone, nothing is sent", async () => {
+    const root = dir();
+    const markers = dir();
+    const script = join(markers, "hang.sh");
+    writeFileSync(
+      script,
+      [
+        `echo "$RM_WORKSPACE" > '${markers}/ws'`,
+        `sh -c 'while true; do printf x >> ${markers}/grandchild.log; sleep 0.05; done' &`,
+        `echo $! > '${markers}/grandchild.pid'`,
+        "sleep 30",
+        "",
+      ].join("\n"),
+    );
+    const api = fakeApi();
+    const outcome = await runTake(
+      config({ workspaceRoot: root, takeTimeoutMs: 500, takeCommand: ["/bin/sh", script] }),
+      work,
+    );
+    expect(outcome.oneShot).toBe("timeout");
+    expect(outcome.submission).toBeNull();
+    expect(api.submits).toEqual([]);
+
+    // The one-shot really ran in a workspace under the root, which is now gone.
+    const ws = readFileSync(join(markers, "ws"), "utf8").trim();
+    expect(ws.startsWith(root)).toBe(true);
+    expect(existsSync(ws)).toBe(false);
+    expect(readdirSync(root)).toEqual([]);
+
+    // No child survives: the grandchild wrote before the kill, and never after.
+    const log = join(markers, "grandchild.log");
+    const sizeAtReturn = statSync(log).size;
+    expect(sizeAtReturn).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(statSync(log).size).toBe(sizeAtReturn);
+    const pid = Number.parseInt(readFileSync(join(markers, "grandchild.pid"), "utf8").trim(), 10);
+    expect(await eventuallyDead(pid)).toBe(true);
+  }, 30_000);
+
+  test("GATE 'crash after submit': the restart RESENDS the same bytes and nonce, and never authors again", async () => {
+    const root = dir();
+    const markers = dir();
+    const cfg = config({ workspaceRoot: root, takeCommand: authoringCommand(markers) });
+    // First life: the server records the take, then the response is lost.
+    let loseResponse = true;
+    const api = fakeApi({
+      afterRecord: () => {
+        if (loseResponse) throw new Error("ECONNRESET: container killed mid-response");
+      },
+    });
+    const first = await runTake(cfg, work);
+    expect(first.oneShot).toBe("ok");
+    expect(first.submission).toBe("unconfirmed");
+    // The signed submission survived in its workspace.
+    expect(readdirSync(root)).toHaveLength(1);
+
+    // Second life: same work offered again. It must resend, not re-author.
+    loseResponse = false;
+    const second = await runTake(cfg, work);
+    expect(second.oneShot).toBeNull();
+    expect(second.submission).toBe("already_submitted");
+    expect(second.nonce).toBe(first.nonce);
+    expect(authoredRuns(markers)).toBe(1);
+    expect(api.submits).toHaveLength(2);
+    expect(api.submits[1]).toBe(api.submits[0]);
+    expect(api.rows).toHaveLength(1);
+    // Confirmed, so the workspace is gone.
+    expect(readdirSync(root)).toEqual([]);
+  }, 30_000);
+
+  test("a send that NEVER reached the server is resent as the same bytes and recorded ONCE", async () => {
+    const root = dir();
+    const markers = dir();
+    const cfg = config({ workspaceRoot: root, takeCommand: authoringCommand(markers) });
+    let down = true;
+    const api = fakeApi({
+      beforeRecord: () => {
+        if (down) throw new Error("ECONNREFUSED website-server:8080");
+      },
+    });
+    expect((await runTake(cfg, work)).submission).toBe("unconfirmed");
+    down = false;
+    const retried = await runTake(cfg, work);
+    expect(retried.submission).toBe("submitted");
+    expect(authoredRuns(markers)).toBe(1);
+    expect(api.submits[1]).toBe(api.submits[0]);
+    expect(api.rows).toHaveLength(1);
+    expect(readdirSync(root)).toEqual([]);
+  }, 30_000);
+
+  test("resendPendingSubmissions resends a take whose session is no longer offered, then disposes it", async () => {
+    // The server recorded the take before the crash, so the session is no
+    // longer pending; only the sweep ever resends it.
+    const root = dir();
+    const markers = dir();
+    const cfg = config({ workspaceRoot: root, takeCommand: authoringCommand(markers) });
+    let loseResponse = true;
+    const api = fakeApi({
+      afterRecord: () => {
+        if (loseResponse) throw new Error("ECONNRESET");
+      },
+    });
+    await runTake(cfg, work);
+    loseResponse = false;
+    const outcomes = await resendPendingSubmissions(cfg);
+    expect(outcomes.map((o) => ({ session: o.sessionId, oneShot: o.oneShot, submission: o.submission }))).toEqual([
+      { session: SESSION_ID, oneShot: null, submission: "already_submitted" },
+    ]);
+    expect(authoredRuns(markers)).toBe(1);
+    expect(api.rows).toHaveLength(1);
+    expect(readdirSync(root)).toEqual([]);
+    // Nothing left: a second sweep sends nothing.
+    expect(await resendPendingSubmissions(cfg)).toEqual([]);
+    expect(api.submits).toHaveLength(2);
+  }, 30_000);
+
+  test("the sweep leaves ANOTHER member's persisted submission alone", async () => {
+    const root = dir();
+    const markers = dir();
+    let loseResponse = true;
+    fakeApi({
+      afterRecord: () => {
+        if (loseResponse) throw new Error("ECONNRESET");
+      },
+    });
+    await runTake(config({ workspaceRoot: root, takeCommand: authoringCommand(markers) }), work);
+    loseResponse = false;
+    expect(await resendPendingSubmissions(config({ workspaceRoot: root, memberId: "m-robot-money" }))).toEqual([]);
+    expect(readdirSync(root)).toHaveLength(1);
+  }, 30_000);
+
+  test("a DEFINITIVE refusal after persisting settles the take — the workspace goes, nothing is resent", async () => {
+    const root = dir();
+    const markers = dir();
+    globalThis.fetch = (async (input: any, init?: any): Promise<Response> => {
+      const url = String(input);
+      if (url.includes(ROUTES.swarm.signingPayload)) {
+        return new Response(JSON.stringify({ canonical: canonicalOf(JSON.parse(String(init?.body))) }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: false, error: "window closed" }), { status: 409 });
+    }) as typeof fetch;
+    const outcome = await runTake(config({ workspaceRoot: root, takeCommand: authoringCommand(markers) }), work);
+    expect(outcome.submission).toBe("refused");
+    expect(outcome.reason).toContain("window closed");
+    expect(readdirSync(root)).toEqual([]);
+  }, 30_000);
+
+  test("authoring RESIDUE of a crashed attempt (no signed submission) is removed, and the take is authored fresh", async () => {
+    const root = dir();
+    const markers = dir();
+    const stale = createTakeWorkspace(root, SESSION_ID, MEMBER_ID);
+    writeFileSync(join(stale.path, "transcript.txt"), "half an authoring run");
+    // A different member whose id merely EXTENDS this one's is not residue.
+    const neighbour = createTakeWorkspace(root, SESSION_ID, `${MEMBER_ID}-2`);
+    fakeApi();
+    const outcome = await runTake(config({ workspaceRoot: root, takeCommand: authoringCommand(markers) }), work);
+    expect(outcome.submission).toBe("submitted");
+    expect(authoredRuns(markers)).toBe(1);
+    expect(existsSync(stale.path)).toBe(false);
+    expect(readdirSync(root)).toEqual([basename(neighbour.path)]);
+  }, 30_000);
+
+  test("the one-shot's argv is the INJECTED take command, never an ambient environment variable", async () => {
+    const root = dir();
+    const markers = dir();
+    process.env.RM_TAKE_COMMAND = "/bin/false";
     try {
-      const outcome = await runTake(config({ workspaceRoot: root }), work);
-      expect(outcome.sessionId).toBe(SESSION_ID);
-      expect(outcome.memberId).toBe(MEMBER_ID);
+      fakeApi();
+      const outcome = await runTake(config({ workspaceRoot: root, takeCommand: authoringCommand(markers) }), work);
+      expect(outcome.submission).toBe("submitted");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      delete process.env.RM_TAKE_COMMAND;
     }
   }, 30_000);
 
-  test("the workspace is disposed — the root is left EMPTY after the take", async () => {
-    answeringApi();
-    const root = tempDir();
-    try {
-      await runTake(config({ workspaceRoot: root }), work);
-      expect(readdirSync(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 30_000);
-
-  test("a TIMED-OUT take still disposes its workspace and reports the timeout", async () => {
-    answeringApi();
-    const root = tempDir();
-    try {
-      const outcome = await runTake(config({ workspaceRoot: root, takeTimeoutMs: 200 }), work);
-      expect(readdirSync(root)).toEqual([]);
-      expect(["timeout", "crashed"]).toContain(outcome.oneShot);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 30_000);
+  test("with NO take command the take is `crashed`, naming the missing setting, and leaves nothing", async () => {
+    const root = dir();
+    const api = fakeApi();
+    const outcome = await runTake(config({ workspaceRoot: root, takeCommand: [] }), work);
+    expect(outcome.oneShot).toBe("crashed");
+    expect(outcome.reason).toContain("RM_TAKE_COMMAND");
+    expect(api.requests).toEqual([]);
+    expect(readdirSync(root)).toEqual([]);
+  });
 
   test("a failed take is a REPORTED OUTCOME, not a throw — one bad session must not kill the container", async () => {
     globalThis.fetch = (async (_input?: any): Promise<Response> => {
       return new Response(JSON.stringify({ ok: false, error: "no session for subject" }), { status: 404 });
     }) as typeof fetch;
-    const root = tempDir();
-    try {
-      const outcome = await runTake(config({ workspaceRoot: root, takeTimeoutMs: 2_000 }), work);
-      expect(outcome.sessionId).toBe(SESSION_ID);
-      expect(typeof outcome.durationMs).toBe("number");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = dir();
+    const markers = dir();
+    const outcome = await runTake(
+      config({ workspaceRoot: root, takeTimeoutMs: 10_000, takeCommand: authoringCommand(markers) }),
+      work,
+    );
+    expect(outcome.sessionId).toBe(SESSION_ID);
+    expect(outcome.oneShot).toBe("ok");
+    expect(outcome.submission).toBe("refused");
+    expect(readdirSync(root)).toEqual([]);
   }, 30_000);
 });
+
+/**
+ * True once `pid` is gone. A killed process can linger as a zombie until its
+ * new parent reaps it; a zombie holds no workspace and runs nothing, so it
+ * counts as dead.
+ */
+async function eventuallyDead(pid: number): Promise<boolean> {
+  for (let i = 0; i < 40; i += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    const stat = join("/proc", String(pid), "stat");
+    if (existsSync(stat) && /\) Z /.test(readFileSync(stat, "utf8"))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
 
 // ── NO DOCKER SOCKET ANYWHERE ON THIS PATH (spec §6.2) ─────────────────────
 describe("take-runner.ts holds no container rail — a take is a PROCESS", () => {
