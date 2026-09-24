@@ -1,10 +1,10 @@
-<!-- /research/late-cycle-signals — Late-cycle signals research preview.
+<!-- /research/late-cycle-signals: Late-cycle signals research preview.
      Full long-form content ported from the published page at
      robotmoney.network/research/late-cycle-signals: four slow-moving gauges
      (index concentration, M&A activity, margin debt, consumer confidence),
      each with its write-up and read-it-this-way line, plus the framing and
      regime-composite sections. Carries the live researchView payload (5
-     gauges: CONCENTRATION, TOP7_VS_SPY, MNA, MARGIN, CONF — the backend's
+     gauges: CONCENTRATION, TOP7_VS_SPY, MNA, MARGIN, CONF; the backend's
      computeLateCycle persists TOP7_VS_SPY as its own gauge alongside the
      four published in the write-up above) and per-indicator sparklines,
      same pattern as the channel-divergence preview.
@@ -20,14 +20,14 @@
         The <a class="stub__inline" href="/regime">regime classifier</a> answers a fast
         question: is risk appetite on <em>right now</em>? These four gauges answer a slow
         one: how mature is the cycle that&rsquo;s producing that risk appetite? They move on
-        monthly and quarterly data, so they don&rsquo;t belong in a daily composite directly
-        &mdash; but a loud risk-on composite combined with saturated late-cycle gauges is
+        monthly and quarterly data, so they don&rsquo;t belong in a daily composite directly.
+        But a loud risk-on composite combined with saturated late-cycle gauges is
         historically the configuration where trimming into strength beats chasing.
       </p>
       <p class="stub__lede">
         The selection is inspired by BofA&rsquo;s &ldquo;signposts of a market peak&rdquo;
         checklist (10 signals, ~70% triggered as of May 2026, vs 80&ndash;90% at the
-        1990/2000/2007 peaks) &mdash; rebuilt here from free sources only. The honest caveat
+        1990/2000/2007 peaks), rebuilt here from free sources only. The honest caveat
         up front: peak checklists are assembled retrospectively, every signal is in-sample by
         construction, and the 2018/2020 rows of BofA&rsquo;s own table show the false-positive
         cost. Read these as gradients, not triggers.
@@ -106,16 +106,16 @@
 
     <div class="stub__body">
       <section class="stub__sec">
-        <h2 class="stub__h2">1. Index concentration &mdash; the top of the index vs the index</h2>
+        <h2 class="stub__h2" id="index-concentration">Index concentration: the top of the index vs the index</h2>
         <p class="stub__p">
           Cap-weighted S&amp;P 500 (SPY) divided by equal-weighted (RSP). When a handful of
           megacaps carry the index, cap-weight outruns equal-weight and the ratio climbs. This
-          is the generic version of &ldquo;top 7 vs the index&rdquo; &mdash; it doesn&rsquo;t
+          is the generic version of &ldquo;top 7 vs the index&rdquo;: it doesn&rsquo;t
           hard-code today&rsquo;s leaders, so it keeps working when leadership rotates. We
           chart the top-7-today basket as a secondary line; its past values carry a
           survivorship caveat (we picked today&rsquo;s winners), which is exactly why the
           generic ratio is the primary signal. Extreme concentration is not a sell signal by
-          itself &mdash; it can persist for years &mdash; but every major unwind (2000, 2022)
+          itself (it can persist for years), but every major unwind (2000, 2022)
           started from a concentration extreme, because an index priced off 7 stories has
           fewer independent legs to stand on.
         </p>
@@ -150,12 +150,12 @@
       </section>
 
       <section class="stub__sec">
-        <h2 class="stub__h2">2. M&amp;A activity &mdash; S-4 filings per month</h2>
+        <h2 class="stub__h2" id="mna-activity">M&amp;A activity: S-4 filings per month</h2>
         <p class="stub__p">
           Monthly count of S-4 registration statements filed with the SEC (the form companies
           file for stock-financed mergers and exchange offers), via EDGAR full-text search.
           Deal-making is a confidence trade: boards commit capital at scale when financing is
-          cheap and projections extrapolate well &mdash; which is why deal counts historically
+          cheap and projections extrapolate well, which is why deal counts historically
           crest near cycle tops (BofA&rsquo;s version of this trigger: 5y deal-count Z-score
           &gt; 1). Mechanical, free, and harder to game than survey data.
         </p>
@@ -176,14 +176,14 @@
       </section>
 
       <section class="stub__sec">
-        <h2 class="stub__h2">3. Margin debt &mdash; speculative leverage</h2>
+        <h2 class="stub__h2" id="margin-debt">Margin debt: speculative leverage</h2>
         <p class="stub__p">
           Broker-dealer margin loans from the Fed&rsquo;s Z.1 flow-of-funds accounts
           (quarterly), read as year-over-year growth. This is the liquidity-and-leverage proxy:
           when investors borrow aggressively against portfolios, marginal buying power is being
           manufactured rather than earned. YoY growth peaks led the 2000, 2007 and 2021 equity
           peaks; the deepest contractions marked durable bottoms. Quarterly data means
-          it&rsquo;s slow &mdash; treat it as cycle positioning, not timing.
+          it&rsquo;s slow: treat it as cycle positioning, not timing.
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: Margin debt YoY growth</div>
@@ -202,12 +202,12 @@
       </section>
 
       <section class="stub__sec">
-        <h2 class="stub__h2">4. Consumer confidence &mdash; the contrarian survey</h2>
+        <h2 class="stub__h2" id="consumer-confidence">Consumer confidence: the contrarian survey</h2>
         <p class="stub__p">
           University of Michigan consumer sentiment (the free cousin of the Conference Board
           series BofA uses with its &gt;110 trigger; scales differ, shape is similar).
           Confidence is a coincident-to-contrarian signal: very high readings mean the good
-          news is fully absorbed &mdash; households are all-in &mdash; which is late-cycle. The
+          news is fully absorbed (households are all-in), which is late-cycle. The
           classic pre-recession pattern is elevated-then-rolling-over. Very low readings are
           historically excellent forward-return setups (2009, 2022).
         </p>
@@ -227,31 +227,31 @@
       </section>
 
       <section class="stub__sec">
-        <h2 class="stub__h2">How these would feed the regime composite</h2>
+        <h2 class="stub__h2" id="regime-composite">How these would feed the regime composite</h2>
         <p class="stub__p">
           Proposed panel assignments if promoted: concentration, M&amp;A activity and margin
           debt join the equity factor panel; consumer confidence joins the macro panel. All
           four would be sign-aligned the same way as existing indicators (percentile-ranked,
           +1 = risk-on), with concentration and M&amp;A carrying a <em>negative</em> sign at
-          the extremes &mdash; the subtlety being that these are hump-shaped signals: rising
+          the extremes. The subtlety is that these are hump-shaped signals: rising
           from low levels is healthy risk-on, saturated readings are late-cycle. That
           nonlinearity is why they start here as a research preview rather than going straight
           into a linear panel, and why any promotion would be a version bump with a documented
-          relock, per <code class="stub__code">data/regime/regime-versions.json</code>.
+          relock.
         </p>
         <p class="stub__p">
           Read together with the
           <a class="stub__inline" href="/research/channel-divergence">channel-divergence preview</a>:
           if late-cycle gauges saturate in equities while crypto isn&rsquo;t absorbing
-          risk-appetite flow, that&rsquo;s the &ldquo;AI vs crypto&rdquo; configuration &mdash;
-          equity euphoria without crypto beta &mdash; and the composite should read it as
+          risk-appetite flow, that&rsquo;s the &ldquo;AI vs crypto&rdquo; configuration
+          (equity euphoria without crypto beta), and the composite should read it as
           something other than uniform risk-on.
         </p>
       </section>
     </div>
 
     <div class="stub__back">
-      <a class="stub__back-link" href="/regime">&larr; Back to /regime</a>
+      <a class="stub__back-link" href="/regime">&larr; Back to the regime classifier</a>
     </div>
   </div>
 </section>
@@ -270,8 +270,8 @@
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-accent);
+  letter-spacing: 0.11em;
+  color: var(--color-text-muted);
   margin-bottom: 1rem;
 }
 .stub__title {
@@ -292,7 +292,7 @@
   color: var(--color-text);
 }
 .stub__lede {
-  color: var(--color-text-muted);
+  color: var(--color-text-soft);
   max-width: 44rem;
   margin: 1.25rem 0 0;
   line-height: 1.65;
@@ -310,12 +310,13 @@
   color: var(--color-text);
   margin: 0;
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
+  scroll-margin-top: 6rem;
 }
 .stub__p {
   font-size: 0.95rem;
   line-height: 1.7;
-  color: var(--color-text-muted);
+  color: var(--color-text-soft);
   margin: 0;
 }
 .stub__p em { font-style: normal; color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }
@@ -342,7 +343,7 @@
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.11em;
   color: var(--color-text-muted);
   text-align: left;
   padding-bottom: 0.5rem;
@@ -353,7 +354,7 @@
   font-size: 0.7rem;
   font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.11em;
   color: var(--color-text-muted);
   text-align: left;
   padding: 0.5rem 1rem 0.5rem 0;
@@ -399,7 +400,7 @@
   font-family: var(--font-mono);
   font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.11em;
   color: var(--color-text-muted);
   line-height: 1.5;
 }
@@ -416,8 +417,8 @@
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-accent);
+  letter-spacing: 0.11em;
+  color: var(--color-text-muted);
   margin-bottom: 0.35rem;
 }
 .stub__back { margin-top: 3rem; }

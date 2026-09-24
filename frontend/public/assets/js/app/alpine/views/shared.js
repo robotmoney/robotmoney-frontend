@@ -7,15 +7,18 @@
 // rather than a drive-by inside an unrelated change.
 //
 // Shared regime-dashboard chart/data helpers, moved verbatim from the top of
-// the old monolithic views.js (review-maintainability finding 025). Today
-// every export is consumed only by views/regime.js, but they are the shared
-// layer any other chart view should import from rather than re-declaring.
-import { PALETTE, SERIES, CATEGORICAL, rgba } from "../../lib/chart-theme.js";
+// the old monolithic views.js (review-maintainability finding 025). The regime
+// page, the blog's backtest charts and the swarm views import from here; any
+// other chart view should too, rather than re-declaring a series colour.
+import { PALETTE, SERIES, CATEGORICAL, REGIME, rgba } from "../../lib/chart-theme.js";
 
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
-// Background regime bands painted behind the line datasets, matching the
-// original RegimeDashboard: risk-off amber @10%, risk-on cyan @8%, neutral bare.
-export const REGIME_BAND = { risk_off: rgba(PALETTE.warm, 0.1), risk_on: rgba(PALETTE.accent, 0.08), neutral: null };
+// Background regime bands painted behind the line datasets. Only risk-off is
+// shaded, as a neutral slate wash; risk-on and neutral stay bare. Cyan is a
+// line and beacon is a point, so neither may be a full-height filled area.
+// The regime hues themselves (REGIME in lib/chart-theme.js) belong on dots and
+// lines, and on a ribbon of 12px or less once one replaces these bands.
+export const REGIME_BAND = { risk_off: rgba(REGIME.neutral, 0.1), risk_on: null, neutral: null };
 export const regimeBandsPlugin = {
   id: "regimeBands",
   beforeDatasetsDraw(chart, _args, opts) {
@@ -81,7 +84,7 @@ export const BACKTESTS = [
       ["composite", "Composite bucket", "Default rule on the published composite."],
       ["macro", "Macro bucket", "Macro panel only."],
       ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
+      ["factor", "Equity factor bucket", "Equity factor panel only."],
       ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
       ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
       ["eth_hodl", "Buy-and-hold ETH", "Reference: 100% ETH."],
@@ -96,7 +99,7 @@ export const BACKTESTS = [
       ["composite", "Composite bucket", "Default rule on the published composite."],
       ["macro", "Macro bucket", "Macro panel only."],
       ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
+      ["factor", "Equity factor bucket", "Equity factor panel only."],
       ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
       ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
       ["sp500_hodl", "Buy-and-hold SP500", "Reference: 100% SP500."],
@@ -111,7 +114,7 @@ export const BACKTESTS = [
       ["composite", "Composite bucket", "Default rule on the published composite."],
       ["macro", "Macro bucket", "Macro panel only."],
       ["onchain", "On-chain bucket", "On-chain panel only."],
-      ["factor", "Equity factor bucket", "Equity factor panel only (only present in /regime_eq)."],
+      ["factor", "Equity factor bucket", "Equity factor panel only."],
       ["conservative", "Conservative (N-panel)", "Any panel off → off; all panels on → on; else neutral."],
       ["aggressive", "Aggressive (N-panel)", "Net sum > 0 → on, < 0 → off, = 0 → neutral."],
       ["blend_hodl", "50/50 ETH + SP500 HODL", "Reference: always max-risk."],
@@ -232,10 +235,10 @@ export const SOURCE_LABEL = {
   blockchain_com: "Blockchain.com", coinmetrics: "Coinmetrics", geckoterminal_newpools: "GeckoTerminal",
 };
 
-// The inline regime-band legend swatches (REGIME_BG_LEGEND from
-// regimeBandsPlugin.ts): shown next to "Full history" and each equity-curve chart.
+// The inline regime-band legend swatches, shown next to "Full history" and each
+// equity-curve chart. One entry, because REGIME_BAND shades risk-off alone: an
+// unshaded span is neutral or risk-on. The swatch is the band's slate, a little
+// stronger so a 10px square still reads.
 export const REGIME_BG_LEGEND = [
-  { label: "risk-off", color: rgba(PALETTE.warm, 0.5) },
-  { label: "neutral", color: rgba(PALETTE.textMuted, 0.15) },
-  { label: "risk-on", color: rgba(PALETTE.accent, 0.4) },
+  { label: "risk-off", color: rgba(REGIME.neutral, 0.3) },
 ];
