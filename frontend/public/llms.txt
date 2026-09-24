@@ -33,7 +33,8 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 
 ## Product
 - [Home](https://robotmoney.network/): what Robot Money is. One USDC deposit, multi-protocol DeFi yield plus an agent-token basket, withdraw anytime minus a 0.25% exit fee.
-- [Agent Skill](https://robotmoney.network/skills): install the robotmoney-cli agent skill into any runtime that can run a shell command; the deposit, yield, basket and withdraw command surface.
+- [Deposit](https://robotmoney.network/deposit): how to deposit. Install the robotmoney-cli deposit skill into any runtime that can run a shell command; the deposit, yield, basket and withdraw command surface, the mechanics and the verified contracts.
+- [Agent skills](https://robotmoney.network/skills): every Robot Money agent skill: the deposit skill (robotmoney-cli) and the swarm onboarding skill.
 - [Tokenomics](https://robotmoney.network/tokenomics): $ROBOTMONEY supply, fee distribution, buyback mechanics, and the governance design that is planned but not built.
 
 ## Live data pages (rendered client-side; use the API below instead)

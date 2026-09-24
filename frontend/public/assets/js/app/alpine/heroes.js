@@ -1516,7 +1516,7 @@ export function registerHeroes(Alpine) {
     },
   }));
 
-  // Bare branching trees for the /skills hero band.
+  // Bare branching trees for the /deposit and /skills hero bands.
   //
   // Follows the same recipe as the /tree effect on the production site:
   // recursive three-way branching, per-tree Perlin-noise wind so each one sways

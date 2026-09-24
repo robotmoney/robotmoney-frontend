@@ -7,6 +7,7 @@ import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
+import { registerSiteNav } from "./alpine/site-nav.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
 import { start } from "./router.js";
@@ -211,6 +212,7 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  registerSiteNav(Alpine);
   registerSubstrate(Alpine);
   registerViews(Alpine);
   registerHeroes(Alpine);

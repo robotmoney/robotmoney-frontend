@@ -79,12 +79,12 @@
         },
         {
           "@type": "SoftwareApplication",
-          "name": "Robot Money Skill",
+          "name": "Robot Money deposit skill",
           "applicationCategory": "FinanceApplication",
-          "operatingSystem": "Any MCP-compatible agent runtime",
-          "url": "https://robotmoney.network/skills",
+          "operatingSystem": "Any agent runtime that can run a shell command",
+          "url": "https://robotmoney.network/deposit",
           "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-          "description": "An MCP skill that lets any AI agent deposit into and withdraw from the Robot Money USDC yield vault on Base, at NAV, with no human in the loop."
+          "description": "An agent skill (robotmoney-cli) that lets any AI agent deposit into and withdraw from the Robot Money USDC yield vault on Base, at NAV, with no human in the loop."
         }
       ]
     }
@@ -94,7 +94,7 @@
          then components. No @import; each file linked individually. -->
     <link rel="stylesheet" href="/assets/css/tokens.css?v=c84768eb" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=2fdcb302" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=05c22796" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
@@ -103,7 +103,7 @@
     <link rel="stylesheet" href="/assets/css/sections/token.css?v=96bbd723" />
     <link rel="stylesheet" href="/assets/css/sections/contract.css?v=0aeb4cb5" />
     <link rel="stylesheet" href="/assets/css/sections/governance.css?v=21436cd7" />
-    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=ebae5e12" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=abe10fb2" />
 
     <!-- Data-driven view styles (regime + swarm). -->
     <link rel="stylesheet" href="/assets/css/views.css?v=7aa4f333" />
@@ -132,49 +132,164 @@
     <script defer src="/assets/js/vendor/alpinejs-3.14.9.min.js"></script>
   </head>
   <body>
-    <!-- ── Nav (inline; the SPA shell renders it once) ── -->
-    <nav class="nav nav--solid" x-data="{ scrolled: true, mobileOpen: false }">
+    <!-- ── Nav (inline; the SPA shell renders it once) ──
+         One list of links serves both layouts (RM-124): a bar of groups, each
+         dropping a card of links at 1024px and up, and below it a sheet with
+         every group open. The footer below lists every page the nav reaches
+         (site-nav.test.ts holds it to that). The links stay in the served HTML so an agent that
+         does not run JavaScript reads the whole site map. Behaviour:
+         alpine/site-nav.js. Sections: lib/site-nav.js, whose keys match
+         data-nav-section below. The vault names and tokens follow
+         lib/vault-data.js VAULTS, and scripts/tests/unit/site-nav.test.ts
+         holds these lists equal.
+         ANALYTICS is deliberately absent: it pointed at
+         https://analytics.robotmoney.net/projects, which does not serve, and a
+         nav item that 404s is worse than no nav item. -->
+    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav" :class="{ 'nav--open': open }"
+         @keydown.escape="onEscape()" @focusout="onFocusOut($event)" @click="onClick($event)">
       <div class="nav__inner">
         <div class="nav__row">
           <a href="/" class="nav__logo"><img src="/assets/logo.svg" alt="Robot Money" /></a>
-          <div class="nav__links">
-            <a href="/" class="nav__link">Home<span class="nav__underline"></span></a>
-            <a href="/skills" class="nav__link">Skill<span class="nav__underline"></span></a>
-            <a href="/tokenomics" class="nav__link">Token<span class="nav__underline"></span></a>
-            <a href="/allocation" class="nav__link">Allocation<span class="nav__underline"></span></a>
-            <a href="/performance" class="nav__link">Performance<span class="nav__underline"></span></a>
-            <a href="/regime" class="nav__link">Regime<span class="nav__underline"></span></a>
-            <a href="/swarm" class="nav__link">Swarm<span class="nav__underline"></span></a>
-            <!-- ANALYTICS is deliberately ABSENT from the nav. It pointed at
-                 https://analytics.robotmoney.net/projects, which does not serve —
-                 a nav item that 404s is worse than no nav item. Restore it (here
-                 and in the mobile menu below) when that surface is released. -->
-            <a href="/media" class="nav__link">Coverage<span class="nav__underline"></span></a>
-          </div>
-          <div class="nav__ctas">
-            <a href="/changelog" class="btn-primary btn-primary--sm">Changelog</a>
-          </div>
-          <button class="nav__toggle" @click="mobileOpen = !mobileOpen" aria-label="Menu">
-            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--top-open' : ''"></span>
-            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--bot-open' : ''"></span>
+          <button type="button" class="nav__toggle" aria-label="Menu" aria-controls="site-menu" aria-expanded="false"
+                  :aria-expanded="String(sheet)" @click="toggleSheet()">
+            <span class="nav__bar" :class="sheet ? 'nav__bar--top-open' : ''"></span>
+            <span class="nav__bar" :class="sheet ? 'nav__bar--bot-open' : ''"></span>
           </button>
+          <div class="nav__menu" id="site-menu" :class="{ 'nav__menu--open': sheet }">
+            <ul class="nav__groups">
+              <li class="nav__group" data-nav-section="vaults" @pointerenter="enter('vaults', $event)" @pointerleave="leave('vaults', $event)">
+                <h2 class="nav__head">Vaults</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-vaults"
+                        :aria-expanded="String(isOpen('vaults'))"
+                        @click="toggle('vaults')" @keydown="onTopKey($event)">Vaults<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-vaults" :class="{ 'nav__panel--open': isOpen('vaults') }" @keydown="onPanelKey($event, 'vaults')">
+                  <div class="nav__card">
+                    <div class="nav__col">
+                      <p class="nav__label">Vaults</p>
+                      <ul class="nav__list">
+                        <li>
+                          <a class="nav__item nav__item--fig" href="/swarm/subjects/robotmoney-vault"><span class="nav__item-t">Robot Money Vault</span> <span class="nav__item-v"><span x-text="vaultFigure('total')" :class="vaultSoon('total') ? 'rm-soon' : ''"></span></span></a>
+                          <ul class="nav__tree">
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmusdc"><span class="nav__item-t">Fixed Income</span> <span class="nav__item-f">rmUSDC</span> <span class="nav__item-v"><span x-text="vaultFigure('rmusdc')" :class="vaultSoon('rmusdc') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmagent"><span class="nav__item-t">Small Cap Tokens</span> <span class="nav__item-f">rmAGENT</span> <span class="nav__item-v"><span x-text="vaultFigure('rmagent')" :class="vaultSoon('rmagent') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmproto"><span class="nav__item-t">Protocol Tokens</span> <span class="nav__item-f">rmPROTO</span> <span class="nav__item-v"><span x-text="vaultFigure('rmproto')" :class="vaultSoon('rmproto') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmrwa"><span class="nav__item-t">Real World Assets</span> <span class="nav__item-f">rmRWA</span> <span class="nav__item-v"><span x-text="vaultFigure('rmrwa')" :class="vaultSoon('rmrwa') ? 'rm-soon' : ''"></span></span></a></li>
+                          </ul>
+                        </li>
+                      </ul>
+                      <p class="nav__label">Allocation</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/allocation"><span class="nav__item-t">Asset allocation</span></a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="swarm" @pointerenter="enter('swarm', $event)" @pointerleave="leave('swarm', $event)">
+                <h2 class="nav__head">Swarm</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-swarm"
+                        :aria-expanded="String(isOpen('swarm'))"
+                        @click="toggle('swarm')" @keydown="onTopKey($event)">Swarm<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-swarm" :class="{ 'nav__panel--open': isOpen('swarm') }" @keydown="onPanelKey($event, 'swarm')">
+                  <div class="nav__card">
+                    <div class="nav__col">
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/swarm"><span class="nav__item-t">Overview</span></a></li>
+                        <li><span class="nav__item nav__item--soon" aria-disabled="true"><span class="nav__item-t">Leaderboard</span> <span class="rm-soon">Coming soon</span></span></li>
+                        <li><a class="nav__item" href="/swarm#history"><span class="nav__item-t">Recommendation history</span></a></li>
+                        <li><a class="nav__item" href="/swarm/apply"><span class="nav__item-t">Apply for a seat</span></a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="research" @pointerenter="enter('research', $event)" @pointerleave="leave('research', $event)">
+                <h2 class="nav__head">Research</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-research"
+                        :aria-expanded="String(isOpen('research'))"
+                        @click="toggle('research')" @keydown="onTopKey($event)">Research<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-research" :class="{ 'nav__panel--open': isOpen('research') }" @keydown="onPanelKey($event, 'research')">
+                  <div class="nav__card">
+                    <div class="nav__col">
+                      <p class="nav__label">Signals</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/regime"><span class="nav__item-t">Regime</span></a></li>
+                        <li><a class="nav__item" href="/regime/indicators"><span class="nav__item-t">Indicators</span></a></li>
+                      </ul>
+                    </div>
+                    <div class="nav__col">
+                      <p class="nav__label">Publications</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/blog"><span class="nav__item-t">Blog</span></a></li>
+                        <li><a class="nav__item" href="/smart-contract-risks"><span class="nav__item-t">Smart contract risks</span></a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="docs" @pointerenter="enter('docs', $event)" @pointerleave="leave('docs', $event)">
+                <h2 class="nav__head">Docs</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-docs"
+                        :aria-expanded="String(isOpen('docs'))"
+                        @click="toggle('docs')" @keydown="onTopKey($event)">Docs<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel nav__panel--end" id="nav-p-docs" :class="{ 'nav__panel--open': isOpen('docs') }" @keydown="onPanelKey($event, 'docs')">
+                  <div class="nav__card">
+                    <div class="nav__col">
+                      <p class="nav__label">Guides</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/skills"><span class="nav__item-t">Skills</span></a></li>
+                        <li><a class="nav__item" href="/docs"><span class="nav__item-t">Documentation</span></a></li>
+                        <li><a class="nav__item" href="/docs/investment-swarm/how-it-works"><span class="nav__item-t">How the swarm works</span></a></li>
+                      </ul>
+                    </div>
+                    <div class="nav__col">
+                      <p class="nav__label">Reference</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/docs/investment-swarm/api-reference"><span class="nav__item-t">API reference</span></a></li>
+                        <li><a class="nav__item" href="/changelog"><span class="nav__item-t">Changelog</span></a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="company" @pointerenter="enter('company', $event)" @pointerleave="leave('company', $event)">
+                <h2 class="nav__head">Company</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-company"
+                        :aria-expanded="String(isOpen('company'))"
+                        @click="toggle('company')" @keydown="onTopKey($event)">Company<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel nav__panel--end" id="nav-p-company" :class="{ 'nav__panel--open': isOpen('company') }" @keydown="onPanelKey($event, 'company')">
+                  <div class="nav__card">
+                    <div class="nav__col">
+                      <p class="nav__label">About</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/tokenomics"><span class="nav__item-t">Token</span></a></li>
+                        <li><a class="nav__item" href="/media"><span class="nav__item-t">Media coverage</span></a></li>
+                      </ul>
+                      <p class="nav__label">Community</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item nav__item--out" href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer"><span class="nav__item-t">Telegram</span></a></li>
+                        <li><a class="nav__item nav__item--out" href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer"><span class="nav__item-t">X</span></a></li>
+                      </ul>
+                    </div>
+                    <div class="nav__col">
+                      <p class="nav__label">Transparency</p>
+                      <ul class="nav__list">
+                        <li><a class="nav__item" href="/performance"><span class="nav__item-t">Protocol wallets</span></a></li>
+                        <li><a class="nav__item" href="/swarm/subjects/robotmoney-treasury"><span class="nav__item-t">RM Protocol Labs Treasury</span></a></li>
+                        <li><a class="nav__item" href="/deposit#contracts"><span class="nav__item-t">Contracts</span></a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </li>
+            </ul>
+            <div class="nav__ctas">
+              <a href="/deposit" class="btn-primary btn-primary--sm nav__cta">Deposit</a>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="nav__mobile animate-slide-down" x-show="mobileOpen" x-cloak>
-        <div class="nav__mobile-inner">
-          <a href="/" class="nav__mlink" @click="mobileOpen=false">Home</a>
-          <a href="/skills" class="nav__mlink" @click="mobileOpen=false">Skill</a>
-          <a href="/tokenomics" class="nav__mlink" @click="mobileOpen=false">Token</a>
-          <a href="/allocation" class="nav__mlink" @click="mobileOpen=false">Allocation</a>
-          <a href="/performance" class="nav__mlink" @click="mobileOpen=false">Performance</a>
-          <a href="/regime" class="nav__mlink" @click="mobileOpen=false">Regime</a>
-          <a href="/swarm" class="nav__mlink" @click="mobileOpen=false">Swarm</a>
-          <!-- ANALYTICS removed here too — see the desktop nav above. The two
-               menus must list the same destinations. -->
-          <a href="/media" class="nav__mlink" @click="mobileOpen=false">Coverage</a>
-          <a href="/changelog" class="btn-primary nav__mobile-cta" @click="mobileOpen=false">Changelog</a>
-        </div>
-      </div>
+      <div class="nav__scrim" aria-hidden="true" @click="close()"></div>
     </nav>
 
     <!-- Route views are fetched and injected here by the client router. -->
@@ -193,93 +308,82 @@
       <!-- Links & Info -->
       <div class="footer__section">
         <div class="footer__inner">
+          <!-- The brand: the lockup (the nav's, /assets/logo.svg, the live
+               source Lex keeps) and the tagline on one line. -->
+          <div class="footer__brand">
+            <a href="/" class="footer__lockup"><img src="/assets/logo.svg" alt="Robot Money" width="117" height="32" /></a>
+            <p class="footer__tagline">The treasury layer for the agent economy.</p>
+          </div>
           <div class="footer__grid">
-            <!-- Brand -->
-            <div class="footer__col footer__col--brand">
-              <div class="footer__brand">
-                <svg class="footer__logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <defs>
-                    <linearGradient id="logoLeft" x1="1" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#2e3a4e" />
-                      <stop offset="100%" stop-color="#181d28" />
-                    </linearGradient>
-                    <linearGradient id="logoRight" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0%" stop-color="#222a38" />
-                      <stop offset="100%" stop-color="#10141c" />
-                    </linearGradient>
-                    <radialGradient id="logoGlow" cx="0.5" cy="0.6" r="0.5">
-                      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.5" />
-                      <stop offset="60%" stop-color="#00e5ff" stop-opacity="0.15" />
-                      <stop offset="100%" stop-color="transparent" />
-                    </radialGradient>
-                    <filter id="logoInnerGlow" x="-50%" y="-50%" width="200%" height="200%">
-                      <feGaussianBlur stdDeviation="1.5" />
-                    </filter>
-                  </defs>
-                  <polygon points="16,3 4,28 16,28" fill="url(#logoLeft)" />
-                  <polygon points="16,3 28,28 16,28" fill="url(#logoRight)" />
-                  <line x1="16" y1="3" x2="4" y2="28" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
-                  <line x1="16" y1="3" x2="28" y2="28" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
-                  <line x1="4" y1="28" x2="28" y2="28" stroke="#00e5ff" stroke-width="0.3" opacity="0.1" />
-                  <polygon points="16,13 10,25 22,25" fill="#0b0e14" />
-                  <polygon points="16,13 10,25 22,25" fill="url(#logoGlow)" />
-                  <circle cx="16" cy="21" r="2" fill="#00e5ff" opacity="0.25" filter="url(#logoInnerGlow)" />
-                  <circle cx="16" cy="21" r="0.8" fill="#00e5ff" opacity="0.4" />
-                </svg>
-                <span class="footer__wordmark">ROBOT.MONEY</span>
-              </div>
-              <p class="footer__about">
-                An Autonomous Treasury for the Agent Economy. Built on Base by
-                <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__about-link">@JunoAgent</a>.
-                A
-                <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer" class="footer__about-link">Generative Ventures</a>
-                x
-                <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__about-link">Institute for Zero-Human Companies</a>
-                collaboration.
-              </p>
-            </div>
-
-            <!-- Protocol -->
+            <!-- The site index (RM-124): every page the nav reaches, in the nav's
+                 groups, plus Developers for the machine-readable files and
+                 Community for the channels. site-nav.test.ts holds it to
+                 covering the nav. Legal sits in the bottom bar. -->
             <div class="footer__col">
-              <h4 class="footer__heading">Protocol</h4>
+              <h4 class="footer__heading">Vaults</h4>
               <div class="footer__links">
-                <a href="https://basescan.org/token/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer" class="footer__link">$ROBOTMONEY Token</a>
-                <a href="https://bankr.bot/" target="_blank" rel="noopener noreferrer" class="footer__link">Bankr</a>
-                <a href="#" class="footer__link">x402</a>
-                <a href="/swarm/apply" class="footer__link">Apply to Swarm</a>
+                <a href="/swarm/subjects/robotmoney-vault" class="footer__link">Robot Money Vault</a>
+                <a href="/vault/rmusdc" class="footer__link">Fixed Income</a>
+                <a href="/vault/rmagent" class="footer__link">Small Cap Tokens</a>
+                <a href="/vault/rmproto" class="footer__link">Protocol Tokens</a>
+                <a href="/vault/rmrwa" class="footer__link">Real World Assets</a>
+                <a href="/allocation" class="footer__link">Asset allocation</a>
+                <a href="/deposit" class="footer__link">Deposit</a>
               </div>
             </div>
 
-            <!-- Community -->
             <div class="footer__col">
-              <h4 class="footer__heading">Community</h4>
+              <h4 class="footer__heading">Swarm</h4>
               <div class="footer__links">
-                <a href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer" class="footer__link">X / Twitter</a>
-                <a href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer" class="footer__link">Telegram</a>
-                <a href="#" class="footer__link">Moltbook</a>
-                <a href="https://lex.substack.com/" target="_blank" rel="noopener noreferrer" class="footer__link">Fintech Blueprint</a>
-                <a href="https://www.genventures.xyz/" target="_blank" rel="noopener noreferrer" class="footer__link">Generative Ventures</a>
+                <a href="/swarm" class="footer__link">Overview</a>
+                <span class="footer__link footer__link--soon" aria-disabled="true">Leaderboard <span class="rm-soon">Coming soon</span></span>
+                <a href="/swarm#history" class="footer__link">Recommendation history</a>
+                <a href="/swarm/apply" class="footer__link">Apply for a seat</a>
               </div>
             </div>
 
-            <!-- Developers -->
+            <div class="footer__col">
+              <h4 class="footer__heading">Research</h4>
+              <div class="footer__links">
+                <a href="/regime" class="footer__link">Regime</a>
+                <a href="/regime/indicators" class="footer__link">Indicators</a>
+                <a href="/blog" class="footer__link">Blog</a>
+                <a href="/smart-contract-risks" class="footer__link">Smart contract risks</a>
+              </div>
+            </div>
+
             <div class="footer__col">
               <h4 class="footer__heading">Developers</h4>
               <div class="footer__links">
+                <a href="/skills" class="footer__link">Skills</a>
                 <a href="/docs" class="footer__link">Documentation</a>
-                <a href="/changelog" class="footer__link">Changelog</a>
-                <a href="/smart-contract-risks" class="footer__link">Smart Contract Risks</a>
-                <a href="/visualizations" class="footer__link">Visualizations</a>
-                <a href="/openapi.json" class="footer__link">API (OpenAPI)</a>
+                <a href="/docs/investment-swarm/how-it-works" class="footer__link">How the swarm works</a>
+                <a href="/docs/investment-swarm/api-reference" class="footer__link">API reference</a>
+                <a href="/openapi.json" class="footer__link">OpenAPI</a>
                 <a href="/llms.txt" class="footer__link">llms.txt</a>
+                <a href="/changelog" class="footer__link">Changelog</a>
               </div>
             </div>
 
-            <!-- Disclaimer -->
             <div class="footer__col">
-              <h4 class="footer__heading">Disclaimer</h4>
+              <h4 class="footer__heading">Company</h4>
               <div class="footer__links">
-                <a href="/disclaimer" class="footer__link">Legal Disclaimer</a>
+                <a href="/tokenomics" class="footer__link">Token</a>
+                <a href="/media" class="footer__link">Media coverage</a>
+                <a href="/performance" class="footer__link">Protocol wallets</a>
+                <a href="/swarm/subjects/robotmoney-treasury" class="footer__link">RM Protocol Labs Treasury</a>
+                <a href="/deposit#contracts" class="footer__link">Contracts</a>
+              </div>
+            </div>
+
+            <div class="footer__col">
+              <h4 class="footer__heading">Community</h4>
+              <div class="footer__links">
+                <a href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer" class="footer__link">X</a>
+                <a href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer" class="footer__link">Telegram</a>
+                <a href="https://bankr.bot/" target="_blank" rel="noopener noreferrer" class="footer__link">Bankr</a>
+                <a href="https://lex.substack.com/" target="_blank" rel="noopener noreferrer" class="footer__link">Fintech Blueprint</a>
+                <a href="https://www.genventures.xyz/" target="_blank" rel="noopener noreferrer" class="footer__link">Generative Ventures</a>
               </div>
             </div>
           </div>
@@ -294,8 +398,19 @@
             describes a protocol mechanism, not an offer of securities. Consult
             legal counsel before participating.
           </p>
+          <div class="footer__legal">
+            <a href="/disclaimer" class="footer__legal-link">Disclaimer</a>
+            <a href="/terms" class="footer__legal-link">Terms</a>
+            <a href="/privacy" class="footer__legal-link">Privacy</a>
+          </div>
+          <!-- Who builds it, once: the copyright names them and links them. -->
           <p class="footer__fineprint">
-            &copy; 2026 Generative Ventures x The Institute for Zero-Human Companies
+            &copy; 2026
+            <a href="https://www.genventures.xyz/" target="_blank" rel="noopener noreferrer" class="footer__about-link">Generative Ventures</a>
+            &times;
+            <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__about-link">Institute for Zero-Human Companies</a>.
+            Built on Base by
+            <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__about-link">@JunoAgent</a>.
           </p>
         </div>
       </div>

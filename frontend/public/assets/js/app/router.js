@@ -8,6 +8,7 @@
 
 import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
+import { isCurrentLink, navSectionFor } from "./lib/site-nav.js";
 
 const viewEl = () => document.getElementById("view");
 
@@ -26,20 +27,25 @@ function outletHost(host) {
   return host.querySelector("[data-outlet]");
 }
 
-// Mark the nav link whose href matches the current path as active/current.
+// Mark where the reader is in the site nav (RM-124): the group that owns the
+// path by prefix keeps its underline, so /vault/rmagent lights Vaults, and the
+// link to the page itself is aria-current. A group's button carries
+// aria-current too, since its panel (and the current link in it) is closed.
+// Sections: lib/site-nav.js.
 function syncNav(pathname) {
-  const links = document.querySelectorAll(".nav__link, .nav__mlink");
-  links.forEach((a) => {
-    const href = a.getAttribute("href") || "";
-    let linkPath = href;
-    try {
-      linkPath = new URL(href, location.origin).pathname;
-    } catch (_) {
-      /* leave as-is for non-URL hrefs */
+  const section = navSectionFor(pathname);
+  document.querySelectorAll(".nav__group").forEach((g) => {
+    const top = g.querySelector(".nav__top");
+    if (!top) return;
+    const on = g.dataset.navSection === section;
+    top.classList.toggle("nav__top--active", on);
+    if (top.tagName === "BUTTON") {
+      if (on) top.setAttribute("aria-current", "true");
+      else top.removeAttribute("aria-current");
     }
-    const active = linkPath === pathname;
-    a.classList.toggle("nav__link--active", active);
-    if (active) a.setAttribute("aria-current", "page");
+  });
+  document.querySelectorAll(".nav a").forEach((a) => {
+    if (isCurrentLink(a.getAttribute("href") || "", pathname)) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
 }
@@ -65,6 +71,7 @@ async function render(pathname) {
   }
   const host = viewEl();
   if (!host) return;
+  stopSettling();
   renderedPath = pathname;
   activeRender?.abort();
   const controller = new AbortController();
@@ -158,7 +165,51 @@ const ANCHOR_OFFSET = 16;
 // getElementById on the decoded fragment, never querySelector: a fragment is
 // arbitrary text from the URL bar and must not be parsed as a selector.
 function scrollForRoute() {
-  if (!scrollToFragment()) window.scrollTo(0, 0);
+  stopSettling();
+  const found = scrollToFragment();
+  if (!found) window.scrollTo(0, 0);
+  if (location.hash) settleOnFragment();
+}
+
+// A view that draws its sections only once its data lands has no target yet
+// when the route renders: the swarm page wraps every section in
+// x-if="!loading", so a link to /swarm#history from another page landed at the
+// top and stayed there (RM-127). And a target that does exist moves as the
+// content above it fills in. So for a while after a route renders, the target
+// is scrolled to when it appears and held there as the view changes size.
+// It hands off the moment the reader scrolls, clicks or types, on the next
+// route, or after SETTLE_MS, whichever comes first.
+const SETTLE_MS = 8000;
+let settling = null;
+
+function stopSettling() {
+  if (settling) settling();
+  settling = null;
+}
+
+function settleOnFragment() {
+  const view = viewEl();
+  if (!view || typeof ResizeObserver !== "function") return;
+  const hold = () => {
+    const target = fragmentTarget();
+    if (!target) return;
+    const top = fragmentTop(target);
+    if (Math.abs(top - window.scrollY) > 1) window.scrollTo(0, top);
+  };
+  const resized = new ResizeObserver(hold);
+  const mutated = new MutationObserver(hold);
+  resized.observe(view);
+  mutated.observe(view, { childList: true, subtree: true });
+  const intents = ["wheel", "touchstart", "pointerdown", "keydown"];
+  const handOff = () => stopSettling();
+  intents.forEach((t) => window.addEventListener(t, handOff, { passive: true, capture: true }));
+  const timer = setTimeout(handOff, SETTLE_MS);
+  settling = () => {
+    resized.disconnect();
+    mutated.disconnect();
+    intents.forEach((t) => window.removeEventListener(t, handOff, { capture: true }));
+    clearTimeout(timer);
+  };
 }
 
 // The site header is fixed, so a target scrolled to the very top sits under
@@ -170,23 +221,30 @@ function anchorOffset() {
   return covered + ANCHOR_OFFSET;
 }
 
+// The element the fragment names, or null.
+function fragmentTarget() {
+  let id = "";
+  try { id = location.hash ? decodeURIComponent(location.hash.slice(1)) : ""; } catch (_) { return null; }
+  return id ? document.getElementById(id) : null;
+}
+
+// Where the page scrolls to show a target. A target that sets its own
+// scroll-margin-top (the changelog's entries, a take card) keeps it;
+// everything else clears the fixed header.
+function fragmentTop(target) {
+  const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || anchorOffset();
+  return Math.max(0, Math.round(target.getBoundingClientRect().top + window.scrollY - offset));
+}
+
 // Scroll to the element the fragment names; false when there is none.
 // Exported for a view whose sections draw only after its data lands (a vault
 // page's #holdings): it calls this once they exist.
 export function scrollToFragment() {
-  let id = "";
-  try { id = location.hash ? decodeURIComponent(location.hash.slice(1)) : ""; } catch (_) { return false; }
-  const target = id ? document.getElementById(id) : null;
+  const target = fragmentTarget();
   if (!target) return false;
   // A frame later: the view is in the DOM but not yet laid out, and Alpine has
   // not had its pass, so anything above the target can still change height.
-  // A target that sets its own scroll-margin-top (the changelog's entries,
-  // a take card) keeps it; everything else clears the fixed header.
-  const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || anchorOffset();
-  requestAnimationFrame(() => {
-    const top = target.getBoundingClientRect().top + window.scrollY - offset;
-    window.scrollTo(0, Math.max(0, Math.round(top)));
-  });
+  requestAnimationFrame(() => window.scrollTo(0, fragmentTop(target)));
   return true;
 }
 
