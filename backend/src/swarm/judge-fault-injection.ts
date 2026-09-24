@@ -1,14 +1,16 @@
 // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, AC-E2E-06's
 // malformed-judge-output clause).
 //
-// WHAT AC-E2E-06 ASKS FOR that nothing could produce. The criterion requires an
-// EXECUTED demonstration that a malformed judge response yields deterministic
-// fallback prose, with `fallback_reason` recorded and the weight vector
-// untouched. judge.ts has always handled that case — but only when a real model
-// actually misbehaves. The two ways to stage one were "point the judge at a
-// model and hope", which is not a repeatable acceptance step, and "edit
-// judge.ts", which demonstrates a build nobody ships. So the lever is the
-// shipped artifact's own documented seam, exercised the way an operator would.
+// HISTORY FIRST: THE LEVER HAS NO CONSUMER TODAY. It was built for AC-E2E-06,
+// which then asked for an executed demonstration that a malformed judge
+// response yielded deterministic fallback prose, with `fallback_reason`
+// recorded and the weight vector untouched. Its only consumer was the backend
+// `judgeSession()`. That judge, and the template fallback with it, are deleted
+// (D53 point 4): the judge is a participant, and a malformed answer is now
+// REFUSED at submission (`judgement_refused:*`) with no row and no substitute
+// prose. Until a judge participant reads this row, swarm/admin.ts refuses to
+// arm it (`fault_injection_has_no_consumer`), so the gates below describe the
+// lever as it will be consumed, not a path that runs today.
 //
 // THREE INDEPENDENT GATES, ALL OF WHICH MUST BE OPEN. The lever is a way to
 // make the judge lie about what a model said; it is one env var away from being
@@ -35,13 +37,14 @@
 // acceptance bundle cites. Turn it off — `{ enabled: false }` — as the last step
 // of the demonstration.
 //
-// WHAT IT CANNOT DO. It cannot produce a `source: "model"` judgement: judge()
-// never parses an injected body and never trusts one, so every injected call
-// lands on the deterministic fallback with `fallback_reason = "malformed_output"`
-// (docs/architecture.md §9.7). And it cannot move a weight: weights come from
-// meanTakeWeights() in domain.ts and the fallback path receives none, which is
-// the property the weight-smuggling body in the tests demonstrates rather than
-// assumes.
+// WHAT IT COULD NOT DO, when it had a consumer. The deleted judge() never
+// parsed an injected body and never trusted one, so every injected call landed
+// on the (now also deleted) deterministic fallback with
+// `fallback_reason = "malformed_output"`. And it could not move a weight:
+// weights come from meanTakeWeights() in domain.ts, and no judgement path
+// receives them. A participant that takes the lever over must keep both
+// properties: an injected body is at most a refused judgement, never a
+// `source: "model"` one.
 import { sql, type DbHandle } from "../db/client.ts";
 import { isAcceptanceJudgeEnv } from "./judge-model-policy.ts";
 

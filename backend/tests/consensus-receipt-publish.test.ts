@@ -8,35 +8,30 @@
 // and a nonce that cannot be carried into a second session.
 //
 // NOTHING IS MOCKED. Real members with real Ed25519 keys, real submissions
-// through submitRecommendation(), the real aggregator, the real judge (with no
-// model configured, so it takes its documented template-fallback path), and the
-// real HTTP dispatcher. The database is a clean clone of the migrated schema
-// per file; if Postgres is unavailable the suite fails loudly rather than
-// skipping.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+// through submitRecommendation(), the real aggregator, a real judge PARTICIPANT
+// submitting a signed judgement through submitJudgement() (the same entry the
+// participant route uses since issue #1026 — there is no inline judge and no
+// template fallback), and the real HTTP dispatcher. The database is a clean
+// clone of the migrated schema per file; if Postgres is unavailable the suite
+// fails loudly rather than skipping.
+import { expect, test } from "bun:test";
 import { RECEIPT_DOMAIN_SEPARATOR, ROUTES, canonicalizeSubmission, path } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { setJudgeConfig, judgeSession } from "../src/swarm/judge-session.ts";
+import { setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt, getConsensusReceipt, verifyAssembledReceipt } from "../src/swarm/consensus-receipt.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint. ONE stub, the
-// launcher-shaped one: it is the endpoint resolveJudgeTransport() actually
-// reaches, and it is also the only one that can serve a deliberately malformed
-// answer (setJudgeStubAnswer, used below).
-//
-// A real judge endpoint, locally served: these tests drive the judging through
-// judgeSessionAdmin, which has no injectable transport. Before issue #969 they
-// leaned on `model` being NULL and anchored the resulting TEMPLATE prose into a
-// signed receipt — the exact thing #969 makes impossible.
-import { installJudgeStub, removeJudgeStub, resetJudgeStubAnswer, setJudgeStubAnswer, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
-beforeAll(installJudgeStub);
-afterAll(removeJudgeStub);
+// A judgement is a model's opinion, signed by the judge that formed it: the
+// support module seats an in-house judge and submits its model's answer the way
+// the participant does. Before issue #969 these tests anchored TEMPLATE prose
+// into a signed receipt — the exact thing #969 made impossible and D53 deleted.
+import {
+  inHouseJudge, requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
+} from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -69,7 +64,7 @@ async function submit(m: Member, date: string, subjectId: string, weights: numbe
  * A collecting session with takes on file — everything up to, but not
  * including, the close/aggregate/judge/publish ladder.
  */
-async function collectingSession(prefix: string, weights: (number[] | null)[], mode: "shadow" | "enforce" = "enforce") {
+async function collectingSession(prefix: string, weights: (number[] | null)[]) {
   const subjectId = rid(prefix);
   await ic.ensureSubject(subjectId, `${prefix} subject`);
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
@@ -77,12 +72,9 @@ async function collectingSession(prefix: string, weights: (number[] | null)[], m
   // beforeAll so it is set against THIS file's cloned database, whatever order
   // the harness creates it in.
   //
-  // ENFORCE, NOT SHADOW, and that is now load-bearing rather than incidental.
-  // In `shadow` applyOpinion() is never called: the judgement is recorded and
-  // the session keeps its aggregator-authored prose. A receipt embeds only the
-  // opinion the session ADOPTED, so a shadow session has nothing to assemble —
-  // asserted directly further down.
-  await setJudgeConfig({ mode, minTakes: 2, model: STUB_JUDGE_MODEL });
+  // ENFORCE: a receipt embeds only the opinion the session ADOPTED, which is
+  // the judge of record's — asserted directly further down.
+  await setJudgeConfig({ mode: "enforce", minTakes: 2, model: STUB_JUDGE_MODEL });
   const session = await ic.openSession(subjectId);
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
@@ -98,22 +90,27 @@ async function collectingSession(prefix: string, weights: (number[] | null)[], m
 const stateOf = async (sessionId: string): Promise<string> =>
   String(((await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any).state);
 
+/** Request judging and have the in-house judge submit its signed judgement. */
+async function judgeNow(sessionId: string, opinion: string = STUB_JUDGE_REPLY) {
+  await requestJudgingFor(sessionId);
+  const judged = await submitSigned(await inHouseJudge(), sessionId, opinion);
+  if (!judged.ok) throw new Error(`judgement refused: ${JSON.stringify(judged)}`);
+  return judged;
+}
+
 /**
- * Take a collecting session all the way to `published` THROUGH THE ADMIN
- * LADDER — close, aggregate, judge, publish — because every one of those is a
- * guarded transition and the receipt is now assembled only from a session that
- * has reached the end of it.
+ * Take a collecting session all the way to `published` — close, aggregate,
+ * judge, publish — because every one of those is a guarded step and the
+ * receipt is assembled only from a session that has reached the end of it.
  */
 async function advanceToPublished(sessionId: string) {
   const closed = await admin.closeSessionAdmin(sessionId, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
   const aggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
   if (!aggregated.ok) throw new Error(`aggregate failed: ${JSON.stringify(aggregated)}`);
-  // The local stub judge answers, so this records `source: "model"` — a real,
-  // anchorable opinion. It used to record `source: "fallback"` because no model
-  // was configured, which anchored TEMPLATE prose into a signed receipt (#969).
-  const judged = await admin.judgeSessionAdmin(sessionId, undefined);
-  if (!judged.ok) throw new Error(`judge failed: ${JSON.stringify(judged)}`);
+  // A judge participant's signed judgement: `source: "model"`, a real,
+  // anchorable opinion, and the session's consensus.
+  const judged = await judgeNow(sessionId);
   const published = await admin.publishSessionAdmin(sessionId, undefined);
   if (!published.ok) throw new Error(`publish failed: ${JSON.stringify(published)}`);
   return judged;
@@ -419,8 +416,7 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
   // carry, so there is nothing to assemble. Published all the same —
   // `aggregated -> published` stays legal with the judge off — so the refusal
   // reported is about the judgement and not about the state.
-  await setJudgeConfig({ mode: "off", minTakes: 2, model: STUB_JUDGE_MODEL });
-  const bare = await collectingSession("recunjudged", [[0.25, 0.25, 0.25, 0.25]], "shadow");
+  const bare = await collectingSession("recunjudged", [[0.25, 0.25, 0.25, 0.25]]);
   await setJudgeConfig({ mode: "off", minTakes: 2, model: STUB_JUDGE_MODEL });
   expect((await admin.closeSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
   expect((await admin.aggregateSessionAdmin(bare.sessionId, undefined)).ok).toBe(true);
@@ -535,7 +531,7 @@ test("BLOCKER 1: aggregate, judge, reopen, amend — and the receipt is REFUSED,
   ]);
   expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
   expect((await admin.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
-  expect((await admin.judgeSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  await judgeNow(sessionId);
   expect(await stateOf(sessionId)).toBe("judged");
 
   // THE ORIGINAL SEQUENCE, step for step, and every one of these is a
@@ -582,7 +578,8 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
     async () => { expect(await stateOf(sessionId)).toBe("collecting"); },
     async () => { expect((await admin.closeSessionAdmin(sessionId, undefined)).ok).toBe(true); },
     async () => { expect((await admin.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true); },
-    async () => { expect((await admin.judgeSessionAdmin(sessionId, undefined)).ok).toBe(true); },
+    async () => { await requestJudgingFor(sessionId); },
+    async () => { expect((await submitSigned(await inHouseJudge(), sessionId)).ok).toBe(true); },
   ]) {
     await advance();
     const refused = await admin.publishConsensusReceiptAdmin(sessionId);
@@ -590,8 +587,8 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
     expect((refused as any).error).toBe("session_not_published");
     seen.push(await stateOf(sessionId));
   }
-  // Loud-skip-never: the loop really did walk four distinct states.
-  expect(seen).toEqual(["collecting", "window_closed", "aggregated", "judged"]);
+  // Loud-skip-never: the loop really did walk five distinct states.
+  expect(seen).toEqual(["collecting", "window_closed", "aggregated", "judging", "judged"]);
 
   // And the same session publishes cleanly the moment it is terminal.
   expect((await admin.publishSessionAdmin(sessionId, undefined)).ok).toBe(true);
@@ -599,55 +596,63 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
   expect(ok.ok).toBe(true);
 });
 
-test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one is bound by equality", async () => {
-  // Shadow is the DOCUMENTED ROLLOUT MODE — operators are told to sit in it
-  // "for as long as it takes to trust it" — so before this, by the design of
-  // the rollout, the first receipts ever published would have carried model
-  // prose the session never showed.
-  const shadow = await collectingSession("recshadow", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]], "shadow");
-  expect((await admin.closeSessionAdmin(shadow.sessionId, undefined)).ok).toBe(true);
-  expect((await admin.aggregateSessionAdmin(shadow.sessionId, undefined)).ok).toBe(true);
-  const judgedShadow = await admin.judgeSessionAdmin(shadow.sessionId, undefined);
-  expect(judgedShadow.ok).toBe(true);
-  expect((judgedShadow as any).judge.mode).toBe("shadow");
-  expect((judgedShadow as any).judge.applied).toBe(false);
-  expect((await admin.publishSessionAdmin(shadow.sessionId, undefined)).ok).toBe(true);
+test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, and the adopted one is bound by equality", async () => {
+  // A second seated judge is eligible and its judgement is RECORDED — but it is
+  // not the judge of record (scheduler spec §4.4), so its opinion never reaches
+  // the session. A session whose only judgement is that one publishes
+  // `no_consensus`, and its receipt must be refused: the row on file is an
+  // opinion the session never adopted.
+  const recordJudge = await seatJudge({ prefix: "judge_a" });
+  const secondJudge = await seatJudge({ prefix: "judge_b" });
+  const unadopted = await collectingSession("recunadopted", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
+  expect((await admin.closeSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
+  expect((await admin.aggregateSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
+  await requestJudgingFor(unadopted.sessionId);
+  const second = await submitSigned(secondJudge, unadopted.sessionId);
+  expect(second).toMatchObject({ ok: true, judgeOfRecord: false, applied: false });
+  await sql`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id = ${unadopted.sessionId}`;
+  expect(await ic.finalizeEpoch(unadopted.sessionId)).toMatchObject({ ok: true, outcome: "no_consensus" });
 
-  // The judgement row IS on file — this is not "no judgement", it is "an
-  // opinion the session never adopted".
   const [rows] = (await sql`
-    SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${shadow.sessionId}`) as any[];
+    SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${unadopted.sessionId}`) as any[];
   expect(rows.n).toBe(1);
-  const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${shadow.sessionId}`) as any[];
+  const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${unadopted.sessionId}`) as any[];
   expect(sess.swarm_recommendation.judge).toBeUndefined();
 
-  const refused = await admin.publishConsensusReceiptAdmin(shadow.sessionId);
+  // Finalize recorded `no_consensus`, and that stored outcome is refused FIRST:
+  // §4.4 publishes such a session with no certificate, whatever is on file.
+  const refused = await admin.publishConsensusReceiptAdmin(unadopted.sessionId);
   expect(refused.ok).toBe(false);
-  expect((refused as any).error).toBe("judgement_not_adopted");
-  expect((refused as any).message).toContain("`shadow`");
+  expect((refused as any).error).toBe("no_consensus");
+  // The adoption gate behind it still holds on its own. A session published
+  // before finalize recorded outcomes carries no `judging_outcome`; with the
+  // same unadopted row on file it is refused by adoption, not by outcome.
+  await sql`UPDATE swarm_sessions SET judging_outcome = NULL WHERE id = ${unadopted.sessionId}`;
+  const unadoptedRefusal = await admin.publishConsensusReceiptAdmin(unadopted.sessionId);
+  expect(unadoptedRefusal.ok).toBe(false);
+  expect((unadoptedRefusal as any).error).toBe("judgement_not_adopted");
   const [none] = (await sql`
-    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${shadow.sessionId}`) as any[];
+    SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${unadopted.sessionId}`) as any[];
   expect(none.n).toBe(0);
 
-  // THE NEWEST ROW IS NOT THE ADOPTED ROW. Judge in enforce (applied), then
-  // record a LATER shadow judgement over the same inputs — identical
+  // THE NEWEST ROW IS NOT THE ADOPTED ROW. The judge of record's judgement is
+  // applied; the second judge's lands LATER over the same inputs — identical
   // prompt_hash and inputs_digest, higher id. `ORDER BY id DESC LIMIT 1` would
-  // embed the shadow one; binding to the session's own judge block does not.
+  // embed the second one; binding to the session's own judge block does not.
   const live = await collectingSession("recbound", [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
   expect((await admin.closeSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   expect((await admin.aggregateSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
-  const enforced = await admin.judgeSessionAdmin(live.sessionId, undefined);
-  expect(enforced.ok).toBe(true);
-  expect((enforced as any).judge.applied).toBe(true);
-  const adoptedId = String((enforced as any).judge.judgementId);
-
-  await setJudgeConfig({ mode: "shadow", minTakes: 2, model: STUB_JUDGE_MODEL });
-  const later = await judgeSession(live.sessionId);
-  expect(later.ok).toBe(true);
-  expect(Number(later.judgementId)).toBeGreaterThan(Number(adoptedId));
-  const [latest] = (await sql`
-    SELECT id, mode FROM swarm_session_judgements WHERE session_id = ${live.sessionId} ORDER BY id DESC LIMIT 1`) as any[];
-  expect(latest.mode).toBe("shadow");
+  await requestJudgingFor(live.sessionId);
+  const adopted = await submitSigned(recordJudge, live.sessionId);
+  expect(adopted).toMatchObject({ ok: true, judgeOfRecord: true, applied: true });
+  const adoptedId = String((adopted as any).judgementId);
+  const later = await submitSigned(secondJudge, live.sessionId, JSON.stringify({
+    rationale: "A second judge's reading, recorded and adopted by nobody.",
+    disagreements: [],
+    release_safety: { release: "hold", concerns: ["a second opinion"] },
+  }));
+  expect(later).toMatchObject({ ok: true, applied: false });
+  expect(Number((later as any).judgementId)).toBeGreaterThan(Number(adoptedId));
 
   expect((await admin.publishSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   const published = await admin.publishConsensusReceiptAdmin(live.sessionId);
@@ -666,37 +671,22 @@ test("BLOCKER 2: a SHADOW judgement never reaches a receipt, and an enforce one 
   expect(body.body.receipt.judge.release_safety).toEqual(record.swarm_recommendation.release_safety);
 });
 
-// Issue #1019: the adopted judgement can be `source='fallback'` (D-A7 — a real,
-// ongoing outcome class main's judge.ts still writes on a genuine model
-// failure, e.g. a malformed response) WITHOUT the session ever having been in
-// `shadow`. `judgement_not_adopted` only catches "no opinion reached the
-// session" — a fallback opinion still gets applyOpinion()'d onto an `enforce`
-// session, so before this fix a receipt over TEMPLATE PROSE published exactly
-// like one over a model's own words. `judgement_not_authored` closes that.
-test("BLOCKER 3: an unusable judge response never reaches a receipt — refused at the judging, and the historical fallback guard still holds", async () => {
+// Issue #1019: an adopted judgement with `source='fallback'` must never reach a
+// receipt. Nothing writes one any more — the judge refuses rather than fakes,
+// and the API refuses an unusable answer at submission — but the append-only
+// table holds pre-#969 rows, and `judgement_not_authored` is their guard.
+test("BLOCKER 3: an unusable judge response never reaches a receipt — refused at submission, and the historical fallback guard still holds", async () => {
   const fallback = await collectingSession("recfallback", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
   expect((await admin.closeSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
   expect((await admin.aggregateSessionAdmin(fallback.sessionId, undefined)).ok).toBe(true);
+  await requestJudgingFor(fallback.sessionId);
 
-  // A body that is NOT valid judge JSON. This used to reach judge.ts's
-  // parse-failure FALLBACK and record a `source: 'fallback'` row that the
-  // receipt layer then had to refuse. judge() has no fallback any more, so the
-  // same body is stopped one layer earlier — the judging itself refuses.
-  setJudgeStubAnswer("this is not a judge response");
-  let judgedFallback: any;
-  try {
-    judgedFallback = await admin.judgeSessionAdmin(fallback.sessionId, undefined);
-  } finally {
-    resetJudgeStubAnswer();
-  }
-  expect(judgedFallback.ok).toBe(false);
-  expect(judgedFallback.status).toBe(503);
-  expect(judgedFallback.error).toBe("judge_unavailable");
-  expect(judgedFallback.judgeUnavailableReason).toBe("not_json");
+  // A body that is NOT valid judge JSON. The API's parser refuses it before
+  // anything is written.
+  const refusedAtSubmission = await submitSigned(await inHouseJudge(), fallback.sessionId, "this is not a judge response");
+  expect(refusedAtSubmission).toEqual({ ok: false, status: 422, error: "judgement_refused:not_json" });
 
-  // NO ROW, NO ADOPTION, NO RECEIPT — the strongest form of what this test
-  // protects. There is no template prose to keep out of a receipt because
-  // there is no judgement at all.
+  // NO ROW, NO ADOPTION, NO RECEIPT.
   const [onFile] = (await sql`
     SELECT count(*)::int AS n FROM swarm_session_judgements WHERE session_id = ${fallback.sessionId}`) as any[];
   expect(onFile.n).toBe(0);
@@ -708,13 +698,10 @@ test("BLOCKER 3: an unusable judge response never reaches a receipt — refused 
     SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${fallback.sessionId}`) as any[];
   expect(noneYet.n).toBe(0);
 
-  // THE HISTORICAL GUARD IS STILL LIVE. `swarm_session_judgements` is
-  // append-only (migration 0040) and holds real pre-#969 `source='fallback'`
-  // rows, some already embedded in signed receipts. Nothing writes a new one,
-  // so the only way to exercise the receipt layer's refusal is to age a
+  // THE HISTORICAL GUARD IS STILL LIVE. Nothing writes a new fallback row, so
+  // the only way to exercise the receipt layer's refusal is to age a
   // model-authored row into one by hand — which is exactly the shape of the
-  // history the guard exists for. Without this half, deleting the guard would
-  // go unnoticed.
+  // history the guard exists for.
   const historical = await judgedSession("rechistfb", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
   await sql`
     UPDATE swarm_session_judgements
@@ -728,9 +715,8 @@ test("BLOCKER 3: an unusable judge response never reaches a receipt — refused 
     SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${historical.sessionId}`) as any[];
   expect(none.n).toBe(0);
 
-  // A sibling session judged by the (stub) MODEL, over the same shape of
-  // takes, is entirely unaffected — no new refusal on the existing passing
-  // path.
+  // A sibling session judged by the model, over the same shape of takes, is
+  // entirely unaffected — no new refusal on the existing passing path.
   const modelAuthored = await judgedSession("recauthored", [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]);
   const publishedModel = await admin.publishConsensusReceiptAdmin(modelAuthored.sessionId);
   expect(publishedModel.ok).toBe(true);

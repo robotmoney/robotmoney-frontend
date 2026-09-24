@@ -1,16 +1,18 @@
+// Issue #812: a graduated member (`swarm_members.role = 'judge'`) judges under
+// its own identity, and the role/status/take-conflict checks run before any
+// judgement row lands. Since issue #1026 (D53 point 4) those checks live where a
+// judgement enters — `submitJudgement` in domain.ts — and every judgement is
+// SIGNED by its judge's own key, so the tests below sign with the member's key.
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
-import { judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judge-session.ts";
+import { setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
+import { requestJudgingFor, seatJudge, signedJudgement } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -38,21 +40,22 @@ async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subje
   return ic.submitRecommendation(m.token, { ...payload, signature });
 }
 
-const opinion = JSON.stringify({
-  rationale: "The takes are coherent enough to publish.",
-  disagreements: [],
-  release_safety: { release: "safe", concerns: [] },
-});
-const transport = { model: "test/judge", complete: async () => opinion };
-
-async function aggregated(prefix: string) {
+/** Two signed takes, closed, aggregated and in `judging`. */
+async function judging(prefix: string) {
   const s = await session(prefix);
   const voters = [await member("voter_a"), await member("voter_b")];
   for (const voter of voters) expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
   await ic.closeWindow(s.session.id);
   await ic.aggregateSession(s.session.id);
+  await requestJudgingFor(s.session.id);
   return s;
 }
+
+const judge = async (m: Awaited<ReturnType<typeof member>>, sessionId: string) =>
+  ic.submitJudgement(m.token, await signedJudgement(m, sessionId));
+
+const rowsFor = async (sessionId: string) =>
+  (await sql`SELECT judged_by, judged_by_member_id FROM swarm_session_judgements WHERE session_id = ${sessionId}`) as any[];
 
 test("grant/revoke preserves the existing credential and makes judging immediately permitted then refused", async () => {
   const candidate = await member("candidate");
@@ -68,13 +71,13 @@ test("grant/revoke preserves the existing credential and makes judging immediate
   const whileJudge = await session("while_judge");
   expect((await submit(candidate, whileJudge.date, whileJudge.subjectId)).error).toBe("judge_role_cannot_submit_takes");
 
-  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
-  // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
-  const judged = await aggregated("judge_allowed");
-  const allowed = await judgeSession(judged.session.id, { judgeMemberId: candidate.id, transport });
-  expect(allowed.ok).toBe(true);
-  expect((await latestJudgement(judged.session.id) as any).judged_by).toBe(candidate.id);
+  // The candidate is not in-house (no `robotmoney` operator), so the
+  // third-party flag must be on for these #812 checks to be what is tested.
+  await setJudgeConfig({ thirdPartyEnabled: true });
+  const judged = await judging("judge_allowed");
+  const allowed = await judge(candidate, judged.session.id);
+  expect(allowed.ok, JSON.stringify(allowed)).toBe(true);
+  expect(await rowsFor(judged.session.id)).toEqual([{ judged_by: candidate.id, judged_by_member_id: candidate.id }]);
 
   // Rotation is still the existing member path, including for a judge: it
   // carries the same public key and returns a new bearer token only once.
@@ -87,53 +90,43 @@ test("grant/revoke preserves the existing credential and makes judging immediate
   expect(revoke.ok).toBe(true);
   const after = await session("after");
   expect((await submit(candidate, after.date, after.subjectId)).status).toBe(201);
-  const refusalSession = await aggregated("after_refusal");
-  const refused = await judgeSession(refusalSession.session.id, { judgeMemberId: candidate.id, transport });
-  expect(refused).toMatchObject({ ok: false, status: 403, error: "judge_role_required" });
-  expect(await latestJudgement(refusalSession.session.id)).toBeNull();
+  const refusalSession = await judging("after_refusal");
+  expect(await judge(candidate, refusalSession.session.id)).toEqual({ ok: false, status: 403, error: "judge_role_required" });
+  expect(await rowsFor(refusalSession.session.id)).toEqual([]);
 });
 
-test("the in-house worker and a graduated member both leave named judgement parties", async () => {
-  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
-  // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
-  const inHouse = await aggregated("in_house");
-  expect((await judgeSession(inHouse.session.id, { transport })).ok).toBe(true);
-  expect((await latestJudgement(inHouse.session.id) as any).judged_by).toBe("robotmoney-in-house");
+test("an in-house judge and a graduated third-party member both leave named judgement parties", async () => {
+  await setJudgeConfig({ thirdPartyEnabled: true });
+  const inHouse = await seatJudge({ prefix: "in_house", operator: "robotmoney" });
+  const first = await judging("in_house");
+  expect((await ic.submitJudgement(inHouse.token, await signedJudgement(inHouse, first.session.id))).ok).toBe(true);
+  expect(await rowsFor(first.session.id)).toEqual([{ judged_by: inHouse.id, judged_by_member_id: inHouse.id }]);
 
   const candidate = await member("named_judge");
   expect((await admin.setMemberRoleAdmin(candidate.id, 1, "judge")).ok).toBe(true);
-  const external = await aggregated("member_judge");
-  expect((await judgeSession(external.session.id, { judgeMemberId: candidate.id, transport })).ok).toBe(true);
-  const row = await latestJudgement(external.session.id) as any;
-  expect(row.judged_by).toBe(candidate.id);
-  expect(row.judged_by_member_id).toBe(candidate.id);
+  const external = await judging("member_judge");
+  expect((await judge(candidate, external.session.id)).ok).toBe(true);
+  expect((await rowsFor(external.session.id)).map((r) => r.judged_by_member_id)).toContain(candidate.id);
 });
 
 test("a non-judge is refused before a judgement row is written", async () => {
-  // Issue #796's flag gates ALL judgeMemberId judgements, so these #812 tests
-  // of the role/status checks must turn it on to still reach those checks.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
+  await setJudgeConfig({ thirdPartyEnabled: true });
   const candidate = await member("ungraduated");
-  const s = await aggregated("refusal");
-  const refused = await judgeSession(s.session.id, { judgeMemberId: candidate.id, transport });
-  expect(refused).toMatchObject({ ok: false, status: 403, error: "judge_role_required" });
-  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
-  expect(rows).toHaveLength(0);
+  const s = await judging("refusal");
+  expect(await judge(candidate, s.session.id)).toEqual({ ok: false, status: 403, error: "judge_role_required" });
+  expect(await rowsFor(s.session.id)).toHaveLength(0);
 });
 
-// Issue #925 (review-security-002): the judge/take conflict-of-interest guard
-// (`judge-session.ts`'s `judge_member_has_take_in_session` refusal) had no
-// regression test anywhere in this suite. A member submits a take as an
-// ordinary voter, is later promoted to `role: 'judge'`, and then attempts to
-// judge the very session it already has a take in — separation of duties must
-// refuse this before any judgement row lands, not merely discourage it.
+// Issue #925 (review-security-002): the judge/take conflict-of-interest guard.
+// A member submits a take as an ordinary voter, is later promoted to
+// `role: 'judge'`, and then attempts to judge the very session it already has
+// a take in — separation of duties must refuse this before any judgement row
+// lands, not merely discourage it.
 test("a judge who already submitted a take in the session is refused before a judgement row is written", async () => {
   // thirdPartyEnabled must be ON so the take-conflict check (which runs AFTER
   // the third-party gate) is actually what is under test here, rather than a
-  // third-party refusal masking it — this candidate is not on
-  // LIVE_ROSTER_HANDLES, so it is not otherwise exempt from that gate.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
+  // third-party refusal masking it.
+  await setJudgeConfig({ thirdPartyEnabled: true });
 
   const candidate = await member("has_take");
   const s = await session("take_conflict");
@@ -144,11 +137,10 @@ test("a judge who already submitted a take in the session is refused before a ju
   expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
   await ic.closeWindow(s.session.id);
   await ic.aggregateSession(s.session.id);
+  await requestJudgingFor(s.session.id);
 
   expect((await admin.setMemberRoleAdmin(candidate.id, 1, "judge")).ok).toBe(true);
 
-  const refused = await judgeSession(s.session.id, { judgeMemberId: candidate.id, transport });
-  expect(refused).toMatchObject({ ok: false, status: 409, error: "judge_member_has_take_in_session" });
-  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
-  expect(rows).toHaveLength(0);
+  expect(await judge(candidate, s.session.id)).toEqual({ ok: false, status: 409, error: "judge_member_has_take_in_session" });
+  expect(await rowsFor(s.session.id)).toHaveLength(0);
 });

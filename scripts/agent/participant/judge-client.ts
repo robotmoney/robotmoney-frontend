@@ -13,25 +13,27 @@
 // WHAT THIS IS, AND WHAT IT REPLACES
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Until now the judge model ran INLINE, in two processes that hold a database
+// The judge model used to run INLINE, in two processes that hold a database
 // credential: the `swarm.judge` queue handler inside `worker-swarm`, and the
-// admin route's `judge` verb inside the API. Both are gone. What remains is
-// this: a standing container, holding a judge's own signing identity and its
-// own model key and nothing else, that learns of work by subscribing and
-// reports it by POSTing.
+// admin route's `judge` verb inside the API. Both are gone, and the backend
+// judge they called is deleted (D53 point 4). What remains is this: a standing
+// container, holding a judge's own signing identity and its own model key and
+// nothing else, that learns of work by subscribing and reports it by POSTing a
+// SIGNED judgement.
 //
-// The server side was built by W4's second part: `judgeSubscribe` serves STATE
-// — every session in `judging` this judge has not submitted, on every connect —
-// and `judgement` wires into the same `recordJudgingConsensus` transition the
-// admin path uses, so the two cannot give different answers.
+// The server side: `judgeSubscribe` serves STATE — every session in `judging`
+// this judge has not submitted and may, on every connect, each with the frozen
+// input it is to read — and `judgement` verifies the signature, re-checks the
+// digest and parses the answer before anything is written (domain.ts
+// `submitJudgement`).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // A JUDGE REFUSES RATHER THAN FAKES
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // There is no fallback branch in this file and there is not going to be one.
-// When the model cannot be reached, or answers a status, or answers nothing a
-// judgement can be read out of, this client SUBMITS NOTHING and logs why. The
+// When the model cannot be reached, or answers a status, or times out, this
+// client SUBMITS NOTHING and logs why, by the D-A7 name (judge-reasons.ts). The
 // session then reaches its deadline with no eligible consensus and the API
 // publishes it `no_consensus`, with no certificate and nothing invented
 // (scheduler spec §4.4).
@@ -52,11 +54,29 @@
 // STATE, so every connect is the same query and a judge that was down while the
 // request was created gets it by coming back. A dropped connection is answered
 // by reconnecting, and there is nothing to replay.
-import { ROUTES } from "@robotmoney/contract";
+import { canonicalizeJudgement, ROUTES } from "@robotmoney/contract";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// THE JUDGE'S PROMPT AND DIGEST ARE THE SERVER'S, imported rather than copied.
+// `judge.ts` is the pure half of the judge — no database, no environment —
+// and the API recomputes `inputsDigest` over the same function at submission,
+// so a second spelling of it here would be a second chance to disagree.
+import {
+  inputsDigest,
+  JUDGE_PROMPT_HASH,
+  renderJudgePrompt,
+  type JudgeInput,
+} from "../../../backend/src/swarm/judge.ts";
+import { assertJudgeModelAllowed } from "../../../backend/src/swarm/judge-model-policy.ts";
+import type { PersonaIdentity } from "../../lib/swarm/persona-keys.ts";
 import { runJudge, type JudgeAnswer } from "./judge-runner.ts";
+import {
+  failureCodeForAnswer,
+  RUNNER_FAULT,
+  type JudgeFailureCode,
+  type JudgeRefusalReason,
+} from "./judge-reasons.ts";
 
 /** One outstanding judging request, as the subscription serves it. */
 export interface PendingJudging {
@@ -65,6 +85,8 @@ export interface PendingJudging {
   date: string;
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
+  /** The frozen take set, brief and rollup facts this judge is to read — and the digest's subject. */
+  input: JudgeInput;
 }
 
 export interface JudgeClientConfig {
@@ -73,6 +95,8 @@ export interface JudgeClientConfig {
   token: string;
   memberId: string;
   name: string;
+  /** This judge's own signing key, from its `credential.json` entry (§6.1). */
+  identity: PersonaIdentity;
   /** The model this judge calls, as the vendor spells it on the wire. */
   model: string;
   endpoint: string;
@@ -82,7 +106,19 @@ export interface JudgeClientConfig {
   reconnectMs: number;
 }
 
-export class JudgeClientConfigError extends Error {}
+/**
+ * A configuration this judge cannot run under. `reason` is the D-A7 name when
+ * the gap is one the taxonomy names (no model, no key, a disallowed model), so
+ * the crash-loop an operator sees says which of them it is.
+ */
+export class JudgeClientConfigError extends Error {
+  readonly reason: JudgeRefusalReason | null;
+  constructor(message: string, reason: JudgeRefusalReason | null = null) {
+    super(reason ? `${reason}: ${message}` : message);
+    this.name = "JudgeClientConfigError";
+    this.reason = reason;
+  }
+}
 
 /** Env names the compose `judge` participant profile injects. */
 export const JUDGE_CLIENT_ENV = {
@@ -90,6 +126,7 @@ export const JUDGE_CLIENT_ENV = {
   token: "RM_MEMBER_TOKEN",
   memberId: "RM_MEMBER_ID",
   name: "RM_MEMBER_NAME",
+  identity: "RM_MEMBER_IDENTITY",
   model: "RM_JUDGE_MODEL",
   endpoint: "RM_JUDGE_BASE_URL",
   apiKey: "OPENCODE_API_KEY",
@@ -97,69 +134,57 @@ export const JUDGE_CLIENT_ENV = {
 } as const;
 
 export function readJudgeClientConfig(env: Record<string, string | undefined> = process.env): JudgeClientConfig {
-  const need = (key: string): string => {
+  const need = (key: string, reason: JudgeRefusalReason | null = null): string => {
     const v = (env[key] ?? "").trim();
-    if (!v) throw new JudgeClientConfigError(`${key} was not injected`);
+    if (!v) throw new JudgeClientConfigError(`${key} was not injected`, reason);
     return v;
   };
+  // The model and the credential are REQUIRED, and each gap refuses by its
+  // D-A7 name. A judge container without them would connect, receive work and
+  // refuse every item — visibly, but only after a deadline had passed.
+  // Refusing at startup puts the misconfiguration in front of the operator
+  // immediately, and the container crash-loops under `restart: unless-stopped`,
+  // which is the right outcome.
+  const model = need(JUDGE_CLIENT_ENV.model, "model_unconfigured");
+  const apiKey = need(JUDGE_CLIENT_ENV.apiKey, "credential_unconfigured");
+  try {
+    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
+    // everywhere, and anything but the pinned model on an acceptance path.
+    assertJudgeModelAllowed(model, env);
+  } catch (err) {
+    throw new JudgeClientConfigError(err instanceof Error ? err.message : String(err), "model_disallowed");
+  }
   const timeout = Number.parseInt(env[JUDGE_CLIENT_ENV.timeoutMs] ?? "", 10);
   return {
     apiUrl: need(JUDGE_CLIENT_ENV.apiUrl).replace(/\/$/, ""),
     token: need(JUDGE_CLIENT_ENV.token),
     memberId: need(JUDGE_CLIENT_ENV.memberId),
     name: need(JUDGE_CLIENT_ENV.name),
-    // The model and the credential are REQUIRED. A judge container without them
-    // would connect, receive work and refuse every item — visibly, but only
-    // after a deadline has passed. Refusing at startup instead puts the
-    // misconfiguration in front of the operator immediately, and the container
-    // crash-loops under `restart: unless-stopped`, which is the right outcome.
-    model: need(JUDGE_CLIENT_ENV.model),
+    identity: readIdentity(need(JUDGE_CLIENT_ENV.identity)),
+    model,
     endpoint: need(JUDGE_CLIENT_ENV.endpoint),
-    apiKey: need(JUDGE_CLIENT_ENV.apiKey),
+    apiKey,
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 300_000,
     reconnectMs: 5_000,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// The prompt
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Build the judge's prompt from the session's PUBLIC record.
- *
- * The judge reads what an outside reviewer could read — the session and its
- * takes over the ordinary API — rather than being handed a curated context by
- * the thing it is judging. A judge given its input by the process under review
- * is not an independent one.
- */
-export async function fetchSessionContext(
-  config: JudgeClientConfig,
-  sessionId: string,
-  fetchImpl: typeof globalThis.fetch = fetch,
-): Promise<unknown> {
-  const url = `${config.apiUrl}${ROUTES.swarm.sessionById.replace(":id", encodeURIComponent(sessionId))}`;
-  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${config.token}` } });
-  if (!res.ok) throw new Error(`session ${sessionId} unreadable: HTTP ${res.status}`);
-  return res.json();
-}
-
-/**
- * The instruction the model is given, verbatim and unparameterised.
- *
- * It says, in its own words, that refusing is an allowed answer. A prompt that
- * only describes how to approve is a prompt that produces approvals.
- */
-export const JUDGE_INSTRUCTION = [
-  "You are an independent judge of one investment-committee session.",
-  "Below is the session's public record: its brief, its signed member takes and its aggregate recommendation.",
-  "Return a judgement of the session's reasoning quality and internal consistency.",
-  "If the record is insufficient to judge, say so explicitly and judge nothing.",
-  "Do not invent facts that are not in the record.",
-].join("\n");
-
-export function buildPrompt(session: unknown): string {
-  return `${JUDGE_INSTRUCTION}\n\n--- SESSION RECORD ---\n${JSON.stringify(session, null, 2)}\n`;
+/** The judge's signing identity. A key it cannot sign with is not a key. */
+function readIdentity(raw: string): PersonaIdentity {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new JudgeClientConfigError(`${JUDGE_CLIENT_ENV.identity} is not JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const identity = parsed as Partial<PersonaIdentity> | null;
+  if (!identity || typeof identity.publicKeyB64 !== "string" || identity.publicKeyB64 === "") {
+    throw new JudgeClientConfigError(`${JUDGE_CLIENT_ENV.identity} carries no publicKeyB64`);
+  }
+  if (!identity.privateJwk || typeof identity.privateJwk !== "object") {
+    throw new JudgeClientConfigError(`${JUDGE_CLIENT_ENV.identity} carries no privateJwk`);
+  }
+  return { publicKeyB64: identity.publicKeyB64, privateJwk: identity.privateJwk };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,11 +193,37 @@ export function buildPrompt(session: unknown): string {
 
 export type JudgeOutcome =
   | { kind: "submitted"; sessionId: string; judgementId: number; duplicate: boolean; lateEvidence: boolean }
-  | { kind: "refused"; sessionId: string; reason: string }
+  /**
+   * Nothing was submitted. `reason` is the D-A7 code, or `runner` for this
+   * container's own fault; `detail` is a bounded label for the log, never
+   * parsed by anything.
+   */
+  | { kind: "refused"; sessionId: string; reason: JudgeFailureCode; detail: string }
   | { kind: "submit_failed"; sessionId: string; status: number; error: string };
+
+/** A detail is a label, not a payload. */
+const DETAIL_MAX = 400;
+
+function detailOf(answer: JudgeAnswer): string {
+  switch (answer.kind) {
+    case "ok":
+      return "";
+    case "model_status":
+      return `HTTP ${answer.status}: ${answer.body}`.slice(0, DETAIL_MAX);
+    case "timeout":
+      return `no answer within ${answer.timeoutMs} ms`;
+    case "runner":
+      return answer.message.slice(0, DETAIL_MAX);
+  }
+}
 
 /**
  * Judge one session and submit, or refuse and submit nothing.
+ *
+ * THE INPUT IS THE ONE THE SUBSCRIPTION SERVED. The prompt is rendered from it
+ * and the signed `inputsDigest` is computed over it, so the API's recomputation
+ * at submission is over the same object and a judgement can never claim to
+ * have read a take set it did not.
  *
  * The prompt goes to the model through a FILE, not argv or an environment
  * variable: a session's full record blows past `MAX_ARG_STRLEN`, and the
@@ -189,18 +240,17 @@ export async function judgeOne(
   const doFetch = deps.fetchImpl ?? fetch;
   const run = deps.runJudgeImpl ?? runJudge;
 
-  let session: unknown;
-  try {
-    session = await fetchSessionContext(config, pending.sessionId, doFetch);
-  } catch (err) {
-    return { kind: "refused", sessionId: pending.sessionId, reason: String((err as Error)?.message ?? err) };
+  if (!pending.input || !Array.isArray(pending.input.takes)) {
+    // A frame with no input is a protocol fault between this container and the
+    // API — not a vendor verdict, and no model is asked.
+    return { kind: "refused", sessionId: pending.sessionId, reason: RUNNER_FAULT, detail: "the subscription served no input for this session" };
   }
 
   const dir = await mkdtemp(join(tmpdir(), "rm-judge-"));
   const promptFile = join(dir, "prompt.txt");
   let answer: JudgeAnswer;
   try {
-    await writeFile(promptFile, buildPrompt(session), "utf8");
+    await writeFile(promptFile, renderJudgePrompt(pending.input), "utf8");
     answer = await run({
       promptFile,
       endpoint: config.endpoint,
@@ -212,62 +262,96 @@ export async function judgeOne(
     await rm(dir, { recursive: true, force: true });
   }
 
-  if (answer.kind !== "ok") {
-    // THE ONLY BRANCH THERE IS. A vendor status and a rail fault are reported
-    // apart, because an operator debugging a container that worked perfectly
-    // and an operator topping up an account that was never charged are looking
-    // for different things — but neither produces a judgement.
-    const reason =
-      answer.kind === "model_status"
-        ? `model refused with HTTP ${answer.status}: ${answer.body}`
-        : `judge runner fault: ${answer.message}`;
-    return { kind: "refused", sessionId: pending.sessionId, reason };
+  const failure = failureCodeForAnswer(answer);
+  if (failure !== null || answer.kind !== "ok") {
+    // THE ONLY BRANCH THERE IS. Each failure keeps its own D-A7 name, because
+    // an operator topping up an account, fixing a key, fixing a model id and
+    // debugging this container are looking for different things — but none of
+    // them produces a judgement.
+    return { kind: "refused", sessionId: pending.sessionId, reason: failure ?? RUNNER_FAULT, detail: detailOf(answer) };
   }
 
-  return submitJudgement(config, pending.sessionId, answer.body, doFetch);
+  return submitJudgement(config, pending, answer.body, doFetch);
 }
 
 /**
- * POST the opinion under this judge's own bearer.
+ * Sign the judgement with THIS judge's own key, or THROW.
+ *
+ * A key this container cannot import is a refusal, not an empty signature: a
+ * judgement is signed by its judge or it does not exist (the same rule
+ * take-runner.ts states for a take).
+ */
+async function signJudgement(canonical: string, config: JudgeClientConfig): Promise<string> {
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey("jwk", config.identity.privateJwk as JsonWebKey, { name: "Ed25519" }, false, ["sign"]);
+  } catch (err) {
+    throw new JudgeClientConfigError(
+      `judge "${config.name}" cannot import its own signing key — a judgement is signed by its judge or it is not ` +
+        `submitted at all: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const signature = await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(canonical));
+  return Buffer.from(new Uint8Array(signature)).toString("base64");
+}
+
+/**
+ * POST the model's raw answer, signed, under this judge's own bearer.
+ *
+ * WHAT IS SIGNED: `canonicalizeJudgement` (@robotmoney/contract) over this
+ * member's id, the session, a fresh nonce, the model, the prompt hash, the
+ * digest of the served input, and the answer text exactly as the model gave
+ * it. The API verifies it against this member's ACTIVE key before anything is
+ * written.
  *
  * A REDELIVERY IS A SUCCESS. The server answers the original row with
  * `duplicate: true` when this judge already submitted for this session, and a
  * client that treated that as a failure would retry for ever against a server
- * that is behaving exactly as designed. A submission after finalize comes back
+ * behaving exactly as designed. A submission after finalize comes back
  * `lateEvidence: true` and is likewise a success — it was recorded, it simply
  * decides nothing (§4.4).
  */
 export async function submitJudgement(
   config: JudgeClientConfig,
-  sessionId: string,
+  pending: PendingJudging,
   opinion: string,
   fetchImpl: typeof globalThis.fetch = fetch,
 ): Promise<JudgeOutcome> {
+  const sessionId = pending.sessionId;
+  const body = {
+    sessionId,
+    opinion,
+    model: config.model,
+    promptHash: JUDGE_PROMPT_HASH,
+    inputsDigest: inputsDigest(pending.input),
+    nonce: crypto.randomUUID(),
+  };
+  const signature = await signJudgement(canonicalizeJudgement({ ...body, memberId: config.memberId }), config);
   let res: Response;
   try {
     res = await fetchImpl(`${config.apiUrl}${ROUTES.swarm.participants.judgement}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, opinion, model: config.model }),
+      body: JSON.stringify({ ...body, signature }),
     });
   } catch (err) {
     return { kind: "submit_failed", sessionId, status: 0, error: String((err as Error)?.message ?? err) };
   }
-  let body: Record<string, unknown> = {};
+  let answer: Record<string, unknown> = {};
   try {
-    body = (await res.json()) as Record<string, unknown>;
+    answer = (await res.json()) as Record<string, unknown>;
   } catch {
-    body = {};
+    answer = {};
   }
   if (!res.ok) {
-    return { kind: "submit_failed", sessionId, status: res.status, error: String(body.error ?? `http_${res.status}`) };
+    return { kind: "submit_failed", sessionId, status: res.status, error: String(answer.error ?? `http_${res.status}`) };
   }
   return {
     kind: "submitted",
     sessionId,
-    judgementId: Number(body.judgementId ?? 0),
-    duplicate: body.duplicate === true,
-    lateEvidence: body.lateEvidence === true,
+    judgementId: Number(answer.judgementId ?? 0),
+    duplicate: answer.duplicate === true,
+    lateEvidence: answer.lateEvidence === true,
   };
 }
 

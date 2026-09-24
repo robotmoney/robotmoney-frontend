@@ -8,13 +8,15 @@
 //
 // THE FOUR RULES THESE PIN, EACH LEARNED FROM A REAL FAILURE:
 //
-//   1. THE THREE-CASE UNION, AND ITS TWO FAILURE ARMS NEVER COLLAPSE.
+//   1. THE ANSWER UNION, AND ITS TWO FAILURE ARMS NEVER COLLAPSE.
 //      `model_status` is the VENDOR refusing — a product fact that feeds the
 //      D-A7 taxonomy and tells an operator to add credit or fix a key.
 //      `runner` is THIS SHIM, its network or its launch failing — an
 //      infrastructure fact about our own deployment. Collapse them and a rail
 //      fault sends an operator to top up an account that was never charged,
 //      while a vendor refusal sends them to debug a container that worked.
+//      A TIMEOUT is its own arm (`timeout`, D-A7's `model_timeout`): the vendor
+//      was asked and did not answer, which is neither of the other two.
 //   2. THE PROMPT ARRIVES AS A FILE. A judge prompt carries every take in the
 //      session; Linux caps one argv/env string at MAX_ARG_STRLEN (128 KiB) and
 //      `execve` then returns E2BIG — the process never starts. A judge that
@@ -43,6 +45,8 @@ import {
   type JudgeAnswer,
   type JudgeRunnerOptions,
 } from "../../agent/participant/judge-runner.ts";
+import { failureCodeForAnswer, type JudgeFailureCode } from "../../agent/participant/judge-reasons.ts";
+import { parseJudgeResponse, renderJudgePrompt, type JudgeInput } from "../../../backend/src/swarm/judge.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "rm-judge-runner-"));
@@ -68,7 +72,7 @@ function lastAnswer(stdout: string): JudgeAnswer | null {
 }
 
 // ── THE ANSWER UNION ROUND-TRIPS, AND THE FAILURE ARMS STAY APART ──────────
-describe("the three-case answer union survives the stdout round trip", () => {
+describe("the answer union survives the stdout round trip", () => {
   test("`ok` round-trips with the model's raw answer text, uninterpreted", () => {
     const answer: JudgeAnswer = { kind: "ok", body: '{"weights":{"athena":0.4}}' };
     expect(parseAnswerLine(formatAnswerLine(answer))).toEqual(answer);
@@ -82,6 +86,16 @@ describe("the three-case answer union survives the stdout round trip", () => {
   test("`runner` round-trips with its message", () => {
     const answer: JudgeAnswer = { kind: "runner", message: "prompt file unreadable" };
     expect(parseAnswerLine(formatAnswerLine(answer))).toEqual(answer);
+  });
+
+  test("`timeout` round-trips with the ceiling it hit", () => {
+    const answer: JudgeAnswer = { kind: "timeout", timeoutMs: 300_000 };
+    expect(parseAnswerLine(formatAnswerLine(answer))).toEqual(answer);
+  });
+
+  test("a TIMEOUT never comes back as a rail fault or a vendor status", () => {
+    const parsed = parseAnswerLine(formatAnswerLine({ kind: "timeout", timeoutMs: 5 }));
+    expect(parsed?.kind).toBe("timeout");
   });
 
   test("a VENDOR refusal never comes back as a rail fault", () => {
@@ -371,6 +385,70 @@ describe("runJudge — exactly one POST, and every failure is an answer rather t
     }
   });
 
+  test("a vendor that never answers inside the ceiling is `timeout`, not `runner`", async () => {
+    const { dir, file } = promptFileWith("judge this");
+    let calls = 0;
+    // Honours the caller's signal exactly as the real fetch does: nothing comes
+    // back until the ceiling aborts the request.
+    globalThis.fetch = ((_input: any, init?: any): Promise<Response> => {
+      calls++;
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => reject(signal.reason));
+      });
+    }) as typeof fetch;
+    try {
+      const answer = await runJudge(options({ promptFile: file, timeoutMs: 50 }));
+      expect(answer).toEqual({ kind: "timeout", timeoutMs: 50 });
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a vendor that sends its HEADERS and then withholds the body past the ceiling is `timeout`, not `runner`", async () => {
+    // A real socket, not a fetch double: the question is what the real fetch
+    // does when the ceiling fires while the BODY is being read, after the
+    // response has already resolved.
+    const { dir, file } = promptFileWith("judge this");
+    let calls = 0;
+    let release: (() => void) | undefined;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        calls++;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // Flush the head of a JSON body so the headers go out and
+            // res.json() is left waiting on the rest.
+            controller.enqueue(new TextEncoder().encode('{"choices":'));
+            release = () => {
+              try {
+                controller.close();
+              } catch {
+                // already torn down with the aborted request
+              }
+            };
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      const answer = await runJudge(options({
+        promptFile: file,
+        endpoint: `http://127.0.0.1:${server.port}/v1`,
+        timeoutMs: 300,
+      }));
+      expect(answer).toEqual({ kind: "timeout", timeoutMs: 300 });
+      expect(calls).toBe(1);
+    } finally {
+      release?.();
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("runJudge never THROWS — every failure becomes exactly one answer", async () => {
     const { dir, file } = promptFileWith("judge this");
     globalThis.fetch = (async (_input?: any): Promise<Response> => {
@@ -403,4 +481,122 @@ describe("the judge one-shot entrypoint — always exit 0, always exactly one ta
     expect(tagged).toHaveLength(1);
     expect(lastAnswer(stdout)?.kind).toBe("runner");
   }, 30_000);
+});
+
+// ── THE DIRECT TRANSPORT, END TO END, ON A LOCAL SOCKET ─────────────────────
+// D53 point 4 moved here the coverage that used to run the deleted backend
+// `judge()`: the runner's real `fetch` against a vendor-shaped endpoint (a
+// Bun.serve on 127.0.0.1 — no container, no network), and the model's text
+// carried UNINTERPRETED to the parser the API runs in `submitJudgement`.
+describe("the runner on its real transport, into the API's parser", () => {
+  const TAKE = "Prefer stable yield while retaining measured protocol exposure.";
+  const input: JudgeInput = {
+    sessionId: "s-roundtrip",
+    date: "2026-09-24",
+    subjectId: "treasury",
+    subjectLabel: "Treasury",
+    brief: null,
+    takes: [{ member_id: "analyst-alpha", member_name: "Alpha", revision: 1, stance: "constructive", confidence: 0.8, body: TAKE }],
+    minTakes: 1,
+    byStance: { constructive: 1 },
+    meanConfidence: 0.8,
+    regimeSummary: null,
+  };
+
+  function vendor(status: number, body: string) {
+    const seen: { auth: string | null; model: unknown }[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const payload = (await req.json()) as { model?: unknown };
+        seen.push({ auth: req.headers.get("authorization"), model: payload.model });
+        return new Response(body, { status, headers: { "content-type": "application/json" } });
+      },
+    });
+    return { server, seen, endpoint: `http://127.0.0.1:${server.port}` };
+  }
+
+  async function withPrompt<T>(fn: (file: string) => Promise<T>): Promise<T> {
+    const dir = tempDir();
+    const file = join(dir, "prompt.txt");
+    writeFileSync(file, renderJudgePrompt(input));
+    try {
+      return await fn(file);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a model's answer arrives uninterpreted, and the API's parser fills every view from the member's own body", async () => {
+    const answerText = JSON.stringify({
+      rationale: "Alpha alone argues the reserve is oversized.",
+      disagreements: [{ topic: "reserve size", positions: [{ member_id: "analyst-alpha", view: "(model text)" }], what_settles: "next session" }],
+      release_safety: { release: "safe", concerns: [] },
+    });
+    const v = vendor(200, JSON.stringify({ choices: [{ message: { content: answerText } }] }));
+    try {
+      const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint, model: "deepseek-v4-flash" })));
+      expect(answer).toEqual({ kind: "ok", body: answerText });
+      expect(v.seen).toEqual([{ auth: "Bearer zen-key", model: "deepseek-v4-flash" }]);
+      const opinion = parseJudgeResponse(answer.kind === "ok" ? answer.body : "", input);
+      expect(opinion.disagreements[0]!.positions[0]).toEqual({ member_id: "analyst-alpha", view: TAKE });
+      expect(opinion.release_safety.take_count).toBe(1);
+    } finally {
+      v.server.stop(true);
+    }
+  });
+
+  test("a smuggled weight passes through the runner untouched and is refused WHOLE by the parser", async () => {
+    const answerText = JSON.stringify({
+      rationale: "Lean into protocols.",
+      disagreements: [],
+      release_safety: { release: "safe", concerns: [], allocation: { stable: 0.1 } },
+    });
+    const v = vendor(200, JSON.stringify({ choices: [{ message: { content: answerText } }] }));
+    try {
+      const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint })));
+      // The shim does not reshape a judgement — it cannot strip the field either.
+      expect(answer).toEqual({ kind: "ok", body: answerText });
+      expect(() => parseJudgeResponse(answerText, input)).toThrow("weight_like_field:release_safety.allocation");
+    } finally {
+      v.server.stop(true);
+    }
+  });
+
+  test("each vendor refusal reaches the D-A7 name through the real transport", async () => {
+    const cases: [number, string, JudgeFailureCode][] = [
+      [402, '{"error":"Payment Required"}', "credit_exhausted"],
+      [401, '{"type":"error","error":{"type":"ModelError","message":"Model opencode/x is not supported"}}', "model_not_supported"],
+      [401, '{"error":"invalid key"}', "credential_rejected"],
+      [429, '{"error":"slow down"}', "model_unavailable:429"],
+    ];
+    for (const [status, body, expected] of cases) {
+      const v = vendor(status, body);
+      try {
+        const answer = await withPrompt((file) => runJudge(options({ promptFile: file, endpoint: v.endpoint })));
+        expect(answer.kind).toBe("model_status");
+        expect({ status, code: failureCodeForAnswer(answer) }).toEqual({ status, code: expected });
+        expect(v.seen).toHaveLength(1);
+      } finally {
+        v.server.stop(true);
+      }
+    }
+  });
+
+  test("an endpoint that accepts the request and never answers is `model_timeout`", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Promise<Response>(() => {}),
+    });
+    try {
+      const answer = await withPrompt((file) =>
+        runJudge(options({ promptFile: file, endpoint: `http://127.0.0.1:${server.port}`, timeoutMs: 100 })));
+      expect(answer).toEqual({ kind: "timeout", timeoutMs: 100 });
+      expect(failureCodeForAnswer(answer)).toBe("model_timeout");
+    } finally {
+      server.stop(true);
+    }
+  });
 });

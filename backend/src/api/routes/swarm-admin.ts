@@ -8,6 +8,7 @@
 import * as admin from "../../swarm/admin.ts";
 import * as epoch from "../../swarm/domain.ts";
 import { getAgentHealthEvents } from "../../swarm/domain.ts";
+import { JUDGE_MODES, type JudgeMode } from "../../swarm/judge-config.ts";
 import { config as globalConfig } from "../../config.ts";
 import { isPrivileged, hasAutomationRole, hasAutomationRight } from "../auth.ts";
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
@@ -84,7 +85,11 @@ export interface AdminAuthConfig {
 const EXPECTED_RECEIPT_REFUSALS = new Set([
   // The judge is off, which is the production default.
   "not_judged",
-  // A shadow judgement is withheld from the session by design.
+  // Judging was requested and no eligible consensus was recorded by the
+  // deadline: §4.4 publishes the session with no certificate, by design.
+  "no_consensus",
+  // Judgements are on file but none reached the session: they came from a judge
+  // that is not the judge of record, or after publication (late evidence).
   "judgement_not_adopted",
   // A member filed a first take after aggregation — consensus-receipt.ts calls
   // this "ordinary product behaviour rather than corruption".
@@ -195,14 +200,14 @@ export async function handleSwarmAdmin(
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
         return fromResult(await epoch.requestJudging(sessionId));
       }
-      case "consensus": {
-        const sessionId = str("sessionId");
-        const judgementId = typeof b.judgementId === "number" ? b.judgementId : null;
-        if (!sessionId || judgementId == null) {
-          return { status: 400, body: { error: "sessionId and judgementId required" } };
-        }
-        return fromResult(await epoch.recordJudgingConsensus(sessionId, judgementId));
-      }
+      // THERE IS NO `consensus` ROUTE. A consensus is recorded by exactly one
+      // path: `submitJudgement`, in the transaction that writes the judge of
+      // record's signed, applied judgement (§4.4, criterion 102: "through part
+      // 1's transition rather than a second copy"). A route that took a bare
+      // judgement id would let a scheduler token record ANY row — a second
+      // judge's, or one that never reached the session — as the consensus, and
+      // finalize would then publish `judged` over a session carrying no adopted
+      // opinion. `epochs/consensus` therefore falls through to the 404 below.
       case "finalize": {
         const sessionId = str("sessionId");
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
@@ -339,11 +344,11 @@ export async function handleSwarmAdmin(
       return fromResult(await admin.createSessionAdmin(parsed));
     }
     const sessionId = segs[1] ? decodeURIComponent(segs[1]) : undefined;
-    // The shadow soak's read path (issue #767, folded from #768). Privileged
-    // like every other route here — a `shadow` opinion is model-authored prose
-    // about named members that the mode deliberately keeps off the public
-    // session page, so serving it unauthenticated would publish exactly what
-    // shadow exists to withhold.
+    // Every judgement a session received (issue #767, folded from #768).
+    // Privileged like every other route here — a judgement that never reached
+    // the session is model-authored prose about named members that the public
+    // session page does not show, so serving it unauthenticated would publish
+    // exactly what the lifecycle kept off the session.
     if (sessionId && segs.length === 3 && segs[2] === "judgements" && m === "GET") {
       const limitRaw = Number(url.searchParams.get("limit") ?? NaN);
       return fromResult(await admin.getSessionJudgementsAdmin(sessionId, Number.isFinite(limitRaw) ? limitRaw : 50));
@@ -411,16 +416,24 @@ export async function handleSwarmAdmin(
   // judge misbehave on live sessions needs `mode: "off"` to take effect on the
   // next session, not on the next deploy. Hence a database row behind a POST,
   // rather than an environment variable behind a container restart.
+  //
+  // THIS ROUTE IS THE ONLY WRITER of `swarm_judge_config` (smoke-production-spec.md
+  // §6.2). The two statements it reaches are registered queries whose declared
+  // caller is this module (swarm/judge-config.ts), and
+  // tests/swarm-judge-config-registry.test.ts asserts that from the registry.
+  //
+  // TWO MODES. `shadow` is refused like any other unknown value: D48's replay
+  // prerequisite was waived by D53, and no write path accepts it.
   if (segs[0] === "judge" && segs.length === 1) {
     if (m === "GET") return fromResult(await admin.getJudgeConfigAdmin());
     if (m === "POST") {
       const b = (await readJsonObject(req)) ?? {};
-      const patch: { mode?: "off" | "shadow" | "enforce"; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean } = {};
+      const patch: { mode?: JudgeMode; minTakes?: number; model?: string | null; thirdPartyEnabled?: boolean } = {};
       if (b.mode !== undefined) {
-        if (b.mode !== "off" && b.mode !== "shadow" && b.mode !== "enforce") {
-          return { status: 400, body: { error: "mode must be off|shadow|enforce" } };
+        if (!JUDGE_MODES.includes(b.mode as JudgeMode)) {
+          return { status: 400, body: { error: "mode must be off|enforce" } };
         }
-        patch.mode = b.mode;
+        patch.mode = b.mode as JudgeMode;
       }
       if (b.minTakes !== undefined) {
         const minTakes = Number(b.minTakes);

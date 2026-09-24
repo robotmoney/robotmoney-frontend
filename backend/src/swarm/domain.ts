@@ -3,6 +3,7 @@
 // server, the worker, and the dev driver all call these; they never diverge.
 import {
   canonicalizeApplication,
+  canonicalizeJudgement,
   classifyRegime,
   RECEIPT_CANONICAL_BUCKET_ORDER,
   REGIME_METHOD,
@@ -21,8 +22,23 @@ import {
   fingerprintPublicKey,
   verifyApplicationSignature,
   verifyClaimChallengeSignature,
+  verifyDetachedSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
+// The PURE half of the consensus judge: the parser every judgement passes
+// through and the digest that pins what a judge read. judge.ts imports nothing
+// from this module, so there is no cycle.
+import {
+  DIGEST_SCHEME,
+  findWeightLikeKey,
+  inputsDigest,
+  JudgeResponseError,
+  noDrops,
+  parseJudgeResponse,
+  type JudgeInput,
+  type JudgeOpinion,
+  type JudgeTake,
+} from "./judge.ts";
 // Pure canonicalization shared with the #977/#978 analytics ledgers — no DB
 // import, so pulling it in here carries no cycle risk. Every brief revision's
 // body is hashed the SAME way an analytics report/output snapshot is, so "the
@@ -437,12 +453,23 @@ export interface ListSessionsOptions {
 // NOT the successor's `window_closes_at`, which does not exist yet: the epoch
 // after next is not scheduled anywhere, because nothing about the epoch model
 // schedules anything.
-async function getNextSwarmSessionAt(): Promise<string | null> {
-  const [row] = await sql`
-    SELECT min(window_closes_at) AS next_at
+export async function getNextSwarmSessionAt(): Promise<string | null> {
+  return (await getNextSwarmSession())?.at ?? null;
+}
+
+/**
+ * The same instant, with the open window it belongs to — for a reader (the
+ * admin overview) that has to say WHICH session turns over next, not only
+ * when. The earliest close across every open window; ties break on id so the
+ * answer is stable.
+ */
+export async function getNextSwarmSession(): Promise<{ sessionId: string; subjectId: string; at: string } | null> {
+  const [row] = await sql<{ id: string; subject_id: string; window_closes_at: Date }[]>`
+    SELECT id, subject_id, window_closes_at
       FROM swarm_sessions
-     WHERE state = 'collecting' AND window_closes_at IS NOT NULL`;
-  return row?.next_at ? instant(row.next_at) : null;
+     WHERE state = 'collecting' AND window_closes_at IS NOT NULL
+     ORDER BY window_closes_at, id LIMIT 1`;
+  return row ? { sessionId: String(row.id), subjectId: row.subject_id, at: instant(row.window_closes_at)! } : null;
 }
 
 export async function listSessions(opts: ListSessionsOptions = {}) {
@@ -2282,15 +2309,17 @@ function stanceBreakdown(byStance: Record<string, number>): string {
 // That made the rationale a function of arrival order, and worse, of the
 // ROUND TRIP: postgres reorders jsonb keys, so re-deriving prose from a stored
 // `swarm_recommendation.stances` could name a different majority than the
-// aggregation that wrote it. The judge's template fallback re-derives exactly
-// that way, so "the fallback is byte-identical to today's prose" was true only
-// until two stances tied.
+// aggregation that wrote it. The judge's template fallback — deleted since
+// (D-A7, and outright by D53) — re-derived exactly that way, so "the fallback
+// is byte-identical to today's prose" was true only until two stances tied.
+// Historical `source='fallback'` judgement rows were written under that rule,
+// which is why the ladder audit below still has something to find.
 //
 // The tie-break is the same one stanceBreakdown() already sorts on — the
 // canonical ascending STANCES ladder, lowest index first — so the two lines of
 // prose can never disagree about which stance led.
 //
-// Exported since #766: `listRationaleLadderDrift()` in judge-session.ts has to
+// Exported since #766: `listRationaleLadderDrift()` in judge-replay.ts has to
 // re-elect the majority for an ALREADY-PUBLISHED session to enumerate the set
 // D42 promises to report. Re-implementing the ladder there would give the
 // enumeration its own chance to disagree with the rule it is auditing against.
@@ -2371,10 +2400,10 @@ export function buildSynthesis(
 // `topic` names the actual stances in conflict (not a generic placeholder)
 // and `what_settles` is an objective, trackable test rather than "" (#323).
 //
-// Exported since #752: this is one of the four template producers the judge
-// falls back to when a model is unavailable or answers badly, and "falls back
-// to the prose the templates produce today" is only checkable if the judge
-// calls the same function the aggregator does.
+// Exported since #752, when this was one of the four template producers the
+// judge fell back to when a model was unavailable or answered badly. That
+// fallback is deleted (D53 point 4): the judge refuses instead, and this is
+// now only the aggregator's own deterministic prose.
 export function buildDisagreements(subjectLabel: string, authoredTakes: any[]): any[] {
   const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
@@ -2407,8 +2436,8 @@ export interface FrozenTakeSet {
   rosterFrozen: boolean;
 }
 
-export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSet | null> {
-  const s = (await sql`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+export async function loadFrozenTakeSet(sessionId: string, h: DbHandle = sql): Promise<FrozenTakeSet | null> {
+  const s = (await h`SELECT * FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   if (!s) return null;
   // LATEST-PER-MEMBER (issue #573), for the same reason as withTakes above and
   // one more that is specific to this function: aggregation copies take prose
@@ -2446,7 +2475,7 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   // entirely #765's `LEFT JOIN`, which matches at most once because
   // `swarm_session_members` is `PRIMARY KEY (session_id, member_id)` and the
   // join pins both halves of that key.
-  const takeRows = await sql`
+  const takeRows = await h`
     SELECT * FROM (
       SELECT DISTINCT ON (r.member_id)
              r.member_id, r.stance, r.confidence, r.body, r.payload, r.revision,
@@ -2466,16 +2495,71 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
   // members when the session has no roster snapshot at all (the legacy/smoke
   // openSession path) — this keeps the pre-#152 smoke/worker behavior
   // unchanged.
-  const rosterRows = await sql<{ id: string }[]>`
+  const rosterRows = await h<{ id: string }[]>`
     SELECT member_id AS id FROM swarm_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
   const activeMembers = rosterRows.length > 0
     ? rosterRows
-    : (await sql`SELECT id FROM swarm_members WHERE status = 'active'`) as unknown as { id: string }[];
+    : (await h`SELECT id FROM swarm_members WHERE status = 'active'`) as unknown as { id: string }[];
   const frozenRoster = new Set(activeMembers.map((member: any) => member.id));
   const takes = rosterRows.length > 0
     ? takeRows.filter((take: any) => frozenRoster.has(take.member_id))
     : takeRows;
   return { session: s as Record<string, any>, takes: takes as any[], activeMembers, rosterFrozen: rosterRows.length > 0 };
+}
+
+/**
+ * The judge's input, built from a frozen take set the CALLER already loaded.
+ *
+ * Every NUMBER on it comes off the session row the aggregator already wrote.
+ * Nothing here recomputes a rollup: if the judge and the aggregator could
+ * disagree about the quorum, the prose would describe a session that does not
+ * exist.
+ *
+ * ONE LOAD, EVERY USE. The judge subscription serves this object to the judge
+ * (`pendingJudgingFor`), `submitJudgement` rebuilds it to check the digest the
+ * judge signed, the consensus receipt (issue #754) rebuilds it over the exact
+ * set it is about to embed, and `judge-replay.ts` (issue #766) over the set it
+ * re-derives the vector from. Each passes the set it loaded, because a second
+ * `loadFrozenTakeSet` would digest whatever that one returned — a different set
+ * whenever a take lands between the two reads, which is exactly the divergence
+ * those comparisons exist to detect.
+ *
+ * Lives here, beside `loadFrozenTakeSet`, since the inline judge's session
+ * module was deleted (issue #1026, D53).
+ */
+export async function judgeInputFromFrozen(
+  frozen: FrozenTakeSet,
+  minTakes: number,
+  h: DbHandle = sql,
+): Promise<JudgeInput> {
+  const s = frozen.session;
+  const sessionId = String(s.id);
+  const [briefRow] = await h<{ body: unknown }[]>`SELECT body FROM swarm_briefs WHERE session_id = ${sessionId}`;
+  const rec = (s.swarm_recommendation ?? {}) as Record<string, unknown>;
+  const takes: JudgeTake[] = frozen.takes.map((t: any) => ({
+    member_id: String(t.member_id),
+    member_name: t.member_name == null ? null : String(t.member_name),
+    revision: Number(t.revision ?? 0),
+    stance: String(t.stance ?? ""),
+    confidence: t.confidence == null ? null : Number(t.confidence),
+    body: typeof t.body === "string" ? t.body : "",
+    // The member's own proposed weights, off their take payload — evidence of
+    // what that member meant, never the session's answer.
+    ["weights"]: Array.isArray(t.payload?.["weights"]) ? t.payload["weights"] : null,
+  }));
+  const date = s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
+  return {
+    sessionId,
+    date,
+    subjectId: String(s.subject_id),
+    subjectLabel: s.subject_name ?? String(s.subject_id),
+    brief: briefRow?.body ?? null,
+    takes,
+    minTakes,
+    byStance: (rec.stances as Record<string, number>) ?? {},
+    meanConfidence: typeof rec.meanConfidence === "number" ? rec.meanConfidence : null,
+    regimeSummary: (s.regime_summary as { composite_percentile?: number } | null) ?? null,
+  };
 }
 
 // THE ROLLUP, AND NO STATE OPINION (issue #806). This function REPLACES
@@ -2627,8 +2711,9 @@ export async function aggregateSession(sessionId: string) {
  * WHAT IT IS NOW. The same single statement, with the admin path's two guards:
  * it fires only from a publishable state and stamps `published_at` once. It
  * stays a single statement rather than becoming `guardedTransition` because the
- * cadence deliberately keeps the two surfaces separate (see
- * `worker/handlers/swarm.ts`), and it reports whether it actually transitioned
+ * direct publish route (api/routes/swarm.ts) and the audited admin transition
+ * are kept separate, as they were when the retired swarm queue handler was
+ * this function's caller, and it reports whether it actually transitioned
  * so a caller can tell an effective publish from a no-op instead of reading
  * "published" either way.
  */
@@ -2714,6 +2799,19 @@ export async function updateMemberProfile(token: string, memberRef: string, patc
   if (!row) return { ok: false, status: 404, error: "member not found" };
   const memberId = row.id as string;
   if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+
+  // THE IN-HOUSE OPERATOR IS RESERVED, HERE AND NOT ONLY IN THE ROUTE (D52,
+  // issue #925). The judge's third-party gate is keyed on `operator`
+  // (`submitJudgement`, smoke-production-spec.md §6.2), so a member that could
+  // write `robotmoney` into its own row could judge while third-party judging
+  // is off — the #925 forgery. The route's validator refuses the literal too,
+  // but this function is the writer, and a rule that lives only in one caller
+  // is one new caller away from gone. Only admin paths and the in-house roster
+  // seed may set it.
+  if (patch.operator !== undefined && typeof patch.operator === "string" &&
+      patch.operator.trim().toLowerCase() === IN_HOUSE_OPERATOR) {
+    return { ok: false, status: 403, error: "operator_reserved: 'robotmoney' is set only by an admin" };
+  }
 
   const merged = {
     tagline: patch.tagline !== undefined ? patch.tagline : row.tagline,
@@ -3234,66 +3332,88 @@ export type RecordConsensusResult = {
  * by. Nothing downstream looks at when an event arrived, when a timer fired, or
  * when finalize was called — §9: "An event's arrival time never decides an
  * outcome."
+ *
+ * NO ROUTE CALLS THIS. It checks only that the judgement belongs to the
+ * session, not that it is the judge of record's or that its opinion reached
+ * the session — `submitJudgement` has already decided both before it calls
+ * `recordJudgingConsensusTx`. The `epochs/consensus` admin route that exposed
+ * this with a bare judgement id is retired for exactly that reason; this
+ * standalone form survives only so the settlement tests can plant a consensus
+ * at a chosen instant.
  */
 export async function recordJudgingConsensus(
   sessionId: string,
   judgementId: number,
 ): Promise<RecordConsensusResult | Refusal> {
-  return sql.begin(async (tx) => {
-    const [s] = await tx<Record<string, any>[]>`
-      SELECT * FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
-    if (!s) return refuse(404, "session_not_found");
-    const [j] = await tx<{ id: string }[]>`
-      SELECT id FROM swarm_session_judgements WHERE id = ${judgementId} AND session_id = ${sessionId}`;
-    if (!j) return refuse(404, "judgement_not_for_session");
+  return sql.begin((tx) => recordJudgingConsensusTx(tx, sessionId, judgementId));
+}
 
-    if (s.state === "published") {
-      // Late evidence. The judgement row already exists and stays; nothing
-      // about the session moves.
-      return {
-        ok: true as const,
-        status: 200,
-        sessionId,
-        state: "published",
-        recordedAt: new Date().toISOString(),
-        lateEvidence: true,
-      };
-    }
-    if (s.consensus_recorded_at) {
-      return {
-        ok: true as const,
-        status: 200,
-        sessionId,
-        state: s.state,
-        recordedAt: new Date(s.consensus_recorded_at).toISOString(),
-        lateEvidence: false,
-      };
-    }
-    if (s.state !== "judging") return refuse(409, "session_not_judging");
-    const [upd] = await tx<{ consensus_recorded_at: Date }[]>`
-      UPDATE swarm_sessions SET state = 'judged', consensus_recorded_at = now()
-       WHERE id = ${sessionId} AND state = 'judging'
-       RETURNING consensus_recorded_at`;
-    // §6.2: `session.judged`. A WAKE-UP and nothing more (§4.4) — the scheduler
-    // finalizes the moment consensus lands instead of waiting out the deadline,
-    // and finalize re-reads the stored instants either way. Written in this
-    // transaction so it exists if and only if the consensus was recorded; late
-    // evidence after publication publishes nothing, because nothing the clock
-    // waits on changed.
-    await appendStreamEvent(tx, "session.judged", {
-      subjectId: s.subject_id,
-      sessionId,
-      payload: { judgementId, recordedAt: new Date(upd.consensus_recorded_at).toISOString() },
-    });
+/**
+ * The same transition inside a transaction the caller already holds.
+ *
+ * `submitJudgement` needs it: the judgement row and the consensus it forms are
+ * written in ONE transaction, so a crash between the two can never leave a
+ * judge of record's judgement on file with no consensus recorded, or a
+ * consensus pointing at a row that rolled back.
+ */
+export async function recordJudgingConsensusTx(
+  tx: DbHandle,
+  sessionId: string,
+  judgementId: number,
+): Promise<RecordConsensusResult | Refusal> {
+  const [s] = await tx<Record<string, any>[]>`
+    SELECT * FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+  if (!s) return refuse(404, "session_not_found");
+  const [j] = await tx<{ id: string }[]>`
+    SELECT id FROM swarm_session_judgements WHERE id = ${judgementId} AND session_id = ${sessionId}`;
+  if (!j) return refuse(404, "judgement_not_for_session");
+
+  if (s.state === "published") {
+    // Late evidence. The judgement row already exists and stays; nothing
+    // about the session moves.
     return {
       ok: true as const,
       status: 200,
       sessionId,
-      state: "judged",
-      recordedAt: new Date(upd.consensus_recorded_at).toISOString(),
+      state: "published",
+      recordedAt: new Date().toISOString(),
+      lateEvidence: true,
+    };
+  }
+  if (s.consensus_recorded_at) {
+    return {
+      ok: true as const,
+      status: 200,
+      sessionId,
+      state: s.state,
+      recordedAt: new Date(s.consensus_recorded_at).toISOString(),
       lateEvidence: false,
     };
+  }
+  if (s.state !== "judging") return refuse(409, "session_not_judging");
+  const [upd] = await tx<{ consensus_recorded_at: Date }[]>`
+    UPDATE swarm_sessions SET state = 'judged', consensus_recorded_at = now()
+     WHERE id = ${sessionId} AND state = 'judging'
+     RETURNING consensus_recorded_at`;
+  // §6.2: `session.judged`. A WAKE-UP and nothing more (§4.4) — the scheduler
+  // finalizes the moment consensus lands instead of waiting out the deadline,
+  // and finalize re-reads the stored instants either way. Written in this
+  // transaction so it exists if and only if the consensus was recorded; late
+  // evidence after publication publishes nothing, because nothing the clock
+  // waits on changed.
+  await appendStreamEvent(tx, "session.judged", {
+    subjectId: s.subject_id,
+    sessionId,
+    payload: { judgementId, recordedAt: new Date(upd.consensus_recorded_at).toISOString() },
   });
+  return {
+    ok: true as const,
+    status: 200,
+    sessionId,
+    state: "judged",
+    recordedAt: new Date(upd.consensus_recorded_at).toISOString(),
+    lateEvidence: false,
+  };
 }
 
 export type FinalizeResult = {
@@ -3443,13 +3563,14 @@ function isOneCollectingViolation(err: unknown): boolean {
 //     words that it "must only ever shrink" and that adding a line is "the one
 //     thing a ratchet exists to prevent". A new module issuing raw statements
 //     needs a new line.
-//   * `registerQuery` is the supported alternative and does not work yet:
-//     registration is process-global, preflight check 2 resolves every declared
-//     relation against the live catalog, and `tests/schema-snapshot.test.ts`'s
-//     blank-bootstrap fixture declares three tables — so the first real
-//     registration anywhere makes that test refuse. That is the W2 fixture gap
-//     the issue already records as blocking, not something this part may paper
-//     over by editing another workstream's test.
+//   * `registerQuery` is the supported alternative, and when these sections
+//     were written it could not be used: registration is process-global,
+//     preflight check 2 resolves every declared relation against the live
+//     catalog, and `tests/schema-snapshot.test.ts`'s blank-bootstrap fixture
+//     declares three tables — so the first real registration anywhere made that
+//     test refuse. `swarm/judge-config.ts` is now that first registration, and
+//     the fixture case runs its preflight in a fresh process; converting these
+//     sections is the W2 conversion of this whole file.
 //
 // A NOTE ON WHAT WAS NOT DONE. The detector's regex only matches a BARE tagged
 // template (`sql\``), so every statement below would have slipped past it
@@ -3840,27 +3961,49 @@ export interface PendingJudging {
   /** The API's STORED deadline. Informational for the judge: it finalizes nothing (§6.2). */
   judgingDeadlineAt: string;
   judgingRequestedAt: string | null;
+  /**
+   * EXACTLY what the judge is to read: the session's frozen take set, its
+   * brief and its rollup facts, as `judgeInputFromFrozen` builds them.
+   *
+   * Served rather than left for the judge to assemble from the public read
+   * API, because the judgement's `inputsDigest` is a claim about this object
+   * and the API recomputes it at submission. A judge that rebuilt its input
+   * from some other read would sign a digest over a set nobody else can
+   * reproduce, and its judgement would be refused as stale.
+   */
+  input: JudgeInput;
 }
 
 /**
- * Every session in `judging` this judge has not submitted for.
+ * Every session in `judging` this judge has not submitted for, and may.
  *
- * "on every connect or reconnect the API serves every session in `judging` for
- * which this judge has not yet submitted, so a judge that was down when the
- * request was created still obtains it if it returns before the deadline"
+ * "on every connect or reconnect the API serves every session in `judging`
+ * for which this judge has not yet submitted, so a judge that was down when
+ * the request was created still obtains it if it returns before the deadline"
  * (§6.2).
  *
- * THE FILTER IS PER JUDGE, not per session. `swarm_session_judgements` carries
- * `judged_by_member_id` (migration 0043), so one judge submitting does not
- * clear the work of another — which matters because §6.1 admits several judges
- * and because the first consensus recorded is the session's, while the others
- * are still evidence worth having.
+ * THE FILTER IS PER JUDGE, not per session. `swarm_session_judgements`
+ * carries `judged_by_member_id` (migration 0043), so one judge submitting does
+ * not clear the work of another.
+ *
+ * A SESSION THIS JUDGE HAS A TAKE IN IS NOT ITS WORK. Scheduler spec §4.4: an
+ * eligible judgement is signed by a judge "that has no take in that session".
+ * Serving it would only hand the judge a model call whose answer is refused.
  *
  * THE DEADLINE IS NOT FILTERED ON. A session past its deadline that the
- * scheduler has not finalized yet is still in `judging`, and a judgement that
- * lands in that window is still eligible or not by the STORED instants alone
- * (§4.4). Hiding it here would be this module deciding an outcome, which is
- * exactly what §6.2 says the judge never does.
+ * scheduler has not finalized yet is still in `judging`; a judgement that lands
+ * in that window is kept as evidence (`after_deadline`) and decides nothing,
+ * by the STORED instants alone (§4.4). Hiding it here would be this module
+ * deciding an outcome, which is exactly what §6.2 says the judge never does.
+ *
+ * THE THIRD-PARTY GATE IS APPLIED HERE TOO (§6.2, D52). While
+ * `third_party_enabled` is false, a judge whose member operator is not the
+ * in-house literal is served NOTHING: its submission would be refused with
+ * `third_party_judging_disabled`, so serving it work would only buy a paid
+ * model call whose answer cannot land. The predicate is the one
+ * `submitJudgement` applies inside its transaction and the judge-of-record
+ * query uses; that later check stays authoritative, because the flag can flip
+ * while the model is thinking.
  */
 export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
   const rows = await sql<
@@ -3869,27 +4012,61 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
     SELECT s.id, s.subject_id, s.date, s.judging_deadline_at, s.judging_requested_at
       FROM swarm_sessions s
      WHERE s.state = 'judging'
+       AND EXISTS (
+         SELECT 1 FROM swarm_members m
+          WHERE m.id = ${memberId}
+            AND (m.operator = ${IN_HOUSE_OPERATOR}
+                 OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)))
        AND NOT EXISTS (
          SELECT 1 FROM swarm_session_judgements j
           WHERE j.session_id = s.id AND j.judged_by_member_id = ${memberId})
+       AND NOT EXISTS (
+         SELECT 1 FROM swarm_recommendations r
+          WHERE r.session_id = s.id AND r.member_id = ${memberId})
      ORDER BY s.judging_deadline_at`;
-  return rows.map((r) => ({
-    sessionId: String(r.id),
-    subjectId: r.subject_id,
-    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
-    judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
-    judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
-  }));
+  const minTakes = await judgeMinTakes(sql);
+  const pending: PendingJudging[] = [];
+  for (const r of rows) {
+    const frozen = await loadFrozenTakeSet(String(r.id));
+    if (!frozen) continue;
+    pending.push({
+      sessionId: String(r.id),
+      subjectId: r.subject_id,
+      date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
+      judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
+      judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
+      input: await judgeInputFromFrozen(frozen, minTakes),
+    });
+  }
+  return pending;
 }
 
+/**
+ * The release-safety threshold a judgement is formed against.
+ *
+ * Read off the config row in the caller's handle, so the submission path reads
+ * it inside the same transaction as the third-party flag beside it.
+ */
+async function judgeMinTakes(h: DbHandle): Promise<number> {
+  const [cfg] = await h<{ min_takes: number }[]>`SELECT min_takes FROM swarm_judge_config WHERE id = 1`;
+  return Number(cfg?.min_takes ?? 3);
+}
+
+/**
+ * A judge's submission, as it arrives over the participant route.
+ *
+ * Every field but `sessionId` is covered by `signature`, over the bytes
+ * `canonicalizeJudgement` (@robotmoney/contract) produces with the member's
+ * id added. `opinion` is the model's RAW answer text; the API parses it.
+ */
 export interface JudgementSubmission {
   sessionId: string;
   opinion: unknown;
-  model?: string;
-  promptHash?: string;
-  inputsDigest?: string;
-  takeCount?: number;
-  minTakes?: number;
+  model?: unknown;
+  promptHash?: unknown;
+  inputsDigest?: unknown;
+  nonce?: unknown;
+  signature?: unknown;
 }
 
 export type SubmitJudgementResult =
@@ -3900,35 +4077,29 @@ export type SubmitJudgementResult =
       judgementId: number;
       state: string;
       recordedAt: string;
-      /** The consensus landed after the session was published: kept, decides nothing (§4.4). */
+      /** The judgement landed after the session was published: kept, decides nothing (§4.4). */
       lateEvidence: boolean;
       /** This judge had already submitted for this session; the original row is returned. */
       duplicate: boolean;
+      /** This judge is the session's judge of record, so its judgement is the consensus (§4.4). */
+      judgeOfRecord: boolean;
+      /** The opinion reached the session's own record, which is what a receipt embeds. */
+      applied: boolean;
     }
   | { ok: false; status: number; error: string };
 
 const refuseSubmission = (status: number, error: string): SubmitJudgementResult => ({ ok: false, status, error });
 
-/**
- * A judge submitting its judgement, under its own participant credential.
- *
- * WIRED TO PART 1's TRANSITION, NOT A SECOND COPY OF IT. This function writes
- * the judgement row and then calls `recordJudgingConsensus`, which owns the
- * whole of the state guard, the acceptance instant, the `session.judged` event
- * and the late-evidence rule. Re-deciding any of that here would give the
- * participant path and the admin path two different answers to the same
- * question, and only one of them could be right.
- *
- * THE CREDENTIAL IS THE MEMBER TOKEN, never the scheduler's automation token
- * (scheduler spec §7 keeps the four kinds apart). `memberIdForToken` is the one
- * choke point that also checks the member is active, so nothing below re-checks
- * status.
- *
- * ORDER, and why the row goes in first: the judgement is the evidence, and it
- * is worth keeping even when the consensus it would have formed is refused or
- * is too late to matter. A submission arriving after publication therefore
- * still lands in `swarm_session_judgements` and comes back `lateEvidence`.
- */
+/** The operator literal that marks an in-house member (smoke-production-spec.md §6.2). */
+export const IN_HOUSE_OPERATOR = "robotmoney";
+
+/** The raw answer a judge may submit. Far above any real answer; a bound, not a budget. */
+const MAX_JUDGEMENT_CHARS = 100_000;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+const boundedText = (v: unknown, max: number): string | null =>
+  typeof v === "string" && v.trim() !== "" && v.length <= max ? v : null;
+
 /**
  * Is this member a judge?
  *
@@ -3941,72 +4112,395 @@ export async function isJudgeMember(memberId: string): Promise<boolean> {
   return member?.role === "judge";
 }
 
+/**
+ * A judge participant submitting its judgement, signed with its own key.
+ *
+ * AUTHORITY: smoke-production-spec.md §6.2 ("The judge is a participant exactly
+ * like an agent", "Third-party gate"), system-scheduler-spec.md §4.4 ("The
+ * judge of record", "A consensus that lands after the session is already
+ * `published` is recorded as late evidence").
+ *
+ * THE ORDER IS THE CONTRACT. Refusals first, cheapest first, and every one of
+ * them BEFORE any row is written:
+ *
+ *   1. The bearer is an active member's (`memberIdForToken`), and that member
+ *      is a judge.
+ *   2. The submission is well-formed, and its Ed25519 signature verifies
+ *      against the member's ACTIVE key over the canonical judgement bytes —
+ *      the same key lookup and the same fail-closed verification a take gets.
+ *   3. Inside one transaction, holding the session row: judging was actually
+ *      requested for this session (`session_not_judging` otherwise — a
+ *      `collecting` or `aggregated` session, or one published under `off`,
+ *      never had a judge to hear from); the judge is still active and still a
+ *      judge; it passes the third-party gate, keyed on its member `operator`;
+ *      it has no take in the session.
+ *   4. The frozen take set it claims to have read is the one on file
+ *      (`inputs_digest_mismatch` otherwise), and there is something in it to
+ *      judge.
+ *   5. The model's answer parses — `parseJudgeResponse`, which rejects a
+ *      weight-like field anywhere in it WHOLE, refuses a dissenter who took no
+ *      part, and fills every quoted view from the member's own body.
+ *
+ * Only then is the row written, and in the SAME transaction: if this judge is
+ * the session's judge of record, the session is still `judging` and its
+ * deadline has not passed by the database clock, its opinion is applied to the
+ * session's record and the consensus is recorded with its acceptance instant
+ * (`recordJudgingConsensusTx`). Any other eligible judgement is recorded as
+ * evidence and changes no outcome: a second seated judge's, one that lands
+ * after the deadline but before finalize (`after_deadline`), or one that lands
+ * after publication (`lateEvidence`).
+ *
+ * THE JUDGE OF RECORD IS CHOSEN BY MEMBER ID, never by arrival (§4.4): the
+ * lowest id among the active judges that pass the gate and hold no take in the
+ * session. Today one judge is seated, so it is that judge.
+ *
+ * NOTHING HERE CAN SUPPLY AN OPINION. A refusal writes nothing and substitutes
+ * nothing; the session then reaches its deadline and publishes `no_consensus`.
+ */
 export async function submitJudgement(
   token: string,
   input: JudgementSubmission,
 ): Promise<SubmitJudgementResult> {
   const memberId = await memberIdForToken(token);
   if (!memberId) return refuseSubmission(401, "invalid_token");
-
   if (!(await isJudgeMember(memberId))) return refuseSubmission(403, "judge_role_required");
 
-  if (!input.sessionId) return refuseSubmission(400, "session_required");
+  const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
+  if (!sessionId) return refuseSubmission(400, "session_required");
+  if (!isUuid(sessionId)) return refuseSubmission(404, "session_not_found");
   // No opinion, no judgement. This is the refusal that keeps "a judge refuses
   // rather than fakes" true at the boundary: there is no branch below that
   // could supply one.
-  if (input.opinion === undefined || input.opinion === null) return refuseSubmission(400, "opinion_required");
+  if (input.opinion === undefined || input.opinion === null || input.opinion === "") {
+    return refuseSubmission(400, "opinion_required");
+  }
+  const opinion = boundedText(input.opinion, MAX_JUDGEMENT_CHARS);
+  if (opinion === null) return refuseSubmission(400, "opinion_must_be_the_raw_model_answer_text");
+  const model = boundedText(input.model, 200);
+  if (model === null) return refuseSubmission(400, "model_required");
+  const promptHash = typeof input.promptHash === "string" && SHA256_HEX.test(input.promptHash) ? input.promptHash : null;
+  if (promptHash === null) return refuseSubmission(400, "prompt_hash_malformed");
+  const claimedDigest = typeof input.inputsDigest === "string" && SHA256_HEX.test(input.inputsDigest)
+    ? input.inputsDigest
+    : null;
+  if (claimedDigest === null) return refuseSubmission(400, "inputs_digest_malformed");
+  const nonce = boundedText(input.nonce, 200);
+  if (nonce === null) return refuseSubmission(400, "nonce_required");
+  const signature = boundedText(input.signature, 200);
+  if (signature === null) return refuseSubmission(400, "signature_required");
 
-  const [session] = await sql<{ id: string; state: string }[]>`
-    SELECT id, state FROM swarm_sessions WHERE id = ${input.sessionId}`;
-  if (!session) return refuseSubmission(404, "session_not_found");
-
-  const [existing] = await sql<{ id: string }[]>`
-    SELECT id FROM swarm_session_judgements
-     WHERE session_id = ${input.sessionId} AND judged_by_member_id = ${memberId}
-     ORDER BY id LIMIT 1`;
-  if (existing) {
-    // A redelivery. The row is append-only (migration 0040) and is not written
-    // twice; the consensus call below is idempotent and returns the original
-    // acceptance instant, so nothing about the session moves.
-    const replay = await recordJudgingConsensus(input.sessionId, Number(existing.id));
-    if (!replay.ok) return refuseSubmission(replay.status, replay.error);
-    return {
-      ok: true,
-      status: 200,
-      sessionId: input.sessionId,
-      judgementId: Number(existing.id),
-      state: replay.state,
-      recordedAt: replay.recordedAt,
-      lateEvidence: replay.lateEvidence,
-      duplicate: true,
-    };
+  // ── SIGNED BY THIS MEMBER'S ACTIVE KEY ─────────────────────────────────────
+  // The same key resolution a take uses (`activeKeyFor`) and the same
+  // fail-closed verifier: an unparseable key or signature is `false`, never a
+  // throw. The member id is not sent by the judge; it is the token's, and it is
+  // inside the signed bytes, so a judgement signed for one member cannot be
+  // replayed under another member's bearer.
+  const key = await activeKeyFor(memberId);
+  if (!key) return refuseSubmission(403, "no_registered_key");
+  const canonical = canonicalizeJudgement({
+    memberId, sessionId, nonce, model, promptHash, inputsDigest: claimedDigest, opinion,
+  });
+  if (!(await verifyDetachedSignature(canonical, signature, key.publicKey))) {
+    return refuseSubmission(400, "signature_invalid");
   }
 
-  const [row] = await sql<{ id: string }[]>`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${input.sessionId}, 'enforce', 'model', ${input.model ?? null},
-            ${input.promptHash ?? "participant"}, ${input.inputsDigest ?? "participant"},
-            ${input.takeCount ?? 0}, ${input.minTakes ?? 1},
-            ${sql.json(input.opinion as any)}, ${memberId}, ${memberId})
-    RETURNING id`;
-  const judgementId = Number(row.id);
+  return sql.begin(async (tx) => {
+    // `past_deadline` is read off the database clock at the moment of the
+    // comparison (system-scheduler-spec.md §4.2, "One clock"): `clock_timestamp()`,
+    // never the transaction's `now()` and never the application's clock. The
+    // deadline itself is inclusive (§4.4: a consensus recorded AT it is eligible).
+    const [session] = await tx<Record<string, any>[]>`
+      SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at,
+             (judging_deadline_at IS NOT NULL AND clock_timestamp() > judging_deadline_at) AS past_deadline
+        FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+    if (!session) return refuseSubmission(404, "session_not_found");
+    // JUDGING WAS REQUESTED, OR THERE IS NOTHING TO SUBMIT INTO. Checked on the
+    // locked row, before anything is written. `published` passes only when it
+    // was reached through judging, which is the late-evidence case §4.4 keeps.
+    //
+    // THE SAME MODE TEST requestJudging AND finalizeEpoch APPLY: only `off`
+    // refuses. A session whose mode was never captured (NULL — one that reached
+    // `aggregated` without a turnover) is judged exactly as those two treat it:
+    // requestJudging accepts it and finalize decides it on the enforce branch.
+    // Refusing it here alone would force its `no_consensus` while the other two
+    // transitions went on waiting for a judgement this one could never take.
+    // The stored deadline is the real proof that judging was requested.
+    if (session.judge_mode === "off" || !session.judging_deadline_at ||
+        !["judging", "judged", "published"].includes(String(session.state))) {
+      return refuseSubmission(409, "session_not_judging");
+    }
 
-  const recorded = await recordJudgingConsensus(input.sessionId, judgementId);
-  if (!recorded.ok) return refuseSubmission(recorded.status, recorded.error);
+    const [existing] = await tx<{ id: string; applied: boolean; applied_skipped_reason: string | null; created_at: Date }[]>`
+      SELECT id, applied, applied_skipped_reason, created_at FROM swarm_session_judgements
+       WHERE session_id = ${sessionId} AND judged_by_member_id = ${memberId}
+       ORDER BY id LIMIT 1`;
+    if (existing) {
+      // A redelivery, or a crash-restart resending. One judgement per judge per
+      // session: the row on file is the answer, and nothing about the session
+      // moves — the consensus, if this row formed it, was recorded with it.
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        judgementId: Number(existing.id),
+        state: String(session.state),
+        recordedAt: new Date(existing.applied && session.consensus_recorded_at
+          ? session.consensus_recorded_at
+          : existing.created_at).toISOString(),
+        lateEvidence: existing.applied_skipped_reason === "late_evidence",
+        duplicate: true,
+        judgeOfRecord: existing.applied === true,
+        applied: existing.applied === true,
+      };
+    }
+
+    // ── ELIGIBILITY, read inside the write transaction ──────────────────────
+    // An admin revoking the judge, or turning third-party judging off, while
+    // its model was thinking is observed before any row can land.
+    const [member] = await tx<{ status: string; role: string; operator: string | null }[]>`
+      SELECT status, role, operator FROM swarm_members WHERE id = ${memberId} FOR SHARE`;
+    if (!member || member.status !== "active") return refuseSubmission(403, "judge_member_inactive");
+    if (member.role !== "judge") return refuseSubmission(403, "judge_role_required");
+    const [cfg] = await tx<{ third_party_enabled: boolean; min_takes: number }[]>`
+      SELECT third_party_enabled, min_takes FROM swarm_judge_config WHERE id = 1`;
+    const thirdPartyEnabled = cfg?.third_party_enabled === true;
+    // THE THIRD-PARTY GATE, KEYED ON OPERATOR (§6.2, D52). `operator` is only
+    // trustworthy because no non-admin writer may set it to the in-house
+    // literal: `updateMemberProfile` refuses it (the #925 forgery), and apply
+    // and registration never write the column at all.
+    if (member.operator !== IN_HOUSE_OPERATOR && !thirdPartyEnabled) {
+      return refuseSubmission(403, "third_party_judging_disabled");
+    }
+    const [take] = await tx`
+      SELECT 1 AS one FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${memberId} LIMIT 1`;
+    if (take) return refuseSubmission(409, "judge_member_has_take_in_session");
+
+    // ── WHAT IT READ IS WHAT IS ON FILE ──────────────────────────────────────
+    const frozen = await loadFrozenTakeSet(sessionId, tx);
+    if (!frozen) return refuseSubmission(404, "session_not_found");
+    const judged = await judgeInputFromFrozen(frozen, Number(cfg?.min_takes ?? 3), tx);
+    if (judged.takes.length === 0) return refuseSubmission(409, "nothing_to_judge:no_takes");
+    if (!judged.takes.some((t) => t.body.trim() !== "")) return refuseSubmission(409, "nothing_to_judge:no_take_bodies");
+    if (inputsDigest(judged) !== claimedDigest) return refuseSubmission(409, "inputs_digest_mismatch");
+
+    // ── THE ANSWER PARSES, OR THERE IS NO JUDGEMENT ─────────────────────────
+    const drops = noDrops();
+    let parsed: JudgeOpinion;
+    try {
+      parsed = parseJudgeResponse(opinion, judged, drops);
+    } catch (err) {
+      if (err instanceof JudgeResponseError) return refuseSubmission(422, `judgement_refused:${err.reason}`);
+      throw err;
+    }
+    // The STORED object is scanned too. parseJudgeResponse rejected a
+    // weight-like key in what the model wrote; this is the same rule asked of
+    // what is about to be written, in front of the row's own no-weights CHECK.
+    const weightPath = findWeightLikeKey(parsed);
+    if (weightPath) return refuseSubmission(422, `judgement_refused:weight_like_field:${weightPath}`);
+
+    // ── THE JUDGE OF RECORD, BY MEMBER ID ────────────────────────────────────
+    const [ofRecord] = await tx<{ id: string }[]>`
+      SELECT m.id FROM swarm_members m
+       WHERE m.role = 'judge' AND m.status = 'active'
+         AND (m.operator = ${IN_HOUSE_OPERATOR} OR ${thirdPartyEnabled})
+         AND NOT EXISTS (SELECT 1 FROM swarm_recommendations r
+                          WHERE r.session_id = ${sessionId} AND r.member_id = m.id)
+       ORDER BY m.id LIMIT 1`;
+    const judgeOfRecord = ofRecord?.id === memberId;
+
+    let applied = false;
+    let skipped: string | null = null;
+    if (session.state === "published") {
+      skipped = "late_evidence";
+    } else if (!judgeOfRecord) {
+      skipped = "not_judge_of_record";
+    } else if (session.state !== "judging" || session.consensus_recorded_at) {
+      skipped = "consensus_already_recorded";
+    } else if (session.past_deadline === true) {
+      // AFTER THE DEADLINE, BEFORE FINALIZE. The session is still `judging`
+      // only because the scheduler has not finalized it yet, and finalize will
+      // decide `no_consensus` from the stored deadline whatever lands now
+      // (§4.4: "A consensus recorded after the deadline is kept as a record but
+      // does not change a `no_consensus` outcome"). So the row is kept as
+      // evidence and the opinion does NOT reach the session: were it applied,
+      // the published `no_consensus` session would carry a judge block, and a
+      // receipt could be assembled over an opinion that decided nothing.
+      skipped = "after_deadline";
+    } else {
+      const attempt = await applyOpinion(tx, sessionId, {
+        opinion: parsed, model, promptHash, inputsDigest: claimedDigest, judgedByMemberId: memberId,
+      });
+      applied = attempt.applied;
+      skipped = attempt.applied ? null : attempt.reason;
+    }
+
+    const [row] = await tx<{ id: string }[]>`
+      INSERT INTO swarm_session_judgements
+        (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
+         applied, applied_skipped_reason, dropped_positions, dropped_disagreements,
+         judged_by, judged_by_member_id, opinion)
+      VALUES (${sessionId}, 'enforce', 'model', ${model}, ${promptHash}, ${claimedDigest}, ${DIGEST_SCHEME},
+              ${judged.takes.length}, ${judged.minTakes}, ${applied}, ${skipped},
+              ${drops.positions}, ${drops.disagreements},
+              ${memberId}, ${memberId}, ${sql.json(parsed as any)})
+      RETURNING id`;
+    const judgementId = Number(row.id);
+    // The signature is kept beside the row it authorizes, so "which key signed
+    // this judgement, over which nonce" is answerable after the fact.
+    await tx`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_judgement', ${sql.json({
+      sessionId, judgementId, nonce, signature, signingKeyId: key.id, judgeOfRecord, applied,
+    } as any)})`;
+
+    if (applied) {
+      const recorded = await recordJudgingConsensusTx(tx, sessionId, judgementId);
+      // Unreachable while the session row is locked in `judging` above, and a
+      // throw rather than a return so the row and the applied opinion roll back
+      // with it: they are one fact.
+      if (!recorded.ok) throw new Error(`consensus refused after the judgement was written: ${recorded.error}`);
+      return {
+        ok: true as const,
+        status: 200,
+        sessionId,
+        judgementId,
+        state: recorded.state,
+        recordedAt: recorded.recordedAt,
+        lateEvidence: false,
+        duplicate: false,
+        judgeOfRecord,
+        applied,
+      };
+    }
+    const [created] = await tx<{ created_at: Date }[]>`
+      SELECT created_at FROM swarm_session_judgements WHERE id = ${judgementId}`;
+    return {
+      ok: true as const,
+      status: 200,
+      sessionId,
+      judgementId,
+      state: String(session.state),
+      recordedAt: new Date(created.created_at).toISOString(),
+      lateEvidence: skipped === "late_evidence",
+      duplicate: false,
+      judgeOfRecord,
+      applied,
+    };
+  }) as Promise<SubmitJudgementResult>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The judgement on the session's own record
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The states in which an opinion may still reach a session: never a terminal one. */
+const OPINION_WRITABLE_STATES = ["scheduled", "collecting", "window_closed", "aggregated", "judging", "judged"];
+
+/** The outcome of trying to put an opinion onto its session. */
+type ApplyOutcome = { applied: true; reason: null } | { applied: false; reason: string };
+
+/**
+ * Merge a judgement's three fields into the recommendation, and name its judge.
+ *
+ * Read-modify-write in JS rather than a jsonb operator so the merge is one
+ * obvious list of keys: rationale, disagreements, release_safety, the `judge`
+ * fingerprint, and NOTHING ELSE. `weights`, `quorum`, `stances`,
+ * `meanConfidence`, `absent` and `type` are untouched by construction — judging
+ * a session cannot change its vector.
+ *
+ * THE ANSWER IS A READ-BACK, NOT A ROW COUNT (issue #806). `applied` claims the
+ * session now carries this opinion, and the admin panel renders that claim
+ * verbatim, so the fact is established the way the read path establishes it:
+ * `swarm_recommendation->'judge'` is read straight back and compared against
+ * this judgement's `prompt_hash`/`inputs_digest`.
+ *
+ * Takes a `tx` because the read and the write are a read-modify-write, inside
+ * the submission's transaction and under its lock on the session row.
+ */
+async function applyOpinion(
+  tx: DbHandle,
+  sessionId: string,
+  j: { opinion: JudgeOpinion; model: string; promptHash: string; inputsDigest: string; judgedByMemberId: string },
+): Promise<ApplyOutcome> {
+  const [row] = await tx<{ state: string; swarm_recommendation: Record<string, unknown> | null }[]>`
+    SELECT state, swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
+  if (!row || !OPINION_WRITABLE_STATES.includes(String(row.state))) {
+    return { applied: false, reason: "session_no_longer_writable" };
+  }
+  const rec = { ...(row.swarm_recommendation ?? {}) } as Record<string, unknown>;
+  rec.rationale = j.opinion.rationale;
+  rec.disagreements = j.opinion.disagreements;
+  rec.release_safety = j.opinion.release_safety;
+  rec.judge = {
+    source: "model",
+    model: j.model,
+    prompt_hash: j.promptHash,
+    inputs_digest: j.inputsDigest,
+    judged_by: j.judgedByMemberId,
+    judged_by_member_id: j.judgedByMemberId,
+  };
+  const upd = await tx`
+    UPDATE swarm_sessions SET swarm_recommendation = ${sql.json(rec as any)}
+    WHERE id = ${sessionId} AND state = ANY(${OPINION_WRITABLE_STATES}::text[])
+    RETURNING id`;
+  if (upd.length === 0) return { applied: false, reason: "session_no_longer_writable" };
+  const carried = await sessionJudgeFingerprint(tx, sessionId);
+  if (carried && carried.inputsDigest === j.inputsDigest && carried.promptHash === j.promptHash &&
+      carried.judgedByMemberId === j.judgedByMemberId) {
+    return { applied: true, reason: null };
+  }
+  return { applied: false, reason: "session_does_not_carry_opinion" };
+}
+
+/**
+ * What `swarm_sessions.swarm_recommendation` says the judge left on it, or null.
+ *
+ * ONE definition, read by the writer (above, to establish `applied`) and by the
+ * admin read path (`getSessionJudgementsAdmin`, to decide whether the opinion it
+ * calls IN FORCE is still the one the session carries). Two copies of this
+ * comparison would be two chances to disagree about the very fact the pair
+ * exists to keep honest.
+ *
+ * THE JUDGE IS PART OF THE FINGERPRINT. Two judges given the same prompt over
+ * the same take set share `prompt_hash` and `inputs_digest`, so the digests
+ * alone cannot say whose judgement the session carries once several judges are
+ * seated. `judgedByMemberId` is null on a historical in-house judgement, which
+ * named no member.
+ */
+export async function sessionJudgeFingerprint(
+  handle: DbHandle = sql,
+  sessionId: string,
+): Promise<{ promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null> {
+  const [row] = await handle<{ prompt_hash: string | null; inputs_digest: string | null; judged_by_member_id: string | null }[]>`
+    SELECT swarm_recommendation->'judge'->>'prompt_hash'         AS prompt_hash,
+           swarm_recommendation->'judge'->>'inputs_digest'       AS inputs_digest,
+           swarm_recommendation->'judge'->>'judged_by_member_id' AS judged_by_member_id
+      FROM swarm_sessions WHERE id = ${sessionId}`;
+  if (!row || row.prompt_hash == null || row.inputs_digest == null) return null;
   return {
-    ok: true,
-    status: 200,
-    sessionId: input.sessionId,
-    judgementId,
-    state: recorded.state,
-    recordedAt: recorded.recordedAt,
-    lateEvidence: recorded.lateEvidence,
-    duplicate: false,
+    promptHash: String(row.prompt_hash),
+    inputsDigest: String(row.inputs_digest),
+    judgedByMemberId: row.judged_by_member_id ?? null,
   };
 }
 
+// ORDER BY id, NOT created_at. `created_at` defaults to `now()`, which is the
+// TRANSACTION START time, so of two judgements written in overlapping
+// transactions the one that committed second can carry the earlier timestamp.
+// `id` is a bigserial drawn at INSERT, so it is the only ordering that agrees
+// with the order the rows were actually written in.
+export async function listJudgements(sessionId: string, limit = 50, db: DbHandle = sql) {
+  const bounded = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
+  return (await db`
+    SELECT id, session_id, mode, source, fallback_reason, model, prompt_hash, inputs_digest, digest_scheme,
+           take_count, min_takes, applied, applied_skipped_reason,
+           dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion, created_at
+    FROM swarm_session_judgements WHERE session_id = ${sessionId}
+    ORDER BY id DESC LIMIT ${bounded}`) as Record<string, unknown>[];
+}
+
+/** The newest judgement on file, by the ordering argued above. */
+export async function latestJudgement(sessionId: string, db: DbHandle = sql) {
+  return (await listJudgements(sessionId, 1, db))[0] ?? null;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // The connection
 // ─────────────────────────────────────────────────────────────────────────────

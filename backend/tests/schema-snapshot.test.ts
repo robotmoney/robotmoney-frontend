@@ -145,6 +145,43 @@ async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => P
   }
 }
 
+/**
+ * `runPreflight` against the named database, in a child process whose module
+ * graph is preflight.ts alone — so check 2 reads a registry this test process's
+ * other files cannot have populated. See the bootstrap-preflight case for why.
+ */
+async function preflightInFreshProcess(dbName: string, context: PreflightContext): Promise<{ passed: boolean }> {
+  const url = new URL(config.databaseUrl);
+  url.pathname = `/${dbName}`;
+  const script = join(fixtures, `preflight-child-${crypto.randomUUID().slice(0, 8)}.ts`);
+  writeFileSync(script, [
+    `import postgres from ${JSON.stringify(Bun.resolveSync("postgres", import.meta.dir))};`,
+    `import { runPreflight } from ${JSON.stringify(join(import.meta.dir, "../src/db/preflight.ts"))};`,
+    `const db = postgres(process.env.RM_PREFLIGHT_CHILD_URL!, { max: 1, onnotice: () => {} });`,
+    `try {`,
+    `  const context = JSON.parse(process.env.RM_PREFLIGHT_CHILD_CONTEXT!);`,
+    `  const report = await runPreflight(db, context, "container", new Map([["rm_app", process.env.RM_PREFLIGHT_CHILD_PASSWORD!]]));`,
+    `  console.log("RM_PREFLIGHT_REPORT " + JSON.stringify(report));`,
+    `} finally {`,
+    `  await db.end({ timeout: 5 });`,
+    `}`,
+  ].join("\n"));
+  const child = Bun.spawnSync(["bun", "run", script], {
+    env: {
+      ...process.env,
+      RM_PREFLIGHT_CHILD_URL: url.toString(),
+      RM_PREFLIGHT_CHILD_CONTEXT: JSON.stringify(context),
+      RM_PREFLIGHT_CHILD_PASSWORD: RM_APP_PASSWORD,
+    },
+  });
+  const out = child.stdout.toString();
+  const line = out.split("\n").find((l) => l.startsWith("RM_PREFLIGHT_REPORT "));
+  if (child.exitCode !== 0 || !line) {
+    throw new Error(`preflight child failed (exit ${child.exitCode}):\n${out}\n${child.stderr.toString()}`);
+  }
+  return JSON.parse(line.slice("RM_PREFLIGHT_REPORT ".length)) as { passed: boolean };
+}
+
 /** The password the preflight case below hands `checkRoleTokens`. Preflight
  *  check 1 is "Every role token smoke will hand to a container authenticates"
  *  (§7), which it answers by actually logging in — so the fixture has to make
@@ -378,8 +415,21 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
   test("a snapshot-created database boots and passes preflight WITHOUT --seed", async () => {
     // Spec §8.4's CI proof, and §10 W2's "snapshot bootstrap boots without
     // `--seed`". The gate is meaningless unless bootstrap never seeds.
+    //
+    // IN A FRESH PROCESS, ON PURPOSE (issue #1026). Check 2 reads the query
+    // registry, and the registry is process-global: every module a process has
+    // loaded has registered its call sites. `bun test` runs every file in ONE
+    // process, so in-process this case asserted against whatever the files run
+    // before it had loaded — `swarm/judge-config.ts`'s writes on
+    // `swarm_judge_config` once any swarm test ran first, which this 3-table
+    // fixture cannot satisfy, and db-registry.test.ts's probe relations before
+    // that. The case never meant that: it has always measured the bootstrap and
+    // the structural checks against a process that registered nothing. A child
+    // process that imports only preflight.ts says so instead of depending on
+    // file order. Proving the real snapshot against the API's real registry is
+    // the §8.4 claim in full, and needs the real snapshot, not this fixture.
     const snapshot = await loadSnapshot(writeSnapshot("bootstrap-preflight"));
-    await withBlankDatabase(async (db) => {
+    await withBlankDatabase(async (db, name) => {
       await db.unsafe("SET ROLE rm_owner");
       await bootstrapBlankDatabase(db, snapshot);
       await db.unsafe("RESET ROLE");
@@ -392,8 +442,8 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
         envFilePath: join(fixtures, "bootstrap-preflight.env"),
       };
       writeFileSync(context.envFilePath, `rm_app=${RM_APP_PASSWORD}\n`, "utf8");
-      const report = await runPreflight(db, context, "container", new Map([["rm_app", RM_APP_PASSWORD]]));
-      expect(report.passed).toBe(true);
+      const report = await preflightInFreshProcess(name, context);
+      expect(report.passed, JSON.stringify(report)).toBe(true);
     });
   });
 

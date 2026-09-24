@@ -1,94 +1,39 @@
-// THE LEVER'S ADMIN PATH AND ITS EFFECT ON A REAL SESSION (R13), and the
-// persisted completion spend (R19).
+// THE LEVER'S ADMIN PATH (R13).
 //
 // The pure gates are covered by judge-fault-injection.test.ts. This file is the
-// half that needs a database, and it protects four things:
+// half that needs a database, and it protects two things:
 //
 //   1. ARMING IS REFUSED ON THE DEFAULT PATH, and the refusal is a 403 an
 //      operator can act on rather than an inert row they believe is working.
 //   2. ARMING WRITES AN AUDIT ROW — the artifact an acceptance bundle cites to
 //      bound the window during which the stack was mutated — and that row does
 //      NOT carry the injected body.
-//   3. AN ARMED LEVER FAULTS A REAL JUDGING: the judging REFUSES with
-//      `malformed_output`, the session gets NO judgement row at all, and the
-//      SESSION'S WEIGHT VECTOR IS BYTE-FOR-BYTE WHAT IT WAS BEFORE. (It used to
-//      record a `source='fallback'` row; judge() has no fallback any more, so
-//      "no row" is what the same guarantee looks like now.)
-//   4. THE JUDGEMENT ROW RECORDS WHAT THE COMPLETION COST when the provider
-//      reports it, and NULL — not zero — when it does not.
+//
+// WHAT IT NO LONGER PROTECTS (issue #1026, D53 point 4). "An armed lever faults
+// a real judging" and "the judgement row records what the completion cost"
+// drove the backend `judgeSession()`, the lever's only consumer and the only
+// writer of the spend columns. That judge is deleted — the judge is a
+// participant — so those tests went with it.
+//
+// ARMING IS NOW REFUSED, and that is pinned here too. With no consumer, an
+// accepted arm would be the inert row point 1 exists to prevent, so once the
+// process gates pass the admin path answers 409
+// `fault_injection_has_no_consumer` and writes nothing. The module-level write
+// and consume are still exercised directly below, because they are what the
+// participant will call when it takes the lever over.
 import { afterEach, beforeAll, afterAll, expect, test } from "bun:test";
-import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
-import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { judgeSession, setJudgeConfig } from "../src/swarm/judge-session.ts";
 import {
   consumeJudgeFaultInjection,
   FAULT_INJECTION_ACCEPTANCE_ENV,
   FAULT_INJECTION_FLAG_ENV,
   getJudgeFaultInjection,
+  writeJudgeFaultInjection,
 } from "../src/swarm/judge-fault-injection.ts";
-import type { JudgeTransport } from "../src/swarm/judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
-
-const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
-const sessionDate = (s: Record<string, unknown>): string =>
-  s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
-
-async function activeMember() {
-  const id = rid("m");
-  const { publicKeyB64, privateKey } = await generateKeyPair();
-  const r = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
-  if (!("token" in r) || !r.token) throw new Error(`activeMember() failed: ${JSON.stringify(r)}`);
-  return { id, token: r.token, privateKey };
-}
-
-// The CANONICAL FOUR, one entry each. Since T17/D14 a take filed against a
-// `bucket_weights` subject that names anything else is refused at submission
-// with a 400 `weights_not_canonical_four`, so the two-bucket fixture this test
-// was written against can no longer reach a session at all.
-const W = [
-  { bucket: "agent_tokens", weight: 2 },
-  { bucket: "conservative_defi_yield", weight: 1 },
-  { bucket: "protocol_tokens", weight: 1 },
-  { bucket: "real_world_assets", weight: 0 },
-];
-
-async function aggregatedSession(prefix: string, count = 3) {
-  const subj = rid(prefix);
-  await ic.ensureSubject(subj, `${prefix} subject`);
-  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subj}`;
-  const session = await ic.openSession(subj);
-  await ic.publishBrief(session.id, 60);
-  const date = sessionDate(session);
-  const stances = ["bullish", "cautious", "neutral"];
-  for (let i = 0; i < count; i++) {
-    const m = await activeMember();
-    const sub = {
-      memberId: m.id, date, subjectId: subj, nonce: rid("n"),
-      stance: stances[i % stances.length]!, confidence: 0.5 + i * 0.1,
-      body: `take ${i} on ${subj}`, weights: W,
-    };
-    const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
-    const res = await ic.submitRecommendation(m.token, { ...sub, signature });
-    if (res.status !== 201) throw new Error(`submit failed: ${JSON.stringify(res)}`);
-  }
-  await ic.closeWindow(session.id);
-  await ic.aggregateSession(session.id);
-  return { subj, session, date };
-}
-
-const recOf = async (sessionId: string) =>
-  ((await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any)
-    .swarm_recommendation as Record<string, any>;
-
-const judgementOf = async (sessionId: string) =>
-  (await sql`
-    SELECT source, fallback_reason, model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_cost_usd
-    FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`)[0] as any;
 
 const MALFORMED = "}{ not json — injected by the AC-E2E-06 lever";
 
@@ -116,51 +61,56 @@ test("arming the lever is REFUSED by default, and refusing writes no row", async
   expect(await sql`SELECT 1 FROM audit_log WHERE action = 'judge_fault_injection'`).toHaveLength(0);
 });
 
-test("arming writes an audited row that does NOT carry the injected body", async () => {
+test("with every process gate open, arming is REFUSED because nothing consumes the lever, and writes nothing", async () => {
   process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  const armed = await admin.setJudgeFaultInjectionAdmin({
+  process.env[FAULT_INJECTION_ACCEPTANCE_ENV] = "1";
+  expect(admin.FAULT_INJECTION_HAS_CONSUMER).toBe(false);
+  const refused = await admin.setJudgeFaultInjectionAdmin({
     enabled: true, body: MALFORMED, remaining: 2, note: "AC-E2E-06 rehearsal",
   });
-  expect(armed.ok).toBe(true);
-  expect((armed.faultInjection as any).enabled).toBe(true);
-  expect((armed.faultInjection as any).remaining).toBe(2);
-  // The body is never echoed — not by the write, not by the read.
-  expect(JSON.stringify(armed)).not.toContain(MALFORMED);
-  expect(JSON.stringify(await admin.getJudgeFaultInjectionAdmin())).not.toContain(MALFORMED);
-  // …but WHICH body is armed is still identifiable.
-  expect((armed.faultInjection as any).bodyChars).toBe(MALFORMED.length);
-  expect((armed.faultInjection as any).bodyDigest).toMatch(/^[0-9a-f]{16}$/);
-  expect((armed.warnings as string[])[0]).toContain("TEST-ONLY");
+  expect(refused.ok).toBe(false);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toBe("fault_injection_has_no_consumer");
+  // Not an inert row an operator believes is working: nothing was written,
+  // nothing was audited, and the body went nowhere.
+  expect((await getJudgeFaultInjection()).enabled).toBe(false);
+  expect(await sql`SELECT 1 FROM audit_log WHERE action = 'judge_fault_injection'`).toHaveLength(0);
+  expect(JSON.stringify(refused)).not.toContain(MALFORMED);
+});
 
-  const rows = await sql`SELECT actor, action, scope FROM audit_log WHERE action = 'judge_fault_injection'` as any[];
-  expect(rows).toHaveLength(1);
-  expect(rows[0].scope.enabled).toBe(true);
-  expect(rows[0].scope.acceptanceMutation).toBe(true);
-  expect(JSON.stringify(rows[0].scope)).not.toContain(MALFORMED);
+test("disarming is never refused, is audited without the body, and clears a row armed before the removal", async () => {
+  // A row armed before the lever lost its consumer, written the only way that
+  // is still possible: the module write, beneath the admin path.
+  await writeJudgeFaultInjection({ enabled: true, body: MALFORMED, remaining: 2 }, "pre-removal");
+  expect((await getJudgeFaultInjection()).enabled).toBe(true);
+  // …and the GET names it without echoing it.
+  const read = await admin.getJudgeFaultInjectionAdmin();
+  expect(JSON.stringify(read)).not.toContain(MALFORMED);
+  expect((read.faultInjection as any).bodyChars).toBe(MALFORMED.length);
+  expect((read.faultInjection as any).bodyDigest).toMatch(/^[0-9a-f]{16}$/);
 
-  // Disarming is audited too, is never refused, and CLEARS the payload.
-  delete process.env[FAULT_INJECTION_FLAG_ENV];
   const off = await admin.setJudgeFaultInjectionAdmin({ enabled: false });
   expect(off.ok).toBe(true);
   const state = await getJudgeFaultInjection();
   expect(state.enabled).toBe(false);
   expect(state.body).toBe("");
   expect(state.remaining).toBe(0);
-  expect(await sql`SELECT 1 FROM audit_log WHERE action = 'judge_fault_injection'`).toHaveLength(2);
+  const rows = await sql`SELECT scope FROM audit_log WHERE action = 'judge_fault_injection'` as any[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0].scope.enabled).toBe(false);
+  expect(JSON.stringify(rows[0].scope)).not.toContain(MALFORMED);
 });
 
-test("an armed lever with no body, or no calls, is refused by the write", async () => {
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  expect((await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: "  ", remaining: 1 })).status).toBe(400);
-  expect((await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: MALFORMED, remaining: 0 })).status).toBe(400);
+test("an armed lever with no body, or no calls, is refused by the module write", async () => {
+  await expect(writeJudgeFaultInjection({ enabled: true, body: "  ", remaining: 1 }, "t")).rejects.toThrow(/non-empty body/);
+  await expect(writeJudgeFaultInjection({ enabled: true, body: MALFORMED, remaining: 0 }, "t")).rejects.toThrow(/remaining/);
   expect((await getJudgeFaultInjection()).enabled).toBe(false);
   // The control: the same call with both present is accepted.
-  expect((await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: MALFORMED, remaining: 1 })).ok).toBe(true);
+  expect((await writeJudgeFaultInjection({ enabled: true, body: MALFORMED, remaining: 1 }, "t")).enabled).toBe(true);
 });
 
 test("consuming the lever disarms it at zero", async () => {
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: MALFORMED, remaining: 2 });
+  await writeJudgeFaultInjection({ enabled: true, body: MALFORMED, remaining: 2 }, "t");
   await consumeJudgeFaultInjection();
   expect(await getJudgeFaultInjection()).toMatchObject({ enabled: true, remaining: 1 });
   await consumeJudgeFaultInjection();
@@ -169,127 +119,4 @@ test("consuming the lever disarms it at zero", async () => {
   // A spent lever cannot go negative.
   await consumeJudgeFaultInjection();
   expect((await getJudgeFaultInjection()).remaining).toBe(0);
-});
-
-// ── 3. A real judging, faulted ────────────────────────────────────────────
-
-test("an armed lever faults a real judging: refused, named reason, no row, weights untouched", async () => {
-  const { session } = await aggregatedSession("fault-lever");
-  const before = await recOf(session.id);
-  expect(before.weights?.length).toBeGreaterThan(0);
-
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: MALFORMED, remaining: 1 });
-
-  // A transport that WOULD have answered perfectly well. The lever is what
-  // decides the outcome, not a broken stub.
-  const honest: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "A perfectly good model opinion nobody will see.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  const result = await judgeSession(session.id, { transport: honest });
-  // A REFUSAL, NOT A FALLBACK ROW. The judging does not happen: a 503 the queue
-  // retries, carrying the lever's reason under its own name.
-  expect(result.ok).toBe(false);
-  expect(result.status).toBe(503);
-  expect(result.error).toBe("judge_unavailable");
-  expect(result.judgeUnavailableReason).toBe("malformed_output");
-
-  // NOTHING WAS WRITTEN. The faulted session has no judgement row at all —
-  // which is the stronger form of what this test used to assert about a row
-  // reading `source='fallback'`.
-  expect(await judgementOf(session.id)).toBeUndefined();
-  // THE PROPERTY AC-E2E-06 IS ABOUT: the vector did not move.
-  const after = await recOf(session.id);
-  expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
-  expect(after.rationale).not.toContain("nobody will see");
-  // …and the lever spent its one call, disarming itself.
-  expect(await getJudgeFaultInjection()).toMatchObject({ enabled: false, remaining: 0 });
-});
-
-test("a weight-smuggling injected body is ignored, vector unchanged — and the CONTROL that the judge was otherwise live", async () => {
-  const { session } = await aggregatedSession("fault-smuggle");
-  const before = await recOf(session.id);
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  const smuggled = JSON.stringify({
-    rationale: "Rebalance to these targets.",
-    weights: [{ bucket: "agent_tokens", weight: 0.99 }, { bucket: "protocol", weight: 0.01 }],
-    disagreements: [],
-    release_safety: { release: "safe", concerns: [] },
-  });
-  await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: smuggled, remaining: 1 });
-
-  const honest: JudgeTransport = { model: "test/judge-model", complete: async () => smuggled };
-  const faulted = await judgeSession(session.id, { transport: honest });
-  expect(faulted.ok).toBe(false);
-  expect(faulted.judgeUnavailableReason).toBe("malformed_output");
-  const after = await recOf(session.id);
-  expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
-  expect(JSON.stringify(after)).not.toContain("0.99");
-
-  // THE CONTROL (C-21). With the lever disarmed, the SAME wiring produces a
-  // model-sourced judgement — so the assertions above are about the lever and
-  // not about a judge that was never running.
-  const { session: live } = await aggregatedSession("fault-control");
-  await admin.setJudgeFaultInjectionAdmin({ enabled: false });
-  const good: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "The takes converge on a constructive read of the subject.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  const honestRun = await judgeSession(live.id, { transport: good });
-  expect(honestRun.outcome?.source).toBe("model");
-  expect((await judgementOf(live.id)).fallback_reason).toBeNull();
-});
-
-// ── 4. R19 — the spend lands on the judgement row ─────────────────────────
-
-test("the judgement row records the completion spend the provider reported", async () => {
-  const { session } = await aggregatedSession("judge-spend");
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  const paid: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => ({
-      text: JSON.stringify({
-        rationale: "The takes converge on a constructive read of the subject.",
-        disagreements: [],
-        release_safety: { release: "safe", concerns: [] },
-      }),
-      usage: { inputTokens: 1820, outputTokens: 611, totalTokens: 2431, costUsd: 0.00042 },
-    }),
-  };
-  const run = await judgeSession(session.id, { transport: paid });
-  expect(run.ok).toBe(true);
-  const row = await judgementOf(session.id);
-  expect(row.source).toBe("model");
-  expect(Number(row.usage_input_tokens)).toBe(1820);
-  expect(Number(row.usage_output_tokens)).toBe(611);
-  expect(Number(row.usage_total_tokens)).toBe(2431);
-  expect(Number(row.usage_cost_usd)).toBeCloseTo(0.00042, 8);
-});
-
-test("a provider that reports no usage leaves NULL, not zero", async () => {
-  const { session } = await aggregatedSession("judge-nospend");
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  const silent: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "The takes converge on a constructive read of the subject.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  await judgeSession(session.id, { transport: silent });
-  const row = await judgementOf(session.id);
-  expect(row.usage_total_tokens).toBeNull();
-  expect(row.usage_cost_usd).toBeNull();
 });

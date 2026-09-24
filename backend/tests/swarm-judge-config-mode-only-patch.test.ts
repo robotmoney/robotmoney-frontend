@@ -14,7 +14,7 @@
 // that preserving the model no longer requires resending it.
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-session.ts";
+import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -26,8 +26,8 @@ test("a mode-only patch preserves the stored model through every transition", as
   await setJudgeConfig({ mode: "off", model: MODEL });
   expect(await getJudgeConfig()).toMatchObject({ mode: "off", model: MODEL });
 
-  // The exact call staging made, which used to 400.
-  expect(await setJudgeConfig({ mode: "shadow" })).toMatchObject({ mode: "shadow", model: MODEL });
+  // The exact call staging made (then with `shadow`, which D53 retired), which
+  // used to 400.
   expect(await setJudgeConfig({ mode: "enforce" })).toMatchObject({ mode: "enforce", model: MODEL });
   expect(await setJudgeConfig({ mode: "off" })).toMatchObject({ mode: "off", model: MODEL });
 });
@@ -153,7 +153,6 @@ test("a mode-only patch cannot enable a pre-seeded free-family model", async () 
   expect(await getJudgeConfig(), "the seed is genuinely there").toMatchObject({ mode: "off", model: FREE });
 
   await expect(setJudgeConfig({ mode: "enforce" })).rejects.toThrow(/keyless free family/);
-  await expect(setJudgeConfig({ mode: "shadow" })).rejects.toThrow(/keyless free family/);
 
   // A refusal changes nothing — the judge stays off rather than half-applied.
   expect(await getJudgeConfig()).toMatchObject({ mode: "off", model: FREE });

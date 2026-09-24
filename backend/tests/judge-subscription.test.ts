@@ -29,23 +29,21 @@ import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import * as judge from "../src/swarm/domain.ts";
+import { inputsDigest } from "../src/swarm/judge.ts";
 import { handleJudgeParticipant } from "../src/api/routes/swarm-judge-participant.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, activeMember, setJudgeMode, sessionRow, type TestMember } from "./support/epoch-fixtures.ts";
+import {
+  activeSubject, activeMember, sessionDate, setJudgeMode, sessionRow, submitTake, type TestMember,
+} from "./support/epoch-fixtures.ts";
+import { seatJudge, signedJudgement, STUB_JUDGE_REPLY, type TestJudge } from "./support/stub-judge.ts";
 
 useCleanDatabase(import.meta.file);
 
-const OPINION = { verdict: "sound", notes: "the takes agree on direction" };
+/** What a judge's model answered — the raw text a participant submits. */
+const OPINION = STUB_JUDGE_REPLY;
 
-const submission = (sessionId: string) => ({
-  sessionId,
-  opinion: OPINION,
-  model: "test/participant-judge",
-  promptHash: "ph-participant",
-  inputsDigest: "digest-participant",
-  takeCount: 1,
-  minTakes: 1,
-});
+/** A SIGNED submission, built exactly as judge-client.ts builds one. */
+const submission = (j: TestJudge, sessionId: string) => signedJudgement(j, sessionId, OPINION);
 
 // THREE PARTICIPANTS FOR THE WHOLE FILE, memoized.
 //
@@ -54,19 +52,24 @@ const submission = (sessionId: string) => ({
 // because every test builds its OWN session, and the pending set is keyed by
 // (session, judge) — so two tests sharing a judge cannot see each other's work
 // unless the filter is broken, which is itself worth catching.
-let judgeA: TestMember | null = null;
-let judgeB: TestMember | null = null;
+let judgeA: TestJudge | null = null;
+let judgeB: TestJudge | null = null;
 let plain: TestMember | null = null;
+let author: TestMember | null = null;
 
-/** A participant with `role = judge` — the credential the subscription authenticates. */
-async function activeJudge(which: "a" | "b" = "a"): Promise<TestMember> {
+/**
+ * An in-house participant with `role = judge` — the credential the
+ * subscription authenticates. Judge A's id sorts before judge B's, so A is the
+ * judge of record whenever both are seated (scheduler spec §4.4: chosen by
+ * member id, never by arrival).
+ */
+async function activeJudge(which: "a" | "b" = "a"): Promise<TestJudge> {
   const cached = which === "a" ? judgeA : judgeB;
   if (cached) return cached;
-  const m = await activeMember();
-  await sql`UPDATE swarm_members SET role = 'judge' WHERE id = ${m.id}`;
-  if (which === "a") judgeA = m;
-  else judgeB = m;
-  return m;
+  const j = await seatJudge({ prefix: which === "a" ? "judge_a" : "judge_b" });
+  if (which === "a") judgeA = j;
+  else judgeB = j;
+  return j;
 }
 
 /** A seated member with no judge role. */
@@ -75,12 +78,19 @@ async function activePlainMember(): Promise<TestMember> {
   return plain;
 }
 
-/** A session parked in `judging` with its stored deadline, exactly as §4.4 leaves it. */
+/**
+ * A session parked in `judging` with its stored deadline, exactly as §4.4
+ * leaves it — carrying one signed take, because a session with nothing in it
+ * is refused as `nothing_to_judge`.
+ */
 async function judgingSession(prefix: string): Promise<{ sessionId: string; deadlineAt: string }> {
   await setJudgeMode("enforce");
   const subjectId = await activeSubject(prefix, 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
+  author ??= await activeMember();
+  const took = await submitTake(author, sessionDate(await sessionRow(opened.sessionId)), subjectId, { body: `a take on ${prefix}` });
+  if (took.status !== 201) throw new Error(`submitTake failed: ${JSON.stringify(took)}`);
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error("turnOverEpoch failed");
   await epoch.aggregateEpoch(turned.closedSessionId);
@@ -136,6 +146,31 @@ test("a judge is served every judging session it has not submitted", async () =>
   expect(pending.find((p) => p.sessionId === a.sessionId)!.judgingDeadlineAt).toBe(a.deadlineAt);
 });
 
+test("each request carries the frozen input the judge is to read — the object the API digests at submission", async () => {
+  const j = await activeJudge();
+  const { sessionId } = await judgingSession("js_input");
+  const served = (await judge.pendingJudgingFor(j.id)).find((p) => p.sessionId === sessionId)!;
+  expect(served.input.sessionId).toBe(sessionId);
+  expect(served.input.takes.map((t) => t.body)).toEqual(["a take on js_input"]);
+  // The digest the judge signs over what it was served is the one the API
+  // recomputes from the frozen take set: a submission signed over it lands.
+  const signed = await signedJudgement(j, sessionId, OPINION, { inputsDigest: inputsDigest(served.input) });
+  expect((await judge.submitJudgement(j.token, signed)).ok).toBe(true);
+});
+
+test("a session this judge has a TAKE in is not its work, and is never served to it", async () => {
+  // Scheduler spec §4.4: an eligible judgement is signed by a judge "that has
+  // no take in that session". The author's own member row is made a judge
+  // here to prove the filter is the take, not the role.
+  const { sessionId } = await judgingSession("js_own_take");
+  await sql`UPDATE swarm_members SET role = 'judge' WHERE id = ${author!.id}`;
+  try {
+    expect((await judge.pendingJudgingFor(author!.id)).map((p) => p.sessionId)).not.toContain(sessionId);
+  } finally {
+    await sql`UPDATE swarm_members SET role = 'member' WHERE id = ${author!.id}`;
+  }
+});
+
 test("a judge that was DOWN when the request was created gets it when it returns", async () => {
   // The whole point of state over event: the request existed before this judge
   // ever connected, and there is no replay buffer, no cursor and no missed
@@ -163,7 +198,7 @@ test("the same work is served AGAIN on a reconnect, until this judge submits", a
 test("once this judge has submitted, the session is no longer served to it", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_submitted");
-  const done = await judge.submitJudgement(j.token, submission(sessionId));
+  const done = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(done.ok).toBe(true);
   expect((await judge.pendingJudgingFor(j.id)).map((p) => p.sessionId)).not.toContain(sessionId);
 });
@@ -185,7 +220,7 @@ test("the pending filter is per judge: one judge's judgement is not another's", 
       (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
        judged_by, judged_by_member_id)
     VALUES (${sessionId}, 'enforce', 'model', 'test/participant-judge', 'ph', 'id', 1, 1,
-            ${sql.json(OPINION as any)}, ${a.id}, ${a.id})`;
+            ${sql.json(JSON.parse(OPINION))}, ${a.id}, ${a.id})`;
   expect((await judge.pendingJudgingFor(a.id)).map((p) => p.sessionId)).not.toContain(sessionId);
   expect((await judge.pendingJudgingFor(b.id)).map((p) => p.sessionId)).toContain(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("judging");
@@ -216,20 +251,22 @@ test("the subscription carries no cursor and no sequence — it is state, not th
 test("a submission is authenticated by the judge's own participant credential", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_auth");
-  const refused = await judge.submitJudgement("not-a-token", submission(sessionId));
+  const refused = await judge.submitJudgement("not-a-token", await submission(j, sessionId));
   expect(refused.ok).toBe(false);
   if (!refused.ok) expect(refused.status).toBe(401);
   // Nothing was written by the refused call.
   expect((await sessionRow(sessionId)).state).toBe("judging");
 
-  const ok = await judge.submitJudgement(j.token, submission(sessionId));
+  const ok = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(ok.ok).toBe(true);
 });
 
 test("a member that is not a judge cannot submit a judgement", async () => {
   const notAJudge = await activePlainMember();
+  const j = await activeJudge();
   const { sessionId } = await judgingSession("js_role");
-  const refused = await judge.submitJudgement(notAJudge.token, submission(sessionId));
+  // Even carrying a judge's valid signature, a bearer without the role is refused.
+  const refused = await judge.submitJudgement(notAJudge.token, await submission(j, sessionId));
   expect(refused.ok).toBe(false);
   if (!refused.ok) expect(refused.error).toBe("judge_role_required");
 });
@@ -238,7 +275,7 @@ test("the submission records the consensus with its acceptance instant", async (
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_instant");
   const before = Date.now();
-  const ok = await judge.submitJudgement(j.token, submission(sessionId));
+  const ok = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(ok.ok).toBe(true);
   if (!ok.ok) return;
 
@@ -264,20 +301,26 @@ test("the submission records the consensus with its acceptance instant", async (
 test("nothing is fabricated: the stored judgement is the judge's own opinion, with no fallback source", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_no_fallback");
-  const ok = await judge.submitJudgement(j.token, submission(sessionId));
+  const ok = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(ok.ok).toBe(true);
   if (!ok.ok) return;
   const [row] = await sql<{ source: string; fallback_reason: string | null; opinion: any }[]>`
     SELECT source, fallback_reason, opinion FROM swarm_session_judgements WHERE id = ${ok.judgementId}`;
   expect(row.source).toBe("model");
   expect(row.fallback_reason).toBeNull();
-  expect(row.opinion).toEqual(OPINION);
+  // The judge's own words, parsed by the API — plus the thin-support arithmetic
+  // the parser owns (one take against the default minimum of three), and
+  // nothing else.
+  const said = JSON.parse(OPINION);
+  expect(row.opinion.rationale).toBe(said.rationale);
+  expect(row.opinion.disagreements).toEqual(said.disagreements);
+  expect(row.opinion.release_safety).toMatchObject({ take_count: 1, thinly_supported: true, release: "hold" });
 });
 
 test("a submission with no opinion is refused rather than filled in", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_empty");
-  const refused = await judge.submitJudgement(j.token, { ...submission(sessionId), opinion: undefined as any });
+  const refused = await judge.submitJudgement(j.token, { ...await submission(j, sessionId), opinion: undefined as any });
   expect(refused.ok).toBe(false);
   if (!refused.ok) expect(refused.status).toBe(400);
   expect((await sessionRow(sessionId)).state).toBe("judging");
@@ -290,12 +333,12 @@ test("a submission with no opinion is refused rather than filled in", async () =
 test("a redelivered submission from the same judge changes nothing", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_redeliver");
-  const first = await judge.submitJudgement(j.token, submission(sessionId));
+  const first = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(first.ok).toBe(true);
   if (!first.ok) return;
   const recorded = (await sessionRow(sessionId)).consensus_recorded_at;
 
-  const again = await judge.submitJudgement(j.token, submission(sessionId));
+  const again = await judge.submitJudgement(j.token, await submission(j, sessionId));
   expect(again.ok).toBe(true);
   if (!again.ok) return;
   expect(again.duplicate).toBe(true);
@@ -313,7 +356,7 @@ test("a submission after finalize is late evidence only", async () => {
   if (!finalized.ok) return;
   expect(finalized.outcome).toBe("no_consensus");
 
-  const after = await judge.submitJudgement(late.token, submission(sessionId));
+  const after = await judge.submitJudgement(late.token, await submission(late, sessionId));
   expect(after.ok).toBe(true);
   if (!after.ok) return;
   expect(after.lateEvidence).toBe(true);
@@ -358,7 +401,7 @@ test("an unconnected judge holds up no other session", async () => {
   const j = await activeJudge();
   const absent = await judgingSession("js_isolation_absent");
   const answered = await judgingSession("js_isolation_answered");
-  await judge.submitJudgement(j.token, submission(answered.sessionId));
+  await judge.submitJudgement(j.token, await submission(j, answered.sessionId));
   expect((await sessionRow(answered.sessionId)).state).toBe("judged");
   expect((await sessionRow(absent.sessionId)).state).toBe("judging");
 });
@@ -409,7 +452,7 @@ test("the submission route posts a judgement under the judge's credential", asyn
     new Request("http://test/api/swarm/participants/judgement", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${j.token}` },
-      body: JSON.stringify(submission(sessionId)),
+      body: JSON.stringify(await submission(j, sessionId)),
     }),
     url("/api/swarm/participants/judgement"),
   )) as { status: number; body: any };

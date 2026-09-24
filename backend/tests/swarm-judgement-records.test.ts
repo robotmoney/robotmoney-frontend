@@ -10,29 +10,30 @@
 //     prompt over the same take set share `prompt_hash` and `inputs_digest`.
 //   - The three public judgement reads serve exactly the public rule
 //     (swarm/judgements.ts): `enforce`, applied, published, newest per party.
-//     A `shadow` opinion leaking here would publish what the mode withholds.
+//     A judgement that never reached the session — a second judge's, late
+//     evidence, a historical `shadow` row — leaking here would publish what the
+//     lifecycle withheld.
 //   - The take receipt names the session it was filed in.
 //
-// The model is injected (a fixed transport) wherever the entry point allows it,
-// and the shared local stub serves the entry points that do not.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+// Every judgement here arrives the way it does in production since issue
+// #1026: a seated judge signs its model's answer and submits it
+// (tests/support/stub-judge.ts). Rows the current writer can no longer produce
+// — an anonymous in-house row, a `shadow` row — are PLANTED, because the
+// public rule still has to hold over the history that carries them.
+import { expect, test } from "bun:test";
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
-import { judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judge-session.ts";
-import type { JudgeTransport } from "../src/swarm/judge.ts";
 import { toMember } from "../src/swarm/projections.ts";
 import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { installJudgeStub, removeJudgeStub, STUB_JUDGE_MODEL } from "./support/judge-stub.ts";
+import { requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, submitSigned, type TestJudge } from "./support/stub-judge.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
-beforeAll(() => { installJudgeStub(); });
-afterAll(() => { removeJudgeStub(); });
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const IN_HOUSE = "robotmoney-in-house";
@@ -46,13 +47,6 @@ async function member(prefix: string) {
 }
 type Member = Awaited<ReturnType<typeof member>>;
 
-async function judgeMember(prefix: string) {
-  const m = await member(prefix);
-  const granted = await admin.setMemberRoleAdmin(m.id, 1, "judge");
-  if (!granted.ok) throw new Error(`setMemberRoleAdmin failed: ${JSON.stringify(granted)}`);
-  return m;
-}
-
 async function submit(
   m: Member, date: string, subjectId: string, body = "a signed take on the subject",
   weights?: { bucket: string; weight: number }[],
@@ -64,8 +58,8 @@ async function submit(
   return res as { status: number; id?: string } & Record<string, unknown>;
 }
 
-/** A prose session with two takes, closed and aggregated: judgeable, not published. */
-async function aggregated(prefix: string) {
+/** A prose session with two takes, closed, aggregated and in `judging`. */
+async function judging(prefix: string) {
   const subjectId = rid(prefix);
   await ensureProseSubject(subjectId, subjectId);
   const session = await ic.openSession(subjectId);
@@ -74,16 +68,41 @@ async function aggregated(prefix: string) {
   for (const voter of [await member("voter_a"), await member("voter_b")]) await submit(voter, date, subjectId);
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
+  await requestJudgingFor(String(session.id));
   return { subjectId, sessionId: String(session.id), date };
 }
 
-function answer(rationale: string, release: "safe" | "hold" = "safe"): JudgeTransport {
-  const text = JSON.stringify({
+function answer(rationale: string, release: "safe" | "hold" = "safe"): string {
+  return JSON.stringify({
     rationale,
     disagreements: [],
     release_safety: { release, concerns: release === "hold" ? ["thin"] : [] },
   });
-  return { model: "test/judge", complete: async () => text };
+}
+
+async function judgeWith(judge: TestJudge, sessionId: string, rationale: string, release: "safe" | "hold" = "safe") {
+  const result = await submitSigned(judge, sessionId, answer(rationale, release));
+  if (!result.ok) throw new Error(`submitJudgement refused: ${JSON.stringify(result)}`);
+  return result;
+}
+
+/** Publish a judged session the way the scheduler does: finalize. */
+async function publish(sessionId: string) {
+  const done = await ic.finalizeEpoch(sessionId);
+  if (!done.ok) throw new Error(`finalizeEpoch refused: ${JSON.stringify(done)}`);
+  return done;
+}
+
+/** Plant a historical judgement row the current writer cannot produce. */
+async function plantHistorical(sessionId: string, o: { mode: "enforce" | "shadow"; applied: boolean; rationale: string }) {
+  const [row] = await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, applied, opinion, judged_by)
+    VALUES (${sessionId}, ${o.mode}, 'model', 'test/judge', ${"a".repeat(64)}, ${"b".repeat(64)}, 2, 3, ${o.applied},
+            ${sql.json({ rationale: o.rationale, disagreements: [], release_safety: { release: "safe", thinly_supported: true, take_count: 2, min_takes: 3, concerns: [] } })},
+            ${IN_HOUSE})
+    RETURNING id`;
+  return String(row!.id);
 }
 
 async function get(pathname: string) {
@@ -96,9 +115,6 @@ async function get(pathname: string) {
 const recOf = async (sessionId: string) =>
   ((await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any)
     .swarm_recommendation as Record<string, any>;
-
-const judgementIds = async (sessionId: string) =>
-  (await sql`SELECT id, mode, applied, judged_by FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id`) as any[];
 
 const sessionJudgements = (sessionId: string) => get(routePath(ROUTES.swarm.sessionJudgements, { id: sessionId }));
 const judgementById = (id: string) => get(routePath(ROUTES.swarm.judgement, { id }));
@@ -124,118 +140,105 @@ test("the public member DTO emits role: member by default, judge once graduated"
 
 // ── the adopted opinion names its judge ─────────────────────────────────────
 
-test("an enforce opinion carries judged_by on the session: the in-house worker, through the production entry point", async () => {
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
-  const s = await aggregated("adopt_in_house");
-  const res = await admin.judgeSessionAdmin(s.sessionId, undefined) as any;
-  expect(res.ok).toBe(true);
-  expect(res.judge.applied).toBe(true);
-
-  const row = await latestJudgement(s.sessionId) as any;
-  const carried = (await recOf(s.sessionId)).judge;
-  expect(carried.judged_by).toBe(IN_HOUSE);
-  expect(carried.judged_by).toBe(row.judged_by);
-  // Only a seated member has a member id to name.
-  expect(carried).not.toHaveProperty("judged_by_member_id");
-  // Same object the public session payload serves.
-  const served = (await get(routePath(ROUTES.swarm.sessionById, { id: s.sessionId }))).body;
-  expect(served.session.swarmRecommendation.judge.judged_by).toBe(IN_HOUSE);
-});
-
-test("an enforce opinion by a seated judge carries its member id, spelled as the judgement row spells it", async () => {
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL, thirdPartyEnabled: true });
-  const j = await judgeMember("adopt_member");
-  const s = await aggregated("adopt_member");
-  const res = await judgeSession(s.sessionId, { judgeMemberId: j.id, transport: answer("A seated judge's opinion.") });
-  expect(res.ok).toBe(true);
+test("the judge of record's opinion carries its member id on the session, spelled as the judgement row spells it", async () => {
+  const j = await seatJudge({ prefix: "adopt_member" });
+  const s = await judging("adopt_member");
+  const res = await judgeWith(j, s.sessionId, "A seated judge's opinion.");
   expect(res.applied).toBe(true);
 
-  const row = await latestJudgement(s.sessionId) as any;
+  const row = (await ic.latestJudgement(s.sessionId)) as any;
   const carried = (await recOf(s.sessionId)).judge;
   expect(carried.judged_by).toBe(j.id);
   expect(carried.judged_by_member_id).toBe(j.id);
   expect(carried.judged_by).toBe(row.judged_by);
   expect(carried.judged_by_member_id).toBe(row.judged_by_member_id);
+  // Same object the public session payload serves.
+  const served = (await get(routePath(ROUTES.swarm.sessionById, { id: s.sessionId }))).body;
+  expect(served.session.swarmRecommendation.judge.judged_by).toBe(j.id);
 });
 
-test("a shadow opinion still reaches no session, judge block and all", async () => {
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
-  const s = await aggregated("adopt_shadow");
-  expect((await judgeSession(s.sessionId, { transport: answer("Withheld.") })).ok).toBe(true);
+test("a second seated judge's opinion reaches no session, judge block and all", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  const s = await judging("adopt_second");
+  const second = await judgeWith(b, s.sessionId, "Recorded, decides nothing.");
+  expect(second.applied).toBe(false);
   expect(await recOf(s.sessionId)).not.toHaveProperty("judge");
+  expect((await judgeWith(a, s.sessionId, "The judge of record.")).applied).toBe(true);
+  expect((await recOf(s.sessionId)).judge.judged_by).toBe(a.id);
 });
 
 // ── GET /api/swarm/sessions/:id/judgements and /api/swarm/judgements/:id ────
 
 test("a session's public judgements: enforce, applied and published only, one per judging party, newest first", async () => {
-  const j = await judgeMember("several");
-  const s = await aggregated("several");
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  const s = await judging("several");
 
-  // 1. in-house, enforce — later replaced by its own party (4).
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL, thirdPartyEnabled: true });
-  expect((await judgeSession(s.sessionId, { transport: answer("In-house, first word.") })).applied).toBe(true);
-  // 2. in-house, shadow — never public, even though it is newer than (1).
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
-  expect((await judgeSession(s.sessionId, { transport: answer("In-house, shadow soak.") })).ok).toBe(true);
-  // 3. a seated judge, enforce.
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
-  expect((await judgeSession(s.sessionId, { judgeMemberId: j.id, transport: answer("The seated judge's view.", "hold") })).applied).toBe(true);
-  // 4. in-house again, enforce — this party's newest applied opinion.
-  expect((await judgeSession(s.sessionId, { transport: answer("In-house, last word.") })).applied).toBe(true);
-
-  const [r1, r2, r3, r4] = (await judgementIds(s.sessionId)).map((r) => String(r.id));
-  expect([r1, r2, r3, r4].every(Boolean)).toBe(true);
+  // HISTORY the current writer cannot produce, planted as an upgraded database
+  // holds it: 1. an anonymous in-house enforce row later replaced by its own
+  // party (4); 2. an in-house shadow row, never public.
+  const r1 = await plantHistorical(s.sessionId, { mode: "enforce", applied: true, rationale: "In-house, first word." });
+  const r2 = await plantHistorical(s.sessionId, { mode: "shadow", applied: false, rationale: "In-house, shadow soak." });
+  // 3. the second seated judge: eligible, recorded, NOT the judge of record.
+  const r3 = String((await judgeWith(b, s.sessionId, "The second judge's view.", "hold")).judgementId);
+  // 4. the in-house party's newest applied row, planted after (1).
+  const r4 = await plantHistorical(s.sessionId, { mode: "enforce", applied: true, rationale: "In-house, last word." });
+  // 5. the judge of record: applied, the consensus.
+  const r5 = String((await judgeWith(a, s.sessionId, "The judge of record's view.", "hold")).judgementId);
 
   // UNPUBLISHED: the session is public, its judgements are not yet.
   const before = await sessionJudgements(s.sessionId);
   expect(before.status).toBe(200);
   expect(before.body).toEqual({ judgements: [] });
-  for (const id of [r1, r2, r3, r4]) expect((await judgementById(id!)).status).toBe(404);
+  for (const id of [r1, r2, r3, r4, r5]) expect((await judgementById(id)).status).toBe(404);
 
-  expect((await ic.publishSession(s.sessionId)).state).toBe("published");
+  expect((await publish(s.sessionId)).outcome).toBe("judged");
 
-  // 5. a seated-judge enforce opinion AFTER publication: recorded, never applied.
-  const late = await judgeSession(s.sessionId, { judgeMemberId: j.id, transport: answer("Too late.") });
-  expect(late.ok).toBe(true);
+  // 6. a late judgement after publication: recorded, never applied.
+  const c = await seatJudge({ prefix: "judge_c" });
+  const late = await judgeWith(c, s.sessionId, "Too late.");
+  expect(late.lateEvidence).toBe(true);
   expect(late.applied).toBe(false);
-  const r5 = String(late.judgementId);
+  const r6 = String(late.judgementId);
 
   const after = await sessionJudgements(s.sessionId);
   expect(after.status).toBe(200);
   const list = after.body.judgements as any[];
-  expect(list.map((x) => x.id)).toEqual([r4, r3]);
-  expect(list.map((x) => x.judgedBy)).toEqual([IN_HOUSE, j.id]);
-  expect(list.map((x) => x.rationale)).toEqual(["In-house, last word.", "The seated judge's view."]);
+  expect(list.map((x) => x.id)).toEqual([r5, r4]);
+  expect(list.map((x) => x.judgedBy)).toEqual([a.id, IN_HOUSE]);
+  expect(list.map((x) => x.rationale)).toEqual(["The judge of record's view.", "In-house, last word."]);
 
   // The exact public shape: nothing admin-only rides along.
-  const [inHouse, seated] = list;
-  expect(Object.keys(inHouse).sort()).toEqual([
+  const [ofRecord, inHouse] = list;
+  expect(Object.keys(ofRecord).sort()).toEqual([
     "createdAt", "disagreements", "id", "inputsDigest", "judgedBy", "judgedByMemberId", "model",
     "promptHash", "rationale", "recommendsWeights", "releaseSafety", "sessionDate", "sessionId", "source", "subjectId",
   ]);
   // A prose session sets no weights: its judges' calls have nothing to update.
-  expect(inHouse).toMatchObject({
+  expect(ofRecord).toMatchObject({
     sessionId: s.sessionId, subjectId: s.subjectId, sessionDate: s.date,
-    judgedBy: IN_HOUSE, judgedByMemberId: null, source: "model", model: "test/judge",
+    judgedBy: a.id, judgedByMemberId: a.id, source: "model", model: STUB_JUDGE_MODEL,
     disagreements: [], recommendsWeights: false,
   });
   // The opinion as recorded — two takes against min_takes 3 is thin support,
-  // which the judge flags whatever the model said.
-  const stored = (await sql`SELECT opinion, prompt_hash, inputs_digest FROM swarm_session_judgements WHERE id = ${r4!}`)[0] as any;
-  expect(inHouse.releaseSafety).toEqual(stored.opinion.release_safety);
-  expect(inHouse.releaseSafety).toMatchObject({ thinly_supported: true, take_count: 2, min_takes: 3 });
-  expect(inHouse.promptHash).toBe(stored.prompt_hash);
-  expect(inHouse.inputsDigest).toBe(stored.inputs_digest);
-  expect(Number.isNaN(Date.parse(inHouse.createdAt))).toBe(false);
-  expect(seated).toMatchObject({ judgedBy: j.id, judgedByMemberId: j.id });
-  expect(seated.releaseSafety.concerns).toContain("thin");
+  // which the parser flags whatever the model said.
+  const stored = (await sql`SELECT opinion, prompt_hash, inputs_digest FROM swarm_session_judgements WHERE id = ${r5}`)[0] as any;
+  expect(ofRecord.releaseSafety).toEqual(stored.opinion.release_safety);
+  expect(ofRecord.releaseSafety).toMatchObject({ thinly_supported: true, take_count: 2, min_takes: 3 });
+  expect(ofRecord.releaseSafety.concerns).toContain("thin");
+  expect(ofRecord.promptHash).toBe(stored.prompt_hash);
+  expect(ofRecord.inputsDigest).toBe(stored.inputs_digest);
+  expect(Number.isNaN(Date.parse(ofRecord.createdAt))).toBe(false);
+  expect(inHouse).toMatchObject({ judgedBy: IN_HOUSE, judgedByMemberId: null });
 
   // One judgement by id answers exactly when the list would serve it.
-  expect(await judgementById(r4!)).toEqual({ status: 200, body: inHouse });
-  expect(await judgementById(r3!)).toEqual({ status: 200, body: seated });
-  expect((await judgementById(r1!)).status).toBe(404); // replaced by its own party
-  expect((await judgementById(r2!)).status).toBe(404); // shadow
-  expect((await judgementById(r5)).status).toBe(404); // enforce, never applied
+  expect(await judgementById(r5)).toEqual({ status: 200, body: ofRecord });
+  expect(await judgementById(r4)).toEqual({ status: 200, body: inHouse });
+  expect((await judgementById(r1)).status).toBe(404); // replaced by its own party
+  expect((await judgementById(r2)).status).toBe(404); // shadow
+  expect((await judgementById(r3)).status).toBe(404); // a second judge's: never applied
+  expect((await judgementById(r6)).status).toBe(404); // late evidence: never applied
   expect((await judgementById("abc")).status).toBe(404);
   expect((await judgementById("9".repeat(30))).status).toBe(404);
   expect((await judgementById("999999")).status).toBe(404);
@@ -260,9 +263,9 @@ test("a judgement on a weights session says its recommendation set weights: its 
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   expect((await recOf(String(session.id))).type).toBe("bucket_weights");
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
-  expect((await judgeSession(String(session.id), { transport: answer("Weights moved.") })).applied).toBe(true);
-  expect((await ic.publishSession(String(session.id))).state).toBe("published");
+  await requestJudgingFor(String(session.id));
+  expect((await judgeWith(await seatJudge(), String(session.id), "Weights moved.")).applied).toBe(true);
+  await publish(String(session.id));
 
   const list = (await sessionJudgements(String(session.id))).body.judgements as any[];
   expect(list).toHaveLength(1);
@@ -285,28 +288,27 @@ test("a date-shaped first segment still means (date, subject), not a session id"
 // ── GET /api/swarm/members/:id/judgements ───────────────────────────────────
 
 test("a judge's public judgements across sessions, newest first, with the takes route's limit convention", async () => {
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL, thirdPartyEnabled: true });
-  const j = await judgeMember("record");
+  const j = await seatJudge({ prefix: "judge_a_record" });
 
-  const older = await aggregated("record_older");
-  await judgeSession(older.sessionId, { judgeMemberId: j.id, transport: answer("Older session.") });
-  // Another party's opinion on the same session: public, but not this judge's.
-  await judgeSession(older.sessionId, { transport: answer("The in-house view of the older session.") });
-  await ic.publishSession(older.sessionId);
+  const older = await judging("record_older");
+  await judgeWith(j, older.sessionId, "Older session.");
+  // Another party's historical opinion on the same session: public, but not this judge's.
+  await plantHistorical(older.sessionId, { mode: "enforce", applied: true, rationale: "The in-house view of the older session." });
+  await publish(older.sessionId);
   expect((await sessionJudgements(older.sessionId)).body.judgements).toHaveLength(2);
 
-  const newer = await aggregated("record_newer");
-  await judgeSession(newer.sessionId, { judgeMemberId: j.id, transport: answer("Newer session.") });
-  await ic.publishSession(newer.sessionId);
+  const newer = await judging("record_newer");
+  await judgeWith(j, newer.sessionId, "Newer session.");
+  await publish(newer.sessionId);
 
   // Judged but not published: not on the record yet.
-  const pending = await aggregated("record_pending");
-  await judgeSession(pending.sessionId, { judgeMemberId: j.id, transport: answer("Pending session.") });
-  // Published, but the judge's only opinion was shadow.
-  const shadowOnly = await aggregated("record_shadow");
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
-  await judgeSession(shadowOnly.sessionId, { judgeMemberId: j.id, transport: answer("Shadow only.") });
-  await ic.publishSession(shadowOnly.sessionId);
+  const pending = await judging("record_pending");
+  await judgeWith(j, pending.sessionId, "Pending session.");
+  // Published, but this judge's only opinion there came after publication.
+  const lateOnly = await judging("record_late");
+  await sql`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id = ${lateOnly.sessionId}`;
+  expect((await publish(lateOnly.sessionId)).outcome).toBe("no_consensus");
+  expect((await judgeWith(j, lateOnly.sessionId, "Late only.")).lateEvidence).toBe(true);
 
   const all = await memberJudgements(j.id);
   expect(all.status).toBe(200);
@@ -354,26 +356,34 @@ test("GET /api/swarm/takes/:id carries the sessionId the take was filed in", asy
   expect(receipt.body.take.id).toBe(takeId);
 });
 
-// ── the production entry point, with the seeded named judge ─────────────────
+// ── the seeded named judge ──────────────────────────────────────────────────
 // LAST in the file: seedLiveRoster() retires every active member not on the
 // live roster, and this file shares one database across its tests.
 
-test("Themis judging through judgeSessionAdmin: the session names Themis, and the judge's record lists it once published", async () => {
+test("Themis, seeded in-house, is a judge whose judgement the session names, and the judge's record lists it once published", async () => {
   await seedLiveRoster();
-  const themisId = ((await sql`SELECT id FROM swarm_members WHERE handle = 'themis'`)[0] as any)?.id as string;
-  expect(themisId, "seedLiveRoster() must have seated a themis row").toBeTruthy();
-  expect((await ic.getMember("themis"))?.role).toBe("judge");
+  const themis = (await sql`SELECT id, operator, role FROM swarm_members WHERE handle = 'themis'`)[0] as any;
+  expect(themis, "seedLiveRoster() must have seated a themis row").toBeTruthy();
+  expect(themis.role).toBe("judge");
+  // The in-house operator is what passes the third-party gate (§6.2).
+  expect(themis.operator).toBe("robotmoney");
 
-  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
-  const s = await aggregated("themis");
-  const res = await admin.judgeSessionAdmin(s.sessionId, undefined) as any;
-  expect(res.ok).toBe(true);
-  expect(res.judge.applied).toBe(true);
-  expect((await recOf(s.sessionId)).judge).toMatchObject({ judged_by: themisId, judged_by_member_id: themisId });
+  // The roster seed holds no signing key the test can use, so Themis's key is
+  // rotated to one the test holds — the same move `rotate-key` makes for a
+  // participant's credential file.
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const rotated = await admin.rotateMemberKeyAdmin(themis.id, { publicKey: publicKeyB64 }) as any;
+  expect(rotated.ok, JSON.stringify(rotated)).toBe(true);
+  const judge: TestJudge = { id: themis.id, token: rotated.token, privateKey };
+
+  const s = await judging("themis");
+  const res = await judgeWith(judge, s.sessionId, "Themis's opinion.");
+  expect(res.applied).toBe(true);
+  expect((await recOf(s.sessionId)).judge).toMatchObject({ judged_by: themis.id, judged_by_member_id: themis.id });
 
   expect((await memberJudgements("themis")).body.judgements).toEqual([]);
-  expect((await ic.publishSession(s.sessionId)).state).toBe("published");
+  await publish(s.sessionId);
   const record = (await memberJudgements("themis")).body.judgements as any[];
-  expect(record.map((x) => [x.sessionId, x.judgedBy])).toEqual([[s.sessionId, themisId]]);
+  expect(record.map((x) => [x.sessionId, x.judgedBy])).toEqual([[s.sessionId, themis.id]]);
   expect((await sessionJudgements(s.sessionId)).body.judgements).toEqual(record);
 });

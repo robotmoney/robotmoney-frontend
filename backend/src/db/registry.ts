@@ -1,11 +1,13 @@
 // The registered query interface — the ONE place a database statement may be
 // issued from, and the reason preflight check 2 can be trusted.
 //
-// STUB. Every function here throws `NOT IMPLEMENTED`. Nothing imports this
-// module yet; it is step 1 of issue #1026's W2 workstream (stubs and their
-// reasoning), and it is deliberately inert so it can land ahead of the
-// behaviour it describes. Governed by smoke-production-spec.md §7.1, with
-// §7 check 2 as its only consumer.
+// Implemented (issue #1026 W2): registration, enumeration and the fold check 2
+// reads are all live, and application modules register their call sites here
+// at module level — `src/swarm/judge-config.ts` is the first. Governed by
+// smoke-production-spec.md §7.1, with §7 check 2 as its main consumer; a
+// declaration's `callers` are also read by the tests that pin who may reach a
+// write (smoke-production-spec.md §6.2: "nothing but the admin route writes
+// `swarm_judge_config`").
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THIS EXISTS
@@ -120,6 +122,22 @@ export interface QueryDeclaration {
   /** One sentence on what the statement is for. Read by humans reviewing a new
    *  privilege, which is the only review a grant widening ever gets. */
   readonly purpose: string;
+  /**
+   * The ENTRY modules through which this statement may be reached, as module
+   * ids relative to `backend/` with no extension (`src/api/routes/swarm-admin`,
+   * or `scripts/<cli>` for an operator command).
+   * An entry module is the outermost application module on the path — the
+   * route that receives the request, or the job handler that claims the job —
+   * not every helper the call passes through.
+   *
+   * WHY IT IS DECLARED HERE AND NOT GREPPED. "Only the admin route writes
+   * `swarm_judge_config`" (smoke-production-spec.md §6.2) is a statement about
+   * a call site, and a grep for the import proves only what the grep happened
+   * to match. The declaration sits next to the statement it governs, is
+   * reviewed with it, and is enumerable through `registeredSites()`, so a test
+   * can assert the property from the registry itself.
+   */
+  readonly callers: readonly string[];
 }
 
 /**
@@ -154,6 +172,9 @@ export interface RegisteredQuery {
  *   - `object` not an unqualified relation name (contains a schema qualifier,
  *     quoting, or whitespace) — check 2 resolves it through `to_regclass` in
  *     `public` and a qualified name silently resolves elsewhere.
+ *   - `callers` empty, repeated, or not a module id under `src/` or
+ *     `scripts/` — a declaration that names no caller says nothing about who
+ *     may reach the statement, and a misspelled one says something false.
  *
  * Serves spec §10 W2 "Registry structurally enforced; execution under each role
  * on a disposable database" — this half is the structural one.
@@ -165,6 +186,7 @@ const bySite = new Map<string, RegisteredQuery>();
 
 export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
   assertValidObject(declaration);
+  assertValidCallers(declaration);
   if (declaration.privileges.length === 0) {
     throw new Error(
       `registry: call site ${declaration.site} declared an empty privileges list on ${declaration.object} — ` +
@@ -218,6 +240,31 @@ function assertValidObject(declaration: QueryDeclaration): void {
   );
 }
 
+/** A module id relative to `backend/`, no extension: `src/api/routes/swarm-admin`, or an
+ *  operator CLI under `scripts/`, which is an entry module in its own right. */
+const MODULE_ID = /^(?:src|scripts)\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/;
+
+function assertValidCallers(declaration: QueryDeclaration): void {
+  const callers = declaration.callers as readonly unknown[] | undefined;
+  if (!Array.isArray(callers) || callers.length === 0) {
+    throw new Error(
+      `registry: call site ${declaration.site} declared no callers — a declaration must name the entry ` +
+        "module(s) through which its statement is reached, or it says nothing about who may issue it.",
+    );
+  }
+  for (const caller of callers) {
+    if (typeof caller !== "string" || !MODULE_ID.test(caller)) {
+      throw new Error(
+        `registry: call site ${declaration.site} declared caller ${JSON.stringify(caller)} — a caller is a module ` +
+          "id under `src/` or `scripts/`, relative to `backend/` and without an extension (e.g. `src/api/routes/swarm-admin`).",
+      );
+    }
+  }
+  if (new Set(callers).size !== callers.length) {
+    throw new Error(`registry: call site ${declaration.site} declared the same caller twice.`);
+  }
+}
+
 function freezeDeclaration(declaration: QueryDeclaration): QueryDeclaration {
   return Object.freeze({
     role: declaration.role,
@@ -225,8 +272,12 @@ function freezeDeclaration(declaration: QueryDeclaration): QueryDeclaration {
     privileges: Object.freeze([...declaration.privileges]),
     site: declaration.site,
     purpose: declaration.purpose,
+    callers: Object.freeze([...declaration.callers]),
   });
 }
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((entry, index) => entry === b[index]);
 
 function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
   return (
@@ -234,8 +285,8 @@ function sameDeclaration(a: QueryDeclaration, b: QueryDeclaration): boolean {
     a.object === b.object &&
     a.site === b.site &&
     a.purpose === b.purpose &&
-    a.privileges.length === b.privileges.length &&
-    a.privileges.every((privilege, index) => privilege === b.privileges[index])
+    sameList(a.privileges, b.privileges) &&
+    sameList(a.callers, b.callers)
   );
 }
 
