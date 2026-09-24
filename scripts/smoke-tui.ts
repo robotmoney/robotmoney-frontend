@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 // `bun smoke:tui` — the standalone TUI observer.
 //
-// STUB (issue #1026, W1 step 1). Signatures and types are real; every body
-// throws, and this file is not yet wired into `package.json`, so running it
-// does nothing today. It is additive and behaviour-neutral by construction.
+// Wired as `bun smoke:tui` in package.json (issue #1026). `bun smoke` itself
+// imports no part of it and draws nothing (scripts/tests/unit/smoke-tui.test.ts
+// walks the boot's import graph to prove it).
 //
 // ── Why the TUI had to be split out ─────────────────────────────────────────
 //

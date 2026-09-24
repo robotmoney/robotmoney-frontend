@@ -71,9 +71,13 @@ describe("scripts/lib/smoke-main.ts is measurably smaller after the #456 split",
     expect(PRE_FIX_FUNCTIONS - count).toBeGreaterThan(10);
   });
 
-  test("at least two modules were extracted, and smoke-main.ts imports from both", () => {
-    expect(smokeMain).toContain('from "./smoke-tui-view.ts"');
-    expect(smokeMain).toContain('from "./smoke-readiness-polling.ts"');
+  test("the two extracted modules stay extracted, and smoke-main.ts imports NEITHER (spec §1: no TUI)", () => {
+    // Flipped by issue #1026. Both modules exist only to paint and feed the
+    // TUI panes; `bun smoke` draws no TUI, so the boot imports neither. The
+    // transitive proof is scripts/tests/unit/smoke-tui.test.ts's import walk.
+    expect(smokeMain).not.toContain('from "./smoke-tui-view.ts"');
+    expect(smokeMain).not.toContain('from "./smoke-readiness-polling.ts"');
+    expect(smokeMain).not.toContain('from "./tui.ts"');
     // Both files are real, non-trivial modules, not empty stubs.
     expect(tuiView.split("\n").length).toBeGreaterThan(50);
     expect(readinessPolling.split("\n").length).toBeGreaterThan(50);
@@ -100,10 +104,86 @@ describe("scripts/lib/smoke-main.ts is measurably smaller after the #456 split",
     expect(readinessPolling).toContain("export function createReadinessPolling(");
     expect(smokeMain).not.toMatch(/^function classifyContainer\(/m);
     expect(smokeMain).not.toMatch(/^function createReadinessPolling\(/m);
-    // The one instance smoke-main.ts creates, then drives via its methods.
-    expect(smokeMain).toContain("createReadinessPolling({");
-    expect(smokeMain).toContain("readinessPolling.startResearchPolling()");
-    expect(smokeMain).toContain("readinessPolling.startHealthPolling()");
+    // The polls fed TUI panes only, so the boot no longer starts them.
+    expect(smokeMain).not.toContain("createReadinessPolling(");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NO DRIVER WRITES JUDGE MODE (issue #1026, D48 as waived by D53, criterion 6).
+//
+// session.ts used to carry setJudgeMode(), enableTwinJudge() and
+// runJudgeRoleCoverage(): every simulation smoke and every CI twin flipped
+// `swarm_judge_config.mode` around a session and asserted a model-authored
+// judgement landed. Nothing on a booted stack judges inline any more (the judge
+// is a participant, smoke spec §6.2), so that assertion could not pass, and the
+// flip was the one place a driver manufactured a judge-mode write at all.
+// Judge coverage comes back with the participant judge.
+// ---------------------------------------------------------------------------
+const session = readFileSync(join(libDir, "swarm", "session.ts"), "utf8");
+const DRIVER_FILES: ReadonlyArray<readonly [string, string]> = [
+  ["scripts/lib/swarm/session.ts", session],
+  ["scripts/lib/smoke-main.ts", smokeMain],
+  ["scripts/lib/smoke-twin.ts", readFileSync(join(libDir, "smoke-twin.ts"), "utf8")],
+  ["scripts/smoke-twin.ts", readFileSync(join(repoRoot, "scripts", "smoke-twin.ts"), "utf8")],
+];
+const JUDGE_WRITERS = ["setJudgeMode", "enableTwinJudge", "runJudgeRoleCoverage", "defaultSmokeTwinJudgeMode"];
+
+/** Code only: `//` and `*` comment lines dropped, so a comment naming the retired function is not a call. */
+function codeOnly(src: string): string {
+  return src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+}
+
+/** Names from JUDGE_WRITERS that `src` declares or calls. */
+function judgeWriters(src: string): string[] {
+  const code = codeOnly(src);
+  return JUDGE_WRITERS.filter((name) => new RegExp(`\\b${name}\\s*\\(`).test(code));
+}
+
+/** A POST to the judge-config admin route whose body carries `shadow`. */
+function shadowPosts(src: string): string[] {
+  const code = codeOnly(src);
+  return [...code.matchAll(/judgeConfig[\s\S]{0,400}?body:\s*JSON\.stringify\(([^)]*)\)/g)]
+    .map((m) => m[1]!)
+    .filter((body) => /shadow/.test(body) || /\bmode\b/.test(body));
+}
+
+describe("no driver writes judge mode, and nothing posts `shadow` (criterion 6)", () => {
+  test("setJudgeMode, enableTwinJudge, runJudgeRoleCoverage are declared and called nowhere", () => {
+    for (const [file, src] of DRIVER_FILES) {
+      expect({ file, writers: judgeWriters(src) }).toEqual({ file, writers: [] });
+    }
+  });
+
+  test("no driver POSTs a judge-config body that sets a mode, least of all `shadow`", () => {
+    for (const [file, src] of DRIVER_FILES) {
+      expect({ file, posts: shadowPosts(src) }).toEqual({ file, posts: [] });
+    }
+  });
+
+  test("no driver source spells a quoted `\"shadow\"` mode at all", () => {
+    for (const [file, src] of DRIVER_FILES) {
+      expect({ file, quoted: /["']shadow["']/.test(codeOnly(src)) }).toEqual({ file, quoted: false });
+    }
+  });
+
+  test("red control: the retired setJudgeMode shape is caught by name", () => {
+    const planted =
+      "export async function setJudgeMode(mode: string) {}\n" +
+      '// setJudgeMode("off") in a comment is not a call\n' +
+      'await runJudgeRoleCoverage("themis", tok, run);\n';
+    expect(judgeWriters(planted)).toEqual(["setJudgeMode", "runJudgeRoleCoverage"]);
+    expect(judgeWriters('// setJudgeMode("off")\n')).toEqual([]);
+  });
+
+  test("red control: a shadow POST to the judge-config route is caught", () => {
+    const planted =
+      "const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {\n" +
+      '  method: "POST",\n' +
+      '  body: JSON.stringify({ mode: "shadow", model }),\n' +
+      "});\n";
+    expect(shadowPosts(planted)).toHaveLength(1);
+    expect(/["']shadow["']/.test(codeOnly(planted))).toBe(true);
   });
 });
 

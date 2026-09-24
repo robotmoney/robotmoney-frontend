@@ -221,6 +221,9 @@ services:
       - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Docker restarts it after a crash or a daemon restart, like every other
+    # standing service (smoke spec §1): `bun smoke` is not what keeps it up.
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney}"]
       interval: 5s
@@ -324,20 +327,14 @@ services:
       # `AUTOMATION_TOKEN` above is the api's side of the credential
       # `system-scheduler` presents; the scheduler's own copy is a FILE, never
       # an env var (smoke-production spec §3).
-      # Consensus judge (issue #752). ITS ON/OFF SWITCH IS NOT HERE, and neither
-      # is WHICH MODEL it uses — both are columns on `swarm_judge_config`, set
-      # over POST /api/swarm/admin/judge without restarting anything. The model
-      # is a row rather than a `SWARM_JUDGE_MODEL` env var because D22 rule 1
-      # keeps model selection to one reviewable signal. What is left here is the
-      # shared OpenCode Zen credential (the member agents' existing key, not a
-      # second one), the endpoint, and the per-call bound. All blank by default.
-      # An unconfigured model no longer means template prose and a recorded
-      # reason (issue #969): `shadow`/`enforce` REQUIRE a model, and a judge
-      # that cannot be reached stops the judging rather than authoring prose
-      # under its own name and letting it reach a signed receipt.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # NO MODEL KEY (D52, smoke spec §6.2). `api` used to carry the shared
+      # OpenCode Zen key, the judge endpoint and its per-call bound, for an
+      # inline judge. Nothing in `api` judges any more: the judge is a
+      # participant, a standing container that takes its own model key from
+      # credential.json. A database-holding process holding a model key is the
+      # combination §7 forbids, so the three keys are gone, not blanked.
+      # scripts/tests/integration/no-docker-socket-compose-config.test.ts
+      # asserts no non-participant service in any composition carries one.
       # THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (R13, backend/src/swarm/
       # judge-fault-injection.ts). This service arms/disarms the row over
       # POST /api/swarm/admin/judge/fault-injection (swarm/admin.ts), and

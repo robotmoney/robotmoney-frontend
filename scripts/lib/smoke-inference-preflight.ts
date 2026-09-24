@@ -1,6 +1,6 @@
 // THE STANDING STACK MUST REACH A FUNDED MODEL OR NOT BOOT (AC-MODEL-01).
 //
-// `bun run smoke:stage` — the `--static-port` boot a tunnel points at — IS the
+// `bun smoke --static-port` — the boot a tunnel points at — IS the
 // staging deployment. On 2026-09-13 it had been running for weeks on
 // `AGENT_MODEL=free` (`nemotron-3-ultra-free`) with an EMPTY
 // `OPENCODE_API_KEY`: every analyst take and every judgement it produced was
@@ -11,7 +11,7 @@
 //   1. THE CREDENTIAL NEVER REACHED THE BOOT. Only
 //      scripts/lib/smoke-twin-rehearsal.ts read a key out of a file, and it
 //      reads `.env.readonly` alone — deliberately, because that command family
-//      is defined by not needing `.env`'s writer credential. `smoke:stage` has
+//      is defined by not needing `.env`'s writer credential. The standing boot has
 //      the opposite constraint: it ALREADY reads `.env` (that is where it finds
 //      DATABASE_URL), so `.env` is exactly where an operator correcting a stage
 //      host puts the key. It was put there, and the boot could not see it.

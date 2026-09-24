@@ -31,7 +31,6 @@
 // assertions changed with that.
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
-import { resolveAgentModel } from "../model-registry.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
 import { resolveSmokeCadence } from "../smoke-cadence.ts";
 import type { SmokeCadence } from "../smoke-cadence.ts";
@@ -522,8 +521,8 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
  * Set a subject's `epoch_duration_seconds` through the admin API — §2.3's only
  * supported route, and §8's stated way to make a test's lifecycle fast.
  *
- * VERSIONED, so the current version is read fresh immediately before the write,
- * exactly as `setMemberRole` does: the same subject row may be brand new on an
+ * VERSIONED, so the current version is read fresh immediately before the write:
+ * the same subject row may be brand new on an
  * ephemeral database or carry version bumps on a persistent twin. A no-op when
  * the stored duration already matches — this runs once per session, and a write
  * per session would publish a `subject.changed` event per session for a value
@@ -1334,216 +1333,6 @@ export async function runRegimeClassify(
   );
 }
 
-// ── Judge role + judge mode live-stack coverage (issue #845) ────────────────
-// `swarm_judge_config.mode` ships `off`, and nothing in `bun smoke` ever
-// granted the per-member `judge` role or flipped the switch — the
-// validator/judge flow (D42 / D42-amendment) had unit and DB-integration
-// coverage only, never a booted live stack. These two admin-route wrappers
-// let `main()` below grant the role and flip the mode for exactly one
-// session, then restore both.
-
-/**
- * Turn the judge ON for a twin boot, with a model that costs real money.
- *
- * WHY A BOOT STEP AND NOT AN OPERATOR ACTION. A twin restores production, and
- * production ships `swarm_judge_config.mode = 'off'` — so every twin boot came
- * up with the judge disabled, every session published unjudged, and the judge
- * path had no live coverage anywhere (issue #846 named exactly this). The twin
- * is the one environment where turning it on is free of consequence: the
- * database is a throwaway copy, and `enforce` there decides nothing real.
- *
- * ENFORCE, NOT SHADOW. A shadow judgement is deliberately withheld from the
- * session, and `publishConsensusReceipt()` refuses to publish a receipt for one
- * (`judgement_not_adopted`). Shadow would therefore exercise the judge and
- * still prove nothing about the artifact the judge exists to produce.
- *
- * REFUSES A KEYLESS MODEL. The point is to prove the judge against the model
- * production would use; a free model would make the receipt's provenance a
- * different claim than the one under test.
- */
-export async function enableTwinJudge(model: string, automationToken?: string): Promise<void> {
-  if (model.startsWith("free/") || model === "free") {
-    throw new Error(
-      `twin judge refuses a keyless model (${model}): a receipt authored by a free model does not evidence the paid judge. ` +
-        "Set AGENT_MODEL to a funded selector, or boot without --twin.",
-    );
-  }
-  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ mode: "enforce", model }),
-  });
-  if (!r.ok) {
-    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:enforce,model:${model}} -> ${r.status}: ${await r.text()}`);
-  }
-  console.log(`  judge: enforce, model=${model} — every session this boot is judged by a REAL model call (twin only)`);
-}
-
-/**
- * `POST /api/swarm/admin/judge` — the runtime switch (mode ∈ off|shadow|enforce).
- *
- * ENABLING IS ONE REQUEST, MODE AND MODEL TOGETHER (migration 0056). The
- * constraint is on the PAIR — `shadow`/`enforce` require a model — and the
- * shipped default is `off` with `model` NULL, so the obvious two-step
- * ("set the mode, then set the model") is refused by the database at step one.
- * That is exactly what turned the GitHub e2e red on `off -> shadow`: the test
- * updated only the mode, against a row whose model was still NULL.
- *
- * The guard below is deliberately a REFUSAL IN THIS PROCESS rather than a
- * fixed-up call site. Patching the one caller that went red would leave the
- * next one to rediscover it as a 400 from the admin route, or — worse, on a
- * restored twin whose model happens to be set — to pass locally and fail on a
- * fresh database. A caller that means to enable the judge knows which model it
- * wants; one that does not is not ready to enable it.
- */
-export async function setJudgeMode(
-  mode: "off" | "shadow" | "enforce",
-  automationToken?: string,
-  model?: string,
-): Promise<void> {
-  if (mode !== "off" && !model?.trim()) {
-    throw new Error(
-      `setJudgeMode(${mode}) needs the model in the SAME request: migration 0056 constrains the ` +
-        "mode/model pair, so enabling the judge against the shipped NULL model is refused by the " +
-        "database. Resolve the model first (setJudgeModel, or resolveAgentModel()) and pass it here. " +
-        'Only setJudgeMode("off") may omit it.',
-    );
-  }
-  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    // Mode + model atomically when enabling: two independent requests permit
-    // another actor (or a stale restored row) to expose an invalid pair.
-    body: JSON.stringify(model ? { mode, model } : { mode }),
-  });
-  if (!r.ok) {
-    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {mode:${mode}, model:${model}} -> ${r.status}: ${await r.text()}`);
-  }
-}
-
-/**
- * `POST /api/swarm/admin/members/:id/role` — versioned, so the current
- * version is read fresh off the admin roster immediately before the call
- * (issue #845: this must work whether the member row is brand new on an
- * ephemeral database or has accumulated version bumps on a persistent twin
- * one). No-ops if the member already holds `role`. The member must already be
- * `active` (`setMemberRoleAdmin` refuses otherwise) — every caller here
- * targets a member `enroll()` has already registered.
- */
-export async function setMemberRole(
-  memberId: string,
-  role: "member" | "judge",
-  automationToken?: string,
-): Promise<void> {
-  const membersRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.members}`, {
-    headers: getAutomationHeaders(automationToken),
-  });
-  if (!membersRes.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${membersRes.status}`);
-  const body = await responseJson<{ members?: Array<{ id?: string; version?: number; role?: string }> }>(membersRes);
-  const member = body.members?.find((m) => m.id === memberId);
-  if (!member) {
-    throw new Error(`setMemberRole: member ${memberId} not found on the admin roster — enroll it before setting a role`);
-  }
-  if (member.role === role) return; // already set — idempotent across re-runs
-  const p = routePath(ROUTES.swarm.admin.memberRole, { id: memberId });
-  const r = await fetch(`${backendUrl()}${p}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ expectedVersion: member.version, role }),
-  });
-  if (!r.ok) throw new Error(`POST ${p} {role:${role}} -> ${r.status}: ${await r.text()}`);
-}
-
-/**
- * `POST /api/swarm/admin/members/:id/update` — sets a member's `operator`
- * column (issue #922). No new admin capability: `updateMemberAdmin`
- * (backend/src/swarm/admin.ts) has taken `operator` in its patch since #593,
- * this just calls the existing versioned route the way `setMemberRole` calls
- * its own.
- *
- * WHY THIS, RATHER THAN FLIPPING `swarm_judge_config.thirdPartyEnabled`: the
- * smoke-local Themis persona is meant to exercise the SAME in-house exemption
- * path the real seeded Themis uses (roster-seed.ts stamps `operator:
- * "robotmoney"` on every in-house seat), not the third-party gate-open path —
- * those are different facts about how a judging was authorized, and #918's
- * whole point was that the in-house judge does not need the gate open at all.
- * `registerMember()` (the path every smoke/test persona enrolls through) never
- * sets `operator`, so without this call the persona would need
- * `thirdPartyEnabled: true` instead — a real, meaningfully different coverage
- * claim this issue does not want to make.
- */
-export async function setMemberOperator(
-  memberId: string,
-  operator: string,
-  automationToken?: string,
-): Promise<void> {
-  const membersRes = await fetch(`${backendUrl()}${ROUTES.swarm.admin.members}`, {
-    headers: getAutomationHeaders(automationToken),
-  });
-  if (!membersRes.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${membersRes.status}`);
-  const body = await responseJson<{ members?: Array<{ id?: string; version?: number; operator?: string | null }> }>(membersRes);
-  const member = body.members?.find((m) => m.id === memberId);
-  if (!member) {
-    throw new Error(`setMemberOperator: member ${memberId} not found on the admin roster — enroll it before setting its operator`);
-  }
-  if (member.operator === operator) return; // already set — idempotent across re-runs
-  const p = routePath(ROUTES.swarm.admin.memberUpdate, { id: memberId });
-  const r = await fetch(`${backendUrl()}${p}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ expectedVersion: member.version, operator }),
-  });
-  if (!r.ok) throw new Error(`POST ${p} {operator:${operator}} -> ${r.status}: ${await r.text()}`);
-}
-
-/**
- * The in-force judgement's `judgedByMemberId` for a session, read over the
- * SAME admin endpoint `countJudgements()` reads (issue #922) — proves who a
- * judgement named, not merely that one landed. Never throws: like
- * `countJudgements()`, a read failure returns `null` rather than turning a
- * flaky GET into a false negative on the identity assertion beside it.
- */
-export async function latestJudgedByMemberId(sessionId: string | number, automationToken?: string): Promise<string | null> {
-  try {
-    const r = await fetch(
-      `${backendUrl()}${routePath(ROUTES.swarm.admin.sessionJudgements, { id: String(sessionId) })}`,
-      { headers: getAutomationHeaders(automationToken) },
-    );
-    if (!r.ok) return null;
-    const body = await responseJson<{ inForce?: { judgedByMemberId?: string | null } | null }>(r);
-    return body.inForce?.judgedByMemberId ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * `POST /api/swarm/admin/judge` — seed the model the judge will actually run.
- *
- * WITHOUT THIS THE SMOKE PROVES NOTHING (issue #969). `swarm_judge_config.model`
- * ships NULL, and a twin restores production's row rather than a fresh one, so
- * every judged session on every smoke ran with no transport at all: judge()
- * returned template prose under `source: "fallback"` and the coverage below
- * still went green, because a fallback row lands, is attributed, and is
- * counted exactly like a real one.
- */
-export async function setJudgeModel(model: string, automationToken?: string): Promise<string> {
-  const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.judgeConfig}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAutomationHeaders(automationToken) },
-    body: JSON.stringify({ model }),
-  });
-  if (!r.ok) {
-    throw new Error(`POST ${ROUTES.swarm.admin.judgeConfig} {model:${model}} -> ${r.status}: ${await r.text()}`);
-  }
-  // RETURN WHAT WAS STORED, not what was asked for. The backend normalises the
-  // `opencode/` provider prefix off the registry id (normalizeJudgeModel), so a
-  // caller logging its own argument would name a model the judge will never
-  // send — the exact string Zen answers with 401 "is not supported".
-  const body = await responseJson<{ judge?: { model?: string | null } }>(r).catch(() => ({}) as { judge?: { model?: string | null } });
-  return body.judge?.model ?? model;
-}
-
 /** The in-force judgement's provenance: did a MODEL author it, or a template? */
 export async function latestJudgementProvenance(
   sessionId: string | number,
@@ -1562,118 +1351,6 @@ export async function latestJudgementProvenance(
     fallbackReason: body.inForce?.fallbackReason ?? null,
     model: body.inForce?.model ?? null,
   };
-}
-
-/**
- * Grants `memberId` the judge role, flips `swarm_judge_config.mode` to
- * `enforce`, runs `runJudgedSession` (expected to be a single `runSession`
- * call whose roster already treats `memberId` as absent — a judge-role member
- * cannot submit a take, so it must not be a participant of the session being
- * judged), asserts a real row landed in `swarm_session_judgements` for the
- * resulting session, then restores BOTH the mode and the role in `finally` —
- * shared by every `bun smoke` variant that wants this coverage (issue #845),
- * so the grant/flip/assert/restore sequence exists in exactly one place
- * rather than being re-derived per caller.
- *
- * Issue #922 adds a SECOND assertion alongside #845's row-count check: the
- * landed judgement's `judgedByMemberId` must equal `memberId` — the exact
- * member this call just granted the role to — not merely that some row
- * exists. That equality only holds when `memberId` is a member #918's
- * `judgeSessionAdmin` would actually resolve (handle `'themis'`) AND whose
- * `operator` column already reads `'robotmoney'` (the in-house exemption);
- * for any other `memberId` the row still lands (`off`-mode's unnamed judge
- * never disappears) but keeps naming `'robotmoney-in-house'`, and this
- * function will correctly report that as a mismatch rather than passing
- * vacuously.
- *
- * ENFORCE, NOT SHADOW — and that is a correction, not a widening of scope. This
- * used to flip to `shadow`, which no longer produces a judged session at all:
- * D48 forbids new shadow judgements, so `currentJudgeMode`
- * (backend/src/swarm/domain.ts) reduces a `shadow` switch to `off` when it
- * stamps the closing session, and the session would publish `not_judged` with
- * zero rows — failing the row-count assertion below for a reason that has
- * nothing to do with the judge. `enforce` is what D48 admits and what the twin
- * path (enableTwinJudge) already uses.
- */
-export async function runJudgeRoleCoverage(
-  memberId: string,
-  automationToken: string | undefined,
-  runJudgedSession: () => Promise<{ sessionId: string | number }>,
-): Promise<void> {
-  await setMemberRole(memberId, "judge", automationToken);
-  console.log(`  ${memberId}: granted judge role via ${ROUTES.swarm.admin.memberRole} (issue #845)`);
-  // SEED THE MODEL BEFORE THE MODE. Since #969 the backend refuses
-  // shadow/enforce while `model` is NULL, so this is no longer merely the
-  // difference between a real judging and a faked one — it is what makes the
-  // setJudgeMode() call below legal at all.
-  const selectedJudgeModel = resolveAgentModel();
-  const storedJudgeModel = await setJudgeModel(selectedJudgeModel, automationToken);
-  console.log(`  judge model: ${storedJudgeModel} (resolveAgentModel -> wire id, issue #969)`);
-  const shippedJudgeMode = await readJudgeMode(automationToken);
-  // `shadow` is deliberately NOT a restore target. If the row this smoke found
-  // said `shadow`, restoring it would put the deployment back on a setting that
-  // silently settles every session as `off` (D48); `off` is what that setting
-  // actually means to the lifecycle now, so that is what it is restored to.
-  const restoreJudgeMode: "off" | "enforce" = shippedJudgeMode === "enforce" ? "enforce" : "off";
-  await setJudgeMode("enforce", automationToken, selectedJudgeModel);
-  console.log(`  judge mode: ${shippedJudgeMode ?? "unreadable"} -> enforce for this session only (issue #845)`);
-  try {
-    const judged = await runJudgedSession();
-    // AC: assert a REAL judgement row landed in swarm_session_judgements —
-    // not just `judged: false` (issue #845). runJudgeStep inside runSession
-    // already requested judging and waited out either the consensus or the
-    // stored deadline because the session captured `enforce`; this reads the
-    // append-only record itself rather than trusting that wait's opinion.
-    const judgementCount = await countJudgements(judged.sessionId, automationToken);
-    if (!judgementCount || judgementCount < 1) {
-      throw new Error(
-        `session ${judged.sessionId}: judge mode=enforce but zero rows landed in swarm_session_judgements — ` +
-          "the judge/validator flow produced no live coverage (issue #845)",
-      );
-    }
-    console.log(
-      `  session ${judged.sessionId}: ${judgementCount} judgement row(s) recorded in swarm_session_judgements ` +
-        "(mode=enforce, issue #845)",
-    );
-    // AC: the row does not merely exist — it names the member this call just
-    // granted the role to (issue #922). Read over the same admin HTTP API
-    // countJudgements() used above, not raw SQL, so this stays a smoke-driver
-    // assertion rather than a second, DB-shaped copy of the admin projection.
-    const judgedByMemberId = await latestJudgedByMemberId(judged.sessionId, automationToken);
-    if (judgedByMemberId !== memberId) {
-      throw new Error(
-        `session ${judged.sessionId}: judgement named judgedByMemberId=${judgedByMemberId ?? "null"}, ` +
-          `expected the granted persona '${memberId}' — #918's handle-based resolution did not attribute ` +
-          "this judging to the member the role was granted to (issue #922)",
-      );
-    }
-    console.log(
-      `  session ${judged.sessionId}: judgedByMemberId=${judgedByMemberId} matches granted persona '${memberId}' (issue #922)`,
-    );
-    // AC: A MODEL AUTHORED IT (issue #969). The three assertions above — a row
-    // landed, it is attributed, it names the granted persona — are ALL true of
-    // a `source: "fallback"` row carrying template prose, which is how this
-    // coverage stayed green on every smoke and every twin while no judge had
-    // ever run. This is the one that could not pass without one.
-    const provenance = await latestJudgementProvenance(judged.sessionId, automationToken);
-    if (provenance.source !== "model") {
-      throw new Error(
-        `session ${judged.sessionId}: judgement source=${provenance.source ?? "null"}` +
-          `${provenance.fallbackReason ? ` (${provenance.fallbackReason})` : ""} — expected "model". ` +
-          "No judge authored this opinion; the smoke must not report coverage for a judging that did not happen (issue #969)",
-      );
-    }
-    console.log(
-      `  session ${judged.sessionId}: judgement authored by model=${provenance.model ?? "unknown"} (source=model, issue #969)`,
-    );
-  } finally {
-    // Restoring to `enforce` is an ENABLE like any other, so it carries the
-    // model too. Restoring to `off` must not: `off` with a model is legal,
-    // but the row this smoke found may legitimately have had none.
-    await setJudgeMode(restoreJudgeMode, automationToken, restoreJudgeMode === "off" ? undefined : storedJudgeModel);
-    await setMemberRole(memberId, "member", automationToken);
-    console.log(`  judge mode restored to ${restoreJudgeMode}; ${memberId} role restored to member (issue #845)`);
-  }
 }
 
 // The member-container rail (issue #361 Phase 2): every present member runs in
@@ -2127,40 +1804,13 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // ── Judge role + judge mode live-stack coverage (issues #845, #922) ───────
-  // Session 1 above ran with the shipped `off` default untouched — that
-  // matters, because `off` is the one behavior existing smoke assertions may
-  // already be relying on. Session 2 is where this coverage lives:
-  // runJudgeRoleCoverage grants `themis` (already enrolled as session 1's
-  // designed no-show — see DEMO_MEMBERS/absent handling in runSession, and
-  // contract's DEMO_NO_SHOWS — so granting it the judge role touches no
-  // take-submission path at all) the `judge` role via the admin route, flips
-  // `swarm_judge_config.mode` off -> `enforce` for exactly this session,
-  // asserts a real judgement row landed AND that it names `themis`'s own
-  // member id, then restores the role in `finally` so it does not leak into
-  // anything that runs after this file's main() — including a persistent
-  // `--db smoke-twin` database across repeated runs.
-  //
-  // `themis`, specifically — not just any role=judge member (issue #922).
-  // judgeSessionAdmin (backend/src/swarm/admin.ts) resolves its judgeMemberId
-  // by looking up the swarm_members row whose HANDLE is 'themis', unconditionally
-  // — granting some OTHER member the judge role (this used to be `draco`,
-  // #845's original target) still produces a judgement row (the unnamed
-  // in-house judge never disappears once the mode is `enforce`), but that row keeps naming the
-  // anonymous 'robotmoney-in-house' default, because nothing in that path
-  // ever looks at WHICH member holds role=judge. Only a member literally
-  // handled 'themis' engages #918's attribution wiring at all.
-  //
-  // operator='robotmoney' FIRST, unconditionally, before the role grant: this
-  // is what exempts her from #796/#918's third-party gate (judge-session.ts's
-  // `member.operator !== "robotmoney"` check) the same way the real seeded
-  // Themis (roster-seed.ts) is exempt, rather than needing
-  // swarm_judge_config.thirdPartyEnabled flipped for this run. See
-  // setMemberOperator's own comment for why that -- not the flag -- is this
-  // persona's path. Not restored in `finally`: it is themis's permanent,
-  // in-house identity, exactly like the real seeded Themis's row, not a
-  // temporary flip the way the role grant and judge mode are.
-  await setMemberOperator("themis", "robotmoney", rail.automationToken);
+  // NO JUDGE COVERAGE HERE (issue #1026, D48/D53). This used to grant `themis`
+  // the judge role and flip `swarm_judge_config.mode` to `enforce` around
+  // session 2, then assert a model-authored judgement landed. Nothing on a
+  // booted stack judges inline any more — the judge is a participant (smoke
+  // spec §6.2) — so that assertion could not pass, and the flip itself was the
+  // one place a driver wrote judge mode at all. Judge coverage returns with
+  // the participant judge.
   //
   // Session 2: a SECOND sitting, different subject (smokenstrates rotation +
   // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
@@ -2173,8 +1823,7 @@ async function main() {
   // 0022 the DATABASE dates a session, so two sittings on one day are simply two
   // rows with different convened_at rather than one row relabelled to a day that
   // has not happened. The rotation this proves is the real one.
-  await runJudgeRoleCoverage("themis", rail.automationToken, () =>
-    runSession(subjects[1], 2, { rail, members, initializer: "simulation", cadence }));
+  await runSession(subjects[1], 2, { rail, members, initializer: "simulation", cadence });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`).then((r) => r.json());

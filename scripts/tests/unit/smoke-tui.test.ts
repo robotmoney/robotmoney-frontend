@@ -19,9 +19,9 @@
 // re-acquiring the deployment) and "Receipt read by `smoke:status`", whose
 // reading path — receipt when present, journal when not (§1.4) — this shares.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { instancePaths, type InstancePaths } from "./../../lib/smoke-state.ts";
 import {
   computePlanId,
@@ -311,5 +311,99 @@ describe("renderFrame — §1, the source label and the redaction promise", () =
     for (const line of renderFrame(frame, 60).split("\n")) {
       expect(line.length).toBeLessThanOrEqual(60);
     }
+  });
+});
+
+// ── `bun smoke` draws nothing and imports no TUI module (criterion 26) ─────────
+//
+// Spec §1: "`bun smoke` never draws a TUI". Observing is this command's job and
+// `smoke:status`'s; the boot itself must not carry a renderer at all, on a TTY
+// or off it. The proof is structural: walk every relative import (static AND
+// dynamic) reachable from the `bun smoke` entry point and assert that no TUI
+// module is among them. The TUI modules are the alternate-screen driver
+// (tui.ts), the panes it painted (smoke-tui-view.ts) and this observer.
+const repoRoot = join(import.meta.dir, "..", "..", "..");
+const TUI_MODULES = ["scripts/lib/tui.ts", "scripts/lib/smoke-tui-view.ts", "scripts/smoke-tui.ts"];
+
+/**
+ * The modules a file loads through `import(join(repoRoot, "a", "b.ts"))`: a
+ * computed path the transpiler cannot see, which smoke-main.ts uses to load the
+ * session driver after BACKEND_URL is set. Read off the source so a new one is
+ * followed without editing this test.
+ */
+function computedImports(src: string): string[] {
+  return [...src.matchAll(/import\(join\(repoRoot,((?:\s*"[^"]+",?)+)\)\)/g)].map((m) =>
+    join(repoRoot, ...[...m[1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!)),
+  );
+}
+
+/** Every file reachable from `entry` through relative, absolute or computed imports, repo-relative. */
+function importGraph(entry: string): Map<string, string> {
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  const via = new Map<string, string>([[entry, "(entry)"]]);
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    // A shebang is not TypeScript; the transpiler refuses it, so it is dropped.
+    const src = readFileSync(file, "utf8").replace(/^#!.*\n/, "");
+    const paths = transpiler.scanImports(src).map((imp) => imp.path).filter((p) => p.startsWith(".") || isAbsolute(p));
+    for (const target of [...paths.map((p) => resolve(dirname(file), p)), ...computedImports(src)]) {
+      if (via.has(target) || !existsSync(target)) continue;
+      via.set(target, file);
+      queue.push(target);
+    }
+  }
+  return new Map([...via].map(([f, from]) => [relative(repoRoot, f), from === "(entry)" ? from : relative(repoRoot, from)]));
+}
+
+function tuiModulesIn(graph: Map<string, string>): string[] {
+  return TUI_MODULES.filter((m) => graph.has(m)).map((m) => `${m} (imported by ${graph.get(m)})`);
+}
+
+describe("`bun smoke` imports no TUI module and draws nothing (spec §1, criterion 26)", () => {
+  const graph = importGraph(join(repoRoot, "scripts", "smoke.ts"));
+
+  test("the walk is not vacuous: it reaches the boot and what the boot drives", () => {
+    for (const f of ["scripts/lib/smoke-main.ts", "scripts/lib/smoke-db-mode.ts", "scripts/lib/smoke-failure.ts", "scripts/lib/swarm/session.ts"]) {
+      expect({ f, reached: graph.has(f) }).toEqual({ f, reached: true });
+    }
+  });
+
+  test("no TUI module is reachable from scripts/smoke.ts, statically or through a dynamic import", () => {
+    expect(tuiModulesIn(graph)).toEqual([]);
+  });
+
+  test("smoke-main.ts holds no renderer of its own: no alternate screen, no TTY branch, no redraw loop", () => {
+    const src = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
+    for (const marker of ["?1049h", "createTui", "isTTY", "repaint(", "NO_TUI", "--no-tui\""]) {
+      expect({ marker, present: src.includes(marker) }).toEqual({ marker, present: false });
+    }
+  });
+
+  test("red control: a module that imports tui.ts two hops away IS caught, and named", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-tui-graph-"));
+    writeFileSync(join(dir, "entry.ts"), 'import "./middle.ts";\n');
+    writeFileSync(join(dir, "middle.ts"), `import { color } from ${JSON.stringify(join(repoRoot, "scripts", "lib", "tui.ts"))};\nexport const c = color;\n`);
+    const planted = tuiModulesIn(importGraph(join(dir, "entry.ts")));
+    expect(planted).toHaveLength(1);
+    expect(planted[0]).toStartWith("scripts/lib/tui.ts (imported by ");
+    expect(planted[0]).toContain("middle.ts");
+  });
+
+  test("red control: a dynamic import is followed too", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-tui-graph-"));
+    writeFileSync(join(dir, "entry.ts"), `await import(${JSON.stringify(join(repoRoot, "scripts", "smoke-tui.ts"))});\n`);
+    expect(tuiModulesIn(importGraph(join(dir, "entry.ts")))[0]).toStartWith("scripts/smoke-tui.ts");
+  });
+
+  test("`smoke:tui` is its own package script, run without the checkout's .env", () => {
+    const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(pkg.scripts["smoke:tui"]).toBe("bun --no-env-file scripts/smoke-tui.ts");
+  });
+
+  test("this observer is no longer a stub: its header says it is wired", () => {
+    const src = readFileSync(join(repoRoot, "scripts", "smoke-tui.ts"), "utf8");
+    expect(src.slice(0, 600)).not.toContain("STUB");
+    expect(src.slice(0, 600)).toContain("package.json");
   });
 });

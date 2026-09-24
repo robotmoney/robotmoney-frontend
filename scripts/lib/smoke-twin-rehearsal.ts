@@ -78,8 +78,10 @@ interface SmokeState {
    * like a content regression.
    */
   webPort?: number;
-  /** Written only by a `--db smoke-twin` boot — see smoke-main.ts's writeStateFile(). */
+  /** Written only by a `--local dump` boot — see smoke-main.ts's writeStateFile(). */
   smokeTwinContainer?: string;
+  /** When the boot wrote the file; a file older than this rehearsal's boot is a previous run's. */
+  createdAt?: string;
 }
 
 async function spawn(
@@ -221,14 +223,17 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     return 2;
   }
 
-  // Compose project names must be lowercase alphanumeric/hyphen/underscore.
-  const project = `rm_smoke_rehearsal_${opts.name.toLowerCase().replace(/[^a-z0-9_]+/g, "_")}`;
+  // The compose project is NOT chosen here. It used to be pinned through
+  // SMOKE_PROJECT, which spec §1 retires with no alias: the boot names its own
+  // project from its environment, and this rehearsal learns it from the state
+  // file the boot writes (the first one written after the boot started).
+  let project: string | null = null;
   let bootProc: Bun.Subprocess | null = null;
+  const bootStartedAt = Date.now();
 
   try {
-    const args = ["bun", "scripts/smoke.ts", "--twin", "--no-tui"];
-    if (opts.backupDir) args.push("--backup-dir", opts.backupDir);
-    log(`booting: ${args.slice(1).join(" ")}  (project=${project}, this can take several minutes)`);
+    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump"];
+    log(`booting: ${args.slice(2).join(" ")}  (this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
     // CI is STRIPPED: this must be the boot a cutover runs, and a truthy CI
@@ -239,7 +244,6 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       cwd: repoRoot,
       env: {
         ...envWithoutCi,
-        SMOKE_PROJECT: project,
         OPENCODE_API_KEY: zen.key,
         // A REHEARSAL migrates the way a cutover does: as a non-superuser
         // bootstrap login, not as the twin container's superuser. Without this
@@ -278,7 +282,9 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       if (existsSync(stateFile)) {
         try {
           const state = JSON.parse(readFileSync(stateFile, "utf8")) as SmokeState;
-          if (state?.apiPort && state.project === project) {
+          const fresh = state?.createdAt !== undefined && Date.parse(state.createdAt) >= bootStartedAt;
+          if (state?.apiPort && fresh) {
+            project = state.project;
             const health = await fetch(`http://127.0.0.1:${state.apiPort}/health`).catch(() => null);
             if (health?.ok) {
               ready = state;
@@ -463,12 +469,10 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       }
     }
 
-    // 2. SMOKE_PROJECT explicitly: smoke-down resolves the project from state, and
-    //    this still has to work when the boot died before writing it. smoke-down
-    //    also removes the smoke-twin CONTAINER, which is why nothing here does.
-    await spawn(["bun", "scripts/smoke-down.ts"], {
-      env: { ...process.env, SMOKE_PROJECT: project },
-    }).catch(() => {});
+    // 2. smoke-down resolves the project from the state file the boot wrote
+    //    (on success, or best-effort on a failed boot). It also removes the
+    //    dump's CONTAINER, which is why nothing here does.
+    await spawn(["bun", "--no-env-file", "scripts/smoke-down.ts"], {}).catch(() => {});
 
     // 3. smoke-down deliberately KEEPS volumes — including the smoke-twin's, whose
     //    contract is that it survives teardown. For a REHEARSAL they are pure
@@ -476,14 +480,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     //    data derived from production. Scoped to this run's project, never a
     //    bare smoke:clean, which is host-wide.
     try {
+      if (!project) throw new Error("the boot never recorded its project; no volume to scope a cleanup to");
       const ls = Bun.spawnSync(["docker", "volume", "ls", "-q", "--filter", `name=${project}`]);
       const vols = new TextDecoder().decode(ls.stdout).split("\n").map((v) => v.trim()).filter(Boolean);
       if (vols.length) {
         Bun.spawnSync(["docker", "volume", "rm", ...vols]);
         log(`removed ${vols.length} leftover volume(s) holding production-derived data`);
       }
-    } catch {
-      /* best effort */
+    } catch (e) {
+      // Best effort, but never silent: a skipped cleanup leaves production data on disk.
+      err(`volume cleanup skipped: ${e instanceof Error ? e.message : String(e)} — reclaim with bun run smoke:clean`);
     }
   }
 }

@@ -540,9 +540,9 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       /resolveSmokeCadenceForBoot\(\{\s*stage: stageCadenceApplies\(staticPortMode, twinBoot\),\s*cadence: parsed\.cadence,?\s*\}\)/,
     );
     expect(smokeMain).not.toMatch(/=\s*resolveSmokeCadence\(/);
-    // The stage argument is DERIVED, not the raw flag: a twin wears the same
+    // The stage argument is DERIVED, not the raw flag: a dump wears the same
     // `--static-port` pin and must still run FAST (stageCadenceApplies).
-    expect(smokeMain).toContain("const twinBoot = requestsTwin(process.argv);");
+    expect(smokeMain).toContain("const twinBoot = requestsDump(process.argv);");
   });
 
   test("the smoke overlay pins NO scheduling switch, because there is none to pin", () => {

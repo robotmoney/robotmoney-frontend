@@ -110,6 +110,53 @@ describe("documented commands exist", () => {
   });
 });
 
+// Spec §1 retires `smoke:archive` and `smoke:stage` "with no alias" (criterion
+// 5). A document naming either is caught above, because no manifest defines
+// them; this block pins the manifest half directly, so re-adding either key —
+// even with no document pointing at it yet — goes red on its own.
+const RETIRED_SCRIPTS = ["smoke:archive", "smoke:stage"];
+
+/** Retired script keys a set of manifests (path → parsed JSON) still defines. */
+function retiredScriptKeys(manifests: Record<string, { scripts?: Record<string, string> }>): string[] {
+  return Object.entries(manifests).flatMap(([path, json]) =>
+    RETIRED_SCRIPTS.filter((name) => name in (json.scripts ?? {})).map((name) => `${path}: ${name}`),
+  );
+}
+
+describe("retired smoke scripts are defined by no manifest (spec §1)", () => {
+  const manifests = Object.fromEntries(
+    MANIFESTS.filter((m) => existsSync(join(repoRoot, m))).map((m) => [m, JSON.parse(readFileSync(join(repoRoot, m), "utf8"))]),
+  );
+
+  test("the scan reads the real root manifest, which defines `smoke`", () => {
+    expect(Object.keys(manifests)).toContain("package.json");
+    expect(Object.keys(manifests["package.json"].scripts ?? {})).toContain("smoke");
+  });
+
+  test("no manifest defines smoke:archive or smoke:stage", () => {
+    expect(retiredScriptKeys(manifests)).toEqual([]);
+  });
+
+  test("the file the retired smoke:stage key ran is gone too", () => {
+    expect(existsSync(join(repoRoot, "scripts", "smoke-stage.ts"))).toBe(false);
+  });
+
+  test("no CURRENT document tells an operator to `bun run` either name", () => {
+    for (const file of CURRENT) {
+      const named = referencedScripts(readFileSync(join(repoRoot, file), "utf8")).filter((n) => RETIRED_SCRIPTS.includes(n));
+      expect({ file, named }).toEqual({ file, named: [] });
+    }
+  });
+
+  test("red control: a manifest that re-adds either key is caught, naming the file", () => {
+    const planted = {
+      "package.json": { scripts: { smoke: "bun scripts/smoke.ts", "smoke:stage": "bun scripts/smoke-stage.ts" } },
+      "backend/package.json": { scripts: { "smoke:archive": "bun x" } },
+    };
+    expect(retiredScriptKeys(planted)).toEqual(["package.json: smoke:stage", "backend/package.json: smoke:archive"]);
+  });
+});
+
 describe("script names are invocable as written", () => {
   // `"smoke:twin --once"` was a real key: `bun run smoke:twin --once` does NOT
   // reach it (bun runs `smoke:twin` and passes `--once`, which smoke-twin.ts

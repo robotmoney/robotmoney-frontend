@@ -1,7 +1,7 @@
 // Unit specification for scripts/lib/smoke-env-policy.ts — the `RM_ENV` policy
 // value (§4.1), the full policy × identity matrix (§4.3), and the
-// `--allow-insecure` / `--schedules-off` refusals (§4.4) of
-// docs/technical/smoke-production-spec.md.
+// `--allow-insecure` refusal (§4.4) of docs/technical/smoke-production-spec.md,
+// and how a `--local` data path reaches the matrix (§3, §5).
 //
 // TDD RED PHASE (issue #1026, W1 step 2). Every function under test currently
 // throws `NOT IMPLEMENTED`, so every test here fails today BY DESIGN. Each one
@@ -32,6 +32,10 @@ import {
   type TargetConnection,
 } from "../../lib/smoke-env-policy.ts";
 import type { DeploymentIdentityKind } from "../../lib/smoke-identity.ts";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseDataPath, targetConnection } from "../../smoke.ts";
 
 /** Every identity value the matrix distinguishes, including the two non-kinds. */
 type Identity = DeploymentIdentityKind | null | "unreadable";
@@ -237,47 +241,90 @@ describe("resolveDeploymentPolicy — §4.3 row: other × any × any refuses", (
   }
 });
 
-describe("refuseWeakeningFlagsOnProd — §4.4, the former overlay knobs are refusals under prod", () => {
+describe("refuseWeakeningFlagsOnProd — §4.4, the one surviving overlay knob is a refusal under prod", () => {
   test("`--allow-insecure` under prod refuses, naming the flag", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true, schedulesOff: false });
+    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true });
     expect(result.allow).toBe(false);
     if (result.allow) throw new Error("expected a refusal");
     expect(result.reason).toContain("--allow-insecure");
   });
 
-  test("`--schedules-off` under prod refuses, naming the flag", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: false, schedulesOff: true });
-    expect(result.allow).toBe(false);
-    if (result.allow) throw new Error("expected a refusal");
-    expect(result.reason).toContain("--schedules-off");
-  });
-
   test("the refusal states that parity with production is a tested property, not an overlay", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true, schedulesOff: false });
+    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true });
     expect(result.allow).toBe(false);
     if (result.allow) throw new Error("expected a refusal");
     expect(result.reason.toLowerCase()).toContain("parity");
   });
 
-  test("both flags together under prod refuse and the reason names both", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true, schedulesOff: true });
-    expect(result.allow).toBe(false);
+  test("no flag under prod allows — a production boot is not weakened by default", () => {
+    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: false })).toEqual({ allow: true });
+  });
+
+  test("`--allow-insecure` under stage allows: stage is where the weakening is legitimate", () => {
+    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true })).toEqual({ allow: true });
+  });
+
+  test("the check does not consult the target: the flag is refused on prod whatever the database says", () => {
+    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: true }).allow).toBe(false);
+    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true }).allow).toBe(true);
+  });
+
+  test("there is no `--schedules-off` to guard: §4.4 says scheduling has no off state", () => {
+    // The guard used to take a `schedulesOff` flag and name it in the refusal,
+    // which read as evidence the flag exists. Its input type no longer has one.
+    const flags: Parameters<typeof refuseWeakeningFlagsOnProd>[1] = { allowInsecure: true };
+    expect(Object.keys(flags)).toEqual(["allowInsecure"]);
+    const result = refuseWeakeningFlagsOnProd("prod", flags);
     if (result.allow) throw new Error("expected a refusal");
-    expect(result.reason).toContain("--allow-insecure");
-    expect(result.reason).toContain("--schedules-off");
+    expect(result.reason).not.toContain("schedules");
+  });
+});
+
+// §3: "Args override env: any `--local` mode makes smoke ignore every remote
+// connection value." Proven against the real parser, with a `$HOME/.env` that
+// names a remote production-shaped host. A local mode must resolve to the local
+// container, reach the matrix as a local connection, and carry no remote
+// address anywhere a later step could dial.
+describe("a --local mode ignores a remote host in ~/.env (criterion 32)", () => {
+  const REMOTE_HOST = "db-rm-app-x.do-user-12345-0.b.db.ondigitalocean.com";
+  const homeEnv = join(mkdtempSync(join(tmpdir(), "rm-policy-home-")), ".env");
+  writeFileSync(homeEnv, `host = ${REMOTE_HOST}\nport = 25060\ndatabase = defaultdb\nsslmode = require\nrm_app = s3cret-remote\n`);
+  const argv = (...flags: string[]) => ["bun", "scripts/smoke.ts", ...flags];
+
+  test("red control: with no --local flag the same file DOES resolve to the remote host", () => {
+    const { dataPath } = parseDataPath(argv(), { envFilePath: homeEnv });
+    expect(dataPath.kind).toBe("external");
+    expect(targetConnection(dataPath)).toBe("remote");
+    expect(JSON.stringify(dataPath)).toContain(REMOTE_HOST);
   });
 
-  test("neither flag under prod allows — a production boot is not weakened by default", () => {
-    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: false, schedulesOff: false })).toEqual({ allow: true });
+  test.each([
+    [["--local", "blank"], "local-blank"],
+    [["--local", "dump"], "local-dump"],
+    [["--local", "volume=rm_smoke_stack_prev_pgdata"], "local-volume"],
+    [["--local=volume"], "local-volume"],
+  ] as const)("%j resolves to the local container as %s, with no remote address", (flags, connection) => {
+    const { dataPath } = parseDataPath(argv(...flags), { envFilePath: homeEnv });
+    expect(dataPath.kind).not.toBe("external");
+    expect(targetConnection(dataPath)).toBe(connection);
+    const serialized = JSON.stringify(dataPath);
+    expect(serialized).not.toContain(REMOTE_HOST);
+    expect(serialized).not.toContain("s3cret-remote");
+    expect(serialized).not.toContain("25060");
   });
 
-  test("both flags under stage allow: stage is where the weakening is legitimate", () => {
-    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true, schedulesOff: true })).toEqual({ allow: true });
+  test("a local mode never even reads the file: an unreadable ~/.env cannot fail it", () => {
+    const missing = join(tmpdir(), "rm-policy-absent", ".env");
+    expect(() => parseDataPath(argv(), { envFilePath: missing })).toThrow();
+    for (const mode of ["blank", "dump", "volume"]) {
+      expect(parseDataPath(argv("--local", mode), { envFilePath: missing }).dataPath.kind).not.toBe("external");
+    }
   });
 
-  test("the check does not consult the target: the flags are refused on prod whatever the database says", () => {
-    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: true, schedulesOff: false }).allow).toBe(false);
-    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true, schedulesOff: false }).allow).toBe(true);
+  test("the matrix then treats it as local: unset RM_ENV warns and proceeds as stage (§4.3 row 10)", () => {
+    const { dataPath } = parseDataPath(argv("--local", "blank"), { envFilePath: homeEnv });
+    const verdict = resolveDeploymentPolicy({ rmEnv: undefined, connection: targetConnection(dataPath), identity: "rehearsal" });
+    expect(verdict).toEqual({ allow: true, env: "stage", posture: "stage", warnings: ["RM_ENV not set, running as stage"] });
   });
 });
 

@@ -1,4 +1,5 @@
 import type { DbMode } from "./smoke-db-mode.ts";
+import { DOCKER_CLIENT_ENV_ALLOWLIST } from "../stack/config.ts";
 
 /**
  * Which data path wrote this state file.
@@ -29,17 +30,22 @@ export interface SmokeLifecycleState {
  * Rebuild the Compose environment for status/down without requiring producer
  * secret material. Those commands never launch the producer; Compose's
  * parse-only /dev/null secret source is sufficient even after cleanup.
+ *
+ * NOT the host environment. Only the docker-client plumbing on the stack's own
+ * allowlist (scripts/stack/config.ts) survives from `hostEnv`; every value
+ * compose interpolates comes from the state file. It used to spread the whole
+ * of `hostEnv`, so an exported (or bun auto-loaded) DATABASE_URL, token or
+ * project name could steer a teardown (criterion 122).
  */
 export function buildSmokeLifecycleComposeEnv(
   state: SmokeLifecycleState,
   hostEnv: Record<string, string | undefined>,
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(hostEnv)) {
+  for (const key of DOCKER_CLIENT_ENV_ALLOWLIST) {
+    const value = hostEnv[key];
     if (value !== undefined) env[key] = value;
   }
-  delete env.ANALYTICS_TOKEN_FILE_HOST;
-  delete env.ANALYTICS_TOKEN;
   return {
     ...env,
     COMPOSE_PROJECT_NAME: state.project,

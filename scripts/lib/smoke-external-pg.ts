@@ -245,24 +245,10 @@ export function externalPgOverlayYaml(redactedUrl: string): string {
  * operator asked for the managed one would be the worst possible outcome — the
  * smoke would look healthy while writing to nothing that persists.
  */
-/**
- * Is a managed Postgres CONFIGURED in `.env`? Answers the question without
- * requiring the flag, and without throwing — used by `bun run smoke:stage`, which
- * chooses a data path rather than being told one.
- *
- * Deliberately separate from resolveExternalPg: that function's contract is
- * "the operator asked for external Postgres, so a broken .env is a FATAL
- * misconfiguration". Here an absent or unusable .env is simply a "no", because
- * nobody asked for anything yet. A wrapper that used the throwing version to
- * probe would turn "you have no .env" into a failed boot.
- */
-export function detectEnvPostgres(envFilePath: string): ExternalPgResolution {
-  try {
-    return resolveExternalPg(["--db", "external"], { envFilePath });
-  } catch {
-    return { enabled: false };
-  }
-}
+// NO NON-THROWING PROBE. `detectEnvPostgres()` answered "is a managed Postgres
+// configured?" for `bun run smoke:stage`, which chose a data path by sniffing
+// `.env`. That wrapper is retired (smoke spec §1), and every boot now states
+// its data path: no flag is the remote database, `--local <mode>` is local.
 
 export function resolveExternalPg(
   argv: string[],

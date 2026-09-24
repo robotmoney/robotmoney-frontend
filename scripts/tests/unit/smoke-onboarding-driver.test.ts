@@ -138,7 +138,9 @@ describe("the smoke's onboarding driver (scripts/lib/smoke-main.ts)", () => {
   test("the extracted driver body is the real one — not an empty or truncated slice", () => {
     expect(body.length).toBeGreaterThan(500);
     expect(body).toContain("plannedNewcomer(n)");
-    expect(body).toContain("startOnboarding(");
+    // Was `startOnboarding(`, a TUI pane call; `bun smoke` draws no TUI now
+    // (issue #1026), so the anchor is the driver's own launch line instead.
+    expect(body).toContain("launching the member-agent container");
   });
 
   test("it rides runOnboardingEvalWithRetry — a refusal can no longer forfeit a roster seat", () => {

@@ -4,14 +4,16 @@
 // and refuses to make differently:
 //   - --static-port ALWAYS, because this is the boot cloudflared points at, and
 //     a smoke-twin on a Docker-assigned port serves the tunnel a 502;
-//   - --smoke ALWAYS, because --db smoke-twin requires it (a restored database is
-//     populated and the smoke fixtures overwrite by design);
+//   - `--local dump` ALWAYS, because a twin is a restored production copy (spec
+//     §5), and never a retired spelling (`--smoke`, `--db`, `--backup-dir`,
+//     `--no-tui`) that the boot now refuses by name;
 //   - --cadence fast ALWAYS, because a twin is a TEST boot — production-shaped
 //     data run at the short ~2-min test cadence, never the 6 h production cadence
 //     the port pin alone would select;
 //   - capture unless --reuse, because "the latest dump" is the whole point.
 import { describe, expect, test } from "bun:test";
 import { planTwin } from "../../smoke-twin.ts";
+import { RETIRED_FLAGS, validateArgv } from "../../smoke.ts";
 import { resolveZenKey, READONLY_ENV_FILE } from "../../lib/smoke-twin-rehearsal.ts";
 
 const plan = (...a: string[]) => {
@@ -30,41 +32,42 @@ describe("planTwin — the decisions it will not let you skip", () => {
   });
 
   test("ALWAYS pins the host port — this is the tunnel's boot", () => {
-    for (const argv of [[], ["--reuse"], ["--no-tui"]]) {
+    for (const argv of [[], ["--reuse"]]) {
       expect(plan(...argv).args).toContain("--static-port");
     }
   });
 
-  test("ALWAYS boots the archive scenario — --db smoke-twin requires --smoke", () => {
-    expect(plan().args).toContain("--smoke");
-    expect(plan().args.join(" ")).toContain("--db smoke-twin");
+  test("ALWAYS boots a local dump, and hands the boot no retired flag", () => {
+    expect(plan().args.join(" ")).toContain("--local dump");
+
+    for (const argv of [[], ["--reuse"], ["--backup-dir", "/srv/b"]]) {
+      for (const r of RETIRED_FLAGS) expect({ argv, flag: r.flag, in: plan(...argv).args.includes(r.flag) }).toEqual({ argv, flag: r.flag, in: false });
+    }
   });
 
   test("ALWAYS runs the short TEST cadence — --cadence fast, never the 6 h profile", () => {
-    for (const argv of [[], ["--reuse"], ["--no-tui"]]) {
+    for (const argv of [[], ["--reuse"]]) {
       const p = plan(...argv);
       expect(p.args.join(" ")).toContain("--cadence fast");
       expect(p.args.join(" ")).not.toContain("--cadence realistic");
     }
   });
 
-  test("--backup-dir is forwarded to the boot", () => {
+  test("--backup-dir is forwarded to the boot as the dump's directory", () => {
     const p = plan("--backup-dir", "/srv/b");
     expect(p.backupDir).toBe("/srv/b");
-    expect(p.args.join(" ")).toContain("--backup-dir /srv/b");
+    expect(p.args).toEqual(["--local", "dump=/srv/b", "--static-port", "--cadence", "fast"]);
   });
 
-  test("--no-tui passes through; nothing else is invented", () => {
-    expect(plan("--no-tui").args).toEqual([
-      "--smoke",
-      "--db",
-      "smoke-twin",
-      "--static-port",
-      "--cadence",
-      "fast",
-      "--no-tui",
-    ]);
-    expect(plan().args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--cadence", "fast"]);
+  test("nothing else is invented", () => {
+    expect(plan().args).toEqual(["--local", "dump", "--static-port", "--cadence", "fast"]);
+  });
+
+  test("the plan the wrapper hands the boot passes the boot's own validator", () => {
+
+    for (const argv of [[], ["--backup-dir", "/srv/b"]]) {
+      expect(validateArgv(["bun", "scripts/smoke.ts", ...plan(...argv).args])).toEqual([]);
+    }
   });
 });
 
@@ -81,6 +84,12 @@ describe("planTwin — refusals", () => {
 
   test("a positional argument is refused", () => {
     expect(planTwin(["now"])).toEqual({ error: 'unexpected argument "now".' });
+  });
+
+  test("--no-tui is refused: there is no TUI to turn off (spec §1)", () => {
+    expect(planTwin(["--no-tui"])).toEqual({
+      error: expect.stringContaining('unknown flag "--no-tui"') as unknown as string,
+    });
   });
 });
 

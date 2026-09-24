@@ -207,7 +207,7 @@ const REALISTIC: SmokeCadence = {
  * every session spends real inference for every seated member plus (once the
  * judge is configured) one judge call. On a twin seating the whole restored
  * roster that is a continuous spend, not a trickle. It is the price of a test
- * instrument that answers in minutes; `bun run smoke:stage` is the standing
+ * instrument that answers in minutes; `bun smoke --static-port` is the standing
  * public smoke and keeps the six-hour grid.
  */
 export function stageCadenceApplies(staticPort: boolean, twin: boolean): boolean {
