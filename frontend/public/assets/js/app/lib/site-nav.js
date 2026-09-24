@@ -12,7 +12,7 @@
 
 /** @type {Array<{ key: string, prefixes: string[] }>} */
 export const NAV_SECTIONS = [
-  { key: "vaults", prefixes: ["/vault", "/allocation", "/performance", "/swarm/subjects/robotmoney-vault"] },
+  { key: "vaults", prefixes: ["/vault", "/allocation", "/swarm/subjects/robotmoney-vault"] },
   { key: "swarm", prefixes: ["/swarm", "/committee"] },
   {
     key: "research",
@@ -20,7 +20,7 @@ export const NAV_SECTIONS = [
   },
   { key: "token", prefixes: ["/tokenomics"] },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
-  { key: "about", prefixes: ["/media"] },
+  { key: "about", prefixes: ["/media", "/performance"] },
 ];
 
 /** @param {string} pathname */

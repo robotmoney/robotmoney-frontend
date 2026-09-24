@@ -121,6 +121,8 @@
   letter-spacing: 0.14em;
   color: var(--color-text-muted);
 }
+/* A second section stacked in the same column (the Vaults card's Allocation). */
+.nav__list + .nav__label { margin-top: 1.25rem; }
 .nav__item {
   display: flex;
   align-items: baseline;
@@ -238,7 +240,7 @@
   .nav__top .nav__underline { display: none; }
   .nav__card { padding-top: 0.5rem; }
   .nav__label { display: none; }
-  .nav__col + .nav__col { margin-top: 0.5rem; }
+  .nav__col + .nav__col, .nav__col > .nav__list ~ .nav__list { margin-top: 0.5rem; }
   .nav__item { min-height: 2.75rem; align-items: center; margin-inline: 0; padding-inline: 0; }
   .nav__item::after { display: none; }
   .nav__ctas {
