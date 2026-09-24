@@ -12,10 +12,10 @@ Use [release policy](../technical/release-runbooks.md) for release gates and
 create an exact-SHA runbook when a release is scheduled and the required tools
 exist.
 
-The repository's Compose topology today contains Postgres, API, static web
-server, and worker services (§7). The target adds `system-scheduler` (API
-credential only) in place of `worker-swarm`, and standing participant
-containers defined by the credential file. The adopted design owns how those
+The repository's Compose topology contains Postgres, API, static web server,
+the analytics and research worker lanes (§7), and `system-scheduler` (API
+credential only), which replaced `worker-swarm`. Standing participant
+containers are defined by the credential file. The adopted design owns how those
 services are prepared, checked, replaced and kept running. Its credentials and
 target identity rules are in smoke-production-spec §§3–5; participants and
 readiness are in §6 (scheduler health in

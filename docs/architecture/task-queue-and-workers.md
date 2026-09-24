@@ -14,10 +14,12 @@ to the API's event stream. The API performs state-guarded transactions and
 serves subscriptions and runs no background orchestration. Participants
 (agents poll, judges subscribe) do the model work. See
 [system-scheduler-spec §§1–4](../technical/system-scheduler-spec.md#1-roles)
-and §9.4 below. The `swarm` lane, `worker-swarm` container and `swarm.*` job
-kinds described in this section are the legacy implementation as of
-2026-09-23, kept here because that code still runs; they are not target
-requirements.
+and §9.4 below. The `swarm` lane, the `worker-swarm` container and the five
+`swarm.*` job kinds are GONE as of issue #1026 W4: the lane is no longer in
+`worker/lanes.ts`, the container is no longer in any composition, the schedule
+rows are deleted by migration 0072, and nothing enqueues those kinds. What
+this section describes below is the queue that remains, which the vault,
+wallet, buyback, project, analytics and research work still depends on.
 
 Each worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`)
 runs three loops:
@@ -51,17 +53,23 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 
 | Lane | Claims | Purpose |
 |------|--------|---------|
-| `swarm` | `swarm.%` only | **Legacy (2026-09-23).** Session-lifecycle capacity for the old job-chain driver. The target has no swarm lane and no `swarm.*` job kinds; `system-scheduler` replaces `worker-swarm` ([scheduler spec §1](../technical/system-scheduler-spec.md#1-roles)). |
-| `analytics` | everything except `swarm.%`/`research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
+| `analytics` | everything except `research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
 | `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. |
-| `generic` | everything except `swarm.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
+| `generic` | everything | Single-process dev convenience; never part of the compose topology. |
 
-The current Compose topology (legacy, 2026-09-23) is one container per lane
-(`worker-swarm`/`worker-analytics`/`worker-research` in
-`docker-compose.yml`), plus the non-queue `analytics-producer`. The target
-topology replaces `worker-swarm` with `system-scheduler`; the analytics and
-research workers keep their lanes and database credentials until a later
-specification moves them (smoke spec §7.2; scheduler spec §11). Worker lanes
+There is no `swarm` lane. It was removed with the job chain it reserved
+capacity for ([scheduler spec §1](../technical/system-scheduler-spec.md#1-roles):
+`system-scheduler` "replaces the process formerly called `worker-swarm`"), and
+the `swarm.%` exclusions the other lanes carried went with it — an exclusion
+for a kind nothing can enqueue is a rule a reader has to look up to discover is
+dead.
+
+The Compose topology is one container per surviving lane
+(`worker-analytics`/`worker-research` in `docker-compose.yml`), the non-queue
+`analytics-producer`, and `system-scheduler`, which is not a queue lane at all
+— it holds one API token, no database credential, and drives epochs over HTTP.
+The analytics and research workers keep their lanes and database credentials
+until a later specification moves them (smoke spec §7.2; scheduler spec §11). Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
 dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a

@@ -54,6 +54,32 @@ const PINNED: Record<string, string> = {
   "scripts/tests/unit/no-swarm-cron.test.ts": "this gate",
 };
 
+/**
+ * Strip comments before matching.
+ *
+ * The gate is about what the SYSTEM DOES, not about what a comment says it used
+ * to do. Several surviving files explain the replacement by naming the thing
+ * replaced — `scripts/system-scheduler.ts`'s header says it replaces
+ * `worker-swarm`, migration 0040's header recalls where `swarm.judge` used to
+ * run — and a gate that failed on those would be rewarded by deleting the
+ * explanation, which is the wrong incentive.
+ *
+ * A string LITERAL is not a comment and is not stripped: a stale user-facing
+ * description that still promises a `swarm.open_session` schedule is a real
+ * finding, and one this sweep caught.
+ */
+function stripComments(file: string, text: string): string {
+  if (file.endsWith(".sql")) return text.replace(/(^|\n)\s*--.*/g, "$1");
+  if (file.endsWith(".yml") || file.endsWith(".yaml") || file.endsWith(".env.example") || file === ".env.example") {
+    return text.replace(/(^|\n)\s*#.*/g, "$1");
+  }
+  if (file.endsWith(".ts") || file.endsWith(".json")) {
+    return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "$1");
+  }
+  if (file.endsWith(".sh")) return text.replace(/(^|\n)\s*#.*/g, "$1");
+  return text;
+}
+
 function sweep(): { file: string; text: string }[] {
   const out: { file: string; text: string }[] = [];
   const seen = new Set<string>();
@@ -62,7 +88,7 @@ function sweep(): { file: string; text: string }[] {
       if (seen.has(rel)) continue;
       if (rel.includes("node_modules/")) continue;
       seen.add(rel);
-      out.push({ file: rel, text: readFileSync(join(REPO, rel), "utf8") });
+      out.push({ file: rel, text: stripComments(rel, readFileSync(join(REPO, rel), "utf8")) });
     }
   }
   return out;

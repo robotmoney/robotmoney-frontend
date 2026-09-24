@@ -168,8 +168,8 @@ Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
 - **`swarm.`** — this repo's Bun `api`, the analytics/research `worker`
-  lanes, `system-scheduler` (target; API credential only, replaces
-  `worker-swarm`), and the standing participant containers from the credential
+  lanes, `system-scheduler` (API credential only; it replaced the container
+  formerly called `worker-swarm`), and the standing participant containers from the credential
   file; `website-server` (issue #892) co-serves this surface's SPA assets
   (`STATIC_DIR`) same-origin at the subdomain root, proxying `/api/` through
   to `api`.
