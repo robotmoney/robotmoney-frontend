@@ -46,7 +46,9 @@ function tryDocker(args: string[]): void {
 let webPort = 0;
 
 beforeAll(() => {
-  // A minimal assembled site, bind-mounted where docker-compose.yml mounts it.
+  // A minimal assembled site, bind-mounted at the root nginx serves
+  // (`root /srv/web/current`; docker-compose.yml mounts the instance's web/ dir
+  // at /srv/web, and `current` is the live site inside it).
   writeFileSync(join(siteDir, "index.html"), "<!doctype html><title>site</title>");
   writeFileSync(join(siteDir, "version.json"), JSON.stringify({ name: "@robotmoney/web-client", version: "0.1.0", commit: "x", apiRange: "^9.8.0" }));
   // mkdtemp makes the directory 0700; the nginx worker runs as its own user.
@@ -66,7 +68,7 @@ beforeAll(() => {
   ]);
   docker([
     "run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK,
-    "-v", `${siteDir}:/srv/frontend:ro`,
+    "-v", `${siteDir}:/srv/web/current:ro`,
     "-p", "127.0.0.1::8080",
     IMAGE,
   ]);
