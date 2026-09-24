@@ -14,6 +14,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
+import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
@@ -189,6 +190,67 @@ test("a past-close take is refused THROUGHOUT an exhausted turnover, and the nex
   const accepted = await submitTake(m, nextDate, subjectId);
   expect(accepted.ok).toBe(true);
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${turned.openedSessionId}`).length).toBe(1);
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
+});
+
+test("a take after DEACTIVATION is refused, though the closed epoch's stored close is still in the future", async () => {
+  // §4.2: takes are accepted "while a session is `collecting` and now is
+  // before its `window_closes_at`". Deactivation (§4.5) closes the epoch and
+  // does not move `window_closes_at`. RED CONTROL: before the INSERT carried
+  // `s.state = 'collecting'`, this take returned 201 and one row landed in the
+  // closed session, after its absences had been recorded.
+  const { subjectId, sessionId, date } = await openedEpoch("win_deactivated");
+  const m = await activeMember();
+  const [subject] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${subjectId}`;
+  const deactivated = await admin.deactivateSubjectAdmin(subjectId, Number(subject.version));
+  expect(deactivated.ok).toBe(true);
+  const [closed] = await sql<{ state: string; still_future: boolean }[]>`
+    SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${sessionId}`;
+  expect(closed).toEqual({ state: "window_closed", still_future: true });
+
+  const r = await submitTake(m, date, subjectId);
+  expect(r).toMatchObject({ ok: false, status: 409, error: "submission window closed" });
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
+});
+
+test("a take that read N before an operator's EARLY turnover committed, and queued behind it, is refused — no row lands in N", async () => {
+  // The race the take INSERT's `FOR SHARE` exists for. The turnover is held
+  // open AFTER it has closed N and recorded its absences: the test takes the
+  // stream-event advisory lock the turnover needs for `epoch.turned_over`.
+  // While it waits, the take reads N as the newest session (N+1 is not yet
+  // committed), passes every early check — the window is minutes from closing
+  // — and blocks on N's row. Then the turnover commits. RED CONTROL: before
+  // the INSERT carried `s.state = 'collecting'`, the take was then inserted
+  // into N after its absences were recorded, so accepted takes and recorded
+  // absences disagreed and the take post-dated aggregation's input.
+  const { subjectId, sessionId, date } = await openedEpoch("win_early_turnover");
+  const m = await activeMember();
+  const waiting = async (locktypes: string[]) => {
+    for (let i = 0; i < 500; i += 1) {
+      const [w] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = ANY(${locktypes})`;
+      if (Number(w?.n ?? 0) > 0) return true;
+      await Bun.sleep(10);
+    }
+    return false;
+  };
+
+  let turnover!: ReturnType<typeof epoch.turnOverEpoch>;
+  let take!: ReturnType<typeof submitTake>;
+  let turnoverWaited = false;
+  let takeWaited = false;
+  await sql.begin(async (hold) => {
+    await hold`SELECT pg_advisory_xact_lock(hashtextextended('swarm_stream_events', 0))`;
+    turnover = epoch.turnOverEpoch(subjectId, sessionId);
+    turnoverWaited = await waiting(["advisory"]);
+    take = submitTake(m, date, subjectId);
+    takeWaited = await waiting(["transactionid", "tuple"]);
+  });
+  const [turned, r] = await Promise.all([turnover, take]);
+  expect(turnoverWaited, "the turnover must have closed N and be waiting to publish its event").toBe(true);
+  expect(takeWaited, "the take must have been waiting on N's row behind the turnover").toBe(true);
+  expect(turned.ok).toBe(true);
+  expect(r).toMatchObject({ ok: false, status: 409, error: "submission window closed" });
   expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${sessionId}`).length).toBe(0);
 });
 

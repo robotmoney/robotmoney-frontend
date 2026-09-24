@@ -37,6 +37,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
+import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
@@ -497,4 +498,54 @@ test("every settlement step refuses out of order, with a reason", async () => {
   const again = await epoch.aggregateEpoch(sessionId);
   expect(again.ok).toBe(true);
   if (again.ok) expect(again.transitioned).toBe(false);
+});
+
+test("a session with nothing captured is refused by request-judging and finalize, which never read the subject's live duration", async () => {
+  // §4.4: "Judge mode and judging duration are captured at turnover", and a
+  // later change "affects later sessions, never one already settling". Every
+  // close path in the code now captures (turnover, deactivation, and the
+  // route-unreachable legacy closes, asserted first below), so an uncaptured
+  // session is a row closed before migration 0074 — modelled here by clearing
+  // the two columns. RED CONTROL: the code before this refusal treated the
+  // NULL mode as `enforce` and COALESCEd the duration from the subject at
+  // request time, so the admin change below reached the settling session as a
+  // 5-second deadline — the state, deadline and duration assertions failed.
+  await setJudgeMode("enforce");
+  const subjectId = await activeSubject("st_uncaptured", 600);
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 120 WHERE id = ${subjectId}`;
+  const opened = await epoch.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  expect((await admin.closeSessionAdmin(opened.sessionId, undefined)).ok).toBe(true);
+  const captured = await sessionRow(opened.sessionId);
+  expect([captured.judge_mode, captured.judging_duration_seconds]).toEqual(["enforce", 120]);
+
+  expect((await epoch.aggregateEpoch(opened.sessionId)).ok).toBe(true);
+  await sql`UPDATE swarm_sessions SET judge_mode = NULL, judging_duration_seconds = NULL WHERE id = ${opened.sessionId}`;
+  // The admin change a settling session must never see.
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 5 WHERE id = ${subjectId}`;
+
+  const req = await epoch.requestJudging(opened.sessionId);
+  expect(req).toMatchObject({ ok: false, status: 409, error: "judging_not_captured" });
+  const fin = await epoch.finalizeEpoch(opened.sessionId);
+  expect(fin).toMatchObject({ ok: false, status: 409, error: "judging_not_captured" });
+
+  const after = await sessionRow(opened.sessionId);
+  expect(after.state).toBe("aggregated");
+  expect(after.judging_duration_seconds).toBeNull();
+  expect(after.judging_requested_at).toBeNull();
+  expect(after.judging_deadline_at).toBeNull();
+  expect(after.judging_outcome).toBeNull();
+});
+
+test("the legacy closeWindow captures judge mode and judging duration at the close, like turnover", async () => {
+  await setJudgeMode("enforce");
+  const subjectId = await activeSubject("st_legacy_close", 600);
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 77 WHERE id = ${subjectId}`;
+  const opened = await epoch.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  await epoch.closeWindow(opened.sessionId);
+  // A change after the close does not reach it.
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 5 WHERE id = ${subjectId}`;
+  const s = await sessionRow(opened.sessionId);
+  expect([s.state, s.judge_mode, s.judging_duration_seconds]).toEqual(["window_closed", "enforce", 77]);
 });

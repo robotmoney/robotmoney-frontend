@@ -849,6 +849,15 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   // whole of the timing contract. A take arriving after session N closed and
   // before session N+1 has published its brief lands on N+1 — the session it
   // belongs to — because N+1 is the newest row and carries no deadline yet.
+  //
+  // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
+  // not here, and with a different answer. The dead zone this paragraph
+  // describes cannot recur: turnover opens N+1 `collecting` in the transaction
+  // that closes N, so the newest session is always the collecting one. What
+  // the conjunct refuses is a take into an epoch that turnover or deactivation
+  // already closed, and it answers `submission window closed` — the same "you
+  // are too late" as the instant — never `not open`.
+  //
   // Signed-date agreement. A stale agent that woke with yesterday's brief must
   // not have its take filed against today's session.
   if (sub.date && day(session.date) !== sub.date) {
@@ -1057,10 +1066,19 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     // passed. If the window closed between our check above and now, 0 rows
     // insert and we reject.
     //
-    // The `s.state = 'collecting'` conjunct is gone with the state gate above
-    // (issue #570) and had to be: leaving it here would have made deleting that
-    // gate a no-op, turning `submission window not open (state=scheduled)` into
-    // `submission window closed` for the same take.
+    // THE EPOCH MUST STILL BE COLLECTING (scheduler spec §4.2: "While a
+    // session is `collecting` and now is before its `window_closes_at`"). Issue
+    // #570 dropped this conjunct because the old lifecycle had a `scheduled`
+    // gap between sessions and a `closeWindow` that ran before the advertised
+    // instant. The epoch model has neither: a session is born `collecting`
+    // (§3), and the only ways an epoch leaves `collecting` are turnover (§4.3,
+    // an operator's early turnover included) and deactivation (§4.5). Neither
+    // moves `window_closes_at`, so without this conjunct a take that read N
+    // just before an early turnover committed — or any take after a
+    // deactivation — landed in a CLOSED epoch whose stored close was still in
+    // the future: after its absences were recorded, and after aggregation.
+    // Under the `FOR SHARE` lock below, the state this reads is the committed
+    // one, so the take either lands before the close or is refused after it.
     //
     // ONE CLOCK (scheduler spec §4.2). The comparison reads `clock_timestamp()`
     // — the database clock at the moment of the comparison — never `now()`,
@@ -1101,14 +1119,16 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
                ${key.id}, ${sub.reportSnapshotId ?? null}::bigint, c.at
         FROM swarm_sessions s, (SELECT clock_timestamp() AS at) c
         WHERE s.id = ${session.id}
+          AND s.state = 'collecting'
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
                WHERE r.session_id = s.id AND r.member_id = ${memberId}) < ${SWARM_TAKE_REVISION_CAP}
         RETURNING id, revision`;
     });
     if (rows.length === 0) {
-      // Two conjuncts can zero this out, and they are not the same answer to an
-      // agent: one says "you are too late", the other says "stop". Re-read the
+      // Two kinds of conjunct can zero this out, and they are not the same
+      // answer to an agent: the window (the epoch closed, or its instant
+      // passed) says "you are too late", the cap says "stop". Re-read the
       // count to say which — only on the failure path, so the happy path stays
       // one statement.
       const after = (await sql<{ n: number }[]>`
@@ -2099,9 +2119,23 @@ export async function closeWindow(
   // never be able to keep a window open. They are therefore decoupled: the
   // UPDATE below commits alone, and recordAbsenceEvents() runs afterwards,
   // its failures collected into the return value rather than thrown.
+  //
+  // THE CLOSE CAPTURES WHAT SETTLEMENT RUNS ON (§4.4, issue #1026). Turnover
+  // and deactivation store the judge mode and judging duration in force as an
+  // epoch closes; this close does the same, in the same statement, so no path
+  // left in the code closes a session with nothing captured. Settlement
+  // refuses an uncaptured session (`judging_not_captured`) rather than reading
+  // the subject's live column later, when an admin may have changed it.
   const upd = await sql`
-    UPDATE swarm_sessions SET state = 'window_closed'
-    WHERE id = ${sessionId} AND state = 'collecting' RETURNING id`;
+    UPDATE swarm_sessions s
+       SET state = 'window_closed',
+           -- currentJudgeMode()'s reduction, in SQL: anything but enforce is off.
+           judge_mode = COALESCE((SELECT CASE WHEN c.mode = 'enforce' THEN 'enforce' ELSE 'off' END
+                                    FROM swarm_judge_config c WHERE c.id = 1), 'off'),
+           judging_duration_seconds = t.judging_duration_seconds
+      FROM swarm_subjects t
+     WHERE s.id = ${sessionId} AND s.state = 'collecting' AND t.id = s.subject_id
+    RETURNING s.id`;
   if (upd.length === 0) return { sessionId, state: "window_closed" };
   const telemetryWarnings = await recordAbsenceEvents(sessionId);
   return telemetryWarnings.length
@@ -3392,13 +3426,16 @@ export type RequestJudgingResult = {
  * `judging_duration_seconds` — never the subject's current value, which an
  * admin may have changed since the epoch closed.
  *
- * A SESSION THAT NEVER TURNED OVER has nothing captured (NULL, migration 0074):
- * one closed through a pre-epoch path, or before 0074. Its judging duration is
- * captured HERE instead, from the subject's own column, in this transaction and
- * written onto the session beside the deadline it produced — the latest moment
- * at which "the value in force when judging began" is still a fact rather than
- * a guess. It is the operator's configured value, never a constant this module
- * chose, and once stored it is what any later read sees.
+ * NOTHING CAPTURED, NOTHING REQUESTED (§4.4: "Judge mode and judging duration
+ * are captured at turnover"). A session whose `judge_mode` or
+ * `judging_duration_seconds` is NULL (migration 0074) closed through a
+ * pre-epoch path — the retired admin `close` verb, `closeWindow` — and has no
+ * captured value to settle by. It is refused with `judging_not_captured`. It is
+ * NOT settled from the subject's live column: that value is whatever an admin
+ * set AFTER the close, so reading it here would let a later change reach a
+ * settling session, which is exactly what capture-at-turnover forbids. A
+ * `judge_mode` of `shadow` on a pre-D53 row is refused the same way — D53 (1)
+ * left no write path that can act on it.
  *
  * Under `off` this is a reasoned refusal rather than a silent success: nothing
  * should be calling it, and saying so is how a scheduler bug surfaces instead
@@ -3409,6 +3446,7 @@ export async function requestJudging(sessionId: string): Promise<RequestJudgingR
     const [s] = await tx<Record<string, any>[]>`
       SELECT * FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
     if (!s) return refuse(404, "session_not_found");
+    if (!judgingCaptured(s)) return refuse(409, "judging_not_captured");
     if (s.judge_mode === "off") return refuse(409, "judge_mode_off");
     if (s.judging_deadline_at) {
       return {
@@ -3424,12 +3462,11 @@ export async function requestJudging(sessionId: string): Promise<RequestJudgingR
     const [upd] = await tx<{ judging_deadline_at: Date }[]>`
       UPDATE swarm_sessions s
          SET state = 'judging',
-             judging_duration_seconds = COALESCE(s.judging_duration_seconds, t.judging_duration_seconds),
              judging_requested_at = c.at,
-             judging_deadline_at = c.at + make_interval(
-               secs => COALESCE(s.judging_duration_seconds, t.judging_duration_seconds))
-        FROM (SELECT clock_timestamp() AS at) c, swarm_subjects t
-       WHERE s.id = ${sessionId} AND s.state = 'aggregated' AND t.id = s.subject_id
+             judging_deadline_at = c.at + make_interval(secs => s.judging_duration_seconds)
+        FROM (SELECT clock_timestamp() AS at) c
+       WHERE s.id = ${sessionId} AND s.state = 'aggregated'
+         AND s.judging_duration_seconds IS NOT NULL
        RETURNING s.judging_deadline_at`;
     if (!upd) return refuse(409, "session_not_aggregated");
     return {
@@ -3628,6 +3665,12 @@ export async function finalizeEpoch(sessionId: string): Promise<FinalizeResult |
       };
     }
 
+    // Nothing captured at turnover → nothing to settle by (see requestJudging).
+    // Checked AFTER the published replay, so an outcome already decided is
+    // still returned, and BEFORE any branch reads the mode — a NULL mode used
+    // to fall through to the `enforce` branch below.
+    if (!judgingCaptured(s)) return refuse(409, "judging_not_captured");
+
     let outcome: JudgingOutcome;
     if (s.judge_mode === "off") {
       if (s.state !== "aggregated") return refuse(409, "session_not_publishable");
@@ -3673,6 +3716,16 @@ export async function finalizeEpoch(sessionId: string): Promise<FinalizeResult |
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Did this session's close capture what settlement runs on (§4.4)? Turnover
+ * and deactivation write both `judge_mode` (off | enforce) and
+ * `judging_duration_seconds` in the transaction that closes the epoch; a
+ * session missing either never closed as an epoch.
+ */
+function judgingCaptured(s: Record<string, any>): boolean {
+  return (s.judge_mode === "off" || s.judge_mode === "enforce") && s.judging_duration_seconds != null;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);

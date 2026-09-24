@@ -401,8 +401,8 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
     // request runs to its deadline and publishes `no_consensus`.
     expect((await adminPost("/api/swarm/admin/judge", { mode: "enforce", model: "deepseek-v4-flash" })).status).toBe(200);
     try {
-      const judgingOf = async (id: string) => {
-        await createSubject(id, 60, { judgingDurationSeconds: 5 });
+      const judgingOf = async (id: string, judgingDurationSeconds: number) => {
+        await createSubject(id, 60, { judgingDurationSeconds });
         const [n] = await waitFor("the first epoch", () => {
           const c = collectingOf(id);
           return c.length === 1 ? c : null;
@@ -415,25 +415,37 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
         return n!.id;
       };
 
-      // BEFORE the deadline.
-      const before = await judgingOf(`rt_deadline_before_${crypto.randomUUID().slice(0, 6)}`);
+      // BEFORE the deadline. The judging duration is long enough, and the
+      // scheduler stays down long enough, that the two answers are far apart:
+      // the scheduler is restarted about 3.5 s into an 8 s judging window, so
+      // the stored deadline falls about 4.5 s after the restart, while a
+      // scheduler that RESTARTED its timer at rebuild would finalize a full 8 s
+      // after it. The assertions below sit between the two with a margin on
+      // both sides, so the red case fails however fast the restart is.
+      const JUDGING = 8;
+      const before = await judgingOf(`rt_deadline_before_${crypto.randomUUID().slice(0, 6)}`, JUDGING);
       const deadline = psql(`SELECT judging_deadline_at::text FROM swarm_sessions WHERE id = ${lit(before)}`);
       await stopScheduler();
-      await Bun.sleep(1000);
+      await Bun.sleep(3000);
+      const restartBeganAt = dbNow();
       await startScheduler();
+      // The restart really was BEFORE the deadline: the rebuild had a timer to
+      // reconstruct, not a finalize to run at once.
+      expect(psql(`SELECT clock_timestamp() < judging_deadline_at FROM swarm_sessions WHERE id = ${lit(before)}`)).toBe("t");
       // The stored deadline is untouched by the restart…
       expect(psql(`SELECT judging_deadline_at::text FROM swarm_sessions WHERE id = ${lit(before)}`)).toBe(deadline);
       await waitFor("finalize at the stored deadline", () =>
         psql(`SELECT state FROM swarm_sessions WHERE id = ${lit(before)}`) === "published", 20_000);
-      // …and finalize ran AT it: not before (the API would have refused) and
-      // not a fresh five seconds after the restart.
+      // …and finalize ran AT it: not before (the API would have refused), and
+      // well short of a fresh judging duration counted from the restart.
       expect(psql(`SELECT published_at >= judging_deadline_at
-                      AND published_at < judging_deadline_at + interval '1500 milliseconds',
+                      AND published_at < judging_deadline_at + interval '1500 milliseconds'
+                      AND published_at < ${lit(restartBeganAt)}::timestamptz + interval '${JUDGING} seconds' - interval '1500 milliseconds',
                       judging_outcome
                      FROM swarm_sessions WHERE id = ${lit(before)}`)).toBe("t|no_consensus");
 
       // AFTER the deadline.
-      const after = await judgingOf(`rt_deadline_after_${crypto.randomUUID().slice(0, 6)}`);
+      const after = await judgingOf(`rt_deadline_after_${crypto.randomUUID().slice(0, 6)}`, 5);
       await stopScheduler();
       await waitFor("the deadline to pass while the scheduler is down", () =>
         psql(`SELECT clock_timestamp() > judging_deadline_at + interval '500 milliseconds'
@@ -448,5 +460,5 @@ describe("the real scheduler drives the real API (§3, §4)", () => {
     } finally {
       await adminPost("/api/swarm/admin/judge", { mode: "off" });
     }
-  }, 120_000);
+  }, 150_000);
 });

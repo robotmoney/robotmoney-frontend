@@ -18,9 +18,12 @@
 // `shadow` — D53 item 1 removed it: the route refuses any mode but
 // `off|enforce`, and `swarm/judge-config.ts`, the one writer of the row,
 // stores `off` wherever a legacy `shadow` stood. That half is pinned in the
-// backend suite, against the route and the registry, and the column CHECK that
-// forbids the value is a migration of its own. This file claims only the
-// scripts: no driver enables the judge or names `shadow`.
+// backend suite, against the route and the registry. The column CHECK does
+// NOT forbid it yet: `swarm_judge_config_mode_check` still admits
+// off|shadow|enforce (backend/schema/snapshot.sql, through migration 0078).
+// Tightening it to off|enforce is pending, in a separate migration owned by the
+// wave's migration package. This file claims only the scripts: no driver
+// enables the judge or names `shadow`.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";

@@ -330,24 +330,46 @@ test("applications: GET list (200), optionally filtered by ?status=", async () =
   expect(Array.isArray((res!.body as any).applications)).toBe(true);
 });
 
-test("sessions: create (201) with bad payload → 400; unknown subject/session → 404", async () => {
-  const bad = await call(req("POST", "/api/swarm/admin/sessions", { token: PROD.adminToken, body: { date: "2026-08-01" } }), PROD);
-  expect(bad?.status).toBe(400);
+// The pre-epoch session verbs are retired (issue #1026, system-scheduler-spec.md
+// §4.3: "Turnover is the only way an epoch closes while its subject stays
+// active"). Each one moved a session with no stream event and no captured judge
+// mode — the NULL-mode source settlement now refuses. RED CONTROL: on the code
+// before the retirement, `close` moved this collecting epoch to window_closed
+// and `create` inserted a `scheduled` session, so the state, version and
+// session-count assertions below all failed.
+test("sessions: the pre-epoch create and lifecycle verbs answer 410 and write nothing", async () => {
+  const subjectId = rid("retired");
+  await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Retired verbs')`;
+  const opened = await call(req("POST", "/api/swarm/admin/epochs/open", { token: PROD.adminToken, body: { subjectId } }), PROD);
+  expect(opened?.status).toBe(201);
+  const sessionId = (opened!.body as any).sessionId as string;
+  const before = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(before.state).toBe("collecting");
 
-  const notFoundSubject = await call(
+  const created = await call(
     req("POST", "/api/swarm/admin/sessions", {
       token: PROD.adminToken,
-      body: { date: "2026-08-01", subjectId: rid("nope"), briefOpensAt: "2026-08-01T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" },
+      body: { date: "2026-08-01", subjectId, briefOpensAt: "2026-08-01T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" },
     }),
     PROD,
   );
-  expect(notFoundSubject?.status).toBe(404);
+  expect(created?.status).toBe(410);
+  expect((created!.body as any).error).toContain("epochs/");
 
-  const notFoundCancel = await call(
-    req("POST", `/api/swarm/admin/sessions/${crypto.randomUUID()}/cancel`, { token: PROD.adminToken, body: {} }),
-    PROD,
-  );
-  expect(notFoundCancel?.status).toBe(404);
+  for (const verb of ["close", "aggregate", "publish", "reopen", "cancel"]) {
+    const res = await call(
+      req("POST", `/api/swarm/admin/sessions/${sessionId}/${verb}`, { token: PROD.adminToken, body: { expectedVersion: Number(before.version) } }),
+      PROD,
+    );
+    expect(res?.status).toBe(410);
+    expect((res!.body as any).error).toContain(`session ${verb} action is gone`);
+  }
+
+  const after = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0];
+  expect(after.state).toBe("collecting");
+  expect(Number(after.version)).toBe(Number(before.version));
+  expect((await sql`SELECT count(*)::int AS n FROM swarm_sessions WHERE subject_id = ${subjectId}`)[0].n).toBe(1);
+  expect((await sql`SELECT count(*)::int AS n FROM swarm_session_events WHERE session_id = ${sessionId}`)[0].n).toBe(0);
 });
 
 // The shadow soak's read path (issue #767). Content is pinned in
@@ -358,22 +380,17 @@ test("sessions: create (201) with bad payload → 400; unknown subject/session �
 test("sessions: the judgements read path is a real admin route — 200 with an empty history, 404 for an unknown session", async () => {
   const subjectId = rid("judgeread");
   await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Judge read path')`;
-  const created = await call(
-    req("POST", "/api/swarm/admin/sessions", {
-      token: PROD.adminToken,
-      body: { date: "2026-08-11", subjectId, briefOpensAt: "2026-08-11T09:00:00Z", windowClosesAt: "2026-08-11T10:00:00Z", publishAt: "2026-08-11T10:05:00Z" },
-    }),
-    PROD,
-  );
+  // Opened through the epoch transition: the pre-epoch session create is 410.
+  const created = await call(req("POST", "/api/swarm/admin/epochs/open", { token: PROD.adminToken, body: { subjectId } }), PROD);
   expect(created?.status).toBe(201);
-  const sessionId = (created!.body as any).session.id as string;
+  const sessionId = (created!.body as any).sessionId as string;
 
   const path = ROUTES.swarm.admin.sessionJudgements.replace(":id", sessionId);
   const res = await call(req("GET", path, { token: PROD.adminToken }), PROD);
   expect(res?.status).toBe(200);
   const body = res!.body as any;
   expect(body.sessionId).toBe(sessionId);
-  expect(body.state).toBe("scheduled");
+  expect(body.state).toBe("collecting");
   expect(body.judgements).toEqual([]);
   expect(body.inForce).toBeNull();
 

@@ -1004,6 +1004,13 @@ function isValidUtcDate(date: string): boolean {
 export const MIN_SESSION_STEP_MS = 3_000;
 
 
+// NO ROUTE REACHES THIS (issue #1026). `POST /api/swarm/admin/sessions` and the
+// sessions/:id/{cancel,close,reopen,aggregate,publish} verbs answer 410 in
+// routes/swarm-admin.ts: each moved a session outside the epoch transitions
+// (system-scheduler-spec.md §4.3). The functions stay only because unowned
+// legacy-fixture suites still build sessions with them — consensus-receipt-
+// publish, swarm-admin-surface, swarm-absence-consistency, swarm-silence-flags,
+// swarm-judge. Delete them once those suites move onto openEpoch/turnOverEpoch.
 export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
   const briefOpensAt = new Date(input.briefOpensAt);
@@ -1309,7 +1316,22 @@ async function transitionWithin(
   if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
   const legal = TRANSITIONS[row.state] ?? [];
   if (!legal.includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-  const upd = await tx`UPDATE swarm_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
+  // A close captures what settlement runs on (system-scheduler-spec.md §4.4),
+  // as turnover and deactivation do, so this path cannot produce a session
+  // settlement must refuse as `judging_not_captured`. First close only: a
+  // re-close after a reopen keeps the values the first close captured.
+  const upd = toState === "window_closed"
+    ? await tx`
+        UPDATE swarm_sessions s
+           SET state = 'window_closed', version = s.version + 1,
+               judge_mode = COALESCE(s.judge_mode,
+                 COALESCE((SELECT CASE WHEN c.mode = 'enforce' THEN 'enforce' ELSE 'off' END
+                             FROM swarm_judge_config c WHERE c.id = 1), 'off')),
+               judging_duration_seconds = COALESCE(s.judging_duration_seconds, t.judging_duration_seconds)
+          FROM swarm_subjects t
+         WHERE s.id = ${sessionId} AND t.id = s.subject_id
+        RETURNING s.id, s.state, s.version`
+    : await tx`UPDATE swarm_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
   await tx`
     INSERT INTO swarm_session_events (session_id, from_state, to_state, action, actor, reason)
     VALUES (${sessionId}, ${row.state}, ${toState}, ${action}, ${actor}, ${opts.reason ?? null})`;
@@ -1317,6 +1339,7 @@ async function transitionWithin(
   return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
 }
 
+// No route reaches the five verbs below either — see createSessionAdmin.
 export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
   return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
 }

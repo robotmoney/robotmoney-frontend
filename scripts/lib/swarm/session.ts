@@ -533,11 +533,18 @@ export function epochDurationSecondsFor(cadence: SmokeCadence): number {
  *
  * `recommendationType` defaults to `bucket_weights`, which is what the removed
  * action seeded, so every caller's subject asks for the same thing it did.
+ *
+ * `epochDurationSeconds` is sent IN THE CREATE BODY, so the subject is born on
+ * its schedule. Setting it afterwards (setSubjectEpochDuration) leaves a window
+ * in which the subject exists on the schema default: a scheduler holding a
+ * token opens the first epoch on the create's `subject.changed`, at the default
+ * length, and the driver's own open then adopts that epoch. The later
+ * setSubjectEpochDuration call stays for a subject that already existed.
  */
 export async function ensureSubjectViaAdmin(
   subject: SessionSubject,
   automationToken?: string,
-  opts: { recommendationType?: string } = {},
+  opts: { recommendationType?: string; epochDurationSeconds?: number } = {},
 ): Promise<{ created: boolean }> {
   const r = await fetch(`${backendUrl()}${ROUTES.swarm.admin.subjects}`, {
     method: "POST",
@@ -546,6 +553,7 @@ export async function ensureSubjectViaAdmin(
       id: subject.id,
       name: subject.name,
       recommendationType: opts.recommendationType ?? "bucket_weights",
+      ...(opts.epochDurationSeconds !== undefined ? { epochDuration: opts.epochDurationSeconds } : {}),
     }),
   });
   if (r.status === 201) return { created: true };
@@ -1460,7 +1468,7 @@ export async function runSession(
   // subject route, which publishes `subject.changed` (§6.2) — the retired
   // `subject` dispatcher action wrote an active subject the scheduler never
   // heard of.
-  await ensureSubjectViaAdmin(subject, rail.automationToken);
+  await ensureSubjectViaAdmin(subject, rail.automationToken, { epochDurationSeconds: epochSeconds });
   // THE WINDOW LENGTH IS A COLUMN ON THE SUBJECT NOW (§2.2, §2.3), set through
   // the admin API before the epoch that will use it is opened. It used to be a
   // `windowMinutes` argument on every `publish_brief`, which meant two sessions
@@ -1776,7 +1784,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await ensureSubjectViaAdmin(subjects[0], rail.automationToken);
+  await ensureSubjectViaAdmin(subjects[0], rail.automationToken, { epochDurationSeconds: epochDurationSecondsFor(cadence) });
 
   // Session 1: today's subject
   await runSession(subjects[0], 1, { rail, members, initializer: "simulation", cadence });
