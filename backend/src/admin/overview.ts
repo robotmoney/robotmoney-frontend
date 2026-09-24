@@ -392,17 +392,22 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   }
 
   // ── The judge's fallback SHARE (R17 / decision D15) ─────────────────────
-  // A misconfigured budget must not be able to masquerade as an upstream
-  // outage. Every OTHER signal on this page is green while the judge is in
-  // permanent fallback: the sessions publish, the receipts exist, nothing is
-  // missing, the lane's jobs succeed. The only thing that is wrong is that no
-  // model ever answered — and until this alert, the only place that fact
-  // existed was a column nobody selected.
+  // HISTORY-ONLY SIGNAL. Nothing writes a `source = 'fallback'` judgement any
+  // more: the template fallback is deleted (D53 point 4) and a judge that
+  // cannot answer refuses, so the session publishes `no_consensus`. On a
+  // current stack this alert therefore reads 0 % fallback, or "stale" when no
+  // judgement landed in the window; a non-zero share can only come from rows
+  // written before the removal.
   //
-  // The thresholds are D15's, matching the postflight check exactly (both call
-  // summarizeJudgeSources): report always, and call it FAILED only at 100 %
-  // over the window, because AC-FE-05 makes a partial fallback a working
-  // feature rather than an incident.
+  // Why it was built: when the template fallback existed, every OTHER signal on
+  // this page stayed green while the judge was in permanent fallback — the
+  // sessions published, the receipts existed, the lane's jobs succeeded — and
+  // the only place the fact lived was a column nobody selected. The thresholds
+  // are D15's, matching the postflight check exactly (both call
+  // summarizeJudgeSources): report always, FAILED only at 100 % over the
+  // window. AC-FE-05 once made a partial fallback a working feature; that
+  // feature is gone, and the thresholds were not re-tuned because nothing new
+  // can reach them.
   try {
     const judgeSources = await sql<{ source: string; fallback_reason: string | null; n: number }[]>`
       SELECT source, coalesce(btrim(fallback_reason), '') AS fallback_reason, count(*)::int AS n

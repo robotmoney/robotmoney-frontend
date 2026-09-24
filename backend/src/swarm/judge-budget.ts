@@ -9,14 +9,20 @@
 //
 // ── The fallback share, and decision D15 ─────────────────────────────────────
 //
-// AC-FE-05 makes deterministic fallback prose a FEATURE: when the model
-// misbehaves, the judging still produces a labelled, reproducible opinion and
-// the session still publishes. That is why no gate in this release looked at
-// it — and why a stack in PERMANENT fallback passed every one of them. A
-// fallback receipt is still a published receipt with four weights, so
-// `/version`, the weights total, `missingReceipts.count == 0` and all four
-// postflight checks were green on a stack where every enforce session
-// published template prose under the judge's name (run-1 §E.3 + this run's
+// HISTORY. Nothing writes a fallback judgement any more: the template fallback
+// is deleted (D-A7, then D53 point 4), and a judge that cannot reach its model
+// or answers badly now REFUSES, so the session publishes `no_consensus`. The
+// share below survives as a reader of `swarm_session_judgements.source` over
+// historical rows, and on a current stack it can only ever read 0 %.
+//
+// Why it was built. AC-FE-05 USED TO make deterministic fallback prose a
+// feature: when the model misbehaved, the judging still produced a labelled,
+// reproducible opinion and the session still published. That was why no gate
+// in that release looked at it — and why a stack in PERMANENT fallback passed
+// every one of them. A fallback receipt was still a published receipt with
+// four weights, so `/version`, the weights total, `missingReceipts.count == 0`
+// and all four postflight checks were green on a stack where every enforce
+// session published template prose under the judge's name (run-1 §E.3 + the
 // 1.12 finding: DEFAULT_JUDGE_TIMEOUT_MS = 60_000 against a pinned model that
 // answers the real prompt in ~112 s).
 //

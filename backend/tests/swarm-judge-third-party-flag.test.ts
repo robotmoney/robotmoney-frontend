@@ -117,6 +117,22 @@ test("while the flag is off a third-party judge is not the judge of record, even
   expect(result).toMatchObject({ ok: true, judgeOfRecord: true, state: "judged" });
 });
 
+test("while the flag is off a third-party judge is SERVED nothing, so it never pays for a model call it cannot land", async () => {
+  expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
+  const thirdParty = await seatJudge({ prefix: "unserved", operator: "peaq" });
+  const anonymous = await seatJudge({ prefix: "unserved_null", operator: null });
+  const inHouse = await seatJudge({ prefix: "served", operator: "robotmoney" });
+  const sessionId = await judging("serve_gate");
+  // The control: the same session IS served to the in-house judge.
+  expect((await ic.pendingJudgingFor(inHouse.id)).map((p) => p.sessionId)).toEqual([sessionId]);
+  expect(await ic.pendingJudgingFor(thirdParty.id)).toEqual([]);
+  expect(await ic.pendingJudgingFor(anonymous.id)).toEqual([]);
+  // Turning the flag on serves it, from the same row and with no redeploy.
+  await setJudgeConfig({ thirdPartyEnabled: true });
+  expect((await ic.pendingJudgingFor(thirdParty.id)).map((p) => p.sessionId)).toEqual([sessionId]);
+  expect((await ic.pendingJudgingFor(anonymous.id)).map((p) => p.sessionId)).toEqual([sessionId]);
+});
+
 test("turning the flag on permits a third-party judge, and its row names it", async () => {
   await setJudgeConfig({ thirdPartyEnabled: true });
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(true);

@@ -46,8 +46,10 @@
 // participant that subscribes over HTTP (smoke-production-spec.md §6.2), and
 // the session itself records the answer. `judge_mode` is captured at turnover
 // and `judging_outcome` is decided once by finalize (system-scheduler-spec.md
-// §4.4), so a session published `no_consensus` under `enforce` is the durable,
-// per-session record that its judge was asked and did not answer in time.
+// §4.4), so a session published `no_consensus` is the durable, per-session
+// record that its judge was asked and did not answer in time. A session that
+// reached judging with no captured mode is read as `enforce` from its stored
+// deadline, the same rule the three judging transitions apply.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
 
 /**
@@ -159,13 +161,23 @@ export async function detectMissingReceiptSessions(
     WITH cfg AS (SELECT mode, min_takes, policy_updated_at FROM swarm_judge_config WHERE id = 1),
     candidate AS (
       SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, t.take_count,
-             COALESCE(g.mode, s.judge_mode, c.mode) AS mode_applied,
+             -- A STORED DEADLINE IS A RECORD OF THE MODE. requestJudging writes
+             -- it only for a session not captured as off, so a session that
+             -- reached judging without a turnover (judge_mode NULL, the
+             -- legacy close route) was judged under enforce by the same rule
+             -- requestJudging, submitJudgement and finalizeEpoch all apply.
+             COALESCE(g.mode, s.judge_mode,
+                      CASE WHEN s.judging_deadline_at IS NOT NULL THEN 'enforce' END,
+                      c.mode) AS mode_applied,
              COALESCE(g.min_takes, c.min_takes)::int AS min_takes_applied,
              -- The session carries its OWN record of the mode that applied.
-             (g.mode IS NOT NULL OR s.judge_mode IS NOT NULL) AS carries_mode,
+             (g.mode IS NOT NULL OR s.judge_mode IS NOT NULL OR s.judging_deadline_at IS NOT NULL) AS carries_mode,
              -- Durable, per-session evidence that the judge was asked and gave
-             -- no eligible consensus: finalize's own recorded outcome.
-             (s.judge_mode = 'enforce' AND s.judging_outcome = 'no_consensus') AS judge_failed,
+             -- no eligible consensus: finalize's own recorded outcome. Finalize
+             -- decides no_consensus only on the non-off branch, so the
+             -- outcome alone is the evidence; the mode test only keeps an
+             -- explicitly off row out.
+             (s.judge_mode IS DISTINCT FROM 'off' AND s.judging_outcome = 'no_consensus') AS judge_failed,
              -- Today's config may only speak for a session it predates, and
              -- "today's config" means the POLICY — mode and min_takes.
              -- policy_updated_at (migration 0057) moves only when one of those

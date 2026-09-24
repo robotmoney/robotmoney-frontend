@@ -619,9 +619,18 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   const [sess] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${unadopted.sessionId}`) as any[];
   expect(sess.swarm_recommendation.judge).toBeUndefined();
 
+  // Finalize recorded `no_consensus`, and that stored outcome is refused FIRST:
+  // §4.4 publishes such a session with no certificate, whatever is on file.
   const refused = await admin.publishConsensusReceiptAdmin(unadopted.sessionId);
   expect(refused.ok).toBe(false);
-  expect((refused as any).error).toBe("judgement_not_adopted");
+  expect((refused as any).error).toBe("no_consensus");
+  // The adoption gate behind it still holds on its own. A session published
+  // before finalize recorded outcomes carries no `judging_outcome`; with the
+  // same unadopted row on file it is refused by adoption, not by outcome.
+  await sql`UPDATE swarm_sessions SET judging_outcome = NULL WHERE id = ${unadopted.sessionId}`;
+  const unadoptedRefusal = await admin.publishConsensusReceiptAdmin(unadopted.sessionId);
+  expect(unadoptedRefusal.ok).toBe(false);
+  expect((unadoptedRefusal as any).error).toBe("judgement_not_adopted");
   const [none] = (await sql`
     SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${unadopted.sessionId}`) as any[];
   expect(none.n).toBe(0);

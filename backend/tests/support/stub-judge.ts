@@ -126,12 +126,13 @@ export async function submitSigned(
  * Put an AGGREGATED session into `judging`, as the scheduler's request-judging
  * step does (system-scheduler-spec.md §4.4).
  *
- * A session built through the legacy fixtures (`openSession` → `closeWindow` →
- * `aggregateSession`) never captured a judge mode at turnover, so the capture
- * is written here — the fixture standing in for the turnover it skipped.
+ * NO MODE IS WRITTEN HERE. A session built through the legacy fixtures
+ * (`openSession` → `closeWindow` → `aggregateSession`) may carry a NULL judge
+ * mode, and it goes through `requestJudging` and `submitJudgement` exactly as
+ * it is: all three transitions refuse only `off`, and the tests exercise that
+ * contract rather than a fixture-patched one.
  */
 export async function requestJudgingFor(sessionId: string): Promise<void> {
-  await sql`UPDATE swarm_sessions SET judge_mode = 'enforce' WHERE id = ${sessionId} AND judge_mode IS NULL`;
   const requested = await requestJudging(sessionId);
   if (!requested.ok) throw new Error(`requestJudgingFor(): ${JSON.stringify(requested)}`);
 }

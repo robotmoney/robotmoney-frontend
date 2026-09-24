@@ -96,7 +96,6 @@ export const ROUTES: {
       epochTurnover: string;
       epochAggregate: string;
       epochRequestJudging: string;
-      epochConsensus: string;
       epochFinalize: string;
       members: string;
       applications: string;

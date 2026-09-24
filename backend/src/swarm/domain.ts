@@ -2400,10 +2400,10 @@ export function buildSynthesis(
 // `topic` names the actual stances in conflict (not a generic placeholder)
 // and `what_settles` is an objective, trackable test rather than "" (#323).
 //
-// Exported since #752: this is one of the four template producers the judge
-// falls back to when a model is unavailable or answers badly, and "falls back
-// to the prose the templates produce today" is only checkable if the judge
-// calls the same function the aggregator does.
+// Exported since #752, when this was one of the four template producers the
+// judge fell back to when a model was unavailable or answered badly. That
+// fallback is deleted (D53 point 4): the judge refuses instead, and this is
+// now only the aggregator's own deterministic prose.
 export function buildDisagreements(subjectLabel: string, authoredTakes: any[]): any[] {
   const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
@@ -3332,6 +3332,14 @@ export type RecordConsensusResult = {
  * by. Nothing downstream looks at when an event arrived, when a timer fired, or
  * when finalize was called — §9: "An event's arrival time never decides an
  * outcome."
+ *
+ * NO ROUTE CALLS THIS. It checks only that the judgement belongs to the
+ * session, not that it is the judge of record's or that its opinion reached
+ * the session — `submitJudgement` has already decided both before it calls
+ * `recordJudgingConsensusTx`. The `epochs/consensus` admin route that exposed
+ * this with a bare judgement id is retired for exactly that reason; this
+ * standalone form survives only so the settlement tests can plant a consensus
+ * at a chosen instant.
  */
 export async function recordJudgingConsensus(
   sessionId: string,
@@ -3983,10 +3991,19 @@ export interface PendingJudging {
  * Serving it would only hand the judge a model call whose answer is refused.
  *
  * THE DEADLINE IS NOT FILTERED ON. A session past its deadline that the
- * scheduler has not finalized yet is still in `judging`, and a judgement that
- * lands in that window is eligible or not by the STORED instants alone
- * (§4.4). Hiding it here would be this module deciding an outcome, which is
- * exactly what §6.2 says the judge never does.
+ * scheduler has not finalized yet is still in `judging`; a judgement that lands
+ * in that window is kept as evidence (`after_deadline`) and decides nothing,
+ * by the STORED instants alone (§4.4). Hiding it here would be this module
+ * deciding an outcome, which is exactly what §6.2 says the judge never does.
+ *
+ * THE THIRD-PARTY GATE IS APPLIED HERE TOO (§6.2, D52). While
+ * `third_party_enabled` is false, a judge whose member operator is not the
+ * in-house literal is served NOTHING: its submission would be refused with
+ * `third_party_judging_disabled`, so serving it work would only buy a paid
+ * model call whose answer cannot land. The predicate is the one
+ * `submitJudgement` applies inside its transaction and the judge-of-record
+ * query uses; that later check stays authoritative, because the flag can flip
+ * while the model is thinking.
  */
 export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
   const rows = await sql<
@@ -3995,6 +4012,11 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
     SELECT s.id, s.subject_id, s.date, s.judging_deadline_at, s.judging_requested_at
       FROM swarm_sessions s
      WHERE s.state = 'judging'
+       AND EXISTS (
+         SELECT 1 FROM swarm_members m
+          WHERE m.id = ${memberId}
+            AND (m.operator = ${IN_HOUSE_OPERATOR}
+                 OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)))
        AND NOT EXISTS (
          SELECT 1 FROM swarm_session_judgements j
           WHERE j.session_id = s.id AND j.judged_by_member_id = ${memberId})
@@ -4120,11 +4142,13 @@ export async function isJudgeMember(memberId: string): Promise<boolean> {
  *      part, and fills every quoted view from the member's own body.
  *
  * Only then is the row written, and in the SAME transaction: if this judge is
- * the session's judge of record and the session is still `judging`, its opinion
- * is applied to the session's record and the consensus is recorded with its
- * acceptance instant (`recordJudgingConsensusTx`). Any other eligible judgement
- * is recorded as evidence and changes no outcome: a second seated judge's, or
- * one that lands after publication (`lateEvidence`).
+ * the session's judge of record, the session is still `judging` and its
+ * deadline has not passed by the database clock, its opinion is applied to the
+ * session's record and the consensus is recorded with its acceptance instant
+ * (`recordJudgingConsensusTx`). Any other eligible judgement is recorded as
+ * evidence and changes no outcome: a second seated judge's, one that lands
+ * after the deadline but before finalize (`after_deadline`), or one that lands
+ * after publication (`lateEvidence`).
  *
  * THE JUDGE OF RECORD IS CHOSEN BY MEMBER ID, never by arrival (§4.4): the
  * lowest id among the active judges that pass the gate and hold no take in the
@@ -4181,14 +4205,27 @@ export async function submitJudgement(
   }
 
   return sql.begin(async (tx) => {
+    // `past_deadline` is read off the database clock at the moment of the
+    // comparison (system-scheduler-spec.md §4.2, "One clock"): `clock_timestamp()`,
+    // never the transaction's `now()` and never the application's clock. The
+    // deadline itself is inclusive (§4.4: a consensus recorded AT it is eligible).
     const [session] = await tx<Record<string, any>[]>`
-      SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at
+      SELECT id, state, judge_mode, judging_deadline_at, consensus_recorded_at,
+             (judging_deadline_at IS NOT NULL AND clock_timestamp() > judging_deadline_at) AS past_deadline
         FROM swarm_sessions WHERE id = ${sessionId} FOR UPDATE`;
     if (!session) return refuseSubmission(404, "session_not_found");
     // JUDGING WAS REQUESTED, OR THERE IS NOTHING TO SUBMIT INTO. Checked on the
     // locked row, before anything is written. `published` passes only when it
     // was reached through judging, which is the late-evidence case §4.4 keeps.
-    if (session.judge_mode !== "enforce" || !session.judging_deadline_at ||
+    //
+    // THE SAME MODE TEST requestJudging AND finalizeEpoch APPLY: only `off`
+    // refuses. A session whose mode was never captured (NULL — one that reached
+    // `aggregated` without a turnover) is judged exactly as those two treat it:
+    // requestJudging accepts it and finalize decides it on the enforce branch.
+    // Refusing it here alone would force its `no_consensus` while the other two
+    // transitions went on waiting for a judgement this one could never take.
+    // The stored deadline is the real proof that judging was requested.
+    if (session.judge_mode === "off" || !session.judging_deadline_at ||
         !["judging", "judged", "published"].includes(String(session.state))) {
       return refuseSubmission(409, "session_not_judging");
     }
@@ -4279,6 +4316,16 @@ export async function submitJudgement(
       skipped = "not_judge_of_record";
     } else if (session.state !== "judging" || session.consensus_recorded_at) {
       skipped = "consensus_already_recorded";
+    } else if (session.past_deadline === true) {
+      // AFTER THE DEADLINE, BEFORE FINALIZE. The session is still `judging`
+      // only because the scheduler has not finalized it yet, and finalize will
+      // decide `no_consensus` from the stored deadline whatever lands now
+      // (§4.4: "A consensus recorded after the deadline is kept as a record but
+      // does not change a `no_consensus` outcome"). So the row is kept as
+      // evidence and the opinion does NOT reach the session: were it applied,
+      // the published `no_consensus` session would carry a judge block, and a
+      // receipt could be assembled over an opinion that decided nothing.
+      skipped = "after_deadline";
     } else {
       const attempt = await applyOpinion(tx, sessionId, {
         opinion: parsed, model, promptHash, inputsDigest: claimedDigest, judgedByMemberId: memberId,

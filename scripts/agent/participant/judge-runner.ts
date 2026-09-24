@@ -249,6 +249,11 @@ export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer
     try {
       body = (await res.text()).slice(0, BODY_LABEL_MAX);
     } catch {
+      // Deliberately NOT `timeout`, even when the body read hit the ceiling:
+      // the vendor has already given its verdict as a status, and the status
+      // alone still classifies (402 is credit_exhausted whatever the body
+      // says). Only the body-dependent distinctions fall back to their
+      // status-only class.
       body = "";
     }
     return { kind: "model_status", status: res.status, body };
@@ -257,6 +262,13 @@ export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer
   try {
     parsed = await res.json();
   } catch (err) {
+    // THE SAME CEILING, READING THE BODY. `AbortSignal.timeout` covers the
+    // whole exchange, so a vendor that sends its headers and then stalls
+    // rejects HERE with the same `TimeoutError`. That is still D-A7's
+    // `model_timeout` — the model did not answer in time — and reporting it as
+    // a `runner` fault would blame the shim for the vendor's silence, the
+    // arm-merge judge-reasons.ts forbids.
+    if (isTimeout(err)) return { kind: "timeout", timeoutMs: options.timeoutMs };
     return { kind: "runner", message: `model answer was not JSON: ${message(err)}` };
   }
   const content = (parsed as { choices?: { message?: { content?: unknown } }[] } | null)

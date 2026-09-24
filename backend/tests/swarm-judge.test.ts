@@ -40,6 +40,7 @@ import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmo
 import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
+import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
@@ -638,8 +639,12 @@ test("a session where EVERY take is stance-only is refused as nothing to judge",
 test("a session in collecting, window_closed or aggregated is refused before any row is written", async () => {
   const judge = await seatJudge();
   const collecting = await weightedSession("judge-early-collecting");
+  const windowClosed = await weightedSession("judge-early-window-closed");
+  await submit(await activeMember(), windowClosed.date, windowClosed.subj, { body: "a take before the close", weights: W });
+  await ic.closeWindow(windowClosed.session.id);
+  expect(await stateOf(windowClosed.session.id)).toBe("window_closed");
   const aggregated = await aggregatedSession("judge-early-aggregated");
-  for (const id of [collecting.session.id, aggregated.session.id]) {
+  for (const id of [collecting.session.id, windowClosed.session.id, aggregated.session.id]) {
     const refused = await refusedJudgement(judge, id, STUB_JUDGE_REPLY);
     expect(refused).toEqual({ ok: false, status: 409, error: "session_not_judging" });
   }
@@ -679,6 +684,59 @@ test("a judge deactivated before it submits is refused: its token no longer auth
   await sql`UPDATE swarm_members SET status = 'inactive' WHERE id = ${judge.id}`;
   expect(await ic.submitJudgement(judge.token, signed)).toEqual({ ok: false, status: 401, error: "invalid_token" });
   expect(await judgementCount(session.id)).toBe(0);
+});
+
+/**
+ * Change the judge's member row in a transaction held OPEN until the
+ * submission is provably waiting on that row, then commit.
+ *
+ * This is how the IN-TRANSACTION re-check is reached rather than the cheap
+ * pre-check in front of it: an uncommitted UPDATE is invisible to
+ * `memberIdForToken` and `isJudgeMember`, so both pass, and only the
+ * submission's own `FOR SHARE` read of the member row blocks on the lock and
+ * then sees the committed change. Observing the waiter in `pg_locks` before
+ * committing is what proves which check answered.
+ */
+async function changeJudgeWhileSubmitting(judge: TestJudge, sessionId: string, change: "revoke_role" | "deactivate") {
+  const signed = await signedJudgement(judge, sessionId);
+  let pending!: Promise<Awaited<ReturnType<typeof ic.submitJudgement>>>;
+  let sawWaiter = false;
+  await sql.begin(async (tx) => {
+    if (change === "revoke_role") await tx`UPDATE swarm_members SET role = 'member' WHERE id = ${judge.id}`;
+    else await tx`UPDATE swarm_members SET status = 'inactive' WHERE id = ${judge.id}`;
+    pending = ic.submitJudgement(judge.token, signed);
+    for (let i = 0; i < 200 && !sawWaiter; i++) {
+      const [w] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks
+         WHERE NOT granted AND pid <> pg_backend_pid() AND locktype IN ('transactionid', 'tuple')`;
+      sawWaiter = Number(w?.n ?? 0) > 0;
+      if (!sawWaiter) await Bun.sleep(25);
+    }
+  });
+  const result = await pending;
+  return { result, sawWaiter };
+}
+
+test("a judge whose ROLE is revoked while it submits is refused by the in-transaction re-check, and writes nothing", async () => {
+  const { session } = await judgingSession("judge-role-revoked-mid-submit");
+  const judge = await seatJudge();
+  const { result, sawWaiter } = await changeJudgeWhileSubmitting(judge, session.id, "revoke_role");
+  expect(sawWaiter, "the submission must have reached the member-row lock inside its transaction").toBe(true);
+  expect(result).toEqual({ ok: false, status: 403, error: "judge_role_required" });
+  expect(await judgementCount(session.id)).toBe(0);
+  expect(await stateOf(session.id)).toBe("judging");
+});
+
+test("a judge DEACTIVATED while it submits is refused as judge_member_inactive, not by its token, and writes nothing", async () => {
+  const { session } = await judgingSession("judge-deactivated-mid-submit");
+  const judge = await seatJudge();
+  const { result, sawWaiter } = await changeJudgeWhileSubmitting(judge, session.id, "deactivate");
+  expect(sawWaiter, "the submission must have reached the member-row lock inside its transaction").toBe(true);
+  // Not `invalid_token`: the token authenticated when the pre-check ran, so
+  // this refusal can only have come from the re-check under the lock.
+  expect(result).toEqual({ ok: false, status: 403, error: "judge_member_inactive" });
+  expect(await judgementCount(session.id)).toBe(0);
+  expect(await stateOf(session.id)).toBe("judging");
 });
 
 test("judged is not terminal: a judged session publishes, and carries the judge's opinion when it does", async () => {
@@ -789,6 +847,74 @@ test("two racing submissions from one judge produce ONE judgement", async () => 
   expect([x.duplicate, y.duplicate].sort()).toEqual([false, true]);
   expect(x.judgementId).toBe(y.judgementId);
   expect(await judgementCount(session.id)).toBe(1);
+});
+
+// ── 7b. After the deadline, before finalize ─────────────────────────────────
+
+const ADMIN_CFG = { adminToken: "s3cret-swarm-judge-admin-token", allowInsecure: false } as const;
+async function callAdmin(path: string, body: unknown): Promise<{ status: number; body: any }> {
+  const req = new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Admin-Token": ADMIN_CFG.adminToken },
+    body: JSON.stringify(body),
+  });
+  return (await handleSwarmAdmin(req, new URL(req.url), ADMIN_CFG)) ?? { status: 404, body: null };
+}
+
+test("the judge of record submitting AFTER the deadline but before finalize is kept as evidence, and the session publishes no_consensus with NO certificate", async () => {
+  const { session } = await judgingSession("judge-after-deadline");
+  const before = await recOf(session.id);
+  // The stored deadline has passed by the database clock; the scheduler has
+  // not finalized yet, so the session is still `judging`.
+  await sql`UPDATE swarm_sessions SET judging_deadline_at = clock_timestamp() - interval '1 second' WHERE id = ${session.id}`;
+  expect(await stateOf(session.id)).toBe("judging");
+
+  const judge = await seatJudge();
+  const late = await submitSigned(judge, session.id, STUB_JUDGE_REPLY);
+  expect(late).toMatchObject({ ok: true, judgeOfRecord: true, applied: false, lateEvidence: false, duplicate: false });
+  // Retained as a record (§4.4), and it reached nothing.
+  const row = await latestRow(session.id);
+  expect(row.applied).toBe(false);
+  expect(row.applied_skipped_reason).toBe("after_deadline");
+  expect(row.judged_by_member_id).toBe(judge.id);
+  expect(await stateOf(session.id)).toBe("judging");
+  const s0 = (await sql`SELECT consensus_recorded_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
+  expect(s0.consensus_recorded_at).toBeNull();
+  const after = await recOf(session.id);
+  expect(after.judge).toBeUndefined();
+  expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+
+  // Finalize and attest through the scheduler's own route.
+  const fin = await callAdmin("/api/swarm/admin/epochs/finalize", { sessionId: session.id });
+  expect(fin.status).toBe(200);
+  expect(fin.body).toMatchObject({ state: "published", outcome: "no_consensus", consensusReceipt: { published: false, reason: "no_consensus" } });
+  expect(fin.body.receiptFailed).toBeUndefined();
+  expect((await recOf(session.id)).judge).toBeUndefined();
+  expect(await sql`SELECT 1 FROM swarm_consensus_receipts WHERE session_id = ${session.id}`).toHaveLength(0);
+
+  // And the receipt refuses on the stored outcome alone, even if a judge block
+  // were somehow on the record: no path certifies a no_consensus session.
+  const refused = await admin.publishConsensusReceiptAdmin(session.id);
+  expect(refused).toMatchObject({ ok: false, error: "no_consensus" });
+});
+
+test("the retired epochs/consensus route is gone: a bare judgement id cannot be recorded as the consensus", async () => {
+  const { session, members } = await judgingSession("judge-no-consensus-route");
+  // A judge that is NOT the judge of record lands evidence that reached nothing.
+  const ofRecord = await seatJudge();
+  const second = await seatJudge();
+  const [low, high] = [ofRecord, second].sort((a, b) => (a.id < b.id ? -1 : 1));
+  const evidence = await submitSigned(high!, session.id, goodAnswer(members[0]!.id, members[1]!.id));
+  expect(evidence).toMatchObject({ ok: true, judgeOfRecord: false, applied: false });
+  expect(low).toBeTruthy();
+
+  const res = await callAdmin("/api/swarm/admin/epochs/consensus", {
+    sessionId: session.id, judgementId: (evidence as any).judgementId,
+  });
+  expect(res.status).toBe(404);
+  expect(await stateOf(session.id)).toBe("judging");
+  const s0 = (await sql`SELECT consensus_recorded_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
+  expect(s0.consensus_recorded_at).toBeNull();
 });
 
 // ── 8. The admin read path ──────────────────────────────────────────────────

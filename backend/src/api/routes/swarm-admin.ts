@@ -85,6 +85,9 @@ export interface AdminAuthConfig {
 const EXPECTED_RECEIPT_REFUSALS = new Set([
   // The judge is off, which is the production default.
   "not_judged",
+  // Judging was requested and no eligible consensus was recorded by the
+  // deadline: §4.4 publishes the session with no certificate, by design.
+  "no_consensus",
   // Judgements are on file but none reached the session: they came from a judge
   // that is not the judge of record, or after publication (late evidence).
   "judgement_not_adopted",
@@ -197,14 +200,14 @@ export async function handleSwarmAdmin(
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
         return fromResult(await epoch.requestJudging(sessionId));
       }
-      case "consensus": {
-        const sessionId = str("sessionId");
-        const judgementId = typeof b.judgementId === "number" ? b.judgementId : null;
-        if (!sessionId || judgementId == null) {
-          return { status: 400, body: { error: "sessionId and judgementId required" } };
-        }
-        return fromResult(await epoch.recordJudgingConsensus(sessionId, judgementId));
-      }
+      // THERE IS NO `consensus` ROUTE. A consensus is recorded by exactly one
+      // path: `submitJudgement`, in the transaction that writes the judge of
+      // record's signed, applied judgement (§4.4, criterion 102: "through part
+      // 1's transition rather than a second copy"). A route that took a bare
+      // judgement id would let a scheduler token record ANY row — a second
+      // judge's, or one that never reached the session — as the consensus, and
+      // finalize would then publish `judged` over a session carrying no adopted
+      // opinion. `epochs/consensus` therefore falls through to the 404 below.
       case "finalize": {
         const sessionId = str("sessionId");
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };

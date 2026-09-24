@@ -406,6 +406,49 @@ describe("runJudge — exactly one POST, and every failure is an answer rather t
     }
   });
 
+  test("a vendor that sends its HEADERS and then withholds the body past the ceiling is `timeout`, not `runner`", async () => {
+    // A real socket, not a fetch double: the question is what the real fetch
+    // does when the ceiling fires while the BODY is being read, after the
+    // response has already resolved.
+    const { dir, file } = promptFileWith("judge this");
+    let calls = 0;
+    let release: (() => void) | undefined;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        calls++;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // Flush the head of a JSON body so the headers go out and
+            // res.json() is left waiting on the rest.
+            controller.enqueue(new TextEncoder().encode('{"choices":'));
+            release = () => {
+              try {
+                controller.close();
+              } catch {
+                // already torn down with the aborted request
+              }
+            };
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      const answer = await runJudge(options({
+        promptFile: file,
+        endpoint: `http://127.0.0.1:${server.port}/v1`,
+        timeoutMs: 300,
+      }));
+      expect(answer).toEqual({ kind: "timeout", timeoutMs: 300 });
+      expect(calls).toBe(1);
+    } finally {
+      release?.();
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("runJudge never THROWS — every failure becomes exactly one answer", async () => {
     const { dir, file } = promptFileWith("judge this");
     globalThis.fetch = (async (_input?: any): Promise<Response> => {

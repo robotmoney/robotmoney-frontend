@@ -263,7 +263,6 @@ export const ROUTES = {
       epochTurnover: "/api/swarm/admin/epochs/turnover", // POST { subjectId, expectedSessionId } — close N, open N+1
       epochAggregate: "/api/swarm/admin/epochs/aggregate", // POST { sessionId } — deterministic rollup
       epochRequestJudging: "/api/swarm/admin/epochs/request-judging", // POST { sessionId } — stores the absolute deadline
-      epochConsensus: "/api/swarm/admin/epochs/consensus", // POST { sessionId, judgementId } — record the acceptance instant
       epochFinalize: "/api/swarm/admin/epochs/finalize", // POST { sessionId } — decide the outcome from stored instants
 
       // GET list (all statuses, redacted) / POST manual add.

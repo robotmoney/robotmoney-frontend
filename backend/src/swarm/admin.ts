@@ -1380,7 +1380,21 @@ function projectFaultInjection(state: JudgeFaultInjectionState) {
  * `judge_fault_injection` rows (on, then off) is what an acceptance bundle
  * cites to bound the window. The BODY never reaches the audit row for the same
  * reason it never reaches the GET.
+ *
+ * ARMING IS REFUSED TODAY: THE LEVER HAS NO CONSUMER (issue #1026, D53 point
+ * 4). Its only consumer was the backend `judgeSession()`, deleted when the
+ * judge became a participant, and no participant reads the row yet. Accepting
+ * `enabled: true` would return 200, write an audit row saying "the judge is now
+ * answering from this table", and change no judging at all — the inert row an
+ * operator believes is working, which is exactly what the 403 above exists to
+ * prevent. So after the process gates pass (so a stack that could never arm it
+ * still says so first), arming is refused with `fault_injection_has_no_consumer`
+ * and writes nothing. Disarming stays open, so a row armed before the removal
+ * can always be cleared. Lift this refusal in the change that makes the judge
+ * participant consume the lever, and not before.
  */
+export const FAULT_INJECTION_HAS_CONSUMER: boolean = false;
+
 export async function setJudgeFaultInjectionAdmin(
   patch: { enabled: boolean; body?: string; remaining?: number; sessionId?: string | null; note?: string | null },
   actor: Actor = ADMIN_ACTOR,
@@ -1393,6 +1407,14 @@ export async function setJudgeFaultInjectionAdmin(
         return { ...err(403, e.message), reason: e.gate, error: "fault_injection_refused", detail: e.message };
       }
       throw e;
+    }
+    if (!FAULT_INJECTION_HAS_CONSUMER) {
+      return {
+        ...err(409, "fault_injection_has_no_consumer"),
+        error: "fault_injection_has_no_consumer",
+        detail: "the judge fault-injection lever has no consumer: the backend judge that read it is deleted (D53) and no " +
+          "judge participant reads it yet, so arming it would change no judging. Nothing was written.",
+      };
     }
   }
   let state: JudgeFaultInjectionState;

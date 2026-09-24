@@ -112,6 +112,10 @@ export type ConsensusReceiptRefusalReason =
   | "session_not_published"
   | "session_not_reaggregated"
   | "not_judged"
+  // Finalize decided `no_consensus` (system-scheduler-spec.md §4.4): judging was
+  // requested and no eligible consensus was recorded by the deadline. Such a
+  // session "is published in that state with no consensus certificate".
+  | "no_consensus"
   | "judgement_not_adopted"
   // The adopted judgement exists and the session took it, but no MODEL wrote
   // it — `source='fallback'`, i.e. the retired template fallback's prose. A receipt is a
@@ -570,6 +574,20 @@ async function loadAssemblyInput(
       `session ${sessionId} is in state "${state}", and a receipt is assembled only from a PUBLISHED session — publish the session first. ` +
         "Until it is published the lifecycle still allows it to be reopened and re-aggregated, and the receipt's bytes are immutable and anchored, " +
         "so a receipt published earlier would go on asserting an allocation the session no longer serves.",
+    );
+  }
+
+  // ── 1b. FINALIZE DECIDED THERE IS NO CONSENSUS ────────────────────────────
+  // The outcome is decided once, by finalize, from stored instants (§4.4), and
+  // `no_consensus` means "no consensus certificate". Checked on the stored
+  // outcome rather than inferred from whether a judge block happens to be on
+  // the record, so no later change to how an opinion reaches a session can
+  // turn a `no_consensus` session into a certified one.
+  if (String(session.judging_outcome ?? "") === "no_consensus") {
+    throw new ConsensusReceiptRefusal(
+      "no_consensus",
+      `session ${sessionId} was published with judging outcome no_consensus — judging was requested and no eligible consensus was recorded by its deadline, ` +
+        "so it is published with no consensus certificate (system-scheduler-spec.md §4.4). A judgement kept after the deadline is a record, not a consensus.",
     );
   }
 
