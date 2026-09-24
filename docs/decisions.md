@@ -3630,6 +3630,8 @@ release gates; the deprecated engineering plan does not schedule that work.
 
 ## D48 — Judge mode is `off | enforce`; `shadow` is not a go-forward mode (Lucas, 2026-09-22)
 
+> **Implementation prerequisite waived by [D53](#d53) on 2026-09-24.** The replay makes no judge call, and under D52 the judge is a participant. `shadow` leaves the write path without the soak.
+
 **Status.** Accepted 2026-09-22; not yet implemented. This records the target,
 not a claim about the current API behavior.
 
@@ -3850,3 +3852,87 @@ this was built:
   below it is forbidden. "Never" foreclosed a retention policy that will be
   needed.
 
+
+## D53 — Seven owner calls that unblock the deployment refactor (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from the
+verified audit of issue #1026, where each point was a place the criteria, the
+specifications and the earlier decisions disagreed. Each call below names the
+rule that wins, so the implementation waves do not have to guess.
+
+**Decision 1: D48's replay prerequisite is waived.** [D48](#d48) said `shadow`
+could leave the write path only after the judge replay covered the real
+recorded inputs of an observe-before-enforce soak. That coverage does not
+exist: `backend/src/swarm/judge-replay.ts` makes no judge call, so it cannot
+prove anything about a judge. The prerequisite is waived rather than built.
+`shadow` is removed from every write path and the judge-mode `CHECK` tightens
+to `off | enforce`. Existing rows and signed receipts that say `shadow` stay
+readable, as D48 already promised.
+*Why.* Under [D52](#d52) the judge is a participant, not a backend function,
+and `currentJudgeMode` already turns `shadow` into `off` for every new session.
+A soak against the retired backend judge would measure code that no longer
+decides anything.
+
+**Decision 2: D52's retention rule beats migration 0072's triggers.** A forward
+migration drops the `DELETE` and `TRUNCATE` guard triggers on
+`swarm_stream_events`. `DELETE` and `TRUNCATE` stay revoked from `rm_app` and
+`rm_worker`, so only `rm_owner` can prune, and only rows older than the oldest
+cursor the API may still be asked to serve. The table leaves
+`APPEND_ONLY_TABLES`. The criterion that asked for the triggers now reads
+"protected by grant, prunable only by `rm_owner`".
+*Why.* D52 refined "never pruned" into "retained past the oldest servable
+cursor", because a log that can never shrink forecloses a retention policy the
+system will need. A trigger that refuses every `DELETE` makes that policy
+impossible. The grant keeps the part that matters: no runtime role can open a
+gap.
+
+**Decision 3: compat headers start after a baseline of 0063.** The migration
+runner refuses a pending migration with no `-- compat: additive` or
+`-- compat: breaking` header, except one numbered at or below the baseline
+constant `0063`, which it accepts as pre-compat. A test proves every migration
+above `0063` carries a header. Files `0001` to `0063` are not backfilled.
+*Why.* Production still runs a release whose pending set includes header-less
+files, so a strict rule would refuse `bun run migrate` and a `--local` dump of
+production outright. Backfilling 63 headers by hand would write compatibility
+claims nobody verified, and a header is a claim the rollout trusts.
+
+**Decision 4: the judge-path criterion moves to the participant.** The Phase 0
+criterion about the judge's direct transport now names the participant path:
+the participant judge-client classifies failures with the D-A7 refusal
+taxonomy on the direct transport, and the salvaged runner works with no
+container or network. The dead backend `judge()`, `judgeSession` and
+`templateOpinion` are deleted with their tests. Coverage from `swarm-judge` and
+`consensus-receipt-judge-roundtrip` that still matters moves into
+`participant-judge-runner` and `no-inline-judge`.
+*Why.* Nothing calls the backend judge any more, and the scheduler spec puts
+judging in a participant. Keeping tests green on a path that never runs proves
+nothing about the path that does. Deleting `templateOpinion` also removes the
+last templated-consensus code, which the no-fake-judge rule forbids anyway.
+
+**Decision 5: `bun smoke:capture` loses `--allow-primary`.** Capture always
+refuses a primary node or a credential that is not `rm_readonly`. There is no
+override.
+*Why.* A dump taken from a primary breaks the read-only rule the capture exists
+to keep, and a replica is always available to capture from. An override that
+is "recorded in the manifest" still takes the dump.
+
+**Decision 6: immutable analytics ledgers count as append-only for preflight.**
+Preflight check 2's rule against `DELETE` and `TRUNCATE` covers the tables in
+`LEDGER_IMMUTABLE_FAMILIES` as well as those in `APPEND_ONLY_TABLES`.
+*Why.* Losing a ledger row is the same harm as losing a history row, and the
+preflight module's own documentation already claimed they counted. This makes
+the check do what its comment says.
+
+**Decision 7: subject columns keep the `_seconds` suffix.**
+`epoch_duration_seconds` already exists and stays. The new columns are
+`epoch_anchor` and `judging_duration_seconds`.
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §2.2 notes
+that duration columns carry the unit suffix.
+*Why.* The spec's bare names were shorthand. Renaming a shipped column would
+break the wire contract for no gain, and a unit in the name stops a reader
+guessing seconds from milliseconds.
+
+**What stays.** D48's decision itself (`off | enforce`, history readable),
+D51's amendments with the `revision` column, and D52's no-fallback judge are
+unchanged. None of these calls adds a judge fallback, a templated consensus or
+a Docker socket.

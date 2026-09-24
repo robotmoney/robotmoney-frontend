@@ -44,6 +44,8 @@ Each subject's windows close on a fixed wall-clock **grid**. Three columns on th
 | `epoch_anchor` | one instant on the grid; every close is `epoch_anchor + k × epoch_duration` for some integer `k` |
 | `judging_duration` | how long judging waits for a consensus after it is requested (§4.4); not part of the grid |
 
+The duration columns carry their unit as a suffix in the schema: `epoch_duration` is `epoch_duration_seconds` and `judging_duration` is `judging_duration_seconds` ([D53](../decisions.md#d53)).
+
 The grid keeps windows from drifting. A late turnover does not push later windows back, and a daily subject anchored after the analytics producer's 22:30 UTC regime refresh closes after it every day.
 
 - **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2). An operator's early turnover (§4.3) follows the same rule, so the next window runs to the grid instant after the early-closed window's scheduled close and is longer than one duration.
