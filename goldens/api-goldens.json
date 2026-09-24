@@ -166269,6 +166269,10 @@
         }
       ]
     },
+    "/api/version": {
+      "api": "0.2.0",
+      "commit": null
+    },
     "/health": {
       "status": "ok",
       "env": "demo",
