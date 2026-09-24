@@ -95,7 +95,12 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.contract == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      # Full history: the version-bump step below diffs against the merge base
+      # (a pull_request) or the push event's `before` commit, neither of which
+      # a depth-1 checkout carries.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
@@ -103,6 +108,12 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Verify vendored contract
         run: bun run check-contract
+      # D54: the API version IS this package's version (GET /api/version
+      # reports it, and a separately deployed website accepts or refuses an API
+      # by it), so a change to contract/src/routes.js must bump it against the
+      # merge base. Exits 1 naming both versions; 2 if the base is unreachable.
+      - name: Route change bumps the contract version
+        run: bun scripts/check-contract-version-bump.ts
       - name: Contract tests (unit)
         working-directory: contract
         run: bun run test

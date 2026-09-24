@@ -13,7 +13,7 @@
 // runs from the repo root whatever directory it is invoked from.
 import { repoRoot } from "./version.ts";
 
-const FIXTURE_SPECS = ["preview-smoke", "api-unreachable", "preview-routes"];
+const FIXTURE_SPECS = ["preview-smoke", "api-unreachable", "api-range-mismatch", "preview-routes"];
 const LIVE_SPECS = ["preview-routes"];
 
 const args = process.argv.slice(2);

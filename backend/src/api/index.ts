@@ -9,6 +9,7 @@ import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/h
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { readStaticIdentity } from "../ops/static-identity.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
+import { apiVersionResponse } from "../ops/api-version.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
@@ -137,6 +138,14 @@ const server = Bun.serve({
 });
 
 async function route(req: Request, url: URL, pathname: string, clientIp: string): Promise<Response> {
+    // D54: the API's contract version, FIRST — ahead of /health and of every
+    // branch below that can touch the database, so a Postgres outage never
+    // reaches it. No auth by design: the website checks it at load, before it
+    // has any session, and the body is two public constants.
+    if (pathname === ROUTES.apiVersion && req.method === "GET") {
+      return apiVersionResponse();
+    }
+
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }

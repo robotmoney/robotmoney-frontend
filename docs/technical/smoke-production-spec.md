@@ -16,6 +16,8 @@
 > **Scope.** This specification governs every service the stack runs: `api`,
 > `website-server`, `system-scheduler`, `analytics-producer`, the pipeline
 > worker, local Postgres, and the participants. Amended 2026-09-24 (§12).
+> The static website is its own release unit, with its own deploy command and
+> version check (§13, [D54](../decisions.md#d54)).
 
 ## Document authority
 
@@ -297,7 +299,7 @@ The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard ha
 
 ## 10. Acceptance gates
 
-Each is an executable release gate. Cutover requires all three workstreams green.
+Each is an executable release gate. Cutover requires all three workstreams green. The W7 gates govern the website lifecycle (§13), which ships on its own schedule.
 
 **W1 deployment lifecycle**
 - Unset `RM_ENV` against a remote target refuses.
@@ -346,6 +348,16 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Configured credential file disappears while participants run: refuse, participants untouched.
 - `--spoof-keys` with `RM_CREDENTIALS` set writes elsewhere; interrupted rebind then rerun; crash after rebind commit before container replacement recovers.
 
+**W7 website lifecycle (§13, D54)**
+- A change to `contract/src/routes.js` without a contract version bump against the merge base fails `contract.yml`; with a bump it passes; a lowered version fails (`scripts/tests/unit/contract-version-bump.test.ts`).
+- `GET /api/version` answers `{api, commit}` with no credential, and still answers while every database query fails (`backend/tests/api-version-endpoint.test.ts`).
+- `website-server` proxies `/api/version` to `api` (`scripts/tests/integration/website-server-api-version.test.ts`).
+- `web-client.yml` fails when `apiRange` excludes the contract version; `/version.json` carries the range; the page's matcher agrees with the Bun-side rule on every table row (`scripts/tests/unit/web-client-api-range.test.ts`).
+- An API outside the page's range shows the reload notice and makes zero other `/api/*` requests with a clean console; an in-range API renders normally (`frontend/test/browser/api-range-mismatch.spec.ts`).
+- `bun smoke:web` refuses a site whose range excludes the running API, switches `website-server` without restarting `api` or a worker, and `--rollback` returns to the previous directory.
+- `bun smoke` refuses an API outside the live site's range unless the same plan deploys a site that admits it, and refuses against a live site with no declared range.
+- Rolling: deploying the site and the API one after the other, in either order, never serves a page against an API outside its range.
+
 ## 11. Out of scope
 
 The design does not specify an admin UI for judge settings. D48 owns the accepted judge-mode decision and its replay prerequisite; only the admin route writes `swarm_judge_config`.
@@ -371,3 +383,37 @@ Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52).
 | §8.5 | upgrade order unstated | additive: migrate then boot; breaking: down, migrate, boot |
 | §9.1 | four steps | adds a schema baseline before the first manifest, three service tokens, and rotating seated members through `rotate-key` |
 
+
+## 13. Website lifecycle
+
+Decided with the owner on 2026-09-24 and recorded as [D54](../decisions.md#d54). The static website is its own release unit: it ships on its own schedule, apart from `api` and the workers. Each side names its version, and deploying either side checks the other.
+
+### 13.1 Versions
+
+- **The site's range.** `frontend/package.json` declares `apiRange`, the semver range of API versions the site accepts. The assembled site's `/version.json` carries it. A manifest with no range publishes `apiRange: null`.
+- **The API's version.** It is `contract/package.json`'s version. `GET /api/version` answers `{api, commit}` with no credential and no database access. `website-server` proxies it with the rest of `/api/`. `/version` keeps reporting build identity (AC-ID-03).
+- **Range grammar.** A range is one or more space-separated comparators, all of which must hold: `^`, `~`, `>=`, `>`, `<=`, `<`, `=`, or an exact `X.Y.Z`. Anything else, and a missing range, is outside every range. `scripts/lib/api-range.ts` holds the rule for every deploy tool. The page's matcher (`lib/api-compat.js`) is tested row by row against it.
+- **Bumps.** A change to `contract/src/routes.js` needs a greater `contract/package.json` version than the merge base has (`contract.yml`). `web-client.yml` fails when the site's range excludes the contract version built from the same commit.
+
+### 13.2 `bun smoke:web`
+
+`bun smoke:web` deploys the site and nothing else.
+
+1. It builds the site into a versioned directory under the instance state directory (§1.1).
+2. It reads the running API's `/api/version` and refuses when that version is outside the new site's range.
+3. It points `website-server` at the new directory and reloads nginx. The switch is atomic. It restarts no `api` or worker container.
+4. It writes its own journal and receipt under the instance's `web/` directory, beside the stack's own (§1.3, §1.4).
+
+`bun smoke:web --rollback` returns `website-server` to the previous directory, with the same reload and receipt.
+
+### 13.3 `bun smoke` and the live site
+
+Before it replaces `api`, `bun smoke` reads the live site's `/version.json`. It refuses when the new API version is outside the live site's range, unless the same plan deploys a site whose range includes that version. A live site with no declared range counts as outside every range.
+
+### 13.4 The page
+
+Before its first API call the page reads its own range from `/version.json` and the API's version from `/api/version`. When the API is outside the range, it shows a reload notice and makes no other `/api/*` call. When the check cannot be answered (the API is down, predates the route, or the site declares no range), the page loads as it did before the check existed. API outages stay with the existing unreachable-API handling.
+
+### 13.5 Open question
+
+**T26, not decided here.** The API still reads the assembled site directory (`_static`) to report the served site's identity at `/version` and `/health`. Once the site switches on its own, that report describes whichever directory the API can see, which may not be the one `website-server` serves. The question is tracked on issue #1026. Until it is decided, the report stays as it is.

@@ -5,13 +5,17 @@
 //   /                    → frontend/preview/index.html (the wrapper)
 //   /preview/index.html  → frontend/preview/index.html
 //   /goldens/*           → goldens/*
-//   /version.json        → the web client's identity (frontend/package.json + HEAD)
+//   /version.json        → the web client's identity (frontend/package.json + HEAD),
+//                          including `apiRange`, the API versions it accepts (D54)
 //   everything else      → frontend/public/* (SPA at the root: /index.html, /assets/*)
 //   miss                 → frontend/preview/404.html, status 404 (frame-escape redirect)
 // Port: random free port by default; override with PORT=<n>.
 //
 // The wrapper's `?api=` switch (fixtures | prod | stage | <origin>) is handled
-// entirely in the browser; this server never proxies an api.
+// entirely in the browser; this server never proxies an api. That includes
+// GET /api/version: in fixtures mode the wrapper answers it from goldens like
+// any other read, and the page checks that answer against the apiRange this
+// server publishes, exactly as a deployed page checks the live api.
 import { join, posix } from "node:path";
 import { webClientVersion } from "./web-client/version.ts";
 

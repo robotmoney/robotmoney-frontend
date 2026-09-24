@@ -3,6 +3,7 @@ export function path(template: string, params?: Record<string, string | number>)
 export const ROUTES: {
   health: string;
   version: string;
+  apiVersion: string;
   comments: { list: string; create: string };
   dashboards: {
     regimeSnapshots: string;

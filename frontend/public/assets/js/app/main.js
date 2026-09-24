@@ -11,7 +11,19 @@ import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
 import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
-import { api, ROUTES } from "./lib/api.js";
+import { api, apiUrl, gateApiOn, ROUTES } from "./lib/api.js";
+import { checkApiCompat, renderReloadNotice } from "./lib/api-compat.js";
+
+// Is the API one this page was built for? (D54) Started first, before the
+// router renders anything or Alpine asks for data, and every lib/api.js call
+// waits on the verdict — so an API outside this site's declared range (its own
+// /version.json `apiRange`) gets a reload notice and no other /api/* request.
+// An unanswerable check is "don't know" and lets the page carry on as before.
+const apiCompat = checkApiCompat({ siteVersionUrl: "/version.json", apiVersionUrl: apiUrl(ROUTES.apiVersion) });
+gateApiOn(apiCompat.then((r) => r.status !== "incompatible"));
+apiCompat.then((r) => {
+  if (r.status === "incompatible") renderReloadNotice(document, r);
+});
 
 // The real vault (source of truth: robotmoney-site config, Base mainnet). This
 // is a public on-chain address, not a fabricated demo value.

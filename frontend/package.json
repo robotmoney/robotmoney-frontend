@@ -1,6 +1,7 @@
 {
   "name": "@robotmoney/web-client",
   "version": "0.1.0",
+  "apiRange": "^0.2.0",
   "private": true,
   "description": "The static web client: frontend/public (the SPA) and frontend/preview (the fixture-mode wrapper). Versioned and merge-gated independently of the api/backend and of the contract.",
   "scripts": {
