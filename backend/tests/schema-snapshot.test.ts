@@ -557,8 +557,14 @@ describe("baselineLedger — so `--migrate` never replays history", () => {
 // WHAT CHECK 2 CAN AND CANNOT SEE HERE. Its denylist half (superuser,
 // CREATEROLE, rm_owner membership, ownership, DDL, append-only DELETE/TRUNCATE)
 // is exercised against the real grants. Its "required" half reads the query
-// registry, and this process registers no queries, so that half has nothing to
-// check. Stated rather than hidden.
+// registry, which is process-global: run alone, this file registers nothing
+// and that half has nothing to check; under `bun test` of the whole backend it
+// checks whatever the files run before it registered (judge-config.ts's
+// swarm_judge_config statements, db-registry and db-preflight-checks
+// fixtures). Either way it is NOT the API's full registry, so these cases do
+// not prove the real snapshot satisfies it (the bootstrap-preflight fixture
+// case above runs in a fresh process for the same reason). Stated rather than
+// hidden; the wave that registers every call site owns that proof.
 
 /**
  * Bootstrap the REAL snapshot into a blank database owned by rm_owner, then
