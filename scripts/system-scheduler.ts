@@ -28,12 +28,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 //   1. Read the token file. No file, no start.
-//   2. HTTP startup check (§1, §7): is the API there, and is the token good?
-//      Either failure exits non-zero with the reason, so Docker's restart
-//      policy and an operator see the same thing.
-//   3. Serve the health surface, immediately — before the first rebuild — so an
-//      operator watching a scheduler that cannot reach its API sees WHY rather
-//      than a refused connection.
+//   2. Serve the health surface immediately — before the startup check and
+//      before the first rebuild — so an operator watching a scheduler that
+//      cannot reach its API sees WHY rather than a refused connection.
+//   3. HTTP startup check (§1, §7): is the API there, and is the token good?
+//      The two failures end differently, and the reasoning is at the call site:
+//      a rejected token exits non-zero, an unreachable API stays up unhealthy
+//      and lets the connect loop bring it in.
 //   4. Open the stream and rebuild. Every later rebuild — a gap, a resync, a
 //      stalled connection, a drop — goes through the same path, which is why
 //      §3.2 can treat four kinds of downtime identically.
@@ -122,14 +123,39 @@ export async function main(): Promise<number> {
   const health = serveHealth(env.healthPort, () => clock.health);
   log(`health on :${health.port}/health`);
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // The startup check, and why its two failures end differently
+  // ───────────────────────────────────────────────────────────────────────────
+  //
+  // §1: the check "exits or reports unhealthy on either failure." Both are
+  // allowed, and the two failures want different ones:
+  //
+  //   * A REJECTED TOKEN is permanent. No amount of waiting fixes a secret the
+  //     API does not know, and a container that sat there unhealthy for ever
+  //     would be indistinguishable from one waiting on a slow dependency. It
+  //     exits non-zero; under `restart: unless-stopped` that is a visible
+  //     crash-loop with the reason in the log, which is what an operator needs.
+  //
+  //   * AN UNREACHABLE API is ordinary at boot — this container and `api` start
+  //     together, and `depends_on` is start ordering, not readiness. Exiting
+  //     would make a normal race into a crash-loop, and it would take the health
+  //     surface down with it, so the one place the reason is written would be
+  //     the one place nobody can read. It stays up, reports unhealthy WITH the
+  //     reason, and the connect loop below brings it in when the API arrives.
+  //     This is not polling: the loop is failure-triggered and backs off, which
+  //     §4.6 distinguishes from a tick in as many words.
   const startup = await runStartupCheck({ apiUrl: env.apiUrl, token });
   clock.markAuthenticated(startup.tokenValid, startup.error ?? undefined);
-  if (!startup.ok) {
-    console.error(`[system-scheduler] startup check failed: ${startup.error}`);
+  if (startup.apiReachable && !startup.tokenValid) {
+    console.error(`[system-scheduler] the API rejected this automation token: ${startup.error}`);
     health.stop();
     return 1;
   }
-  log("startup check passed: API reachable, token accepted");
+  if (!startup.ok) {
+    log(`startup check: ${startup.error} — staying up and reporting unhealthy while the connect loop retries`);
+  } else {
+    log("startup check passed: API reachable, token accepted");
+  }
 
   // The consumer owns §3.1. Its hooks are the only place the clock is driven
   // from the stream, and `onRebuild` is the ONE path every kind of downtime
@@ -139,6 +165,12 @@ export async function main(): Promise<number> {
     {
       applyEvent: (event) => clock.applyEvent(event),
       onRebuild: async (snapshot, trigger) => {
+        // A full read that came back IS proof the token is accepted right now,
+        // which is the only honest basis for the health surface's
+        // `authenticated`. The startup check answers it once; this keeps
+        // answering it, so a token re-provisioned underneath a running
+        // scheduler shows up here rather than staying true from boot.
+        clock.markAuthenticated(true);
         log(`rebuild (${trigger}) at cursor ${snapshot.cursor}`);
         await clock.rebuild(snapshot as unknown as SchedulerFullRead);
       },
@@ -177,7 +209,16 @@ export async function main(): Promise<number> {
         // after a drop; it rebuilds." `reconnect()` does the full read; this
         // loop only has to re-open the socket on the cursor it landed on.
         await consumer.reconnect();
-        if (!consumer.current) continue;
+        if (!consumer.current) {
+          // `reconnect()` swallows the full read's error to keep backing off,
+          // so re-probe to find out WHICH failure it was. A rejected token is
+          // permanent and the health surface must say so rather than reporting
+          // an endless reconnect; an unreachable API is the ordinary case and
+          // the loop keeps going.
+          const probe = await runStartupCheck({ apiUrl: env.apiUrl, token });
+          clock.markAuthenticated(probe.tokenValid, probe.error ?? undefined);
+          continue;
+        }
         try {
           await connect();
           clock.markStreamSynchronized(true);
@@ -192,10 +233,21 @@ export async function main(): Promise<number> {
     }
   };
 
-  await consumer.start();
-  await connect();
-  clock.markStreamSynchronized(consumer.current);
-  log("clock running");
+  // The first connect goes through the SAME loop every later one does. §3.2
+  // treats four kinds of downtime identically — a crash, a dead connection, a
+  // gap, a resync — and a boot against an API that is not up yet is the first
+  // of them. A separate first-connect path would be a fifth case with its own
+  // behaviour, which is exactly what §3.2 says there must not be.
+  try {
+    await consumer.start();
+    await connect();
+    clock.markStreamSynchronized(consumer.current);
+    log("clock running");
+  } catch (err) {
+    log(`initial connect failed: ${String((err as Error)?.message ?? err)}`);
+    clock.markStreamSynchronized(false);
+    void reconnect();
+  }
 
   // §6.3's silent-failure detection. Two numbers compared on an interval; no
   // API call, no read of business state.
