@@ -70,6 +70,9 @@ const PINNED: Record<string, string> = {
   "backend/migrations/0072_drop_swarm_schedules.sql":
     "the migration that DELETES the rows has to name them",
   "scripts/tests/unit/no-swarm-cron.test.ts": "this gate",
+  "backend/tests/fixtures/releases/v0.5.0/release.json":
+    "the record of what the SHIPPED v0.5.0 release seeded and queued, read from the tag, so the upgrade test " +
+    "seeds exactly that and proves 0072 and 0066 clear it — history, not a live seed",
   "scripts/tests/unit/swarm-session-window.test.ts":
     "it asserts the ABSENCE of `SWARM_WINDOW_MINUTES` from the session driver, so it has to name it",
 };
@@ -203,6 +206,157 @@ describe("the enable flag, the enable command and the cron variables are gone", 
         .map(([name]) => name);
       expect({ file, offending }).toEqual({ file, offending: [] });
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The docs name the enable command only where they record its removal
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `docs/` is outside the shipping sweep above, on purpose: a spec recording a
+// removal is not the removal failing. But a doc that PRESCRIBES the command —
+// a runbook step, a §2 tool list, a sentence of running prose — is an
+// instruction an operator will follow, and criterion 80 says no spec clause
+// and no §2 tool list may name it. The one legitimate place is an amendment
+// table row, which is where the removal is recorded (system-scheduler-spec.md
+// §12: "§9.1 step 4 | `bun run schedules:enable` | deleted").
+//
+// So the rule is structural, not a count, over EVERY markdown file under docs/
+// (a runbook is as able to prescribe the command as a spec): every mention must
+// sit on a TABLE ROW inside a section whose heading is an amendments section
+// (`## 12.` / `## 13.` … "Amendments"), and that row must RECORD THE REMOVAL —
+// its last cell (the amendment's "now" column) must not name the command and
+// must say it was deleted or removed, or that there is no enable command. A
+// mention in that section's prose, in a table elsewhere, in an amendment row
+// that prescribes the command, or anywhere else fails naming file and line.
+
+const ENABLE_COMMAND = "schedules:enable";
+
+/** Every markdown file under docs/, both glob forms for the reason above. */
+const DOC_FILES = [
+  ...new Set([...new Glob("docs/*.md").scanSync({ cwd: REPO }), ...new Glob("docs/**/*.md").scanSync({ cwd: REPO })]),
+].sort();
+
+/** The last cell of a markdown table row records the removal. */
+function recordsRemoval(row: string): boolean {
+  const cells = row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+  const last = cells[cells.length - 1] ?? "";
+  return !last.includes(ENABLE_COMMAND) && /\b(deleted|removed)\b|\bno enable command\b/i.test(last);
+}
+
+/** Each line mentioning `needle`, classified by where it sits. */
+function specMentions(text: string, needle: string): { line: number; recordsRemoval: boolean; text: string }[] {
+  const out: { line: number; recordsRemoval: boolean; text: string }[] = [];
+  let inAmendments = false;
+  text.split("\n").forEach((raw, index) => {
+    // A level-2 heading opens a new top-level section and closes the previous
+    // one; deeper headings stay inside it.
+    const heading = /^##\s+(.*)$/.exec(raw);
+    if (heading && !raw.startsWith("###")) inAmendments = /amendments/i.test(heading[1]!);
+    if (!raw.includes(needle)) return;
+    out.push({
+      line: index + 1,
+      recordsRemoval: inAmendments && /^\s*\|/.test(raw) && recordsRemoval(raw),
+      text: raw.trim(),
+    });
+  });
+  return out;
+}
+
+function misplaced(text: string, needle: string): string[] {
+  return specMentions(text, needle)
+    .filter((m) => !m.recordsRemoval)
+    .map((m) => `line ${m.line}: ${m.text}`);
+}
+
+describe("the docs name `schedules:enable` only in amendment rows that record its removal", () => {
+  test("the sweep read every doc, including the two governing specs", () => {
+    expect(DOC_FILES.length).toBeGreaterThan(10);
+    for (const spec of ["docs/technical/smoke-production-spec.md", "docs/technical/system-scheduler-spec.md", "docs/decisions.md"]) {
+      expect({ spec, swept: DOC_FILES.includes(spec) }).toEqual({ spec, swept: true });
+    }
+  });
+
+  test("no doc clause, tool list, runbook step or prose names it", () => {
+    const found = DOC_FILES.flatMap((file) =>
+      misplaced(readFileSync(join(REPO, file), "utf8"), ENABLE_COMMAND).map((m) => `${file} ${m}`),
+    );
+    expect(found).toEqual([]);
+  });
+
+  test("the removal IS still recorded — the rule is not passing on an empty file", () => {
+    const text = readFileSync(join(REPO, "docs/technical/system-scheduler-spec.md"), "utf8");
+    const recorded = specMentions(text, ENABLE_COMMAND).filter((m) => m.recordsRemoval);
+    // §9.1 step 4's row says the command was deleted; §2's row says it left the
+    // tool list. Both are the record the rule protects.
+    expect(recorded.some((m) => m.text.includes("§9.1 step 4") && m.text.includes("deleted"))).toBe(true);
+    expect(recorded.some((m) => m.text.includes("§2 / §1.2") && m.text.includes("removed from that list"))).toBe(true);
+  });
+
+  // RED CONTROLS, on the real spec text with one line planted, so the rule is
+  // shown to fire on exactly the shapes it exists to catch.
+  const real = (): string => readFileSync(join(REPO, "docs/technical/smoke-production-spec.md"), "utf8");
+
+  test("RED CONTROL: the name planted in running prose fails, naming the line", () => {
+    const text = real().replace(
+      "**There is nothing to enable.**",
+      "**There is nothing to enable.** After boot, run `bun run schedules:enable` once.",
+    );
+    const found = misplaced(text, ENABLE_COMMAND);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("run `bun run schedules:enable` once");
+  });
+
+  test("RED CONTROL: the name in a §2 tool list fails", () => {
+    const text = real().replace("## 2. Target-lock protocol\n", "## 2. Target-lock protocol\n\n- `bun run schedules:enable`\n");
+    expect(misplaced(text, ENABLE_COMMAND)).toEqual(["line 74: - `bun run schedules:enable`"]);
+  });
+
+  test("RED CONTROL: prose INSIDE an amendments section fails — only its table rows may record the removal", () => {
+    const text = real().replace(
+      "## 12. Amendments (2026-09-24)\n",
+      "## 12. Amendments (2026-09-24)\n\nOperators still run `bun run schedules:enable` after these amendments.\n",
+    );
+    expect(misplaced(text, ENABLE_COMMAND)).toHaveLength(1);
+  });
+
+  test("RED CONTROL: a table row OUTSIDE an amendments section fails", () => {
+    const text = real().replace(
+      "## 9. Production\n",
+      "## 9. Production\n\n| step | command |\n|---|---|\n| 4 | `bun run schedules:enable` |\n",
+    );
+    expect(misplaced(text, ENABLE_COMMAND)).toHaveLength(1);
+  });
+
+  test("RED CONTROL: an amendment row that PRESCRIBES the command fails — the row must record its removal", () => {
+    const text = real().replace(
+      "| §9.1 | four steps |",
+      "| §6.3 | — | run `bun run schedules:enable` after boot |\n| §9.1 | four steps |",
+    );
+    expect(misplaced(text, ENABLE_COMMAND)).toEqual([
+      expect.stringContaining("| §6.3 | — | run `bun run schedules:enable` after boot |"),
+    ]);
+  });
+
+  test("RED CONTROL: an amendment row whose last cell neither names nor removes it, but re-adds it in words, fails", () => {
+    const text = real().replace(
+      "| §9.1 | four steps |",
+      "| §6.3 | `bun run schedules:enable` | kept as the enable step |\n| §9.1 | four steps |",
+    );
+    expect(misplaced(text, ENABLE_COMMAND)).toHaveLength(1);
+  });
+
+  test("RED CONTROL: the name in a runbook elsewhere under docs/ fails — the sweep is every doc, not two specs", () => {
+    const runbook = "# Deploy runbook\n\n1. Boot the stack.\n2. Run `bun run schedules:enable`.\n";
+    expect(misplaced(runbook, ENABLE_COMMAND)).toEqual(["line 4: 2. Run `bun run schedules:enable`."]);
+  });
+
+  test("CONTROL: a new amendment row recording the removal passes", () => {
+    const text = real().replace(
+      "| §9.1 | four steps |",
+      "| §6.3 | `bun run schedules:enable` | deleted |\n| §9.1 | four steps |",
+    );
+    expect(misplaced(text, ENABLE_COMMAND)).toEqual([]);
   });
 });
 
