@@ -465,9 +465,6 @@
      drops the headline below the offset every other hero pins it to. */
   align-items: start;
 }
-@media (max-width: 59.99rem) {
-  .sk__install-cmd { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
-}
 @media (min-width: 60rem) {
   /* Wide enough that the 62-character install command sits on one line. */
   .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 42rem); gap: 2.5rem; }
@@ -561,6 +558,12 @@
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
+}
+/* Below the breakpoint the card is whatever the phone allows, so the command
+   wraps rather than hiding its end behind an ellipsis. After the base rule,
+   which it overrides at the same specificity. */
+@media (max-width: 59.99rem) {
+  .sk__install-cmd { white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
 }
 
 .sk__install-copy {

@@ -515,7 +515,8 @@ export function metaFor(pathname) {
  */
 export function citeTitle(pathname) {
   if (!isKnownPage(pathname)) return "";
-  return String(metaFor(pathname).title || "").split(" — ")[0].trim();
+  // Titles qualify their name after " — " or " | " ("Agent Skills | Robot Money").
+  return String(metaFor(pathname).title || "").split(/\s+[—|]\s+/)[0].trim();
 }
 
 /**

@@ -137,11 +137,15 @@
 /* One skill per entry: square, hairline, the install line as a terminal row. */
 .skx-list { display: grid; gap: 1.5rem; }
 .skx {
+  display: flex;
+  flex-direction: column;
   padding: 1.75rem 1.5rem;
   border: 1px solid var(--color-border);
   background: var(--color-deep);
   scroll-margin-top: 6rem;
 }
+/* The ways in sit at the foot of each card, level across the pair. */
+.skx .rm-actions { margin-top: auto; padding-top: 1.8rem; }
 .skx__id {
   margin: 0 0 0.5rem;
   font-family: var(--font-mono);
@@ -204,6 +208,10 @@
 @media (min-width: 700px) {
   .sk__title { font-size: 3.5rem; }
   .skx { padding: 2rem 2.25rem; }
+}
+/* Side by side once a card is wide enough to hold the install command on
+   one or two lines. */
+@media (min-width: 64rem) {
   .skx-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>
