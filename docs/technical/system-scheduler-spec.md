@@ -47,7 +47,7 @@ Each subject's windows close on a fixed wall-clock **grid**. Three columns on th
 The grid keeps windows from drifting. A late turnover does not push later windows back, and a daily subject anchored after the analytics producer's 22:30 UTC regime refresh closes after it every day.
 
 - **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2). An operator's early turnover (§4.3) follows the same rule, so the next window runs to the grid instant after the early-closed window's scheduled close and is longer than one duration.
-- **First epoch.** An epoch opened with no predecessor (a fresh database, an activation, a reactivation) closes at the first grid instant after now. Its window can therefore be shorter than one duration.
+- **First epoch.** An epoch opened with no predecessor (a fresh database, an activation, a reactivation) closes at the first grid instant at least **half of `epoch_duration`** after now; if the next instant is nearer than that, it closes at the one after. Its window is therefore between half a duration and one and a half, never a sliver. Without the floor, a subject activated moments before a grid instant would open a window nobody can submit into and then publish a session recording every seated member absent.
 - **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction; a subject with no open window keeps its anchor. The current window is unchanged, and the grid continues from its close with the new spacing.
 
 ### 2.3 Where it lives and who sets it
@@ -109,7 +109,7 @@ Opening an epoch is one API call that does three things atomically: create the s
 
 While a session is `collecting` **and now is before its `window_closes_at`**, participants submit takes through the API. The advertised instant is the contract participants are bound to, not the state: a submission after `window_closes_at` is refused even if delayed turnover has not yet moved the session out of `collecting`. Absences (§4.3) are judged against the same instant, so accepted takes and recorded absences can never disagree about who was on time.
 
-**One clock.** Every comparison against a stored instant — a take against `window_closes_at`, an absence, a consensus against the judging deadline, finalize's time guard — reads the database clock with `clock_timestamp()` inside the deciding transaction. Never the application's clock, and never `now()`, which is the transaction's start time and would let a slow transaction accept a late take. The instants the API stores are taken from the same clock.
+**One clock.** Every comparison of the present against a stored instant — a take against `window_closes_at`, an absence, a consensus against the judging deadline, finalize's time guard — reads the database clock with `clock_timestamp()` at the moment of the comparison. Never the application's clock, and never `now()`, which is the transaction's start time and would let a slow transaction accept a late take. A **derived** instant, such as the next grid close, is computed once per transaction from a single read of that clock and reused, so one transaction never acts on two different presents. The instants the API stores come from the same clock.
 
 The window is the only scheduled part of a session's life. The judging deadline is a timeout inside settlement, not a schedule (§6.1).
 
@@ -127,7 +127,7 @@ Closing an epoch starts its settlement, and settlement is **not scheduled**. It 
 
 **Judge mode and judging duration are captured at turnover.** The session records the judge mode in force (`off` or `enforce`, per D48) and the subject's `judging_duration` at the instant it closes. An admin changing either afterwards affects later sessions, never one already settling.
 
-**What a consensus is.** Until a separate document defines agreement among several judges, a consensus is the first eligible judgement recorded for the session. An eligible judgement is signed by an active member holding the `judge` role that has no take in that session, and it passes the third-party gate of `smoke-production-spec.md` §6.2.
+**The judge of record.** A session has one **judge of record**, and its judgement is the session's consensus. An eligible judgement is signed by an active member holding the `judge` role that has no take in that session, and it passes the third-party gate of `smoke-production-spec.md` §6.2. Today one judge is seated, so the judge of record is that judge. If more than one is seated, the judge of record is chosen deterministically by member id — never by which judgement arrived first, so no judgement is selected by being fastest. Judgements from other seated judges are recorded and change no outcome. Agreement among several judges is a later amendment.
 
 1. **Aggregate** — roll the signed takes up into the recommendation. `window_closed → aggregated`. Deterministic; the allocation arithmetic and the signed member history are the same whatever judging later produces.
 2. **Judge** — branches on the captured mode:
@@ -200,7 +200,7 @@ A duration change takes effect at the **next** boundary: the current window keep
 - **Gapless, in commit order.** Each event takes its number by incrementing one counter row inside the transaction that makes the change. The row lock serializes event-writing transactions, so numbers are assigned in commit order and a rolled-back transaction leaves no hole. A database sequence must not be used: it assigns numbers at insert time, so a later number can commit first and move a subscriber's cursor past an earlier one still in flight, which the subscriber would then drop as a duplicate. The full read takes its cursor from the counter value visible in its own snapshot.
 - **Duplicates** (a sequence number at or below the last applied) are ignored.
 - **A gap** — a sequence number that is not the last applied plus one — means the copy is no longer provably current. Stop, full read, rebuild.
-- **Retention.** The event log is append-only and never pruned, so every cursor the API ever issued remains servable.
+- **Retention.** The event log is append-only and is retained at least as far back as the oldest cursor the API may still be asked to serve. Pruning above that point is permitted; pruning below it is forbidden.
 - **Resync.** If the API cannot serve from the requested cursor — its buffer for this subscriber overflowed, or the cursor is above the log's head — it says so, and the scheduler treats that as downtime (§3.2): full read, rebuild. The API never silently skips.
 - **Silent failure detection.** The connection carries a transport-level keepalive (a WebSocket ping/pong or equivalent). A missed keepalive is a dropped connection under §3.1. This is a transport frame, not an API call, and not a read of business state; §10's no-API-call gate is stated accordingly.
 - **The keepalive carries the head sequence.** Each keepalive from the API includes the sequence number of the last event it committed. A scheduler whose last-applied number is below that head has missed an event with no later event to expose the gap; it treats this exactly like a gap — stop, full read, rebuild. This closes the one loss sequence numbers alone cannot detect: the final event before a quiet period. It costs nothing beyond a number on a frame the protocol already requires, and it is not a read of business state.
@@ -230,7 +230,8 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 
 ## 9. Invariants
 
-- Among the running services this document covers, only the API connects to the database. (The pipeline worker, which runs the vault, wallet, buyback and project jobs, also holds a database role; `smoke-production-spec.md` §7.2 governs it. This invariant is not silently extended to it.)
+- **A transition transaction never spans a network call, a model call, or a wait on another service.** It does database work and commits. The event counter (§6.3) therefore serializes only database work, bounded by the slowest single transition. Without this rule, one transition holding its transaction open would stall every other subject's.
+- Exactly two running services hold a database credential: `api`, and the pipeline worker running the vault, wallet, buyback and project jobs as `rm_worker` (`smoke-production-spec.md` §7.2). A third is a defect. The pipeline worker's move to the same no-database model is a later document.
 - A subject's scheduling columns are set once by bootstrap and afterwards only by the admin API.
 - Every window closes on its subject's grid. A late turnover never shifts later windows.
 - Event sequence numbers are gapless and assigned in commit order.
@@ -266,7 +267,7 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - **Eligibility is decided by stored time, not event arrival:** a consensus recorded before the stored deadline whose `session.judged` event arrives after it yields `judged`. A consensus recorded after the deadline yields `no_consensus` and is kept as a record. Repeated finalize returns the same outcome. A lost or duplicated `session.judged` event changes no outcome.
 - **Deadline reconstruction:** kill the scheduler after judging was requested and restart it before the deadline — the deadline timer fires at the originally stored instant, not later. Restart after the deadline — finalize runs immediately.
 - **Recovery read:** kill the scheduler between every pair of settlement transitions — after turnover, after aggregate, after the judging request, after `judged` — including for a subject deactivated meanwhile, and after an API commit whose response was lost. On restart each settlement resumes from its recorded state and no durable effect repeats.
-- **Isolation:** a judge wait on one session and a failed transition on another do not delay any subject's boundary or any other session's settlement.
+- **Isolation:** a judge wait on one session, and a failed transition on another, delay no subject's boundary and no other session's settlement. Both happen between transactions, never inside one; transitions contend only on the event counter, for the duration of a database write (§9).
 - Transient aggregate failure with a healthy stream is retried and succeeds; a refusal with a reason is not retried.
 - Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action; activation during scheduler downtime yields one fresh epoch on rebuild, not backdated.
 - An operator turning over an epoch early through the admin API settles it and opens the next exactly as the boundary would, the new window closes on the grid instant after the early-closed window's scheduled close, and the scheduler's timer moves to that instant.
@@ -281,6 +282,11 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - Dropping one event from the stream (a sequence gap) causes a full read and rebuild before any further fire. An API resync notice does the same.
 - **Commit-ordered numbering:** two concurrent transitions for different subjects commit events whose numbers follow their commit order; a rolled-back transition leaves no hole; a subscriber applying both sees no gap and loses neither.
 - **One clock:** a take arriving inside a transaction that started before `window_closes_at` but reaches the check after it is refused.
+- **One present per transaction:** a transition that both derives the next grid close and checks lateness uses one reading of the clock for the derivation, so its stored close never disagrees with itself.
+- **First-epoch floor:** activate a subject one second before a grid instant; its first window closes at the following instant instead, is at least half a duration long, and no session is published with every member absent because nobody could submit in time.
+- **Judge of record:** with two judges seated, the judge of record is the same one on every replay and does not change when the other answers first; the other's judgement is recorded and changes no outcome.
+- **No transaction spans a call:** a transition never holds its transaction open across a network or model call, asserted by instrumenting the transition path; with one transition deliberately slowed, another subject's boundary still fires within its tolerance.
+- **Two credential holders:** the rendered compose config gives exactly `api` and the pipeline worker a database credential; a third service carrying one fails the gate by name.
 - Between instants, with a live stream and no events, `system-scheduler` makes no API call; transport keepalive frames are not API calls.
 
 ## 11. Out of scope
@@ -317,8 +323,10 @@ Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52).
 | §2.2, §4.1, §4.3 | one parameter, `window_closes_at = now + duration`; windows drift with turnover latency | windows close on a wall-clock grid, `epoch_anchor + k × epoch_duration`; downtime skips to the next future grid instant |
 | §2.2, §4.4 | judging duration hardcoded | `judging_duration` is a subject column, captured at turnover with the judge mode |
 | §4.2 | clock unspecified | every instant comparison uses the database clock, `clock_timestamp()` |
-| §4.4 | consensus among judges out of scope | a consensus is the first eligible judgement until a multi-judge document exists |
-| §6.3 | monotonic sequence numbers; retained log may not reach a cursor; job pushes with acks | gapless numbers from one counter row in commit order; the log is never pruned; no job pushes |
+| §4.4 | consensus among judges out of scope | a session has one judge of record whose judgement is its consensus; with several seated, chosen by member id, never by arrival |
+| §6.3 | monotonic sequence numbers; retained log may not reach a cursor; job pushes with acks | gapless numbers from one counter row in commit order; the log is retained past the oldest servable cursor; no job pushes |
 | §7 | API tokens "provisioned per caller" | service tokens are per-instance files hashed in the API's token store; participant bearers live in `credential.json` |
-| §9, §11 | "analytics and research workers" outside scope | the pipeline worker holds `rm_worker` under the companion's §7.2; analytics compute already runs without a database credential |
+| §9, §11 | "analytics and research workers" outside scope | exactly two services hold a database credential, `api` and the pipeline worker; a third is a defect |
+| §2.2 | a first epoch may be arbitrarily short | a first epoch's window is at least half a duration, so activation timing cannot publish an unusable session |
+| §9, §10 | the counter serializes transitions while the isolation gate implies none | a transition transaction never spans a network or model call, so the counter serializes only database work |
 
