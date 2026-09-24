@@ -15,7 +15,31 @@
 // for this file alone, because "the column does not exist" and "the column is
 // NULL" are different database states and §8.4 turns on the difference.
 import { afterEach, describe, expect, test } from "bun:test";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import postgres from "postgres";
+import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
+import {
+  checkSchemaCompatibility,
+  checkSchemaIntegrity,
+  type PreflightContext,
+  type PreflightFinding,
+} from "../src/db/preflight.ts";
+import {
+  MANIFEST_FORMAT_VERSION,
+  hashManifest,
+  serializeDeclaration,
+  writeManifest,
+  type SchemaDeclaration,
+} from "../src/db/schema-manifest.ts";
+import {
+  SNAPSHOT_FILES,
+  bootstrapBlankDatabase,
+  loadSnapshot,
+  regenerateSnapshotMetadata,
+} from "../src/db/schema-snapshot.ts";
 import {
   COMPAT_COLUMNS,
   COMPAT_HEADER_BASELINE,
@@ -369,9 +393,11 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     expect(await checkCompatibility(sql, names.slice(0, -2), names)).toEqual({ kind: "compatible", surplus });
   });
 
-  test("old code boots after an ADDITIVE change to an existing table", async () => {
-    // The §10 W2 gate, in the shape it is written: an `ALTER TABLE ... ADD
-    // COLUMN` that is genuinely additive keeps code-only rollback alive.
+  test("an ADDITIVE surplus row is compatible — the 3b half of the §10 W2 gate", async () => {
+    // The ledger half only. Whether the database itself is intact is 3a's
+    // question, answered against the manifest in the "old code at N against a
+    // database at N + additive" case below — never by a row count, which a
+    // DROP COLUMN would pass just as well.
     await addCompatColumns();
     const names = await ledgerNames();
     await sql.unsafe("ALTER TABLE jobs ADD COLUMN rm_compat_probe text");
@@ -379,12 +405,7 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
       INSERT INTO schema_migrations (name, compat, metadata_version)
       VALUES ('0063_jobs_add_probe.sql', 'additive', ${COMPAT_METADATA_VERSION})`;
     const verdict = await checkCompatibility(sql, names, [...names, "0063_jobs_add_probe.sql"]);
-    expect(verdict.kind).toBe("compatible");
-    // …and the old code's declared query on that table still works, which is
-    // what `additive` actually promises (§8.4: "every query the older registry
-    // declares still succeeds with the same semantics").
-    const [row] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM jobs`;
-    expect(row?.count).toBeGreaterThanOrEqual(0);
+    expect(verdict).toEqual({ kind: "compatible", surplus: ["0063_jobs_add_probe.sql"] });
   });
 
   test("refuses a surplus row declared `breaking`, naming the file and the condition", async () => {
@@ -582,5 +603,206 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
         });
       }),
     ).rejects.toThrow("0066_already_declared.sql");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The §10 W2 gate: old code at N, a database at N + additive, and drift
+// ───────────────────────────────────────────────────────────────────────────
+//
+// "Old code boots after an additive change to an existing table while genuine
+// drift on the same database still fails." A boot's schema verdict is preflight
+// check 3: (a) the live catalog against the manifest STORED IN THE DATABASE,
+// (b) the ledger surplus against the booting code's filename list. So this runs
+// both, on ONE database that carries a real manifest: a snapshot bootstrap
+// (version N), then an additive migration committed the way the migrate run
+// commits one and the manifest for the new version M — whose fingerprint comes
+// from bootstrapping M's snapshot into a different database — published by the
+// real writer, then genuine drift.
+//
+// What this does NOT prove: that a container boots. Nothing calls
+// `runPreflight` at container startup yet (criterion 44's wiring wave); this is
+// the verdict such a boot would reach.
+
+/** A URL for `database` on the suite's server, as the harness superuser. */
+function databaseUrl(database: string): string {
+  const url = new URL(config.databaseUrl);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+/** A blank database owned by rm_owner, bootstrapped from the REAL snapshot
+ *  (pgcrypto installed first, as the provider's half), handed to `body` as the
+ *  harness superuser and dropped afterwards. */
+async function withSnapshotDatabase(
+  body: (db: postgres.Sql<{}>, snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => Promise<void>,
+): Promise<void> {
+  const snapshot = await loadSnapshot();
+  const name = `rmt_compat_snapshot_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    try {
+      await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      await db.unsafe("SET ROLE rm_owner");
+      await bootstrapBlankDatabase(db, snapshot);
+      await db.unsafe("RESET ROLE");
+      await body(db, snapshot);
+    } finally {
+      await db.end({ timeout: 5 });
+    }
+  } finally {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin.end({ timeout: 5 });
+  }
+}
+
+/**
+ * Version M's snapshot, produced the way every snapshot is: N's three parts
+ * copied into a scratch directory, M's DDL appended to the declaration, and
+ * `regenerateSnapshotMetadata` bootstrapping them into a SEPARATE blank
+ * database and fingerprinting THAT. Returns M's declaration.
+ *
+ * The separate database is the point. Fingerprinting the database under test
+ * would make the pass below prove only that a database matches its own
+ * fingerprint; this makes it prove that N + the additive migration equals a
+ * bootstrap of M's declaration — §8.4's "snapshot N + migrations = snapshot
+ * N+1" — before old code is asked to boot against it.
+ */
+async function snapshotForVersionM(additiveDdl: string): Promise<SchemaDeclaration> {
+  const root = mkdtempSync(join(tmpdir(), "rm-snapshot-m-"));
+  const name = `rmt_compat_snapshot_m_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    mkdirSync(join(root, "schema"));
+    for (const part of Object.values(SNAPSHOT_FILES)) {
+      copyFileSync(join(import.meta.dir, "..", part), join(root, part));
+    }
+    const declarationPath = join(root, SNAPSHOT_FILES.declaration);
+    writeFileSync(declarationPath, `${readFileSync(declarationPath, "utf8")}\n${additiveDdl}\n`, "utf8");
+
+    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const blank = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    try {
+      await blank.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      await blank.unsafe("SET ROLE rm_owner");
+      const metadata = await regenerateSnapshotMetadata(blank, root);
+      return serializeDeclaration({
+        sql: readFileSync(declarationPath, "utf8").replace(/\s+$/, ""),
+        exclusions: metadata.exclusions,
+        fingerprint: metadata.fingerprint,
+      });
+    } finally {
+      await blank.end({ timeout: 5 });
+    }
+  } finally {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin.end({ timeout: 5 });
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** Checks 3a and 3b together, for code shipping `codeFilenames`: their
+ *  refusal sentences, per check. */
+async function checkThree(
+  db: postgres.Sql<{}>,
+  codeFilenames: readonly string[],
+): Promise<{ integrity: string[]; compatibility: string[] }> {
+  const context: PreflightContext = {
+    env: "stage",
+    connection: "local",
+    roles: ["rm_app"],
+    codeFilenames,
+    envFilePath: "/nonexistent/unused.env",
+  };
+  const refusalsOf = (findings: readonly PreflightFinding[]) =>
+    findings.filter((f) => f.severity === "refuse").map((f) => f.message);
+  return {
+    integrity: refusalsOf((await checkSchemaIntegrity(db, context)).findings),
+    compatibility: refusalsOf((await checkSchemaCompatibility(db, context)).findings),
+  };
+}
+
+describe("old code at N against a database at N + additive — and genuine drift on the same database", () => {
+  test("old code passes 3a and 3b after an additive column; dropping a column then fails 3a, naming it", async () => {
+    await withSnapshotDatabase(async (db, snapshot) => {
+      const shippedByOldCode = snapshot.filenames;
+
+      // Version N, as bootstrapped: the old code's own version passes.
+      expect(await checkThree(db, shippedByOldCode)).toEqual({ integrity: [], compatibility: [] });
+
+      // A NEWER release's migrate run: one additive migration, committed with
+      // its declaration in its own transaction (migrate-run.ts step 5)…
+      const file = "9999_job_schedules_add_note.sql";
+      const ddl = [
+        "-- compat: additive",
+        `-- metadata_version: ${COMPAT_METADATA_VERSION}`,
+        "ALTER TABLE job_schedules ADD COLUMN operator_note text;",
+        "",
+      ].join("\n");
+      await db.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx.unsafe(ddl);
+        await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+        await recordMigrationCompat(tx, parseMigrationHeader(file, ddl));
+      });
+      // …then the manifest for the final state M, written by `writeManifest`
+      // (the writer migrate-run.ts step 6 calls) in an rm_owner transaction.
+      // M's declaration is what the newer release's snapshot carries, built by
+      // the real snapshot generator from M's SQL on ANOTHER database — never a
+      // fingerprint of this one. (`runMigrate` itself cannot publish it: step 6
+      // reads this checkout's snapshot, which is N's.)
+      const declaration = await snapshotForVersionM("ALTER TABLE public.job_schedules ADD COLUMN operator_note text;");
+      expect(JSON.parse(declaration.text).fingerprint["column public.job_schedules.operator_note"]).toEqual({
+        type: "text",
+        notnull: "no",
+      });
+      await db.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        const filenames = [...shippedByOldCode, file];
+        await writeManifest(tx, {
+          formatVersion: MANIFEST_FORMAT_VERSION,
+          declaration,
+          filenames,
+          contentHash: hashManifest(declaration, filenames),
+        });
+      });
+
+      // OLD CODE BOOTS: 3a compares against M's manifest, which includes the
+      // column; 3b reads the migration's recorded declaration (spec §7 check 3).
+      expect(await checkThree(db, shippedByOldCode)).toEqual({ integrity: [], compatibility: [] });
+
+      // GENUINE DRIFT on the same database, for the same old code: a column
+      // M declares is gone. 3a refuses and names it; 3b still passes, so 3a's
+      // refusal is the one the operator reads.
+      await db.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+      const drifted = await checkThree(db, shippedByOldCode);
+      expect(drifted.compatibility).toEqual([]);
+      expect(drifted.integrity).toEqual([
+        "column public.job_schedules.last_enqueued_at is declared by the installed manifest but absent from the live catalog",
+      ]);
+    });
+  });
+
+  test("RED CONTROL: without M's manifest the additive column is not silently accepted — the database reads as in progress", async () => {
+    // The pass above depends on the manifest describing M. The same ledger with
+    // N's manifest still installed is §8.3's in-progress state, and 3a refuses
+    // it: an additive migration nobody finished publishing is not a version.
+    await withSnapshotDatabase(async (db, snapshot) => {
+      const file = "9999_job_schedules_add_note.sql";
+      const ddl = `-- compat: additive\n-- metadata_version: ${COMPAT_METADATA_VERSION}\nALTER TABLE job_schedules ADD COLUMN operator_note text;\n`;
+      await db.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx.unsafe(ddl);
+        await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+        await recordMigrationCompat(tx, parseMigrationHeader(file, ddl));
+      });
+      const verdict = await checkThree(db, snapshot.filenames);
+      expect(verdict.compatibility).toEqual([]);
+      expect(verdict.integrity).toHaveLength(1);
+      expect(verdict.integrity[0]).toContain("in progress");
+      expect(verdict.integrity[0]).toContain(file);
+    });
   });
 });

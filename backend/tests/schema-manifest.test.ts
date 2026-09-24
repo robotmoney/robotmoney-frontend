@@ -2,14 +2,13 @@
 // database is SUPPOSED to have, so preflight check 3a can tell genuine drift
 // from an ordinary version difference.
 //
-// These tests are the specification for src/db/schema-manifest.ts. Every
-// function there throws `NOT IMPLEMENTED` today, so every test here fails —
-// #1026 W2 step 2's deliverable.
+// These tests are the specification for src/db/schema-manifest.ts (issue
+// #1026, W2). The catalog comparison it also exports (`compareCatalog`) is
+// exercised class by class through check 3a in db-preflight-checks.test.ts.
 //
-// The hashing tests are pure and pin EXACT digests, the way this repo already
-// pins `promptHash` / `inputsDigest` in src/swarm/judge.ts: a content hash whose
-// value is not executable by a test is a hash nobody can prove stayed stable
-// across a refactor, and stability is the entire property.
+// The hashing and serialization tests are pure: a content hash whose value is
+// not executable by a test is a hash nobody can prove stayed stable across a
+// refactor, and stability is the entire property.
 //
 // The state tests run against the real ephemeral Postgres in a database cloned
 // for this file alone, because "ledger ahead of manifest" is a relationship
@@ -25,7 +24,9 @@ import {
   MANIFEST_TABLE,
   detectManifestState,
   hashManifest,
+  parseDeclaration,
   readManifest,
+  serializeDeclaration,
   resumePlan,
   writeManifest,
   type SchemaDeclaration,
@@ -52,9 +53,9 @@ function manifest(over: Partial<SchemaManifest> = {}): SchemaManifest {
   };
 }
 
-/** The manifest table does not exist in this checkout's migrations yet — it is
- *  W2.6's. Tests that need it build it, and drop it again, so a file that ran
- *  before the migration lands still says something true. */
+/** Migration 0064 creates the manifest table, but the afterEach below drops it
+ *  so "no manifest table" stays reachable; a test that needs the table builds
+ *  it here, owned by rm_owner as §8.3's write restriction requires. */
 async function createManifestTable(): Promise<void> {
   await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS ${MANIFEST_TABLE} (
@@ -96,6 +97,51 @@ afterEach(async () => {
 // ───────────────────────────────────────────────────────────────────────────
 // hashManifest — pure, and over BOTH inputs
 // ───────────────────────────────────────────────────────────────────────────
+
+describe("serializeDeclaration / parseDeclaration — the format-2 declaration the hash covers", () => {
+  const exclusions = { roles: ["doadmin", "postgres"], extensions: ["pgcrypto", "plpgsql"] };
+  const fingerprint = {
+    "table public.jobs": { owner: "rm_owner" },
+    "column public.jobs.id": { type: "bigint", notnull: "yes" },
+  };
+
+  test("round-trips the SQL, the exclusion list and the fingerprint", () => {
+    const declaration = serializeDeclaration({ sql: DECLARATION.text, exclusions, fingerprint });
+    expect(parseDeclaration(declaration)).toEqual({ sql: DECLARATION.text, exclusions, fingerprint });
+  });
+
+  test("is canonical: the order an object was built in never changes the bytes, so never the hash", () => {
+    const scrambled = {
+      "column public.jobs.id": { notnull: "yes", type: "bigint" },
+      "table public.jobs": { owner: "rm_owner" },
+    };
+    const a = serializeDeclaration({ sql: "x", exclusions, fingerprint });
+    const b = serializeDeclaration({ sql: "x", exclusions, fingerprint: scrambled });
+    expect(b.text).toBe(a.text);
+    expect(hashManifest(b, ON_DISK)).toBe(hashManifest(a, ON_DISK));
+  });
+
+  test("the hash covers the fingerprint: one changed attribute is a different digest", () => {
+    const a = serializeDeclaration({ sql: "x", exclusions, fingerprint });
+    const b = serializeDeclaration({
+      sql: "x",
+      exclusions,
+      fingerprint: { ...fingerprint, "table public.jobs": { owner: "rm_app" } },
+    });
+    expect(hashManifest(b, ON_DISK)).not.toBe(hashManifest(a, ON_DISK));
+  });
+
+  test("refuses a format-1 declaration (bare SQL), naming why — 3a cannot compare against it", () => {
+    expect(() => parseDeclaration(DECLARATION)).toThrow("not JSON");
+    expect(() => parseDeclaration({ text: JSON.stringify({ sql: "x", exclusions }) })).toThrow("fingerprint");
+    expect(() => parseDeclaration({ text: JSON.stringify({ sql: "x", fingerprint }) })).toThrow("exclusion list");
+  });
+
+  test("refuses an exclusion list naming a §3 taxonomy role", () => {
+    const text = JSON.stringify({ sql: "x", exclusions: { roles: ["rm_owner"], extensions: [] }, fingerprint });
+    expect(() => parseDeclaration({ text })).toThrow("rm_owner");
+  });
+});
 
 describe("hashManifest — the content hash re-checked on every read", () => {
   test("is deterministic: the same declaration and filename list always hash the same", () => {

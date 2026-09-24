@@ -8,8 +8,8 @@
 --   * grants and default privileges -- they are part 3 (schema/grants.sql), because
 --     reconciliation runs on EVERY migrate run while this file runs only on a blank
 --     database (§8.3);
---   * `CREATE EXTENSION pgcrypto` -- provider-managed (PROVIDER_MANAGED_EXCLUSIONS in
---     src/db/schema-snapshot.ts); a managed cluster installs it and rm_owner may not.
+--   * `CREATE EXTENSION pgcrypto` -- provider-managed (the `exclusions` list in
+--     schema/snapshot.json); a managed cluster installs it and rm_owner may not.
 --
 -- Ownership: applied by rm_owner, so every object it creates is owned by rm_owner,
 -- which is what the check-2 denylist (`object_ownership`) requires.
@@ -39,6 +39,16 @@ SET row_security = off;
 --
 
 -- *not* creating schema, since initdb creates it
+
+-- HAND-ADDED (issue #1026 W2): the schema's OWNER, which pg_dump --no-owner
+-- omits. Migration 0053:85 runs `ALTER SCHEMA public OWNER TO rm_owner`, so a
+-- database built by the migrations has rm_owner here, and "blank + all
+-- migrations = snapshot" (§8.4) needs the snapshot to say the same. Without it a
+-- snapshot bootstrap leaves pg_database_owner, check 3a's fingerprint records
+-- that, and every migration-built database then refuses 3a against the manifest
+-- the migrate run publishes (§9.1 step 2). Needs the bootstrap's database to be
+-- owned by rm_owner, which every blank bootstrap creates it as.
+ALTER SCHEMA public OWNER TO rm_owner;
 
 
 --
@@ -6190,6 +6200,20 @@ ALTER TABLE ONLY public.wallet_sleeve_sample_evidence
 
 ALTER TABLE ONLY public.wallet_sleeve_samples
     ADD CONSTRAINT wallet_sleeve_samples_snapshot_run_id_fkey FOREIGN KEY (snapshot_run_id) REFERENCES public.wallet_aum_snapshot_runs(run_id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- HAND-ADDED (issue #1026 W2): rm_owner's default privileges as the migrations
+-- leave them, which pg_dump --no-privileges omits. 0053:139-140 revoked every
+-- default; grants.sql restores rm_app and rm_readonly on TABLES; these are the
+-- rest, from migration 0062 (rm_readonly_sequence_select.sql:47 and :203-206).
+-- Read-only, every one: 0053's rule that no default grants a write still holds.
+-- Check 3a compares default privileges (§8.1), so a snapshot without these
+-- would declare a catalog no migrated database has.
+--
+
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly, rm_app, rm_worker;
 
 
 --

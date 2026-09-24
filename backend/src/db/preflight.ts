@@ -74,7 +74,7 @@ import {
 } from "./append-only-guard.ts";
 import { registeredSites, requiredPrivileges } from "./registry.ts";
 import type { RmRole, TablePrivilege } from "./registry.ts";
-import { MANIFEST_TABLE, detectManifestState, readManifest } from "./schema-manifest.ts";
+import { MANIFEST_TABLE, compareCatalog, detectManifestState, parseDeclaration, readManifest } from "./schema-manifest.ts";
 import type { SchemaManifest } from "./schema-manifest.ts";
 import { checkCompatibility } from "./schema-compat.ts";
 
@@ -88,7 +88,7 @@ export type PreflightCheckId =
   | "schema_compatibility"
   | "env_credentials"
   | "env_identity"
-  | "subject_epoch_durations";
+  | "subject_scheduling";
 
 /** `prod` and `stage` only — spec §4.1. `stage` covers stage, test and CI,
  *  which "are isomorphic and share `stage`". `smoke` is not a value; §9.3
@@ -796,9 +796,20 @@ export async function missingPrivileges(
  * produces no findings at all — while a dropped trigger, a hand-altered column
  * or a half-restored dump still fails, on the same database, for the same image.
  *
+ * WHAT IS COMPARED. Every object class §8.1 names — tables and their columns
+ * (type, nullability, default), indexes, constraints, functions, triggers
+ * (definition and enabled state), policies, ownership and default privileges —
+ * through the catalog fingerprint the manifest carries (`compareCatalog` in
+ * ./schema-manifest.ts). In both directions: a declared object that is absent
+ * or different, and a live object the manifest does not declare.
+ *
  * Refusals:
- *   - Any live object differs from the manifest (excluding
- *     `PROVIDER_MANAGED_EXCLUSIONS` in ./schema-snapshot.ts).
+ *   - Any live object differs from the manifest, or the live catalog holds an
+ *     object the manifest does not declare — excluding the provider list the
+ *     manifest itself carries (members of its listed extensions; undeclared
+ *     objects owned by its listed provider roles).
+ *   - The manifest's declaration cannot be read as a fingerprinted
+ *     declaration (`parseDeclaration`).
  *   - The manifest is absent. A database with no manifest cannot be verified
  *     and must not be served on the grounds that there was nothing to compare.
  *   - `detectManifestState` reports `in_progress` — ledger ahead of manifest.
@@ -862,10 +873,22 @@ export async function checkSchemaIntegrity(
       );
     }
 
-    // The manifest's declaration is authored SQL, so the comparison is over the
-    // OBJECTS it names, never its bytes: a live catalog does not re-serialize
-    // to the text a human wrote.
-    for (const problem of await declaredObjectsMissing(db, manifest)) refuse(problem);
+    // THE COMPARISON, only against a manifest that describes this database.
+    // In progress, the manifest describes the version BEFORE the committed
+    // migrations, so their objects would read as drift and bury the one
+    // sentence the operator needs; inconsistent or unknown, it describes
+    // nothing that can be trusted. Each of those is already a refusal above.
+    if (state.kind === "published") {
+      let declared;
+      try {
+        declared = parseDeclaration(manifest.declaration);
+      } catch (error) {
+        refuse(
+          `${MANIFEST_TABLE}'s declaration cannot be compared with the live catalog — ${(error as Error).message}`,
+        );
+      }
+      if (declared) for (const problem of await compareCatalog(db, declared)) refuse(problem);
+    }
   }
 
   // ── The live half, which does not depend on a manifest existing.
@@ -885,28 +908,6 @@ async function ledgerAhead(db: PreflightDb, embodied: readonly string[]): Promis
   const rows = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
   const known = new Set(embodied);
   return rows.map((row) => row.name).filter((name) => !known.has(name));
-}
-
-/** Every relation the manifest's declaration names that the live catalog does
- *  not have. Named objects, not bytes — see `checkSchemaIntegrity`. */
-async function declaredObjectsMissing(db: PreflightDb, manifest: SchemaManifest): Promise<string[]> {
-  const declared = new Set<string>();
-  const pattern = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?/gi;
-  for (const match of manifest.declaration.text.matchAll(pattern)) {
-    if (match[1]) declared.add(match[1]);
-  }
-  if (declared.size === 0) return [];
-
-  const rows = (await db`
-    SELECT c.relname AS name
-    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`) as unknown as { name: string }[];
-  const live = new Set(rows.map((row) => row.name));
-
-  return [...declared]
-    .filter((name) => !live.has(name))
-    .sort()
-    .map((name) => `${name} is declared by the installed manifest but absent from the live catalog`);
 }
 
 /** The append-only and ledger-immutable triggers each guard migration installs,
@@ -1388,80 +1389,102 @@ export async function checkEnvIdentity(
 }
 
 /**
- * Check 6 — every ACTIVE subject has an epoch duration.
+ * The three columns a subject is scheduled by (scheduler spec §2.2/§2.3): the
+ * epoch length, the grid's anchor instant, and the judging window after close.
+ * Nothing else about a subject's schedule is stored — spec §2.4: "There is no
+ * on/off state for scheduling."
+ */
+export const SUBJECT_SCHEDULING_COLUMNS: readonly string[] = Object.freeze([
+  "epoch_duration_seconds",
+  "epoch_anchor",
+  "judging_duration_seconds",
+]);
+
+/**
+ * Check 6 — the scheduling check. Spec §7 check 6, verbatim: "Every active
+ * subject has its epoch duration, epoch anchor and judging duration. (Whether
+ * it has an open epoch is a readiness check, not a preflight one — §6.3.)"
  *
- * Inputs: a handle and the context. Output: findings, one per offending
- * subject, naming it.
+ * Inputs: a handle and the context. Output: findings — one per active subject
+ * per missing column, each naming the subject and the column, or one per column
+ * the table lacks altogether.
  *
- * WHAT THIS REPLACED, and why it had to (issue #1026 W4). Until now check 6
- * asked whether "the five `swarm.*` schedule rows are enabled and their cron
- * strings parse". The scheduler spec's §12 amendment table rewrites that clause
- * in those words: "preflight: every active subject has an epoch duration."
- * Keeping the old body would have been worse than merely stale — the same
- * change that gives a subject its duration retires the schedule rows, so the
- * old check would have refused every production boot for the absence of rows
- * the design forbids.
+ * WHAT THIS REPLACED (issue #1026 W4). Check 6 used to ask whether "the five
+ * `swarm.*` schedule rows are enabled and their cron strings parse". The same
+ * change that gives a subject its schedule retires those rows, so the old body
+ * would have refused every production boot for the absence of rows the design
+ * forbids.
  *
  * NO ENVIRONMENT QUALIFIER. The old check returned an empty result off `prod`,
- * because stage legitimately ran with the rows disabled (`--schedules-off`).
- * Nothing about a subject's duration is environment-specific: §8 says the same
- * image runs everywhere and "only the subjects' epoch durations differ", and
- * spec §7 check 6 states the rule unconditionally. A stage subject with no
- * duration is exactly as broken as a production one, so the early return is
- * gone rather than kept with a new reason.
+ * because stage legitimately ran with the rows disabled. Nothing about a
+ * subject's schedule is environment-specific: the same image runs everywhere
+ * and "only the subjects' epoch durations differ" (scheduler spec §8). A stage
+ * subject with no anchor is exactly as broken as a production one.
  *
- * WHY IT CAN STILL FIND ANYTHING. Migration 0067's column is NOT NULL with a
- * positive default, so on a database that migration has reached this check
- * passes by construction. That is the point of a preflight: it measures rather
- * than assumes, and the case it exists for is the one where the column is
- * absent or a subject predates it — a partially applied migration, a restore
- * that stopped early, an older image against a newer database. A check that is
- * only interesting when something is wrong is a check doing its job.
+ * WHY IT CAN STILL FIND ANYTHING. Migrations 0067 and 0073 make all three
+ * columns NOT NULL with defaults, so on a database they have reached this passes
+ * by construction. That is the point of a preflight: it measures rather than
+ * assumes, and the case it exists for is a column that is absent or was relaxed
+ * — a partially applied migration, a restore that stopped early, a hand-run
+ * `ALTER TABLE`, an older image against a newer database.
  *
- * WHAT IT DELIBERATELY DOES NOT CHECK. Whether a subject has a `collecting`
- * session. That is READINESS, not preflight, and the distinction is stated in
- * the same amendment: readiness additionally requires the scheduler to be
- * authenticated, its stream synchronized, its initial rebuild complete and no
- * work exhausted (`smoke-production-spec.md` §6.3). Preflight runs before the
- * scheduler exists, so requiring its output would refuse every first boot.
+ * WHAT IT DELIBERATELY DOES NOT CHECK. Whether a subject has an open epoch.
+ * That is READINESS (`smoke-production-spec.md` §6.3): preflight runs before
+ * the scheduler exists, so requiring its output would refuse every first boot.
+ * A non-positive duration is the columns' own CHECK constraints' business, and
+ * check 3a refuses a database that lost one.
  */
-export async function checkSubjectEpochDurations(
+export async function checkSubjectScheduling(
   db: PreflightDb,
   _context: PreflightContext,
 ): Promise<PreflightCheckResult> {
   const findings: PreflightFinding[] = [];
+  const refuse = (message: string): void => {
+    findings.push({ check: "subject_scheduling", severity: "refuse", message });
+  };
 
-  const [present] = (await db`
-    SELECT count(*)::int AS n FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = 'swarm_subjects'
-       AND column_name = 'epoch_duration_seconds'`) as unknown as { n: number }[];
-  if (!present || present.n === 0) {
-    findings.push({
-      check: "subject_epoch_durations",
-      severity: "refuse",
-      message:
-        "swarm_subjects has no epoch_duration_seconds column: migration 0067 has not reached this database, " +
-        "so no subject has a schedule at all (scheduler spec §2.3)",
-    });
-    return { check: "subject_epoch_durations", findings };
+  // `pg_attribute`, not `information_schema.columns`: the view is
+  // privilege-filtered, and a role with no grant on the table would read every
+  // column as absent.
+  const present = new Set(
+    (
+      (await db`
+        SELECT a.attname AS name
+          FROM pg_attribute a
+         WHERE a.attrelid = to_regclass('public.swarm_subjects')
+           AND a.attnum > 0 AND NOT a.attisdropped`) as unknown as { name: string }[]
+    ).map((row) => row.name),
+  );
+  const absent = SUBJECT_SCHEDULING_COLUMNS.filter((column) => !present.has(column));
+  for (const column of absent) {
+    refuse(
+      `swarm_subjects has no ${column} column: the migration that adds it has not reached this database, so no ` +
+        "subject can be scheduled (scheduler spec §2.3)",
+    );
   }
+  if (absent.length > 0) return { check: "subject_scheduling", findings };
 
   const rows = (await db`
-    SELECT id FROM swarm_subjects
-     WHERE status = 'active' AND (epoch_duration_seconds IS NULL OR epoch_duration_seconds <= 0)
-     ORDER BY id`) as unknown as { id: string }[];
+    SELECT id,
+           epoch_duration_seconds IS NULL   AS no_epoch_duration_seconds,
+           epoch_anchor IS NULL             AS no_epoch_anchor,
+           judging_duration_seconds IS NULL AS no_judging_duration_seconds
+      FROM swarm_subjects
+     WHERE status = 'active'
+       AND (epoch_duration_seconds IS NULL OR epoch_anchor IS NULL OR judging_duration_seconds IS NULL)
+     ORDER BY id`) as unknown as ({ id: string } & Record<string, boolean>)[];
 
   for (const row of rows) {
-    findings.push({
-      check: "subject_epoch_durations",
-      severity: "refuse",
-      message:
-        `active subject ${row.id} has no epoch duration: it is the subject's only scheduling parameter ` +
-        "(scheduler spec §2.2), set through the admin subject route",
-    });
+    for (const column of SUBJECT_SCHEDULING_COLUMNS) {
+      if (row[`no_${column}`] !== true) continue;
+      refuse(
+        `active subject ${row.id} has no ${column}: a subject is scheduled by its epoch duration, epoch anchor and ` +
+          "judging duration (scheduler spec §2.2), all three set through the admin subject route",
+      );
+    }
   }
 
-  return { check: "subject_epoch_durations", findings };
+  return { check: "subject_scheduling", findings };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1523,7 +1546,7 @@ export async function runPreflight(
   if (scope === "full") {
     results.push(await checkEnvCredentials(context));
     results.push(await checkEnvIdentity(db, context));
-    results.push(await checkSubjectEpochDurations(db, context));
+    results.push(await checkSubjectScheduling(db, context));
   }
 
   const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));
