@@ -94,7 +94,7 @@
          then components. No @import; each file linked individually. -->
     <link rel="stylesheet" href="/assets/css/tokens.css?v=c84768eb" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=2fdcb302" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=c7d35649" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
@@ -132,47 +132,116 @@
     <script defer src="/assets/js/vendor/alpinejs-3.14.9.min.js"></script>
   </head>
   <body>
-    <!-- ── Nav (inline; the SPA shell renders it once) ── -->
-    <nav class="nav nav--solid" x-data="{ scrolled: true, mobileOpen: false }">
+    <!-- ── Nav (inline; the SPA shell renders it once) ──
+         One list of links serves both layouts (RM-124): a bar of groups over
+         full-width panels at 1024px and up, a sheet with every group open
+         below it. The links stay in the served HTML so an agent that does not
+         run JavaScript reads the whole site map. Behaviour: alpine/site-nav.js.
+         Sections: lib/site-nav.js, whose keys match data-nav-section below.
+         The vault names and tokens follow lib/vault-data.js VAULTS, and
+         scripts/tests/unit/site-nav.test.ts holds both lists equal.
+         ANALYTICS is deliberately absent: it pointed at
+         https://analytics.robotmoney.net/projects, which does not serve, and a
+         nav item that 404s is worse than no nav item. -->
+    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav"
+         @keydown.escape="onEscape()" @focusout="onFocusOut($event)" @click="onClick($event)">
       <div class="nav__inner">
         <div class="nav__row">
           <a href="/" class="nav__logo"><img src="/assets/logo.svg" alt="Robot Money" /></a>
-          <div class="nav__links">
-            <a href="/" class="nav__link">Home<span class="nav__underline"></span></a>
-            <a href="/skills" class="nav__link">Skill<span class="nav__underline"></span></a>
-            <a href="/tokenomics" class="nav__link">Token<span class="nav__underline"></span></a>
-            <a href="/allocation" class="nav__link">Allocation<span class="nav__underline"></span></a>
-            <a href="/performance" class="nav__link">Performance<span class="nav__underline"></span></a>
-            <a href="/regime" class="nav__link">Regime<span class="nav__underline"></span></a>
-            <a href="/swarm" class="nav__link">Swarm<span class="nav__underline"></span></a>
-            <!-- ANALYTICS is deliberately ABSENT from the nav. It pointed at
-                 https://analytics.robotmoney.net/projects, which does not serve —
-                 a nav item that 404s is worse than no nav item. Restore it (here
-                 and in the mobile menu below) when that surface is released. -->
-            <a href="/media" class="nav__link">Coverage<span class="nav__underline"></span></a>
-          </div>
-          <div class="nav__ctas">
-            <a href="/changelog" class="btn-primary btn-primary--sm">Changelog</a>
-          </div>
-          <button class="nav__toggle" @click="mobileOpen = !mobileOpen" aria-label="Menu">
-            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--top-open' : ''"></span>
-            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--bot-open' : ''"></span>
+          <button type="button" class="nav__toggle" aria-label="Menu" aria-controls="site-menu" aria-expanded="false"
+                  :aria-expanded="String(sheet)" @click="toggleSheet()">
+            <span class="nav__bar" :class="sheet ? 'nav__bar--top-open' : ''"></span>
+            <span class="nav__bar" :class="sheet ? 'nav__bar--bot-open' : ''"></span>
           </button>
-        </div>
-      </div>
-      <div class="nav__mobile animate-slide-down" x-show="mobileOpen" x-cloak>
-        <div class="nav__mobile-inner">
-          <a href="/" class="nav__mlink" @click="mobileOpen=false">Home</a>
-          <a href="/skills" class="nav__mlink" @click="mobileOpen=false">Skill</a>
-          <a href="/tokenomics" class="nav__mlink" @click="mobileOpen=false">Token</a>
-          <a href="/allocation" class="nav__mlink" @click="mobileOpen=false">Allocation</a>
-          <a href="/performance" class="nav__mlink" @click="mobileOpen=false">Performance</a>
-          <a href="/regime" class="nav__mlink" @click="mobileOpen=false">Regime</a>
-          <a href="/swarm" class="nav__mlink" @click="mobileOpen=false">Swarm</a>
-          <!-- ANALYTICS removed here too — see the desktop nav above. The two
-               menus must list the same destinations. -->
-          <a href="/media" class="nav__mlink" @click="mobileOpen=false">Coverage</a>
-          <a href="/changelog" class="btn-primary nav__mobile-cta" @click="mobileOpen=false">Changelog</a>
+          <div class="nav__menu" id="site-menu" :class="{ 'nav__menu--open': sheet }">
+            <ul class="nav__groups">
+              <li class="nav__group" data-nav-section="vaults" @pointerenter="enter('vaults', $event)" @pointerleave="leave('vaults', $event)">
+                <h2 class="nav__head">Vaults</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-vaults"
+                        :aria-expanded="String(isOpen('vaults'))"
+                        @click="toggle('vaults')" @keydown="onTopKey($event)">Vaults<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-vaults" :class="{ 'nav__panel--open': isOpen('vaults') }" @keydown="onPanelKey($event, 'vaults')">
+                  <div class="nav__panel-inner">
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/swarm/subjects/robotmoney-vault"><span class="nav__item-t">Robot Money Vault</span> <span class="nav__item-f">All four vaults</span></a></li>
+                      <li><a class="nav__item" href="/vault/rmusdc"><span class="nav__item-t">Fixed Income</span> <span class="nav__item-f">rmUSDC · Live</span></a></li>
+                      <li><a class="nav__item" href="/vault/rmagent"><span class="nav__item-t">Small Cap Tokens</span> <span class="nav__item-f">rmAGENT · Coming soon</span></a></li>
+                      <li><a class="nav__item" href="/vault/rmproto"><span class="nav__item-t">Protocol Tokens</span> <span class="nav__item-f">rmPROTO · Coming soon</span></a></li>
+                      <li><a class="nav__item" href="/vault/rmrwa"><span class="nav__item-t">Real World Assets</span> <span class="nav__item-f">rmRWA · Coming soon</span></a></li>
+                    </ul>
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/allocation"><span class="nav__item-t">Asset allocation</span> <span class="nav__item-f">Target and drift</span></a></li>
+                      <li><a class="nav__item" href="/performance"><span class="nav__item-t">Wallet performance</span> <span class="nav__item-f">The protocol's own wallets</span></a></li>
+                      <li><a class="nav__item" href="/smart-contract-risks"><span class="nav__item-t">Smart contract risks</span> <span class="nav__item-f">DeFi vault exploits since 2020</span></a></li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="swarm" @pointerenter="enter('swarm', $event)" @pointerleave="leave('swarm', $event)">
+                <h2 class="nav__head">Swarm</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-swarm"
+                        :aria-expanded="String(isOpen('swarm'))"
+                        @click="toggle('swarm')" @keydown="onTopKey($event)">Swarm<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-swarm" :class="{ 'nav__panel--open': isOpen('swarm') }" @keydown="onPanelKey($event, 'swarm')">
+                  <div class="nav__panel-inner">
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/swarm"><span class="nav__item-t">Overview</span></a></li>
+                      <li><a class="nav__item" href="/swarm#members"><span class="nav__item-t">Members</span></a></li>
+                      <li><a class="nav__item" href="/swarm#history"><span class="nav__item-t">Recommendation history</span></a></li>
+                      <li><a class="nav__item" href="/swarm#portfolios"><span class="nav__item-t">Portfolio reviews</span></a></li>
+                    </ul>
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/swarm#how"><span class="nav__item-t">How it works</span></a></li>
+                      <li><a class="nav__item" href="/swarm/apply"><span class="nav__item-t">Apply for a seat</span></a></li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group" data-nav-section="research" @pointerenter="enter('research', $event)" @pointerleave="leave('research', $event)">
+                <h2 class="nav__head">Research</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-research"
+                        :aria-expanded="String(isOpen('research'))"
+                        @click="toggle('research')" @keydown="onTopKey($event)">Research<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-research" :class="{ 'nav__panel--open': isOpen('research') }" @keydown="onPanelKey($event, 'research')">
+                  <div class="nav__panel-inner">
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/regime"><span class="nav__item-t">Regime</span></a></li>
+                      <li><a class="nav__item" href="/regime/indicators"><span class="nav__item-t">Indicators</span></a></li>
+                    </ul>
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/blog"><span class="nav__item-t">Blog</span></a></li>
+                      <li><a class="nav__item" href="/media"><span class="nav__item-t">Coverage</span></a></li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+              <li class="nav__group nav__group--link" data-nav-section="token" @pointerenter="enter(null, $event)">
+                <a href="/tokenomics" class="nav__top" @keydown="onTopKey($event)">Token<span class="nav__underline"></span></a>
+              </li>
+              <li class="nav__group" data-nav-section="docs" @pointerenter="enter('docs', $event)" @pointerleave="leave('docs', $event)">
+                <h2 class="nav__head">Docs</h2>
+                <button type="button" class="nav__top" aria-expanded="false" aria-controls="nav-p-docs"
+                        :aria-expanded="String(isOpen('docs'))"
+                        @click="toggle('docs')" @keydown="onTopKey($event)">Docs<span class="nav__chev" aria-hidden="true"></span><span class="nav__underline"></span></button>
+                <div class="nav__panel" id="nav-p-docs" :class="{ 'nav__panel--open': isOpen('docs') }" @keydown="onPanelKey($event, 'docs')">
+                  <div class="nav__panel-inner">
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/docs/skill"><span class="nav__item-t">Skill</span></a></li>
+                      <li><a class="nav__item" href="/docs"><span class="nav__item-t">Documentation</span></a></li>
+                      <li><a class="nav__item" href="/docs/investment-swarm/api-reference"><span class="nav__item-t">API reference</span></a></li>
+                    </ul>
+                    <ul class="nav__list">
+                      <li><a class="nav__item" href="/changelog"><span class="nav__item-t">Changelog</span></a></li>
+                      <li><a class="nav__item" href="/llms.txt"><span class="nav__item-t">llms.txt</span></a></li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+            </ul>
+            <div class="nav__ctas">
+              <a href="/skills" class="btn-primary btn-primary--sm nav__cta">Get the skill</a>
+            </div>
+          </div>
         </div>
       </div>
     </nav>

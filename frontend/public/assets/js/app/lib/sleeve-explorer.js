@@ -32,8 +32,8 @@
 //   so a pointer skimming the edge does not collapse the panel under it.
 // - The breakdown stays mounted and animates its height (0fr to 1fr), and it
 //   keeps showing the last sleeve while it closes rather than emptying first.
-const INTENT_MS = 60;
-const LEAVE_MS = 180;
+export const INTENT_MS = 60;
+export const LEAVE_MS = 180;
 const SWAP_MS = 80;
 
 // An action as a chip reads it: the direction glyph first, so the column

@@ -65,9 +65,9 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
 async function openChangelog(page: Page): Promise<FrameLocator> {
   await page.goto(`${baseUrl}/`);
   const frame = page.frameLocator("#frame");
-  await expect(frame.locator(".nav__ctas .btn-primary")).toBeAttached({ timeout: 15_000 });
-  // Drive the router inside the iframe. The desktop nav CTA is `display:none`
-  // at phone widths, and the preview wrapper's hash replay replaceStates
+  await expect(frame.locator(".nav__cta")).toBeAttached({ timeout: 15_000 });
+  // Drive the router inside the iframe. The nav is a closed sheet at phone
+  // widths, and the preview wrapper's hash replay replaceStates
   // without a popstate, so neither click nor `#/changelog` is reliable here.
   await page.evaluate(() => {
     const win = (document.querySelector("#frame") as HTMLIFrameElement).contentWindow!;
@@ -84,11 +84,13 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(33);
+  await expect(frame.locator(".cl__entry")).toHaveCount(34);
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
-  await expect(frame.locator(".nav__ctas .btn-primary")).toHaveText("Changelog");
+  // The changelog is under Docs; the nav's button is the skill (RM-124).
+  await expect(frame.locator('.nav__panel a[href="/changelog"]')).toHaveText("Changelog");
+  await expect(frame.locator(".nav__cta")).toHaveText("Get the skill");
 
   const title = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
@@ -148,8 +150,9 @@ test("the in-progress chip is the only colour in that callout", async ({ page })
 test("the tag filter hides entries that do not carry the tag", async ({ page }) => {
   const frame = await openChangelog(page);
 
-  const swarm = frame.getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("33 releases");
+  // In the page, not the nav: the nav has a Swarm button of its own (RM-124).
+  const swarm = frame.locator("#view").getByRole("button", { name: "Swarm", exact: true });
+  await expect(frame.locator(".cl__count")).toHaveText("34 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -166,7 +169,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("33 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("34 releases");
 });
 
 // Merged work that is not in production yet sits in one block on top of the
@@ -188,9 +191,11 @@ test("pending entries read Next release, styled as a date", async ({ page }) => 
     return;
   }
   // The heading and the Also block are marked too, and the heading comes first.
+  // A release can ship with no smaller changes, so the Also block is optional.
   await expect(frame.locator('.cl__month-h[data-release="pending"]')).toHaveText("Next release");
   await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
-  await expect(frame.locator('.cl__also[data-release="pending"] .cl__also-h')).toHaveText("Also in the next release");
+  const also = frame.locator('.cl__also[data-release="pending"]');
+  if (await also.count()) await expect(also.locator(".cl__also-h")).toHaveText("Also in the next release");
   await expect(frame.locator('.cl__updated .cl__pending[data-release="pending"]')).toHaveText("with the next release");
 
   const read = await page.evaluate(() => {
@@ -252,7 +257,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
   const frame = await openChangelog(page);
 
   for (const name of ["Allocation", "Swarm"]) {
-    const button = frame.getByRole("button", { name, exact: true });
+    const button = frame.locator("#view").getByRole("button", { name, exact: true });
     await button.click();
     await expect(button).toHaveAttribute("aria-pressed", "true");
     const tag = name.toLowerCase();
@@ -278,7 +283,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
     expect(seen.headings).toBe(0);
     await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
     await button.click();
-    await expect(frame.locator(".cl__count")).toHaveText("33 releases");
+    await expect(frame.locator(".cl__count")).toHaveText("34 releases");
   }
 });
 

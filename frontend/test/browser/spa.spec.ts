@@ -251,12 +251,19 @@ const EXTRA_HERO_ROUTES = [
   "/projects",
 ];
 
+// The hero bands components.css pins to one offset. Since RM-124 the nav also
+// reaches pages that open without one (a vault, a subject, the docs), and the
+// invariant is about the bands, so those are passed over rather than listed.
+const HERO_BANDS = ".a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head";
+
 async function heroRoutes(page: Page): Promise<string[]> {
   const nav = await page.locator(".nav a[href^='/']").evaluateAll((els) =>
     els.map((el) => el.getAttribute("href") as string));
   // "/" is the home page: a full-bleed landing hero, not one of the nav pages
-  // this invariant is about.
-  const routes = [...new Set([...nav, ...EXTRA_HERO_ROUTES])].filter((h) => h !== "/");
+  // this invariant is about. A link to a section of a page (/swarm#members) is
+  // that page again, and llms.txt is a file.
+  const routes = [...new Set([...nav, ...EXTRA_HERO_ROUTES])]
+    .filter((h) => h !== "/" && !h.includes("#") && !/\.[a-z]+$/.test(h));
   // A derived list that silently derives to nothing would pass this test
   // without asserting anything.
   expect(routes.length).toBeGreaterThanOrEqual(7);
@@ -270,7 +277,9 @@ test("every hero headline shares one size, one typeface and one offset", async (
   const seen: Record<string, { size: string; family: string; transform: string; top: number }> = {};
   for (const route of HERO_ROUTES) {
     await navigate(page, route);
-    const h1 = page.locator("#view h1").first();
+    const band = page.locator(`#view :is(${HERO_BANDS})`).first();
+    if (!(await band.count())) continue;
+    const h1 = band.locator("h1").first();
     await expect(h1).toBeVisible();
     seen[route] = await h1.evaluate((el) => {
       const c = getComputedStyle(el);
@@ -283,8 +292,11 @@ test("every hero headline shares one size, one typeface and one offset", async (
     });
   }
 
-  const first = seen[HERO_ROUTES[0]];
-  for (const route of HERO_ROUTES) {
+  const checked = Object.keys(seen);
+  // The pages that carried the nav before RM-124 all open with a band.
+  expect(checked.length).toBeGreaterThanOrEqual(7);
+  const first = seen[checked[0]];
+  for (const route of checked) {
     expect(seen[route].size, `${route} font-size`).toBe(first.size);
     expect(seen[route].family, `${route} font-family`).toBe(first.family);
     expect(seen[route].transform, `${route} text-transform`).toBe(first.transform);
