@@ -65,7 +65,8 @@ const routes: Array<{
   contentMaxWidth: number;
 }> = [
   { path: "/tokenomics", heroSelector: ".tok__hero", titleSelector: ".tok__h1", contentMaxWidth: 1280 },
-  { path: "/blog", heroSelector: ".blog-idx__hero", titleSelector: ".blog-idx__title", contentMaxWidth: 1000 },
+  // RM-134: the blog index moved from its own 1000px band onto the 80rem site column.
+  { path: "/blog", heroSelector: ".blog-idx__hero", titleSelector: ".blog-idx__title", contentMaxWidth: 1280 },
   { path: "/faq", heroSelector: ".faq__hero", titleSelector: ".faq__title", contentMaxWidth: 840 },
 ];
 

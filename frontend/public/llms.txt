@@ -40,7 +40,7 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 ## Live data pages (rendered client-side; use the API below instead)
 - [Allocation](https://robotmoney.network/allocation): the four allocation sleeves and their target weights, per-adapter vault TVL, APY, Robot Money protocol wallet holdings, and $ROBOTMONEY buybacks.
 - [Performance](https://robotmoney.network/performance): daily value and allocation of the Robot Money protocol wallets since inception. Days with no persisted snapshot are drawn as gaps, never interpolated.
-- [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests. Composite score in 0..1; below 0.33 is risk_off, 0.33 to 0.67 is neutral, above 0.67 is risk_on.
+- [Regime](https://robotmoney.network/regime): the daily cross-asset risk-on/risk-off classifier, with backtests. The composite is the mean of the macro and on-chain panels; the equity factor panel is shown for context and is not part of it. The buckets apply to the composite's 3-year rolling percentile (`latest.compositePercentile`), not to the composite itself: below 0.33 reads risk_off, above 0.67 risk_on, neutral between. The published label (`latest.regime`) switches only after 5 consecutive trading days in a new bucket, or on a single-day percentile move larger than 2σ.
 - [Investment Swarm](https://robotmoney.network/swarm): the daily AI swarm that analyzes agent portfolios: members, subjects, and signed sessions.
 
 <!-- BEGIN GENERATED ENDPOINTS: bun run build:agent-surface -->
@@ -106,9 +106,9 @@ These pages are server-rendered and readable by a plain fetch.
 
 ## Research & updates
 - [Blog](https://robotmoney.network/blog): research, regime signals, treasury-allocation backtests, and announcements.
+- [Smart contract risks](https://robotmoney.network/smart-contract-risks): a field guide to how DeFi vaults get exploited. Dated case studies of third-party exploits from 2016 to 2026, each with the financial impact, the parties involved and the technical attack vector. It is research on other protocols, not an audit of Robot Money.
 - [Changelog](https://robotmoney.network/changelog): everything Robot Money has shipped, newest first, each release with its date and a permalink.
 - [FAQ](https://robotmoney.network/faq)
 
 ## Risk & legal
-- [Smart contract risks](https://robotmoney.network/smart-contract-risks): audit status, upgrade authority, non-custodial caveats.
 - [Legal disclaimer](https://robotmoney.network/disclaimer): experimental software on Base, not a financial product; not FDIC/SIPC insured.

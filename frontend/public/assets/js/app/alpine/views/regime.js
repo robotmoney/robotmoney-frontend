@@ -4,7 +4,7 @@
 import { api, ROUTES } from "../../lib/api.js";
 import { scrollToFragment } from "../../router.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
-import { PALETTE, SERIES, MONO_FONT, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { PALETTE, MONO_FONT, REGIME, rgba, monoAxis } from "../../lib/chart-theme.js";
 import {
   regimeBandsPlugin,
   alignToDates,
@@ -19,6 +19,14 @@ import {
   SOURCE_LABEL,
   REGIME_BG_LEGEND,
 } from "./shared.js";
+
+// A figure as the site prints one: a true minus sign, a plus only where asked,
+// and no sign at all on a value that rounds to zero ("-0.0%" read as a loss).
+function signedFig(n, digits, suffix, plus) {
+  const s = Math.abs(n).toFixed(digits);
+  if (Number(s) === 0) return s + suffix;
+  return (n < 0 ? "\u2212" : plus ? "+" : "") + s + suffix;
+}
 
 export function registerRegimeView(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
@@ -88,12 +96,22 @@ export function registerRegimeView(Alpine) {
 
     // ── formatting ──────────────────────────────────────────────────────────
     posPct(x) { return x == null ? 0 : Math.max(0, Math.min(1, x)) * 100; },
-    // Percentile as an integer (no % sign), e.g. "62" → rendered "62th pct".
-    fmtPctInt(x) { return x == null || !isFinite(x) ? "—" : (x * 100).toFixed(0); },
+    // A 0-1 percentile as an ordinal, "91st". Appending "th" to the integer
+    // printed "91th", "92th" and "93th".
+    ordinalPct(x) {
+      if (x == null || !isFinite(x)) return "—";
+      const n = Math.round(x * 100);
+      const rem100 = n % 100;
+      if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+      return `${n}${({ 1: "st", 2: "nd", 3: "rd" })[n % 10] || "th"}`;
+    },
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
-    regimeColor(r) { return r === "risk_off" ? PALETTE.warn : r === "risk_on" ? PALETTE.accent : PALETTE.textMuted; },
-    regimeCardStyle(r) { const c = this.regimeColor(r); return `border-color:${c};background:${rgba(c, 0.1)}`; },
+    // One regime palette, the session page's: green risk-on, slate neutral,
+    // beacon risk-off. It marks a reading as a small round dot or a line,
+    // never as type or a filled area, so the regime card's label stays in the
+    // text colour beside its dot.
+    regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
     fmtSign(s) { return s == null ? "—" : (s >= 0 ? "+" : "") + s; },
     sourceLabel(s) { return SOURCE_LABEL[s] || s || "—"; },
     // Row-level provenance badge label (issue #397): which AnalyticsDataSource
@@ -136,12 +154,19 @@ export function registerRegimeView(Alpine) {
     // Fallback for pre-`description` snapshots (see indicatorTooltip).
     signTooltip(sign, name) {
       if (sign == null || sign >= 0) {
-        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. The "Risk-on" column has the same orientation — high = risk-on — across every indicator.`;
+        return `Sign +1: a rising ${name} reads as risk-on, so its percentile is used as is. A high reading means risk-on for every indicator.`;
       }
-      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps the "Risk-on" column oriented high = risk-on across every indicator.`;
+      return `Sign −1: a rising ${name} reads as risk-off, so its percentile is flipped (1 − percentile) before averaging. A high reading means risk-on for every indicator.`;
     },
     // Component methodology footer: bucket thresholds as integer percentiles.
-    bucketPct(key) { const t = this.latest?.bucketThresholds; return t && t[key] != null ? (t[key] * 100).toFixed(0) : "—"; },
+    // The live snapshot can carry no thresholds (bucketThresholds null), which
+    // printed a placeholder dash into the sentence. The method buckets at
+    // 0.33 / 0.67, the value every snapshot that does carry them holds.
+    bucketPct(key) {
+      const t = this.latest?.bucketThresholds;
+      const v = t && t[key] != null ? t[key] : ({ risk_off: 0.33, risk_on: 0.67 })[key];
+      return v == null ? "—" : (v * 100).toFixed(0);
+    },
 
     // Last visible value (transformed for change series), formatted by unit.
     fmtLast(ind) {
@@ -150,7 +175,7 @@ export function registerRegimeView(Alpine) {
       if (v == null) return "—";
       const u = ind.unit;
       if (u === "percent") return v.toFixed(2) + "%";
-      if (u === "percent_change") return (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+      if (u === "percent_change") return signedFig(v * 100, 1, "%", true);
       if (u === "index") return v.toFixed(2);
       if (u === "count") return Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + "M" : Math.round(v).toLocaleString();
       if (u === "ratio2") return v.toFixed(2);
@@ -164,10 +189,18 @@ export function registerRegimeView(Alpine) {
       return v.toFixed(2);
     },
     fmtSigned(v) { return v == null ? "—" : Math.round(v * 100).toString(); },
-    signedColor(v) { return v == null ? PALETTE.textMuted : v >= 0.5 ? PALETTE.accent : PALETTE.warn; },
+    // The reading a sign-aligned percentile gives, at the method's own cuts
+    // (0.33 / 0.67, see bucketPct) rather than at 0.5, which read 44 as
+    // risk-off. It colours the sparkline, a line; the figure beside it stays
+    // in the text colour.
+    signedColor(v) {
+      if (v == null || !isFinite(v)) return PALETTE.textMuted;
+      const lo = +this.bucketPct("risk_off") / 100, hi = +this.bucketPct("risk_on") / 100;
+      return v > hi ? REGIME.risk_on : v < lo ? REGIME.risk_off : REGIME.neutral;
+    },
 
-    // Inline-SVG sparkline (percentiles in [0,1]); stroke cyan when the last
-    // point is risk-on (>=0.5), amber otherwise. Mid-line reference at 0.5.
+    // Inline-SVG sparkline (percentiles in [0,1]), stroked in the reading its
+    // last point gives (signedColor). Mid-line reference at 0.5.
     sparklineSvg(values) {
       const vals = Array.isArray(values) ? values : [];
       const finite = vals.filter((v) => typeof v === "number" && isFinite(v));
@@ -182,7 +215,7 @@ export function registerRegimeView(Alpine) {
       const yAt = (v) => pad + (1 - v) * (H - 2 * pad);
       let last = null;
       for (let k = vals.length - 1; k >= 0; k--) { if (typeof vals[k] === "number" && isFinite(vals[k])) { last = vals[k]; break; } }
-      const stroke = last >= 0.5 ? PALETTE.accent : PALETTE.warn;
+      const stroke = this.signedColor(last);
       const pts = []; let lastX = pad, lastY = yAt(0.5);
       vals.forEach((v, i) => { if (typeof v === "number" && isFinite(v)) { const px = xAt(i), py = yAt(v); pts.push(px.toFixed(1) + "," + py.toFixed(1)); lastX = px; lastY = py; } });
       const mid = yAt(0.5).toFixed(1);
@@ -205,13 +238,26 @@ export function registerRegimeView(Alpine) {
     },
     fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
     conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
-    rhoText(cell) { if (!cell || cell.rho == null) return "—"; return (cell.rho >= 0 ? "+" : "") + cell.rho.toFixed(2); },
-    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textMuted; const r = cell.rho; if (Math.abs(r) < 0.15) return PALETTE.textMuted; return r > 0 ? PALETTE.accent : PALETTE.warn; },
+    rhoText(cell) { if (!cell || cell.rho == null) return "—"; return signedFig(cell.rho, 2, "", true); },
+    // A correlation is a figure, not a regime reading, so it takes no regime
+    // hue: the sign glyph leads, a meaningful |ρ| is in the text colour and one
+    // under 0.15 recedes to muted. It used to paint 21 figures cyan.
+    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textMuted; return Math.abs(cell.rho) < 0.15 ? PALETTE.textMuted : PALETTE.text; },
     rhoTitle(cell) { return cell && cell.n != null ? "n = " + cell.n + " paired observations" : ""; },
+    // The span the correlations are measured over, from the history's first
+    // and last dates. n / 252 treated a count of calendar days as trading days
+    // and printed "~12.1y" over 8.4 years of data.
     corrSampleMeta() {
-      const c = this.latest?.correlations;
-      const n = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
-      const trailing = n >= 252 ? "~" + (n / 252).toFixed(1) + "y" : "~" + Math.max(1, Math.round(n / 21)) + "mo";
+      const h = this.history;
+      let days = 0;
+      if (h.length >= 2) {
+        days = (Date.parse(h[h.length - 1].date + "T00:00:00Z") - Date.parse(h[0].date + "T00:00:00Z")) / 86_400_000;
+      } else {
+        const c = this.latest?.correlations;
+        days = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
+      }
+      if (!isFinite(days) || days <= 0) return "Spearman ρ";
+      const trailing = days >= 365 ? "~" + (days / 365.25).toFixed(1) + "y" : "~" + Math.max(1, Math.round(days / 30.44)) + "mo";
       return "Spearman ρ · trailing " + trailing;
     },
 
@@ -241,8 +287,8 @@ export function registerRegimeView(Alpine) {
     },
     btEmptyDetail(key) { return this._curveKeys(key).length ? this.historyEmptyDetail() : ""; },
     fmtNum2(v) { return v == null ? "—" : (+v).toFixed(2); },
-    fmtPctSigned(v) { return v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%"; },
-    fmtPctUnsigned(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; },
+    fmtPctSigned(v) { return v == null ? "—" : signedFig(v * 100, 1, "%", true); },
+    fmtPctUnsigned(v) { return v == null ? "—" : signedFig(v * 100, 1, "%", false); },
     ddColor(v) { return v == null ? PALETTE.textMuted : v < -0.5 ? PALETTE.warn : PALETTE.textMuted; },
     tradesText(row) { return row.baseline ? "—" : (row.s.transitions ?? "—"); },
     describeWeights(w) { return Object.keys(ASSET_COLOR).filter((a) => w[a]).map((a) => Math.round(w[a] * 100) + "% " + ASSET_LABEL[a]).join(" / "); },
@@ -251,13 +297,14 @@ export function registerRegimeView(Alpine) {
       const size = 28, r = size / 2 - 1, cx = size / 2, cy = size / 2;
       const order = Object.keys(ASSET_COLOR).filter((a) => (w[a] || 0) > 0);
       const total = order.reduce((s, a) => s + w[a], 0) || 1;
-      if (order.length === 1) return '<svg class="rv__pie" width="' + size + '" height="' + size + '" aria-hidden="true"><circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + ASSET_COLOR[order[0]] + '"/></svg>';
+      // The slices are CATEGORICAL hues (cash, ETH, SP500) and declare it.
+      if (order.length === 1) return '<svg class="rv__pie" width="' + size + '" height="' + size + '" aria-hidden="true"><circle data-mark="series" cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + ASSET_COLOR[order[0]] + '"/></svg>';
       let a0 = -Math.PI / 2, paths = "";
       for (const a of order) {
         const frac = w[a] / total, a1 = a0 + frac * Math.PI * 2, large = frac > 0.5 ? 1 : 0;
         const x0 = (cx + r * Math.cos(a0)).toFixed(2), y0 = (cy + r * Math.sin(a0)).toFixed(2);
         const x1 = (cx + r * Math.cos(a1)).toFixed(2), y1 = (cy + r * Math.sin(a1)).toFixed(2);
-        paths += '<path d="M ' + cx + ' ' + cy + ' L ' + x0 + ' ' + y0 + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x1 + ' ' + y1 + ' Z" fill="' + ASSET_COLOR[a] + '"/>';
+        paths += '<path data-mark="series" d="M ' + cx + ' ' + cy + ' L ' + x0 + ' ' + y0 + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x1 + ' ' + y1 + ' Z" fill="' + ASSET_COLOR[a] + '"/>';
         a0 = a1;
       }
       return '<svg class="rv__pie" width="' + size + '" height="' + size + '" aria-hidden="true">' + paths + '</svg>';
@@ -265,6 +312,12 @@ export function registerRegimeView(Alpine) {
 
     // ── history-chart overlay toggles + legend ────────────────────────────────
     bgLegend() { return REGIME_BG_LEGEND; },
+    // A price overlay is reference context, so it is drawn the way the
+    // backtests draw the same asset's buy-and-hold line: slate, with that
+    // line's dash. Teal and mint named On-chain and Conservative elsewhere on
+    // this page. The chip's dot reads the same colour.
+    overlayStyle(key) { return STRATEGY_STYLE[key === "spx" ? "sp500_hodl" : "eth_hodl"]; },
+    overlayColor(key) { return this.overlayStyle(key).color; },
     hasSpx() { return (this.latest?.extras?.spx || []).length > 0; },
     hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
@@ -311,19 +364,24 @@ export function registerRegimeView(Alpine) {
       // spanGaps:false is Chart.js's own default, set explicitly (issue #624,
       // mirroring wallet-perf.js) so a `null` gap day breaks the line instead
       // of ever silently interpolating across it.
-      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: o.bg || "transparent", fill: !!o.fill, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, yAxisID: o.axis || "y", spanGaps: false });
+      // Lines only: the composite no longer fills to zero, which made its hue
+      // a mass over the whole plot. Each series takes the colour its name has
+      // in the backtest charts below (STRATEGY_STYLE), so Macro, On-chain and
+      // Equity factor are one hue each on the whole page.
+      const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: "transparent", fill: false, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, borderDash: o.dash, yAxisID: o.axis || "y", spanGaps: false });
       const ds = [
-        line("Composite", val((h) => h.composite), PALETTE.accent, { fill: true, bg: rgba(PALETTE.accent, 0.1), bw: 2 }),
-        line("Macro", val((h) => this._idx(h, "macro")), PALETTE.textMuted),
-        line("On-chain", val((h) => this._idx(h, "onchain")), PALETTE.warm),
+        line("Composite", val((h) => h.composite), STRATEGY_STYLE.composite.color, { bw: 2 }),
+        line("Macro", val((h) => this._idx(h, "macro")), STRATEGY_STYLE.macro.color),
+        line("On-chain", val((h) => this._idx(h, "onchain")), STRATEGY_STYLE.onchain.color),
       ];
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor) ds.push(line("Equity factor", val((h) => this._idx(h, "factor")), SERIES.emerald));
+      if (hasFactor) ds.push(line("Equity factor", val((h) => this._idx(h, "factor")), STRATEGY_STYLE.factor.color));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
-      if (showSpx) ds.push(line("S&P 500", alignToDates(extras.spx, labels), SERIES.teal, { axis: "yPrice" }));
-      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), SERIES.mint, { axis: "yPrice" }));
+      const spx = this.overlayStyle("spx"), eth = this.overlayStyle("eth");
+      if (showSpx) ds.push(line("S&P 500", alignToDates(extras.spx, labels), spx.color, { axis: "yPrice", dash: spx.dash }));
+      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), eth.color, { axis: "yPrice", dash: eth.dash }));
       const chart = new window.Chart(canvas, {
         type: "line",
         data: { labels, datasets: ds },
@@ -337,7 +395,9 @@ export function registerRegimeView(Alpine) {
           },
           scales: {
             x: monoAxis({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }),
-            y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25 } }) },
+            // Two decimals: Chart.js's own label rounded the 0.25 and 0.75
+            // ticks to "0.3" and "0.8".
+            y: { min: 0, max: 1, ...monoAxis({ ticks: { stepSize: 0.25, callback: (v) => (+v).toFixed(2) } }) },
             yPrice: { type: "logarithmic", display: !!(showSpx || showEth), position: "right", ticks: { color: PALETTE.textMuted, font: MONO_FONT }, grid: { drawOnChartArea: false } },
           },
         },

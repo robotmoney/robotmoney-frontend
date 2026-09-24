@@ -6,7 +6,7 @@
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
-import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
+import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
@@ -538,10 +538,11 @@ export const helpers = {
   // looked the same as the two that agreed. Same ends as STANCE_COLORS (Pool
   // green for the constructive end, Beacon for the attention end, slate
   // neutral), carried by a <=8px dot rather than coloured text: Beacon is a
-  // POINT in the covenant, never a run of type.
+  // POINT in the covenant, never a run of type. The hues are REGIME in
+  // lib/chart-theme.js, the one regime palette /regime and the blog share.
   regimeColor(regime) {
     const key = String(regime || "").replace(/-/g, "_");
-    return ({ risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" })[key] || "#7e889e";
+    return REGIME[key] || REGIME.neutral;
   },
   // A 0-1 percentile as "71st". The backdrop panel prints percentiles as bare
   // integers next to a bar, where "71" could as easily be a score or a count;

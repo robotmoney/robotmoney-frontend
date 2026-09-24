@@ -77,7 +77,7 @@ const META = {
   },
   "/regime": {
     title: "Market Regime Classifier — Robot Money",
-    description: "Robot Money's live regime classifier blends macro, onchain, and equity-factor panels into a daily cross-asset risk-on/risk-off score, recomputed every 24h.",
+    description: "Robot Money's daily risk-on/risk-off regime classifier. Macro and on-chain panels form the composite; an equity factor panel is shown for context only.",
   },
   "/swarm": {
     title: "AI Investment Swarm — Robot Money",
@@ -154,7 +154,7 @@ const META = {
   // description in search results and link unfurls.
   "/smart-contract-risks": {
     title: "Smart Contract Risks — How DeFi Vaults Get Exploited",
-    description: "A field guide to DeFi vault exploits from 2020 to 2026: chronological case studies with the financial impact, the parties involved, and the precise technical attack vector for each.",
+    description: "A field guide to DeFi vault exploits from 2016 to 2026: dated case studies with the financial impact, the parties involved and the technical attack vector for each.",
   },
   "/regime-detection": {
     title: "Regime Detection — Prior Art, Methods and Data Sources",
@@ -162,7 +162,7 @@ const META = {
   },
   "/regime/indicators": {
     title: "The 26 Indicators Behind the Regime Classifier",
-    description: "Plain-language explanation of every indicator in the Robot Money regime composite: what each one is, how it is derived, and how to read it, with the numeric thresholds that matter.",
+    description: "Every regime indicator in plain language: what it is, how it is derived and how to read it. 18 macro and on-chain indicators feed the composite; 8 equity factor indicators are shown for context.",
   },
   "/research/late-cycle-signals": {
     title: "Late-Cycle Signals — How Late in the Rally Are We?",
@@ -189,7 +189,7 @@ const META = {
   },
   "/regime_2panel": {
     title: "Regime Classifier, 2-panel reference — Robot Money",
-    description: "The original two-panel regime classifier, macro and on-chain indicators only, preserved for reference. The current three-panel composite lives at /regime.",
+    description: "A placeholder for the original two-panel regime classifier, macro and on-chain indicators only, kept for reference. The live classifier is on the regime page.",
     robots: "noindex, follow",
   },
   "/tech-proposal-march-16": {
