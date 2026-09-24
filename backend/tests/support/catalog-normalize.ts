@@ -336,14 +336,27 @@ const CLASSES: readonly { readonly name: string; readonly sql: string }[] = [
                  WHEN 'pg_proc' THEN (SELECT n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                    WHERE p.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
-                 WHEN 'pg_constraint' THEN (SELECT n.nspname || '.' || con.conname
+                 -- Constraint, trigger and policy names are unique only per
+                 -- owning relation (or domain), so the key carries it — the
+                 -- same key shape as the object's own class above. By name
+                 -- alone, a comment moved to a same-named trigger on another
+                 -- table would compare equal.
+                 WHEN 'pg_constraint' THEN (SELECT n.nspname || '.' || coalesce(c.relname, t.typname) || '.' || con.conname
                    FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace
+                   LEFT JOIN pg_class c ON c.oid = con.conrelid
+                   LEFT JOIN pg_type t ON t.oid = con.contypid
                    WHERE con.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
-                 WHEN 'pg_trigger' THEN (SELECT tg.tgname FROM pg_trigger tg WHERE tg.oid = d.objoid)
+                 WHEN 'pg_trigger' THEN (SELECT n.nspname || '.' || c.relname || '.' || tg.tgname
+                   FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE tg.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
                  WHEN 'pg_type' THEN (SELECT n.nspname || '.' || t.typname
                    FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
                    WHERE t.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
-                 WHEN 'pg_policy' THEN (SELECT pol.polname FROM pg_policy pol WHERE pol.oid = d.objoid)
+                 WHEN 'pg_policy' THEN (SELECT n.nspname || '.' || c.relname || '.' || pol.polname
+                   FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE pol.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
                  WHEN 'pg_namespace' THEN (SELECT n.nspname FROM pg_namespace n
                    WHERE n.oid = d.objoid AND ${SYSTEM_SCHEMA_FILTER})
                END, '') AS key,
@@ -360,19 +373,16 @@ const CLASSES: readonly { readonly name: string; readonly sql: string }[] = [
 /**
  * Read the database's catalog as sorted, OID-free `(key, definition)` entries.
  *
- * `comments: false` leaves out `COMMENT ON` text, for a comparison against a
- * declaration that was dumped without it. Every other class is always read.
+ * Every class is always read. There is deliberately no switch to leave one
+ * out: a comparison that skips a class hides its drift instead of recording it
+ * (a known difference belongs in the caller's list of causes, by name).
  *
  * Throws, naming the class, when a class query fails, and when two objects
  * collapse onto one key — a collision would let one hide the other.
  */
-export async function normalizedCatalog(
-  db: CatalogDb,
-  options: { readonly comments?: boolean } = {},
-): Promise<CatalogEntry[]> {
+export async function normalizedCatalog(db: CatalogDb): Promise<CatalogEntry[]> {
   const entries = new Map<string, string>();
   for (const cls of CLASSES) {
-    if (cls.name === "comments" && options.comments === false) continue;
     let rows: { key: string | null; definition: string | null }[];
     try {
       rows = (await db.unsafe(cls.sql)) as unknown as { key: string | null; definition: string | null }[];

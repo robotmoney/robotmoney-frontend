@@ -9,7 +9,13 @@
 // SUPPORTED_RELEASES is v0.5.0 alone: it is the release production runs
 // (`releases-0.5.x` carries the same 72 migration files; v0.5.1's 0062 was
 // never tagged), and an upgrade path from anything older is one no database
-// will take. Adding a release is one fixture directory and one entry below.
+// will take. Adding a release is one fixture directory and one entry below
+// ONLY for a release built by v0.5.0's runner loop (`applyAsReleaseRunner`),
+// which records no compat declaration. A release whose own runner recorded
+// compat (anything shipped with 0064's runMigrate) also needs that runner
+// modelled here, or its ledger rows above the baseline read NULL. What depends
+// on whether the release predates 0063 — the refusal, the bridge, the "compat
+// is NULL" boot refusal — is gated on it (`predatesIdentity`), not assumed.
 //
 // A release's schema is rebuilt from its OWN migration bytes, recorded in
 // tests/fixtures/releases/<tag>/release.json as a sha256 per file, taken from
@@ -83,6 +89,13 @@ const SUPPORTED_RELEASES = ["v0.5.0"] as const;
 interface ReleaseFixture {
   readonly tag: string;
   readonly commit: string;
+  /** What the release itself seeded and could queue — read from the tag, not
+   *  from the migrations under test (see release.json's `source`). */
+  readonly swarm: {
+    readonly source: string;
+    readonly scheduleKinds: readonly string[];
+    readonly jobKinds: readonly string[];
+  };
   readonly migrations: readonly { readonly file: string; readonly sha256: string }[];
 }
 
@@ -172,24 +185,29 @@ async function restoreRoleAttributes(db: postgres.Sql<{}>, saved: readonly RoleA
 // rows in append-only tables.
 
 /**
- * The retired swarm schedule kinds, READ FROM 0072 rather than written here.
- * scripts/tests/unit/no-swarm-cron.test.ts lets exactly one shipping file name
- * them — the migration that deletes them — and this file seeds precisely the
- * rows that migration says it removes, so the list comes from there.
+ * The swarm.* schedule kinds 0072 says it deletes, parsed from the migration — used ONLY
+ * to check the migration against what the release seeded, never to decide what
+ * to seed (that would make the data assertion circular: a kind the release
+ * seeded and 0072 forgot would be neither seeded nor checked).
  */
-const RETIRED_SCHEDULE_KINDS: readonly string[] = (() => {
+function scheduleKindsDeletedBy0072(): string[] {
   const text = readFileSync(join(MIGRATIONS_DIR, "0072_drop_swarm_schedules.sql"), "utf8");
   const list = /DELETE FROM job_schedules\s+WHERE kind IN \(([^)]*)\)/.exec(text)?.[1] ?? "";
   const kinds = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-  if (kinds.length === 0) throw new Error("0072_drop_swarm_schedules.sql no longer names the kinds it deletes");
+  if (kinds.length === 0) throw new Error("0072_drop_swarm_schedules.sql no longer names the schedule kinds it deletes");
   return kinds;
-})();
+}
 
 const SESSION_PUBLISHED = "00000000-0000-4000-8000-00000000a001";
 const SESSION_OLD_OPEN = "00000000-0000-4000-8000-00000000a002";
 const SESSION_NEW_OPEN = "00000000-0000-4000-8000-00000000a003";
 
-const RELEASE_DATA = `
+/** The release's populated data. Every swarm.* schedule row the release
+ *  seeded, and a pending job of every swarm.* kind it could queue, come from
+ *  release.json — the release's own record. */
+function releaseData(release: ReleaseFixture): string {
+  const { scheduleKinds, jobKinds } = release.swarm;
+  return `
 INSERT INTO swarm_members (id, status, name, handle, role) VALUES
   ('m-alpha', 'active', 'Alpha', 'alpha', 'member'),
   ('m-beta',  'active', 'Beta',  'beta',  'member'),
@@ -205,17 +223,17 @@ INSERT INTO swarm_recommendations (session_id, member_id, subject_id, date, nonc
   ('${SESSION_PUBLISHED}', 'm-beta',  'subj-1', '2026-09-01', 'n-beta-1',  'sell', '{"take":"beta r1"}',  'sig-beta-1',  true, 1);
 INSERT INTO job_schedules (kind, cron, payload, enabled) VALUES
   ('vault.sample_share_price', '0 * * * *',  '{"vault":"v1"}', true),
-  ${RETIRED_SCHEDULE_KINDS.map((kind) => `('${kind}', '0 12 * * *', '{}', true)`).join(",\n  ")};
+  ${scheduleKinds.map((kind) => `('${kind}', '0 12 * * *', '{}', true)`).join(",\n  ")};
 INSERT INTO jobs (kind, status, payload, dedupe_key) VALUES
-  ('vault.sample_share_price',          'pending',   '{"vault":"v1"}', 'rel-vault'),
-  ${RETIRED_SCHEDULE_KINDS.map((kind, i) => `('${kind}', 'pending', '{}', 'rel-retired-pending-${i}')`).join(",\n  ")},
-  ('${RETIRED_SCHEDULE_KINDS[0]}', 'succeeded', '{}', 'rel-retired-history'),
-  ('swarm.send_activation_notification','pending',   '{}',             'rel-notify');
+  ('vault.sample_share_price', 'pending', '{"vault":"v1"}', 'rel-vault'),
+  ${jobKinds.map((kind) => `('${kind}', 'pending', '{}', 'rel-pending-${kind}')`).join(",\n  ")},
+  ('${scheduleKinds[0]}', 'succeeded', '{}', 'rel-retired-history');
 INSERT INTO swarm_judge_config (id, mode, model) VALUES (1, 'enforce', NULL)
   ON CONFLICT (id) DO UPDATE SET mode = EXCLUDED.mode, model = EXCLUDED.model;
 INSERT INTO audit_log (actor, action, target_type, target_id) VALUES ('release-fixture', 'member.activate', 'member', 'm-alpha');
 INSERT INTO swarm_waitlist (email, email_norm, notified_at) VALUES ('Wait@Example.com', 'wait@example.com', '2026-09-02T00:00:00Z');
 `;
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Fixture integrity — needs no database
@@ -233,6 +251,16 @@ describe("the release fixtures are the releases' own bytes", () => {
       // A file edited on the branch after the tag needs its release bytes kept
       // under fixtures/releases/<tag>/migrations/ — never a re-recorded hash.
       expect(drifted).toEqual([]);
+    });
+
+    test(`${tag}: it records the swarm schedule and job kinds it seeded, and 0072 deletes every one of them`, () => {
+      const { scheduleKinds, jobKinds } = loadRelease(tag).swarm;
+      expect(scheduleKinds.length).toBeGreaterThan(0);
+      // Every schedule kind is also a job kind: a seeded row only enqueues
+      // kinds a handler was registered for.
+      expect(scheduleKinds.filter((kind) => !jobKinds.includes(kind))).toEqual([]);
+      const deletedSchedules = scheduleKindsDeletedBy0072();
+      expect(scheduleKinds.filter((kind) => !deletedSchedules.includes(kind))).toEqual([]);
     });
 
     test(`${tag}: its migrations are a subset of the branch's — an upgrade never meets a file the branch lacks`, () => {
@@ -286,6 +314,9 @@ for (const tag of SUPPORTED_RELEASES) {
     let release: ReleaseFixture;
     let pendingAtOrBelowBaseline: string[] = [];
     let appliedByRun: readonly string[] = [];
+    /** True when the release predates 0063 — it has no deployment_identity,
+     *  so runMigrate refuses it and the bridge must run first. */
+    let predatesIdentity = false;
 
     beforeAll(async () => {
       release = loadRelease(tag);
@@ -302,9 +333,10 @@ for (const tag of SUPPORTED_RELEASES) {
         // before anything else in this process can observe them.
         await restoreRoleAttributes(admin, savedRoles);
       }
-      await db.unsafe(RELEASE_DATA);
+      await db.unsafe(releaseData(release));
 
       const recorded = new Set(release.migrations.map((m) => m.file));
+      predatesIdentity = Math.max(...release.migrations.map((m) => migrationNumber(m.file))) < migrationNumber("0063_deployment_identity.sql");
       pendingAtOrBelowBaseline = HEAD_FILES.filter(
         (file) => !recorded.has(file) && migrationNumber(file) <= COMPAT_HEADER_BASELINE,
       );
@@ -314,11 +346,13 @@ for (const tag of SUPPORTED_RELEASES) {
       await db?.end({ timeout: 5 });
     });
 
-    test("runMigrate refuses the release as it stands — it has no deployment_identity to be enrolled in (reported gap)", async () => {
+    test("runMigrate refuses a release that predates 0063 — it has no deployment_identity to be enrolled in (reported gap)", async () => {
       const [table] = (await db`SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`) as unknown as {
         present: boolean;
       }[];
-      expect(table?.present).toBe(false);
+      // A release at or past 0063 has the table and meets no such refusal.
+      expect(table?.present).toBe(!predatesIdentity);
+      if (!predatesIdentity) return;
       await expect(runMigrate(db, MIGRATE_OPTIONS)).rejects.toThrow("no deployment_identity row");
       await expect(runMigrate(db, { ...MIGRATE_OPTIONS, caller: "operator", env: "prod", connection: "remote" })).rejects.toThrow(
         "no deployment_identity row",
@@ -328,14 +362,14 @@ for (const tag of SUPPORTED_RELEASES) {
       expect(ledger.map((r) => r.name)).toEqual(release.migrations.map((m) => m.file));
     });
 
-    test("bridge, enrol, then the real migrate run reaches the branch's version", async () => {
+    test("bridge (when the release predates 0063), enrol, then the real migrate run reaches the branch's version", async () => {
       // Every pending file at or below the baseline is pre-compat: parsing its
       // header must not refuse (D53 decision 3), which is what lets the release
       // runner loop apply it without a declaration.
       for (const file of pendingAtOrBelowBaseline) {
         expect(() => parsePendingHeader(file, readFileSync(join(MIGRATIONS_DIR, file), "utf8"))).not.toThrow();
       }
-      expect(pendingAtOrBelowBaseline).toContain("0063_deployment_identity.sql");
+      if (predatesIdentity) expect(pendingAtOrBelowBaseline).toContain("0063_deployment_identity.sql");
       await applyAsReleaseRunner(
         db,
         pendingAtOrBelowBaseline.map((file) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") })),
@@ -344,7 +378,10 @@ for (const tag of SUPPORTED_RELEASES) {
 
       const result = await runMigrate(db, MIGRATE_OPTIONS);
       appliedByRun = result.applied;
-      expect(result.applied).toEqual(HEAD_FILES.filter((file) => migrationNumber(file) > COMPAT_HEADER_BASELINE));
+      const recorded = new Set(release.migrations.map((m) => m.file));
+      expect(result.applied).toEqual(
+        HEAD_FILES.filter((file) => !recorded.has(file) && migrationNumber(file) > COMPAT_HEADER_BASELINE),
+      );
       expect(result.manifest.filenames).toEqual(HEAD_FILES);
 
       const ledger = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
@@ -437,21 +474,40 @@ for (const tag of SUPPORTED_RELEASES) {
       ]);
     });
 
-    test("the vault schedule and its job survive; the retired schedule rows and their pending jobs are gone; history stays (0066, 0072)", async () => {
+    test("the vault schedule and its job survive; every swarm schedule row the release seeded is gone; no swarm job it queued is left pending; history stays (0066, 0072)", async () => {
+      const { scheduleKinds, jobKinds } = release.swarm;
+      // Only the vault row survives — so every seeded swarm.* row is gone,
+      // whatever list 0072 happens to carry.
       expect(await rows(db`SELECT kind, cron, payload, enabled FROM job_schedules ORDER BY kind`)).toEqual([
         { kind: "vault.sample_share_price", cron: "0 * * * *", payload: { vault: "v1" }, enabled: true },
       ]);
+      // A pending job whose handler is gone never settles: every swarm.* kind
+      // the release could queue must leave the pending state, by deletion
+      // (0072) or cancellation (0066).
       expect(
-        await rows(db`SELECT dedupe_key, kind, status, last_error FROM jobs WHERE dedupe_key LIKE 'rel-%' ORDER BY dedupe_key`),
-      ).toEqual([
-        {
-          dedupe_key: "rel-notify",
-          kind: "swarm.send_activation_notification",
+        await rows(db`SELECT kind FROM jobs WHERE dedupe_key LIKE 'rel-pending-%' AND status = 'pending' ORDER BY kind`),
+      ).toEqual([]);
+      const settled = (await db`
+        SELECT kind, status, last_error FROM jobs WHERE dedupe_key LIKE 'rel-pending-%' ORDER BY kind`) as unknown as {
+        kind: string;
+        status: string;
+        last_error: string | null;
+      }[];
+      for (const row of settled) {
+        expect({ kind: row.kind, status: row.status, last_error: row.last_error }).toEqual({
+          kind: row.kind,
           status: "cancelled",
           last_error: "swarm email removed (issue #1026 W5, decision D50)",
-        },
-        { dedupe_key: "rel-retired-history", kind: RETIRED_SCHEDULE_KINDS[0], status: "succeeded", last_error: null },
-        { dedupe_key: "rel-vault", kind: "vault.sample_share_price", status: "pending", last_error: null },
+        });
+      }
+      // Every seeded kind is accounted for: deleted, or cancelled above.
+      expect(jobKinds.length).toBeGreaterThan(scheduleKinds.length);
+      expect(settled.every((row) => jobKinds.includes(row.kind))).toBe(true);
+      expect(
+        await rows(db`SELECT dedupe_key, kind, status FROM jobs WHERE dedupe_key IN ('rel-vault', 'rel-retired-history') ORDER BY dedupe_key`),
+      ).toEqual([
+        { dedupe_key: "rel-retired-history", kind: scheduleKinds[0], status: "succeeded" },
+        { dedupe_key: "rel-vault", kind: "vault.sample_share_price", status: "pending" },
       ]);
     });
 
@@ -520,15 +576,22 @@ for (const tag of SUPPORTED_RELEASES) {
       expect(messages.some((m) => m.startsWith(`${boundary}: declared breaking`))).toBe(true);
     });
 
-    test(`code at ${tag} itself refuses to boot on the upgraded database`, async () => {
+    test(`code at ${tag} itself refuses to boot on the upgraded database when the release predates the baseline or the last breaking file`, async () => {
       const code = release.migrations.map((m) => m.file);
       const messages = (await checkSchemaCompatibility(db, context(code))).findings
         .filter((f) => f.severity === "refuse")
         .map((f) => f.message);
-      // Pre-compat files the release lacks carry a NULL compat, and the
-      // breaking file is in its surplus: both refuse, and both are named.
-      expect(messages.some((m) => m.includes("compat is NULL"))).toBe(true);
-      expect(messages.some((m) => m.startsWith(`${lastBreaking()}: declared breaking`))).toBe(true);
+      // Pre-compat files the release lacks carry a NULL compat (only when it
+      // predates the baseline), and a breaking file in its surplus refuses
+      // (only when the release lacks it): each refuses, and each is named.
+      const recorded = new Set(code);
+      const lacksPreCompat = HEAD_FILES.some((f) => !recorded.has(f) && migrationNumber(f) <= COMPAT_HEADER_BASELINE);
+      const lacksBreaking = !recorded.has(lastBreaking());
+      // A release past both boots on the additive tail — the check-3b test
+      // above already covers that case.
+      expect(messages.length > 0).toBe(lacksPreCompat || lacksBreaking);
+      expect(messages.some((m) => m.includes("compat is NULL"))).toBe(lacksPreCompat);
+      if (lacksBreaking) expect(messages.some((m) => m.startsWith(`${lastBreaking()}: declared breaking`))).toBe(true);
     });
   });
 }

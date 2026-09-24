@@ -1,6 +1,27 @@
 {
   "tag": "v0.5.0",
   "commit": "ec261867664c75e0502c57908f65f6fb3cd256fc",
+  "swarm": {
+    "source": "Read by hand from the tag: scheduleKinds from backend/src/config.ts resolveSwarmSchedules (:633-641), the job_schedules rows the release seeded; jobKinds from backend/src/worker/handlers/index.ts (:94-107), every swarm.* job kind the release registered a handler for and could therefore have queued.",
+    "scheduleKinds": [
+      "swarm.open_session",
+      "swarm.publish_brief",
+      "swarm.close_window",
+      "swarm.aggregate",
+      "swarm.publish"
+    ],
+    "jobKinds": [
+      "swarm.open_session",
+      "swarm.publish_brief",
+      "swarm.close_window",
+      "swarm.aggregate",
+      "swarm.judge",
+      "swarm.publish",
+      "swarm.send_application_received_notification",
+      "swarm.send_activation_notification",
+      "swarm.send_seat_open_notification"
+    ]
+  },
   "migrations": [
     {
       "file": "0001_backends.sql",
