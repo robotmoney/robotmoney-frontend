@@ -3936,3 +3936,79 @@ guessing seconds from milliseconds.
 D51's amendments with the `revision` column, and D52's no-fallback judge are
 unchanged. None of these calls adds a judge fallback, a templated consensus or
 a Docker socket.
+
+
+<a id="d54"></a>
+
+## D54 — The static website is its own release unit (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; the version contract and the checks are
+implemented, and the deploy tooling (`bun smoke:web`, the compatibility refusal
+in `bun smoke`) is not yet built. The owner approved workstream W7 on issue
+#1026. [`smoke-production-spec.md`](technical/smoke-production-spec.md) §13
+carries the rules below as deployment behavior.
+
+**Decision.** The website ships on its own schedule, separately from the API
+and the workers. Each side names its version, and deploying either side checks
+the other.
+
+- **The site declares the API versions it accepts.** `frontend/package.json`
+  carries an `apiRange`, a semver range such as `^0.2.0`. The site's
+  `/version.json` carries the same range. A manifest with no range publishes
+  `apiRange: null`.
+- **The API reports its version.** The API version is `contract/package.json`'s
+  version. `GET /api/version` answers `{api, commit}`: that version and the
+  image's build commit, or `null` for an image built without one. It needs no
+  credential and touches no database. `website-server` proxies it with the rest
+  of `/api/`. The older `/version` route keeps reporting build identity
+  unchanged.
+- **A route change needs a version bump.** A change to
+  `contract/src/routes.js` needs a greater `contract/package.json` version than
+  the merge base has. `contract.yml` runs
+  `scripts/check-contract-version-bump.ts` to enforce this. `web-client.yml`
+  fails when `apiRange` excludes the contract version built from the same
+  commit, and a contract bump re-runs it.
+- **`bun smoke:web` deploys the site alone.** It builds the site into a
+  versioned directory under the instance state directory. It refuses when the
+  running API's version is outside the new site's range. It switches
+  `website-server` to the new directory atomically with an nginx reload, and it
+  restarts no `api` or worker container. It writes its own journal and receipt
+  under the instance's `web/` directory. `bun smoke:web --rollback` returns to
+  the previous directory.
+- **`bun smoke` checks the live site.** It refuses to start an API whose
+  version is outside the live site's range, unless the same plan deploys a site
+  whose range includes that version. A live site with no declared range counts
+  as outside every range.
+- **The page checks at load.** Before its first API call the page reads its own
+  range from `/version.json` and the API's version from `/api/version`. When the
+  API is outside the range, the page shows a reload notice and makes no other
+  `/api/*` call. When the check cannot be answered, the page loads as it did
+  before this check existed. An API outage stays the job of the existing
+  unreachable-API handling.
+
+**Amends D45.** The web client's merge gate gains one blocking check,
+that `apiRange` admits the contract version. The four D45 checks are unchanged.
+
+**Open question, not decided here (T26).** The API still reads the assembled
+site directory (`_static`) to report the served site's identity at `/version`
+and `/health` (`static`, `matches_image`). Once the site switches on its own,
+that report describes whichever directory the API can see, which may not be
+the one `website-server` serves. Whether the API keeps that report, drops it,
+or reads it from `website-server` is tracked on issue #1026. Until it is
+decided, the report stays as it is.
+
+**Why.** A site deploy that restarts the API turns every copy fix into an API
+outage. An API deploy that ignores the site can leave readers on a page that
+misreads the new API's data. A version on each side, and a check on each
+deploy, lets either side ship alone without that risk. The contract package is
+the right source of the number because it is what the site depends on: the
+route table and the response shapes.
+
+**Alternatives rejected.**
+- **Deploy the site and the API together** (the status quo). This couples
+  every site change to an API restart, which is the cost this decision exists
+  to remove.
+- **Use `backend/package.json`'s version.** It moves for changes the site cannot
+  see and stays still for contract changes it can see.
+- **Check only in the browser.** A notice after a bad deploy is damage control.
+  The deploy tools refuse the mismatch before any reader sees it.
