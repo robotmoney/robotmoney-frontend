@@ -1281,6 +1281,37 @@ ALTER SEQUENCE public.committee_memos_id_seq OWNED BY public.swarm_memos.id;
 
 
 --
+-- Name: swarm_scheduler_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.swarm_scheduler_jobs (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    target text NOT NULL,
+    idempotency_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    acked_at timestamp with time zone,
+    CONSTRAINT swarm_scheduler_jobs_key_check CHECK ((idempotency_key ~ '^[A-Za-z0-9._:-]{4,128}$'::text)),
+    CONSTRAINT swarm_scheduler_jobs_kind_check CHECK ((kind <> ''::text)),
+    CONSTRAINT swarm_scheduler_jobs_target_check CHECK ((target <> ''::text))
+);
+
+
+--
+-- Name: swarm_scheduler_jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.swarm_scheduler_jobs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.swarm_scheduler_jobs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: swarm_session_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3826,6 +3857,22 @@ ALTER TABLE ONLY public.swarm_recommendations
 
 
 --
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_idempotency_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_scheduler_jobs
+    ADD CONSTRAINT swarm_scheduler_jobs_idempotency_key_key UNIQUE (idempotency_key);
+
+
+--
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_scheduler_jobs
+    ADD CONSTRAINT swarm_scheduler_jobs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: swarm_session_events swarm_session_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4560,6 +4607,13 @@ CREATE INDEX swarm_recommendations_session_member_latest_idx ON public.swarm_rec
 --
 
 CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision);
+
+
+--
+-- Name: swarm_scheduler_jobs_unacked_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_scheduler_jobs_unacked_idx ON public.swarm_scheduler_jobs USING btree (created_at) WHERE (acked_at IS NULL);
 
 
 --

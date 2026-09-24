@@ -28,7 +28,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
-import * as judge from "../src/swarm/judge-subscription.ts";
+import * as judge from "../src/swarm/domain.ts";
 import { handleJudgeParticipant } from "../src/api/routes/swarm-judge-participant.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, activeMember, setJudgeMode, sessionRow, type TestMember } from "./support/epoch-fixtures.ts";
@@ -47,11 +47,32 @@ const submission = (sessionId: string) => ({
   minTakes: 1,
 });
 
+// THREE PARTICIPANTS FOR THE WHOLE FILE, memoized.
+//
+// Not fastidiousness: the roster has a hard cap (SWARM_ROSTER_CAP) and a
+// per-test member exhausts it halfway through the file. Reuse is safe here
+// because every test builds its OWN session, and the pending set is keyed by
+// (session, judge) — so two tests sharing a judge cannot see each other's work
+// unless the filter is broken, which is itself worth catching.
+let judgeA: TestMember | null = null;
+let judgeB: TestMember | null = null;
+let plain: TestMember | null = null;
+
 /** A participant with `role = judge` — the credential the subscription authenticates. */
-async function activeJudge(): Promise<TestMember> {
+async function activeJudge(which: "a" | "b" = "a"): Promise<TestMember> {
+  const cached = which === "a" ? judgeA : judgeB;
+  if (cached) return cached;
   const m = await activeMember();
   await sql`UPDATE swarm_members SET role = 'judge' WHERE id = ${m.id}`;
+  if (which === "a") judgeA = m;
+  else judgeB = m;
   return m;
+}
+
+/** A seated member with no judge role. */
+async function activePlainMember(): Promise<TestMember> {
+  if (!plain) plain = await activeMember();
+  return plain;
 }
 
 /** A session parked in `judging` with its stored deadline, exactly as §4.4 leaves it. */
@@ -147,13 +168,27 @@ test("once this judge has submitted, the session is no longer served to it", asy
   expect((await judge.pendingJudgingFor(j.id)).map((p) => p.sessionId)).not.toContain(sessionId);
 });
 
-test("one judge's submission does not clear another judge's pending work", async () => {
-  const a = await activeJudge();
-  const b = await activeJudge();
+test("the pending filter is per judge: one judge's judgement is not another's", async () => {
+  // THE ROW IS PLANTED, and the reason is worth stating because it looks like a
+  // shortcut and is not. A real `submitJudgement` by judge A on a session in
+  // `judging` also RECORDS THE CONSENSUS, which moves the session to `judged`
+  // and takes it out of everyone's pending set — correctly, per §4.4. So a
+  // two-judge submission cannot isolate the property under test. What is under
+  // test is the filter's scope: it excludes a session because THIS judge has a
+  // judgement on it, never because some judge does. A filter keyed on the
+  // session alone would silence every other judge the moment one answered.
+  const a = await activeJudge("a");
+  const b = await activeJudge("b");
   const { sessionId } = await judgingSession("js_two_judges");
-  await judge.submitJudgement(a.token, submission(sessionId));
+  await sql`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
+       judged_by, judged_by_member_id)
+    VALUES (${sessionId}, 'enforce', 'model', 'test/participant-judge', 'ph', 'id', 1, 1,
+            ${sql.json(OPINION as any)}, ${a.id}, ${a.id})`;
   expect((await judge.pendingJudgingFor(a.id)).map((p) => p.sessionId)).not.toContain(sessionId);
   expect((await judge.pendingJudgingFor(b.id)).map((p) => p.sessionId)).toContain(sessionId);
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 });
 
 test("a session that is not in judging is served to nobody", async () => {
@@ -192,7 +227,7 @@ test("a submission is authenticated by the judge's own participant credential", 
 });
 
 test("a member that is not a judge cannot submit a judgement", async () => {
-  const notAJudge = await activeMember();
+  const notAJudge = await activePlainMember();
   const { sessionId } = await judgingSession("js_role");
   const refused = await judge.submitJudgement(notAJudge.token, submission(sessionId));
   expect(refused.ok).toBe(false);
@@ -269,8 +304,8 @@ test("a redelivered submission from the same judge changes nothing", async () =>
 });
 
 test("a submission after finalize is late evidence only", async () => {
-  const j = await activeJudge();
-  const late = await activeJudge();
+  const j = await activeJudge("a");
+  const late = await activeJudge("b");
   const { sessionId } = await judgingSession("js_late");
   await expireDeadline(sessionId);
   const finalized = await epoch.finalizeEpoch(sessionId);
@@ -357,7 +392,7 @@ test("the subscribe route refuses a missing or unknown bearer, and a non-judge m
   );
   expect((anon as { status: number }).status).toBe(401);
 
-  const member = await activeMember();
+  const member = await activePlainMember();
   const wrongRole = await handleJudgeParticipant(
     new Request("http://test/api/swarm/participants/judge/subscribe", {
       headers: { Authorization: `Bearer ${member.token}` },

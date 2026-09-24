@@ -22,7 +22,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
-import * as stream from "../src/swarm/stream.ts";
+import * as stream from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSchedulerStream } from "../src/api/routes/swarm-stream.ts";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
@@ -130,7 +130,7 @@ test("the full read returns every closed-but-unpublished session with its state"
   // §3 step 3 names four states, and a rebuild that missed any one of them
   // would leave that settlement stalled for ever. So all four are built and all
   // four are demanded, rather than one standing in for the set.
-  const wanted = new Map<string, string>();
+  const wanted = new Map<string, stream.SettlingState>();
 
   const closed = await activeSubject("fr_window_closed", 600);
   const o1 = await epoch.openEpoch(closed);
@@ -397,17 +397,20 @@ test("an unacked job is pushed on connect, and again on reconnect", async () => 
   const key = `job_${crypto.randomUUID()}`;
   await stream.pushJob({ kind: "reconcile_subject", target: "sub-3", idempotencyKey: key });
   const head = await epoch.streamHeadSequence();
+  // Every job the file has pushed and not acked is outstanding, so the frames
+  // are matched by key rather than by position — asserting "the first frame" here
+  // would be asserting the order of the tests above, not the contract.
+  const outstanding = (await stream.unackedJobs()).length;
+  expect(outstanding).toBeGreaterThanOrEqual(1);
 
-  const first = await readFrames(stream.openSchedulerStream(head, { keepaliveMs: 5000, pollMs: 10 }), 1);
-  expect(first[0].type).toBe("job");
-  expect(first[0].data.idempotencyKey).toBe(key);
+  const first = await readFrames(stream.openSchedulerStream(head, { keepaliveMs: 30, pollMs: 10 }), outstanding);
+  expect(first.filter((f) => f.type === "job").map((f) => f.data.idempotencyKey)).toContain(key);
 
   // §6.3: "On reconnect the API re-pushes anything unacked." The job was never
   // acked, so a second connection must see it again — an at-most-once push
   // would lose the work of a scheduler that died holding it.
-  const second = await readFrames(stream.openSchedulerStream(head, { keepaliveMs: 5000, pollMs: 10 }), 1);
-  expect(second[0].type).toBe("job");
-  expect(second[0].data.idempotencyKey).toBe(key);
+  const second = await readFrames(stream.openSchedulerStream(head, { keepaliveMs: 30, pollMs: 10 }), outstanding);
+  expect(second.filter((f) => f.type === "job").map((f) => f.data.idempotencyKey)).toContain(key);
 });
 
 test("an acked job is not pushed again", async () => {

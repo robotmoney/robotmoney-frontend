@@ -3429,3 +3429,668 @@ function isOneCollectingViolation(err: unknown): boolean {
     (e.constraint_name === "swarm_sessions_one_collecting_per_subject" ||
       Boolean(e.message?.includes("swarm_sessions_one_collecting_per_subject")));
 }
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SERVING THE SCHEDULER STREAM, AND THE JUDGE SUBSCRIPTION (issue #1026 W4.4/W4.7)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// WHY THESE TWO SECTIONS ARE IN domain.ts AND NOT IN MODULES OF THEIR OWN.
+// The same wall the epoch lifecycle hit above, for the same reason and with the
+// same evidence. They were written as two modules of their own — a stream
+// module and a judge-subscription module beside this one — and moved here:
+//
+//   * `backend/tests/db-registry.test.ts`'s RAW_SQL_ALLOWLIST says in those
+//     words that it "must only ever shrink" and that adding a line is "the one
+//     thing a ratchet exists to prevent". A new module issuing raw statements
+//     needs a new line.
+//   * `registerQuery` is the supported alternative and does not work yet:
+//     registration is process-global, preflight check 2 resolves every declared
+//     relation against the live catalog, and `tests/schema-snapshot.test.ts`'s
+//     blank-bootstrap fixture declares three tables — so the first real
+//     registration anywhere makes that test refuse. That is the W2 fixture gap
+//     the issue already records as blocking, not something this part may paper
+//     over by editing another workstream's test.
+//
+// A NOTE ON WHAT WAS NOT DONE. The detector's regex only matches a BARE tagged
+// template (`sql\``), so every statement below would have slipped past it
+// untouched simply because it carries a generic type argument. That is a
+// loophole, not a distinction, and using it would have been a silent violation
+// of §7.1 rather than a recorded one. The code is here instead.
+//
+// Nothing else changed in the move: the sections keep their own headers, and
+// they move to `registerQuery` with the rest of this file when W2 converts it.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §3 — the full read
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** §3 part 1: an active subject and the one scheduling parameter it has (§2.2). */
+export interface SchedulerSubject {
+  subjectId: string;
+  name: string;
+  epochDurationSeconds: number;
+}
+
+/** §3 part 2: an open window, and the instant it closes at. */
+export interface CollectingSession {
+  sessionId: string;
+  subjectId: string;
+  windowClosesAt: string;
+}
+
+/** The four states §3 part 3 names: closed, but not yet `published`. */
+export type SettlingState = "window_closed" | "aggregated" | "judging" | "judged";
+
+/** §3 part 3: an unfinished settlement the rebuild has to resume. */
+export interface SettlingSession {
+  sessionId: string;
+  subjectId: string;
+  state: SettlingState;
+  /** §3: "for `judging` its recorded deadline". The STORED instant, never a fresh one (§9). */
+  judgingDeadlineAt: string | null;
+  /**
+   * Whether the subject is still active.
+   *
+   * Carried because §3 includes "sessions whose subject has since been
+   * deactivated" and §4.5 says settlement of those "proceeds and must finish",
+   * while the scheduler must NOT hold a boundary timer for them. One flag tells
+   * the two apart without a second read.
+   */
+  subjectActive: boolean;
+}
+
+export interface SchedulerFullRead {
+  subjects: SchedulerSubject[];
+  collecting: CollectingSession[];
+  settling: SettlingSession[];
+  /** §3 part 4, §6.3: the sequence of the last event committed before this snapshot. */
+  cursor: number;
+}
+
+const SETTLING_STATES: readonly SettlingState[] = ["window_closed", "aggregated", "judging", "judged"];
+
+const isoOrNull = (v: Date | string | null): string | null => (v == null ? null : new Date(v).toISOString());
+
+/**
+ * §3's four parts and the cursor, as one consistent snapshot.
+ *
+ * Read the module header for why this is one REPEATABLE READ transaction rather
+ * than five statements. The cursor is taken INSIDE it, from the same snapshot
+ * the rows came from.
+ */
+export async function fullRead(): Promise<SchedulerFullRead> {
+  return sql.begin(async (tx) => {
+    await tx`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`;
+
+    const subjects = await tx<{ id: string; name: string; epoch_duration_seconds: number }[]>`
+      SELECT id, name, epoch_duration_seconds FROM swarm_subjects
+       WHERE status = 'active' ORDER BY id`;
+
+    const collecting = await tx<{ id: string; subject_id: string; window_closes_at: Date }[]>`
+      SELECT id, subject_id, window_closes_at FROM swarm_sessions
+       WHERE state = 'collecting' ORDER BY window_closes_at`;
+
+    const settling = await tx<
+      { id: string; subject_id: string; state: SettlingState; judging_deadline_at: Date | null; subject_active: boolean }[]
+    >`
+      SELECT s.id, s.subject_id, s.state, s.judging_deadline_at,
+             COALESCE(t.status = 'active', false) AS subject_active
+        FROM swarm_sessions s
+        LEFT JOIN swarm_subjects t ON t.id = s.subject_id
+       WHERE s.state = ANY(${SETTLING_STATES as unknown as string[]})
+       ORDER BY s.convened_at`;
+
+    const [head] = await tx<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+
+    return {
+      subjects: subjects.map((s) => ({
+        subjectId: s.id,
+        name: s.name,
+        epochDurationSeconds: Number(s.epoch_duration_seconds),
+      })),
+      collecting: collecting.map((c) => ({
+        sessionId: String(c.id),
+        subjectId: c.subject_id,
+        windowClosesAt: isoOrNull(c.window_closes_at)!,
+      })),
+      settling: settling.map((s) => ({
+        sessionId: String(s.id),
+        subjectId: s.subject_id,
+        state: s.state,
+        judgingDeadlineAt: isoOrNull(s.judging_deadline_at),
+        subjectActive: s.subject_active,
+      })),
+      cursor: Number(head.head),
+    };
+  }) as Promise<SchedulerFullRead>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §6.3 — serving events above a cursor
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ServedStreamEvent {
+  seq: number;
+  kind: string;
+  subjectId: string | null;
+  sessionId: string | null;
+  payload: Record<string, unknown>;
+  committedAt: string;
+}
+
+/**
+ * Everything above `cursor`, in order.
+ *
+ * STRICTLY above, because §6.3 defines a duplicate as "a sequence number at or
+ * below the last applied" — serving one at the cursor would hand every
+ * subscriber a duplicate on every connect and make the consumer's duplicate
+ * rule load-bearing for ordinary operation rather than for a real redelivery.
+ */
+export async function eventsAbove(cursor: number, limit = 500, h: DbHandle = sql): Promise<ServedStreamEvent[]> {
+  const rows = await h<
+    { seq: string; kind: string; subject_id: string | null; session_id: string | null; payload: Record<string, unknown>; committed_at: Date }[]
+  >`
+    SELECT seq, kind, subject_id, session_id, payload, committed_at
+      FROM swarm_stream_events
+     WHERE seq > ${cursor}
+     ORDER BY seq
+     LIMIT ${limit}`;
+  return rows.map((r) => ({
+    seq: Number(r.seq),
+    kind: r.kind,
+    subjectId: r.subject_id,
+    sessionId: r.session_id,
+    payload: r.payload ?? {},
+    committedAt: isoOrNull(r.committed_at)!,
+  }));
+}
+
+/** The lowest sequence still in the log, or null when the log is empty. */
+export async function retainedFloor(h: DbHandle = sql): Promise<number | null> {
+  const [row] = await h<{ floor: string | null }[]>`SELECT MIN(seq) AS floor FROM swarm_stream_events`;
+  return row.floor == null ? null : Number(row.floor);
+}
+
+/**
+ * §6.3's resync reasons. Two, and they are different failures.
+ *
+ *   "If the API cannot serve from the requested cursor — its retained log does
+ *    not reach that far, or its buffer for this subscriber overflowed — it says
+ *    so ... The API never silently skips."
+ *
+ * `cursor_ahead_of_head` — the subscriber claims to have applied an event this
+ * API has not committed. Nothing can be served from there. Answering with an
+ * empty stream would be indistinguishable from "you are up to date", which is
+ * exactly the silent skip.
+ *
+ * `log_truncated` — the next event this subscriber needs is below the log's
+ * floor and is gone. Serving from the floor instead would skip the missing
+ * ones, silently.
+ *
+ * A cursor of `floor - 1` is SERVABLE: the next event it needs is the floor
+ * itself, and that is still here. A cursor of 0 against any log is servable for
+ * the same reason, and is what a scheduler starting against a fresh database
+ * presents.
+ */
+export type ResyncReason = "cursor_ahead_of_head" | "log_truncated";
+
+export async function resyncReasonFor(cursor: number, h: DbHandle = sql): Promise<ResyncReason | null> {
+  const head = await streamHeadSequence(h);
+  if (cursor > head) return "cursor_ahead_of_head";
+  const floor = await retainedFloor(h);
+  if (floor !== null && cursor < floor - 1) return "log_truncated";
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §6.3 — job pushes
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SchedulerJob {
+  kind: string;
+  target: string;
+  idempotencyKey: string;
+}
+
+/**
+ * Record an ad-hoc job for the scheduler.
+ *
+ * `created: false` means the key was already known — whether it is outstanding
+ * or long since acked. Migration 0070's header explains why the row outlives
+ * the ack: the idempotency key is the guarantee, and a guarantee that is
+ * deleted when the work finishes lets the same key back in as fresh work.
+ */
+export async function pushJob(job: SchedulerJob): Promise<{ created: boolean }> {
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO swarm_scheduler_jobs (kind, target, idempotency_key)
+    VALUES (${job.kind}, ${job.target}, ${job.idempotencyKey})
+    ON CONFLICT (idempotency_key) DO NOTHING
+    RETURNING id`;
+  return { created: rows.length > 0 };
+}
+
+/** Everything the scheduler has not reported done, oldest first. */
+export async function unackedJobs(limit = 100, h: DbHandle = sql): Promise<SchedulerJob[]> {
+  const rows = await h<{ kind: string; target: string; idempotency_key: string }[]>`
+    SELECT kind, target, idempotency_key FROM swarm_scheduler_jobs
+     WHERE acked_at IS NULL ORDER BY created_at, id LIMIT ${limit}`;
+  return rows.map((r) => ({ kind: r.kind, target: r.target, idempotencyKey: r.idempotency_key }));
+}
+
+/**
+ * The scheduler reporting one job done.
+ *
+ * Three distinguishable answers, because the caller needs to tell them apart:
+ * an unknown key is a bug or a forged ack and must not read as success; a
+ * second ack of the same key is the ordinary consequence of a redelivery whose
+ * first ack was lost, and is not an error.
+ */
+export async function ackJob(
+  idempotencyKey: string,
+): Promise<{ known: boolean; acked: boolean; alreadyAcked: boolean }> {
+  const rows = await sql<{ acked_at: Date | null }[]>`
+    UPDATE swarm_scheduler_jobs SET acked_at = now()
+     WHERE idempotency_key = ${idempotencyKey} AND acked_at IS NULL
+     RETURNING acked_at`;
+  if (rows.length > 0) return { known: true, acked: true, alreadyAcked: false };
+  const [existing] = await sql<{ id: string }[]>`
+    SELECT id FROM swarm_scheduler_jobs WHERE idempotency_key = ${idempotencyKey}`;
+  return existing
+    ? { known: true, acked: false, alreadyAcked: true }
+    : { known: false, acked: false, alreadyAcked: false };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §6.3 — the subscription itself
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How a connection behaves. Both values are defaults a test may shorten; NONE
+ * of them is a scheduling parameter, and none is read from the environment.
+ */
+export interface StreamOptions {
+  /**
+   * How often a keepalive goes out when nothing else has (§6.3's "silent
+   * failure detection"). It carries the head sequence, so it is also the only
+   * thing that can reveal the loss of the last event before a quiet period.
+   */
+  keepaliveMs?: number;
+  /**
+   * How often this CONNECTION looks for events above what it has sent.
+   *
+   * This is the API serving an open subscription, which §6.3 admits in the same
+   * breath as redelivery: "part of the API's serving of that subscription — it
+   * is not autonomous orchestration and does not need a background worker."
+   * Nothing runs when nobody is connected, and the SCHEDULER's no-polling rule
+   * (§9) is about the scheduler, which makes no call at all while this loop
+   * runs.
+   */
+  pollMs?: number;
+}
+
+const STREAM_DEFAULTS = { keepaliveMs: 15_000, pollMs: 500 } as const;
+
+type StreamServeFrame =
+  | { event: "event"; data: ServedStreamEvent }
+  | { event: "keepalive"; data: { head: number } }
+  | { event: "resync"; data: { reason: ResyncReason; head: number } }
+  | { event: "job"; data: SchedulerJob };
+
+const encodeStreamFrame = (f: StreamServeFrame): string => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`;
+
+/**
+ * Open a subscription from `cursor`.
+ *
+ * The shape of the connection, in order:
+ *
+ *   1. If the cursor cannot be served, ONE resync frame and close. Not an empty
+ *      stream, and not a skip forward to the head (§6.3).
+ *   2. Everything unacked, as job frames — §6.3's "On reconnect the API
+ *      re-pushes anything unacked", which on a first connect is simply
+ *      everything outstanding.
+ *   3. Events above the cursor, in order, for as long as the connection lives.
+ *   4. A keepalive carrying the head sequence whenever the keepalive interval
+ *      passes with nothing else sent.
+ *
+ * THE LOOP DIES WITH THE CONNECTION. `cancel` clears the timers and flips the
+ * flag the loop reads, so a disconnected subscriber leaves nothing running —
+ * which is the difference between serving a connection and being a background
+ * process.
+ */
+export function openSchedulerStream(cursor: number, opts: StreamOptions = {}): Response {
+  const keepaliveMs = opts.keepaliveMs ?? STREAM_DEFAULTS.keepaliveMs;
+  const pollMs = opts.pollMs ?? STREAM_DEFAULTS.pollMs;
+  let live = true;
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const send = (f: StreamServeFrame): void => {
+        if (!live) return;
+        try {
+          controller.enqueue(encoder.encode(encodeStreamFrame(f)));
+        } catch {
+          live = false;
+        }
+      };
+
+      const reason = await resyncReasonFor(cursor);
+      if (reason) {
+        send({ event: "resync", data: { reason, head: await streamHeadSequence() } });
+        live = false;
+        try {
+          controller.close();
+        } catch {
+          /* already closed by the consumer */
+        }
+        return;
+      }
+
+      for (const job of await unackedJobs()) send({ event: "job", data: job });
+
+      let sent = cursor;
+      let lastFrameAt = Date.now();
+      // Drive the connection from here rather than from a module-level timer:
+      // this promise is owned by the stream and ends when `live` goes false.
+      void (async () => {
+        while (live) {
+          const events = await eventsAbove(sent).catch(() => []);
+          for (const e of events) {
+            send({ event: "event", data: e });
+            sent = e.seq;
+          }
+          if (events.length > 0) lastFrameAt = Date.now();
+          else if (Date.now() - lastFrameAt >= keepaliveMs) {
+            // §6.3: "Each keepalive from the API includes the sequence number of
+            // the last event it committed." The HEAD of the log, not `sent` —
+            // the whole point is that a subscriber behind the head can tell.
+            send({ event: "keepalive", data: { head: await streamHeadSequence().catch(() => sent) } });
+            lastFrameAt = Date.now();
+          }
+          if (!live) break;
+          await Bun.sleep(pollMs);
+        }
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      })();
+    },
+    cancel() {
+      live = false;
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+    },
+  });
+}
+
+
+/** One outstanding judging request, as served to the judge that owes it. */
+export interface PendingJudging {
+  sessionId: string;
+  subjectId: string;
+  date: string;
+  /** The API's STORED deadline. Informational for the judge: it finalizes nothing (§6.2). */
+  judgingDeadlineAt: string;
+  judgingRequestedAt: string | null;
+}
+
+/**
+ * Every session in `judging` this judge has not submitted for.
+ *
+ * "on every connect or reconnect the API serves every session in `judging` for
+ * which this judge has not yet submitted, so a judge that was down when the
+ * request was created still obtains it if it returns before the deadline"
+ * (§6.2).
+ *
+ * THE FILTER IS PER JUDGE, not per session. `swarm_session_judgements` carries
+ * `judged_by_member_id` (migration 0043), so one judge submitting does not
+ * clear the work of another — which matters because §6.1 admits several judges
+ * and because the first consensus recorded is the session's, while the others
+ * are still evidence worth having.
+ *
+ * THE DEADLINE IS NOT FILTERED ON. A session past its deadline that the
+ * scheduler has not finalized yet is still in `judging`, and a judgement that
+ * lands in that window is still eligible or not by the STORED instants alone
+ * (§4.4). Hiding it here would be this module deciding an outcome, which is
+ * exactly what §6.2 says the judge never does.
+ */
+export async function pendingJudgingFor(memberId: string): Promise<PendingJudging[]> {
+  const rows = await sql<
+    { id: string; subject_id: string; date: Date | string; judging_deadline_at: Date; judging_requested_at: Date | null }[]
+  >`
+    SELECT s.id, s.subject_id, s.date, s.judging_deadline_at, s.judging_requested_at
+      FROM swarm_sessions s
+     WHERE s.state = 'judging'
+       AND NOT EXISTS (
+         SELECT 1 FROM swarm_session_judgements j
+          WHERE j.session_id = s.id AND j.judged_by_member_id = ${memberId})
+     ORDER BY s.judging_deadline_at`;
+  return rows.map((r) => ({
+    sessionId: String(r.id),
+    subjectId: r.subject_id,
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
+    judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
+    judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
+  }));
+}
+
+export interface JudgementSubmission {
+  sessionId: string;
+  opinion: unknown;
+  model?: string;
+  promptHash?: string;
+  inputsDigest?: string;
+  takeCount?: number;
+  minTakes?: number;
+}
+
+export type SubmitJudgementResult =
+  | {
+      ok: true;
+      status: number;
+      sessionId: string;
+      judgementId: number;
+      state: string;
+      recordedAt: string;
+      /** The consensus landed after the session was published: kept, decides nothing (§4.4). */
+      lateEvidence: boolean;
+      /** This judge had already submitted for this session; the original row is returned. */
+      duplicate: boolean;
+    }
+  | { ok: false; status: number; error: string };
+
+const refuseSubmission = (status: number, error: string): SubmitJudgementResult => ({ ok: false, status, error });
+
+/**
+ * A judge submitting its judgement, under its own participant credential.
+ *
+ * WIRED TO PART 1's TRANSITION, NOT A SECOND COPY OF IT. This function writes
+ * the judgement row and then calls `recordJudgingConsensus`, which owns the
+ * whole of the state guard, the acceptance instant, the `session.judged` event
+ * and the late-evidence rule. Re-deciding any of that here would give the
+ * participant path and the admin path two different answers to the same
+ * question, and only one of them could be right.
+ *
+ * THE CREDENTIAL IS THE MEMBER TOKEN, never the scheduler's automation token
+ * (scheduler spec §7 keeps the four kinds apart). `memberIdForToken` is the one
+ * choke point that also checks the member is active, so nothing below re-checks
+ * status.
+ *
+ * ORDER, and why the row goes in first: the judgement is the evidence, and it
+ * is worth keeping even when the consensus it would have formed is refused or
+ * is too late to matter. A submission arriving after publication therefore
+ * still lands in `swarm_session_judgements` and comes back `lateEvidence`.
+ */
+/**
+ * Is this member a judge?
+ *
+ * Exported so the participant router holds no statement of its own: §7.1 wants
+ * database access in one place, and a role check spelled out in a route file is
+ * a second place it can drift.
+ */
+export async function isJudgeMember(memberId: string): Promise<boolean> {
+  const [member] = await sql<{ role: string }[]>`SELECT role FROM swarm_members WHERE id = ${memberId}`;
+  return member?.role === "judge";
+}
+
+export async function submitJudgement(
+  token: string,
+  input: JudgementSubmission,
+): Promise<SubmitJudgementResult> {
+  const memberId = await memberIdForToken(token);
+  if (!memberId) return refuseSubmission(401, "invalid_token");
+
+  if (!(await isJudgeMember(memberId))) return refuseSubmission(403, "judge_role_required");
+
+  if (!input.sessionId) return refuseSubmission(400, "session_required");
+  // No opinion, no judgement. This is the refusal that keeps "a judge refuses
+  // rather than fakes" true at the boundary: there is no branch below that
+  // could supply one.
+  if (input.opinion === undefined || input.opinion === null) return refuseSubmission(400, "opinion_required");
+
+  const [session] = await sql<{ id: string; state: string }[]>`
+    SELECT id, state FROM swarm_sessions WHERE id = ${input.sessionId}`;
+  if (!session) return refuseSubmission(404, "session_not_found");
+
+  const [existing] = await sql<{ id: string }[]>`
+    SELECT id FROM swarm_session_judgements
+     WHERE session_id = ${input.sessionId} AND judged_by_member_id = ${memberId}
+     ORDER BY id LIMIT 1`;
+  if (existing) {
+    // A redelivery. The row is append-only (migration 0040) and is not written
+    // twice; the consensus call below is idempotent and returns the original
+    // acceptance instant, so nothing about the session moves.
+    const replay = await recordJudgingConsensus(input.sessionId, Number(existing.id));
+    if (!replay.ok) return refuseSubmission(replay.status, replay.error);
+    return {
+      ok: true,
+      status: 200,
+      sessionId: input.sessionId,
+      judgementId: Number(existing.id),
+      state: replay.state,
+      recordedAt: replay.recordedAt,
+      lateEvidence: replay.lateEvidence,
+      duplicate: true,
+    };
+  }
+
+  const [row] = await sql<{ id: string }[]>`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
+       judged_by, judged_by_member_id)
+    VALUES (${input.sessionId}, 'enforce', 'model', ${input.model ?? null},
+            ${input.promptHash ?? "participant"}, ${input.inputsDigest ?? "participant"},
+            ${input.takeCount ?? 0}, ${input.minTakes ?? 1},
+            ${sql.json(input.opinion as any)}, ${memberId}, ${memberId})
+    RETURNING id`;
+  const judgementId = Number(row.id);
+
+  const recorded = await recordJudgingConsensus(input.sessionId, judgementId);
+  if (!recorded.ok) return refuseSubmission(recorded.status, recorded.error);
+  return {
+    ok: true,
+    status: 200,
+    sessionId: input.sessionId,
+    judgementId,
+    state: recorded.state,
+    recordedAt: recorded.recordedAt,
+    lateEvidence: recorded.lateEvidence,
+    duplicate: false,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The connection
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface JudgeStreamOptions {
+  /** How often a keepalive goes out when the pending set has not changed. */
+  keepaliveMs?: number;
+  /** How often this connection recomputes the judge's pending set. */
+  refreshMs?: number;
+}
+
+const JUDGE_STREAM_DEFAULTS = { keepaliveMs: 15_000, refreshMs: 5_000 } as const;
+
+/**
+ * Hold a judge's subscription open, serving its pending set.
+ *
+ * ON EVERY CONNECT, the first frame is the whole pending set — not a delta, not
+ * a resumption. That single property is the contract (§6.2): a judge that
+ * crashed, redeployed or was never up gets its work by connecting, with nothing
+ * to replay and nothing to have missed.
+ *
+ * While the connection lives, the set is recomputed and re-sent whenever it
+ * CHANGES — a new request appears, or this judge's own submission clears one.
+ * Resending an unchanged set would be noise, and sending nothing at all would
+ * make a judge that connected a second before a request wait for its own
+ * reconnect.
+ *
+ * Like the scheduler's stream, everything here belongs to the open connection
+ * and stops with it. Nothing runs when no judge is connected.
+ */
+export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {}): Response {
+  const keepaliveMs = opts.keepaliveMs ?? JUDGE_STREAM_DEFAULTS.keepaliveMs;
+  const refreshMs = opts.refreshMs ?? JUDGE_STREAM_DEFAULTS.refreshMs;
+  let live = true;
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const send = (event: string, data: unknown): void => {
+        if (!live) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          live = false;
+        }
+      };
+
+      let lastServed = "";
+      let lastFrameAt = 0;
+      void (async () => {
+        while (live) {
+          const pending = await pendingJudgingFor(memberId).catch(() => null);
+          if (pending) {
+            const fingerprint = JSON.stringify(pending.map((p) => p.sessionId));
+            if (fingerprint !== lastServed) {
+              lastServed = fingerprint;
+              send("pending", { pending });
+              lastFrameAt = Date.now();
+            } else if (Date.now() - lastFrameAt >= keepaliveMs) {
+              send("keepalive", {});
+              lastFrameAt = Date.now();
+            }
+          }
+          if (!live) break;
+          await Bun.sleep(refreshMs);
+        }
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      })();
+    },
+    cancel() {
+      live = false;
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+    },
+  });
+}

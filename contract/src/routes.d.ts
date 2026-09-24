@@ -66,6 +66,15 @@ export const ROUTES: {
     register: string;
     regime: string;
     submit: string;
+    scheduler: {
+      fullRead: string;
+      subscribe: string;
+      jobAck: string;
+    };
+    participants: {
+      judgeSubscribe: string;
+      judgement: string;
+    };
     admin: {
       action: string;
       activate: string;

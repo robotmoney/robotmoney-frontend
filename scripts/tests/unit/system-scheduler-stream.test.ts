@@ -75,7 +75,9 @@ async function started(opts: { keepaliveBudgetMs?: number } = {}): Promise<Harne
   const consumer = new SchedulerStreamConsumer(
     api,
     {
-      applyEvent: (e) => applied.push(e.seq),
+      applyEvent: (e) => {
+        applied.push(e.seq);
+      },
       runJob: (job) => {
         jobsRun.push(job.idempotencyKey);
       },
@@ -168,7 +170,11 @@ describe("a gap and a resync both force a full read", () => {
       api.calls.push("fullRead");
       return { cursor: 140 } as FullReadSnapshot;
     };
-    const consumer = new SchedulerStreamConsumer(api, { applyEvent: (e) => applied.push(e.seq) });
+    const consumer = new SchedulerStreamConsumer(api, {
+      applyEvent: (e) => {
+        applied.push(e.seq);
+      },
+    });
     await consumer.start();
     await consumer.receive(evt(103));
     // §3.1's "it stops acting" is not decoration: the window during which the
@@ -295,15 +301,22 @@ describe("a stalled or dropped connection", () => {
       if (delays.length < 3) throw new Error("api unreachable");
       return { cursor: 100 } as FullReadSnapshot;
     };
+    const sleep = async () => {};
     await consumer.connectionDropped();
-    for (let i = 0; i < 4; i++) delays.push(await consumer.reconnect({ sleep: async () => {} }));
-    // Strictly increasing while it fails, then back to the first step once the
-    // connection is established — an unreset backoff makes the SECOND outage of
-    // a flapping dependency slower than the first for no reason.
+    // Three failures, then the fourth attempt connects.
+    for (let i = 0; i < 4; i++) delays.push(await consumer.reconnect({ sleep }));
+    expect(consumer.current).toBe(true);
+
+    // The NEXT outage starts from the first step again. An unreset backoff makes
+    // the second outage of a flapping dependency slower than the first for no
+    // reason, and the fourth attempt's own delay was still the escalated one —
+    // the reset lands on the attempt after the connection, not on it.
+    await consumer.connectionDropped();
+    delays.push(await consumer.reconnect({ sleep }));
     expect(delays[0]).toBeLessThan(delays[1]);
     expect(delays[1]).toBeLessThan(delays[2]);
-    expect(delays[3]).toBe(delays[0]);
-    expect(consumer.current).toBe(true);
+    expect(delays[2]).toBeLessThan(delays[3]);
+    expect(delays[4]).toBe(delays[0]);
   });
 });
 

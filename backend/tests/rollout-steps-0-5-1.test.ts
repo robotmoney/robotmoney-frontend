@@ -153,10 +153,14 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     //          at-most-one-`collecting`-per-subject unique index (§2.1).
     //   0069 — W4.5's `automation_tokens`, the API automation-credential store
     //          (smoke spec §3): a hash and the rights, never the secret.
+    //   0070 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API pushes on
+    //          the scheduler subscription (scheduler spec §6.3). Rows are never
+    //          deleted, because the idempotency key has to outlive the ack.
     "0066_drop_swarm_notifications.sql",
     "0067_subject_epoch_duration.sql",
     "0068_session_epoch_lifecycle.sql",
     "0069_automation_tokens.sql",
+    "0070_swarm_scheduler_jobs.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

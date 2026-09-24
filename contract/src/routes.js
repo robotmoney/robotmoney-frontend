@@ -193,6 +193,29 @@ export const ROUTES = {
     register: "/api/swarm/register", // POST (privileged) — apply+activate shortcut for demo/E2E
     regime: "/api/swarm/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/swarm/submit", // POST (member bearer, ed25519-signed)
+
+    // ── The scheduler's stream (issue #1026 W4.4, system-scheduler-spec.md §6.3)
+    // NOT under `admin`, deliberately. These are the surface of ONE credential:
+    // the automation token §7 issues to `system-scheduler`, carrying the
+    // read_subjects / read_sessions / lifecycle_transitions rights and nothing
+    // else. An operator's admin token does not open them, and they open nothing
+    // an operator would drive by hand.
+    scheduler: {
+      fullRead: "/api/swarm/scheduler/full-read", // GET → §3's four parts + the cursor, one consistent snapshot
+      subscribe: "/api/swarm/scheduler/subscribe", // GET ?cursor=N → text/event-stream: event | keepalive (carries head) | resync | job
+      jobAck: "/api/swarm/scheduler/jobs/ack", // POST { idempotencyKey } — the scheduler reporting one pushed job done
+    },
+
+    // ── Participants (smoke-production-spec.md §6.2)
+    // The judge's own contract, authenticated by the judge's member bearer.
+    // `judgeSubscribe` serves STATE — every session in `judging` this judge has
+    // not submitted — on every connect, so it carries no cursor and no sequence
+    // and is not the scheduler's stream above.
+    participants: {
+      judgeSubscribe: "/api/swarm/participants/judge/subscribe", // GET (judge bearer) → text/event-stream: pending | keepalive
+      judgement: "/api/swarm/participants/judgement", // POST (judge bearer) { sessionId, opinion, … }
+    },
+
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
     // drivers can reference them without re-hardcoding the path.
