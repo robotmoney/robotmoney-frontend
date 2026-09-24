@@ -48,9 +48,9 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
   ([scheduler spec §5](../technical/system-scheduler-spec.md#5-transitions-are-state-guarded)).
   The browser never runs domain operations itself.
 - Preserve accepted swarm recommendations as append-only signed records.
-  Admins cannot edit or delete them. Under [D49](../decisions.md#d49) a member
-  files one take per epoch and cannot amend it; a changed view goes into the
-  next epoch's take.
+  Admins cannot edit or delete them. Under [D51](../decisions.md#d51) a member
+  may amend while the window is open; each amendment is its own signed row and
+  the newest is marked final, so nothing is ever rewritten.
 - “Remove member” means deactivate. No swarm member is hard-deleted.
 - “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
@@ -111,11 +111,10 @@ The implementation must extend, not replace, these pieces:
   ([scheduler spec §5](../technical/system-scheduler-spec.md#5-transitions-are-state-guarded));
   this plan adds those guards where they are missing.
 - Canonical accepted takes live in `swarm_recommendations`, one per
-  `(session_id, member_id)` ([D49](../decisions.md#d49), which supersedes
-  D33's capped revisions). A resubmission on that key returns the existing
-  row. Legacy sessions may hold several `revision` rows per member; reads of
-  those sessions still resolve latest-per-member. Replay protection on
-  `(member_id, nonce)` is unchanged.
+  several rows per member, capped, of which exactly one carries the final flag
+  ([D51](../decisions.md#d51)). Every read that means "the session's takes"
+  selects the final ones; a retry of the same submission returns the existing
+  row. Replay protection on `(member_id, nonce)` is unchanged.
   Invalid signatures are rejected before insert and are not retained. The admin
   UI therefore shows accepted submissions only; rejected submission-attempt
   forensics are out of scope.
@@ -413,7 +412,8 @@ Acceptance:
   absent counts, consensus, disagreements, actions or weights, and the source
   recommendation ids used.
 - No admin endpoint can update `swarm_recommendations`, and no code path
-  anywhere UPDATEs an accepted take's content ([D49](../decisions.md#d49)).
+  anywhere UPDATEs an accepted take's content; the final flag is metadata about
+  which row counts, not a rewrite of what a member said ([D51](../decisions.md#d51)).
 
 ### US-A3 — Inspect audit history
 

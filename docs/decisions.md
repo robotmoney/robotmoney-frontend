@@ -3649,6 +3649,8 @@ documentation tree; recover it from Git only for historical context.
 
 ## D49 — One immutable take per member per epoch; supersedes D33's amendments (Lucas, 2026-09-23)
 
+> **Superseded by [D51](#d51) on 2026-09-24.** The product rule (one take counts) was right; the storage rule (one row exists) was not. Amendments return, with an explicit final flag.
+
 **Status.** Accepted 2026-09-23; not yet implemented. This records the target,
 not a claim about the current API behavior.
 
@@ -3730,3 +3732,58 @@ are built from matters more, not less.
 
 **Enforcement.** `scripts/tests/unit/no-swarm-email.test.ts` fails if the
 feature returns under any of its old names.
+
+## D51 — A member's newest take is the final one; submitting unsets the prior (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Supersedes [D49](#d49),
+which was wrong about the storage rule. Restores the substance of
+[D33](#d33) with an explicit marker in place of an implicit read.
+
+**Decision.** A member may submit more than once while its session's
+submission window is open. Every submission is a new immutable row in
+`swarm_recommendations` with its own content, nonce, signature and permalink.
+Each take carries a **final** flag. Accepting a new take sets that take final
+and unsets the member's previous one, so at every instant a member has exactly
+one final take in a session. Every read that means "the session's takes"
+selects the final ones. When the submission window closes, submissions are
+refused by instant (`system-scheduler-spec.md` §4.2), so whatever was final at
+the close stays final for aggregation, judging and the receipt.
+
+**Why this shape.** The product rule is "one take counts", not "one row
+exists". D49 mistook the second for the first and tried to enforce it with a
+uniqueness constraint, which cannot be added to a table that already holds
+several rows per member and cannot be scoped to new sessions, because a
+partial index can only test the row in front of it. A flag on the take needs
+no such distinction: legacy rows get their newest marked final and the rule
+applies everywhere at once.
+
+**What stays append-only.** A take's content, nonce and signature are never
+`UPDATE`d, nothing is deleted, and no admin endpoint writes the table. The
+final flag is metadata about which row counts, not a rewrite of what a member
+said, and the table's guard triggers block only `DELETE` and `TRUNCATE`, so
+setting it is permitted as written.
+
+**Revisions and the cap.** The `revision` column stays. It is inside the
+signed consensus receipt and hashed into `inputs_digest`, and the published
+contract requires the field, so removing it would be a receipt format change
+for no gain. `SWARM_TAKE_REVISION_CAP` stays at 5 and continues to bound how
+many rows one member can add to one session.
+
+**A live bug this exposes.** Two paths already default `revision` differently,
+`?? 0` in `judge-session.ts` and `?? 1` in `projections.ts` and
+`consensus-receipt.ts`. The same take set can therefore produce two different
+digests. Fix that to a single default as part of this work; it is independent
+of the decision.
+
+**What D49 got right and this keeps.** Idempotent submission: a retry of the
+same submission returns the existing record rather than creating a second row,
+so a crash after submit or an old and new container overlapping during a
+roster change produces at most a redundant request. That is retry
+deduplication, and it is a different thing from an intentional amendment.
+
+**Implementation.** Add the final flag with a migration that backfills each
+legacy session's newest revision per member as final; set and unset it inside
+the accepting transaction; resolve reads and `loadFrozenTakeSet` from the flag
+instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
+extend it for the flag. Tracked under the deployment refactor issue (#1026),
+W3.

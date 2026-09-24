@@ -101,7 +101,7 @@ registry), `swarm_subjects`, `swarm_sessions`, `swarm_briefs`,
 **`swarm_recommendations`** (append-only — payload + signature + nonce +
 `revision` + `verified`; the canonical store behind a take/submission. Target:
 one immutable take per member per epoch, identity `(session, member)`, a
-resubmission returns the existing row ([D49](../decisions.md#d49)). Legacy rows
+a member may amend while the window is open and the newest take is marked final, unsetting the prior ([D51](../decisions.md#d51)); a retry of the same submission returns the existing row. Legacy rows
 with `revision > 1` exist from the D33 era and stay readable; nothing is ever
 edited in place),
 `swarm_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
