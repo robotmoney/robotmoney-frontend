@@ -132,9 +132,12 @@ const META = {
     title: "Privacy Policy — Robot Money",
     description: "What data the Robot Money website collects, what it does not, and how onchain data is treated as public.",
   },
+  // A placeholder hub nothing links to since the footer became the site index
+  // (RM-124), and out of sitemap.xml: noindexed like the stubs below.
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
     description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Swarm, updating on Base.",
+    robots: "noindex, follow",
   },
   "/blog": {
     title: "Robot Money Blog — Research & Vault Updates",

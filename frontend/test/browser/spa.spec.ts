@@ -347,7 +347,8 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
     return chart.id;
   });
 
-  await page.getByRole("link", { name: "Home", exact: true }).first().click();
+  // The logo is the way home: the nav has no Home link (RM-124).
+  await page.locator(".nav__logo").click();
   await expect(page.locator(".a2-chart canvas")).toHaveCount(0);
   await expect.poll(() =>
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
@@ -359,7 +360,7 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const handle = await p5Canvas.elementHandle();
   if (!handle) throw new Error("p5 canvas was not created");
 
-  await page.getByRole("link", { name: "Home", exact: true }).first().click();
+  await page.locator(".nav__logo").click();
   await expect.poll(() => handle.evaluate((canvas) => canvas.isConnected)).toBe(false);
 
   await expectNoBrowserErrors(errors);
@@ -376,6 +377,7 @@ const NOINDEX_STUB_ROUTES = [
   { path: "/flow-field", title: "Flow Field (in progress) — Robot Money" },
   { path: "/regime_2panel", title: "Regime Classifier, 2-panel reference — Robot Money" },
   { path: "/tech-proposal-march-16", title: "Technical Proposal, March 16 (archived) — Robot Money" },
+  { path: "/visualizations", title: "Robot Money Visualizations — Live Vault Data" },
 ];
 
 for (const { path, title } of NOINDEX_STUB_ROUTES) {

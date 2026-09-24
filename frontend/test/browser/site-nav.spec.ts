@@ -121,7 +121,7 @@ test.describe("desktop", () => {
     await page.keyboard.press("Escape");
     await expect(panel(page, "swarm")).toBeHidden();
     await page.keyboard.press("End");
-    await expect(top(page, "about")).toBeFocused();
+    await expect(top(page, "company")).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(top(page, "vaults")).toBeFocused();
 
@@ -145,6 +145,78 @@ test.describe("desktop", () => {
     await expect(panel(page, "vaults")).toBeVisible();
     await expect(page.locator("#view h1")).toBeVisible();
     await expect(panel(page, "vaults")).toBeVisible();
+  });
+
+  test("the Vaults card shows each vault's value from a live read, and nothing from test data", async ({ page }) => {
+    // The Base vault's feed: the contract declares no four-vault route yet, so
+    // the loader reads this one (lib/vault-source.js), and "stub" is test data.
+    const economics = { asOf: "2026-09-24T10:00:00Z", tvlUsd: 18390.4, sharePrice: 1.0177, idleUsdc: 0, adapters: [], source: "rpc" };
+    let reads = 0;
+    await page.route("**/api/dashboards/vault-economics*", (route) => {
+      reads += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(economics) });
+    });
+    await page.goto("/");
+    await expect(page.locator("#view h1").first()).toBeAttached();
+    // Read when the card opens, not on every page load.
+    expect(reads).toBe(0);
+    await top(page, "vaults").click();
+    const fig = (href: string) => panel(page, "vaults").locator(`a[href="${href}"] .nav__item-v`);
+    await expect(fig("/vault/rmusdc")).toHaveText("$18,390");
+    await expect(fig("/vault/rmagent")).toHaveText("Coming soon");
+    // Not on the network yet reads as a state, in a pill, not as a figure.
+    await expect(fig("/vault/rmagent").locator(".rm-soon")).toHaveText("Coming soon");
+    await expect(fig("/vault/rmusdc").locator(".rm-soon")).toHaveCount(0);
+    await expect(fig("/swarm/subjects/robotmoney-vault")).toHaveText("$18,390");
+    expect(reads).toBe(1);
+
+    // Test data carries a label wherever a figure shows; a menu row has no
+    // room for one, so the card shows none.
+    const test = await page.context().newPage();
+    await test.route("**/api/dashboards/vault-economics*", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...economics, source: "stub" }) }));
+    await test.goto("/");
+    await expect(test.locator("#view h1").first()).toBeAttached();
+    await test.locator('.nav__group[data-nav-section="vaults"] > .nav__top').click();
+    await expect(test.locator("#nav-p-vaults")).toBeVisible();
+    await test.waitForTimeout(500);
+    await expect(test.locator("#nav-p-vaults .nav__item-v")).toHaveText(["", "", "", "", ""]);
+  });
+
+  test("a link off the site shows its arrow before any pointer reaches it; one on the site shows it on hover", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "company").click();
+    const arrow = (sel: string) => page.locator(sel).evaluate((el) => {
+      const c = getComputedStyle(el, "::after");
+      return { content: c.content, opacity: c.opacity, marginLeft: c.marginLeft };
+    });
+    const out = await arrow('#nav-p-company a[href^="https://t.me"]');
+    expect(out.opacity).toBe("1");
+    expect(out.content).toContain("\u2197");
+    const inside = await arrow('#nav-p-company a[href="/media"]');
+    expect(inside.opacity).toBe("0");
+    // Both sit at the row's right edge: the site-wide new-tab arrow does not
+    // pull the external one in beside the word.
+    const box = await page.locator('#nav-p-company a[href^="https://t.me"]').boundingBox();
+    expect(parseFloat(out.marginLeft)).toBeGreaterThan(box!.width / 3);
+
+    // A page not built yet is named, marked and not a link.
+    await top(page, "swarm").click();
+    const soon = panel(page, "swarm").locator(".nav__item--soon");
+    await expect(soon).toContainText("Leaderboard");
+    await expect(soon.locator(".rm-soon")).toHaveText("Coming soon");
+    await expect(panel(page, "swarm").locator('a:has-text("Leaderboard")')).toHaveCount(0);
+  });
+
+  test("a click on blank space inside a pinned card keeps it open", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "docs").click();
+    await expect(panel(page, "docs")).toBeVisible();
+    await panel(page, "docs").locator(".nav__label").first().click();
+    await expect(panel(page, "docs")).toBeVisible();
+    const card = await panel(page, "docs").locator(".nav__card").boundingBox();
+    await page.mouse.click(card!.x + card!.width - 6, card!.y + card!.height - 6);
+    await expect(panel(page, "docs")).toBeVisible();
   });
 
   test("the page behind an open card steps back, and a click on it closes the card", async ({ page }) => {
@@ -214,14 +286,13 @@ test.describe("phone", () => {
     await expect(page.locator(".nav__menu")).toBeVisible();
     // Every group open under a heading; the desktop buttons, which would do
     // nothing here, are not in the sheet at all.
-    for (const key of ["vaults", "swarm", "research", "docs", "about"]) {
+    for (const key of ["vaults", "swarm", "research", "docs", "company"]) {
       await expect(panel(page, key)).toBeVisible();
       await expect(top(page, key)).toBeHidden();
     }
-    await expect(page.locator(".nav__head")).toHaveText(["Vaults", "Swarm", "Research", "Docs", "About"]);
+    await expect(page.locator(".nav__head")).toHaveText(["Vaults", "Swarm", "Research", "Docs", "Company"]);
     await expect(page.locator(".nav").getByRole("heading", { level: 2 })).toHaveCount(5);
-    await expect(top(page, "token")).toBeVisible();
-    await expect(page.locator(".nav").getByRole("link", { name: "Token", exact: true })).toBeVisible();
+    await expect(panel(page, "company").getByRole("link", { name: "Token", exact: true })).toBeVisible();
 
     // The sheet's links follow the button that opened it, and a link that
     // takes focus is never left under the pinned button.

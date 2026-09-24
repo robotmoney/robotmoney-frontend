@@ -146,6 +146,18 @@
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
 }
+/* A vault's value, from a live read only (alpine/site-nav.js): right-aligned
+   in a slot kept open before the figures land, so the card does not resize. */
+.nav__item-v {
+  margin-left: auto;
+  min-width: 5.5rem;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+.nav__item:hover .nav__item-v, .nav__item:focus-visible .nav__item-v { color: var(--color-text-soft); }
 /* The arrow says where the row goes: across the site, or off it. Decorative,
    so it is not part of the link's name (the second declaration; engines
    without alt text keep the first). */
@@ -160,7 +172,17 @@
   transform: translateX(-0.25rem);
   transition: opacity 0.16s, transform 0.16s;
 }
-.nav__item--out::after { content: "\2197"; content: "\2197" / ""; }
+/* Off the site: the arrow points out, and it is always there, so an item
+   that leaves the site reads differently from one that stays before any
+   pointer reaches it. */
+.nav__item--out::after { content: "\2197"; content: "\2197" / ""; opacity: 1; transform: none; }
+/* Not a link yet (the leaderboard): muted, no highlight, no arrow. */
+.nav__item--soon { cursor: default; align-items: center; }
+.nav__item--soon .nav__item-t { color: var(--color-text-muted); }
+.nav__item--soon::after { content: none; }
+.nav__item--soon:hover { background: none; }
+.nav__item--soon:hover .nav__item-t { color: var(--color-text-muted); }
+.nav__item--fig::after { margin-left: 0; padding-left: 0.75rem; }
 .nav__item:hover, .nav__item:focus-visible { background: rgba(255, 255, 255, 0.04); }
 .nav__item:hover .nav__item-t, .nav__item:focus-visible .nav__item-t,
 .nav__item[aria-current="page"] .nav__item-t { color: var(--color-text); }
@@ -232,17 +254,15 @@
     letter-spacing: 0.12em;
     color: var(--color-text-muted);
   }
-  /* Token has no group under it, so its heading is the link: a full-width row
-     with an arrow, not a heading over nothing. */
-  .nav__group--link { padding-block: 0.5rem; }
-  a.nav__top { display: flex; justify-content: space-between; min-height: 2.75rem; color: var(--color-text); }
-  a.nav__top::after { content: "\2192"; content: "\2192" / ""; font-size: 0.875rem; letter-spacing: 0; }
-  .nav__top .nav__underline { display: none; }
   .nav__card { padding-top: 0.5rem; }
   .nav__label { display: none; }
   .nav__col + .nav__col, .nav__col > .nav__list ~ .nav__list { margin-top: 0.5rem; }
+  /* A value stays on one line, so a row keeps its height when the figures
+     land after the sheet has opened. */
+  .nav__item-v { min-width: 0; white-space: nowrap; }
   .nav__item { min-height: 2.75rem; align-items: center; margin-inline: 0; padding-inline: 0; }
   .nav__item::after { display: none; }
+  .nav__item--out::after { display: inline; margin-left: auto; }
   .nav__ctas {
     position: sticky;
     bottom: 0;
@@ -253,6 +273,11 @@
   }
   .nav__cta { display: flex; justify-content: center; }
   html.nav-sheet-open { overflow: hidden; }
+}
+/* On the narrowest phones a vault row cannot hold its name, token and value:
+   the token goes, the name and value stay. */
+@media (max-width: 359.98px) {
+  .nav__tree .nav__item-f { display: none; }
 }
 
 /* ── Desktop: the bar and its cards ── */
@@ -770,6 +795,13 @@
 @media (prefers-reduced-motion: reduce) { .rm-pulse { animation: none; } }
 /* A plain fact worn as a pill (Coming soon): mono caps on a hairline, square,
    no hue, the role pill's shape. */
+/* Not yet: a vault not on the network, a page still being built. The status
+   pill's shape at a size that sits inside a menu row, drawn in the house's
+   line (cyan is a line: its hairline, never its words). */
+.rm-soon { display: inline-flex; align-items: center; padding: 0.1875rem 0.375rem;
+  border: 1px solid var(--color-accent-line);
+  font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
 .rm-pill { display: inline-flex; align-items: center; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-light);
   font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; line-height: 1; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--color-text-soft); white-space: nowrap; vertical-align: middle; }
@@ -831,10 +863,11 @@
 
 /* A link that opens a new tab says so, site-wide: an arrow after its text.
    Text links only: a link that is an image, an icon, a card or a button
-   carries none, and the dashboards keep their own link style. The arrow is
+   carries none, the dashboards keep their own link style, and a nav card's
+   items draw their own (.nav__item--out). The arrow is
    generated rather than typed, so a copied link text stays its words, and its
    alternative text is empty: a screen reader announces the new tab itself. */
-a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not([data-dash-shell] *)::after {
+a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(.rr-cta):not(.nav__item):not([data-dash-shell] *)::after {
   content: "\2197"; content: "\2197" / "";
   display: inline-block; margin-left: 0.25em; text-decoration: none;
 }
