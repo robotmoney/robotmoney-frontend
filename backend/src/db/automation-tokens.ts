@@ -3,6 +3,8 @@
 // Governed by docs/technical/smoke-production-spec.md §3 and
 // docs/technical/system-scheduler-spec.md §7. Migration 0069 is the table; this
 // module is the only thing that writes it and the only thing that reads it.
+// Migration 0078 keyed it on (instance, holder) for §3's three holders: the
+// scheduler, the analytics producer and the operator.
 //
 // WHY PROVISIONING LIVES HERE AND NOT IN A SCRIPT. The secret is generated,
 // hashed and stored in one place, so no caller ever holds a path by which the
@@ -16,18 +18,47 @@ import { sql } from "./client.ts";
 import { hashKey } from "../lib/keys.ts";
 
 /**
- * The three rights the spec names, and no others.
+ * Who presents a service token — smoke spec §3's three holders.
  *
- * `system-scheduler` holds all three: "an automation token with the rights to
- * read subjects and sessions and to perform lifecycle transitions" (scheduler
- * spec §7). Migration 0069's CHECK holds the same list, so a value that gets
- * past this module is still refused by the database.
+ * `system-scheduler` was the store's only holder until migration 0078. It is
+ * still the default, so a caller that names no holder means what it always did.
  */
-export const AUTOMATION_RIGHTS = ["read_subjects", "read_sessions", "lifecycle_transitions"] as const;
+export const AUTOMATION_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
+export type AutomationHolder = (typeof AUTOMATION_HOLDERS)[number];
+
+/**
+ * Each holder's rights, and no others.
+ *
+ * `system-scheduler`: "read subjects and sessions, perform lifecycle
+ * transitions" (scheduler spec §7). `analytics-producer`: "the analytics
+ * ingestion routes". The operator: "the admin routes; this replaces the
+ * `ADMIN_TOKEN` environment variable" (smoke spec §3). The first two "hold one
+ * API credential and no other kind", so a right from another holder's list is
+ * refused rather than recorded. Migration 0078's
+ * `automation_tokens_holder_rights_check` holds the same table, so a value that
+ * gets past this module is still refused by the database.
+ */
+export const HOLDER_RIGHTS = {
+  "system-scheduler": ["read_subjects", "read_sessions", "lifecycle_transitions"],
+  "analytics-producer": ["analytics_ingestion"],
+  operator: ["admin"],
+} as const satisfies Record<AutomationHolder, readonly string[]>;
+
+/**
+ * Every right any holder may carry. The scheduler's three come first, in the
+ * order migration 0069 declared them; migration 0078's
+ * `automation_tokens_rights_known_check` holds the same list.
+ */
+export const AUTOMATION_RIGHTS = [
+  ...HOLDER_RIGHTS["system-scheduler"],
+  ...HOLDER_RIGHTS["analytics-producer"],
+  ...HOLDER_RIGHTS.operator,
+] as const;
 export type AutomationRight = (typeof AUTOMATION_RIGHTS)[number];
 
 export interface AutomationGrant {
   instance: string;
+  holder: AutomationHolder;
   rights: AutomationRight[];
 }
 
@@ -35,7 +66,7 @@ export interface AutomationGrant {
 const TOKEN_PREFIX = "rmat_";
 
 /**
- * Provision (or rotate) one instance's automation token.
+ * Provision (or rotate) one holder's token on one instance.
  *
  * Rotation and first issue are the same statement on purpose: smoke spec §3
  * says "Rotation is a re-provision and a container restart", and an UPSERT is
@@ -44,33 +75,51 @@ const TOKEN_PREFIX = "rmat_";
  * commits — there is no grace window, because a grace window is a second valid
  * credential nobody is tracking.
  *
+ * The key is (instance, holder), so re-provisioning one holder replaces that
+ * holder's row and no other: "provisioning one never invalidates another's".
+ * `holder` defaults to `system-scheduler`, the store's only holder before
+ * migration 0078, so existing callers keep their meaning.
+ *
  * Returns the secret ONCE. It is not stored and cannot be recovered.
  */
 export async function provisionAutomationToken(
   instance: string,
   rights: readonly AutomationRight[],
-): Promise<{ instance: string; token: string; rights: AutomationRight[] }> {
+  options: { holder?: AutomationHolder } = {},
+): Promise<{ instance: string; holder: AutomationHolder; token: string; rights: AutomationRight[] }> {
+  const holder = options.holder ?? "system-scheduler";
+  if (!(AUTOMATION_HOLDERS as readonly string[]).includes(holder)) {
+    throw new Error(
+      `provisionAutomationToken: unknown holder "${holder}" — expected ${AUTOMATION_HOLDERS.join(" | ")}`,
+    );
+  }
   if (rights.length === 0) {
     throw new Error("provisionAutomationToken: a token with no rights authorizes nothing — name at least one");
   }
+  const allowed: readonly string[] = HOLDER_RIGHTS[holder];
   for (const right of rights) {
     if (!(AUTOMATION_RIGHTS as readonly string[]).includes(right)) {
       throw new Error(
         `provisionAutomationToken: unknown right "${right}" — expected ${AUTOMATION_RIGHTS.join(" | ")}`,
       );
     }
+    if (!allowed.includes(right)) {
+      throw new Error(
+        `provisionAutomationToken: ${holder} may not hold "${right}" — its rights are ${allowed.join(" | ")}`,
+      );
+    }
   }
   const unique = [...new Set(rights)];
   const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   await sql`
-    INSERT INTO automation_tokens (instance, token_hash, rights)
-    VALUES (${instance}, ${hashKey(token)}, ${unique})
-    ON CONFLICT (instance) DO UPDATE
+    INSERT INTO automation_tokens (instance, holder, token_hash, rights)
+    VALUES (${instance}, ${holder}, ${hashKey(token)}, ${unique})
+    ON CONFLICT (instance, holder) DO UPDATE
       SET token_hash = EXCLUDED.token_hash,
           rights = EXCLUDED.rights,
           created_at = now(),
           created_by = CURRENT_USER`;
-  return { instance, token, rights: unique };
+  return { instance, holder, token, rights: unique };
 }
 
 /**
@@ -87,7 +136,7 @@ export async function provisionAutomationToken(
  */
 export async function lookupAutomationToken(presented: string | null): Promise<AutomationGrant | null> {
   if (!presented) return null;
-  const [row] = await sql<{ instance: string; rights: AutomationRight[] }[]>`
-    SELECT instance, rights FROM automation_tokens WHERE token_hash = ${hashKey(presented)}`;
-  return row ? { instance: row.instance, rights: row.rights } : null;
+  const [row] = await sql<{ instance: string; holder: AutomationHolder; rights: AutomationRight[] }[]>`
+    SELECT instance, holder, rights FROM automation_tokens WHERE token_hash = ${hashKey(presented)}`;
+  return row ? { instance: row.instance, holder: row.holder, rights: row.rights } : null;
 }

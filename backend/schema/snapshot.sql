@@ -438,6 +438,39 @@ END;
 $$;
 
 
+--
+-- Name: swarm_recommendations_default_final(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.swarm_recommendations_default_final() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- A writer that knows D51 set the flag itself; the partial unique index
+  -- is its check.
+  IF NEW.final THEN
+    RETURN NEW;
+  END IF;
+  -- Only the member's newest revision in the session is the counting take.
+  IF EXISTS (
+    SELECT 1 FROM public.swarm_recommendations
+     WHERE session_id = NEW.session_id
+       AND member_id = NEW.member_id
+       AND revision >= NEW.revision
+  ) THEN
+    RETURN NEW;
+  END IF;
+  UPDATE public.swarm_recommendations
+     SET final = false
+   WHERE session_id = NEW.session_id
+     AND member_id = NEW.member_id
+     AND final;
+  NEW.final := true;
+  RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -1078,9 +1111,12 @@ CREATE TABLE public.automation_tokens (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by text DEFAULT CURRENT_USER NOT NULL,
     note text,
+    holder text DEFAULT 'system-scheduler'::text NOT NULL,
     CONSTRAINT automation_tokens_hash_shape_check CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT automation_tokens_holder_check CHECK ((holder = ANY (ARRAY['system-scheduler'::text, 'analytics-producer'::text, 'operator'::text]))),
+    CONSTRAINT automation_tokens_holder_rights_check CHECK ((((holder = 'system-scheduler'::text) AND (rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])) OR ((holder = 'analytics-producer'::text) AND (rights <@ ARRAY['analytics_ingestion'::text])) OR ((holder = 'operator'::text) AND (rights <@ ARRAY['admin'::text])))),
     CONSTRAINT automation_tokens_instance_check CHECK ((instance ~ '^[a-z0-9][a-z0-9_-]{2,63}$'::text)),
-    CONSTRAINT automation_tokens_rights_known_check CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])),
+    CONSTRAINT automation_tokens_rights_known_check CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text, 'analytics_ingestion'::text, 'admin'::text])),
     CONSTRAINT automation_tokens_rights_nonempty_check CHECK ((cardinality(rights) > 0))
 );
 
@@ -2246,6 +2282,7 @@ CREATE TABLE public.swarm_recommendations (
     revision integer DEFAULT 1 NOT NULL,
     signing_key_id bigint,
     report_snapshot_id bigint,
+    final boolean DEFAULT false NOT NULL,
     CONSTRAINT swarm_recommendations_revision_positive CHECK ((revision >= 1))
 );
 
@@ -2361,7 +2398,9 @@ CREATE TABLE public.swarm_sessions (
     consensus_recorded_at timestamp with time zone,
     judging_outcome text,
     successor_session_id uuid,
+    judging_duration_seconds integer,
     CONSTRAINT swarm_sessions_judge_mode_check CHECK (((judge_mode IS NULL) OR (judge_mode = ANY (ARRAY['off'::text, 'enforce'::text])))),
+    CONSTRAINT swarm_sessions_judging_duration_seconds_check CHECK (((judging_duration_seconds IS NULL) OR (judging_duration_seconds > 0))),
     CONSTRAINT swarm_sessions_judging_outcome_check CHECK (((judging_outcome IS NULL) OR (judging_outcome = ANY (ARRAY['judged'::text, 'no_consensus'::text, 'not_judged'::text])))),
     CONSTRAINT swarm_sessions_judging_request_pair_check CHECK (((judging_requested_at IS NULL) = (judging_deadline_at IS NULL))),
     CONSTRAINT swarm_sessions_state_check CHECK ((state = ANY (ARRAY['collecting'::text, 'window_closed'::text, 'aggregated'::text, 'judging'::text, 'judged'::text, 'published'::text, 'scheduled'::text, 'cancelled'::text]))),
@@ -2422,7 +2461,10 @@ CREATE TABLE public.swarm_subjects (
     version integer DEFAULT 1 CONSTRAINT committee_subjects_version_not_null NOT NULL,
     updated_at timestamp with time zone DEFAULT now() CONSTRAINT committee_subjects_updated_at_not_null NOT NULL,
     epoch_duration_seconds integer DEFAULT 3600 NOT NULL,
+    epoch_anchor timestamp with time zone DEFAULT '1970-01-01 00:00:00+00'::timestamp with time zone NOT NULL,
+    judging_duration_seconds integer DEFAULT 900 NOT NULL,
     CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK ((epoch_duration_seconds > 0)),
+    CONSTRAINT swarm_subjects_judging_duration_seconds_check CHECK ((judging_duration_seconds > 0)),
     CONSTRAINT swarm_subjects_status_check CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))
 );
 
@@ -3365,7 +3407,7 @@ ALTER TABLE ONLY public.audit_log
 --
 
 ALTER TABLE ONLY public.automation_tokens
-    ADD CONSTRAINT automation_tokens_pkey PRIMARY KEY (instance);
+    ADD CONSTRAINT automation_tokens_pkey PRIMARY KEY (instance, holder);
 
 
 --
@@ -4589,6 +4631,13 @@ CREATE INDEX swarm_recommendations_member_session_idx ON public.swarm_recommenda
 
 
 --
+-- Name: swarm_recommendations_one_final_per_member; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX swarm_recommendations_one_final_per_member ON public.swarm_recommendations USING btree (session_id, member_id) WHERE final;
+
+
+--
 -- Name: swarm_recommendations_session_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5363,6 +5412,13 @@ ALTER TABLE public.swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendat
 CREATE TRIGGER swarm_recommendations_append_only_row BEFORE DELETE ON public.swarm_recommendations FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendations_append_only_row;
+
+
+--
+-- Name: swarm_recommendations swarm_recommendations_default_final_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_recommendations_default_final_trigger BEFORE INSERT ON public.swarm_recommendations FOR EACH ROW EXECUTE FUNCTION public.swarm_recommendations_default_final();
 
 
 --

@@ -14,10 +14,12 @@
 // The state tests run against the real ephemeral Postgres in a database cloned
 // for this file alone, because "ledger ahead of manifest" is a relationship
 // between two tables and cannot be asserted about a mock.
-import { afterEach, describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
+import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import {
   MANIFEST_FORMAT_VERSION,
   MANIFEST_TABLE,
@@ -416,5 +418,130 @@ describe("resumePlan — finishing an interrupted run without replaying or accep
     await insertManifestRow({ filenames: embodied, contentHash: hashManifest(DECLARATION, embodied) });
     await sql.unsafe("DROP TRIGGER IF EXISTS swarm_members_append_only ON swarm_members");
     await expect(resumePlan(sql, names)).rejects.toThrow("swarm_members");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The trusted inputs are refused to rm_app BY GRANT (§8.3)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("rm_app is refused every write to the manifest and the ledger, by grant, connecting as rm_app", () => {
+  // §8.3: "Only `rm_owner` may write it or the ledger's `compat`/
+  // `metadata_version` columns; they are trusted inputs to boot decisions."
+  //
+  // The writeManifest test above proves only a TypeScript `current_user` check,
+  // over the suite's superuser connection. These cases are the database's own
+  // answer: a real login as rm_app, a real statement, SQLSTATE 42501 from the
+  // executor's privilege check, which runs before a single row is formed. The
+  // UPDATEs match every row, so a pass could not hide behind an empty match,
+  // and any other outcome (success, or a constraint error that only a
+  // privileged writer could reach) fails the equality below.
+  //
+  // WHY THE MANIFEST TABLE IS REBUILT FROM THE REAL 0064. This file's afterEach
+  // drops `schema_manifest` after every test, so the table the migrations built
+  // is long gone by now. Re-running the migration's own text as rm_owner puts
+  // back exactly what 0064 creates, grants included. The second case first runs
+  // the real reconciliation (backend/schema/grants.sql), whose default
+  // privileges hand every NEW rm_owner table `SELECT, INSERT, UPDATE` for
+  // rm_app — which is the state production is in, and the state in which
+  // 0064's REVOKE is the only thing between rm_app and a forged manifest.
+  const RM_APP_PASSWORD = "rm_app_manifest_grant_test";
+  const MIGRATION_0064 = readFileSync(join(MIGRATIONS_DIR, "0064_schema_manifest.sql"), "utf8");
+  let app: postgres.Sql<{}>;
+
+  beforeAll(async () => {
+    await sql.unsafe(`ALTER ROLE rm_app WITH LOGIN PASSWORD '${RM_APP_PASSWORD}'`);
+    const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+    const url = new URL(process.env.DATABASE_URL!);
+    url.pathname = `/${db}`;
+    url.username = "rm_app";
+    url.password = RM_APP_PASSWORD;
+    app = postgres(url.toString(), { max: 1, onnotice: () => {} });
+  });
+
+  afterAll(async () => {
+    await app?.end({ timeout: 5 });
+  });
+
+  async function asOwner(statements: string): Promise<void> {
+    await sql.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(statements);
+    });
+  }
+
+  /** Put back 0064's table and one manifest row, as the migration and a
+   *  migrate run would leave them. */
+  async function rebuildManifestFromMigration(): Promise<void> {
+    await sql.unsafe(`DROP TABLE IF EXISTS ${MANIFEST_TABLE}`);
+    await asOwner(MIGRATION_0064);
+    await insertManifestRow({ filenames: await ledgerNames() });
+  }
+
+  async function sqlstate(statement: string): Promise<string | null> {
+    try {
+      await app.unsafe(statement);
+      return null;
+    } catch (error) {
+      return (error as { code?: string }).code ?? "no-sqlstate";
+    }
+  }
+
+  async function assertRefusedByGrant(): Promise<void> {
+    const [who] = (await app`SELECT current_user AS role`) as unknown as { role: string }[];
+    expect(who?.role).toBe("rm_app");
+
+    const refusals = {
+      "INSERT schema_manifest": await sqlstate(
+        `INSERT INTO ${MANIFEST_TABLE} (format_version, declaration, filenames, content_hash)
+         VALUES (1, 'forged', ARRAY['0001_backends.sql'], 'forged')`,
+      ),
+      "UPDATE schema_manifest": await sqlstate(`UPDATE ${MANIFEST_TABLE} SET content_hash = 'forged'`),
+      "UPDATE schema_migrations.compat": await sqlstate("UPDATE schema_migrations SET compat = 'additive'"),
+      "UPDATE schema_migrations.metadata_version": await sqlstate("UPDATE schema_migrations SET metadata_version = 1"),
+      "INSERT schema_migrations": await sqlstate(
+        "INSERT INTO schema_migrations (name, compat, metadata_version) VALUES ('9999_forged.sql', 'additive', 1)",
+      ),
+    };
+    expect(refusals).toEqual({
+      "INSERT schema_manifest": "42501",
+      "UPDATE schema_manifest": "42501",
+      "UPDATE schema_migrations.compat": "42501",
+      "UPDATE schema_migrations.metadata_version": "42501",
+      "INSERT schema_migrations": "42501",
+    });
+
+    // Reading both stays open: the api's append-only guard reads the ledger at
+    // boot, and §7.2 has every container run check 3a — which reads the ledger
+    // and the manifest — under its own credential.
+    const manifestRows = (await app.unsafe(`SELECT content_hash FROM ${MANIFEST_TABLE}`)) as unknown as {
+      content_hash: string;
+    }[];
+    expect(manifestRows.map((r) => r.content_hash)).toEqual(["unverified"]);
+    const ledger = (await app`SELECT name, compat, metadata_version FROM schema_migrations ORDER BY name`) as unknown as {
+      name: string;
+    }[];
+    expect(ledger.map((r) => r.name)).toEqual(await ledgerNames());
+    expect(ledger.some((r) => r.name === "9999_forged.sql")).toBe(false);
+  }
+
+  test("on the migrated schema: 42501 for every manifest write and every ledger write, SELECT still served", async () => {
+    await rebuildManifestFromMigration();
+    await assertRefusedByGrant();
+  });
+
+  test("after the real grants reconciliation — default privileges included — still 42501 for every write", async () => {
+    // The reconciliation first, so its default privileges are in force when
+    // 0064 creates the table: the production order.
+    const snapshot = await loadSnapshot();
+    await asOwner(snapshot.grantsSql);
+    await rebuildManifestFromMigration();
+    // Here 0064's own REVOKE is the only thing standing between rm_app and the
+    // INSERT/UPDATE the default privileges just handed the new table.
+    await assertRefusedByGrant();
+    // And once more afterwards, as every later migrate run does: the sweep must
+    // re-assert the narrowing, never undo it.
+    await asOwner(snapshot.grantsSql);
+    await assertRefusedByGrant();
   });
 });

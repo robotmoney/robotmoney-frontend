@@ -194,7 +194,12 @@ test("a fresh nonce from the same member is an AMENDMENT, not a duplicate — an
     .map((r) => r.indexdef).join("\n");
   expect(idx).toMatch(/UNIQUE.*\(session_id, member_id, revision\)/);
   expect(idx).toMatch(/UNIQUE.*\(member_id, nonce\)/);
-  expect(idx).not.toMatch(/UNIQUE.*\(session_id, member_id\)[^,]/);
+  // D51 (migration 0075) adds ONE (session_id, member_id) uniqueness, and it is
+  // partial: `WHERE final`, so it bounds which take counts and never refuses an
+  // amendment. Any other UNIQUE on exactly that pair is the old blanket one.
+  const pairUniques = idx.split("\n").filter((line) => /UNIQUE.*\(session_id, member_id\)/.test(line));
+  expect(pairUniques.filter((line) => !/\(session_id, member_id\) WHERE final$/.test(line))).toEqual([]);
+  expect(pairUniques).toHaveLength(1);
 });
 
 test("published_at >= window_closes_at — the invariant that was false by -59.9 min for a month", async () => {

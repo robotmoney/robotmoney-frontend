@@ -46,7 +46,19 @@ const SWEEP_GLOBS = [
   ".env.example",
   ".github/**/*.{yml,yaml}",
   "stacks/**/*.{yml,yaml}",
+  // Every workspace's package.json, by name. `bun run schedules:enable` was a
+  // package script, so the manifests that declare scripts are where an enable
+  // command would come back. `backend/package.json` is already matched by
+  // `backend/*.{ts,sql,json}`; the other three live outside every glob above.
+  "package.json",
+  "frontend/package.json",
+  "contract/package.json",
 ];
+
+/** Every package.json that can declare a `bun run` script (root and the three
+ *  workspaces). Named, not globbed, so a missing one is a failure rather than
+ *  a quietly smaller sweep. */
+const PACKAGE_MANIFESTS = ["package.json", "backend/package.json", "frontend/package.json", "contract/package.json"];
 
 /**
  * Files whose remaining mention is REQUIRED, each with the reason.
@@ -177,6 +189,20 @@ describe("the enable flag, the enable command and the cron variables are gone", 
   test("nothing enables a schedule: `schedules:enable` and its script are gone", () => {
     expect(hits("schedules:enable")).toEqual([]);
     expect(hits("schedules-enable")).toEqual([]);
+  });
+
+  test("every package.json is in the sweep, and no `scripts` block names or runs a schedule-enable command", () => {
+    for (const file of PACKAGE_MANIFESTS) {
+      expect({ file, swept: FILES.some((f) => f.file === file) }).toEqual({ file, swept: true });
+      // Parsed, not grepped: the name of a script is a KEY and its command is a
+      // VALUE, and both are checked — `"enable": "bun run scripts/schedules-enable.ts"`
+      // would hide from a key-only check, a renamed key from a value-only one.
+      const manifest = JSON.parse(readFileSync(join(REPO, file), "utf8")) as { scripts?: Record<string, string> };
+      const offending = Object.entries(manifest.scripts ?? {})
+        .filter(([name, command]) => /schedules?[:-]enable|SWARM_SCHEDULES_ENABLED/.test(`${name} ${command}`))
+        .map(([name]) => name);
+      expect({ file, offending }).toEqual({ file, offending: [] });
+    }
   });
 });
 

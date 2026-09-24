@@ -466,6 +466,25 @@ test("an unknown bearer reads nothing from the stream", async () => {
   expect((refused as { status: number }).status).toBe(403);
 });
 
+test("the analytics producer's and the operator's tokens read nothing from the stream — rights are per holder", async () => {
+  // Smoke spec §3: the scheduler's rights are "read subjects and sessions,
+  // perform lifecycle transitions"; the other two holders on the SAME instance
+  // hold only their own (migration 0078). A valid, store-issued token of the
+  // wrong holder is refused exactly like a forged one.
+  const producer = await provisionAutomationToken("rm_stream_holders", ["analytics_ingestion"], {
+    holder: "analytics-producer",
+  });
+  const operator = await provisionAutomationToken("rm_stream_holders", ["admin"], { holder: "operator" });
+  for (const token of [producer.token, operator.token]) {
+    const refused = await handleSchedulerStream(
+      get("/api/swarm/scheduler/full-read", token),
+      url("/api/swarm/scheduler/full-read"),
+      LOCKED,
+    );
+    expect((refused as { status: number }).status).toBe(403);
+  }
+});
+
 test("the ack route needs lifecycle_transitions, not merely a read right", async () => {
   const key = `job_${crypto.randomUUID()}`;
   await stream.pushJob({ kind: "reconcile_subject", target: "sub-7", idempotencyKey: key });

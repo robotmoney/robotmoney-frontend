@@ -280,6 +280,24 @@ export interface BootstrapResult {
 }
 
 /**
+ * The session settings a pg_dump text changes: every `SET name = ...` line and
+ * every `set_config('name', ..., false)` call (the non-local form; `true` is
+ * transaction-local and ends with the transaction). Returned in first-seen
+ * order, each name once, validated as a plain identifier before it is ever
+ * interpolated into a `RESET`.
+ */
+export function dumpSessionSettings(...dumps: readonly string[]): string[] {
+  const names = new Set<string>();
+  for (const text of dumps) {
+    for (const match of text.matchAll(/^SET\s+([a-z_][a-z0-9_.]*)\s*(?:=|TO\b)/gim)) names.add(match[1]!.toLowerCase());
+    for (const match of text.matchAll(/set_config\(\s*'([a-z_][a-z0-9_.]*)'\s*,[^)]*,\s*false\s*\)/gi)) {
+      names.add(match[1]!.toLowerCase());
+    }
+  }
+  return [...names];
+}
+
+/**
  * Bring an empty database to the snapshot's version: declaration, bootstrap
  * data, grants, baselined ledger, published manifest, and
  * `deployment_identity = rehearsal`.
@@ -351,6 +369,22 @@ export async function bootstrapBlankDatabase(db: SnapshotDb, snapshot: Snapshot)
   const baselined = await inTransaction(db, async (tx) => {
     await tx.unsafe(snapshot.declarationSql);
     await tx.unsafe(snapshot.bootstrapDataSql);
+    // The declaration and the bootstrap data are pg_dump output, and pg_dump's
+    // preamble changes SESSION settings that outlive the statement:
+    // `set_config('search_path', '', false)`, `statement_timeout = 0`,
+    // `row_security = off`, `check_function_bodies = false` and the rest. Left
+    // in force, every unqualified name after this line (`schema_migrations`,
+    // `deployment_identity`, the manifest table) fails with "no schema has been
+    // selected to create in" — which is how the real snapshot failed to
+    // bootstrap while every fixture passed — and the caller's handle keeps
+    // running with no statement timeout and row security off.
+    //
+    // Each setting the dump touched is RESET by name, read from the dump text
+    // itself so a regenerated dump cannot add one this list forgets. Never
+    // RESET ALL: it would also drop the caller's `SET ROLE rm_owner`.
+    for (const name of dumpSessionSettings(snapshot.declarationSql, snapshot.bootstrapDataSql)) {
+      await tx.unsafe(`RESET ${name}`);
+    }
     await tx.unsafe(snapshot.grantsSql);
 
     // AFTER the grants sweep, never before: the manifest is a trusted input to

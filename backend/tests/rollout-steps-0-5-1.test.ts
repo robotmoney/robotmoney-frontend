@@ -167,6 +167,24 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0069_automation_tokens.sql",
     "0070_swarm_scheduler_jobs.sql",
     "0072_drop_swarm_schedules.sql",
+    //   0073 — the subject's `epoch_anchor` and `judging_duration_seconds`
+    //          (scheduler spec §2.2, D53 decision 7).
+    //   0074 — `swarm_sessions.judging_duration_seconds`, captured at
+    //          turnover (scheduler spec §4.4).
+    //   0075 — the take's `final` flag, its backfill and partial unique index,
+    //          and rm_app's column-only UPDATE (D51).
+    //   0076 — the ledger's INSERT/UPDATE revoked from the runtime roles
+    //          (smoke spec §8.3).
+    //   0077 — the immutable analytics ledgers narrowed back to SELECT,
+    //          INSERT for rm_app (D53 decision 6).
+    //   0078 — `automation_tokens` keyed on (instance, holder) for the three
+    //          service-token holders (smoke spec §3, D52).
+    "0073_subject_grid_columns.sql",
+    "0074_session_judging_duration.sql",
+    "0075_swarm_recommendations_final.sql",
+    "0076_ledger_write_revoke.sql",
+    "0077_immutable_ledger_grants.sql",
+    "0078_automation_token_holders.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

@@ -29,10 +29,13 @@ import {
   SNAPSHOT_FILES,
   baselineLedger,
   bootstrapBlankDatabase,
+  dumpSessionSettings,
   loadSnapshot,
 } from "../src/db/schema-snapshot.ts";
-import { runPreflight, type PreflightContext } from "../src/db/preflight.ts";
+import { runPreflight, type PreflightContext, type PreflightReport } from "../src/db/preflight.ts";
 import type { RmRole } from "../src/db/registry.ts";
+import { SCHEDULES } from "../src/db/seed.ts";
+import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 const ON_DISK = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
@@ -305,6 +308,50 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
     });
   });
 
+  test("leaves the caller's session as it found it — the dump's preamble settings do not outlive the bootstrap", async () => {
+    // pg_dump's preamble turns statement_timeout off, row security off and
+    // function-body checks off for the SESSION. A bootstrap that left them in
+    // force would hand its caller a handle with no statement timeout and
+    // row-level security disabled — and RESET ALL is no fix, because it would
+    // also drop the caller's SET ROLE.
+    const snapshot = await loadSnapshot();
+    const touched = dumpSessionSettings(snapshot.declarationSql, snapshot.bootstrapDataSql);
+    for (const name of ["search_path", "statement_timeout", "lock_timeout", "row_security", "check_function_bodies", "client_min_messages"]) {
+      expect(touched).toContain(name);
+    }
+    await withBlankDatabase(async (db) => {
+      await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      const read = async () =>
+        (
+          (await db.unsafe(`
+            SELECT current_user AS role,
+                   current_setting('search_path') AS search_path,
+                   current_setting('statement_timeout') AS statement_timeout,
+                   current_setting('lock_timeout') AS lock_timeout,
+                   current_setting('row_security') AS row_security,
+                   current_setting('check_function_bodies') AS check_function_bodies,
+                   current_setting('client_min_messages') AS client_min_messages`)) as unknown as Record<string, string>[]
+        )[0]!;
+      await db.unsafe("SET ROLE rm_owner");
+      const before = await read();
+      await bootstrapBlankDatabase(db, snapshot);
+      expect(await read()).toEqual(before);
+      expect(before.role).toBe("rm_owner");
+      expect(before.row_security).toBe("on");
+      expect(before.check_function_bodies).toBe("on");
+    });
+  });
+
+  test("dumpSessionSettings reads SET lines and session set_config calls, never a transaction-local one", () => {
+    expect(
+      dumpSessionSettings(
+        "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n" +
+          "SELECT set_config('work_mem', '1MB', true);\nSET ROLE rm_owner;\nSET LOCAL lock_timeout = 0;",
+        "set row_security TO off;\nSET statement_timeout = 0;",
+      ),
+    ).toEqual(["statement_timeout", "search_path", "row_security"]);
+  });
+
   test("writes deployment_identity = rehearsal, never production", async () => {
     const snapshot = await loadSnapshot(writeSnapshot("bootstrap-identity"));
     await withBlankDatabase(async (db) => {
@@ -439,6 +486,436 @@ describe("baselineLedger — so `--migrate` never replays history", () => {
     await withBlankDatabase(async (db) => {
       await db.unsafe("CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())");
       await expect(baselineLedger(db, [...ON_DISK, "9999_imaginary.sql"])).rejects.toThrow("9999_imaginary.sql");
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE REAL SNAPSHOT — backend/schema/, not a fixture
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Everything above runs on a three-table fixture, which proves the MECHANISM.
+// It cannot prove the thing §10 W2 actually asks for: that the snapshot this
+// repository ships bootstraps a blank database which then passes a real
+// preflight without `--seed`. These cases load `loadSnapshot()` with no
+// directory — the four files under backend/schema/ — and apply them.
+//
+// PREFLIGHT RUNS AS rm_app, in the `full` scope. The container scope skips
+// checks 4-6, and a superuser handle answers every catalog question as the one
+// role that can see everything. rm_app is the role the api boots under.
+//
+// WHAT CHECK 2 CAN AND CANNOT SEE HERE. Its denylist half (superuser,
+// CREATEROLE, rm_owner membership, ownership, DDL, append-only DELETE/TRUNCATE)
+// is exercised against the real grants. Its "required" half reads the query
+// registry, and this process registers no queries, so that half has nothing to
+// check. Stated rather than hidden.
+
+/**
+ * Bootstrap the REAL snapshot into a blank database owned by rm_owner, then
+ * hand `body` both the owner-side handle and an rm_app login to it.
+ *
+ * pgcrypto is installed first, as the superuser, because the snapshot's header
+ * says it is provider-managed: "a managed cluster installs it and rm_owner may
+ * not". Installing it is the provider's half of a blank database, not a
+ * shortcut past the snapshot.
+ */
+async function withRealBootstrap(
+  body: (ctx: { owner: postgres.Sql<{}>; app: postgres.Sql<{}>; snapshot: Awaited<ReturnType<typeof loadSnapshot>> }) => Promise<void>,
+): Promise<void> {
+  const snapshot = await loadSnapshot();
+  await withBlankDatabase(async (owner, name) => {
+    await owner.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    await owner.unsafe("SET ROLE rm_owner");
+    await bootstrapBlankDatabase(owner, snapshot);
+    await owner.unsafe("RESET ROLE");
+
+    const url = new URL(config.databaseUrl);
+    url.pathname = `/${name}`;
+    url.username = "rm_app";
+    url.password = RM_APP_PASSWORD;
+    const app = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    try {
+      await body({ owner, app, snapshot });
+    } finally {
+      await app.end({ timeout: 5 });
+    }
+  });
+}
+
+async function fullPreflightAsApp(
+  app: postgres.Sql<{}>,
+  snapshot: Awaited<ReturnType<typeof loadSnapshot>>,
+  envName: string,
+): Promise<PreflightReport> {
+  const context: PreflightContext = {
+    env: "stage",
+    connection: "local",
+    roles: ["rm_app"] as readonly RmRole[],
+    codeFilenames: snapshot.filenames,
+    envFilePath: join(fixtures, `${envName}.env`),
+  };
+  writeFileSync(context.envFilePath, `rm_app=${RM_APP_PASSWORD}\n`, "utf8");
+  return runPreflight(app, context, "full", new Map([["rm_app", RM_APP_PASSWORD]]));
+}
+
+/** Every finding, flattened, so a failure prints what refused rather than `false`. */
+function findings(report: PreflightReport): string[] {
+  return report.results.flatMap((r) => r.findings.map((f) => `${f.severity} ${f.check}: ${f.message}`));
+}
+
+describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstrap data, grid columns", () => {
+  test("the real snapshot bootstraps and passes full preflight without --seed", async () => {
+    await withRealBootstrap(async ({ owner, app, snapshot }) => {
+      const [who] = (await app`SELECT current_user AS role`) as unknown as { role: string }[];
+      expect(who?.role).toBe("rm_app");
+
+      // No --seed: the ledger is the snapshot's list and the identity is the
+      // one a blank bootstrap writes (§4.2).
+      const ledger = await owner<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
+      expect(ledger.map((r) => r.name)).toEqual([...snapshot.filenames].sort());
+      const identity = await owner<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
+      expect(identity.map((r) => r.kind)).toEqual(["rehearsal"]);
+
+      const report = await fullPreflightAsApp(app, snapshot, "real-preflight");
+      expect(findings(report).filter((f) => f.startsWith("refuse"))).toEqual([]);
+      expect(report.passed).toBe(true);
+
+      // All six checks ran — the full scope, not the container's three.
+      expect(report.results.map((r) => r.check)).toEqual([
+        "roles_authenticate",
+        "privileges",
+        "schema_integrity",
+        "schema_compatibility",
+        "env_credentials",
+        "env_identity",
+        "subject_epoch_durations",
+      ]);
+
+      // RECORDED, NOT HIDDEN: check 6 had no subject to check. The bootstrap
+      // data seeds no subject, so on a blank database check 6 passes because
+      // there is nothing to refuse. The next case gives it a subject.
+      const [subjects] = (await app`SELECT count(*)::int AS n FROM swarm_subjects`) as unknown as { n: number }[];
+      expect(subjects?.n).toBe(0);
+    });
+  });
+
+  test("check 6 passes again with a subject to check — every column from the declaration, none from a seed", async () => {
+    await withRealBootstrap(async ({ app, snapshot }) => {
+      // The minimal insert the admin route makes: it names no scheduling
+      // column, so all three come from the schema declaration (§2.3, criterion
+      // 81's "from the schema declaration").
+      await app`INSERT INTO swarm_subjects (id, name) VALUES ('grid-subject', 'Grid Subject')`;
+      const [subject] = (await app`
+        SELECT status, epoch_duration_seconds, epoch_anchor, judging_duration_seconds
+          FROM swarm_subjects WHERE id = 'grid-subject'`) as unknown as {
+        status: string;
+        epoch_duration_seconds: number;
+        epoch_anchor: Date;
+        judging_duration_seconds: number;
+      }[];
+      expect(subject?.status).toBe("active");
+      expect(subject?.epoch_duration_seconds).toBe(3600);
+      expect(subject?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
+      expect(subject?.judging_duration_seconds).toBe(900);
+
+      const report = await fullPreflightAsApp(app, snapshot, "real-preflight-subject");
+      expect(findings(report).filter((f) => f.startsWith("refuse"))).toEqual([]);
+      expect(report.passed).toBe(true);
+    });
+  });
+
+  test("every subject carries all three scheduling columns, and NULL or non-positive is refused, not treated as disabled", async () => {
+    await withRealBootstrap(async ({ owner }) => {
+      const columns = await owner<{ column_name: string; is_nullable: string; column_default: string | null }[]>`
+        SELECT column_name, is_nullable, column_default
+          FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'swarm_subjects'
+           AND column_name IN ('epoch_duration_seconds', 'epoch_anchor', 'judging_duration_seconds')
+         ORDER BY column_name`;
+      expect(columns.map((c) => ({ column: c.column_name, nullable: c.is_nullable, defaulted: c.column_default !== null })))
+        .toEqual([
+          { column: "epoch_anchor", nullable: "NO", defaulted: true },
+          { column: "epoch_duration_seconds", nullable: "NO", defaulted: true },
+          { column: "judging_duration_seconds", nullable: "NO", defaulted: true },
+        ]);
+      // No enable column: §2.4 "There is no on/off state for scheduling."
+      const enable = await owner<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'swarm_subjects'
+           AND column_name ~ '(enabled|schedul|paused|disabled)'`;
+      expect(enable.map((c) => c.column_name)).toEqual([]);
+
+      const refused = async (statement: string): Promise<string | null> => {
+        try {
+          await owner.unsafe(statement);
+          return null;
+        } catch (error) {
+          return (error as { code?: string }).code ?? "no-sqlstate";
+        }
+      };
+      // 23502 not_null_violation, 23514 check_violation.
+      expect({
+        nullDuration: await refused("INSERT INTO swarm_subjects (id, name, epoch_duration_seconds) VALUES ('a', 'a', NULL)"),
+        zeroDuration: await refused("INSERT INTO swarm_subjects (id, name, epoch_duration_seconds) VALUES ('b', 'b', 0)"),
+        nullAnchor: await refused("INSERT INTO swarm_subjects (id, name, epoch_anchor) VALUES ('c', 'c', NULL)"),
+        nullJudging: await refused("INSERT INTO swarm_subjects (id, name, judging_duration_seconds) VALUES ('d', 'd', NULL)"),
+        zeroJudging: await refused("INSERT INTO swarm_subjects (id, name, judging_duration_seconds) VALUES ('e', 'e', 0)"),
+        negativeJudging: await refused("INSERT INTO swarm_subjects (id, name, judging_duration_seconds) VALUES ('f', 'f', -1)"),
+      }).toEqual({
+        nullDuration: "23502",
+        zeroDuration: "23514",
+        nullAnchor: "23502",
+        nullJudging: "23502",
+        zeroJudging: "23514",
+        negativeJudging: "23514",
+      });
+    });
+  });
+
+  test("a reconciliation run on a populated database changes no subject's scheduling columns", async () => {
+    await withRealBootstrap(async ({ owner, app, snapshot }) => {
+      await app`
+        INSERT INTO swarm_subjects (id, name, epoch_duration_seconds, epoch_anchor, judging_duration_seconds)
+        VALUES ('populated', 'Populated', 86400, '2026-09-01T22:45:00Z', 1800)`;
+      // What every migrate run applies, "always, even with nothing pending" (§8.3).
+      await owner.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx.unsafe(snapshot.grantsSql);
+      });
+      const [row] = (await app`
+        SELECT epoch_duration_seconds, epoch_anchor, judging_duration_seconds
+          FROM swarm_subjects WHERE id = 'populated'`) as unknown as {
+        epoch_duration_seconds: number;
+        epoch_anchor: Date;
+        judging_duration_seconds: number;
+      }[];
+      expect({
+        duration: row?.epoch_duration_seconds,
+        anchor: row?.epoch_anchor.toISOString(),
+        judging: row?.judging_duration_seconds,
+      }).toEqual({ duration: 86400, anchor: "2026-09-01T22:45:00.000Z", judging: 1800 });
+    });
+  });
+
+  test("reconciliation never widens an immutable analytics ledger past SELECT, INSERT — every family, every run", async () => {
+    await withRealBootstrap(async ({ owner, app, snapshot }) => {
+      // Derived from the guard's own inventory, never written down here: a
+      // family added later must be covered by grants.sql's insert-only list or
+      // this case goes red.
+      const ledgers = LEDGER_FAMILIES.flatMap((family) => [...family.tables]).sort();
+      expect(ledgers.length).toBeGreaterThan(10);
+
+      const privileges = async () =>
+        (await owner`
+          SELECT t AS ledger,
+                 has_table_privilege('rm_app', 'public.' || t, 'SELECT')    AS app_select,
+                 has_table_privilege('rm_app', 'public.' || t, 'INSERT')    AS app_insert,
+                 has_table_privilege('rm_app', 'public.' || t, 'UPDATE')    AS app_update,
+                 has_table_privilege('rm_app', 'public.' || t, 'DELETE')    AS app_delete,
+                 has_table_privilege('rm_app', 'public.' || t, 'TRUNCATE')  AS app_truncate,
+                 has_table_privilege('rm_worker', 'public.' || t, 'UPDATE')   AS worker_update,
+                 has_table_privilege('rm_worker', 'public.' || t, 'DELETE')   AS worker_delete,
+                 has_table_privilege('rm_worker', 'public.' || t, 'TRUNCATE') AS worker_truncate
+            FROM unnest(${ledgers}::text[]) AS t
+           ORDER BY t`) as unknown as Record<string, unknown>[];
+      const expected = ledgers.map((ledger) => ({
+        ledger,
+        app_select: true,
+        app_insert: true,
+        app_update: false,
+        app_delete: false,
+        app_truncate: false,
+        worker_update: false,
+        worker_delete: false,
+        worker_truncate: false,
+      }));
+
+      // After the bootstrap's own reconciliation, and after a second run — the
+      // "always, even with nothing pending" run every migrate performs (§8.3).
+      expect(await privileges()).toEqual(expected);
+      await owner.begin(async (tx) => {
+        await tx.unsafe("SET LOCAL ROLE rm_owner");
+        await tx.unsafe(snapshot.grantsSql);
+      });
+      expect(await privileges()).toEqual(expected);
+
+      // And the refusal is the GRANT's, not the trigger's: 42501 from the
+      // executor, before the immutability trigger (P0001) could run.
+      const refused = await app
+        .unsafe("UPDATE source_acquisitions SET cache_identity = cache_identity")
+        .then(() => null, (error: { code?: string }) => error.code ?? "no-sqlstate");
+      expect(refused).toBe("42501");
+    });
+  });
+
+  test("D51: one final take per (session, member) under a race, and rm_app may UPDATE only `final`", async () => {
+    await withRealBootstrap(async ({ owner, app }) => {
+      // The minimum a take needs: a subject, a member and a session.
+      await owner`INSERT INTO swarm_subjects (id, name) VALUES ('final-subject', 'Final Subject')`;
+      await owner`INSERT INTO swarm_members (id, name, handle) VALUES ('final-member', 'Final Member', 'final-member')`;
+      const [session] = (await owner`
+        INSERT INTO swarm_sessions (subject_id, state) VALUES ('final-subject', 'collecting')
+        RETURNING id`) as unknown as { id: string }[];
+      const take = (revision: number, final: boolean) => `
+        INSERT INTO swarm_recommendations
+          (session_id, member_id, subject_id, date, nonce, stance, payload, signature, revision, final)
+        VALUES ('${session!.id}', 'final-member', 'final-subject', CURRENT_DATE, 'nonce-${revision}', 'hold',
+                '{}'::jsonb, 'sig-${revision}', ${revision}, ${final})`;
+      await app.unsafe(take(1, true));
+
+      const code = async (run: () => Promise<unknown>): Promise<string | null> => {
+        try {
+          await run();
+          return null;
+        } catch (error) {
+          return (error as { code?: string }).code ?? "no-sqlstate";
+        }
+      };
+
+      // Content is never rewritten: every column but `final` is refused by
+      // grant, as rm_app, over a real login.
+      expect({
+        stance: await code(() => app.unsafe("UPDATE swarm_recommendations SET stance = 'sell'")),
+        payload: await code(() => app.unsafe(`UPDATE swarm_recommendations SET payload = '{"x":1}'::jsonb`)),
+        signature: await code(() => app.unsafe("UPDATE swarm_recommendations SET signature = 'forged'")),
+        revision: await code(() => app.unsafe("UPDATE swarm_recommendations SET revision = 9")),
+        final: await code(() => app.unsafe("UPDATE swarm_recommendations SET final = true WHERE revision = 1")),
+      }).toEqual({ stance: "42501", payload: "42501", signature: "42501", revision: "42501", final: null });
+
+      // Two racing amendments. Each unsets the member's current final take and
+      // inserts its own as final, in its own transaction, on its own
+      // connection. The partial unique index serializes them: whichever commits
+      // second meets the first's final row and is refused.
+      const url = new URL(config.databaseUrl);
+      url.pathname = `/${(await owner`SELECT current_database() AS db`)[0]!.db}`;
+      url.username = "rm_app";
+      url.password = RM_APP_PASSWORD;
+      const racer = postgres(url.toString(), { max: 1, onnotice: () => {} });
+      try {
+        let releaseFirst!: () => void;
+        const firstHolds = new Promise<void>((resolve) => (releaseFirst = resolve));
+        let firstInserted!: () => void;
+        const inserted = new Promise<void>((resolve) => (firstInserted = resolve));
+
+        const first = app.begin(async (tx) => {
+          await tx.unsafe("UPDATE swarm_recommendations SET final = false WHERE final AND member_id = 'final-member'");
+          await tx.unsafe(take(2, true));
+          firstInserted();
+          await firstHolds;
+        });
+        await inserted;
+        const second = code(() =>
+          racer.begin(async (tx) => {
+            // Blocks on the first transaction's row lock, then sees its final
+            // row once it commits.
+            await tx.unsafe("UPDATE swarm_recommendations SET final = false WHERE final AND member_id = 'final-member'");
+            await tx.unsafe(take(3, true));
+          }),
+        );
+        // Release the first only once the second is provably WAITING on it —
+        // otherwise the two run one after the other, which is an ordinary
+        // amendment and not the race this case is about.
+        for (let attempt = 0; ; attempt++) {
+          const [waiting] = (await owner`
+            SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND usename = 'rm_app' AND wait_event_type = 'Lock'`) as unknown as {
+            n: number;
+          }[];
+          if ((waiting?.n ?? 0) > 0) break;
+          if (attempt > 200) throw new Error("the second amendment never blocked on the first");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        releaseFirst();
+        await first;
+        const secondOutcome = await second;
+        // Under READ COMMITTED the loser's UPDATE re-checks the row it waited
+        // on, finds it no longer final, unsets nothing, and its INSERT then
+        // meets the winner's final row: 23505 on the partial index. The loser
+        // wrote nothing.
+        expect(secondOutcome).toBe("23505");
+      } finally {
+        await racer.end({ timeout: 5 });
+      }
+
+      const rows = (await owner`
+        SELECT revision, final FROM swarm_recommendations
+         WHERE session_id = ${session!.id} AND member_id = 'final-member' ORDER BY revision`) as unknown as {
+        revision: number;
+        final: boolean;
+      }[];
+      expect(rows).toEqual([
+        { revision: 1, final: false },
+        { revision: 2, final: true },
+      ]);
+    });
+  });
+
+  test("D51 for a writer that predates `final`: an insert that omits it becomes the member's one final take", async () => {
+    // The old code keeps accepting takes during §8.5's migrate-then-boot
+    // window, and after a code-only rollback. Its INSERT never names `final`,
+    // so without the trigger a first take would have no final row and an
+    // amendment would leave the OLD revision final.
+    await withRealBootstrap(async ({ owner, app }) => {
+      await owner`INSERT INTO swarm_subjects (id, name) VALUES ('legacy-subject', 'Legacy Subject')`;
+      await owner`INSERT INTO swarm_members (id, name, handle) VALUES ('legacy-member', 'Legacy Member', 'legacy-member')`;
+      const [session] = (await owner`
+        INSERT INTO swarm_sessions (subject_id, state) VALUES ('legacy-subject', 'collecting')
+        RETURNING id`) as unknown as { id: string }[];
+      const legacyTake = (revision: number) => `
+        INSERT INTO swarm_recommendations
+          (session_id, member_id, subject_id, date, nonce, stance, payload, signature, revision)
+        VALUES ('${session!.id}', 'legacy-member', 'legacy-subject', CURRENT_DATE, 'legacy-${revision}', 'hold',
+                '{}'::jsonb, 'sig-${revision}', ${revision})`;
+      const finals = async () =>
+        (
+          (await owner`
+            SELECT revision FROM swarm_recommendations
+             WHERE session_id = ${session!.id} AND member_id = 'legacy-member' AND final
+             ORDER BY revision`) as unknown as { revision: number }[]
+        ).map((r) => r.revision);
+
+      // As rm_app, the runtime role, over a real login: the trigger's UPDATE
+      // runs with the inserter's privileges, so this is also the proof that
+      // UPDATE (final) is enough for it.
+      await app.unsafe(legacyTake(1));
+      expect(await finals()).toEqual([1]);
+      await app.unsafe(legacyTake(2));
+      expect(await finals()).toEqual([2]);
+    });
+  });
+
+  test("bootstrap data is exactly seed.ts's SCHEDULES: vault, wallet, buyback and project rows, and no swarm or session row", async () => {
+    await withRealBootstrap(async ({ owner }) => {
+      const rows = await owner<
+        { kind: string; cron: string; enabled: boolean; timezone: string; payload: unknown; catchup_policy: string }[]
+      >`SELECT kind, cron, enabled, timezone, payload, catchup_policy FROM job_schedules ORDER BY kind, cron`;
+      const actual = rows.map((r) => ({ ...r, payload: JSON.parse(JSON.stringify(r.payload)) }));
+      const expected = SCHEDULES.map((s) => ({
+        kind: s.kind,
+        cron: s.cron,
+        enabled: s.enabled,
+        timezone: s.timezone,
+        payload: s.payload,
+        catchup_policy: s.catchupPolicy ?? "all",
+      })).sort((a, b) => (a.kind === b.kind ? a.cron.localeCompare(b.cron) : a.kind < b.kind ? -1 : 1));
+      // Set equality in both directions, every column the seed writes: the
+      // bootstrap data and the seed are two writers of the same rows, and
+      // nothing else pins one to the other.
+      expect(actual).toEqual(expected);
+
+      // §8.1's named families, each present and enabled.
+      const kinds = new Set(rows.filter((r) => r.enabled).map((r) => r.kind));
+      for (const family of ["vault.", "wallet.", "buybacks.", "projects."]) {
+        expect({ family, present: [...kinds].some((k) => k.startsWith(family)) }).toEqual({ family, present: true });
+      }
+
+      // "There are no session schedule rows" (§8.1), and no session at all.
+      expect(rows.filter((r) => r.kind.startsWith("swarm."))).toEqual([]);
+      const [sessions] = (await owner`SELECT count(*)::int AS n FROM swarm_sessions`) as unknown as { n: number }[];
+      expect(sessions?.n).toBe(0);
+      const [recommendations] = (await owner`
+        SELECT count(*)::int AS n FROM swarm_recommendations`) as unknown as { n: number }[];
+      expect(recommendations?.n).toBe(0);
     });
   });
 });
