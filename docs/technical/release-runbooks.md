@@ -263,8 +263,8 @@ authorized by the operator before execution.
 step's job.** The adopted [smoke production spec](./smoke-production-spec.md)
 separates production migration and initialization from boot, then requires
 preflight, readiness and durable evidence. Production migration prompts for
-`rm_owner`; boot receives runtime credentials only. The old `rm_migrator`,
-`migrate:external`, ownership-based auto-migration and `smoke:archive` plans are
+`rm_owner`; boot receives runtime credentials only. The old separate migration
+role, `migrate:external`, ownership-based auto-migration and `smoke:archive` plans are
 deprecated and must not guide new implementation. A legacy release procedure must
 state its exact code identity and limitations; it is not a second target design.
 

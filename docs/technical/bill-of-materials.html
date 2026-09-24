@@ -1131,12 +1131,11 @@ footer {
   </ul>
 
   <h3>Swarm Service</h3>
-  <p>Location: <span class="file-path">backend/src/swarm/</span> — six files, not one per noun:</p>
+  <p>Location: <span class="file-path">backend/src/swarm/</span> — the core files, not one per noun:</p>
   <ul>
     <li><strong>domain.ts</strong> — member/session/take domain logic</li>
     <li><strong>admin.ts</strong> — privileged lifecycle operations</li>
     <li><strong>projections.ts</strong> — read models for the public API</li>
-    <li><strong>notifications.ts</strong> — durable outbox rows + swarm-lane delivery jobs</li>
     <li><strong>roster-seed.ts</strong> — the <code>SWARM_SEED_ROSTER</code> house-roster seed</li>
     <li><strong>v0-archive.ts</strong> — imported v0 session history</li>
   </ul>
@@ -1408,11 +1407,6 @@ footer {
           dead-letters these kinds, and shared workers get no analytics bearer.</td>
       </tr>
       <tr>
-        <td><strong>swarm.ts</strong></td>
-        <td><code>swarm.open_session</code>, <code>publish_brief</code>, <code>close_window</code>,
-          <code>aggregate</code>, <code>publish</code>, and the four <code>send_*_notification</code> kinds</td>
-      </tr>
-      <tr>
         <td><strong>projects.ts</strong></td>
         <td><code>projects.discover</code>, <code>refresh_coins</code>, <code>refresh_wallets</code>,
           <code>fetch_vaults</code>, <code>sync_revenue</code>, <code>snapshot_daily</code>,
@@ -1437,6 +1431,9 @@ footer {
     it submits through the authenticated <code>/api/analytics/*</code> boundary
     (<code>ANALYTICS_API_URL</code> + <code>ANALYTICS_TOKEN</code>). Its own DB connection is scoped to queue lifecycle
     plus the non-analytics samplers.</p>
+  <p class="note">No swarm kind is registered. The session lifecycle is not queue work: the
+    <code>system-scheduler</code> container drives each subject's epoch through the API
+    (system-scheduler-spec §4), and the swarm email kinds were deleted with the feature (D50).</p>
 
   <h3>Job Lifecycle</h3>
   <p>Status is a CHECK-constrained enum in <span class="file-path">0003_task_queue.sql</span>:
@@ -1604,6 +1601,12 @@ footer {
     mints a fresh credential). If the roster is full an applicant lands on <code>/api/swarm/waitlist</code> instead.</p>
 
   <h3>Session Lifecycle</h3>
+  <p>Sessions run in back-to-back <strong>epochs</strong>, one session per epoch, driven by the
+    <code>system-scheduler</code> container through the API (system-scheduler-spec §4). Windows close on a fixed
+    wall-clock grid, <code>epoch_anchor + k &times; epoch_duration_seconds</code>, set per subject through the
+    admin API. Every transition is one state-guarded call under
+    <span class="endpoint">/api/swarm/admin/epochs/*</span>, which needs the <code>lifecycle_transitions</code>
+    automation right or an admin token.</p>
   <table>
     <thead>
       <tr>
@@ -1613,37 +1616,39 @@ footer {
     </thead>
     <tbody>
       <tr>
-        <td><strong>Create</strong></td>
-        <td>Admin creates the session (UTC-validated). It snapshots the expected roster and enqueues four scoped
-          swarm-lane jobs.</td>
-      </tr>
-      <tr>
         <td><strong>Open</strong></td>
-        <td><code>swarm.open_session</code> — the session starts collecting</td>
+        <td><code>epochs/open</code> — creates the session, publishes its brief and sets
+          <code>window_closes_at</code> to a grid instant, in one transaction. The session is <code>collecting</code>
+          from its first instant. An active subject has at most one collecting session.</td>
       </tr>
       <tr>
-        <td><strong>Publish brief</strong></td>
-        <td><code>swarm.publish_brief</code> — the brief goes out and the submission window opens</td>
-      </tr>
-      <tr>
-        <td><strong>Close window</strong></td>
-        <td><code>swarm.close_window</code> — submissions stop (default window: 60 minutes after the brief)</td>
+        <td><strong>Turnover</strong></td>
+        <td><code>epochs/turnover</code> — named by <code>expectedSessionId</code>. Closes epoch N (recording absences
+          against <code>window_closes_at</code>) and opens N+1 in the same transaction. A stale or repeated call never
+          closes the successor.</td>
       </tr>
       <tr>
         <td><strong>Aggregate</strong></td>
-        <td><code>swarm.aggregate</code> — deterministic rollup of the collected takes</td>
+        <td><code>epochs/aggregate</code> — deterministic rollup of the signed takes</td>
       </tr>
       <tr>
-        <td><strong>Publish</strong></td>
-        <td><code>swarm.publish</code> — results published to swarm history</td>
+        <td><strong>Judge</strong></td>
+        <td>With judge mode <code>off</code> nothing waits. With <code>enforce</code>,
+          <code>epochs/request-judging</code> stores an absolute deadline from the subject's
+          <code>judging_duration_seconds</code>, and <code>epochs/consensus</code> records the judge of record's
+          judgement with its acceptance instant.</td>
+      </tr>
+      <tr>
+        <td><strong>Finalize</strong></td>
+        <td><code>epochs/finalize</code> — decides <code>judged</code>, <code>no_consensus</code> or
+          <code>not_judged</code> from stored instants, then publishes. No consensus is ever fabricated.</td>
       </tr>
     </tbody>
   </table>
-  <p class="note">Each stage has both an admin REST verb
-    (<code>/api/swarm/admin/sessions/:id/{cancel,close,reopen,aggregate,publish}</code>, versioned and guarded) and a
-    queue kind, so a deployment can run the sequence on the five <code>SWARM_*_CRON</code> schedules or drive it by
-    hand. Those schedules ship <strong>seed-time disabled</strong> (<code>SWARM_SCHEDULES_ENABLED</code> defaults
-    false) so a fresh CI/smoke database never auto-enqueues real lifecycle jobs.</p>
+  <p class="note">There is no queue kind, cron schedule or on/off switch for the lifecycle. Migration
+    <span class="file-path">0072_drop_swarm_schedules.sql</span> deleted the old swarm schedule rows. The per-session
+    admin verbs (<code>/api/swarm/admin/sessions/:id/{cancel,close,reopen,aggregate,publish}</code>) remain for an
+    operator acting by hand, behind the same state guard.</p>
 
   <h3>Cryptography</h3>
   <p>Swarm uses Ed25519 for application and submission signing (not self-custody wallet signing).</p>
@@ -2088,8 +2093,10 @@ footer {
       </tr>
       <tr>
         <td><code>SWARM_PUBLIC_BASE_URL</code></td>
-        <td>Absolute origin every link inside a notification email is built from</td>
-        <td>Defaults to https://robotmoney.net — set it on staging or testers get sent to production</td>
+        <td>Absolute public origin for applicant-facing links. D50 keeps it after removing the swarm email that
+          used it; no backend code reads it today</td>
+        <td>Defaults to https://robotmoney.network. No compose file, Dockerfile or smoke passthrough delivers it to a
+          container, so the default is the effective value everywhere</td>
       </tr>
     </tbody>
   </table>
@@ -2252,7 +2259,6 @@ footer {
     <li>For production: set <code>ADMIN_TOKEN</code>, <code>ANALYTICS_TOKEN</code>, and
       <code>PROJECTS_SOURCE=live</code> (the projects pipelines refuse to serve fixtures in prod)</li>
     <li>No provider API keys are needed — the analytics fetchers are keyless</li>
-    <li>Set <code>SWARM_PUBLIC_BASE_URL</code> if the deployment is not the canonical production origin</li>
     <li>Run <code>bun run --cwd backend migrate</code> to apply the schema and seed</li>
     <li>Run <code>bun run smoke</code>, or <code>bun run api</code> plus one
       <code>WORKER_LANE=&lt;lane&gt; bun run worker</code> per lane (separate terminals)</li>

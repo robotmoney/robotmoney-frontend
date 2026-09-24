@@ -29,6 +29,13 @@ const REPO = join(import.meta.dir, "..", "..", "..");
 /** The criterion's own pattern, verbatim. */
 const PATTERN = String.raw`agentmail\|notification_outbox\|SWARM_NOTIFICATION`;
 
+/**
+ * Copy that promises an email: an ERE for git grep that JS RegExp reads the
+ * same way. Matched case-insensitively.
+ */
+const EMAIL_PROMISE =
+  "email you|we email|emailed on approval|approval notification|activation notification|tell you the moment";
+
 /** path → why a match there is not the feature returning. */
 const PINNED: Record<string, string> = {
   // APPLIED HISTORY. 0019 created `committee_notification_outbox`, 0021/0022
@@ -113,6 +120,49 @@ describe(`nothing in the repo sends swarm email (/${PATTERN}/i)`, () => {
     ]) {
       expect(existsSync(join(REPO, path)), `${path} came back`).toBe(false);
     }
+  });
+
+  test("no onboarding copy promises an email the swarm no longer sends", () => {
+    // D50 leaves the applicant one channel, their status page, and the
+    // waitlist one path, an operator inviting by hand. Copy that still says
+    // "we email you" sends applicants to an inbox that stays empty. The scope
+    // is what an applicant or their agent reads: the public site and the
+    // onboarding skill it serves. The dated changelog is history, as above.
+    const copy = Bun.spawnSync(
+      ["git", "grep", "-niIE", EMAIL_PROMISE, "--", "frontend/public", ":!frontend/public/views/changelog.html"],
+      { cwd: REPO },
+    );
+    // Exit 1 with no output is "searched and found nothing"; a broken pathspec
+    // or pattern is exit 128 with stderr, which must not read as a pass.
+    expect(copy.stderr.toString()).toBe("");
+    expect(copy.stdout.toString().trim()).toBe("");
+    expect(copy.exitCode).toBe(1);
+    // The onboarding skill sits under frontend/public, so the scan above covers
+    // it. This proves the pathspec reaches the file rather than assuming so.
+    const skill = Bun.spawnSync(
+      ["git", "ls-files", "--error-unmatch", join("frontend", "public", "skills", "swarm-onboarding", "SKILL.md")],
+      { cwd: REPO },
+    );
+    expect(skill.exitCode).toBe(0);
+  });
+
+  test("red control: the copy pattern catches each promise it replaced", () => {
+    // The strings the site and skill carried before D50's copy pass. If the
+    // pattern stopped matching them, the scan above would pass on anything.
+    const re = new RegExp(EMAIL_PROMISE, "i");
+    for (const old of [
+      "Leave your email and we'll tell you the moment one frees up.",
+      "We review it and email you.",
+      "it updates itself the moment you are approved, and we email you too.",
+      "a contact email for the approval notification",
+      "Receives the transactional approval notification.",
+      "you are emailed on approval.",
+      "valid contact email required for activation notification",
+    ]) {
+      expect(re.test(old), old).toBe(true);
+    }
+    // And it leaves the replacement copy alone.
+    expect(re.test("Nothing emails you when you are approved")).toBe(false);
   });
 
   test("no worker job kind delivers a notification", () => {

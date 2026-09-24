@@ -37,7 +37,7 @@ them — this repo's own local dev/smoke/e2e harness included.
   query interface that declares `(role, object, privilege)` at the call site
   ([smoke-production-spec §7.1](../technical/smoke-production-spec.md#71-registry-enforced-structurally));
   the roles are `rm_owner` (schema owner, `LOGIN`, migration only), `rm_app`,
-  `rm_worker` and `rm_readonly`, and there is no `rm_migrator`
+  `rm_worker` and `rm_readonly`, and there is no separate migration role
   ([§3](../technical/smoke-production-spec.md#3-roles-and-credentials)).
 
 ### Authentication & authorization
