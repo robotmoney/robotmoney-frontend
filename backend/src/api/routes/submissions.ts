@@ -10,7 +10,20 @@
 // scope).
 import type { Submission, SubmissionActionType, SubmissionCreate, SubmissionRegistration } from "@robotmoney/contract";
 import { jsonValue, sql } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { hashKey } from "../../lib/keys.ts";
+
+// A registered query (smoke-production-spec.md §7.1): the public intake route
+// runs as `rm_app` and is the only module that reaches this insert.
+const insertSubmission = registerQuery({
+  role: "rm_app",
+  object: "analytics_submissions",
+  // SELECT because of RETURNING, which Postgres checks as a read of the row.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/api/routes/submissions:createSubmission",
+  purpose: "Insert one anonymous /submit intake row, always status 'pending', for POST /api/dashboards/submissions.",
+  callers: ["src/api/routes/submissions"],
+});
 
 const MAX_HANDLE = 80;
 const MAX_SUMMARY = 4000;
@@ -141,7 +154,7 @@ export async function createSubmission(raw: unknown, ip: string): Promise<Create
     return { status: 429, body: { error: "too many submissions — slow down and try again shortly" } };
   }
 
-  const rows = await sql<any[]>`
+  const rows = await on(sql, insertSubmission)<any>`
     INSERT INTO analytics_submissions (action_type, submitter_handle, agent_id, summary, registration, ip_hash)
     VALUES (${actionType}, ${submitterHandle}, ${agentId}, ${summary}, ${registration ? sql.json(jsonValue(registration)) : null}, ${ipHash})
     RETURNING id, action_type, submitter_handle, agent_id, summary, registration, status, created_at`;

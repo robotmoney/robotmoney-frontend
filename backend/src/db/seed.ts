@@ -9,10 +9,136 @@
 // existing row — that lets the scheduler own slot bookkeeping and lets an
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
+import { on, registerQuery } from "./registry.ts";
 import { seedLiveRoster, pruneToLiveRoster, backfillMemberHandles } from "../swarm/roster-seed.ts";
 import { seedSmokeProjects } from "../projects/smoke-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVERY STATEMENT BELOW IS A REGISTERED QUERY (smoke-production-spec.md §7.1).
+//
+// Two entry modules run the seed: this file run directly (`bun run
+// src/db/seed.ts`) and prod-bootstrap's seed step, which also migrates and so
+// holds the `rm_owner` credential. The smoke-only schedule changes are reached
+// only through the direct run's `--smoke-schedules`. An UPDATE or DELETE
+// declares SELECT too, because Postgres checks a WHERE clause's columns as a
+// read.
+//
+// THE ROLE IS `rm_owner`, because nothing else can run these statements on a
+// snapshot-built database: backend/schema/grants.sql hands `rm_app` SELECT,
+// INSERT and UPDATE on ordinary tables and no DELETE, so the retirement
+// DELETEs on `job_schedules` below are an owner's statements. Declared as
+// `rm_app` they made preflight check 2 refuse the real snapshot
+// (tests/schema-snapshot.test.ts), which is the check doing its job: the
+// seed is preparation (smoke-production-spec.md §5), not a runtime program.
+// The smoke today still runs it in the `api` container (scripts/lib/
+// smoke-main.ts, `bun run src/db/seed.ts --smoke-schedules`), on whatever
+// credential that container holds. If that is `rm_app` on a snapshot-built
+// database, grants.sql says the DELETE is refused (read from the grants, not
+// yet executed).
+// ─────────────────────────────────────────────────────────────────────────────
+const SEED_CALLERS = ["src/db/seed", "scripts/prod-bootstrap"];
+const SMOKE_CALLERS = ["src/db/seed"];
+
+const insertSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["INSERT"],
+  site: "src/db/seed:seedJobSchedules.insert",
+  purpose: "Insert each canonical schedule once, never overwriting the scheduler-managed columns of an existing row.",
+  callers: SEED_CALLERS,
+});
+
+const disableProducerSchedules = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/db/seed:seedJobSchedules.disableProducer",
+  purpose: "Disable the retired consumer-DB regime/research schedules an older deployment left enabled.",
+  callers: SEED_CALLERS,
+});
+
+const deadLetterProducerJobs = registerQuery({
+  role: "rm_owner",
+  object: "jobs",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/db/seed:seedJobSchedules.deadLetterProducer",
+  purpose: "Dead-letter pending or running regime/research jobs the independent producer now owns.",
+  callers: SEED_CALLERS,
+});
+
+const deleteAnalyticsRunSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["DELETE", "SELECT"],
+  site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun",
+  purpose: "Delete the retired combined analytics.run schedule rows (issue #107).",
+  callers: SEED_CALLERS,
+});
+
+const deadLetterAnalyticsRunJobs = registerQuery({
+  role: "rm_owner",
+  object: "jobs",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/db/seed:seedJobSchedules.deadLetterAnalyticsRun",
+  purpose: "Dead-letter not-yet-terminal jobs of the retired analytics.run kind (issue #107).",
+  callers: SEED_CALLERS,
+});
+
+const deleteHourlyRepairSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["DELETE", "SELECT"],
+  site: "src/db/seed:seedJobSchedules.deleteHourlyRepair",
+  purpose: "Delete the superseded hourly ops.repair_gaps row so exactly one repair cadence remains.",
+  callers: SEED_CALLERS,
+});
+
+const insertSmokeSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["INSERT"],
+  site: "src/db/seed:seedSmokeJobSchedules.insert",
+  purpose: "Insert the smoke's quota-safe schedule rows once, idempotently.",
+  callers: SMOKE_CALLERS,
+});
+
+const disableSmokeSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/db/seed:seedSmokeJobSchedules.disable",
+  purpose: "Disable the per-minute samplers, the superseded fast rows and coverage recompute on a smoke database.",
+  callers: SMOKE_CALLERS,
+});
+
+const enqueueColdStart = registerQuery({
+  role: "rm_owner",
+  object: "jobs",
+  privileges: ["INSERT"],
+  site: "src/db/seed:seed.coldStart",
+  purpose: "Enqueue one cold-start job per sampler and the gap repair, at most once per database via a constant dedupe_key.",
+  callers: SEED_CALLERS,
+});
+
+const insertWalletHistorySeed = registerQuery({
+  role: "rm_owner",
+  object: "wallet_balance_samples",
+  privileges: ["INSERT"],
+  site: "src/db/seed:backfillWalletHistory",
+  purpose: "Insert the pre-launch prop-wallet history, provenance 'seed', never clobbering a live sample.",
+  callers: SEED_CALLERS,
+});
+
+const insertAllocationFramework = registerQuery({
+  role: "rm_owner",
+  object: "allocation_framework",
+  privileges: ["INSERT"],
+  site: "src/db/seed:seed.allocationFramework",
+  purpose: "Fill the single allocation_framework row on an empty table, never overwriting an admin rewrite.",
+  callers: SEED_CALLERS,
+});
 
 type CatchupPolicy = "all" | "collapse-per-bucket";
 
@@ -169,7 +295,7 @@ export async function seedJobSchedules(): Promise<void> {
     // ON CONFLICT DO NOTHING keeps this purely additive/idempotent: the row is
     // inserted once and never overwritten, so the scheduler-managed columns
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
-    await sql`
+    await on(sql, insertSchedule)`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, catchup_policy)
       VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled}, ${s.catchupPolicy ?? "all"})
       ON CONFLICT (kind, cron) DO NOTHING
@@ -179,11 +305,11 @@ export async function seedJobSchedules(): Promise<void> {
 
   // Phase 4: regime/research production moved to the independent producer.
   // Disable any legacy consumer-DB schedules left by an older deployment.
-  await sql`
+  await on(sql, disableProducerSchedules)`
     UPDATE job_schedules SET enabled = false
      WHERE kind IN ('regime.classify', 'research.refresh') AND enabled
   `;
-  await sql`
+  await on(sql, deadLetterProducerJobs)`
     UPDATE jobs
        SET status = 'dead', locked_at = NULL, locked_by = NULL,
            last_error = 'retired consumer job: independent analytics-producer owns this execution',
@@ -195,8 +321,8 @@ export async function seedJobSchedules(): Promise<void> {
   // otherwise purely additive, so an existing deployment would keep enqueuing a
   // kind that no longer has a handler or lane. Drop its schedule rows and
   // dead-letter any not-yet-terminal jobs (job_runs history is preserved).
-  await sql`DELETE FROM job_schedules WHERE kind = 'analytics.run'`;
-  await sql`
+  await on(sql, deleteAnalyticsRunSchedule)`DELETE FROM job_schedules WHERE kind = 'analytics.run'`;
+  await on(sql, deadLetterAnalyticsRunJobs)`
     UPDATE jobs
        SET status = 'dead',
            locked_at = NULL, locked_by = NULL,
@@ -213,34 +339,34 @@ export async function seedJobSchedules(): Promise<void> {
   // requires exactly ONE row for the kind (the procedure release.ts documents
   // at NEW_SCHEDULE_CRON). Jobs are untouched — the kind survives, only its
   // cadence moved.
-  await sql`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
+  await on(sql, deleteHourlyRepairSchedule)`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
 /** Apply the smoke's quota-safe schedule changes explicitly and idempotently. */
 export async function seedSmokeJobSchedules(): Promise<void> {
   for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
-    await sql`
+    await on(sql, insertSmokeSchedule)`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
       VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }
 
-  await sql`
+  await on(sql, disableSmokeSchedule)`
     UPDATE job_schedules SET enabled = false
      WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
   `;
   console.log("smoke schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
 
   for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
-    await sql`
+    await on(sql, disableSmokeSchedule)`
       UPDATE job_schedules SET enabled = false
        WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
     `;
   }
   console.log("smoke schedules: confirmed retired consumer analytics schedules disabled");
 
-  await sql`
+  await on(sql, disableSmokeSchedule)`
     UPDATE job_schedules SET enabled = false
      WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
   `;
@@ -259,22 +385,22 @@ export async function seed(): Promise<void> {
   // guarantees the sampler issues at least one real aggregate3 eth_call within
   // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
   // scheduler's partial unique index on dedupe_key.
-  await sql`
+  await on(sql, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('wallet.sample_balances', ${sql.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await sql`
+  await on(sql, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('wallet.sample_sleeves', ${sql.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await sql`
+  await on(sql, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('vault.sample_adapters', ${sql.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await sql`
+  await on(sql, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('vault.sample_share_price', ${sql.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
@@ -291,7 +417,7 @@ export async function seed(): Promise<void> {
   // than double work: the dispatcher declines while a window job is in flight
   // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
   // once per database.
-  await sql`
+  await on(sql, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('ops.repair_gaps', ${sql.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
@@ -311,7 +437,7 @@ export async function seed(): Promise<void> {
   // copied into ALLOCATION_FRAMEWORK_SEED). ON CONFLICT DO NOTHING so a later
   // admin rewrite is NEVER clobbered by a re-boot ("projects overviews
   // admin-managed" policy) — this seed only fills an empty table.
-  await sql`
+  await on(sql, insertAllocationFramework)`
     INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
     VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
             ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
@@ -403,7 +529,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export async function backfillWalletHistory(): Promise<number> {
   const rows = walletHistorySeedRows();
   for (const r of rows) {
-    await sql`
+    await on(sql, insertWalletHistorySeed)`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance)
       VALUES

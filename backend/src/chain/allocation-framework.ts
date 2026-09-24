@@ -10,6 +10,7 @@
 // until an admin rewrites the row; there is no chain 'stale' concept here.
 import { resolveBaseRpcSource, type BaseRpcSource } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 export interface AllocationStrategy {
@@ -141,6 +142,15 @@ interface Row {
 
 const CACHE_TTL_MS = 30_000;
 
+const readFramework = registerQuery({
+  role: "rm_app",
+  object: "allocation_framework",
+  privileges: ["SELECT"],
+  site: "src/chain/allocation-framework:computeAllocationFramework",
+  purpose: "Read the single admin-managed allocation row for GET /api/dashboards/allocation.",
+  callers: ["src/api/routes/dashboards"],
+});
+
 async function computeAllocationFramework(): Promise<AllocationFramework> {
   const now = Date.now();
 
@@ -149,7 +159,7 @@ async function computeAllocationFramework(): Promise<AllocationFramework> {
   let asof: Date | string | null;
   let rawBuckets: RawBucket[];
   try {
-    const rows = await sql<Row[]>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`;
+    const rows = await on(sql, readFramework)<Row>`SELECT asof, buckets FROM allocation_framework WHERE id = 1`;
     const row = rows[0];
     if (row && Array.isArray(row.buckets) && row.buckets.length > 0) {
       asof = row.asof;

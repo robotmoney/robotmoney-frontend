@@ -9,6 +9,7 @@
 // issue #70's `projects` tables): a fresh deploy has an empty table and this
 // returns `{ entries: [] }`, never a fabricated row (issue #98/#346).
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import type { ActivityLogEntry, ActivityLogResponse, ActivityLogStatus } from "@robotmoney/contract";
 
 // §5.6: "50 fetched, zero-score noise filtered, 20 shown" — the DB fetch is
@@ -17,8 +18,28 @@ import type { ActivityLogEntry, ActivityLogResponse, ActivityLogStatus } from "@
 // viewer can still scroll to the 21st..50th).
 const FETCH_LIMIT = 50;
 
+// Registered queries (smoke-production-spec.md §7.1): the feed reads the log and
+// LEFT JOINs the live agent name, so it declares both relations.
+const activityRows = registerQuery({
+  role: "rm_app",
+  object: "agent_activity_log",
+  privileges: ["SELECT"],
+  site: "src/projects/activity-log-projections:fetchActivityLog.log",
+  purpose: "Read the 50 newest non-noise agent actions for GET /api/dashboards/activity.",
+  callers: ["src/api/routes/dashboards"],
+});
+
+const activityAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/activity-log-projections:fetchActivityLog.agents",
+  purpose: "Join each action's live agent name, which the activity feed LEFT JOINs.",
+  callers: ["src/api/routes/dashboards"],
+});
+
 export async function fetchActivityLog(): Promise<ActivityLogResponse> {
-  const rows = await sql<
+  const rows = await on(sql, activityRows, activityAgents)<
     {
       id: string;
       occurred_at: string | Date;
@@ -30,7 +51,7 @@ export async function fetchActivityLog(): Promise<ActivityLogResponse> {
       commit_summary: string | null;
       submitted_by: string | null;
       approved_by: string | null;
-    }[]
+    }
   >`
     SELECT
       al.id,

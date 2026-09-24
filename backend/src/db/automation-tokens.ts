@@ -15,6 +15,7 @@
 // and deliberately not this module's business.
 import { randomBytes } from "node:crypto";
 import { sql } from "./client.ts";
+import { on, registerQuery } from "./registry.ts";
 import { hashKey } from "../lib/keys.ts";
 
 /**
@@ -61,6 +62,38 @@ export interface AutomationGrant {
   holder: AutomationHolder;
   rights: AutomationRight[];
 }
+
+/**
+ * THE TWO STATEMENTS, REGISTERED (smoke-production-spec.md §7.1).
+ *
+ * Provisioning runs as `rm_owner`: migration 0069 grants the runtime roles
+ * SELECT on this table and nothing else, because a token is written by "the
+ * same authorized preparation that writes `deployment_identity`" (§3), and
+ * that table is "writable only by `rm_owner`" (§4.2).
+ *
+ * NO ENTRY MODULE CALLS `provisionAutomationToken` YET. The preparation step
+ * that will (§3, §5, §9.1) is W4's to wire, so until then this module names
+ * itself as the caller. That is a placeholder the wiring must replace with its
+ * own module id, not a claim that anything reaches the write today.
+ */
+const provisionToken = registerQuery({
+  role: "rm_owner",
+  object: "automation_tokens",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because it reads EXCLUDED columns.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/db/automation-tokens:provisionAutomationToken",
+  purpose: "Provision or rotate one holder's automation token on one instance, storing only its hash.",
+  callers: ["src/db/automation-tokens"],
+});
+
+const lookupToken = registerQuery({
+  role: "rm_app",
+  object: "automation_tokens",
+  privileges: ["SELECT"],
+  site: "src/db/automation-tokens:lookupAutomationToken",
+  purpose: "Resolve a presented automation token to its grant by hash, for the routes that check a right.",
+  callers: ["src/api/routes/swarm-admin", "src/api/routes/swarm-stream"],
+});
 
 /** The token's wire prefix, so an operator reading a file knows what it is holding. */
 const TOKEN_PREFIX = "rmat_";
@@ -111,7 +144,7 @@ export async function provisionAutomationToken(
   }
   const unique = [...new Set(rights)];
   const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
-  await sql`
+  await on(sql, provisionToken)`
     INSERT INTO automation_tokens (instance, holder, token_hash, rights)
     VALUES (${instance}, ${holder}, ${hashKey(token)}, ${unique})
     ON CONFLICT (instance, holder) DO UPDATE
@@ -136,7 +169,7 @@ export async function provisionAutomationToken(
  */
 export async function lookupAutomationToken(presented: string | null): Promise<AutomationGrant | null> {
   if (!presented) return null;
-  const [row] = await sql<{ instance: string; holder: AutomationHolder; rights: AutomationRight[] }[]>`
+  const [row] = await on(sql, lookupToken)<{ instance: string; holder: AutomationHolder; rights: AutomationRight[] }>`
     SELECT instance, holder, rights FROM automation_tokens WHERE token_hash = ${hashKey(presented)}`;
   return row ? { instance: row.instance, holder: row.holder, rights: row.rights } : null;
 }

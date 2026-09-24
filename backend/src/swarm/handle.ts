@@ -21,6 +21,7 @@
 // (issue #562 declined renaming existing members): those rows are inserted raw
 // by roster-seed.ts and never pass through here at all.
 import type { DbHandle } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 
 // `handle` is validated at the admin route with `requiredString(body, "handle",
 // 80)`, so a derived handle must fit the same budget or an operator could not
@@ -105,6 +106,20 @@ export function slugifyMemberName(name: string): string {
  * can be occupied, and the scan below is bounded by it — no unbounded probe
  * loop against the database.
  */
+const takenNames = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/handle:deriveMemberHandle",
+  purpose: "Read every handle and id in a derived stem's family so the lowest free suffix can be chosen in memory.",
+  // registerMember and activateMember (public swarm route), addMemberAdmin
+  // (admin route), and the seed's backfillMemberHandles. The seed path runs on
+  // the seed's `rm_owner` credential, which owns swarm_members; a declaration
+  // carries one role, and `rm_app` is the one check 2 has something to verify
+  // for.
+  callers: ["src/api/routes/swarm", "src/api/routes/swarm-admin", "src/db/seed", "scripts/prod-bootstrap"],
+});
+
 export async function deriveMemberHandle(
   db: DbHandle,
   input: { memberId: string; name: string },
@@ -113,7 +128,7 @@ export async function deriveMemberHandle(
   // The stem is `[a-z0-9-]` by construction, so it carries no LIKE wildcard and
   // needs no escaping.
   const prefix = `${stem}-%`;
-  const rows = await db<{ taken: string }[]>`
+  const rows = await on(db, takenNames)<{ taken: string }>`
     SELECT handle AS taken FROM swarm_members
     WHERE id <> ${input.memberId} AND (handle = ${stem} OR handle LIKE ${prefix})
     UNION

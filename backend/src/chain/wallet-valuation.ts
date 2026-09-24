@@ -33,6 +33,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   decodeAggregate3,
   decodeUint256,
@@ -153,15 +154,36 @@ export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 // `price_usd`), and it is the exact same JS double `amount * price` the
 // sampler computed at sample time — so a row missing `price_usd` derives it
 // back out as `value_usd / amount` instead.
+// Registered queries (smoke-production-spec.md §7.1). The persisted-price
+// fallback is reached by the wallet sampler's valueLeg and by the projects
+// pipeline's live source; the request path never reads a price through it.
+const fallbackSample = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-valuation:recentPersistedPrice.samples",
+  purpose: "Read a symbol's newest recent sample price, for the fallback when a live price read fails.",
+  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+});
+
+const fallbackPrice = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-valuation:recentPersistedPrice.prices",
+  purpose: "Join the settled asset price for the fallback sample's day, which the fallback read LEFT JOINs.",
+  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
+});
+
 async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
-  const rows = await sql<{
+  const rows = await on(sql, fallbackSample, fallbackPrice)<{
     price_usd: string | null;
     amount: string | null;
     value_usd: string | null;
     sampled_at: Date;
     asset_price_usd: string | null;
     is_closed: boolean;
-  }[]>`
+  }>`
     SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
            ap.price_usd AS asset_price_usd,
            (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed

@@ -22,6 +22,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
@@ -166,6 +167,45 @@ async function readChainAmounts(assets: TrackedAsset[], wallets: string[]): Prom
   return out;
 }
 
+// Every statement below is a registered query (smoke-production-spec.md §7.1).
+// The live read (fetchWalletBalances) is the wallet sampler's; the persisted
+// read (fetchPersistedWalletBalances) is GET /api/dashboards/wallet-balances.
+const lastHolding = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:lastPersistedHolding",
+  purpose: "Read a symbol's newest non-quarantined sample, for the stale-degrade path of a failed live read.",
+  callers: ["src/worker/handlers/wallet"],
+});
+
+const historySamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:loadHistory.samples",
+  purpose: "Read the wallet's daily sample history, excluding quarantined days, for the balances payload.",
+  callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+});
+
+const historyPrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:loadHistory.prices",
+  purpose: "Join each closed day's settled asset price onto the wallet history, which the history read LEFT JOINs.",
+  callers: ["src/api/routes/dashboards", "src/worker/handlers/wallet"],
+});
+
+const latestSamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_balance_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-balances:fetchPersistedWalletBalances",
+  purpose: "Read the last scheduled sample per symbol for the persisted, zero-RPC balances payload.",
+  callers: ["src/api/routes/dashboards"],
+});
+
 interface PersistedHolding {
   amount: number | null;
   priceUsd: number | null;
@@ -173,7 +213,7 @@ interface PersistedHolding {
 }
 
 async function lastPersistedHolding(symbol: string): Promise<PersistedHolding | null> {
-  const rows = await sql<{ amount: string | null; price_usd: string | null; value_usd: string }[]>`
+  const rows = await on(sql, lastHolding)<{ amount: string | null; price_usd: string | null; value_usd: string }>`
     SELECT amount, price_usd, value_usd
       FROM wallet_balance_samples
      WHERE symbol = ${symbol}
@@ -297,7 +337,7 @@ function dominantProvenance(seen: Set<Provenance>): Provenance {
 // as arbitrary-precision `numeric` arithmetic and could differ in its last
 // digits.
 async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyProvenance: Record<Provenance, number> }> {
-  const rows = await sql<{
+  const rows = await on(sql, historySamples, historyPrices)<{
     sample_date: Date;
     symbol: string;
     amount: string | null;
@@ -305,7 +345,7 @@ async function loadHistory(): Promise<{ history: WalletHistoryPoint[]; historyPr
     provenance: Provenance;
     asset_price_usd: string | null;
     is_closed: boolean;
-  }[]>`
+  }>`
     SELECT wbs.sample_date, wbs.symbol, wbs.amount, wbs.value_usd, wbs.provenance,
            ap.price_usd AS asset_price_usd,
            (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
@@ -410,8 +450,8 @@ export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
 
   // Latest sample per symbol. The (sample_date, symbol) upsert keeps one row per
   // symbol per UTC day, so "newest sample_date wins" is the last scheduled read.
-  const rows = await sql<
-    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; strategy_nav_idle_only: boolean | null; sampled_at: Date }[]
+  const rows = await on(sql, latestSamples)<
+    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; strategy_nav_idle_only: boolean | null; sampled_at: Date }
   >`
     SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, strategy_nav_idle_only, sampled_at
       FROM wallet_balance_samples

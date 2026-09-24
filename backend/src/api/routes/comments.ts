@@ -1,5 +1,6 @@
 import type { Comment, CommentCreate, CommentListResponse } from "@robotmoney/contract";
 import { sql } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { hashKey } from "../../lib/keys.ts";
 
 // Validation caps — keep posts short and the page slug sane.
@@ -41,6 +42,39 @@ function rateLimited(ipHash: string, now = Date.now()): boolean {
   return false;
 }
 
+// Every statement is a registered query (smoke-production-spec.md §7.1): the
+// public comment routes run as `rm_app`, and this route module is the entry
+// module for all three.
+const ROUTE = "src/api/routes/comments";
+
+const listVisible = registerQuery({
+  role: "rm_app",
+  object: "comments",
+  privileges: ["SELECT"],
+  site: "src/api/routes/comments:listComments",
+  purpose: "List a page's visible comments, oldest first, for GET /api/comments.",
+  callers: [ROUTE],
+});
+
+const readParent = registerQuery({
+  role: "rm_app",
+  object: "comments",
+  privileges: ["SELECT"],
+  site: "src/api/routes/comments:createComment.parent",
+  purpose: "Check that a reply's parent is a visible comment on the same page before inserting it.",
+  callers: [ROUTE],
+});
+
+const insertComment = registerQuery({
+  role: "rm_app",
+  object: "comments",
+  // SELECT because of RETURNING, which Postgres checks as a read of the row.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/api/routes/comments:createComment.insert",
+  purpose: "Insert one anonymous comment (ip stored only as a hash) for POST /api/comments.",
+  callers: [ROUTE],
+});
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // postgres.js returns timestamptz as a Date; normalize to ISO 8601.
@@ -64,7 +98,7 @@ function toComment(r: any): Comment {
 export async function listComments(url: URL): Promise<CommentListResponse> {
   const page = (url.searchParams.get("page") ?? "").trim();
   if (!page) return { comments: [] };
-  const rows = await sql<any[]>`
+  const rows = await on(sql, listVisible)<any>`
     SELECT id, page, author, content, parent_id, status, created_at
     FROM comments
     WHERE page = ${page} AND status = 'visible'
@@ -94,7 +128,7 @@ export async function createComment(raw: unknown, ip: string): Promise<CreateRes
   // the id format first (a malformed value must 400, not 500 on insert).
   if (parentId !== null) {
     if (!UUID_RE.test(parentId)) return { status: 400, body: { error: "invalid parentId" } };
-    const parent = (await sql<any[]>`SELECT page, status FROM comments WHERE id = ${parentId}`)[0];
+    const parent = (await on(sql, readParent)<any>`SELECT page, status FROM comments WHERE id = ${parentId}`)[0];
     if (!parent || parent.page !== page || parent.status !== "visible")
       return { status: 400, body: { error: "invalid parentId" } };
   }
@@ -104,7 +138,7 @@ export async function createComment(raw: unknown, ip: string): Promise<CreateRes
     return { status: 429, body: { error: "too many comments — slow down and try again shortly" } };
   }
 
-  const rows = await sql<any[]>`
+  const rows = await on(sql, insertComment)<any>`
     INSERT INTO comments (page, author, content, parent_id, ip_hash)
     VALUES (${page}, ${author}, ${content}, ${parentId}, ${ipHash})
     RETURNING id, page, author, content, parent_id, status, created_at`;

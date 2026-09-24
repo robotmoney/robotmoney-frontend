@@ -4,6 +4,7 @@
 // (vault.sample_share_price, vault.sample_adapters) populate the tables.
 import { config, resolveBaseRpcSource, resolveVaultAdapters, type BaseRpcSource, type VaultAdapterConfig } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   decodeUint256,
   encodeBalanceOfCall,
@@ -147,8 +148,46 @@ const rpcVaultAdapterReader: VaultAdapterReader = {
   },
 };
 
+// Every statement below is a registered query (smoke-production-spec.md §7.1),
+// reached only through GET /api/dashboards/vault-economics.
+const latestShareSample = registerQuery({
+  role: "rm_app",
+  object: "vault_share_price_history",
+  privileges: ["SELECT"],
+  site: "src/chain/vault-economics:lastPersistedSample",
+  purpose: "Read a vault's newest persisted share-price sample for the sample reader.",
+  callers: ["src/api/routes/dashboards"],
+});
+
+const apyWindow = registerQuery({
+  role: "rm_app",
+  object: "vault_share_price_history",
+  privileges: ["SELECT"],
+  site: "src/chain/vault-economics:computeApy7d",
+  purpose: "Read a vault's last seven days of share prices to annualise its APY.",
+  callers: ["src/api/routes/dashboards"],
+});
+
+const coreTotals = registerQuery({
+  role: "rm_app",
+  object: "vault_share_price_history",
+  privileges: ["SELECT"],
+  site: "src/chain/vault-economics:computeVaultEconomics.core",
+  purpose: "Read the newest persisted vault totals for the vault-economics payload, with zero RPC.",
+  callers: ["src/api/routes/dashboards"],
+});
+
+const adapterBalances = registerQuery({
+  role: "rm_app",
+  object: "vault_adapter_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/vault-economics:computeVaultEconomics.adapters",
+  purpose: "Read each adapter's newest persisted balance for the vault-economics payload, with zero RPC.",
+  callers: ["src/api/routes/dashboards"],
+});
+
 async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {
-  const rows = await sql<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }[]>`
+  const rows = await on(sql, latestShareSample)<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }>`
     SELECT sample_hour, total_assets, total_supply, share_price
       FROM vault_share_price_history
      WHERE lower(vault_address) = lower(${vaultAddress})
@@ -177,7 +216,7 @@ const defaultVaultEconomicsReaders: VaultEconomicsReaders = {
 };
 
 export async function computeApy7d(vaultAddress: string): Promise<number | null> {
-  const rows = await sql<{ sample_hour: Date; share_price: string }[]>`
+  const rows = await on(sql, apyWindow)<{ sample_hour: Date; share_price: string }>`
     SELECT sample_hour, share_price
       FROM vault_share_price_history
      WHERE lower(vault_address) = lower(${vaultAddress})
@@ -210,8 +249,8 @@ async function computeVaultEconomics(
   const adapters = resolveVaultAdapters();
 
   // Core totals from vault_share_price_history (ZERO RPC)
-  const coreRows = await sql<
-    { sample_hour: Date; sampled_at: Date; total_assets: string; total_supply: string; share_price: string | null }[]
+  const coreRows = await on(sql, coreTotals)<
+    { sample_hour: Date; sampled_at: Date; total_assets: string; total_supply: string; share_price: string | null }
   >`
     SELECT sample_hour, sampled_at, total_assets, total_supply, share_price
       FROM vault_share_price_history
@@ -242,8 +281,8 @@ async function computeVaultEconomics(
   }
 
   // Per-adapter balances from vault_adapter_samples (ZERO RPC)
-  const adapterRows = await sql<
-    { adapter_address: string; adapter_name: string; balance_usd: string | null; configured: boolean; provenance: string; sampled_at: Date }[]
+  const adapterRows = await on(sql, adapterBalances)<
+    { adapter_address: string; adapter_name: string; balance_usd: string | null; configured: boolean; provenance: string; sampled_at: Date }
   >`
     SELECT DISTINCT ON (adapter_address) adapter_address, adapter_name, balance_usd, configured, provenance, sampled_at
       FROM vault_adapter_samples

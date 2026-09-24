@@ -25,7 +25,7 @@
 // stores `off` in its place. The CHECK that forbids `shadow` in the column is a
 // migration of its own.
 import { sql } from "../db/client.ts";
-import { registerQuery, type RegisteredQuery, type RegistryDb } from "../db/registry.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
 import type { JudgeMode } from "./domain.ts";
 
@@ -82,12 +82,6 @@ const insertConfig = registerQuery({
   purpose: "Create the one judge-switch row on an empty table, for an audited admin write.",
   callers: [ADMIN_ROUTE],
 });
-
-/** A registered site as a tag, so a statement reads as SQL rather than as a call. */
-function on(db: RegistryDb, query: RegisteredQuery) {
-  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T[]> =>
-    query.run<T>(db, strings, ...values);
-}
 
 export async function getJudgeConfig(): Promise<JudgeConfig> {
   const [row] = await on(sql, readConfig)<{

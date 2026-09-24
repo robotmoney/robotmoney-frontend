@@ -10,6 +10,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   persistedFallbackWalletPriceReader,
   QUARANTINED_PROVENANCE,
@@ -57,6 +58,27 @@ export interface WalletSleeveReaders {
   priceReader: WalletPriceReader;
 }
 
+// Registered queries (smoke-production-spec.md §7.1): the sleeve read joins the
+// settled asset price, so it declares both relations. GET
+// /api/dashboards/wallet-sleeves is the only entry that reaches it.
+const sleeveSamples = registerQuery({
+  role: "rm_app",
+  object: "wallet_sleeve_samples",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-sleeves:computeWalletSleeves.samples",
+  purpose: "Read each sleeve wallet's newest non-quarantined sample per symbol for the sleeves payload.",
+  callers: ["src/api/routes/dashboards"],
+});
+
+const sleevePrices = registerQuery({
+  role: "rm_app",
+  object: "asset_prices",
+  privileges: ["SELECT"],
+  site: "src/chain/wallet-sleeves:computeWalletSleeves.prices",
+  purpose: "Join each closed day's settled asset price onto the sleeve samples, which the sleeve read LEFT JOINs.",
+  callers: ["src/api/routes/dashboards"],
+});
+
 const defaultWalletSleeveReaders: WalletSleeveReaders = {
   readChainAmounts: readChainAmountsBatched,
   priceReader: persistedFallbackWalletPriceReader,
@@ -100,7 +122,7 @@ async function computeWalletSleeves(
     // same JS double that produced the sample row's `value_usd`, so the JS
     // product reproduces it bit-for-bit rather than Postgres `numeric`
     // arithmetic's differently-rounded product.
-    const rows = await sql<
+    const rows = await on(sql, sleeveSamples, sleevePrices)<
       {
         symbol: string;
         amount: string | null;
@@ -110,7 +132,7 @@ async function computeWalletSleeves(
         sampled_at: Date;
         asset_price_usd: string | null;
         is_closed: boolean;
-      }[]
+      }
     >`
       SELECT DISTINCT ON (wss.symbol) wss.symbol, wss.amount, wss.price_usd, wss.value_usd,
              wss.provenance, wss.sampled_at,
