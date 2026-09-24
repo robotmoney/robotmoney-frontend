@@ -2446,7 +2446,7 @@ degrade rules) those feeds were built against is the
   A 30s in-process cache still sits in front of the request-path reads.
 - **Config, not on-chain discovery** — `config.vault` (`backend/src/config.ts`)
   holds the vault + USDC addresses (already documented publicly at
-  `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
+  `frontend/public/views/docs/skill/installation.html` and `deposit.html`) and
   the three adapter entries, all overridable via env (`VAULT_ADDRESS`,
   `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`, `ADAPTER_AAVE_ADDRESS`,
   `ADAPTER_COMPOUND_ADDRESS`). Since #112 the three adapter entries ship with

@@ -50,6 +50,7 @@ describe("navSectionFor", () => {
     ["/media/articles", "company"],
     ["/tokenomics", "company"],
     ["/skills", "docs"],
+    ["/deposit", "vaults"],
     ["/docs/investment-swarm/api-reference", "docs"],
     ["/changelog", "docs"],
   ])("%s is in %s", (path, key) => {
@@ -152,8 +153,8 @@ describe("the nav markup", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
-  test("the primary action is to deposit, through the skill", () => {
-    expect(nav).toMatch(/<a href="\/skills" class="btn-primary[^"]*nav__cta">Deposit<\/a>/);
+  test("the primary action is to deposit, on its own page", () => {
+    expect(nav).toMatch(/<a href="\/deposit" class="btn-primary[^"]*nav__cta">Deposit<\/a>/);
   });
 
   test("what is not built yet is named, marked, and not a link", () => {
@@ -174,5 +175,33 @@ describe("the nav markup", () => {
       expect(attrs).toContain('rel="noopener noreferrer"');
       expect(attrs).toContain("nav__item--out");
     }
+  });
+});
+
+// RM-129: depositing has its own page, and /skills is the index of every
+// skill. The deposit page keeps the section ids the old /skills page had, so
+// the links that pointed into it still land.
+describe("the deposit page and the skills index", () => {
+  const deposit = readFileSync(join(pub, "views/deposit.html"), "utf8");
+  const skills = readFileSync(join(pub, "views/skills.html"), "utf8");
+
+  test("/deposit keeps every section the deposit skill's page had", () => {
+    for (const id of ["how-it-works", "capabilities", "mechanics", "contracts", "about"]) {
+      expect(deposit, id).toContain(`id="${id}"`);
+    }
+    expect(deposit).toContain("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+  });
+
+  test("/skills lists each skill with its way in", () => {
+    expect(skills).toContain('id="deposit-skill"');
+    expect(skills).toContain('href="/deposit"');
+    expect(skills).toContain('id="swarm-onboarding"');
+    expect(skills).toContain('href="/swarm/apply"');
+    expect(existsSync(join(pub, "skills/swarm-onboarding/SKILL.md"))).toBe(true);
+  });
+
+  test("nothing on the site still sends a reader to /skills for a deposit section", () => {
+    const pages = [html, ...["home", "tokenomics", "vault", "deposit", "skills"].map((v) => readFileSync(join(pub, `views/${v}.html`), "utf8"))];
+    for (const page of pages) expect(page).not.toMatch(/href="\/skills#/);
   });
 });

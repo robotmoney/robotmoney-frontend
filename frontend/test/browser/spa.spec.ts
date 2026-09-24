@@ -200,15 +200,16 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
   expect(reserved!.filled).toBeLessThan(reserved!.viewport);
 });
 
-test("the skills hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
+test("the deposit hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
-  await navigate(page, "/skills");
+  // /deposit since RM-129; this was /skills, now the index of every skill.
+  await navigate(page, "/deposit");
 
   // The install command is the call to action on this page, so it belongs in
   // the hero beside the headline rather than in a block further down.
   const hero = page.locator(".sk__head");
-  await expect(hero.locator(".sk__title")).toContainText("Agent");
+  await expect(hero.locator(".sk__title")).toContainText("Deposit");
   await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
   await expect(hero.locator(".sk__cta")).toBeVisible();
 

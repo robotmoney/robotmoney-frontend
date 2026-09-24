@@ -1,0 +1,914 @@
+<!-- /deposit: how to deposit into Robot Money (RM-129). Until RM-129 this was
+     /skills, the deposit skill's page, restored from production: hero + install,
+     how it works, the two wallet paths, the twelve-command table, protocol
+     mechanics, verified contract + basket token addresses, and about. Deposit
+     is the site's main action, so the page leads with it; /skills is now the
+     index of every Robot Money skill. The section ids (#how-it-works,
+     #capabilities, #mechanics, #contracts, #about) are unchanged.
+     NO <script>, NO <canvas>, NO custom Alpine factories. -->
+
+<section class="sk container">
+  <header class="sk__head">
+    <div class="sk__head-viz" x-data="treeHero()" aria-hidden="true"></div>
+    <div class="sk__head-inner">
+      <div class="sk__head-copy">
+        <h1 class="sk__title">
+          Deposit <span class="sk__title-accent">USDC</span>
+        </h1>
+        <p class="sk__lede">
+          Your agent deposits with one skill. 95% goes into Fixed Income, the rmUSDC
+          vault lending across Morpho, Aave and Compound on Base, and 5% buys seven
+          Small Cap Tokens that land in your own wallet.
+        </p>
+      </div>
+
+      <!-- The install card sits beside the headline rather than below it: the
+           command IS the call to action on this page, so it belongs in the first
+           screen, not after a scroll. -->
+      <div class="sk__install-card" x-data="{ copied: false }">
+        <div class="sk__install-head">
+          <span class="sk__install-label">install the deposit skill</span>
+        </div>
+        <div class="sk__install-body">
+          <span class="sk__install-prompt" aria-hidden="true">$</span>
+          <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+          <!-- Icon only: the label cost the width the command needs to stay on
+               one line. aria-label carries the meaning, and it flips to a tick
+               on success so the state is not colour-only. -->
+          <button type="button" class="sk__install-copy" :class="copied && 'is-copied'"
+            @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
+            :aria-label="copied ? 'Command copied' : 'Copy the install command'">
+            <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
+              <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
+            </svg>
+            <svg x-show="copied" x-cloak width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.5 8.5l4 4 7-9" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </button>
+        </div>
+        <p class="sk__install-note">
+          Works with Claude Code, Cursor, Codex, and any agent runtime that can run a
+          shell command.
+        </p>
+        <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- How it works -->
+  <div class="sk__section" id="how-it-works">
+    <span class="sk__eyebrow">How it works</span>
+    <h2 class="sk__section-title">Skill loads.<br>Agent acts.</h2>
+    <p class="sk__sec-lede">
+      Robot Money skills give the agent protocol context, route requests through the
+      CLI tool layer, and simulate before any write path reaches your wallet.
+    </p>
+
+    <div class="sk__steps">
+      <div class="sk-step">
+        <span class="sk-step__num">01</span>
+        <h3 class="sk-step__title">Prompt</h3>
+        <p class="sk-step__desc">
+          Ask your agent, for example: &ldquo;deposit 50 USDC into Robot Money.&rdquo;
+        </p>
+      </div>
+      <div class="sk-step">
+        <span class="sk-step__num">02</span>
+        <h3 class="sk-step__title">Skill loads</h3>
+        <p class="sk-step__desc">
+          The agent pulls Robot Money protocol context and the command list into its working memory.
+        </p>
+      </div>
+      <div class="sk-step">
+        <span class="sk-step__num">03</span>
+        <h3 class="sk-step__title">Simulate &rarr; Sign &rarr; Broadcast</h3>
+        <p class="sk-step__desc">
+          The CLI simulates locally for accurate gas, signs via the caller&rsquo;s wallet or OWS,
+          and returns a confirmed transaction hash.
+        </p>
+      </div>
+    </div>
+
+    <ul class="sk__checks">
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Works from agent code</li>
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Simulation-first write flows</li>
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Built on Open Wallet Standard</li>
+    </ul>
+  </div>
+
+  <!-- Two paths -->
+  <div class="sk__section">
+    <span class="sk__eyebrow">Two paths</span>
+    <h2 class="sk__section-title">Bring your own wallet,<br>or bootstrap a fresh one.</h2>
+    <p class="sk__sec-lede">
+      Sign externally with whatever you already use, or let the CLI generate an OWS
+      wallet and sign + broadcast for you.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--paths">
+        <thead>
+          <tr>
+            <th scope="col"><span class="sk-sr">Step</span></th>
+            <th scope="col">With your own wallet</th>
+            <th scope="col">With a fresh OWS wallet</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Setup</th>
+            <td>Nothing: use your existing wallet</td>
+            <td><code>create-wallet --label my-agent</code></td>
+          </tr>
+          <tr>
+            <th scope="row">Fund</th>
+            <td>
+              Your existing wallet with USDC + a small amount of ETH for gas
+              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
+            </td>
+            <td>
+              The generated address with USDC + a small amount of ETH for gas
+              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Deposit</th>
+            <td><code>prepare-deposit</code></td>
+            <td><code>execute-deposit</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sk__table-note">
+      Either flow works with Claude Code, Cursor, Codex, or any agent that can run a
+      shell command.
+    </p>
+  </div>
+
+  <!-- Commands -->
+  <div class="sk__section" id="capabilities">
+    <span class="sk__eyebrow">Commands</span>
+    <h2 class="sk__section-title">Twelve commands.<br>Onboard, earn, exit.</h2>
+    <p class="sk__sec-lede">
+      Everything an agent or machine needs to deposit yield + an agent-token basket,
+      and exit on demand, from your wallet or OWS.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--cmds">
+        <thead>
+          <tr>
+            <th scope="col">Command</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Wallet</th>
+          </tr>
+          <tr>
+            <td><code>create-wallet</code></td>
+            <td>Bootstrap a new Open Wallet Standard (OWS) wallet for an agent or machine</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Read</th>
+          </tr>
+          <tr>
+            <td><code>health-check</code></td>
+            <td>Check RPC connectivity and vault reachability</td>
+          </tr>
+          <tr>
+            <td><code>get-vault</code></td>
+            <td>Full vault state: caps, exit fee, share price, totals, per-adapter breakdown</td>
+          </tr>
+          <tr>
+            <td><code>get-balance</code></td>
+            <td>A user&rsquo;s rmUSDC balance and USDC-equivalent value</td>
+          </tr>
+          <tr>
+            <td><code>get-apy</code></td>
+            <td>Blended APY across Morpho, Aave, and Compound</td>
+          </tr>
+          <tr>
+            <td><code>get-basket-holdings</code></td>
+            <td>Per-token balances + USD values for the 7 agent tokens in the basket</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Prepare</th>
+          </tr>
+          <tr>
+            <td><code>prepare-deposit</code></td>
+            <td>Unsigned calldata for the vault leg (95%) and the Uniswap basket leg (5%), for the caller to sign with their own wallet</td>
+          </tr>
+          <tr>
+            <td><code>prepare-redeem</code></td>
+            <td>Unsigned calldata for the vault redeem and the basket sale; the caller picks how much of the basket to sell</td>
+          </tr>
+          <tr>
+            <td><code>prepare-withdraw</code></td>
+            <td>Unsigned withdrawal by target net USDC amount</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Execute</th>
+          </tr>
+          <tr>
+            <td><code>execute-deposit</code></td>
+            <td>Sign + broadcast deposit (vault + basket) end-to-end via OWS</td>
+          </tr>
+          <tr>
+            <td><code>execute-redeem</code></td>
+            <td>Sign + broadcast redeem (vault + basket sell) end-to-end via OWS</td>
+          </tr>
+          <tr>
+            <td><code>execute-withdraw</code></td>
+            <td>Sign + broadcast a withdrawal end-to-end via OWS</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Mechanics -->
+  <div class="sk__section" id="mechanics">
+    <span class="sk__eyebrow">Mechanics</span>
+    <h2 class="sk__section-title">On-chain, multisig-administered,<br>no operator in the hot path.</h2>
+    <p class="sk__sec-lede">
+      A single ERC-4626 vault on Base routes USDC across blue-chip lending protocols.
+      The basket leg is a separate Uniswap swap in the same deposit: those tokens land
+      in your own wallet, not in the vault.
+    </p>
+
+    <div class="sk__mech">
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">ERC-4626 compliant</h3>
+        <p class="sk-mech__desc">One vault, one share token (rmUSDC). Works with any 4626-aware indexer or integration.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Dynamic equal-weight routing</h3>
+        <p class="sk-mech__desc">Deposits split atomically across Morpho Gauntlet USDC Prime, Aave V3, and Compound V3, so no single protocol holds it all.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Synchronous deposits + withdrawals</h3>
+        <p class="sk-mech__desc">No cooldowns, no locks: a single transaction each way. Redeem returns USDC immediately, minus exit fee.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Exit fee: 0.25%</h3>
+        <p class="sk-mech__desc">The only fee. Taken on withdraw or redeem, enforced in the contract, and it stays in the vault. There is no management fee.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Production caps</h3>
+        <p class="sk-mech__desc">$100,000 TVL cap, $5,000 per-deposit cap. Multisig-administered.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Live blended yield</h3>
+        <p class="sk-mech__desc">APY fetched from the three underlying protocols in real time via <code>get-apy</code>. No manual updates.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Agent-token basket leg</h3>
+        <p class="sk-mech__desc">5% of each deposit routes through Uniswap atomically into 7 agent tokens: VIRTUAL, ROBOT, BNKR, JUNO, ZFI, GIZA, PEAQ. They are sent straight to your own wallet, not to the vault.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">No new contracts for the basket</h3>
+        <p class="sk-mech__desc">The basket leg uses Uniswap&rsquo;s UniversalRouter directly. No protocol fee, no API key, no aggregator middleman.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Contracts -->
+  <div class="sk__section" id="contracts">
+    <span class="sk__eyebrow">Contracts</span>
+    <h2 class="sk__section-title">All on-chain.<br>All verified.</h2>
+    <p class="sk__sec-lede">
+      Every contract verified on BaseScan. Chain: Base (8453).
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--addr">
+        <caption class="sk-table__caption">Protocol</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">RobotMoneyVault</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">MorphoAdapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9" target="_blank" rel="noopener noreferrer">0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">AaveV3Adapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea" target="_blank" rel="noopener noreferrer">0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">CompoundV3Adapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x8247da22a59fce074c102431048d0ce7294c2652" target="_blank" rel="noopener noreferrer">0x8247da22a59fce074c102431048d0ce7294c2652<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Multisig (Admin)</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0" target="_blank" rel="noopener noreferrer">0x88bA7364cC6cE5054981d571b33f8fb3E91475A0<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Seven tokens, per robotmoney-skills packages/cli/src/lib/basket/constants.ts
+         (v0.3.0). The allocation API seed lists a different seven (it carries Woon and
+         DEUS, which the skill does not buy, and drops VIRTUAL and BNKR, which it does).
+         That seed is not the basket. Do not copy it here. -->
+    <h3 class="sk__sub-title">Basket tokens</h3>
+    <p class="sk__sec-lede">
+      5% of each deposit routes through Uniswap directly into these 7 agent tokens.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--addr">
+        <caption class="sk-table__caption">Basket</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">VIRTUAL</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b" target="_blank" rel="noopener noreferrer">0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">ROBOT</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">0x65021a79aeef22b17cdc1b768f5e79a8618beba3<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">BNKR</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b" target="_blank" rel="noopener noreferrer">0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">JUNO</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07" target="_blank" rel="noopener noreferrer">0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">ZFI</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0xd080ed3c74a20250a2c9821885203034acd2d5ae" target="_blank" rel="noopener noreferrer">0xd080ed3c74a20250a2c9821885203034acd2d5ae<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">GIZA</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x590830dfdf9a3f68afcdde2694773debdf267774" target="_blank" rel="noopener noreferrer">0x590830dfdf9a3f68afcdde2694773debdf267774<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">PEAQ</th>
+            <td>
+              <span class="sk-table__sub">address not listed here yet; the skill carries it in its basket constants</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- About -->
+  <footer class="sk__footer" id="about">
+    <span class="sk__eyebrow">About</span>
+    <h2 class="sk__section-title">Autonomous yield<br>for the agent economy.</h2>
+    <p class="sk__footer-text">
+      Once an agent has USDC and ETH on Base, the full deposit &rarr; yield + basket &rarr;
+      withdraw loop runs with no human in the loop: yield across Morpho, Aave, and
+      Compound, and a 5% basket leg into 7 curated agent tokens via Uniswap, in a single
+      prompt, fully permissionless.
+    </p>
+    <div class="sk__footer-links">
+      <a class="sk__footer-link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+      <a class="sk__footer-link" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">Vault on BaseScan</a>
+      <a class="sk__footer-link" href="/skill.md">View SKILL.md</a>
+    </div>
+  </footer>
+</section>
+
+<style>
+.sk {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+.sk-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Header — full-bleed headline band, matching the other nav pages */
+.sk__head {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+  margin-bottom: 3rem;
+}
+/* Canvas host for treeHero(). Behind the content and never interactive, so a
+   click anywhere in the band still lands on the copy or install control. */
+.sk__head-viz { position: absolute; inset: 0; pointer-events: none; }
+.sk__head-inner {
+  position: relative;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  /* start, not center: centring the copy against a taller facing card
+     drops the headline below the offset every other hero pins it to. */
+  align-items: start;
+}
+@media (min-width: 60rem) {
+  /* Wide enough that the 62-character install command sits on one line. */
+  .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 42rem); gap: 2.5rem; }
+}
+.sk__head-copy { min-width: 0; }
+
+.sk__eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.sk__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.75rem;
+  line-height: 1.05;
+  margin: 0 0 1.25rem;
+}
+
+.sk__title-accent {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+
+.sk__lede {
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 0;
+}
+
+/* Install card — the terminal block beside the headline */
+.sk__install-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  min-width: 0;
+}
+
+.sk__install-head {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sk__install-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 1rem;
+}
+
+.sk__install-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+}
+
+.sk__install-prompt {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* The command reads in plain text, not accent. Cyan is the house colour and it
+   already fills the CTA under this line; spending it again on the longest
+   string in the hero is what makes the band feel washed. */
+.sk__install-cmd {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text);
+  /* One line at desktop, where the card is sized for it. Below the breakpoint
+     the card is whatever the phone allows, so wrapping is re-enabled there
+     rather than forcing a sideways scroll. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+/* Below the breakpoint the card is whatever the phone allows, so the command
+   wraps rather than hiding its end behind an ellipsis. After the base rule,
+   which it overrides at the same specificity. */
+@media (max-width: 59.99rem) {
+  .sk__install-cmd { white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
+}
+
+.sk__install-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+/* A secondary button with an icon for a label: the frame goes to the text
+   colour on hover, never to cyan. Copied is the tick, not a hue, so it holds
+   the hover state rather than a colour of its own. */
+.sk__install-copy:hover,
+.sk__install-copy.is-copied { border-color: var(--color-text); }
+
+.sk__install-note {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  margin: 0;
+  padding: 0 1rem 1rem;
+}
+
+/* The install card's action and the page's one labelled button, so it is the
+   primary: .btn-primary's filled cyan and type, at the card's width. */
+.sk__cta {
+  display: block;
+  margin: 0 1rem 1rem;
+  text-align: center;
+  padding: 0.85rem 1.75rem;
+  background: var(--color-accent);
+  color: var(--color-void);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-decoration: none;
+  transition: background-color 0.3s;
+}
+
+.sk__cta:hover { background: #fff; }
+
+/* Card grid */
+
+
+
+
+
+
+
+
+
+/* Inline code: square, bordered, never a cyan mass */
+.sk code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-text);
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  padding: 0.1rem 0.35rem;
+}
+
+.sk-table code { white-space: nowrap; }
+
+/* Wins over the generic `.sk code` styling, which would otherwise draw the
+   command as an inline code chip. Colour is deliberately plain text, see
+   .sk__install-cmd above. */
+.sk .sk__install-cmd {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-text);
+}
+
+/* Sections */
+.sk__section { margin-bottom: 4rem; }
+
+.sk__section-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.75rem;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+}
+
+.sk__sub-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.25rem;
+  margin: 2.5rem 0 0.75rem;
+}
+
+.sk__sec-lede {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 0 0 2rem;
+}
+
+/* How it works: steps */
+.sk__steps {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.sk-step {
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-accent);
+}
+
+.sk-step__num {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.3em;
+  color: var(--color-text-muted);
+}
+
+.sk-step__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.6rem 0 0.5rem;
+}
+
+.sk-step__desc {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.sk__checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 2rem;
+}
+
+.sk-check {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+}
+
+.sk-check__mark {
+  color: var(--color-green);
+  margin-right: 0.5rem;
+}
+
+/* Tables */
+.sk__table-wrap {
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+}
+
+.sk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.sk-table--paths { min-width: 40rem; }
+.sk-table--cmds { min-width: 36rem; }
+.sk-table--addr { min-width: 34rem; }
+
+.sk-table__caption {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  color: var(--color-accent);
+  text-align: left;
+  padding: 0.85rem 1rem 0;
+}
+
+.sk-table thead th {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: bottom;
+}
+
+.sk-table tbody th {
+  font-weight: 600;
+  color: var(--color-text);
+  padding: 0.85rem 1rem;
+  vertical-align: top;
+}
+
+.sk-table tbody td {
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  padding: 0.85rem 1rem;
+  vertical-align: top;
+}
+
+.sk-table tbody tr { border-bottom: 1px solid var(--color-border); }
+.sk-table tbody tr:last-child { border-bottom: 0; }
+
+.sk-table__group th {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  background: var(--color-deep);
+  padding: 0.6rem 1rem;
+}
+
+.sk-table__sub {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  margin-top: 0.35rem;
+}
+
+.sk__table-note {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.sk-addr {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-link);
+  text-decoration: none;
+  word-break: break-all;
+  border-bottom: 1px solid var(--color-link-line);
+  transition: border-color 0.2s;
+}
+
+.sk-addr:hover { border-bottom-color: var(--color-link); }
+
+.sk-addr__ext {
+  margin-left: 0.4rem;
+  color: var(--color-text-muted);
+}
+
+/* Mechanics */
+.sk__mech {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+.sk-mech {
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.sk-mech__title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.sk-mech__desc {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* Footer / About */
+.sk__footer {
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.sk__footer-text {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 0 0 1.5rem;
+}
+
+.sk__footer-links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.sk__footer-link {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.sk__footer-link:hover { color: var(--color-text); }
+
+/* Keyboard focus stays visible everywhere on the page */
+.sk a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+@media (min-width: 700px) {
+  .sk__title { font-size: 3.5rem; }
+  .sk__section-title { font-size: 2.25rem; }
+  .sk__steps { grid-template-columns: repeat(3, 1fr); }
+  .sk__mech { grid-template-columns: 1fr 1fr; }
+  .sk__footer-links { flex-direction: row; flex-wrap: wrap; }
+}
+
+@media (min-width: 1024px) {
+  .sk { padding: 0 2rem 6rem; }
+  .sk__mech { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+}
+</style>

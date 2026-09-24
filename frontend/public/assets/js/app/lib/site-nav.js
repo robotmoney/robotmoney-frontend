@@ -12,7 +12,7 @@
 
 /** @type {Array<{ key: string, prefixes: string[] }>} */
 export const NAV_SECTIONS = [
-  { key: "vaults", prefixes: ["/vault", "/allocation", "/swarm/subjects/robotmoney-vault"] },
+  { key: "vaults", prefixes: ["/vault", "/allocation", "/deposit", "/swarm/subjects/robotmoney-vault"] },
   { key: "swarm", prefixes: ["/swarm", "/committee"] },
   {
     key: "research",
