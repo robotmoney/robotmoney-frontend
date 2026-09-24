@@ -3,8 +3,9 @@
 // live in ./shared.js.
 import { api, ROUTES } from "../../lib/api.js";
 import { scrollToFragment } from "../../router.js";
+import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
-import { PALETTE, MONO_FONT, REGIME, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, MONO_FONT, REGIME, rgba, monoAxis } from "../../lib/chart-theme.js";
 import {
   regimeBandsPlugin,
   alignToDates,
@@ -27,6 +28,15 @@ function signedFig(n, digits, suffix, plus) {
   if (Number(s) === 0) return s + suffix;
   return (n < 0 ? "\u2212" : plus ? "+" : "") + s + suffix;
 }
+
+// The summary cards' panel tips (panelTip below). `reads` is each panel's own
+// description on the indicators page; `count` is that page's count, used only
+// when a snapshot carries no indicator rows to count.
+const PANEL_TIP = {
+  macro: { noun: "macro", count: 8, reads: "rates, credit, the dollar, jobs, volatility", role: "Half of the composite." },
+  onchain: { noun: "on-chain", count: 10, reads: "DeFi TVL, stablecoin float, active addresses, valuation, trend", role: "Half of the composite." },
+  factor: { noun: "equity factor", count: 8, reads: "trend, breadth, momentum, style, valuation", role: "Tracked for context and left out of the composite." },
+};
 
 export function registerRegimeView(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
@@ -58,8 +68,10 @@ export function registerRegimeView(Alpine) {
         this.staleness = data.staleness || null;
         this.loading = false;
         // #composite and #panel-<key> exist only now: a session page links
-        // its market context rows to them.
-        this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); scrollToFragment(); });
+        // its market context rows to them. So do the dashboard's headings,
+        // which the router's rm:view-changed pass (lib/heading-anchors.js)
+        // ran too early to give their section links.
+        this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); enhanceHeadings(this.$root); scrollToFragment(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
@@ -77,6 +89,30 @@ export function registerRegimeView(Alpine) {
     },
     panelLabel(p) { return p === "macro" ? "Macro" : p === "onchain" ? "On-chain" : p === "factor" ? "Equity factor" : p; },
     panelIndex(p) { return this.latest?.[p + "Index"]; },
+
+    // ── summary-card tooltips ───────────────────────────────────────────────
+    // What each top figure is, in the terms the methodology below uses. The
+    // thresholds are read from the snapshot (bucketPct), and a panel's count
+    // from the indicators it actually carries, so a tip cannot state a cut or
+    // a count the rest of the page disagrees with. PANEL_TIP holds the parts
+    // no snapshot carries: what the panel reads (the indicators page's panel
+    // descriptions), its count when the snapshot has no indicator rows, and
+    // its part in the composite.
+    regimeTip() {
+      const lo = this.ordinalPct(+this.bucketPct("risk_off") / 100);
+      const hi = this.ordinalPct(+this.bucketPct("risk_on") / 100);
+      return `Where the composite, the mean of the macro and on-chain indices, ranks in its last 3 years: risk-off below the ${lo} percentile, risk-on above the ${hi}, neutral between. The label switches after 5 consecutive trading days in a new bucket, or on a one-day move over\u00a02σ.`;
+    },
+    panelTip(p) {
+      const t = PANEL_TIP[p];
+      const n = this.indicatorsIn(p).length || t?.count;
+      const what = [n, t ? t.noun : this.panelLabel(p).toLowerCase(), n === 1 ? "indicator" : "indicators"].filter(Boolean).join(" ");
+      return `A weighted mean of ${what}${t ? ` (${t.reads})` : ""}, each a percentile of its own last 3 years: 0 is risk-off, 1 risk-on.${t ? " " + t.role : ""}`;
+    },
+    // An id for a heading whose text is data (a panel or backtest title): the
+    // text, lowercased, with every run of other characters as one hyphen.
+    // "Backtest · ETH / cash" is backtest-eth-cash.
+    slug(s) { return String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); },
     // Rich per-indicator objects come only on the latest (asof) row; historical
     // rows carry the numeric columns + `percentiles` map. Group by panel.
     indicatorsIn(panel) {
@@ -88,6 +124,28 @@ export function registerRegimeView(Alpine) {
     // Stale data is flagged over the charts it froze. No snapshot at all is
     // not stale data: the empty chart in the dashboard's place says it.
     isStale() { return !!(this.staleness && this.staleness.stale && this.staleness.asof != null); },
+    // Days since the latest reading. The server's own count when it sends one
+    // (it knows its date), else from the reading's date against today, UTC.
+    ageDays() {
+      const s = this.staleness;
+      if (s && s.ageDays != null && s.asof === this.latest?.date) return s.ageDays;
+      const d = this.latest?.date;
+      if (!d) return null;
+      const then = Date.parse(d + "T00:00:00Z"), now = new Date();
+      if (!isFinite(then)) return null;
+      return Math.max(0, Math.round((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - then) / 86400000));
+    },
+    // "Updated today", "Updated 1 day ago", "Updated 3 days ago". The date
+    // itself stays on the element as its datetime and its title.
+    updatedText() {
+      const n = this.ageDays();
+      if (n == null) return "";
+      return n === 0 ? "Updated today" : `Updated ${n} day${n === 1 ? "" : "s"} ago`;
+    },
+    dateLong(d) {
+      const t = Date.parse(String(d || "") + "T00:00:00Z");
+      return isFinite(t) ? new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : "";
+    },
     staleMessage() {
       const s = this.staleness;
       if (!s || s.ageDays == null || s.asof == null) return "";
@@ -189,14 +247,14 @@ export function registerRegimeView(Alpine) {
       return v.toFixed(2);
     },
     fmtSigned(v) { return v == null ? "—" : Math.round(v * 100).toString(); },
-    // The reading a sign-aligned percentile gives, at the method's own cuts
-    // (0.33 / 0.67, see bucketPct) rather than at 0.5, which read 44 as
-    // risk-off. It colours the sparkline, a line; the figure beside it stays
-    // in the text colour.
+    // Which side of its median a sign-aligned percentile sits: at or above
+    // 0.5 it leans risk-on, below it risk-off. Indicators have no buckets of
+    // their own (only the composite is bucketed at 0.33 / 0.67), so this is a
+    // lean, not a reading. It colours the sparkline, a line; the figure beside
+    // it stays in the text colour.
     signedColor(v) {
       if (v == null || !isFinite(v)) return PALETTE.textMuted;
-      const lo = +this.bucketPct("risk_off") / 100, hi = +this.bucketPct("risk_on") / 100;
-      return v > hi ? REGIME.risk_on : v < lo ? REGIME.risk_off : REGIME.neutral;
+      return v >= 0.5 ? REGIME.risk_on : REGIME.risk_off;
     },
 
     // Inline-SVG sparkline (percentiles in [0,1]), stroked in the reading its
@@ -239,23 +297,23 @@ export function registerRegimeView(Alpine) {
     fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
     conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
     rhoText(cell) { if (!cell || cell.rho == null) return "—"; return signedFig(cell.rho, 2, "", true); },
-    // A correlation is a figure, not a regime reading, so it takes no regime
-    // hue: the sign glyph leads, a meaningful |ρ| is in the text colour and one
-    // under 0.15 recedes to muted. It used to paint 21 figures cyan.
-    rhoColor(cell) { if (!cell || cell.rho == null) return PALETTE.textMuted; return Math.abs(cell.rho) < 0.15 ? PALETTE.textMuted : PALETTE.text; },
+    // A signed figure, coloured like a delta with its sign glyph first: green
+    // for ρ ≥ +0.15, red for ρ ≤ −0.15, muted under 0.15 (noise). The key is in
+    // the note under the tables. It used to be cyan, which never marks a figure.
+    rhoColor(cell) {
+      if (!cell || cell.rho == null) return PALETTE.textMuted;
+      const r = cell.rho;
+      if (Math.abs(r) < 0.15) return PALETTE.textMuted;
+      return r > 0 ? SERIES.emerald : PALETTE.warn;
+    },
     rhoTitle(cell) { return cell && cell.n != null ? "n = " + cell.n + " paired observations" : ""; },
-    // The span the correlations are measured over, from the history's first
-    // and last dates. n / 252 treated a count of calendar days as trading days
-    // and printed "~12.1y" over 8.4 years of data.
+    // The span the correlations are measured over: n paired observations, one
+    // per calendar day (the history is forward-filled across weekends), so
+    // n / 365.25 years. n / 252 treated them as trading days and printed
+    // "~12.1y" over 8.4 years of data.
     corrSampleMeta() {
-      const h = this.history;
-      let days = 0;
-      if (h.length >= 2) {
-        days = (Date.parse(h[h.length - 1].date + "T00:00:00Z") - Date.parse(h[0].date + "T00:00:00Z")) / 86_400_000;
-      } else {
-        const c = this.latest?.correlations;
-        days = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
-      }
+      const c = this.latest?.correlations;
+      const days = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
       if (!isFinite(days) || days <= 0) return "Spearman ρ";
       const trailing = days >= 365 ? "~" + (days / 365.25).toFixed(1) + "y" : "~" + Math.max(1, Math.round(days / 30.44)) + "mo";
       return "Spearman ρ · trailing " + trailing;

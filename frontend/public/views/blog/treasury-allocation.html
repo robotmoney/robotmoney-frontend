@@ -26,7 +26,7 @@
      as a 3-stroke ladder (cash → diversified HODL → regime composite)
      instead; see the factory's comment for why. -->
 
-<article class="blog-research" x-data="treasuryAllocationCharts()" x-init="load()">
+<article class="blog-research" x-data="treasuryAllocationCharts()" x-init="load()" data-anchors>
   <header class="blog-research__head">
     <div class="blog-research__meta">
       <span class="rm-role">Research</span>
@@ -34,16 +34,16 @@
     </div>
     <h1 class="blog-research__title">Treasury Allocation for On-Chain Businesses</h1>
     <p class="blog-research__lede">Comparing regime-based allocation, HODL, and stable yield across a full market cycle.</p>
-    <p class="rr-note blog-research__note">Research note: not investment advice or an offer to buy or sell any security or digital asset, and Robot Money is not a registered investment advisor. Every figure is a hypothetical backtest, not the return of any fund or tradable instrument. It benefits from hindsight in the choice of indicators and parameters, assumes frictionless execution where costs are not modeled, and does not fully reflect smart-contract, custody, regulatory or counterparty risk. Past performance does not predict future results. <a href="/disclaimer">Full disclaimer</a></p>
+    <p class="rr-note blog-research__note">Research note: not investment advice, not a financial product, and not an offer to buy or sell any security or digital asset. Robot Money publishes this as research and is not a registered investment advisor. Every figure is a hypothetical backtest computed from historical data: not live trading, and not the return of any tradable instrument, fund or managed account. Backtests assume frictionless execution where costs are not modeled and benefit from hindsight in the choice of indicators and parameters. Smart-contract, custody, regulatory and counterparty risks are not fully reflected in these numbers. Past performance, especially backtested, does not predict future results. Consult qualified advisors before making allocation decisions for any treasury, personal or institutional. Source data, methodology and the live snapshot are public on the <a href="/regime">regime page</a>. <a href="/disclaimer">Full disclaimer</a></p>
   </header>
 
   <div class="blog-research__body">
-    <h2>The treasury problem nobody talks about until it&apos;s too late</h2>
+    <h2 id="the-treasury-problem-nobody-talks-about-until-its-too-late">The treasury problem nobody talks about until it&apos;s too late</h2>
     <p>Most on-chain businesses hold their treasury in one of four ways: their own token, ETH or BTC, spot stables, or stablecoin yield (Aave, Compound, similar). Each choice has a real failure mode and there is published evidence for what each one costs over a full cycle.</p>
     <p>The bear that ran from late 2021 through 2022 is the most useful natural experiment in recent memory. ETH drew down ~94% peak-to-trough; most 2021-era project tokens are still down 80–95% from their peaks even now; pure spot stables earned nothing while everything around them moved. Treasuries that didn&apos;t survive that drawdown are the silent majority of the story.</p>
     <p>The question this piece sets out to answer: What does an asset-allocation approach actually offer over the dominant on-chain treasury patterns, and how much of that is genuine risk management versus single-cycle luck?</p>
 
-    <h2>The seven comparison points</h2>
+    <h2 id="the-seven-comparison-points">The seven comparison points</h2>
     <p>We computed 8+ years of daily-rebalanced backtests for the strategies on-chain businesses actually pick between. Numbers from a deterministic, open-source pipeline; sources, code, and live snapshot are on the <a href="/regime">regime page</a>.</p>
 
     <div class="blog-research__scroll">
@@ -100,7 +100,7 @@
     </div>
     <p class="blog-research__fine">* DeFi stable yields are time-varying and not backtested here: lending rates and protocol health change across cycles. † Excludes catastrophic events (depegs, exploits) which historically have caused major drawdowns in this category.</p>
 
-    <h2>Eight years, same terms</h2>
+    <h2 id="eight-years-same-terms">Eight years, same terms</h2>
     <p>Same starting capital ($1), same end date (May 2026), and the figures below are the compounded result for each strategy over that window.</p>
     <div class="blog-research__figure">
       <div class="blog-research__figure-label">Backtest equity curves, $1 starting capital, log scale</div>
@@ -108,7 +108,7 @@
       <p class="blog-research__figure-caption">Regime-based 3-state (ETH+SP500+cash) vs the four baselines in the table above. Monthly-sampled, daily-rebalanced backtest.</p>
     </div>
 
-    <h2>What the backtest actually shows</h2>
+    <h2 id="what-the-backtest-actually-shows">What the backtest actually shows</h2>
     <p>Three things are worth naming explicitly:</p>
     <ul>
       <li><strong>ETH HODL took a 94% drawdown.</strong> For a business treasury that needs to make payroll, that is a non-survivable event. The position eventually recovers, but the practical question is whether the company is still operating when it does. Most weren&apos;t.</li>
@@ -116,7 +116,7 @@
       <li><strong>The 50/50 ETH+SP500 blend already beats single-asset HODL</strong> on a risk-adjusted basis (Sharpe 0.67 vs 0.58 for ETH-only). This is the simplest possible diversification, and it is already a material improvement before any tactical overlay.</li>
     </ul>
 
-    <h2>The return-attribution view</h2>
+    <h2 id="the-return-attribution-view">The return-attribution view</h2>
     <p>The headline 25% CAGR comes from two stacked effects, and a treasury reader benefits from knowing where each one is doing the work. Attributing the regime composite&apos;s growth back to those two sources splits it as follows.</p>
     <div class="blog-research__figure">
       <div class="blog-research__figure-label">Return attribution: cash → diversified HODL → regime composite</div>
@@ -128,7 +128,7 @@
     <p><strong>The regime overlay is the second.</strong> It is the additional return earned by tactically moving to cash during risk-off regime calls, and its behaviour over time is the real story: negligible in calm periods, largest during the 2022 drawdown (the regime kept capital in cash while HODL fell), then shrinking steadily as HODL catches up during the recovery. What remains today is the lead the overlay still has, currently +17% over straight HODL, down from a peak of +136% at the end of 2022.</p>
     <p>Both effects matter, but for different reasons. Diversification is what gets you above the &ldquo;cash forever&rdquo; baseline at all, and that is most of the return premium for a business that needs growth. The overlay is insurance: it pays out during the bad cycle quarters and you pay a small carry cost during the good ones. A treasury that ignores either is leaving real value on the table.</p>
 
-    <h2>Decomposing the two effects</h2>
+    <h2 id="decomposing-the-two-effects">Decomposing the two effects</h2>
     <p>Same idea, structured as a 2×2 attribution table. Read across rows for the diversification effect (going from ETH to 50/50); read down columns for the regime overlay effect (adding tactical cash overlay).</p>
 
     <div class="blog-research__scroll">
@@ -168,7 +168,7 @@
     <p><strong>By Sharpe contribution</strong>, regime overlay does 70% (+0.21 of +0.30 total improvement). Diversification does 30%.</p>
     <p><strong>By drawdown protection</strong>, the two effects split roughly evenly: diversification 42% (−94 → −73, saves 21pp), regime overlay 58% (−73 → −44, saves another 29pp).</p>
 
-    <h2>Performance through each cycle phase</h2>
+    <h2 id="performance-through-each-cycle-phase">Performance through each cycle phase</h2>
     <p>The 8-year aggregate hides when each strategy worked and when it didn&apos;t. The honest read is in the phase-by-phase breakdown, particularly for a treasury whose survival depends on what happens in any single phase, not what averages out.</p>
 
     <div class="blog-research__scroll">
@@ -224,7 +224,7 @@
     <p class="blog-research__fine">Each cell: annualized CAGR over the phase / max drawdown within the phase. Phase boundaries are calendar-defined, not optimized.</p>
     <p>The pattern is consistent across all three regime portfolios (ETH-only, SP500-only, Mixed): <strong>composite wins decisively in drawdown periods, ties in mania periods, loses meaningfully during recoveries and benign out-of-sample windows.</strong> The 8-year aggregate win is essentially built up across two events (late 2018 + 2020 COVID, and 2022) and partially given back during the recoveries that follow.</p>
 
-    <h2>The lead is shrinking</h2>
+    <h2 id="the-lead-is-shrinking">The lead is shrinking</h2>
     <p>Tracking the composite&apos;s cumulative advantage over the 50/50 HODL baseline through each phase makes the &ldquo;insurance&rdquo; framing concrete:</p>
 
     <div class="blog-research__scroll">
@@ -249,7 +249,7 @@
     </div>
     <p>The composite&apos;s edge peaked at 2.36× at end-2022 and has been narrowing ever since. This is the visible cost of carrying tail protection when no tail event is materializing. Whether the strategy &ldquo;works&rdquo; from here depends on whether the next 1–4 years contain another fat-tail event before HODL fully closes the gap. An honest treasury can&apos;t know in advance which world it is in.</p>
 
-    <h2>Honest limitations</h2>
+    <h2 id="honest-limitations">Honest limitations</h2>
     <ul>
       <li><strong>Single cycle.</strong> 2018–2026 covers roughly two full crypto cycles. The 2022 ETH drawdown drives a large fraction of the overlay&apos;s benefit. Strategies dependent on rare fat-tail events behave well in samples that contain such events and may behave less well in samples that don&apos;t.</li>
       <li><strong>Backtest, not deployment.</strong> Real execution introduces slippage, gas costs, custody overhead, and behavioural drift. Each of these reduces realized vs backtested performance.</li>
@@ -258,7 +258,7 @@
       <li><strong>Daily-rebalanced HODL assumption.</strong> The 50/50 HODL baseline assumes daily rebalancing with zero friction, which captures the full rebalancing premium between two volatile assets. A realistic 50/50 with monthly rebalancing and small friction would capture roughly half of that premium, narrowing the diversification effect somewhat.</li>
     </ul>
 
-    <h2>What this is and isn&apos;t</h2>
+    <h2 id="what-this-is-and-isnt">What this is and isn&apos;t</h2>
     <p>This is a public research artifact: open data, open code, deterministic computation, one-page methodology. It is not a fund, a managed account, a token offering, a financial product, or a recommendation. We publish it because we think the comparison itself is undervalued in on-chain treasury discussions. Most teams default to &quot;hold our own token&quot; or &quot;hold ETH&quot; without ever pricing the alternative, and the alternative is meaningfully different over a full cycle.</p>
     <p>Anyone interested in the underlying mechanics (indicators, weights, regime smoothing, correlation analysis) can see the live dashboard, methodology, and snapshot on the <a href="/regime">regime page</a>.</p>
 

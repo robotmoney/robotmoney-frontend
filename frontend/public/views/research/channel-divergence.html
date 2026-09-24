@@ -8,7 +8,7 @@
      Fragment only: NO <script>, NO custom Alpine factories beyond the existing
      researchView, NO <html>/<head>/<body>. -->
 
-<section class="rs rs--divergence container" x-data="researchView('channel-divergence')" x-init="load()">
+<section class="rs rs--divergence container" x-data="researchView('channel-divergence')" x-init="load()" data-anchors>
   <header class="rs__head">
     <div class="rs__eyebrow">Research preview</div>
     <h1 class="rs__title">Is the macro&ndash;to&ndash;crypto channel breaking?</h1>
@@ -23,7 +23,7 @@
       on-chain panel.
     </p>
     <p class="rs__asof" x-show="payload" x-cloak>
-      Readings as of <span x-text="payload?.asof"></span>.
+      Readings as of <span x-text="payload?.asof"></span>. They complement the regime composite and are not part of it.
     </p>
   </header>
 
@@ -52,7 +52,7 @@
   </template>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">Long-run reference</h2>
+    <h2 class="rs__h2" id="long-run-reference">Long-run reference</h2>
     <!-- The READING column that used to sit beside these medians was hardcoded
          at authoring time and drifted against the live panel above (0.52 vs
          0.479, 7% vs 5.9%, -5.9% vs -7.1% on 2026-08-03), while its caption
@@ -90,7 +90,7 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">BTC &beta; vs risk-appetite factor</h2>
+    <h2 class="rs__h2" id="btc-beta-vs-risk-appetite-factor">BTC &beta; vs risk-appetite factor</h2>
     <p class="rs__p">
       90-day rolling OLS beta of BTC daily returns regressed on (QQQ &minus; SPY) daily
       returns. The (QQQ &minus; SPY) spread isolates the high-beta-tech component: when
@@ -118,7 +118,7 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">BTC / QQQ relative-strength percentile</h2>
+    <h2 class="rs__h2" id="btc-qqq-relative-strength-percentile">BTC / QQQ relative-strength percentile</h2>
     <p class="rs__p">
       BTC/QQQ price ratio, 3-year rolling percentile rank. A direct race between &ldquo;buy
       BTC&rdquo; and &ldquo;buy the AI-tech basket.&rdquo; Below the 50th percentile and falling
@@ -141,7 +141,7 @@
   </section>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">Stablecoin float growth vs QQQ growth (90d)</h2>
+    <h2 class="rs__h2" id="stablecoin-float-growth-vs-qqq-growth-90d">Stablecoin float growth vs QQQ growth (90d)</h2>
     <p class="rs__p">
       90-day percent change in total stablecoin float minus 90-day percent change in QQQ price.
       A direct flow proxy: are speculative dollars showing up as new stables (crypto rails) or
@@ -165,7 +165,7 @@
   </section>
 
   <section class="rs__sec rs__panel">
-    <h2 class="rs__h2">How this would feed the regime composite</h2>
+    <h2 class="rs__h2" id="regime-composite">How this would feed the regime composite</h2>
     <p class="rs__p">
       These three indicators belong in the on-chain panel. When risk-on macro is loud (macro
       panel &gt; 0.7) but the channel indicators are weak (e.g., BTC &beta; &lt; 0.5&times; its
