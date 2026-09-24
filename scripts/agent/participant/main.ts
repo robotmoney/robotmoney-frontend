@@ -60,8 +60,14 @@ import type { ParticipantKind } from "../../lib/swarm/credential-file.ts";
  * The work queue this participant polls (spec §6.2). Session coordinates only:
  * the participant fetches its own context over REST afterwards, exactly the way
  * an outside member's deployment does.
+ *
+ * IT IS THE CONTRACT'S PATH NOW, not a literal declared here — issue #1026 W4.
+ * A client-side constant is never compared against the server's route table, so
+ * a participant whose path did not exist polled a 404 for ever and read it as
+ * "no work": silent, indefinite, and invisible to every test on either side.
+ * Re-exported under the old name so importers keep working.
  */
-export const PARTICIPANT_PENDING_PATH = "/api/swarm/participants/pending";
+export const PARTICIPANT_PENDING_PATH: string = ROUTES.swarm.participants.pending;
 
 /**
  * Environment names the compose `participant` profile injects. RM_API_URL /

@@ -36,7 +36,12 @@ DECLARE
     'swarm_briefs', 'swarm_subjects', 'swarm_session_events', 'swarm_session_members',
     'swarm_subject_snapshots', 'swarm_session_judgements', 'swarm_consensus_receipts',
     'swarm_member_keys', 'swarm_applications', 'audit_log', 'agent_activity_log',
-    'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events'
+    'regime_snapshots', 'schema_migrations', 'analytics_overwrite_events',
+    -- Issue #1026 W4, migration 0072: the epoch scheduler's event log and its
+    -- pushed-job ledger. Both are append-only for the same reason — a removed
+    -- row destroys the guarantee the other side reads (a gapless sequence, a
+    -- durable idempotency key).
+    'swarm_stream_events', 'swarm_scheduler_jobs'
   ];
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
   -- back. 0056 revoked ALL on `analytics_overwrite_events` from rm_app/rm_worker;

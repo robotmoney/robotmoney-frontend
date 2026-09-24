@@ -156,11 +156,17 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     //   0070 — W4.4's `swarm_scheduler_jobs`, the ad-hoc jobs the API pushes on
     //          the scheduler subscription (scheduler spec §6.3). Rows are never
     //          deleted, because the idempotency key has to outlive the ack.
+    //   0072 — W4's removal half: it DELETES the five retired `swarm.*`
+    //          `job_schedules` rows (scheduler spec §12; there are no schedule
+    //          rows any more) and makes 0068's and 0070's logs append-only,
+    //          because a deleted row in the event log IS the gap §6.3 defines
+    //          as proof the clock is stale.
     "0066_drop_swarm_notifications.sql",
     "0067_subject_epoch_duration.sql",
     "0068_session_epoch_lifecycle.sql",
     "0069_automation_tokens.sql",
     "0070_swarm_scheduler_jobs.sql",
+    "0072_drop_swarm_schedules.sql",
   ];
 
   test("nothing this release shipped is also claimed as a later arrival", () => {

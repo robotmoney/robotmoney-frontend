@@ -252,6 +252,13 @@ export const APPEND_ONLY_TABLES = [
   "regime_snapshots",
   "schema_migrations",
   "analytics_overwrite_events",
+  // Issue #1026 W4: the epoch scheduler's two logs. `swarm_stream_events` is
+  // the log §6.3's gap rule rests on — a deleted row IS a gap, and one the
+  // scheduler cannot tell from a lost frame. `swarm_scheduler_jobs` holds the
+  // idempotency keys, and a guarantee that disappears when the work finishes
+  // lets the same key back in as fresh work (migration 0070's header).
+  "swarm_stream_events",
+  "swarm_scheduler_jobs",
 ] as const;
 
 export type AppendOnlyTable = (typeof APPEND_ONLY_TABLES)[number];
@@ -275,6 +282,7 @@ export const APPEND_ONLY_MIGRATIONS = [
   "0042_swarm_consensus_receipts.sql",
   "0050_swarm_member_keys_append_only.sql",
   "0056_analytics_overwrite_events.sql",
+  "0072_drop_swarm_schedules.sql",
 ] as const;
 
 /**
@@ -324,6 +332,12 @@ export const APPEND_ONLY_TABLE_MIGRATION: Record<
   // written: 0056 both CREATES this table and installs its own ENABLE ALWAYS
   // triggers, so it is its own opt-in migration.
   analytics_overwrite_events: "0056_analytics_overwrite_events.sql",
+  // 0068 and 0070 CREATED these two; 0072 is what opts them in, so 0072 is the
+  // migration a database must have reached before the guard expects triggers on
+  // them. Pointing at their creating migration instead would make every
+  // database between 0068 and 0072 report a disarmed guard.
+  swarm_stream_events: "0072_drop_swarm_schedules.sql",
+  swarm_scheduler_jobs: "0072_drop_swarm_schedules.sql",
 };
 
 /** The two trigger names migration 0032 installs on each protected table. */

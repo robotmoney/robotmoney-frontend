@@ -72,6 +72,7 @@ export const ROUTES: {
       jobAck: string;
     };
     participants: {
+      pending: string;
       judgeSubscribe: string;
       judgement: string;
     };

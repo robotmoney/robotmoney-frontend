@@ -87,7 +87,8 @@
     "0067_subject_epoch_duration.sql",
     "0068_session_epoch_lifecycle.sql",
     "0069_automation_tokens.sql",
-    "0070_swarm_scheduler_jobs.sql"
+    "0070_swarm_scheduler_jobs.sql",
+    "0072_drop_swarm_schedules.sql"
   ],
-  "contentHash": "6937680e0fe76621b0d42d111349f762cd116f2ecd3377abb7cff1f7fa3c4288"
+  "contentHash": "027990f8ebe07ad6e8ba2565566309599773886012660ac2e13efdbb72969c7c"
 }

@@ -212,6 +212,13 @@ export const ROUTES = {
     // not submitted — on every connect, so it carries no cursor and no sequence
     // and is not the scheduler's stream above.
     participants: {
+      // The AGENT's side of §6.2: agents poll, judges subscribe. This path was
+      // a literal inside scripts/agent/participant/main.ts, which is why a
+      // standing participant could poll a 404 for ever and read it as "no
+      // work" — a client-side constant cannot be compared against the server's
+      // route table, and nothing did. It belongs here, where both sides read
+      // the same string.
+      pending: "/api/swarm/participants/pending", // GET ?member=<id> (member bearer) → { pending: PendingWork | null }
       judgeSubscribe: "/api/swarm/participants/judge/subscribe", // GET (judge bearer) → text/event-stream: pending | keepalive
       judgement: "/api/swarm/participants/judgement", // POST (judge bearer) { sessionId, opinion, … }
     },

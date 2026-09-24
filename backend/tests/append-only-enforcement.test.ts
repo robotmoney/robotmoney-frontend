@@ -157,6 +157,19 @@ beforeAll(async () => {
             ${sql.json({ schema_version: "1.0", session_id: SESSION, subject_id: SUBJECT } as never)},
             ${"robotmoney:consensus-receipt:v1\n{\"schema_version\":\"1.0\"}\n"})`;
   await sql`INSERT INTO swarm_applications (payload) VALUES ('{}'::jsonb)`;
+  // Issue #1026 W4, migration 0072: the epoch scheduler's two logs. Seeded for
+  // the same reason as everything else here — an empty table would pass the
+  // "the rows survive" assertions for the wrong reason. `swarm_stream_events`
+  // assigns `seq` by hand in the production path (an advisory lock plus
+  // MAX(seq)+1, so the sequence is gapless and in commit order), so the fixture
+  // does the same rather than relying on a default that does not exist.
+  await sql`
+    INSERT INTO swarm_stream_events (seq, kind, subject_id, session_id, payload)
+    VALUES ((SELECT COALESCE(MAX(seq), 0) + 1 FROM swarm_stream_events),
+            'subject.changed', ${SUBJECT}, NULL, '{"reason":"append-only-probe"}'::jsonb)`;
+  await sql`
+    INSERT INTO swarm_scheduler_jobs (kind, target, idempotency_key)
+    VALUES ('probe.kind', ${SUBJECT}, 'append-only-probe-key')`;
   await sql`INSERT INTO audit_log (actor, action) VALUES ('append-only-test', 'probe')`;
   await sql`INSERT INTO agent_activity_log (action_type, status) VALUES ('probe', 'success')`;
   await sql`INSERT INTO regime_snapshots (date) VALUES ('2031-01-02')`;

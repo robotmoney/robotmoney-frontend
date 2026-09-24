@@ -600,6 +600,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.scheduler.fullRead]: "scheduler automation token only; an internal snapshot for one client",
   [ROUTES.swarm.scheduler.subscribe]: "scheduler automation token only; a long-lived event-stream, not a document",
   [ROUTES.swarm.scheduler.jobAck]: "scheduler automation token only; a write that retires pushed work",
+  [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
   [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
   [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
 };

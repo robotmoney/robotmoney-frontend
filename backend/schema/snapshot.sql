@@ -5366,6 +5366,24 @@ ALTER TABLE public.swarm_recommendations ENABLE ALWAYS TRIGGER swarm_recommendat
 
 
 --
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_scheduler_jobs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_scheduler_jobs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only;
+
+
+--
+-- Name: swarm_scheduler_jobs swarm_scheduler_jobs_append_only_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_scheduler_jobs_append_only_row BEFORE DELETE ON public.swarm_scheduler_jobs FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_scheduler_jobs ENABLE ALWAYS TRIGGER swarm_scheduler_jobs_append_only_row;
+
+
+--
 -- Name: swarm_session_events swarm_session_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5435,6 +5453,24 @@ ALTER TABLE public.swarm_sessions ENABLE ALWAYS TRIGGER swarm_sessions_append_on
 CREATE TRIGGER swarm_sessions_append_only_row BEFORE DELETE ON public.swarm_sessions FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.swarm_sessions ENABLE ALWAYS TRIGGER swarm_sessions_append_only_row;
+
+
+--
+-- Name: swarm_stream_events swarm_stream_events_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_stream_events_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_stream_events FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only;
+
+
+--
+-- Name: swarm_stream_events swarm_stream_events_append_only_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_stream_events_append_only_row BEFORE DELETE ON public.swarm_stream_events FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
+
+ALTER TABLE public.swarm_stream_events ENABLE ALWAYS TRIGGER swarm_stream_events_append_only_row;
 
 
 --
