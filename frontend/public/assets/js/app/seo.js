@@ -30,9 +30,15 @@ const META = {
     title: "Robot Money — Autonomous Treasury for the Agent Economy",
     description: "Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime.",
   },
+  // /deposit is the site's main action (RM-129); until then it was /skills,
+  // which is now the index of every Robot Money agent skill.
+  "/deposit": {
+    title: "Deposit USDC with Your Agent | Robot Money",
+    description: "Deposit USDC into Robot Money from any AI agent with one skill: 95% into Fixed Income (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, minus a 0.25% exit fee.",
+  },
   "/skills": {
-    title: "Robot Money Skill — MCP Agent Vault Docs",
-    description: "Install the Robot Money skill into any MCP agent runtime. One USDC deposit splits 95% into a multi-protocol yield vault and 5% into a 6-token agent basket.",
+    title: "Agent Skills | Robot Money",
+    description: "Robot Money's agent skills: the deposit skill (robotmoney-cli) for depositing into and withdrawing from the vault, and the swarm onboarding skill for taking a seat in the investment swarm.",
   },
   "/tokenomics": {
     title: "$ROBOTMONEY Tokenomics & Governance — Robot Money",

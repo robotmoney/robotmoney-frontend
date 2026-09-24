@@ -28,46 +28,31 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2.25rem 1.5rem;
 }
-.footer__col--brand { grid-column: 1 / -1; }
 
 /* <div className="space-y-4 ..."> — vertical rhythm between direct children */
 .footer__col > * + * {
   margin-top: 0.9rem; /* reduced from space-y-4 */
 }
 
-/* <div className="flex items-center gap-3"> */
+/* The brand row: the lockup and the tagline on one line, split by a hairline.
+   On a phone the tagline goes under the lockup. */
 .footer__brand {
   display: flex;
-  align-items: center;
-  gap: 0.75rem; /* gap-3 */
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.875rem;
+  margin-bottom: 2.75rem;
 }
-
-.footer__logo {
-  display: block;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-}
-
-/* <span className="font-mono text-sm tracking-wider"> */
-.footer__wordmark {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.1rem;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-/* <p className="text-xs text-[var(--color-text-muted)] leading-relaxed"> */
-.footer__about {
+.footer__lockup { display: block; line-height: 0; }
+.footer__lockup img { display: block; height: 32px; width: auto; }
+.footer__tagline {
   margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  max-width: 42ch;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  color: var(--color-text-soft);
 }
 
-/* Inline links inside the about copy. Monochrome, like every text link on
+/* Inline links inside the copyright line. Monochrome, like every text link on
    the site (David, 2026-09-18): a step lighter than the muted paragraph, over
    a neutral rule that goes to the link's own colour on hover. Never cyan. */
 .footer__about-link {
@@ -165,6 +150,8 @@
 
 /* ── md: breakpoint (Tailwind md = 768px) ── */
 @media (min-width: 768px) {
+  .footer__brand { flex-direction: row; align-items: center; gap: 1.5rem; }
+  .footer__tagline { padding-left: 1.5rem; border-left: 1px solid var(--color-border); }
   .footer__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 2rem; }
   /* md:flex-row + md:text-left on the bottom bar; the disclaimer wraps to
      its own line */
