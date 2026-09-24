@@ -28,6 +28,16 @@ export const ROUTES = {
   // object also rides on /health as `build`, so an existing health check gains
   // the identity without a second request.
   version: "/version",
+  // GET — the API's CONTRACT version, `{api, commit}` (D54). `api` is
+  // contract/package.json's version: the version of THIS file's route table
+  // and the DTOs beside it, which is what a separately deployed website has to
+  // agree with. `/version` above answers "which build is this process"; this
+  // answers "which API does it speak". The site declares the range it accepts
+  // (frontend/package.json `apiRange`, carried in its /version.json) and checks
+  // this at load. Unauthenticated and database-free by construction, so it
+  // still answers while Postgres is down. Under /api/ so website-server's
+  // existing /api/ proxy carries it with no new nginx rule.
+  apiVersion: "/api/version",
 
   comments: {
     list: "/api/comments", // GET ?page=

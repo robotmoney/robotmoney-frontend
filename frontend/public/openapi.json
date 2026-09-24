@@ -79,6 +79,30 @@
         }
       }
     },
+    "/api/version": {
+      "get": {
+        "operationId": "getApiVersion",
+        "summary": "Which API contract version this deployment speaks",
+        "description": "Returns `api`, the semver version of the published @robotmoney/contract package this API serves, and `commit`, the build commit (null when the image was built without one). The version moves whenever a route or response shape changes, so a client can compare it against the range it was written for before calling anything else. Needs no credential and answers even while the database is down.\n\nResponse size: under 100 B.\n\nResponse type: `{ api, commit }` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-contract-type": "{ api, commit }",
+        "responses": {
+          "200": {
+            "description": "Which API contract version this deployment speaks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "{ api, commit }"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/vault-economics": {
       "get": {
         "operationId": "getVaultEconomics",

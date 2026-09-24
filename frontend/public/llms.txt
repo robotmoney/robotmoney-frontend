@@ -48,6 +48,7 @@ Source code is public and clonable: [github.com/robotmoney/robotmoney-frontend](
 
 Every number on this site is served by these endpoints. They answer a plain GET with JSON and need no authentication. Full description: [openapi.json](https://robotmoney.network/openapi.json). Check [/health](https://robotmoney.network/health) first: an `env` other than `prod` means demo or staging data.
 
+- [https://robotmoney.network/api/version](https://robotmoney.network/api/version): Which API contract version this deployment speaks. Under 100 B.
 - [https://robotmoney.network/api/dashboards/vault-economics](https://robotmoney.network/api/dashboards/vault-economics): rmUSDC vault TVL, share price, APY and per-adapter split. About 1 KB.
 - [https://robotmoney.network/api/dashboards/allocation](https://robotmoney.network/api/dashboards/allocation): Target allocation: strategy sleeves and bucket weights. About 1 KB.
 - [https://robotmoney.network/api/dashboards/wallet-sleeves](https://robotmoney.network/api/dashboards/wallet-sleeves): Per-wallet holdings grouped into the allocation sleeves. About 2 KB.

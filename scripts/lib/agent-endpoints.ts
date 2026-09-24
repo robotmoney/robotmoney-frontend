@@ -96,6 +96,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getApiVersion",
+    method: "GET",
+    path: ROUTES.apiVersion,
+    summary: "Which API contract version this deployment speaks",
+    description:
+      "Returns `api`, the semver version of the published @robotmoney/contract package this API serves, and `commit`, the build commit (null when the image was built without one). The version moves whenever a route or response shape changes, so a client can compare it against the range it was written for before calling anything else. Needs no credential and answers even while the database is down.",
+    backs: [],
+    contractType: "{ api, commit }",
+    sizeHint: "under 100 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
