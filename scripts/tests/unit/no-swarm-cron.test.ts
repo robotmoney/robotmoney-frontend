@@ -309,7 +309,11 @@ describe("the docs name `schedules:enable` only in amendment rows that record it
 
   test("RED CONTROL: the name in a §2 tool list fails", () => {
     const text = real().replace("## 2. Target-lock protocol\n", "## 2. Target-lock protocol\n\n- `bun run schedules:enable`\n");
-    expect(misplaced(text, ENABLE_COMMAND)).toEqual(["line 74: - `bun run schedules:enable`"]);
+    // The planted line's number is derived from the text, so an unrelated spec
+    // edit above §2 does not move the expected report.
+    const plantedLine = text.split("\n").indexOf("- `bun run schedules:enable`") + 1;
+    expect(plantedLine).toBeGreaterThan(1);
+    expect(misplaced(text, ENABLE_COMMAND)).toEqual([`line ${plantedLine}: - \`bun run schedules:enable\``]);
   });
 
   test("RED CONTROL: prose INSIDE an amendments section fails — only its table rows may record the removal", () => {
