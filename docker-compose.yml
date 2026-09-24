@@ -436,8 +436,6 @@ services:
         AUM_PRODUCER_REVISION: ${AUM_PRODUCER_REVISION:-}
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
-      
-      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL}
       ANALYTICS_API_URL: http://api:8787
       ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}

@@ -110,11 +110,8 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 // A stack-owned value an operator's environment can no longer shadow, paired with
 // the reason its presence is worth a line of output rather than silence.
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
-  [
-    "the worker lanes take the stack's own DATABASE_URL (the twin, under --db smoke-twin). " +
-      "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
-      "not have, and every lane died in DNS while the boot reported only unhealthy workers",
-  ],
+  // WORKER_DATABASE_URL left this list in v0.5.0 (ec261867): an --db external
+  // boot takes the deployment's rm_worker URL through DEMO_COMPOSE_PASSTHROUGH.
 ];
 
 /**
