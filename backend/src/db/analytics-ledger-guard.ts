@@ -12,7 +12,7 @@
 // evidence ledger (not merely the older swarm/audit history) is protected.
 import type postgresTypes from "postgres";
 import { sql } from "./client.ts";
-import { createNamespaceGuardClient } from "./handle-namespace.ts";
+import { createNamespaceGuardClient } from "./guard-client.ts";
 
 export type AnalyticsLedgerDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 

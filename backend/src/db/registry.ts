@@ -3,7 +3,7 @@
 //
 // Implemented (issue #1026 W2): registration, enumeration and the fold check 2
 // reads are all live, and application modules register their call sites here
-// at module level — `src/swarm/judge-config.ts` is the first. Governed by
+// at module level and issue them through `on(...)` below. Governed by
 // smoke-production-spec.md §7.1, with §7 check 2 as its main consumer; a
 // declaration's `callers` are also read by the tests that pin who may reach a
 // write (smoke-production-spec.md §6.2: "nothing but the admin route writes
@@ -54,22 +54,30 @@
 //
 // Two enforcement halves, both W2.3's gate ("registry structurally enforced"):
 //
-//   1. A lint test greps for tagged-template `sql` usage outside this module
-//      and the small set of files allowed to construct a pool. A raw statement
-//      anywhere else fails the build. This is what makes the registry complete
-//      rather than merely populated.
+//   1. tests/db-registry.test.ts parses every module under `src/` and treats
+//      every tagged template as a statement, whatever its handle is called and
+//      whether or not it carries a type argument, unless its tag is a call of
+//      `on(...)` imported from this module; every `.unsafe(...)` call counts
+//      too. A raw statement outside the db layer's named infrastructure files
+//      (pools, this module, migrate, target lock, preflight, schema-*, the two
+//      append-only boot guards) and outside the dated allowlist fails the build. The
+//      allowlist is a ratchet that only shrinks. This is what makes the
+//      registry complete rather than merely populated, and it is complete only
+//      once that allowlist is empty.
 //   2. `registeredSites()` below enumerates every declaration the process has
-//      made, so the same test can assert that each one names a role that
-//      exists, an object that exists in the snapshot (§8.1), and a privilege
-//      Postgres recognises — and so `requiredPrivileges()` can fold them into
-//      the (role → object → privileges) map preflight check 2 compares against
+//      made, so the same test can assert that each one names a §3 role, an
+//      object the schema snapshot (§8.1) creates, and callers that are real
+//      modules — and so `requiredPrivileges()` can fold them into the
+//      (role → object → privileges) map preflight check 2 compares against
 //      `has_table_privilege`.
 //
-// Enumeration is only as complete as the module graph that has been imported,
-// which is why the lint test imports the application entry points (`api`,
-// `worker`, `worker-analytics`) before calling `registeredSites()`. A registration
-// that happens lazily inside a function body is therefore invisible to CI;
-// registrations are module-level by convention and the lint test pins that too.
+// Enumeration is only as complete as the module graph that has been imported.
+// The test therefore does not read "whatever is registered so far": it finds
+// every module whose source calls `registerQuery`, imports each one itself,
+// and reads back the sites that module owns, so its answer does not depend on
+// which test file ran first. A registration made lazily inside a function body
+// would be invisible to that enumeration and to preflight; registrations are
+// module-level by convention, and the test pins that from the source too.
 import type postgresTypes from "postgres";
 
 /**
@@ -223,6 +231,66 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
   bySite.set(frozen.site, query);
   order.push(frozen);
   return query;
+}
+
+/**
+ * A registered site as a tag, so a statement reads as SQL rather than as a call:
+ *
+ *   const rows = await on(sql, readConfig)<{ mode: string }>`SELECT mode FROM swarm_judge_config`;
+ *
+ * Inputs: the handle to run on (the pool or a transaction), the registered
+ * site, and — for a statement that touches more than one relation — the
+ * declarations for the others. Output: a tagged template that forwards to
+ * `query.run`. `T` is the ROW type, not the row-array type a bare postgres.js
+ * tag takes.
+ *
+ * A JOIN IS SEVERAL DECLARATIONS. `QueryDeclaration.object` is one relation,
+ * because check 2 tests privileges per relation, so a statement reading
+ * `agent_activity_log` joined to `openclaw_agents` needs a declaration for
+ * each. The statement runs through the first; the rest are named here so the
+ * call site shows every relation it is covered for:
+ *
+ *   on(sql, activityRows, activityAgents)<Row>`SELECT ... FROM agent_activity_log LEFT JOIN openclaw_agents ...`
+ *
+ * ONE STATEMENT, SEVERAL ROLES, is the same shape. A declaration's `role` is
+ * the role of the program that issues the statement, so a statement reached
+ * from programs that connect as different roles (the api on `rm_app`, an
+ * operator CLI on `rm_owner`, a worker handler on `rm_worker`) declares once
+ * per role and names the others here. The runner does not know which role the
+ * handle holds; check 2 needs every role's requirement recorded.
+ *
+ * WHY IT LIVES HERE. The structural lint (tests/db-registry.test.ts) treats
+ * every tagged template outside the db layer as a raw statement unless its tag
+ * is a call of THIS function, imported from this module. That is what lets the
+ * lint match on the permitted shape instead of on a list of handle names: a
+ * handle can be called anything (`sql`, `tx`, `h`, `handle`), but the one way
+ * to issue a statement without declaring it is to tag a template with
+ * something other than `on(...)`.
+ */
+export function on(db: RegistryDb, query: RegisteredQuery, ...joined: readonly RegisteredQuery[]) {
+  // IDENTITY, NOT A SITE NAME. The structural lint accepts any tag that is a
+  // call of this function, so this function is the only thing standing between
+  // `on(...)` and an undeclared statement. A caller can hand it an object
+  // literal shaped like a RegisteredQuery — `{ declaration: { site: 'x' }, run }`
+  // — whose `run` issues whatever it likes. Checking that the site id is known
+  // would not stop that either: a forgery can copy a real site id and still
+  // carry its own `run` or a different object. So every query handed in, the
+  // primary one included, must be the exact runner `registerQuery` returned for
+  // that site, or nothing runs.
+  for (const candidate of [query, ...joined]) assertRegistered(candidate, query);
+  return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> =>
+    query.run<T>(db, strings, ...values);
+}
+
+/** Refuse anything but the runner `registerQuery` handed back for its site. */
+function assertRegistered(candidate: RegisteredQuery, primary: RegisteredQuery): void {
+  const site = (candidate as Partial<RegisteredQuery> | undefined)?.declaration?.site;
+  if (typeof site === "string" && bySite.get(site) === candidate) return;
+  const named = (primary as Partial<RegisteredQuery> | undefined)?.declaration?.site;
+  throw new Error(
+    `registry: on() was handed an unregistered site (${JSON.stringify(site)}) for ${JSON.stringify(named)} — ` +
+      "only the runner registerQuery returned may issue a statement (spec §7.1).",
+  );
 }
 
 /** An unqualified relation name exactly as `pg_class.relname` spells it: no

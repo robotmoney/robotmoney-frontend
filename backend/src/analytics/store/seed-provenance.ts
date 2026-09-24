@@ -12,6 +12,7 @@
 // (backend/scripts/seed-provenance-verify.ts) can call it without any
 // analytics/** updater module gaining direct DB access.
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { validateFloorCalendar } from "../extract/floor-seed-calendar.ts";
 import type { RawIndicatorHistory } from "../types.ts";
 
@@ -21,9 +22,35 @@ export interface SeedProvenanceRow {
   value: number;
 }
 
+// Both statements are registered queries (smoke-production-spec.md §7.1). The
+// operator CLI reaches them directly and through prod-bootstrap's
+// seed-provenance:verify step. Both run as `rm_owner`: prod-bootstrap migrates
+// on the same credential, and backend/schema/grants.sql gives `rm_app` no
+// DELETE on ordinary tables, so the --clean DELETE is an owner's statement.
+const CALLERS = ["scripts/seed-provenance-verify", "scripts/prod-bootstrap"];
+
+const loadSeedRows = registerQuery({
+  role: "rm_owner",
+  object: "raw_indicator_history",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/seed-provenance:loadSeedTaggedFloor",
+  purpose: "Read every source='seed' floor row so the calendar validator can find fabricated dates.",
+  callers: CALLERS,
+});
+
+const deleteInvalidSeedRow = registerQuery({
+  role: "rm_owner",
+  object: "raw_indicator_history",
+  // SELECT because the WHERE and RETURNING read the row.
+  privileges: ["DELETE", "SELECT"],
+  site: "src/analytics/store/seed-provenance:verifySeedProvenance.clean",
+  purpose: "Delete one calendar-invalid source='seed' row on an operator's --clean, never a live-tagged one.",
+  callers: CALLERS,
+});
+
 // Load every source='seed' row, grouped for the calendar validator.
 async function loadSeedTaggedFloor(db: DbHandle): Promise<RawIndicatorHistory> {
-  const rows = await db<{ indicator: string; date: string; value: number }[]>`
+  const rows = await on(db, loadSeedRows)<{ indicator: string; date: string; value: number }>`
     SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     WHERE source = 'seed'
@@ -55,7 +82,7 @@ export async function verifySeedProvenance(db: DbHandle = sql, clean = false): P
   let deleted = 0;
   if (clean) {
     for (const row of invalid) {
-      const res = await db<{ indicator: string }[]>`
+      const res = await on(db, deleteInvalidSeedRow)<{ indicator: string }>`
         DELETE FROM raw_indicator_history
         WHERE indicator = ${row.indicatorId} AND date = ${row.date} AND source = 'seed'
         RETURNING indicator`;
