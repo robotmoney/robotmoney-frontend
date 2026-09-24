@@ -2,14 +2,16 @@
 // served, run identically by smoke, by every database-holding container, and by
 // CI.
 //
-// STUB. Every function throws `NOT IMPLEMENTED`; nothing imports this module
-// yet. Step 1 of issue #1026's W2 workstream. Governed by
-// smoke-production-spec.md §7 (the six checks, §7.1 the registry, §7.2 the
-// three callers, §7.3 CI isomorphism), with §8.3/§8.4 supplying check 3.
+// Governed by smoke-production-spec.md §7 (the six checks, §7.1 the registry,
+// §7.2 the three callers, §7.3 CI isomorphism), with §8.3/§8.4 supplying
+// check 3. Issue #1026, W2.
 //
-// It eventually absorbs backend/scripts/db-preflight.ts and
-// backend/scripts/schema-current.ts (plan row W2.4). Neither is touched in this
-// step; both keep running exactly as they do today.
+// Every check is implemented and exercised against a real Postgres by
+// backend/tests/db-preflight-checks.test.ts. NO RUNTIME CALLER YET: smoke, `api`
+// and the worker lanes do not call `runPreflight` until #1026's wiring wave
+// lands (criterion 44). Until then backend/scripts/db-preflight.ts and
+// backend/scripts/schema-current.ts keep running exactly as they do today, and
+// this module is meant to absorb both (plan row W2.4).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHERE IT SITS
@@ -58,9 +60,10 @@
 // roles and the production preflight." A separate CI-shaped check proves
 // nothing about production.
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
-import { config } from "../config.ts";
 import {
   APPEND_ONLY_MIGRATIONS,
   APPEND_ONLY_TABLES,
@@ -116,8 +119,26 @@ export interface PreflightContext {
    *  `0059_swarm_framework_subject_snapshot_cleanup.sql`), so a number names
    *  two different schemas. */
   readonly codeFilenames: readonly string[];
-  /** Path to the `~/.env` check 4 reads, overridable for tests. */
+  /** Path to the `~/.env` check 4 reads. Every runtime caller passes
+   *  `homeEnvPath()` — the deploying user's home-directory file (§3); tests
+   *  pass a fixture path. Required rather than defaulted, so no caller reads
+   *  some other file by forgetting to say which. */
   readonly envFilePath: string;
+}
+
+/**
+ * `$HOME/.env`, the one file §3 names: "the deploying user's home-directory
+ * file, outside every checkout".
+ *
+ * The same rule as `homeEnvFilePath()` in scripts/lib/env-role.ts, which every
+ * host-side tool reads through. It is restated rather than imported because
+ * this module runs inside the backend image, and backend/Dockerfile copies
+ * `backend/` and nothing from `scripts/lib/` — an import across that boundary
+ * would type-check here and fail to resolve in the container.
+ * backend/tests/db-preflight-checks.test.ts pins the two to the same answer.
+ */
+export function homeEnvPath(home: string = homedir()): string {
+  return join(home, ".env");
 }
 
 /** One finding. Checks report every problem they find rather than the first,
@@ -150,29 +171,44 @@ export interface PreflightReport {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Check 1 — "Every role token smoke will hand to a container authenticates."
+ * Check 1 — "Every role password smoke will hand to a container
+ * authenticates."
  *
- * Inputs: the connection details and one token per role in
- * `context.roles`. Output: findings, one per role that cannot log in.
+ * Inputs: the handle the rest of preflight reads through, the context, and one
+ * token (the role's password) per role in `context.roles`. Output: findings,
+ * one per role that cannot log in.
  *
  * It opens a throwaway connection per role and closes it. That is the one place
  * preflight connects as anything other than its own credential, and it is
  * unavoidable: authentication is the one property no catalog query can answer
  * about a password held by the caller.
  *
+ * THE PROBE GOES WHERE THE HANDLE GOES. Host, port (or socket path), database
+ * and TLS mode are read from `db`'s own parsed options (`probeTarget`), never
+ * from `config.databaseUrl`. A host-side smoke preflight holds a handle to the
+ * remote it is about to serve while its own process environment names some
+ * other database; a password proven against that other database proves nothing
+ * about the one the containers will meet.
+ *
  * Refusals: any role whose token fails authentication. A role in
  * `context.roles` with no token supplied is also a refusal — an absent token is
- * how a container ends up falling back to some other credential.
+ * how a container ends up falling back to some other credential. A handle that
+ * does not expose its server refuses every role rather than guessing a target.
+ * Only a top-level `postgres(...)` pool exposes it: neither a `sql.begin`
+ * transaction handle nor a `sql.reserve()` connection carries the parsed
+ * options, so a caller must pass the pool itself.
  *
  * Serves spec §10 W2 "Test database off superuser" and "Unattended CI boot
  * `--local blank --migrate --seed`" — both require that the runtime roles
  * actually work before anything starts.
  */
 export async function checkRoleTokens(
+  db: PreflightDb,
   context: PreflightContext,
   tokens: ReadonlyMap<RmRole, string>,
 ): Promise<PreflightCheckResult> {
   const findings: PreflightFinding[] = [];
+  const target = probeTarget(db);
 
   for (const role of context.roles) {
     const token = tokens.get(role);
@@ -187,27 +223,50 @@ export async function checkRoleTokens(
       continue;
     }
 
+    if (target === null) {
+      findings.push({
+        check: "roles_authenticate",
+        severity: "refuse",
+        message:
+          `${role} could not be tested: the handle does not expose which server it points at (only a top-level ` +
+          "postgres() pool does, not a transaction or a reserved connection), and a password proven against any " +
+          "other server proves nothing about this one",
+      });
+      continue;
+    }
+
     // The one place preflight connects as anything but its own credential.
     // Authentication is the single property no catalog query can answer about a
     // password the CALLER holds, so it is tested by using it — and by nothing
     // else: the connection issues `SELECT 1` and is closed.
-    const probe = postgres(config.databaseUrl, {
+    const probeOptions: postgresTypes.Options<{}> = {
+      // `host:port[,host:port…]` — the one form postgres.js's typed options
+      // accept for a multi-host target; its parser splits it back into the
+      // same host and port lists the handle carries.
+      host: target.host.map((host, index) => `${host}:${target.port[index] ?? target.port[0]}`).join(","),
+      ...(target.path ? { path: target.path } : {}),
+      database: target.database,
+      ssl: target.ssl,
+      ...(target.targetSessionAttrs ? { target_session_attrs: target.targetSessionAttrs } : {}),
       max: 1,
       user: role,
       username: role,
       password: token,
       connect_timeout: 10,
       onnotice: () => {},
-    });
+    };
+    const probe = postgres(probeOptions);
     try {
       await probe`SELECT 1`;
     } catch (error) {
-      // The role's name, never the token, and never the driver's echo of the
-      // connection string.
+      // The role's name and where it was tried, never the token, and never the
+      // driver's echo of the connection string.
       findings.push({
         check: "roles_authenticate",
         severity: "refuse",
-        message: `${role} could not authenticate against the target: ${(error as { code?: string }).code ?? "authentication failed"}`,
+        message:
+          `${role} could not authenticate against ${target.label}: ` +
+          `${(error as { code?: string }).code ?? "authentication failed"}`,
       });
     } finally {
       await probe.end({ timeout: 5 }).catch(() => undefined);
@@ -215,6 +274,42 @@ export async function checkRoleTokens(
   }
 
   return { check: "roles_authenticate", findings };
+}
+
+/** Where check 1's probes connect: the server and database `db` itself uses. */
+interface ProbeTarget {
+  readonly host: string[];
+  readonly port: number[];
+  readonly path: string | null;
+  readonly database: string;
+  readonly ssl: postgresTypes.Options<{}>["ssl"];
+  readonly targetSessionAttrs: postgresTypes.Options<{}>["target_session_attrs"];
+  /** `host:port/database`, for the finding. No user, no password. */
+  readonly label: string;
+}
+
+/**
+ * The server a handle points at, from the options postgres.js parsed when the
+ * pool was built. Only the top-level pool (`postgres(...)`) carries them:
+ * postgres.js attaches `options` to the pool object alone, and both a
+ * `sql.begin` transaction handle and a `sql.reserve()` connection are bare
+ * query functions without it. `null` makes check 1 refuse rather than fall
+ * back to some other database.
+ */
+function probeTarget(db: PreflightDb): ProbeTarget | null {
+  const options = (db as { options?: postgresTypes.ParsedOptions<{}> }).options;
+  if (!options || !Array.isArray(options.host) || !options.database) return null;
+  const path = typeof options.path === "string" && options.path !== "" ? options.path : null;
+  const where = path ?? options.host.map((host, index) => `${host}:${options.port[index] ?? options.port[0]}`).join(",");
+  return {
+    host: [...options.host],
+    port: [...options.port],
+    path,
+    database: options.database,
+    ssl: options.ssl,
+    targetSessionAttrs: options.target_session_attrs ?? undefined,
+    label: `${where}/${options.database}`,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,43 +324,71 @@ export async function checkRoleTokens(
  * Fixed, not derived. Nothing a call site declares in the registry can add to
  * this list or take anything off it — that is the difference between a rule and
  * a preference.
+ *
+ * "DDL" is three rules below, not one, because a grant can open it three
+ * separate ways and an operator fixing a boot needs to know which: CREATE on a
+ * schema (`ddl`), CREATE on the database, which is how a new schema appears
+ * (`database_create`), and the TRIGGER privilege, which lets a role attach code
+ * that runs inside every other role's writes (`trigger_privilege`).
+ *
+ * "Application object" means any object in a non-system schema — every
+ * namespace except `information_schema` and the reserved `pg_*` ones — and
+ * covers relations, functions, types and the schemas themselves. Extension
+ * members belong to the extension, not the application, and are skipped.
  */
 export type DenylistRule =
   /** `pg_roles.rolsuper`. */
   | "superuser"
-  /** `pg_roles.rolcreaterole`. 0053 pins `NOCREATEROLE` on all four roles
-   *  (lines 49-52) and creates them with it (lines 10, 13, 16, 35); this checks
-   *  the cluster still agrees. */
+  /** `pg_roles.rolcreaterole`. Migration 0053 creates all four roles
+   *  `NOCREATEROLE` and pins it again with `ALTER ROLE`; this checks the
+   *  cluster still agrees. */
   | "createrole"
-  /** `pg_has_role(role, 'rm_owner', 'USAGE'|'MEMBER')`. 0053 line 56 grants
-   *  `rm_owner` to `current_user` — the bootstrap/migration login — and its own
-   *  comment says "This is intentionally the current role, never either runtime
-   *  role." A runtime role that has acquired it is the single most direct way
-   *  every other guard in this file becomes decorative. */
+  /** `pg_has_role(role, 'rm_owner', 'MEMBER')`. 0053 grants `rm_owner` to
+   *  `current_user` — the bootstrap/migration login — and its own comment says
+   *  "This is intentionally the current role, never either runtime role." A
+   *  runtime role that has acquired it is the single most direct way every
+   *  other guard in this file becomes decorative. */
   | "rm_owner_membership"
-  /** `pg_class.relowner` pointing at a runtime role for any application
-   *  object. Ownership is what 0053's two sweeps moved to `rm_owner` precisely
-   *  so a grantee "cannot alter/drop tables or triggers" (0053 line 126). */
+  /** A runtime role owns an application object: a relation
+   *  (`pg_class.relowner`), a function (`pg_proc.proowner`), a type
+   *  (`pg_type.typowner`) or a schema (`pg_namespace.nspowner`). Ownership is
+   *  what 0053's sweeps moved to `rm_owner` precisely so a grantee "cannot
+   *  alter/drop tables or triggers"; an owner can also re-grant itself anything
+   *  this list forbids. */
   | "object_ownership"
-  /** CREATE on `public`, or any other route to DDL. 0053 line 117 revokes ALL
-   *  on the schema from PUBLIC and line 118 grants only USAGE. */
+  /** CREATE on a non-system schema, `public` included. 0053 revokes ALL on
+   *  `public` from PUBLIC and grants the runtime roles USAGE only. */
   | "ddl"
-  /** `DELETE` or `TRUNCATE` on any table in `APPEND_ONLY_TABLES` /
-   *  `LEDGER_IMMUTABLE_FAMILIES` (./append-only-guard.ts).
+  /** CREATE on the current database — the privilege `CREATE SCHEMA` needs.
+   *  PUBLIC does not hold it by default; a runtime role that does can build a
+   *  schema of its own and own everything in it. */
+  | "database_create"
+  /** The TRIGGER privilege on any relation in a non-system schema. A trigger
+   *  runs inside other roles' statements, so a runtime role able to create one
+   *  can rewrite writes it could never issue itself. */
+  | "trigger_privilege"
+  /** `DELETE` or `TRUNCATE` on any table in `APPEND_ONLY_TABLES` or in
+   *  `LEDGER_IMMUTABLE_FAMILIES` (./append-only-guard.ts), or in
+   *  `RUNTIME_DELETE_REVOKED_TABLES` below. The ledger families count per
+   *  decision D53 (6): losing a ledger row is the same harm as losing a
+   *  history row. The grant-only tables count per D53 (2).
    *
-   *  THIS ONE FAILS TODAY, BY DESIGN. 0053 line 129 is
+   *  Migration 0065 is spec §9.1 step 2, the transition that revokes 0053's
    *  `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
-   *  rm_app` — every table, append-only ones included. Spec §9.1 step 2 makes
-   *  the transition migration a production-initialization step and states the
-   *  consequence: "Check 2 fails until it lands." W2.2 is that migration. A
-   *  preflight that passed on today's production would be measuring nothing. */
+   *  rm_app` on the append-only set; 0072 does the same for the two scheduler
+   *  logs. Before them this rule refuses every boot, which is what §9.1 means
+   *  by "Check 2 fails until it lands". db-preflight-checks.test.ts replays that
+   *  transition and proves both halves. */
   | "append_only_write";
 
 /** One denylist hit, resolved to the exact role and object. */
 export interface DenylistViolation {
   readonly rule: DenylistRule;
   readonly role: RmRole;
-  /** The relation or role name involved, where the rule names one. */
+  /** What the rule names: a relation (as `regclass` prints it), a schema, the
+   *  database, `function <regprocedure>` / `type <regtype>` / `schema <name>`
+   *  for non-relation ownership, or the `rm_owner` role. `null` for the two
+   *  role attributes. */
   readonly object: string | null;
 }
 
@@ -283,7 +406,9 @@ export interface DenylistViolation {
  *   which is the only way the message is actionable.
  *
  *   DENYLIST — the fixed `DenylistRule` set above, checked through
- *   `pg_roles`, `pg_has_role` and `pg_class.relowner`.
+ *   `pg_roles`, `pg_has_role`, the owner columns of `pg_class`, `pg_proc`,
+ *   `pg_type` and `pg_namespace`, and `has_schema_privilege` /
+ *   `has_database_privilege` / `has_table_privilege`.
  *
  * ASYMMETRY, STATED ON PURPOSE. Spec §7 check 2: "A grant absent from the
  * registry is not forbidden by that fact alone." The registry is the source of
@@ -379,12 +504,63 @@ function denylistMessage(violation: DenylistViolation): string {
       return `${violation.role} owns the application object ${violation.object}: ownership belongs to rm_owner`;
     case "ddl":
       return `${violation.role} holds CREATE on schema ${violation.object}: DDL is not a runtime privilege`;
+    case "database_create":
+      return (
+        `${violation.role} holds CREATE on database ${violation.object}: it can create a schema of its own, ` +
+        "and DDL is not a runtime privilege"
+      );
+    case "trigger_privilege":
+      return (
+        `${violation.role} holds TRIGGER on ${violation.object}: a trigger runs inside other roles' writes, ` +
+        "and DDL is not a runtime privilege"
+      );
     case "append_only_write":
+      if (violation.object !== null && isGrantOnlyProtected(violation.object)) {
+        return (
+          `${violation.role} holds DELETE/TRUNCATE on ${violation.object}, which D53 (2) keeps revoked from the ` +
+          "runtime roles: only rm_owner prunes it, past the oldest servable cursor"
+        );
+      }
       return (
         `${violation.role} holds DELETE/TRUNCATE on the append-only table ${violation.object}: ` +
-        "spec §9.1 step 2's grant transition has not landed on this database"
+        "spec §9.1 step 2's grant transition has not landed on this database, or a grant re-widened it"
       );
   }
+}
+
+/**
+ * Tables whose DELETE and TRUNCATE stay revoked from the runtime roles although
+ * they are not append-only. Decision D53 (2): `swarm_stream_events` loses its
+ * DELETE/TRUNCATE triggers so rm_owner can prune rows older than the oldest
+ * servable cursor (D52 retention), and it leaves `APPEND_ONLY_TABLES` — but
+ * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker".
+ *
+ * Listed here, independently of ./append-only-guard.ts, on purpose: if check 2
+ * derived its protected set from `APPEND_ONLY_TABLES` alone, taking the table
+ * out of that list would silently stop check 2 refusing a runtime-role DELETE
+ * grant on it. A table leaves this list only by a decision that says so.
+ */
+export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze(["swarm_stream_events"]);
+
+/** Every table the `append_only_write` rule protects: the append-only set, the
+ *  immutable ledger families (D53 (6)) and the grant-only tables (D53 (2)),
+ *  deduplicated, in a stable order. */
+export function protectedFromDeletion(): string[] {
+  const tables = new Set<string>(APPEND_ONLY_TABLES);
+  for (const family of LEDGER_IMMUTABLE_FAMILIES) {
+    for (const table of family.tables) tables.add(table);
+  }
+  for (const table of RUNTIME_DELETE_REVOKED_TABLES) tables.add(table);
+  return [...tables].sort();
+}
+
+/** True when `table` is protected only by D53 (2)'s grant rule — neither
+ *  append-only nor an immutable ledger — so its refusal must not call it
+ *  append-only. */
+function isGrantOnlyProtected(table: string): boolean {
+  if (!RUNTIME_DELETE_REVOKED_TABLES.includes(table)) return false;
+  if ((APPEND_ONLY_TABLES as readonly string[]).includes(table)) return false;
+  return !LEDGER_IMMUTABLE_FAMILIES.some((family) => (family.tables as readonly string[]).includes(table));
 }
 
 /**
@@ -409,48 +585,114 @@ export async function findDenylistViolations(
   const names = [...roles];
 
   // Role ATTRIBUTES and role MEMBERSHIP — pg_roles and pg_has_role, never an
-  // attempted `SET ROLE`.
+  // attempted `SET ROLE`. CREATE on the database rides along: it is a property
+  // of (role, current database), one row per role.
   const attributes = (await db`
-    SELECT rolname                                        AS role,
-           rolsuper                                       AS superuser,
-           rolcreaterole                                  AS createrole,
-           pg_has_role(rolname, 'rm_owner', 'MEMBER')     AS owner_member,
-           has_schema_privilege(rolname, 'public', 'CREATE') AS ddl
+    SELECT rolname                                                    AS role,
+           rolsuper                                                   AS superuser,
+           rolcreaterole                                              AS createrole,
+           pg_has_role(rolname, 'rm_owner', 'MEMBER')                 AS owner_member,
+           has_database_privilege(rolname, current_database(), 'CREATE') AS database_create,
+           current_database()                                         AS database
     FROM pg_roles
     WHERE rolname = ANY(${names})`) as unknown as {
     role: RmRole;
     superuser: boolean;
     createrole: boolean;
     owner_member: boolean;
-    ddl: boolean;
+    database_create: boolean;
+    database: string;
   }[];
   const byRole = new Map(attributes.map((row) => [row.role, row]));
 
-  // OWNERSHIP of application objects. 0053's two sweeps moved every relation in
-  // `public` to rm_owner precisely so a grantee "cannot alter/drop tables or
-  // triggers"; a relation that has moved back is the denylist's `object_ownership`.
-  const owned = (await db`
-    SELECT r.rolname AS role, c.relname AS object
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    JOIN pg_roles r ON r.oid = c.relowner
-    WHERE n.nspname = 'public'
-      AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-      AND r.rolname = ANY(${names})
-    ORDER BY r.rolname, c.relname`) as unknown as { role: RmRole; object: string }[];
+  // Every catalog query below reads only APPLICATION namespaces: everything but
+  // `information_schema` and the `pg_*` names Postgres reserves for itself
+  // (pg_catalog, pg_toast, each session's pg_temp_N). A temp table a runtime
+  // role creates for one session is not an application object.
 
-  // APPEND-ONLY WRITE. The protected set is APPEND_ONLY_TABLES — migration
-  // 0032's set, which is also what the triggers cover — resolved through
-  // `to_regclass` so a table this database has not reached yet is skipped
-  // rather than raising.
+  // OWNERSHIP of application objects — relations, functions, types, schemas.
+  // 0053's sweeps moved every relation and function to rm_owner precisely so a
+  // grantee "cannot alter/drop tables or triggers"; an object that has moved
+  // back is the denylist's `object_ownership`. Relations are named as
+  // `regclass` prints them (bare in `public`), the rest with their kind.
+  //
+  // Types skip what Postgres creates implicitly alongside another object —
+  // a relation's row type, an array type, a range's multirange — so one owned
+  // table is reported once, as the table.
+  const owned = (await db`
+    SELECT r.rolname AS role, o.object
+    FROM (
+      SELECT c.relowner AS owner, c.oid::regclass::text AS object
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+        AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                         WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+      UNION ALL
+      SELECT p.proowner, 'function ' || p.oid::regprocedure::text
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                         WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+      UNION ALL
+      SELECT t.typowner, 'type ' || t.oid::regtype::text
+      FROM pg_type t
+      JOIN pg_namespace n ON n.oid = t.typnamespace
+      LEFT JOIN pg_class rc ON rc.oid = t.typrelid
+      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+        AND t.typtype <> 'm'
+        AND (t.typrelid = 0 OR rc.relkind = 'c')
+        AND NOT EXISTS (SELECT 1 FROM pg_type e WHERE e.typarray = t.oid)
+        AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                         WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e')
+      UNION ALL
+      SELECT n.nspowner, 'schema ' || n.nspname
+      FROM pg_namespace n
+      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+    ) o
+    JOIN pg_roles r ON r.oid = o.owner
+    WHERE r.rolname = ANY(${names})
+    ORDER BY r.rolname, o.object`) as unknown as { role: RmRole; object: string }[];
+
+  // DDL through CREATE on any application schema, `public` included.
+  const schemaCreate = (await db`
+    SELECT r.rolname AS role, n.nspname AS object
+    FROM pg_roles r
+    CROSS JOIN pg_namespace n
+    WHERE r.rolname = ANY(${names})
+      AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND has_schema_privilege(r.rolname, n.oid, 'CREATE')
+    ORDER BY r.rolname, n.nspname`) as unknown as { role: RmRole; object: string }[];
+
+  // DDL through the TRIGGER privilege on any application relation that can
+  // carry a trigger.
+  const triggerable = (await db`
+    SELECT r.rolname AS role, c.oid::regclass::text AS object
+    FROM pg_roles r
+    CROSS JOIN pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE r.rolname = ANY(${names})
+      AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND c.relkind IN ('r', 'p', 'v', 'f')
+      AND has_table_privilege(r.rolname, c.oid, 'TRIGGER')
+    ORDER BY r.rolname, c.oid::regclass::text`) as unknown as { role: RmRole; object: string }[];
+
+  // APPEND-ONLY WRITE. The protected set is APPEND_ONLY_TABLES plus every
+  // LEDGER_IMMUTABLE_FAMILIES table (D53 (6)) plus RUNTIME_DELETE_REVOKED_TABLES
+  // (D53 (2)), resolved through `to_regclass`
+  // so a table this database has not reached yet is skipped rather than
+  // raising.
   const appendOnly = (await db`
     SELECT r.rolname AS role,
            t.name    AS object,
            has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'DELETE')   AS may_delete,
            has_table_privilege(r.rolname, to_regclass('public.' || t.name), 'TRUNCATE') AS may_truncate
-    FROM unnest(${names}::text[]) AS r(rolname)
-    CROSS JOIN unnest(${[...APPEND_ONLY_TABLES]}::text[]) AS t(name)
-    WHERE to_regclass('public.' || t.name) IS NOT NULL
+    FROM pg_roles r
+    CROSS JOIN unnest(${protectedFromDeletion()}::text[]) AS t(name)
+    WHERE r.rolname = ANY(${names})
+      AND to_regclass('public.' || t.name) IS NOT NULL
     ORDER BY r.rolname, t.name`) as unknown as {
     role: RmRole;
     object: string;
@@ -467,7 +709,13 @@ export async function findDenylistViolations(
     for (const entry of owned.filter((o) => o.role === role)) {
       violations.push({ rule: "object_ownership", role, object: entry.object });
     }
-    if (row?.ddl) violations.push({ rule: "ddl", role, object: "public" });
+    for (const entry of schemaCreate.filter((s) => s.role === role)) {
+      violations.push({ rule: "ddl", role, object: entry.object });
+    }
+    if (row?.database_create) violations.push({ rule: "database_create", role, object: row.database });
+    for (const entry of triggerable.filter((t) => t.role === role)) {
+      violations.push({ rule: "trigger_privilege", role, object: entry.object });
+    }
     for (const entry of appendOnly.filter((a) => a.role === role)) {
       // ONE violation per table, whichever of the two privileges is held:
       // absent privilege is one protection, and a table is either protected or
@@ -817,84 +1065,203 @@ export interface SchemaIdentity {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Check 4 — `~/.env` holds no dangerous credential.
+ * The keys §3 allows in `~/.env`, and nothing else: "the remote connection
+ * (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and
+ * `rm_readonly`; `RM_ENV`; and `RM_CREDENTIALS`."
  *
- * Input: the context (for `envFilePath` and `env`). Output: findings.
+ * The connection keys are spelled the way scripts/lib/env-role.ts's
+ * `CONNECTION_TOKENS` reads them — the DigitalOcean panel's `host`, `port`,
+ * `database`, `sslmode` — because that module is the one resolver every
+ * host-side tool uses, and a key it cannot read is a key nothing uses. §3
+ * writes the database key as `dbname`; BOTH spellings are accepted, so a file
+ * written from the spec and a file pasted from the panel both pass. `sslmode`
+ * is part of "the remote connection" even though §3's parenthesis does not list
+ * it: a managed cluster refuses a connection without it.
  *
- * Spec §7 check 4: "`~/.env` holds no dangerous credential (`rm_owner`,
- * `doadmin`, superuser): warn on `stage`, refuse on `prod`." Spec §3 states the
- * positive rule it enforces: "`~/.env` ... holds the remote connection
- * (host/port/dbname) and the runtime tokens only: `rm_app = …`,
- * `rm_worker = …`, `rm_readonly = …`. It must not contain `rm_owner`,
- * `doadmin`, or any superuser token."
+ * Exact spelling, case included: `HOST` is not `host` to env-role.ts, so it is
+ * a key nothing reads, and an unread key in the credential file is precisely
+ * what this check exists to find. db-preflight-checks.test.ts pins this set
+ * against env-role.ts's `CONNECTION_TOKENS` and `ROLES`.
+ */
+export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
+  "host",
+  "port",
+  "database",
+  "dbname",
+  "sslmode",
+  "rm_app",
+  "rm_worker",
+  "rm_readonly",
+  "RM_ENV",
+  "RM_CREDENTIALS",
+]);
+
+/**
+ * Check 4 — `~/.env` holds only the keys §3 lists.
  *
- * The point is that `rm_owner`'s password is "typed at the terminal for the one
- * run that needs it and never stored" (§3). A stored owner password turns every
- * operator-intervention gate in §9.1 into a formality, and it does so silently.
+ * Input: the context (for `envFilePath`, `env` and `connection`). Output:
+ * findings, one per offending line.
+ *
+ * AN ALLOWLIST, NOT A DENYLIST. Spec §7 check 4: "`~/.env` holds only the keys
+ * §3 lists. Any other key warns on `stage` and refuses on `prod`; an
+ * `rm_owner`, `doadmin` or superuser credential is named in the message." §3
+ * lists what else it "must not contain": "`rm_owner`, `doadmin`, a superuser
+ * token, a service token, a signing key or a model key". Those are open-ended
+ * categories — `OPENCODE_API_KEY`, `ADMIN_TOKEN`, a participant's signing key
+ * pasted in by mistake — and a denylist of names would pass each new one until
+ * someone thought to add it. So every key outside `ENV_FILE_ALLOWED_KEYS` is a
+ * finding, and the dangerous ones are additionally NAMED as what they are
+ * (`dangerousKeyReason`).
+ *
+ * The point is that every credential lives in exactly one place (§3, "Why this
+ * shape"): `rm_owner`'s password is "typed at the terminal for the one run that
+ * needs it and never stored", participant keys live in `credential.json`, and
+ * service tokens are files the boot places per instance. A copy in `~/.env`
+ * turns each of those boundaries into a formality, silently.
+ *
+ * THE FILE is `context.envFilePath`, which every runtime caller sets to
+ * `homeEnvPath()` — the deploying user's `$HOME/.env`; tests pass a fixture.
+ * A missing or unreadable file is silence,
+ * not a refusal: it holds no stray key because it holds nothing, and whether
+ * the file is REQUIRED is configuration validation's question, earlier in the
+ * boot order.
  *
  * Reads only the KEY NAMES. It never logs, hashes or compares a value, and a
- * finding names the offending line's key and nothing else — the same posture
- * `redactedTarget` takes in backend/scripts/db-preflight.ts.
+ * finding names the offending key and nothing else — the same posture
+ * `redactedTarget` takes in backend/scripts/db-preflight.ts. A non-blank,
+ * non-comment line that is not `KEY = VALUE` at all (a bare pasted secret), or
+ * whose key is not a plain name, is reported by line number, never by content.
+ * The key is the text before the first `=`, exactly as env-role.ts's
+ * `parseEnvFile` reads it (`envLines`).
  *
- * Refusals: on `prod`, any dangerous key present. On `stage` the same finding
- * is severity `warn` and the boot proceeds, because a stage host legitimately
- * holds an owner credential for `--migrate` (§8.5). When `env` is `null` the
- * finding is a refusal against a remote connection and a warning under
- * `--local`, following §4.3's unset row.
+ * Refusals: on `prod`, any key outside the allowlist. On `stage` the same
+ * finding is severity `warn` and the boot proceeds (§7 check 4). When `env` is
+ * `null` the finding is a refusal against a remote connection and a warning
+ * under `--local`, following §4.3's unset row.
  *
  * Serves spec §10 W2 (plan row W2.4's "`.env` dangerous-credential refusal on
- * `prod`").
+ * `prod`") as amended by D52: "check 4 an allowlist".
  */
 export async function checkEnvCredentials(context: PreflightContext): Promise<PreflightCheckResult> {
   const findings: PreflightFinding[] = [];
+  const path = context.envFilePath;
 
   let text: string;
   try {
-    text = readFileSync(context.envFilePath, "utf8");
+    text = readFileSync(path, "utf8");
   } catch {
-    // An unreadable env file is check 4's silence, not its refusal: it holds no
-    // dangerous credential because it holds nothing. Whether the file is
-    // REQUIRED is configuration validation's question, earlier in the boot order.
     return { check: "env_credentials", findings };
   }
 
-  // `stage` legitimately holds an owner credential for `--migrate` (§8.5); prod
-  // never does. With RM_ENV unset, §4.3's unset row decides: refuse against a
-  // remote, warn under `--local`.
+  // §7 check 4: warn on stage, refuse on prod. With RM_ENV unset, §4.3's unset
+  // row decides: refuse against a remote, warn under `--local`.
   const severity: PreflightFinding["severity"] =
     context.env === "prod" ? "refuse" : context.env === "stage" ? "warn" : context.connection === "remote" ? "refuse" : "warn";
+  const allowed = new Set(ENV_FILE_ALLOWED_KEYS);
 
-  for (const key of envKeys(text)) {
-    const reason = dangerousKeyReason(key);
-    if (!reason) continue;
+  for (const line of envLines(text)) {
     // The KEY and nothing else. The value is never read, logged, hashed or
-    // compared — §3: rm_owner's password is "typed at the terminal for the one
-    // run that needs it and never stored".
+    // compared.
+    if (line.key === null) {
+      findings.push({
+        check: "env_credentials",
+        severity,
+        message:
+          `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the three ` +
+          "runtime role passwords, RM_ENV and RM_CREDENTIALS, and a bare value is none of them",
+      });
+      continue;
+    }
+    if (allowed.has(line.key)) continue;
+    if (!line.plain) {
+      // Not printed: a key holding `:`, spaces or quotes may be half a secret.
+      const reason = dangerousTokenReason(line.key);
+      findings.push({
+        check: "env_credentials",
+        severity,
+        message:
+          `${path} line ${line.number} has a key that is not a plain name, ` +
+          `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
+          "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV and " +
+          "RM_CREDENTIALS",
+      });
+      continue;
+    }
+    const reason = dangerousKeyReason(line.key);
     findings.push({
       check: "env_credentials",
       severity,
-      message: `${context.envFilePath} holds ${key}, ${reason} — §3 allows only the connection and the three runtime tokens`,
+      message:
+        `${path} holds ${line.key}, ${reason ?? "a key §3 does not list"} — §3 allows only the connection values ` +
+        "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV and " +
+        "RM_CREDENTIALS",
     });
   }
 
   return { check: "env_credentials", findings };
 }
 
-/** The KEY names of an env file, in file order. Values are not returned, so
- *  nothing downstream can print one by accident. */
-function envKeys(text: string): string[] {
-  const keys: string[] = [];
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const match = /^([A-Za-z0-9_.-]+)\s*[=:]/.exec(trimmed);
-    if (match?.[1]) keys.push(match[1]);
-  }
-  return keys;
+/** One meaningful line of an env file: its 1-based number and its KEY, or
+ *  `null` when the line has no `=` at all. `plain` says whether the key is a
+ *  bare name that is safe to print; a key that is not (it holds `:`, spaces or
+ *  anything a pasted secret might) is reported by line number instead. Values
+ *  are never returned, so nothing downstream can print one by accident. */
+interface EnvLine {
+  readonly number: number;
+  readonly key: string | null;
+  readonly plain: boolean;
 }
 
-/** Why a key is dangerous, or null. Spec §7 check 4 names three: `rm_owner`,
- *  `doadmin`, and any superuser token. */
+/** A key that is safe to name in a finding. */
+const PLAIN_ENV_KEY = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * The meaningful lines of an env file, in file order. Blank lines and `#`
+ * comments are skipped.
+ *
+ * The KEY is derived exactly as env-role.ts's `parseEnvFile` derives it — the
+ * text before the FIRST `=`, an `export ` prefix stripped, trimmed — and the
+ * whole of it is what the allowlist tests. Anything looser lets a line pass as
+ * one key while the reader stores it as another: with a `[=:]` separator,
+ * `host:OPENCODE_API_KEY=sk-…` read as the allowed `host`, while parseEnvFile
+ * stores the disallowed key `host:OPENCODE_API_KEY`.
+ *
+ * A line with no `=` is not something parseEnvFile reads, but a secret stored
+ * that way (a bare paste, or `rm_owner: …`) is still stored, so it is a finding
+ * by line number.
+ */
+function envLines(text: string): EnvLine[] {
+  const lines: EnvLine[] = [];
+  for (const [index, raw] of text.split("\n").entries()) {
+    const trimmed = raw.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) {
+      lines.push({ number: index + 1, key: null, plain: false });
+      continue;
+    }
+    const key = trimmed.slice(0, eq).replace(/^export\s+/, "").trim();
+    lines.push({ number: index + 1, key, plain: PLAIN_ENV_KEY.test(key) });
+  }
+  return lines;
+}
+
+/** The first dangerous credential named anywhere in a non-plain key, split on
+ *  anything that is not a name character, so `rm_worker: rm_owner` is still
+ *  called the migration credential without printing the key itself. */
+function dangerousTokenReason(key: string): string | null {
+  for (const token of key.split(/[^A-Za-z0-9_.-]+/)) {
+    if (token === "") continue;
+    const reason = dangerousKeyReason(token);
+    if (reason !== null) return reason;
+  }
+  return null;
+}
+
+/** What a disallowed key IS, when it is one of the credentials §7 check 4 says
+ *  must be named in the message: `rm_owner`, `doadmin`, a superuser, or the
+ *  cluster's `postgres` login. `null` for any other disallowed key, which is
+ *  still a finding — only its wording is generic. */
 function dangerousKeyReason(key: string): string | null {
   const name = key.toLowerCase();
   if (name === "rm_owner") return "the migration credential (§3: typed for one run, never stored)";
@@ -1144,7 +1511,7 @@ export async function runPreflight(
   await db`SELECT 1`;
 
   const results: PreflightCheckResult[] = [
-    await checkRoleTokens(context, tokens),
+    await checkRoleTokens(db, context, tokens),
     await checkPrivileges(db, context),
     await checkSchemaIntegrity(db, context),
     await checkSchemaCompatibility(db, context),

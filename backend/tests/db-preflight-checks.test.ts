@@ -1,9 +1,10 @@
 // Preflight, checks 1-6 (spec §7) — the read-only checks that decide whether a
 // database may be served.
 //
-// These tests are the specification for src/db/preflight.ts. Every function in
-// that module throws `NOT IMPLEMENTED` today, so every test here fails; that is
-// #1026 W2 step 2's deliverable, not a defect.
+// These tests are the specification for src/db/preflight.ts and exercise every
+// check it implements (issue #1026, W2). Nothing calls `runPreflight` at
+// runtime yet; wiring it into smoke, `api` and the worker lanes is a later
+// wave, so a green run here proves the checks, not that a boot runs them.
 //
 // THEY RUN AGAINST THE REAL EPHEMERAL POSTGRES (tests/preload.ts), in a
 // database cloned for this file alone, because §7.3's whole point is that "CI
@@ -17,13 +18,17 @@
 // `finally` — a leaked `rm_app SUPERUSER` would make every later file in the
 // run meaningless rather than red.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
-import { APPEND_ONLY_TABLES } from "../src/db/append-only-guard.ts";
+import { CONNECTION_TOKENS, ROLES, homeEnvFilePath } from "../../scripts/lib/env-role.ts";
+import { config } from "../src/config.ts";
+import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-only-guard.ts";
 import { sql } from "../src/db/client.ts";
 import {
+  ENV_FILE_ALLOWED_KEYS,
+  RUNTIME_DELETE_REVOKED_TABLES,
   checkEnvCredentials,
   checkEnvIdentity,
   checkPrivileges,
@@ -32,25 +37,34 @@ import {
   checkSchemaCompatibility,
   checkSchemaIntegrity,
   findDenylistViolations,
+  homeEnvPath,
   missingPrivileges,
   preflightReportLines,
+  protectedFromDeletion,
   runPreflight,
   type PreflightContext,
+  type PreflightDb,
   type PreflightFinding,
+  type PreflightReport,
 } from "../src/db/preflight.ts";
-import type { RmRole } from "../src/db/registry.ts";
+import { registerQuery, registeredSites, requiredPrivileges, type RmRole } from "../src/db/registry.ts";
+import { parseMigrationHeader, recordMigrationCompat } from "../src/db/schema-compat.ts";
+import { MANIFEST_FORMAT_VERSION, detectManifestState, hashManifest, writeManifest } from "../src/db/schema-manifest.ts";
+import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
-// DATABASE state rather than to cluster state: check 6 deletes a `swarm.*`
-// schedule row and breaks another's cron string, and check 3a drops an
-// append-only trigger. None of that is reversible by a fixture — this repo's
-// rule is a clean database per test via a template copy, never delete-to-reset
-// (tests/support/clean-db.ts) — so a later test asserting the healthy shape
-// could never pass behind them. A template copy is a file-level copy, measured
-// in tens of milliseconds, so the isolation is cheap enough to be the default
-// here. The `beforeAll` below only touches CLUSTER state (role passwords),
-// which a clone does not reset and therefore still holds for every test.
+// DATABASE state rather than to cluster state: check 6 drops the
+// `epoch_duration_seconds` column and its constraint, check 3a drops an
+// append-only trigger, and the check-2 cases grant and revoke privileges and
+// create objects owned by runtime roles. None of that is reversible by a
+// fixture — this repo's rule is a clean database per test via a template copy,
+// never delete-to-reset (tests/support/clean-db.ts) — so a later test asserting
+// the healthy shape could never pass behind them. A template copy is a
+// file-level copy, measured in tens of milliseconds, so the isolation is cheap
+// enough to be the default here. The `beforeAll` below only touches CLUSTER
+// state (role passwords), which a clone does not reset and therefore still
+// holds for every test.
 useCleanDatabasePerTest(import.meta.file);
 
 const PASSWORDS: Record<"rm_app" | "rm_worker" | "rm_readonly", string> = {
@@ -104,11 +118,141 @@ function refusals(findings: readonly PreflightFinding[]): readonly PreflightFind
   return findings.filter((f) => f.severity === "refuse");
 }
 
+/** The site-id prefix of every declaration THIS file registers. */
+const OWN_SITE_PREFIX = "tests/db-preflight-checks:";
+
+/**
+ * Check 2's findings without the required-half findings owed to declarations
+ * that OTHER TEST FILES registered.
+ *
+ * The registry is process-global and backend CI runs every file in one `bun
+ * test` process. db-registry.test.ts registers rm_worker UPDATE and rm_app
+ * DELETE on relations that do not exist, and those stay registered for every
+ * file that runs after it. Without this scope, whether a zero-finding
+ * assertion here holds would depend on which files happen to sort before this
+ * one — a verdict about file order, not about the check.
+ *
+ * What is dropped is narrow: a finding of check `privileges` that names a
+ * `tests/…` site id from another file and no site id of this file's. A
+ * required-half finding always names its declarants (`declarantsFor`); a
+ * denylist finding never names a site id, so every denylist finding is kept.
+ * So is every finding for a REAL call site, whose id is `<module>:<function>`
+ * and never starts with `tests/`: a production declaration this database
+ * cannot satisfy still fails these tests.
+ */
+function scoped(findings: readonly PreflightFinding[]): readonly PreflightFinding[] {
+  const sites = registeredSites().map((declaration) => declaration.site);
+  const foreign = sites.filter((site) => site.startsWith("tests/") && !site.startsWith(OWN_SITE_PREFIX));
+  const own = sites.filter((site) => site.startsWith(OWN_SITE_PREFIX));
+  return findings.filter(
+    (finding) =>
+      finding.check !== "privileges" ||
+      !foreign.some((site) => finding.message.includes(site)) ||
+      own.some((site) => finding.message.includes(site)),
+  );
+}
+
+/** A report with `scoped` applied to every check and `passed` recomputed the
+ *  way `runPreflight` computes it. */
+function scopedReport(report: PreflightReport): PreflightReport {
+  const results = report.results.map((result) => ({ ...result, findings: [...scoped(result.findings)] }));
+  const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));
+  return { results, passed };
+}
+
 function writeEnvFile(name: string, lines: readonly string[]): string {
   const path = join(tmpDir, name);
   writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
   return path;
 }
+
+/** The ledger's recorded filenames, in apply order. */
+async function ledgerNames(db: PreflightDb = sql): Promise<string[]> {
+  return ((await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[]).map(
+    (row) => row.name,
+  );
+}
+
+/** Publish the manifest for the current ledger the way a finished migrate run
+ *  does (backend/scripts/migrate-run.ts step 6): as rm_owner, through
+ *  `writeManifest`, with the snapshot's declaration and a hash from
+ *  `hashManifest`. Nothing here is a hand-written row. */
+async function publishManifest(): Promise<void> {
+  const snapshot = await loadSnapshot();
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE rm_owner");
+    const filenames = await ledgerNames(tx);
+    await writeManifest(tx, {
+      formatVersion: MANIFEST_FORMAT_VERSION,
+      declaration: snapshot.manifest.declaration,
+      filenames,
+      contentHash: hashManifest(snapshot.manifest.declaration, filenames),
+    });
+  });
+}
+
+/** Enroll this clone as `rehearsal`, as rm_owner — the only role 0063 lets
+ *  write it. */
+async function enrollRehearsal(): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE rm_owner");
+    await tx`INSERT INTO deployment_identity (kind, note) VALUES ('rehearsal', 'db-preflight-checks fixture')`;
+  });
+}
+
+/** Rows each `public` table has had inserted, updated or deleted, from the
+ *  cumulative statistics. Read in one transaction after clearing this
+ *  session's snapshot, so the numbers are the current shared-memory ones. */
+async function tupleWrites(): Promise<Record<string, number>> {
+  return await sql.begin(async (tx) => {
+    await tx`SELECT pg_stat_clear_snapshot()`;
+    const rows = (await tx`
+      SELECT relname AS name, (n_tup_ins + n_tup_upd + n_tup_del)::bigint AS writes
+      FROM pg_stat_user_tables
+      WHERE schemaname = 'public'
+      ORDER BY relname`) as unknown as { name: string; writes: string }[];
+    return Object.fromEntries(rows.map((row) => [row.name, Number(row.writes)]));
+  });
+}
+
+/** A one-connection pool on this file's clone, as the harness's superuser. */
+function pinnedConnection(readOnly: boolean): postgres.Sql<{}> {
+  return postgres(config.databaseUrl, {
+    max: 1,
+    onnotice: () => {},
+    ...(readOnly ? { connection: { default_transaction_read_only: true } } : {}),
+  });
+}
+
+/** Push a connection's pending table statistics to shared memory. Postgres
+ *  flushes them lazily (at most once a second while a backend is busy), and
+ *  a comparison that reads before the flush would call every write
+ *  invisible. `pg_stat_force_next_flush()` makes the flush happen as that
+ *  statement's backend goes idle, which is before the statement returns. */
+async function flushStats(db: postgres.Sql<{}>): Promise<void> {
+  await db`SELECT pg_stat_force_next_flush()`;
+  await db`SELECT 1`;
+}
+
+/**
+ * A (role, relation, privilege) declaration for the REQUIRED half of check 2,
+ * registered the way a real call site registers one. The live registry is
+ * still empty (no call site uses `registerQuery` yet), so without this every
+ * required-half assertion below would loop over nothing.
+ *
+ * rm_readonly SELECT on `jobs` is a declaration every migrated database
+ * satisfies. The registry is process-global and has no unregister, so this
+ * declaration stays registered for every file that runs after this one; it is
+ * chosen so that it can never be the reason another file's check 2 refuses.
+ * The site id starts with OWN_SITE_PREFIX, which `scoped` relies on.
+ */
+const REQUIRED_FIXTURE = registerQuery({
+  role: "rm_readonly",
+  object: "jobs",
+  privileges: ["SELECT"],
+  site: "tests/db-preflight-checks:requiredHalfFixture",
+  purpose: "Fixture declaration giving check 2's required half something real to test.",
+}).declaration;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Check 1 — every role token authenticates
@@ -116,13 +260,13 @@ function writeEnvFile(name: string, lines: readonly string[]): string {
 
 describe("check 1 — every role token smoke will hand to a container authenticates", () => {
   test("passes with no findings when every role in the context has a working token", async () => {
-    const result = await checkRoleTokens(context(), tokens());
+    const result = await checkRoleTokens(sql, context(), tokens());
     expect(result.check).toBe("roles_authenticate");
     expect(result.findings).toEqual([]);
   });
 
   test("refuses, naming the role, when a token does not authenticate", async () => {
-    const result = await checkRoleTokens(context(), tokens({ rm_worker: "not-the-password" }));
+    const result = await checkRoleTokens(sql, context(), tokens({ rm_worker: "not-the-password" }));
     expect(refusals(result.findings)).toHaveLength(1);
     expect(result.findings[0]?.check).toBe("roles_authenticate");
     expect(result.findings[0]?.message).toContain("rm_worker");
@@ -130,13 +274,13 @@ describe("check 1 — every role token smoke will hand to a container authentica
 
   test("refuses a role with NO token supplied — an absent token is how a container falls back to another credential", async () => {
     const partial = new Map<RmRole, string>([["rm_app", PASSWORDS.rm_app]]);
-    const result = await checkRoleTokens(context({ roles: ["rm_app", "rm_worker"] }), partial);
+    const result = await checkRoleTokens(sql, context({ roles: ["rm_app", "rm_worker"] }), partial);
     expect(refusals(result.findings)).toHaveLength(1);
     expect(result.findings[0]?.message).toContain("rm_worker");
   });
 
   test("reports every failing role, not the first, so one boot fixes them all", async () => {
-    const result = await checkRoleTokens(context(), tokens({ rm_app: "wrong", rm_readonly: "wrong" }));
+    const result = await checkRoleTokens(sql, context(), tokens({ rm_app: "wrong", rm_readonly: "wrong" }));
     const named = result.findings.map((f) => f.message).join(" ");
     expect(refusals(result.findings)).toHaveLength(2);
     expect(named).toContain("rm_app");
@@ -145,16 +289,83 @@ describe("check 1 — every role token smoke will hand to a container authentica
 
   test("a container scope asks only about its own credential", async () => {
     const own = new Map<RmRole, string>([["rm_app", PASSWORDS.rm_app]]);
-    const result = await checkRoleTokens(context({ roles: ["rm_app"] }), own);
+    const result = await checkRoleTokens(sql, context({ roles: ["rm_app"] }), own);
     expect(result.findings).toEqual([]);
   });
 
   test("never logs a token value — a finding names the role and nothing else", async () => {
     const secret = "a-secret-that-must-not-be-printed";
-    const result = await checkRoleTokens(context({ roles: ["rm_app"] }), new Map([["rm_app", secret]]));
+    const result = await checkRoleTokens(sql, context({ roles: ["rm_app"] }), new Map([["rm_app", secret]]));
     for (const finding of result.findings) {
       expect(finding.message).not.toContain(secret);
     }
+  });
+
+  test("probes the server the HANDLE points at — config.databaseUrl naming a dead server changes nothing", async () => {
+    // The host-side smoke preflight holds a handle to the remote it will serve
+    // while its own environment can name any other database. The probe must
+    // follow the handle: with the process's configured URL pointed at a port
+    // nothing listens on, the three real passwords still authenticate.
+    const configured = config.databaseUrl;
+    config.databaseUrl = "postgres://nobody:nothing@127.0.0.1:1/nowhere";
+    try {
+      const result = await checkRoleTokens(sql, context(), tokens());
+      expect(result.findings).toEqual([]);
+    } finally {
+      config.databaseUrl = configured;
+    }
+  });
+
+  test("probes the handle's DATABASE — roles that may not connect to it refuse, naming it", async () => {
+    // Same server, different database: one the runtime roles have no CONNECT
+    // on. A probe aimed at config.databaseUrl (this file's clone, which they
+    // may connect to) would pass all three; a probe that follows the handle
+    // refuses each one and says where it tried.
+    const database = `rmt_pf_probe_${crypto.randomUUID().slice(0, 8)}`;
+    await sql.unsafe(`CREATE DATABASE ${database}`);
+    await sql.unsafe(`REVOKE CONNECT ON DATABASE ${database} FROM PUBLIC`);
+    const url = new URL(config.databaseUrl);
+    url.pathname = `/${database}`;
+    const elsewhere = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    try {
+      const result = await checkRoleTokens(elsewhere, context(), tokens());
+      expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
+      for (const role of RUNTIME_ROLES) {
+        const finding = result.findings.find((f) => f.message.startsWith(`${role} `));
+        expect(finding?.message).toContain(`/${database}`);
+      }
+      // The control: the clone the process is configured for accepts them.
+      expect((await checkRoleTokens(sql, context(), tokens())).findings).toEqual([]);
+    } finally {
+      await elsewhere.end({ timeout: 5 });
+      await sql.unsafe(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+    }
+  });
+
+  test("a handle that cannot say which server it points at refuses rather than guessing", async () => {
+    // A `sql.begin` transaction handle carries no connection options. Falling
+    // back to any other target would test a password against a database the
+    // containers may never meet.
+    const result = await sql.begin((tx) => checkRoleTokens(tx, context(), tokens()));
+    expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
+    for (const finding of result.findings) expect(finding.message).toContain("only a top-level postgres() pool");
+  });
+
+  test("a reserved connection cannot say either — only the top-level pool carries the server", async () => {
+    // postgres.js attaches `options` to the pool object alone; `sql.reserve()`
+    // returns a bare query function. A caller that wires check 1 to a reserved
+    // handle refuses every role, so wiring must pass the pool itself.
+    const reserved = await sql.reserve();
+    try {
+      expect((reserved as unknown as { options?: unknown }).options).toBeUndefined();
+      const result = await checkRoleTokens(reserved, context(), tokens());
+      expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
+      for (const finding of result.findings) expect(finding.message).toContain("only a top-level postgres() pool");
+    } finally {
+      reserved.release();
+    }
+    // The control: the pool the reserved connection came from works.
+    expect((await checkRoleTokens(sql, context(), tokens())).findings).toEqual([]);
   });
 });
 
@@ -189,14 +400,30 @@ describe("check 2, required half — the registry says what each role's programs
     expect(after?.count).toBe(before?.count);
   });
 
-  test("a missing required privilege refuses, naming the call site that declared it", async () => {
+  test("the registry declares something for rm_readonly, so the required half has a case to decide", () => {
+    // Guards the two tests below against passing vacuously: an empty registry
+    // makes "every declared privilege is held" true of any database.
+    const declared = requiredPrivileges().get("rm_readonly")?.get(REQUIRED_FIXTURE.object);
+    expect([...(declared ?? [])]).toContain("SELECT");
+  });
+
+  test("a declared privilege that is held produces no finding", async () => {
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
     expect(result.check).toBe("privileges");
-    for (const finding of refusals(result.findings)) {
-      // Actionable means "which declaration asked for this", not "something is
-      // missing somewhere": the site id is `<module>:<function>`.
-      expect(finding.message).toMatch(/[a-z0-9/_-]+:[A-Za-z0-9_]+/);
-    }
+    expect(scoped(result.findings)).toEqual([]);
+  });
+
+  test("a missing required privilege refuses, naming the call site that declared it", async () => {
+    // Revoke exactly the privilege the fixture declares. Grants live in this
+    // test's cloned database, so the next test starts from the template again.
+    await sql.unsafe(`REVOKE SELECT ON ${REQUIRED_FIXTURE.object} FROM rm_readonly`);
+    const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
+    const refused = refusals(scoped(result.findings));
+    expect(refused).toHaveLength(1);
+    // Actionable means "which declaration asked for this", not "something is
+    // missing somewhere": the site id is `<module>:<function>`.
+    expect(refused[0]?.message).toContain(REQUIRED_FIXTURE.site);
+    expect(refused[0]?.message).toContain("rm_readonly is missing SELECT on jobs");
   });
 });
 
@@ -301,9 +528,31 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
     }
   });
 
+  test("DELETE or TRUNCATE on an immutable ledger table is the same violation, one per table (D53 (6))", async () => {
+    // LEDGER_IMMUTABLE_FAMILIES count as append-only for this rule: losing a
+    // ledger row is the same harm as losing a history row. 0057-0060 grant the
+    // runtime roles SELECT and INSERT only, so the grant is constructed here.
+    const tables = [...new Set(LEDGER_IMMUTABLE_FAMILIES.flatMap((family) => family.tables))].sort();
+    const relations = tables.map((t) => `"${t}"`).join(", ");
+    await sql.unsafe(`GRANT DELETE ON ${relations} TO rm_app`);
+    await sql.unsafe(`GRANT TRUNCATE ON ${relations} TO rm_worker`);
+    const violations = await findDenylistViolations(sql, ["rm_app", "rm_worker"]);
+    for (const role of ["rm_app", "rm_worker"] as const) {
+      const hits = violations.filter((v) => v.rule === "append_only_write" && v.role === role).map((v) => v.object);
+      expect(hits.sort()).toEqual(tables);
+    }
+  });
+
   test("a clean runtime role produces no violations at all", async () => {
-    // rm_readonly holds SELECT only (0053 lines 136-137) and owns nothing.
+    // rm_readonly holds SELECT only (0053) and owns nothing.
     expect(await findDenylistViolations(sql, ["rm_readonly"])).toEqual([]);
+  });
+
+  test("the fully migrated database is clean for every runtime role — no rule fires on a correct grant state", async () => {
+    // The widened rules (every schema, the database, TRIGGER, functions,
+    // types, schemas, the ledgers) must not turn a correct database into a
+    // refused one: a check that always fails gets turned off.
+    expect(await findDenylistViolations(sql, RUNTIME_ROLES)).toEqual([]);
   });
 
   test("reports every violation it finds, not the first", async () => {
@@ -318,16 +567,93 @@ describe("check 2, denylist half — the fixed list of things no runtime role ma
   });
 });
 
+describe("check 2, every denylist class refuses through checkPrivileges itself", () => {
+  // Each case builds exactly one violation for rm_worker, then asks CHECK 2 —
+  // not the helper — and expects a refusal that names the thing. The helper's
+  // report only matters if checkPrivileges turns it into a refusal, so that is
+  // the path proved here. Grants and objects live in this test's cloned
+  // database; the two role attributes are cluster-wide and are undone.
+  const cases: readonly { name: string; setup: string[]; teardown?: string[]; expects: string }[] = [
+    { name: "SUPERUSER", setup: ["ALTER ROLE rm_worker SUPERUSER"], teardown: ["ALTER ROLE rm_worker NOSUPERUSER"], expects: "rm_worker is a SUPERUSER" },
+    { name: "CREATEROLE", setup: ["ALTER ROLE rm_worker CREATEROLE"], teardown: ["ALTER ROLE rm_worker NOCREATEROLE"], expects: "rm_worker holds CREATEROLE" },
+    { name: "membership in rm_owner", setup: ["GRANT rm_owner TO rm_worker"], teardown: ["REVOKE rm_owner FROM rm_worker"], expects: "rm_worker holds membership in rm_owner" },
+    {
+      name: "ownership of a relation",
+      setup: ["CREATE TABLE rm_pf_owned_rel (id integer)", "ALTER TABLE rm_pf_owned_rel OWNER TO rm_worker"],
+      expects: "rm_worker owns the application object rm_pf_owned_rel",
+    },
+    {
+      name: "ownership of a function",
+      setup: [
+        "CREATE FUNCTION rm_pf_owned_fn(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1'",
+        "ALTER FUNCTION rm_pf_owned_fn(integer) OWNER TO rm_worker",
+      ],
+      expects: "rm_worker owns the application object function rm_pf_owned_fn(integer)",
+    },
+    {
+      name: "ownership of a type",
+      setup: ["CREATE TYPE rm_pf_owned_type AS ENUM ('a', 'b')", "ALTER TYPE rm_pf_owned_type OWNER TO rm_worker"],
+      expects: "rm_worker owns the application object type rm_pf_owned_type",
+    },
+    {
+      name: "ownership of a schema",
+      setup: ["CREATE SCHEMA rm_pf_owned_schema AUTHORIZATION rm_worker"],
+      expects: "rm_worker owns the application object schema rm_pf_owned_schema",
+    },
+    { name: "CREATE on public", setup: ["GRANT CREATE ON SCHEMA public TO rm_worker"], expects: "rm_worker holds CREATE on schema public" },
+    {
+      name: "CREATE on a non-system schema other than public",
+      setup: ["CREATE SCHEMA rm_pf_other_schema", "GRANT CREATE ON SCHEMA rm_pf_other_schema TO rm_worker"],
+      expects: "rm_worker holds CREATE on schema rm_pf_other_schema",
+    },
+    {
+      name: "CREATE on the database",
+      setup: ["DO $$ BEGIN EXECUTE format('GRANT CREATE ON DATABASE %I TO rm_worker', current_database()); END $$"],
+      teardown: ["DO $$ BEGIN EXECUTE format('REVOKE CREATE ON DATABASE %I FROM rm_worker', current_database()); END $$"],
+      expects: "rm_worker holds CREATE on database",
+    },
+    { name: "the TRIGGER privilege", setup: ["GRANT TRIGGER ON jobs TO rm_worker"], expects: "rm_worker holds TRIGGER on jobs" },
+    { name: "DELETE on an append-only table", setup: ["GRANT DELETE ON audit_log TO rm_worker"], expects: "append-only table audit_log" },
+    { name: "TRUNCATE on an append-only table", setup: ["GRANT TRUNCATE ON audit_log TO rm_worker"], expects: "append-only table audit_log" },
+    { name: "DELETE on an immutable ledger table", setup: ["GRANT DELETE ON source_acquisitions TO rm_worker"], expects: "append-only table source_acquisitions" },
+    { name: "TRUNCATE on an immutable ledger table", setup: ["GRANT TRUNCATE ON analytics_ledger_runs TO rm_worker"], expects: "append-only table analytics_ledger_runs" },
+  ];
+
+  for (const entry of cases) {
+    test(`${entry.name} refuses the boot`, async () => {
+      // The control: the clean clone does not already say it.
+      const before = await checkPrivileges(sql, context({ roles: ["rm_worker"] }));
+      expect(refusals(before.findings).map((f) => f.message).join("\n")).not.toContain(entry.expects);
+
+      for (const statement of entry.setup) await sql.unsafe(statement);
+      try {
+        const result = await checkPrivileges(sql, context({ roles: ["rm_worker"] }));
+        const text = refusals(result.findings).map((f) => f.message).join("\n");
+        expect(text).toContain(entry.expects);
+      } finally {
+        for (const statement of entry.teardown ?? []) await sql.unsafe(statement);
+      }
+    });
+  }
+});
+
 describe("check 2, the asymmetry — the registry is not an allowlist", () => {
   test("a grant absent from the registry is NOT forbidden by that fact alone", async () => {
-    // Spec §7 check 2, verbatim. 0053 line 136 grants rm_readonly SELECT on ALL
-    // tables and line 137 adds a default privilege for future ones — dozens of
-    // grants no call site declares. Treating the registry as an allowlist would
-    // make every boot fail on grants that are correct, and a check that always
-    // fails gets turned off.
+    // Spec §7 check 2, verbatim: "A grant absent from the registry is not
+    // forbidden by that fact alone." The registry declares rm_readonly SELECT
+    // on `jobs` (REQUIRED_FIXTURE) and nothing on `job_schedules`; rm_readonly
+    // is then given a privilege on `job_schedules` that 0053 never gave it and
+    // no call site declares. Check 2 must report NOTHING — not "undeclared",
+    // not in any other wording — because only the denylist says what may not
+    // be held.
+    expect(requiredPrivileges().get("rm_readonly")?.has("job_schedules") ?? false).toBe(false);
+    await sql.unsafe("GRANT INSERT ON job_schedules TO rm_readonly");
+    const [held] = await sql<{ held: boolean }[]>`
+      SELECT has_table_privilege('rm_readonly', 'job_schedules', 'INSERT') AS held`;
+    expect(held?.held).toBe(true);
+
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
-    const undeclared = refusals(result.findings).filter((f) => /not declared|undeclared|not in the registry/i.test(f.message));
-    expect(undeclared).toEqual([]);
+    expect(scoped(result.findings)).toEqual([]);
   });
 
   test("rm_app holding DELETE on an append-only table FAILS check 2 — the grant §9.1 step 2 exists to remove", async () => {
@@ -365,6 +691,131 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Check 2 × spec §9.1 step 2 — the append-only grant transition, replayed
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("check 2 fails before the append-only grant transition and passes after it (0065 + 0072 PART 2)", () => {
+  const TRANSITION_0065 = readFileSync(join(MIGRATIONS_DIR, "0065_append_only_grant_transition.sql"), "utf8");
+  const MIGRATION_0072 = readFileSync(join(MIGRATIONS_DIR, "0072_drop_swarm_schedules.sql"), "utf8");
+
+  /** 0072's PART 2 DO block, verbatim: the first `DO $$ … $$;` after the
+   *  PART 2 banner. PART 1 deletes the retired schedule rows and is not part
+   *  of the grant transition. */
+  function part2Of0072(): string {
+    const banner = MIGRATION_0072.indexOf("PART 2");
+    expect(banner).toBeGreaterThan(-1);
+    const start = MIGRATION_0072.indexOf("DO $$", banner);
+    const end = MIGRATION_0072.indexOf("\n$$;", start);
+    expect(start).toBeGreaterThan(banner);
+    expect(end).toBeGreaterThan(start);
+    return MIGRATION_0072.slice(start, end + "\n$$;".length);
+  }
+
+  /** The quoted names in a migration's `<name> text[] := ARRAY[...]`. */
+  function declaredArray(text: string, name: string): string[] {
+    const match = new RegExp(`${name}\\s+text\\[\\]\\s*:=\\s*ARRAY\\[([^\\]]*)\\]`).exec(text);
+    expect(match).not.toBeNull();
+    return [...(match?.[1] ?? "").matchAll(/'([^']+)'/g)].map((m) => m[1] ?? "");
+  }
+
+  /** Apply the transition exactly as the migrate run applies a migration:
+   *  inside a transaction, as rm_owner. */
+  async function applyTransition(): Promise<void> {
+    await sql.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(TRANSITION_0065);
+      await tx.unsafe(part2Of0072());
+    });
+  }
+
+  /** Every runtime-role privilege on every append-only table, for comparing
+   *  one apply with the next. */
+  async function grantMatrix(): Promise<readonly object[]> {
+    return await sql`
+      SELECT r.rolname AS role, t.name AS object, p.privilege,
+             has_table_privilege(r.rolname, to_regclass('public.' || t.name), p.privilege) AS held
+      FROM unnest(${["rm_app", "rm_worker", "rm_readonly"]}::text[]) AS r(rolname)
+      CROSS JOIN unnest(${[...APPEND_ONLY_TABLES]}::text[]) AS t(name)
+      CROSS JOIN unnest(${["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]}::text[]) AS p(privilege)
+      ORDER BY 1, 2, 3`;
+  }
+
+  const WRITERS: readonly RmRole[] = ["rm_app", "rm_worker"];
+
+  test("the post-0053 grant state refuses once per (role, table); the transition clears it; re-applying it is a no-op", async () => {
+    // RECREATE what 0053 left behind: `GRANT SELECT, INSERT, UPDATE, DELETE ON
+    // ALL TABLES` reached every append-only table, and TRUNCATE is the
+    // privilege the row triggers cannot stop.
+    const relations = [...APPEND_ONLY_TABLES].map((t) => `"${t}"`).join(", ");
+    await sql.unsafe(`GRANT DELETE, TRUNCATE ON ${relations} TO rm_app, rm_worker`);
+
+    // BEFORE: check 2 refuses, exactly once per role per table.
+    const before = await checkPrivileges(sql, context({ roles: WRITERS }));
+    const appendOnly = refusals(scoped(before.findings)).filter((f) => f.message.includes("append-only table"));
+    const named = appendOnly.map((f) => {
+      const match = /^(rm_\w+) holds DELETE\/TRUNCATE on the append-only table (\w+):/.exec(f.message);
+      return match ? `${match[1]}/${match[2]}` : f.message;
+    });
+    const expected = WRITERS.flatMap((role) => [...APPEND_ONLY_TABLES].map((table) => `${role}/${table}`));
+    expect(named.sort()).toEqual(expected.sort());
+
+    // AFTER: the migration text itself, not a hand-written REVOKE.
+    await applyTransition();
+    expect(scoped((await checkPrivileges(sql, context({ roles: WRITERS }))).findings)).toEqual([]);
+    expect(await findDenylistViolations(sql, WRITERS)).toEqual([]);
+    const once = await grantMatrix();
+
+    // AGAIN: idempotent — no error, the same grants, the same verdict.
+    await applyTransition();
+    expect(await grantMatrix()).toEqual(once);
+    expect(scoped((await checkPrivileges(sql, context({ roles: WRITERS }))).findings)).toEqual([]);
+  });
+
+  test("the transition's arrays cover every APPEND_ONLY_TABLES entry — no append-only table can skip it", () => {
+    // 0065 revokes on the 0032-era set and 0072 on the two scheduler logs. A
+    // table added to APPEND_ONLY_TABLES without a revoking migration would
+    // pass every test above that builds its own grants, and still hold 0053's
+    // DELETE in production. A new append-only table needs its own revoking
+    // migration, added to this union.
+    const union = new Set([
+      ...declaredArray(TRANSITION_0065, "append_only"),
+      ...declaredArray(MIGRATION_0072, "newly_protected"),
+    ]);
+    expect([...APPEND_ONLY_TABLES].filter((table) => !union.has(table))).toEqual([]);
+
+    // The other direction: nothing the transition protects is unknown to
+    // check 2. D53 (2) moves `swarm_stream_events` to grant-only protection
+    // (its triggers go so rm_owner can prune past the oldest servable cursor;
+    // DELETE/TRUNCATE stay revoked from the runtime roles, which is what 0072's
+    // REVOKE does). So the comparison is against check 2's own protected set,
+    // not APPEND_ONLY_TABLES: a table the transition revokes on must stay one
+    // check 2 refuses a DELETE grant on.
+    const protectedSet = new Set(protectedFromDeletion());
+    expect([...union].filter((table) => !protectedSet.has(table))).toEqual([]);
+  });
+
+  test("check 2 refuses a runtime-role DELETE grant on swarm_stream_events whether or not it is append-only (D53 (2))", async () => {
+    // Listed on its own, independently of APPEND_ONLY_TABLES: when wave 3
+    // takes the table out of the append-only set, check 2 must keep refusing.
+    expect(RUNTIME_DELETE_REVOKED_TABLES).toContain("swarm_stream_events");
+    expect(protectedFromDeletion()).toContain("swarm_stream_events");
+
+    // The control: the clean clone does not already say it.
+    expect(
+      (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_events"),
+    ).toEqual([]);
+
+    await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+    await sql.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
+    const result = await checkPrivileges(sql, context({ roles: WRITERS }));
+    const named = refusals(result.findings)
+      .filter((f) => f.message.includes("swarm_stream_events"))
+      .map((f) => /^(rm_\w+) holds DELETE\/TRUNCATE on /.exec(f.message)?.[1]);
+    expect(named.sort()).toEqual(["rm_app", "rm_worker"]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // Check 3 — integrity (a) and compatibility (b)
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -376,38 +827,49 @@ describe("check 3a — integrity against the manifest stored in the database", (
     expect(result.findings.map((f) => f.message).join("\n")).toContain("schema_manifest");
   });
 
-  test("refuses an in-progress database — ledger ahead of manifest means nothing verified where it got to", async () => {
-    // Migration 0064 creates `schema_manifest` (§8.3 makes it a real one-row
-    // TABLE), so this builds the shape it needs on its own clone rather than
-    // assuming the table is absent. What is under test is manifest BEHAVIOUR,
-    // not who created the table.
-    await sql.unsafe("DROP TABLE IF EXISTS schema_manifest");
-    await sql.unsafe(`
-      CREATE TABLE schema_manifest (
-        format_version integer NOT NULL,
-        declaration text NOT NULL,
-        filenames text[] NOT NULL,
-        content_hash text NOT NULL,
-        singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton)
-      )`);
-    try {
-      // A manifest embodying a strict prefix of the ledger is exactly §8.3's
-      // *in progress*: the ledger already records migrations the manifest does
-      // not describe.
-      const ledger = await sql<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
-      const embodied = ledger.slice(0, -1).map((r) => r.name);
-      await sql`
-        INSERT INTO schema_manifest (format_version, declaration, filenames, content_hash)
-        VALUES (1, 'declaration', ${embodied}, 'unverified')`;
+  test("a manifest published by the real writer passes 3a — the control for the interrupted case below", async () => {
+    await publishManifest();
+    expect((await detectManifestState(sql)).kind).toBe("published");
+    expect((await checkSchemaIntegrity(sql, context())).findings).toEqual([]);
+  });
 
-      const result = await checkSchemaIntegrity(sql, context());
-      const text = refusals(result.findings).map((f) => f.message).join("\n");
-      expect(refusals(result.findings).length).toBeGreaterThan(0);
-      expect(text).toContain("in progress");
-      expect(text).toContain(ledger[ledger.length - 1]?.name ?? "");
-    } finally {
-      await sql.unsafe("DROP TABLE IF EXISTS schema_manifest");
-    }
+  test("refuses a really-interrupted database, and for that reason alone — ledger ahead of a VALID manifest", async () => {
+    // Built from the writes an interrupted migrate run leaves, in the order it
+    // leaves them (backend/scripts/migrate-run.ts):
+    //   1. a finished run published the manifest for the whole ledger (step 6:
+    //      rm_owner, writeManifest, hashManifest);
+    //   2. the next run committed one migration in its own transaction
+    //      (step 5: rm_owner, the DDL, the ledger row, recordMigrationCompat);
+    //   3. it died before its reconciliation transaction published anything.
+    // Every row is written by the function production writes it with, and the
+    // manifest's hash verifies — so "in progress" is the ONLY thing wrong. The
+    // old fixture's hash was the literal 'unverified', which also made the
+    // manifest inconsistent and hid whether in-progress alone refuses.
+    await publishManifest();
+
+    const file = "9999_rm_preflight_interrupted_probe.sql";
+    const ddl = [
+      "-- compat: additive",
+      "-- metadata_version: 1",
+      "CREATE TABLE rm_preflight_interrupted_probe (id integer PRIMARY KEY);",
+      "",
+    ].join("\n");
+    await sql.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL ROLE rm_owner");
+      await tx.unsafe(ddl);
+      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+      await recordMigrationCompat(tx, parseMigrationHeader(file, ddl));
+    });
+
+    const state = await detectManifestState(sql);
+    expect(state.kind).toBe("in_progress");
+    expect(state.kind === "in_progress" ? state.ahead : []).toEqual([file]);
+
+    const result = await checkSchemaIntegrity(sql, context());
+    const refused = refusals(result.findings);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.message).toContain("in progress");
+    expect(refused[0]?.message).toContain(file);
   });
 
   test("compares against the DATABASE's manifest, not the booting image's snapshot", async () => {
@@ -483,14 +945,130 @@ describe("check 3b — does the booting code support the installed version", () 
 // Check 4 — ~/.env holds no dangerous credential
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("check 4 — ~/.env holds no dangerous credential", () => {
-  const SAFE = ["DATABASE_HOST=db.example.invalid", "rm_app=token-a", "rm_worker=token-b", "rm_readonly=token-c"];
+describe("check 4 — ~/.env holds only the keys §3 lists", () => {
+  // The connection keys as scripts/lib/env-role.ts reads them (the
+  // DigitalOcean panel's spelling), plus the three runtime role passwords.
+  const SAFE = [
+    "host = db.example.invalid",
+    "port = 25060",
+    "database = defaultdb",
+    "sslmode = require",
+    "rm_app = token-a",
+    "rm_worker = token-b",
+    "rm_readonly = token-c",
+  ];
 
-  test("a file holding only the three runtime tokens passes", async () => {
-    const envFilePath = writeEnvFile("safe.env", SAFE);
+  test("the allowlist is exactly §3's keys, spelled the way env-role.ts reads the connection and the roles", () => {
+    // §3: "the remote connection (host, port, dbname); the runtime role
+    // passwords rm_app, rm_worker and rm_readonly; RM_ENV; and RM_CREDENTIALS."
+    // env-role.ts is the one resolver the host-side tools use, so its
+    // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
+    // spelling of `database` and is accepted beside it.
+    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "RM_ENV", "RM_CREDENTIALS"];
+    expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
+  });
+
+  test("the file preflight reads by default is env-role.ts's $HOME/.env", () => {
+    expect(homeEnvPath("/home/deployer")).toBe(homeEnvFilePath("/home/deployer"));
+    expect(homeEnvPath()).toBe(homeEnvFilePath());
+  });
+
+  test("a file holding exactly the allowlist passes on prod — both database spellings, RM_ENV, RM_CREDENTIALS", async () => {
+    const envFilePath = writeEnvFile("exact-allowlist.env", [
+      "# the deploying user's home-directory file",
+      ...SAFE,
+      "dbname = defaultdb",
+      "RM_ENV=prod",
+      "export RM_CREDENTIALS=/home/deployer/.robotmoney/credential.json",
+    ]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     expect(result.check).toBe("env_credentials");
     expect(result.findings).toEqual([]);
+  });
+
+  test("a file holding only the connection and the three runtime tokens passes", async () => {
+    const envFilePath = writeEnvFile("safe.env", SAFE);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(result.findings).toEqual([]);
+  });
+
+  test("an unlisted key — a model key — refuses on prod and warns on stage, naming the key and never the value", async () => {
+    const secret = "sk-zen-a-model-key-that-must-not-be-printed";
+    const envFilePath = writeEnvFile("model-key.env", [...SAFE, `OPENCODE_API_KEY=${secret}`]);
+
+    const prod = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(prod.findings)).toHaveLength(1);
+    expect(prod.findings[0]?.message).toContain("OPENCODE_API_KEY");
+    expect(prod.findings[0]?.message).not.toContain(secret);
+
+    const stage = await checkEnvCredentials(context({ env: "stage", envFilePath }));
+    expect(stage.findings).toHaveLength(1);
+    expect(stage.findings[0]?.severity).toBe("warn");
+    expect(stage.findings[0]?.message).toContain("OPENCODE_API_KEY");
+  });
+
+  test("an unlisted key — the retired ADMIN_TOKEN, now a service token (§3) — refuses on prod", async () => {
+    const envFilePath = writeEnvFile("admin-token.env", [...SAFE, "ADMIN_TOKEN=an-operator-bearer"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("ADMIN_TOKEN");
+  });
+
+  test("the spelling is exact — `HOST` is a key env-role.ts never reads, so it is not the allowed `host`", async () => {
+    const envFilePath = writeEnvFile("upper-host.env", ["HOST=db.example.invalid", "rm_app=token-a"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("HOST");
+  });
+
+  test("an `export` prefix does not hide a key", async () => {
+    const envFilePath = writeEnvFile("export-owner.env", [...SAFE, "export rm_owner=typed-once-never-stored"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("rm_owner");
+    expect(result.findings[0]?.message).toContain("the migration credential");
+  });
+
+  test("a line that is not KEY = VALUE is reported by line number, never by content", async () => {
+    const pasted = "a-bare-pasted-secret-with-no-key";
+    const envFilePath = writeEnvFile("bare-line.env", [...SAFE, pasted]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain(`line ${SAFE.length + 1}`);
+    expect(result.findings[0]?.message).not.toContain(pasted);
+  });
+
+  test("the key is everything before the first `=`, as env-role.ts reads it — an allowed prefix cannot hide a key", async () => {
+    // `host:OPENCODE_API_KEY=…` and `rm_worker: rm_owner=…` start with an
+    // allowed key, but parseEnvFile stores them under the keys
+    // `host:OPENCODE_API_KEY` and `rm_worker: rm_owner`, neither of which §3
+    // allows. Each is its own refusal on prod, by line number, and neither
+    // the value nor the key text is printed.
+    const modelKey = "sk-live-secret-behind-an-allowed-prefix";
+    const ownerPassword = "owner-password-behind-an-allowed-prefix";
+    const envFilePath = writeEnvFile("colon-prefix.env", [
+      ...SAFE,
+      `host:OPENCODE_API_KEY=${modelKey}`,
+      `rm_worker: rm_owner=${ownerPassword}`,
+    ]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    const refused = refusals(result.findings);
+    expect(refused).toHaveLength(2);
+    expect(refused[0]?.message).toContain(`line ${SAFE.length + 1}`);
+    expect(refused[1]?.message).toContain(`line ${SAFE.length + 2}`);
+    expect(refused[1]?.message).toContain("the migration credential");
+    const text = result.findings.map((f) => f.message).join("\n");
+    expect(text).not.toContain(modelKey);
+    expect(text).not.toContain(ownerPassword);
+    expect(text).not.toContain("host:OPENCODE_API_KEY");
+  });
+
+  test("a `key: value` line with no `=` is still a stored credential — refused by line number", async () => {
+    const envFilePath = writeEnvFile("colon-only.env", [...SAFE, "rm_owner: typed-once-never-stored"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain(`line ${SAFE.length + 1}`);
+    expect(result.findings[0]?.message).not.toContain("typed-once-never-stored");
   });
 
   test("refuses an rm_owner token on prod", async () => {
@@ -507,11 +1085,12 @@ describe("check 4 — ~/.env holds no dangerous credential", () => {
     expect(result.findings[0]?.message).toContain("doadmin");
   });
 
-  test("warns and proceeds on stage, where a host legitimately holds an owner credential for --migrate", async () => {
+  test("warns and proceeds on stage (§7 check 4), still naming an owner credential", async () => {
     const envFilePath = writeEnvFile("owner-stage.env", [...SAFE, "rm_owner=super-secret-owner-token"]);
     const result = await checkEnvCredentials(context({ env: "stage", envFilePath }));
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.severity).toBe("warn");
+    expect(result.findings[0]?.message).toContain("rm_owner");
     expect(refusals(result.findings)).toEqual([]);
   });
 
@@ -796,13 +1375,84 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
     expect(report.passed).toBe(report.results.every((r) => !r.findings.some((f) => f.severity === "refuse")));
   });
 
-  test("is read-only in every outcome — no row anywhere changes", async () => {
-    const [before] = await sql<{ jobs: number; schedules: number }[]>`
-      SELECT (SELECT COUNT(*) FROM jobs)::int AS jobs, (SELECT COUNT(*) FROM job_schedules)::int AS schedules`;
-    await runPreflight(sql, context({ env: "prod" }), "full", tokens());
-    const [after] = await sql<{ jobs: number; schedules: number }[]>`
-      SELECT (SELECT COUNT(*) FROM jobs)::int AS jobs, (SELECT COUNT(*) FROM job_schedules)::int AS schedules`;
-    expect(after).toEqual(before as { jobs: number; schedules: number });
+  describe("is read-only against EVERY table, in a passing outcome and in a failing one", () => {
+    // Two independent proofs, both over the whole database rather than a
+    // couple of tables:
+    //   (a) the run happens on a connection pinned
+    //       `default_transaction_read_only = on`, where any INSERT, UPDATE,
+    //       DELETE, TRUNCATE, DDL or sequence advance raises 25006 — and a
+    //       check that caught that error would turn it into a finding, so no
+    //       finding may mention it either;
+    //   (b) the cumulative n_tup_ins / n_tup_upd / n_tup_del of every public
+    //       table is the same after the run as before it.
+
+    async function readOnlyRun(ctx: PreflightContext): Promise<PreflightReport> {
+      const pinned = pinnedConnection(true);
+      try {
+        // The pin is real, or (a) proves nothing.
+        const [setting] = await pinned<{ value: string }[]>`SELECT current_setting('default_transaction_read_only') AS value`;
+        expect(setting?.value).toBe("on");
+        // Awaited inside a try, not handed to `expect(...).rejects`: a
+        // postgres.js query is lazy and only runs when its own `then` is
+        // called, which bun's matcher does not do.
+        let refusedCode: string | undefined;
+        try {
+          await pinned`CREATE TABLE rm_preflight_read_only_probe (id integer)`;
+        } catch (error) {
+          refusedCode = (error as { code?: string }).code;
+        }
+        expect(refusedCode).toBe("25006");
+
+        const report = await runPreflight(pinned, ctx, "full", tokens());
+        await flushStats(pinned);
+        const text = report.results.flatMap((r) => r.findings.map((f) => f.message)).join("\n");
+        expect(text).not.toContain("25006");
+        expect(text).not.toMatch(/read-only transaction/i);
+        return report;
+      } finally {
+        await pinned.end({ timeout: 5 });
+      }
+    }
+
+    test("the tuple counters see a write from another connection — the comparison below is not blind", async () => {
+      const before = await tupleWrites();
+      const writer = pinnedConnection(false);
+      try {
+        await writer`UPDATE job_schedules SET enabled = enabled WHERE id = (SELECT min(id) FROM job_schedules)`;
+        await flushStats(writer);
+      } finally {
+        await writer.end({ timeout: 5 });
+      }
+      const after = await tupleWrites();
+      expect(after.job_schedules).toBeGreaterThan(before.job_schedules ?? 0);
+    });
+
+    test("passing outcome: a published, enrolled, clean database — report passes and nothing is written", async () => {
+      await publishManifest();
+      await enrollRehearsal();
+      const envFilePath = writeEnvFile("read-only-pass.env", ["host=db.example.invalid", "rm_app=token-a"]);
+      const ctx = context({ env: "stage", connection: "local", codeFilenames: await ledgerNames(), envFilePath });
+
+      const before = await tupleWrites();
+      const report = scopedReport(await readOnlyRun(ctx));
+      expect(preflightReportLines(report)).toEqual([]);
+      expect(report.passed).toBe(true);
+      expect(await tupleWrites()).toEqual(before);
+    });
+
+    test("failing outcome: checks 2, 3 and 5 refuse — and still nothing is written", async () => {
+      await sql.unsafe("GRANT DELETE ON swarm_members TO rm_app");
+      const ctx = context({ env: "prod", connection: "remote" });
+
+      const before = await tupleWrites();
+      const report = await readOnlyRun(ctx);
+      expect(report.passed).toBe(false);
+      const failed = report.results.filter((r) => refusals(r.findings).length > 0).map((r) => r.check);
+      expect(failed).toContain("privileges");
+      expect(failed).toContain("schema_integrity");
+      expect(failed).toContain("env_identity");
+      expect(await tupleWrites()).toEqual(before);
+    });
   });
 
   test("throws rather than reporting a failed check when the database cannot be queried at all", async () => {
