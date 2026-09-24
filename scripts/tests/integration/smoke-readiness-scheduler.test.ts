@@ -250,7 +250,7 @@ async function bootScheduler(
 describe("the scheduler's health endpoint, read the way smoke reads it", () => {
   test("a booted scheduler reports authenticated, synchronized and rebuilt, and readiness passes", async () => {
     const api = startFakeApi({
-      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(Date.now() + 3_600_000) }],
       settling: [],
       cursor: 0,
@@ -321,7 +321,7 @@ describe("the SSE hop, which only a real socket exercises", () => {
   test("a real `text/event-stream` frame reaches the clock and moves its timer", async () => {
     const closesAt = Date.now() + 3_600_000;
     const api = startFakeApi({
-      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(closesAt) }],
       settling: [],
       cursor: 0,
@@ -352,7 +352,7 @@ describe("the SSE hop, which only a real socket exercises", () => {
 
   test("real keepalive frames keep the copy current and move nothing", async () => {
     const api = startFakeApi({
-      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(Date.now() + 3_600_000) }],
       settling: [],
       cursor: 0,
@@ -378,7 +378,7 @@ describe("the SSE hop, which only a real socket exercises", () => {
     // transport's subscribe was a no-op, so the rebuild stayed on the stalled
     // socket and the watchdog re-read on every budget for ever.
     const api = startFakeApi({
-      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(Date.now() + 3_600_000) }],
       settling: [],
       cursor: 0,
@@ -401,7 +401,7 @@ describe("the SSE hop, which only a real socket exercises", () => {
 
   test("an event emitted over the real wire is applied in order and moves lastApplied", async () => {
     const api = startFakeApi({
-      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600 }],
+      subjects: [{ subjectId: "sub-a", name: "A", epochDurationSeconds: 3600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [{ sessionId: "s1", subjectId: "sub-a", windowClosesAt: iso(Date.now() + 3_600_000) }],
       settling: [],
       cursor: 0,

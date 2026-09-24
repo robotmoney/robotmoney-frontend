@@ -85,10 +85,13 @@ function toSubjectAdmin(row: Record<string, any>) {
     linkedMemberId: row.linked_member_id ?? null,
     structuralNotes: row.structural_notes ?? null,
     lastReviewed: row.last_reviewed ?? null,
-    // The subject's ONE scheduling parameter (scheduler spec §2.2). Surfaced on
-    // every admin read because §2.3 makes this route the only way it changes,
-    // and an operator cannot change a value the surface never shows.
+    // The subject's three scheduling columns (scheduler spec §2.2, D53 (7)).
+    // Surfaced on every admin read because §2.3 makes this route the only way
+    // they change, and an operator cannot change a value the surface never
+    // shows.
     epochDuration: row.epoch_duration_seconds != null ? Number(row.epoch_duration_seconds) : null,
+    epochAnchor: row.epoch_anchor != null ? new Date(row.epoch_anchor).toISOString() : null,
+    judgingDurationSeconds: row.judging_duration_seconds != null ? Number(row.judging_duration_seconds) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -150,8 +153,16 @@ export interface SubjectInput {
   linkedMemberId?: string;
   structuralNotes?: unknown;
   lastReviewed?: string;
-  /** Seconds the submission window stays open (scheduler spec §2.2). Omitted on create means the schema default. */
-  epochDuration?: number;
+  // The three scheduling columns (scheduler spec §2.2, D53 (7)). Typed
+  // `unknown` because they arrive straight off a request body and are
+  // validated here, in this module, with refusals that name the field. Omitted
+  // on create means the schema default; present-but-null is refused (§2.4).
+  /** Grid spacing in seconds — the length of every full window. */
+  epochDuration?: unknown;
+  /** One instant on the grid, as an ISO-8601 timestamp with a zone. */
+  epochAnchor?: unknown;
+  /** Seconds judging waits for a consensus once requested (§4.4). */
+  judgingDurationSeconds?: unknown;
 }
 
 export async function listSubjectsAdmin() {
@@ -162,9 +173,8 @@ export async function listSubjectsAdmin() {
 export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   const existing = (await sql`SELECT id FROM swarm_subjects WHERE id = ${input.id}`)[0];
   if (existing) return err(409, "subject id already exists");
-  if (input.epochDuration !== undefined && !isPositiveWholeSeconds(input.epochDuration)) {
-    return err(400, "epochDuration must be a positive whole number of seconds");
-  }
+  const refused = schedulingRefusal(input);
+  if (refused) return refused;
   // ONE TRANSACTION, because a created subject is an ACTIVE subject and §6.2
   // makes activation a `subject.changed` event the scheduler acts on by opening
   // that subject's first epoch. A create that committed without its event would
@@ -174,18 +184,20 @@ export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADM
       INSERT INTO swarm_subjects
         (id, status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts,
          source, recommendation_type, linked_member_id, structural_notes, last_reviewed,
-         epoch_duration_seconds)
+         epoch_duration_seconds, epoch_anchor, judging_duration_seconds)
       VALUES
         (${input.id}, 'active', ${input.name}, ${input.operator ?? null}, ${input.homepage ?? null},
          ${input.xHandle ?? null}, ${input.thesisBlurb ?? null}, ${tx.json((input.wallets ?? null) as any)},
          ${tx.json((input.nftContracts ?? null) as any)}, ${tx.json((input.source ?? null) as any)},
          ${input.recommendationType ?? null}, ${input.linkedMemberId ?? null},
          ${tx.json((input.structuralNotes ?? null) as any)}, ${input.lastReviewed ?? null},
-         ${input.epochDuration !== undefined ? tx`${input.epochDuration}` : tx`DEFAULT`})
+         ${input.epochDuration !== undefined ? tx`${input.epochDuration as number}` : tx`DEFAULT`},
+         ${input.epochAnchor !== undefined ? tx`${input.epochAnchor as string}::text::timestamptz` : tx`DEFAULT`},
+         ${input.judgingDurationSeconds !== undefined ? tx`${input.judgingDurationSeconds as number}` : tx`DEFAULT`})
       RETURNING *`;
     await appendStreamEvent(tx, "subject.changed", {
       subjectId: input.id,
-      payload: { reason: "activated", epochDurationSeconds: Number(rows[0].epoch_duration_seconds) },
+      payload: { reason: "activated", ...schedulingPayload(rows[0]) },
     });
     await audit(actor, "subject_create", { subjectId: input.id }, tx);
     return { ok: true, status: 201, subject: toSubjectAdmin(rows[0]) };
@@ -193,11 +205,53 @@ export async function createSubjectAdmin(input: SubjectInput, actor: Actor = ADM
 }
 
 /**
- * A whole, positive number of seconds — the only shape an epoch duration may
- * take (scheduler spec §2.2/§2.4, migration 0067's CHECK).
+ * A whole, positive number of seconds — the only shape a duration may take
+ * (scheduler spec §2.2/§2.4, migrations 0067 and 0073's CHECKs).
  */
 function isPositiveWholeSeconds(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v > 0;
+}
+
+/**
+ * An instant with an explicit zone. An anchor without one would be read in
+ * whatever time zone the connection happened to have: two grids for one input.
+ */
+const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+function isInstant(v: unknown): v is string {
+  return typeof v === "string" && INSTANT_RE.test(v) && !Number.isNaN(Date.parse(v));
+}
+
+/**
+ * The refusal for a scheduling column that is present and wrong, or null.
+ *
+ * `undefined` means "not supplied" and is never refused. Anything else must be
+ * the column's shape: §2.4 says there is no on/off state for scheduling, so a
+ * `null`, a zero or a negative duration is not "disabled" — it is refused here
+ * with the field named, before the write, rather than surfacing as a 23514
+ * from the column's CHECK.
+ */
+function schedulingRefusal(
+  input: { epochDuration?: unknown; epochAnchor?: unknown; judgingDurationSeconds?: unknown },
+): AdminResult | null {
+  if (input.epochDuration !== undefined && !isPositiveWholeSeconds(input.epochDuration)) {
+    return err(400, "epochDuration must be a positive whole number of seconds");
+  }
+  if (input.judgingDurationSeconds !== undefined && !isPositiveWholeSeconds(input.judgingDurationSeconds)) {
+    return err(400, "judgingDurationSeconds must be a positive whole number of seconds");
+  }
+  if (input.epochAnchor !== undefined && !isInstant(input.epochAnchor)) {
+    return err(400, "epochAnchor must be an ISO-8601 timestamp with a zone (e.g. 2026-01-01T22:45:00Z)");
+  }
+  return null;
+}
+
+/** The scheduling columns as `subject.changed` carries them — what the scheduler re-reads (§6.2). */
+function schedulingPayload(row: Record<string, any>) {
+  return {
+    epochDurationSeconds: Number(row.epoch_duration_seconds),
+    epochAnchor: new Date(row.epoch_anchor).toISOString(),
+    judgingDurationSeconds: Number(row.judging_duration_seconds),
+  };
 }
 
 export type SubjectPatch = Partial<Omit<SubjectInput, "id">>;
@@ -208,10 +262,35 @@ export async function updateSubjectAdmin(
   patch: SubjectPatch,
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
+  // Refused before the transaction: a wrong value is wrong whatever the row says.
+  const refused = schedulingRefusal(patch);
+  if (refused) return refused;
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR UPDATE`)[0];
+    // `FOR NO KEY UPDATE`, not `FOR UPDATE`: a take in flight holds its
+    // session row and needs a key-share lock on this row for its foreign key,
+    // and this transaction may go on to write that session (the rename
+    // backfill below). `FOR UPDATE` would refuse the take its key share and
+    // deadlock the two.
+    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
     if (!row) return err(404, "subject not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+
+    // §2.2 DURATION CHANGE: "Changing `epoch_duration` through the admin API
+    // also sets `epoch_anchor` to the current window's `window_closes_at`, in
+    // the same transaction; a subject with no open window keeps its anchor."
+    // The current window keeps the close it was opened with, and the grid
+    // continues from that close with the new spacing (§6.2). An anchor the
+    // operator names in the SAME request is what they asked for, and wins.
+    // Read as text so the anchor is that close to the microsecond.
+    const durationChanged = patch.epochDuration !== undefined &&
+      Number(patch.epochDuration) !== Number(row.epoch_duration_seconds);
+    let anchor: string | null = patch.epochAnchor !== undefined ? (patch.epochAnchor as string) : null;
+    if (anchor === null && durationChanged) {
+      const [open] = await tx<{ closes: string | null }[]>`
+        SELECT window_closes_at::text AS closes FROM swarm_sessions
+         WHERE subject_id = ${id} AND state = 'collecting'`;
+      anchor = open?.closes ?? null;
+    }
     const merged = {
       name: patch.name ?? row.name,
       operator: patch.operator ?? row.operator,
@@ -225,14 +304,9 @@ export async function updateSubjectAdmin(
       linked_member_id: patch.linkedMemberId ?? row.linked_member_id,
       structural_notes: patch.structuralNotes !== undefined ? patch.structuralNotes : row.structural_notes,
       last_reviewed: patch.lastReviewed ?? row.last_reviewed,
-      epoch_duration_seconds: patch.epochDuration ?? row.epoch_duration_seconds,
+      epoch_duration_seconds: (patch.epochDuration as number | undefined) ?? row.epoch_duration_seconds,
+      judging_duration_seconds: (patch.judgingDurationSeconds as number | undefined) ?? row.judging_duration_seconds,
     };
-    // §2.4: "There is no on/off state for scheduling." A zero, a negative or a
-    // fractional duration is refused HERE, before the write, so the caller gets
-    // a 400 naming the field rather than a 23514 from migration 0067's CHECK.
-    if (patch.epochDuration !== undefined && !isPositiveWholeSeconds(patch.epochDuration)) {
-      return err(400, "epochDuration must be a positive whole number of seconds");
-    }
     const upd = await tx`
       UPDATE swarm_subjects SET
         name = ${merged.name}, operator = ${merged.operator}, homepage = ${merged.homepage},
@@ -241,6 +315,8 @@ export async function updateSubjectAdmin(
         source = ${tx.json(merged.source as any)}, recommendation_type = ${merged.recommendation_type},
         linked_member_id = ${merged.linked_member_id}, structural_notes = ${tx.json(merged.structural_notes as any)},
         last_reviewed = ${merged.last_reviewed}, epoch_duration_seconds = ${merged.epoch_duration_seconds},
+        epoch_anchor = COALESCE(${anchor}::text::timestamptz, epoch_anchor),
+        judging_duration_seconds = ${merged.judging_duration_seconds},
         version = version + 1, updated_at = now()
       WHERE id = ${id} AND version = ${expectedVersion}
       RETURNING *`;
@@ -256,8 +332,8 @@ export async function updateSubjectAdmin(
       await tx`UPDATE swarm_sessions SET subject_name = ${merged.name} WHERE subject_id = ${id}`;
     }
 
-    // Scheduler spec §6.2: `subject.changed` — "epoch duration changed, or
-    // subject activated / deactivated". Published for ANY subject edit, not
+    // Scheduler spec §6.2: `subject.changed` — "a scheduling column changed,
+    // or subject activated / deactivated". Published for ANY subject edit, not
     // only a duration change: the scheduler's documented reaction is to re-read
     // the subject, and deciding here which fields it cares about would make
     // this function the second place that knowledge lives. Written inside the
@@ -265,7 +341,7 @@ export async function updateSubjectAdmin(
     // change that rolled back.
     await appendStreamEvent(tx, "subject.changed", {
       subjectId: id,
-      payload: { reason: "updated", epochDurationSeconds: Number(upd[0].epoch_duration_seconds) },
+      payload: { reason: "updated", ...schedulingPayload(upd[0]) },
     });
     await audit(actor, "subject_update", { subjectId: id }, tx);
     return { ok: true, status: 200, subject: toSubjectAdmin(upd[0]) };
@@ -278,7 +354,10 @@ export async function deactivateSubjectAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   return sql.begin(async (tx) => {
-    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR UPDATE`)[0];
+    // `FOR NO KEY UPDATE` for updateSubjectAdmin's reason: the close below
+    // writes the open session, which a take in flight may hold while it waits
+    // on a key-share lock of this row.
+    const row = (await tx`SELECT * FROM swarm_subjects WHERE id = ${id} FOR NO KEY UPDATE`)[0];
     if (!row) return err(404, "subject not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
     const upd = await tx`

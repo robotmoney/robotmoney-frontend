@@ -17,9 +17,18 @@
 // This is the single most important correctness property on the API side: the
 // gate races two schedulers against one epoch, and a retry aimed at N must
 // never reach N+1.
+//
+// THE GRID (§2.2, amended 2026-09-24): "Epoch N+1 closes at the first grid
+// instant after N's `window_closes_at` — on an unchanged grid, exactly
+// `window_closes_at + epoch_duration`. If that instant has already passed, it
+// closes at the first grid instant after now instead. Missed slots are
+// skipped, never opened." Every grid equality below is compared IN SQL, at
+// microsecond precision; a JS Date would round both sides to the millisecond
+// and could call an off-grid close "on" it.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as epoch from "../src/swarm/domain.ts";
+import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 
@@ -32,7 +41,31 @@ async function openedEpoch(prefix: string, durationSeconds = 600) {
   return { subjectId, sessionId: r.sessionId };
 }
 
-test("turnover closes N and opens N+1, and the new window is the open instant plus the duration", async () => {
+/** k for a session's close on its subject's grid, and whether it is an integer — by Postgres. */
+async function onGrid(sessionId: string): Promise<{ k: number; exact: boolean }> {
+  const [row] = await sql<{ k: string; exact: boolean }[]>`
+    SELECT extract(epoch FROM (s.window_closes_at - t.epoch_anchor)) / t.epoch_duration_seconds AS k,
+           mod(extract(epoch FROM (s.window_closes_at - t.epoch_anchor)), t.epoch_duration_seconds) = 0 AS exact
+      FROM swarm_sessions s JOIN swarm_subjects t ON t.id = s.subject_id
+     WHERE s.id = ${sessionId}`;
+  return { k: Number(row.k), exact: row.exact };
+}
+
+/**
+ * Put N's close on the most recent grid instant at or before the database's
+ * now — a boundary that has fired late — or `slots` whole slots before that.
+ */
+async function closeNOnPastGridInstant(sessionId: string, subjectId: string, slots = 0): Promise<void> {
+  await sql`
+    UPDATE swarm_sessions s
+       SET window_closes_at = t.epoch_anchor + make_interval(secs => (
+             (floor(extract(epoch FROM (clock_timestamp() - t.epoch_anchor)) / t.epoch_duration_seconds) - ${slots})
+             * t.epoch_duration_seconds)::float8)
+      FROM swarm_subjects t
+     WHERE s.id = ${sessionId} AND t.id = ${subjectId}`;
+}
+
+test("turnover closes N and opens N+1, and N+1 closes EXACTLY one duration after N's close on an unchanged grid", async () => {
   const { subjectId, sessionId } = await openedEpoch("to_basic", 900);
   const r = await epoch.turnOverEpoch(subjectId, sessionId);
   expect(r.ok).toBe(true);
@@ -47,10 +80,212 @@ test("turnover closes N and opens N+1, and the new window is the open instant pl
 
   const opened = await sessionRow(r.openedSessionId);
   expect(opened.state).toBe("collecting");
-  expect(new Date(opened.window_closes_at).getTime() - new Date(opened.convened_at).getTime()).toBe(900 * 1000);
+  // §2.2: "on an unchanged grid, exactly `window_closes_at + epoch_duration`"
+  // — measured from N's CLOSE, not from the instant the turnover ran. This is
+  // an operator's early turnover (N's close is still ahead), so the new window
+  // is LONGER than one duration from its open, as §2.2 says it must be.
+  const [row] = await sql<{ exact: boolean; longer_than_one: boolean }[]>`
+    SELECT n1.window_closes_at = n.window_closes_at + interval '900 seconds' AS exact,
+           n1.window_closes_at - n1.convened_at > interval '900 seconds' AS longer_than_one
+      FROM swarm_sessions n JOIN swarm_sessions n1 ON n1.id = n.successor_session_id
+     WHERE n.id = ${sessionId}`;
+  expect(row).toEqual({ exact: true, longer_than_one: true });
+  expect((await onGrid(r.openedSessionId)).exact).toBe(true);
 
   // There is no gap: exactly one collecting session for the subject, always.
   expect((await collectingSessions(subjectId)).length).toBe(1);
+});
+
+test("a turnover dispatched LATE still closes N+1 on the grid, one duration after N's close — not now + duration", async () => {
+  // N's close is a grid instant in the past (the boundary fired late), but the
+  // next one is still ahead: N+1 takes it.
+  const { subjectId, sessionId } = await openedEpoch("to_late", 3600);
+  await closeNOnPastGridInstant(sessionId, subjectId);
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  const [row] = await sql<{ exact: boolean; not_now_plus: boolean }[]>`
+    SELECT n1.window_closes_at = n.window_closes_at + interval '3600 seconds' AS exact,
+           n1.window_closes_at < clock_timestamp() + interval '3600 seconds' AS not_now_plus
+      FROM swarm_sessions n JOIN swarm_sessions n1 ON n1.id = n.successor_session_id
+     WHERE n.id = ${sessionId}`;
+  expect(row).toEqual({ exact: true, not_now_plus: true });
+});
+
+test("NO DRIFT: after ten late turnovers every close equals epoch_anchor + k × epoch_duration exactly", async () => {
+  // §10: "a turnover dispatched late still gives N+1 a close on the grid;
+  // after ten epochs each close equals `epoch_anchor + k × epoch_duration`
+  // exactly."
+  //
+  // HOW TEN LATE EPOCHS RUN WITHOUT WAITING TEN DURATIONS. Each round turns
+  // over an epoch whose close is already 37 s behind the database clock. To
+  // reach the next round, the subject — its anchor and every close — is moved
+  // back by one duration, which is what one duration of real time passing
+  // looks like to every comparison the API makes: they all read the same
+  // clock against these stored instants. The grid relation between the
+  // closes is untouched by the move, so k is read against the moved anchor.
+  const D = 600;
+  const { subjectId, sessionId: first } = await openedEpoch("to_nodrift", D);
+  await sql`UPDATE swarm_subjects SET epoch_anchor = clock_timestamp() - interval '37 seconds' WHERE id = ${subjectId}`;
+  await closeNOnPastGridInstant(first, subjectId);
+
+  const chain: string[] = [first];
+  for (let round = 0; round < 10; round += 1) {
+    const r = await epoch.turnOverEpoch(subjectId, chain[chain.length - 1]!);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.replayed).toBe(false);
+    chain.push(r.openedSessionId);
+    await sql`UPDATE swarm_subjects SET epoch_anchor = epoch_anchor - make_interval(secs => ${D}) WHERE id = ${subjectId}`;
+    await sql`UPDATE swarm_sessions SET window_closes_at = window_closes_at - make_interval(secs => ${D})
+               WHERE subject_id = ${subjectId}`;
+  }
+
+  const ks: number[] = [];
+  for (const id of chain) {
+    const pos = await onGrid(id);
+    expect(pos.exact, `session ${id} closes off the grid`).toBe(true);
+    ks.push(pos.k);
+  }
+  // k advances by EXACTLY one per turnover: no slot skipped (each was late by
+  // under one duration), and no drift — a `now + duration` close would sit
+  // off the grid by the lateness on every round and fail `exact` above.
+  expect(ks.length).toBe(11);
+  for (let i = 1; i < ks.length; i += 1) expect(ks[i]! - ks[i - 1]!).toBe(1);
+});
+
+test("GRID AFTER DOWNTIME: two missed slots, then ONE turnover lands on the first FUTURE grid instant", async () => {
+  // §10: "restart after two missed slots; the one turnover on rebuild gives
+  // N+1 the first future grid instant, never a past one and never
+  // `now + duration`." N's close is two whole slots before the latest past
+  // grid instant, so N.close + D and N.close + 2D both passed while nothing
+  // turned it over.
+  const D = 120;
+  const { subjectId, sessionId } = await openedEpoch("to_downtime", D);
+  await closeNOnPastGridInstant(sessionId, subjectId, 2);
+  const [{ before }] = await sql<{ before: string }[]>`SELECT clock_timestamp()::text AS before`;
+
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  const [row] = await sql<{ future: boolean; first: boolean; skipped: boolean; on_grid: boolean }[]>`
+    SELECT n1.window_closes_at > ${before}::text::timestamptz AS future,
+           n1.window_closes_at <= ${before}::text::timestamptz + make_interval(secs => ${D}) AS first,
+           n1.window_closes_at = n.window_closes_at + make_interval(secs => ${3 * D}) AS skipped,
+           mod(extract(epoch FROM (n1.window_closes_at - t.epoch_anchor)), t.epoch_duration_seconds) = 0 AS on_grid
+      FROM swarm_sessions n
+      JOIN swarm_sessions n1 ON n1.id = n.successor_session_id
+      JOIN swarm_subjects t ON t.id = n.subject_id
+     WHERE n.id = ${sessionId}`;
+  // Future, on the grid, the FIRST such instant (within one duration of the
+  // present), and exactly three slots after N's close — the two missed slots
+  // were skipped, not opened.
+  expect(row).toEqual({ future: true, first: true, skipped: true, on_grid: true });
+  // ONE turnover: two sessions for the subject, not four.
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(2);
+});
+
+test("ONE PRESENT, READ AT THE COMPARISON: a turnover that waited past the next grid instant never opens a closed window", async () => {
+  // §4.2: "A derived instant, such as the next grid close, is computed once
+  // per transaction from a single read of that clock." That one read has to
+  // come AFTER the transaction holds the subject: a turnover queued behind
+  // another transaction's lock across a grid instant would otherwise derive
+  // its successor from a present that went stale while it waited, and open a
+  // window whose close had already passed.
+  const D = 2;
+  const { subjectId, sessionId } = await openedEpoch("to_one_present", D);
+  // N's close is the latest past grid instant; G1 = N.close + D is the next.
+  await closeNOnPastGridInstant(sessionId, subjectId);
+
+  let pending!: ReturnType<typeof epoch.turnOverEpoch>;
+  let sawWaiter = false;
+  let releasedAt = "";
+  await sql.begin(async (tx) => {
+    await tx`SELECT id FROM swarm_subjects WHERE id = ${subjectId} FOR UPDATE`;
+    pending = epoch.turnOverEpoch(subjectId, sessionId);
+    for (let i = 0; i < 200 && !sawWaiter; i += 1) {
+      const [w] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND pid <> pg_backend_pid()`;
+      sawWaiter = Number(w?.n ?? 0) > 0;
+      if (!sawWaiter) await Bun.sleep(10);
+    }
+    // Hold the lock until G1 has passed by the database clock.
+    await tx`
+      SELECT pg_sleep(GREATEST(0, extract(epoch FROM (
+        (SELECT window_closes_at FROM swarm_sessions WHERE id = ${sessionId})
+          + make_interval(secs => ${D}) + interval '200 milliseconds' - clock_timestamp()))::float8))`;
+    const [{ at }] = await tx<{ at: string }[]>`SELECT clock_timestamp()::text AS at`;
+    releasedAt = at;
+  });
+  expect(sawWaiter, "the turnover must have queued behind the subject lock").toBe(true);
+  const r = await pending;
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  const [row] = await sql<{ after_release: boolean; second_slot: boolean }[]>`
+    SELECT n1.window_closes_at > ${releasedAt}::text::timestamptz AS after_release,
+           n1.window_closes_at = n.window_closes_at + make_interval(secs => ${2 * D}) AS second_slot
+      FROM swarm_sessions n JOIN swarm_sessions n1 ON n1.id = n.successor_session_id
+     WHERE n.id = ${sessionId}`;
+  // G1 passed while the turnover waited, so the successor takes the slot after
+  // it: a window that is still open when the turnover commits.
+  expect(row).toEqual({ after_release: true, second_slot: true });
+});
+
+test("a refused turnover closes NOTHING: an inactive subject's collecting epoch stays exactly as it was", async () => {
+  // §5: a refusal is a reasoned no-op. The subject-status check used to run
+  // AFTER the UPDATE that closed N, and a refusal returned from inside
+  // `sql.begin` COMMITS — so "refused" and "closed, absences recorded" were
+  // one and the same outcome.
+  const { subjectId, sessionId } = await openedEpoch("to_refuse_inactive");
+  await sql`UPDATE swarm_subjects SET status = 'inactive' WHERE id = ${subjectId}`;
+  const [{ head }] = await sql<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(false);
+  if (r.ok) return;
+  expect(r.error).toBe("subject_not_active");
+
+  const s = await sessionRow(sessionId);
+  expect(s.state).toBe("collecting");
+  expect(s.judge_mode).toBeNull();
+  expect(s.judging_duration_seconds).toBeNull();
+  expect(s.successor_session_id).toBeNull();
+  expect((await sql`SELECT 1 FROM swarm_agent_health_events WHERE session_id = ${sessionId}`).length).toBe(0);
+  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${Number(head)}`).length).toBe(0);
+});
+
+test("HTTP: POST epochs/turnover without expectedSessionId is a 400 and changes nothing", async () => {
+  // §4.3: turnover is bound to a named epoch. The route refuses a call that
+  // names none before it reaches the transition, and nothing moves.
+  const { subjectId, sessionId } = await openedEpoch("to_http_unbound");
+  const [{ head }] = await sql<{ head: string }[]>`SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_stream_events`;
+  const cfg = { adminToken: null, allowInsecure: true } as const;
+  const post = (body: unknown) => {
+    const req = new Request("http://x/api/swarm/admin/epochs/turnover", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    return handleSwarmAdmin(req, new URL(req.url), cfg);
+  };
+
+  for (const body of [{ subjectId }, { subjectId, expectedSessionId: "" }, { subjectId, expectedSessionId: null }]) {
+    const res = await post(body);
+    expect(res?.status).toBe(400);
+    expect((res!.body as { error: string }).error).toBe("subjectId and expectedSessionId required");
+  }
+  // Naming an epoch that does not exist is a reasoned refusal, not a 400 —
+  // and it closes nothing either.
+  const unknown = await post({ subjectId, expectedSessionId: "00000000-0000-4000-8000-000000000000" });
+  expect(unknown?.status).toBe(404);
+  expect((unknown!.body as { error: string }).error).toBe("expected_session_not_found");
+
+  expect((await sessionRow(sessionId)).state).toBe("collecting");
+  expect((await sql`SELECT id FROM swarm_sessions WHERE subject_id = ${subjectId}`).length).toBe(1);
+  expect((await sql`SELECT 1 FROM swarm_stream_events WHERE seq > ${Number(head)}`).length).toBe(0);
+
+  // And the bound call, through the same route, does turn it over.
+  const bound = await post({ subjectId, expectedSessionId: sessionId });
+  expect(bound?.status).toBe(200);
+  expect((await sessionRow(sessionId)).state).toBe("window_closed");
 });
 
 test("the successor's brief is published in the same call, so the epoch is usable at once", async () => {
@@ -202,4 +437,25 @@ test("the judge mode in force is captured on the closing epoch, and a later chan
   expect(second.ok).toBe(true);
   if (!second.ok) return;
   expect(second.judgeMode).toBe("off");
+});
+
+test("the judging duration in force is captured on the closing epoch, and a later change does not reach it", async () => {
+  // §4.4: "Judge mode and judging duration are captured at turnover … An admin
+  // changing either afterwards affects later sessions, never one already
+  // settling." The capture is the SESSION column (migration 0074), never a
+  // live read of the subject.
+  const { subjectId, sessionId } = await openedEpoch("to_judging_duration");
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 240 WHERE id = ${subjectId}`;
+  const r = await epoch.turnOverEpoch(subjectId, sessionId);
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect((await sessionRow(sessionId)).judging_duration_seconds).toBe(240);
+  // Still collecting: nothing is captured on the successor until IT closes.
+  expect((await sessionRow(r.openedSessionId)).judging_duration_seconds).toBeNull();
+
+  await sql`UPDATE swarm_subjects SET judging_duration_seconds = 60 WHERE id = ${subjectId}`;
+  expect((await sessionRow(sessionId)).judging_duration_seconds).toBe(240);
+  const second = await epoch.turnOverEpoch(subjectId, r.openedSessionId);
+  expect(second.ok).toBe(true);
+  expect((await sessionRow(r.openedSessionId)).judging_duration_seconds).toBe(60);
 });

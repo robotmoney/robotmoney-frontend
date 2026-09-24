@@ -40,7 +40,6 @@ export interface SwarmWaitlistEntry {
   email: string;
   emailNorm: string;
   createdAt: string;
-  notifiedAt: string | null;
   source: string | null;
 }
 
@@ -455,11 +454,20 @@ export interface SwarmSessionListResponse {
   /** Opaque cursor for the next page; null once exhausted (always null for ?full=1). */
   nextCursor: string | null;
   /**
-   * Next fire time of the enabled `swarm.open_session` schedule (issue #783),
-   * so a resting-state client can say "opens in 3h" without guessing at an
-   * env-configured cron. Null when no such schedule is enabled — never
-   * omitted, so a caller can tell "not scheduled" apart from "older API".
-   * Present on every page (including `?full=1`), not just the first.
+   * When the next session opens (issue #783), so a resting-state client can
+   * say "opens in 3h". An ISO-8601 instant, the same shape it has always had.
+   *
+   * Answered from the EPOCH model (system-scheduler-spec.md §2.1): epochs run
+   * back to back, and turnover opens N+1 in the transaction that closes N, so
+   * the instant an open window closes IS the instant the next session opens.
+   * The value is the earliest `windowClosesAt` across every `collecting`
+   * session. It is not read from any schedule table — `job_schedules` rows no
+   * longer drive sessions, and a stale `next_run_at` there changes nothing.
+   *
+   * Null when no subject has an open window (a fresh database before the
+   * scheduler's first rebuild, or every subject deactivated) — never omitted,
+   * so a caller can tell "nothing open" apart from "older API". Present on
+   * every page (including `?full=1`), not just the first.
    */
   nextSessionAt: string | null;
 }

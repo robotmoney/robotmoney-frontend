@@ -293,6 +293,27 @@ describe("a judging deadline is reconstructed, never restarted (§3.2, §9, §10
 });
 
 describe("the full read is consumed whole (§3, §10)", () => {
+  test("the full read returns every active subject with all THREE scheduling columns (§3 part 1, §2.2)", async () => {
+    // §3 part 1: "Every active subject, with its scheduling columns (§2.2)" —
+    // `epoch_duration`, `epoch_anchor` and `judging_duration`, not the one
+    // column the pre-amendment read carried. The API side of the same claim is
+    // pinned in backend/tests/epoch-duration.test.ts against real Postgres; the
+    // field NAMES are held equal on both sides by system-scheduler-wire-parity.
+    const { api } = world();
+    api.addSubject("sub-a", 600, true, { epochAnchorMs: T0 - 42_000, judgingDurationSeconds: 120 });
+    api.addSubject("sub-off", 300, false);
+    const snapshot = await api.fullRead();
+    expect(snapshot.subjects).toEqual([
+      {
+        subjectId: "sub-a",
+        name: "sub-a",
+        epochDurationSeconds: 600,
+        epochAnchor: new Date(T0 - 42_000).toISOString(),
+        judgingDurationSeconds: 120,
+      },
+    ]);
+  });
+
   test("a recovered `judged` session goes straight to finalize, skipping aggregate and request", async () => {
     const { api, boot } = world();
     api.addSubject("sub-a", 600);
