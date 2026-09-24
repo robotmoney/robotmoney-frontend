@@ -254,7 +254,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
     "src/api/routes/projects",
-    "src/api/routes/swarm",
     "src/api/routes/swarm/waitlist",
     "src/chain/buyback-logs",
     "src/ops/asset-prices",

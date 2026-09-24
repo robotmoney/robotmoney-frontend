@@ -24,8 +24,13 @@
 
 /**
  * The SIX images this repo builds, in the order `docker compose build` is asked
- * for them. Five come from `backend/Dockerfile` (api + the three worker lanes +
- * the independent analytics producer); `member-agent` is profile-gated and
+ * for them. Five come from `backend/Dockerfile` (api + the two surviving worker
+ * lanes + `system-scheduler` + the independent analytics producer). The count
+ * is unchanged by issue #1026 only by coincidence: `worker-swarm` left the list
+ * and `system-scheduler` — the one long-running container that replaces it
+ * (system-scheduler-spec.md §1) — took its place, and it ships from the same
+ * `backend/Dockerfile` image so a staging host still compiles nothing.
+ * `member-agent` is profile-gated and
  * built from `scripts/lib/member-agent/Dockerfile`, and it is a RUNTIME
  * prerequisite of a full stack even though it never appears in `servicesFor`
  * (see config.ts's buildServicesFor) — leaving it unshipped would make the
@@ -37,9 +42,9 @@
  */
 export const SHIPPED_IMAGE_SERVICES = [
   "api",
-  "worker-swarm",
   "worker-analytics",
   "worker-research",
+  "system-scheduler",
   "analytics-producer",
   "member-agent",
 ] as const;

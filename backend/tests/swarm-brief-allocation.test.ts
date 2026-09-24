@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import * as swarm from "../src/swarm/domain.ts";
+import * as ic from "../src/swarm/domain.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../src/chain/allocation-framework.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -20,9 +20,9 @@ test("publishBrief() for subject with source.type === 'framework' attaches body.
                     ${sql.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
             ON CONFLICT (id) DO UPDATE SET asof = EXCLUDED.asof, buckets = EXCLUDED.buckets`;
 
-  const session = await swarm.openSession(subjId);
-  await swarm.publishBrief(session.id);
-  const brief = await swarm.getBriefBySession(session.id);
+  const session = await ic.openSession(subjId);
+  await ic.publishBrief(session.id);
+  const brief = await ic.getBriefBySession(session.id);
 
   expect(brief).not.toBeNull();
   expect(brief?.body?.allocation).toBeDefined();
@@ -38,9 +38,9 @@ test("publishBrief() for subject with source.type !== 'framework' omits body.all
             VALUES (${subjId}, 'active', 'Woon Treasury', ${sql.json({ type: "wallets" })}, 'bucket_weights')
             ON CONFLICT (id) DO UPDATE SET source = EXCLUDED.source`;
 
-  const session = await swarm.openSession(subjId);
-  await swarm.publishBrief(session.id);
-  const brief = await swarm.getBriefBySession(session.id);
+  const session = await ic.openSession(subjId);
+  await ic.publishBrief(session.id);
+  const brief = await ic.getBriefBySession(session.id);
 
   expect(brief).not.toBeNull();
   expect(brief?.body?.allocation).toBeUndefined();
@@ -54,9 +54,9 @@ test("publishBrief() for framework subject without allocation_framework row carr
 
   await sql`DELETE FROM allocation_framework WHERE id = 1`;
 
-  const session = await swarm.openSession(subjId);
-  await swarm.publishBrief(session.id);
-  const brief = await swarm.getBriefBySession(session.id);
+  const session = await ic.openSession(subjId);
+  await ic.publishBrief(session.id);
+  const brief = await ic.getBriefBySession(session.id);
 
   expect(brief).not.toBeNull();
   expect(brief?.body?.allocation).toBeUndefined();
@@ -73,9 +73,9 @@ test("brief freezes policy at creation and retry cannot replace its reference", 
                     ${sql.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
             ON CONFLICT (id) DO UPDATE SET asof = EXCLUDED.asof, buckets = EXCLUDED.buckets`;
 
-  const first = await swarm.openSession(subjId);
-  await swarm.publishBrief(first.id);
-  const before = await swarm.getBriefBySession(first.id);
+  const first = await ic.openSession(subjId);
+  await ic.publishBrief(first.id);
+  const before = await ic.getBriefBySession(first.id);
   expect(before?.body?.allocation?.buckets[0]?.target_weight).toBe(0.95);
 
   // Alter the policy in the database
@@ -86,15 +86,15 @@ test("brief freezes policy at creation and retry cannot replace its reference", 
   await sql`UPDATE allocation_framework SET buckets = ${sql.json(JSON.parse(JSON.stringify(changed)))} WHERE id = 1`;
 
   // Retry publishing the first session — must retain original reference
-  await swarm.publishBrief(first.id);
-  const afterRetry = await swarm.getBriefBySession(first.id);
+  await ic.publishBrief(first.id);
+  const afterRetry = await ic.getBriefBySession(first.id);
   expect(afterRetry?.body?.allocation).toEqual(before?.body?.allocation);
 
   // Publishing a fresh session picks up the new policy
   await sql`UPDATE swarm_sessions SET state = 'published' WHERE id = ${first.id}`;
-  const second = await swarm.openSession(subjId);
-  await swarm.publishBrief(second.id);
-  const secondBrief = await swarm.getBriefBySession(second.id);
+  const second = await ic.openSession(subjId);
+  await ic.publishBrief(second.id);
+  const secondBrief = await ic.getBriefBySession(second.id);
   expect(secondBrief?.body?.allocation?.buckets[0]?.target_weight).toBe(0.9);
 });
 
@@ -123,10 +123,10 @@ test("publishBrief()'s recentSessions only contains published sessions matching 
   }
 
   // Open and publish a new session for subjA
-  const targetSession = await swarm.openSession(subjA);
-  await swarm.publishBrief(targetSession.id);
+  const targetSession = await ic.openSession(subjA);
+  await ic.publishBrief(targetSession.id);
 
-  const brief = await swarm.getBriefBySession(targetSession.id);
+  const brief = await ic.getBriefBySession(targetSession.id);
   expect(brief).not.toBeNull();
 
   const recent = brief?.body?.recentSessions as Array<{ date: string; subject_id: string; state: string }>;

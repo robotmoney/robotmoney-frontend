@@ -58,7 +58,9 @@ function plan(overrides: Partial<DeploymentPlan> = {}): DeploymentPlan {
     target: { rmEnv: "stage", identity: "rehearsal", database: "db.example.invalid/robotmoney" },
     images: { api: DIGEST_A, worker: DIGEST_A },
     roster: { agents: ["athena", "robot-money"], judges: ["themis"] },
-    configuration: { SWARM_OPEN_SESSION_CRON: "*/5 * * * *" },
+    // An arbitrary surviving configuration key — the journal records whatever
+    // the plan carries and cares only that the value round-trips.
+    configuration: { PRODUCER_RESEARCH_CRON: "0 23 * * *" },
     mutations: ["migrate"],
     ...overrides,
   };
@@ -556,7 +558,7 @@ describe("receipt — §1.4, the artifact that outlives the run", () => {
     const p = plan();
     openJournal(paths, { kind: "fresh-start", reason: "none" }, p);
     const failed = receiptFor(p, {
-      readiness: [{ check: "enabled schedules advanced", pass: false, detail: "swarm.publish never advanced" }],
+      readiness: [{ check: "scheduler ready", pass: false, detail: "initial rebuild never completed" }],
     });
     await expect(writeReceipt(paths, failed)).rejects.toThrow(/readiness/i);
     expect(readReceipt(paths)).toBeNull();

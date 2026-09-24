@@ -27,7 +27,7 @@
 // point and which the first cut of this file got wrong. It is written back into
 // the passed env (so the direct `docker compose` calls smoke-main.ts drives off
 // `dockerEnv` see it) AND RETURNED as a compose-env fragment, because the api
-// and worker-swarm services do NOT come up that way: they come up through
+// service does NOT come up that way: it comes up through
 // `stack.up()`, whose child environment is `buildSpawnEnv()` — a fixed
 // DOCKER_CLIENT_ENV_ALLOWLIST (PATH/HOME/DOCKER_*/proxy) plus
 // `buildComposeEnv()`. That allowlist exists precisely to keep a provider secret

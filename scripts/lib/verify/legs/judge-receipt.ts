@@ -7,8 +7,11 @@
 //   1. `swarm_judge_config.mode` is `off` in production, and a twin restores
 //      production — so every twin boot judged nothing at all.
 //   2. `OPENCODE_API_KEY` reached the member-agent containers but not the
-//      `worker-swarm` lane that runs the judge, so `resolveJudgeTransport()`
-//      returned null and every judgement was template prose.
+//      worker lane that ran the judge (that lane is gone — issue #1026 made the
+//      judge a participant, which receives its model key from
+//      `credential.json` like every other participant, smoke-production-spec.md
+//      §3), so `resolveJudgeTransport()` returned null and every judgement was
+//      template prose.
 //   3. A twin adopted production's in-flight session and inherited its
 //      six-hour window, so the lifecycle stalled before the judge job.
 //   4. The Zen REST API rejects the provider-qualified model id the config
@@ -86,7 +89,7 @@ export function receiptVerdict(body: ReceiptResponse | Receipt): { ok: boolean; 
     return {
       ok: false,
       why: `judge.source='${source}', not 'model' — this certificate attests TEMPLATE PROSE, not inference. ` +
-        "Check swarm_judge_config.model and that OPENCODE_API_KEY reaches worker-swarm.",
+        "Check swarm_judge_config.model and that OPENCODE_API_KEY reaches the judge participant's container.",
     };
   }
   if (mode && mode !== "enforce") {

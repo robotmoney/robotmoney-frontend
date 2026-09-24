@@ -41,7 +41,7 @@
  * It was 60_000, and that is the whole of run-1 §E.3 / this run's 1.12 finding:
  * the pinned model (`deepseek-v4-flash` over Zen) ANSWERS the real judge prompt
  * — correctly, ~2.5 kB of it — in 58 s to 175 s, measured inside the
- * worker-swarm container against the funded key. The 60 s default was under the
+ * judge participant container against the funded key. The 60 s default was under the
  * FASTEST of those. So every enforce session aborted at 60 s, was classified
  * `model_timeout` (correctly),
  * and published deterministic fallback prose under the judge's name. Nothing
@@ -69,7 +69,7 @@ export const JUDGE_FALLBACK_LOOKBACK_DAYS = 7;
  * The pinned model's MEASURED latency on the real judge prompt, in ms.
  *
  * Not an estimate and not a guess at a vendor SLA. Measured inside the
- * worker-swarm container against the funded key, through the application's own
+ * judge participant container against the funded key, through the application's own
  * buildJudgeInput/renderJudgePrompt/resolveJudgeTransport, on three real
  * three-take prompts across two days: 58.1 s, 112.1 s and 174.9 s (run-1
  * `phase1-rc2/1.12-judge-timeout-FINDING.txt`, run-2

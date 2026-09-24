@@ -846,7 +846,7 @@ test("GET /api/swarm/sessions: malformed cursor and out-of-range limit are 400s 
 // ── Issue #783: nextSessionAt on the sessions envelope ──────────────────────
 //
 // RE-SOURCED FROM THE EPOCH MODEL (issue #1026 W4). The field used to report
-// the enabled `swarm.open_session` cron row's `next_run_at`; those rows are
+// the enabled session-opening cron row's `next_run_at`; those rows are
 // retired, and the epoch model answers the same question exactly rather than
 // approximately. Scheduler spec §2.1: epochs run back to back, so the instant
 // the current window closes IS the instant the next session opens. The field's
@@ -1274,7 +1274,7 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
   expect(dated?.sessionId).toBe(second.id);
   expect(dated?.body?.windowClosesAt).toBe(secondPublished.windowClosesAt);
 
-  // Re-publishing the SAME session (a retried swarm.publish_brief job) still
+  // Re-publishing the SAME session (a retried brief publication) still
   // updates in place — no third row — and must not touch session 1's brief.
   const republished = await ic.publishBrief(second.id, 45);
   const afterRepublish = await sql`SELECT id FROM swarm_briefs WHERE subject_id = ${subj} AND date = ${date}`;

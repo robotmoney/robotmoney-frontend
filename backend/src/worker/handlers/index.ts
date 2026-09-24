@@ -3,7 +3,6 @@
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
-import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
@@ -90,13 +89,13 @@ export const handlers: Record<string, JobHandler> = {
   "analytics.parity_sweep": () => triggerParitySweep(),
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
-  // swarm session lifecycle
-  "swarm.open_session": swarm.openSession,
-  "swarm.publish_brief": swarm.publishBrief,
-  "swarm.close_window": swarm.closeWindow,
-  "swarm.aggregate": swarm.aggregateSession,
-  "swarm.judge": swarm.judgeSession,
-  "swarm.publish": swarm.publishSession,
+  // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue
+  // work any more: system-scheduler-spec.md §4 gives the lifecycle a different
+  // shape — the `system-scheduler` container drives a subject's epoch through
+  // the API, and §1/§7 put every step that needs a model in a participant
+  // container, because the scheduler "calls no model, so it has no model key".
+  // A registration here would put one back inside a process that holds the
+  // database credential.
   // The three swarm email delivery kinds (application receipt, activation
   // approval, waitlist seat-open) were REMOVED with the swarm email feature
   // itself — issue #1026 W5, decision D50 reversing D30. Nothing enqueues them

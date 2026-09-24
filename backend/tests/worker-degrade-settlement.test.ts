@@ -55,17 +55,20 @@ test("a degrade that exhausts its retries settles FAILED, not succeeded", async 
 });
 
 test("the exhausted degrade is VISIBLE on the admin overview", async () => {
+  // `swarm.judge` is a MONITORED kind (admin/overview.ts JUDGE_KIND) with no
+  // registered handler of its own any more — judging moved out of the queue
+  // entirely (issue #1026 W4). That is exactly what this test needs: it is
+  // asserting the overview surfaces an exhausted degrade, and it supplies the
+  // degrading handler itself. The lane is `generic`, which claims every kind.
   await sql`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('swarm.judge', '{}', 2)`;
-  handlers["swarm.judge.saved"] = handlers["swarm.judge"];
   handlers["swarm.judge"] = async () => ({ ok: false, error: "judge_unavailable" });
   try {
     for (let i = 0; i < 6; i++) {
       await sql`UPDATE jobs SET run_after = now() WHERE status = 'pending'`;
-      if (!(await processOneJob({ lane: LANES.swarm }))) break;
+      if (!(await processOneJob({ lane: LANES.generic }))) break;
     }
   } finally {
-    handlers["swarm.judge"] = handlers["swarm.judge.saved"];
-    delete handlers["swarm.judge.saved"];
+    delete handlers["swarm.judge"];
   }
   const [job] = await sql`SELECT status FROM jobs WHERE kind = 'swarm.judge' ORDER BY id DESC LIMIT 1`;
   expect(job.status).toBe("failed");

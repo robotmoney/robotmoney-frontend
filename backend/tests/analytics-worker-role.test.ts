@@ -286,7 +286,7 @@ test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the re
 // The consensus judge's two tables (migrations 0039/0040, issue #752). 0016's
 // ALTER DEFAULT PRIVILEGES grants rm_worker full DML on every table created
 // afterwards, so a table that needs less has to say so explicitly. Neither
-// needs any: `swarm.judge` runs in worker-swarm, but every statement it issues
+// needs any: judging runs in the judge participant, but every statement it issues
 // goes through src/db/client.ts — the DATABASE_URL pool — not the
 // WORKER_DATABASE_URL one this test connects as.
 test("the judge's judgement record and config row DENY insert/update/delete to the worker role, reads still allowed", async () => {

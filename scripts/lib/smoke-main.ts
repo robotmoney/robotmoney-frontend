@@ -21,7 +21,7 @@ import {
   resolveSmokeCadenceForBoot,
   stageCadenceApplies,
   type SubjectCadencePlan,
-} from "./smoke-schedule.ts";
+} from "./smoke-cadence.ts";
 import {
   admissionRecord,
   ADMISSION_RECORD_FILE,
@@ -166,10 +166,10 @@ const imagesOverride = imagesOverrideDecision.path;
 // swarm interval, the SUBMISSION WINDOW (#570), the subject phase offset and the
 // producer beats. A `--static-port` boot is the standing/public smoke (6 h per
 // subject); every other boot, CI included, keeps today's fast ~2-min values.
-// Every number lives in scripts/lib/smoke-schedule.ts, which also ASSERTS that
+// Every number lives in scripts/lib/smoke-cadence.ts, which also ASSERTS that
 // the constants resolved here are the ones this invocation claims — fatal if not.
 // …EXCEPT on a twin, which is a test instrument and runs FAST however the port
-// is pinned — see stageCadenceApplies() in smoke-schedule.ts for why, and the
+// is pinned — see stageCadenceApplies() in smoke-cadence.ts for why, and the
 // smoke-twin's explicit `--cadence fast` override says the same thing out loud.
 // The profile itself is RESOLVED with the data path below, which owns the FATAL
 // for both; only the twin question is answered here, because the flags say it.
@@ -242,7 +242,7 @@ let cadence: ReturnType<typeof resolveSmokeCadenceForBoot>;
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: homeEnvFilePath() });
   requestedDataPath = parsed.dataPath;
-  cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), cadence: parsed.cadence, env: process.env });
+  cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), cadence: parsed.cadence });
   for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
@@ -543,12 +543,15 @@ const state: SmokeState = {
     // that `docker ps` would never show.
     ...(composePostgres ? [{ name: "postgres", phase: "pending" as const }] : []),
     { name: "api", phase: "pending" },
-    // One container per worker execution lane (issue #107): swarm is the
-    // reserved interactive lane; analytics (regime + pipelines) and research
-    // run independently so a blocked research fetch can't starve the others.
-    { name: "worker-swarm", phase: "pending" },
+    // One container per worker execution lane (issue #107): analytics (regime +
+    // pipelines) and research run independently so a blocked research fetch
+    // can't starve the others.
     { name: "worker-analytics", phase: "pending" },
     { name: "worker-research", phase: "pending" },
+    // The clock (issue #1026) — not a lane: it claims no jobs and holds no
+    // database credential (system-scheduler-spec.md §1, §7). It gets a tile
+    // because a stalled one is why no session turns over.
+    { name: "system-scheduler", phase: "pending" },
   ],
   steps: [
     // Only a pre-populated database carries the guard, so only it shows the step.
@@ -1085,7 +1088,10 @@ async function main(): Promise<void> {
   // StackHooks is how the TUI is driven WITHOUT scripts/stack importing a
   // renderer: each lifecycle event maps onto the panes exactly as the
   // hand-rolled sequence did, so the visible boot is unchanged.
-  const WORKER_LANES = ["worker-swarm", "worker-analytics", "worker-research", "analytics-producer"];
+  // The standing non-api containers this boot starts. `system-scheduler` is
+  // here because `up` starts it and its tile must track that; it is NOT a
+  // worker lane (issue #1026) and holds no queue.
+  const WORKER_LANES = ["worker-analytics", "worker-research", "system-scheduler", "analytics-producer"];
   const onStackEvent = (e: StackEvent): void => {
     if (e.phase === "log") return void log(e.message);
     const { phase, status } = e;
@@ -1109,10 +1115,11 @@ async function main(): Promise<void> {
       }
     } else if (phase === "services") {
       if (status === "start") {
-        log("starting api, worker lanes (swarm/analytics/research)…");
+        log("starting api, worker lanes (analytics/research), system-scheduler…");
         for (const n of ["api", ...WORKER_LANES]) setContainer(state, n, "starting");
       } else {
         // No /health endpoint on a lane — `up` ⇒ running (unchanged semantics).
+        // system-scheduler serves one, but §6.3 reports it separately.
         for (const n of WORKER_LANES) setContainer(state, n, "healthy", "running");
         setStep(state, "api /health", "running");
       }
@@ -1549,8 +1556,8 @@ async function main(): Promise<void> {
   // sessions never run concurrently and race on the shared member roster. runSession
   // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
   // needs pre-seeding here.
-  // The TIMETABLE is decided by the pure planner in scripts/lib/smoke-schedule.ts
-  // (unit-tested in scripts/tests/unit/smoke-schedule.test.ts; also the source of
+  // The TIMETABLE is decided by the pure planner in scripts/lib/smoke-cadence.ts
+  // (unit-tested in scripts/tests/unit/smoke-cadence.test.ts; also the source of
   // the nightly LIVE smoke's deadline — issue #128). This loop keeps only the
   // I/O: every subject's first session lands promptly under BOTH profiles, and
   // later runs walk that subject's phase-offset steady-state grid.
@@ -1725,7 +1732,7 @@ async function main(): Promise<void> {
   // order, and never more — no generated fallback name once the list is
   // exhausted, and the driver loop terminates once they're all attempted
   // rather than running forever.
-  // ADMISSION CADENCE comes from the profile (scripts/lib/smoke-schedule.ts), not
+  // ADMISSION CADENCE comes from the profile (scripts/lib/smoke-cadence.ts), not
   // from literals here: the first admission stays prompt under both profiles
   // (after the base swarm shows), and later admissions ride the fast
   // profile's 5-min beat or, under `--stage`, the realistic swarm interval.

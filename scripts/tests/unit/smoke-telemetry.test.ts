@@ -28,13 +28,13 @@ describe("parseTelemetry", () => {
     const out = parseTelemetry(
       [
         "api|true|0|0|false|healthy",
-        "worker-swarm|false|7|1|false|none",
-        "worker-analytics|true|2|0|true|unhealthy",
+        "worker-analytics|false|7|1|false|none",
+        "worker-research|true|2|0|true|unhealthy",
       ].join("\n"),
     );
     expect(out).toHaveLength(3);
     expect(out[1]).toEqual({
-      service: "worker-swarm", running: false, restarts: 7, exitCode: 1, oomKilled: false, health: "none",
+      service: "worker-analytics", running: false, restarts: 7, exitCode: 1, oomKilled: false, health: "none",
     });
     expect(out[2]!.oomKilled).toBe(true);
     expect(out[2]!.health).toBe("unhealthy");
@@ -89,9 +89,9 @@ describe("telemetryDetail — says something only when something is wrong", () =
 describe("selectContainerErrors", () => {
   const LOGS = [
     "api-1  | GET /api/swarm/sessions 200",
-    "worker-swarm-1  | error: connection refused reaching postgres:5432",
+    "worker-analytics-1  | error: connection refused reaching postgres:5432",
     "api-1  | GET /health 200",
-    "worker-swarm-1  | Unhandled exception in lane swarm",
+    "worker-analytics-1  | Unhandled exception in lane analytics",
   ].join("\n");
 
   test("keeps the failure lines and drops routine traffic", () => {
@@ -101,7 +101,7 @@ describe("selectContainerErrors", () => {
   });
 
   test("attributes each line to its lane, with the replica suffix stripped", () => {
-    expect(selectContainerErrors(LOGS)[0]!.service).toBe("worker-swarm");
+    expect(selectContainerErrors(LOGS)[0]!.service).toBe("worker-analytics");
   });
 
   test("caps the excerpt and keeps the NEWEST, which is the one still happening", () => {
@@ -122,7 +122,7 @@ describe("sampleTelemetry", () => {
     const out = sampleTelemetry((argv) => {
       seen.push([...argv]);
       if (argv.includes("ps")) return "abc123\ndef456\n";
-      return "api|true|0|0|false|healthy\nworker-swarm|true|0|0|false|none";
+      return "api|true|0|0|false|healthy\nworker-analytics|true|0|0|false|none";
     });
     expect(out.samples).toHaveLength(2);
     expect(seen[0]).toContain("ps");
@@ -160,13 +160,13 @@ describe("renderTelemetryPane", () => {
 
   test("shows the troubled lane, its detail, and the error line behind it", () => {
     const pane = renderTelemetryPane(
-      [healthy, { ...healthy, service: "worker-swarm", running: false, restarts: 4, exitCode: 1, health: "none" }],
-      [{ service: "worker-swarm", text: "error: connection refused" }],
+      [healthy, { ...healthy, service: "worker-analytics", running: false, restarts: 4, exitCode: 1, health: "none" }],
+      [{ service: "worker-analytics", text: "error: connection refused" }],
       100,
     ).map(plain).join("\n");
 
     expect(pane).toContain("Containers");
-    expect(pane).toContain("worker-swarm");
+    expect(pane).toContain("worker-analytics");
     expect(pane).toContain("4×restarted");
     expect(pane).toContain("exit 1");
     expect(pane).toContain("connection refused");

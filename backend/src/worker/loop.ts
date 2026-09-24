@@ -33,7 +33,7 @@ function isDegradedResult(output: unknown): output is { ok: false; error?: unkno
 }
 
 // A degrade a RETRY CANNOT CHANGE THE ANSWER TO (T21). The seam is the same
-// question `worker/handlers/swarm.ts` already applies to benign skips, asked in
+// question the session handlers already applied to benign skips, asked in
 // the other direction: a consensus receipt refused because a FROZEN take set
 // carries no weight vector will be refused identically on every attempt, so
 // five identical red rows are five copies of one fact and a wasted backoff
@@ -70,9 +70,10 @@ export interface ClaimOptions {
 // WITHIN the lane (ORDER BY priority DESC applies to the lane-filtered set).
 //
 // `, id` IS LOAD-BEARING (issue #806), not cosmetic. `run_after` is a
-// millisecond instant and jobs routinely share one: every swarm session job is
-// priority 0, and `createSessionAdmin`'s clamp collapses `swarm.aggregate` and
-// `swarm.judge` onto an IDENTICAL run_after for any window under ~2s. Without a
+// millisecond instant and jobs routinely share one: the retired session-lifecycle
+// rows were all priority 0, and `createSessionAdmin`'s clamp collapsed the
+// aggregate and judge steps onto an IDENTICAL run_after for any window under ~2s.
+// The rows are gone but the tie is not theirs alone, and without a
 // tiebreak the claim order among equals is whatever the plan returns, and
 // executed against a real Postgres the judge lost it: `aggregate` and `publish`
 // both drained first and the judge burned all five attempts on
@@ -93,7 +94,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
       -- The ", id" tiebreak is LOAD-BEARING (issue #806) and is explained in
       -- the comment above this function: run_after is a millisecond instant
       -- that same-priority jobs routinely share, and without a tiebreak the
-      -- swarm judge measurably lost the tie to its own publish.
+      -- the judge step measurably lost the tie to its own publish.
       ORDER BY priority DESC, run_after, id
       FOR UPDATE SKIP LOCKED
       LIMIT 1

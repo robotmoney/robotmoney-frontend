@@ -333,7 +333,10 @@ describe("the generated overlay", () => {
     const yaml = dataPathOverlayYaml(dp);
     expect(yaml).toContain("  postgres: !reset null");
     expect(yaml).toContain("  pgdata: !reset null");
-    for (const s of ["api", "worker-swarm", "worker-analytics", "worker-research"]) {
+    // Exactly the services that HOLD a database connection. `system-scheduler`
+    // is not among them and must not be: it has no `depends_on: postgres` to
+    // reset because it has no database at all (system-scheduler-spec.md §1).
+    for (const s of ["api", "worker-analytics", "worker-research"]) {
       expect(yaml).toContain(`  ${s}:\n    depends_on: !reset null`);
     }
   });

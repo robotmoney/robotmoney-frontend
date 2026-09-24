@@ -1,30 +1,30 @@
 // Execution lanes (issue #107): deterministic kind-allowlist filtering for queue
-// claims so interactive swarm work, regime analytics, and slow research
-// fetches run with independent capacity. A lane is a pair of SQL LIKE pattern
-// lists applied inside the FOR UPDATE SKIP LOCKED claim (loop.ts) — ownership
-// semantics are unchanged, a lane only narrows WHICH pending kinds a worker may
-// claim.
+// claims so regime analytics and slow research fetches run with independent
+// capacity. A lane is a pair of SQL LIKE pattern lists applied inside the
+// FOR UPDATE SKIP LOCKED claim (loop.ts) — ownership semantics are unchanged, a
+// lane only narrows WHICH pending kinds a worker may claim.
 //
 // Topology (production default = the docker-compose services):
-//   - `swarm` — RESERVED interactive lane; claims ONLY `swarm.%`
-//     session-lifecycle kinds. No other lane may claim them, so swarm work
-//     is always immediately claimable regardless of what analytics/research are
-//     doing (service `worker-swarm`).
 //   - `analytics` — non-research scheduled product pipelines
-//     (vault/wallet/buybacks/projects): everything EXCEPT `swarm.%` and
-//     `research.%` (service `worker-analytics`). Legacy regime.classify rows are
-//     disabled/dead-lettered and have no supported enqueue path.
+//     (vault/wallet/buybacks/projects): everything EXCEPT `research.%` (service
+//     `worker-analytics`). Legacy regime.classify rows are disabled/dead-lettered
+//     and have no supported enqueue path.
 //   - `research` — compatibility lane for legacy `research.%` queue rows. D25's
 //     independent producer owns supported research execution; seed retires
 //     pending rows and control-plane endpoints cannot create new ones.
-//   - `generic` — single-process dev/tooling convenience: everything EXCEPT the
-//     reserved `swarm.%` kinds. A generic worker can NEVER consume reserved
-//     interactive capacity. Not part of the compose topology.
+//   - `generic` — single-process dev/tooling convenience: every kind. Not part of
+//     the compose topology.
+//
+// THERE IS NO SWARM LANE. Session work is not queue work any more: per
+// docs/technical/system-scheduler-spec.md §1 the `system-scheduler` container
+// drives a subject's epoch and the participants do the work that needs a model,
+// over HTTP from their own containers. Nothing enqueues a `swarm.%` kind, so
+// there is no reserved capacity left to protect and no pattern left to exclude.
 //
 // WORKER_LANE is REQUIRED for a worker process: empty or unknown lane names fail
 // loudly at startup (resolveLane) rather than silently claiming everything.
 
-export type LaneName = "swarm" | "analytics" | "research" | "generic";
+export type LaneName = "analytics" | "research" | "generic";
 
 export interface Lane {
   readonly name: LaneName;
@@ -34,14 +34,12 @@ export interface Lane {
   readonly exclude: readonly string[];
 }
 
-const SWARM_KINDS = "swarm.%";
 const RESEARCH_KINDS = "research.%";
 
 export const LANES: Record<LaneName, Lane> = {
-  swarm: { name: "swarm", include: [SWARM_KINDS], exclude: [] },
   research: { name: "research", include: [RESEARCH_KINDS], exclude: [] },
-  analytics: { name: "analytics", include: ["%"], exclude: [SWARM_KINDS, RESEARCH_KINDS] },
-  generic: { name: "generic", include: ["%"], exclude: [SWARM_KINDS] },
+  analytics: { name: "analytics", include: ["%"], exclude: [RESEARCH_KINDS] },
+  generic: { name: "generic", include: ["%"], exclude: [] },
 };
 
 // Human-readable claim summary for startup/health logging ("lane-aware status").
@@ -52,8 +50,9 @@ export function describeLane(lane: Lane): string {
 
 // Resolve a worker's lane from configuration (WORKER_LANE). FAIL-CLOSED: an
 // empty/missing or unknown value throws at startup — a misconfigured worker must
-// never fall through to claiming every kind (that would silently consume the
-// reserved swarm capacity).
+// never fall through to claiming every kind: `analytics` and `research` are sized
+// and deployed separately, and a worker that claimed both would starve whichever
+// side its neighbour was meant to serve.
 export function resolveLane(raw: string | undefined | null): Lane {
   const value = (raw ?? "").trim();
   const valid = Object.keys(LANES).join(" | ");

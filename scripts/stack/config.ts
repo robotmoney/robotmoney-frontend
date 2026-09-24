@@ -31,7 +31,8 @@ import {
 // origin every browser- and BACKEND_URL-based consumer of this stack loads
 // pages from (issue #892 — website-server/nginx.conf proxies /api/ and
 // /health to api, so the two together still present as one origin). `full`
-// adds the three worker execution lanes that the standing smoke drives. The
+// adds the two worker execution lanes the standing smoke drives, the
+// `system-scheduler` clock (issue #1026) and the independent producer. The
 // member-agent service is deliberately in NEITHER *running* list: it is
 // compose-profile gated (docker-compose.smoke.yml `profiles:
 // ["member-agent"]`) and is only ever started one-shot via `docker compose
@@ -39,9 +40,21 @@ import {
 export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api", "website-server"] as const;
-export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
+export const WORKER_LANE_SERVICES = ["worker-analytics", "worker-research"] as const;
+// The clock (issue #1026). NOT a worker lane and deliberately its own list: it
+// claims no jobs, holds no database credential and shares none of the lanes'
+// wiring — system-scheduler-spec.md §1 gives it a database connection of
+// "**No.** Never." Anything that reasons about lanes (external-pg's
+// depends_on surgery, the lane telemetry tiles) must not pick it up by
+// accident, and anything that reasons about "the full stack" must.
+export const SCHEDULER_SERVICES = ["system-scheduler"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
-export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
+export const FULL_SERVICES = [
+  ...CORE_SERVICES,
+  ...WORKER_LANE_SERVICES,
+  ...SCHEDULER_SERVICES,
+  ...PRODUCER_SERVICES,
+] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),

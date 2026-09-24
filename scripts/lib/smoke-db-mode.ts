@@ -43,7 +43,7 @@ import {
   redactPostgresUrl,
   resolveExternalPg,
 } from "./smoke-external-pg.ts";
-import type { SmokeCadenceProfile } from "./smoke-schedule.ts";
+import type { SmokeCadenceProfile } from "./smoke-cadence.ts";
 
 export { redactPostgresUrl };
 
@@ -201,7 +201,7 @@ export interface ParsedDataPath {
    * here with the same argv a smoke-main boots — a bad value is one more invalid
    * invocation that fails in this one try/catch, before any container work.
    * Absent, it is undefined and the cadence resolver picks the profile the
-   * invocation shape implies (scripts/lib/smoke-schedule.ts).
+   * invocation shape implies (scripts/lib/smoke-cadence.ts).
    */
   cadence: SmokeCadenceProfile | undefined;
   /** Deprecation notices for the caller to print. Never printed from here. */
@@ -389,8 +389,8 @@ function has(argv: readonly string[], flag: string): boolean {
  * THROWS on a value that is not a cadence profile — an unknown `--cadence` value
  * must not fall back to the default any more than a typo'd `--db` value may.
  * Absent, it is undefined and the boot resolves the cadence from its own shape
- * (scripts/lib/smoke-schedule.ts). The value domain lives here only as a
- * passthrough shim; the profiles themselves are smoke-schedule.ts's.
+ * (scripts/lib/smoke-cadence.ts). The value domain lives here only as a
+ * passthrough shim; the profiles themselves are smoke-cadence.ts's.
  */
 export function cadenceOverride(argv: readonly string[]): SmokeCadenceProfile | undefined {
   const value = valueOf(argv, CADENCE_FLAG);

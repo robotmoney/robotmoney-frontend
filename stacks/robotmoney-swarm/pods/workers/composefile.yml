@@ -1,10 +1,12 @@
-# workers pod: the three task-queue lanes plus the independent analytics
-# producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env anchor
-# pattern — worker-swarm / worker-analytics / worker-research share the same
-# api image and differ only by WORKER_LANE (and, for worker-swarm, the judge
-# credential — see that service's own block, same reasoning as
-# docker-compose.yml: analytics/research never call a model, so the shared
-# anchor omits it).
+# workers pod: the two surviving task-queue lanes plus the independent
+# analytics producer. Mirrors docker-compose.yml's x-worker-base / x-worker-env
+# anchor pattern — worker-analytics / worker-research share the same api image
+# and differ only by WORKER_LANE. Neither calls a model, so the shared anchor
+# carries no inference credential.
+#
+# There is no swarm lane (issue #1026): session timing left the queue for its
+# own container, `system-scheduler` (system scheduler spec §1). This stack tree
+# does not declare that container yet — see stack.yml.
 #
 # Images are referenced by tag only — never `build:` here (field guide §3).
 #
@@ -56,18 +58,6 @@ x-worker-env: &worker-env
   OPENCODE_TIMEOUT_MS:
 
 services:
-  worker-swarm:
-    <<: *worker-base
-    environment:
-      <<: *worker-env
-      WORKER_LANE: swarm
-      # Consensus judge (issue #752) — THIS LANE ONLY, same reasoning as
-      # docker-compose.yml: worker-analytics/worker-research never run
-      # swarm.judge, so the shared worker-env anchor omits the credential.
-      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
-
   worker-analytics:
     <<: *worker-base
     environment:

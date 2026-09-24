@@ -271,8 +271,14 @@ test("overview: #398 regression — a today-dated regime_snapshots row with STAL
 });
 
 test("overview: enabled analytics schedules + next swarm event + alert shape", async () => {
+  // A SYNTHETIC `swarm.%` KIND, deliberately. `nextSwarmEvent` reads
+  // `kind LIKE 'swarm.%' AND status = 'pending'`, and nothing enqueues such a
+  // row any more (issue #1026 W4 retired the lifecycle kinds) — but an upgraded
+  // database can still hold one, so the query is what is under test here, not
+  // any particular kind. Naming a retired kind would only pin a literal that no
+  // longer exists.
   const swarmId = await insertJob({
-    kind: "swarm.publish_brief",
+    kind: "swarm.legacy_pending",
     status: "pending",
     run_after: new Date(Date.now() + 60 * 60 * 1000),
   });
@@ -444,7 +450,7 @@ test("schedule toggle: admin cannot enable retired consumer analytics schedules"
   expect(updated.kind).toBe("regime.classify"); // untouched
 });
 
-test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, swarm smoke rows", async () => {
+test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind", async () => {
   const [regime] = await sql`SELECT id FROM job_schedules WHERE kind = 'regime.classify' LIMIT 1`;
   const reason = "a perfectly fine operational reason";
 
@@ -461,11 +467,11 @@ test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields
   const [vault] = await sql`SELECT id FROM job_schedules WHERE kind = 'vault.sample_share_price' LIMIT 1`;
   expect((await call(req("PATCH", `/api/admin/schedules/${vault.id}`, PROD.adminToken, { enabled: false, reason })))?.status).toBe(400);
 
-  // swarm smoke row
-  const [swarm] = await sql`SELECT id FROM job_schedules WHERE kind LIKE 'swarm.%' LIMIT 1`;
-  expect((await call(req("PATCH", `/api/admin/schedules/${swarm.id}`, PROD.adminToken, { enabled: true, reason })))?.status).toBe(409);
-  const [unchanged] = await sql`SELECT enabled FROM job_schedules WHERE id = ${swarm.id}`;
-  expect(unchanged.enabled).toBe(false); // seeded disabled, still disabled
+  // The seeded-disabled swarm row case is deleted with the row (issue #1026
+  // W4): there is no `swarm.%` schedule to refuse a toggle on, because a
+  // subject's epoch duration is its whole schedule now
+  // (system-scheduler-spec.md §2.2). The non-analytics 409 above still covers
+  // the rule itself.
 });
 
 // ── GET /api/admin/audit ────────────────────────────────────────────────────

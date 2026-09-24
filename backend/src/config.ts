@@ -1,7 +1,6 @@
 // Central environment configuration. The only required input is DATABASE_URL.
 // RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
-import parser from "cron-parser";
 import { envSecret } from "./lib/env-secret.ts";
 
 function required(name: string): string {
@@ -572,74 +571,6 @@ export function assertNoVaultAddressCollision(
       throw new Error(`tracked asset ${t.symbol} is the rmUSDC vault share (${t.address}) — never track vault shares here`);
     }
   }
-}
-
-// --- Swarm session-lifecycle cron cadence (issue #208) -------------------
-// The five swarm.* job_schedules rows (open_session/publish_brief/
-// close_window/aggregate/publish) ship seed-time DISABLED by default so a
-// fresh CI/e2e/smoke database never auto-enqueues real swarm lifecycle jobs
-// alongside the smoke's own explicit enqueue-job admin path.
-// SWARM_SCHEDULES_ENABLED is the single switch that turns the WHOLE
-// managed sequence on for a deployment: production sets it explicitly (daily
-// 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
-// same flag with accelerated SWARM_*_CRON overrides; repo smoke/e2e never
-// sets it (docker-compose.smoke.yml pins it off). Resolved once at seed-time
-// (backend/src/db/seed.ts) — job_schedules
-// rows are the persisted source of truth thereafter; the scheduler
-// (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
-export interface SwarmScheduleConfig {
-  kind: string;
-  cron: string;
-  enabled: boolean;
-  payload: Record<string, unknown>;
-  timezone: string;
-}
-
-// Fail-closed cron validation (review-operations finding on issue #208): every
-// job_schedules row is ticked by ONE shared scheduler (worker/scheduler.ts
-// tickScheduler) that evaluates ALL due rows inside a SINGLE transaction/loop —
-// an unparseable cron on any one row throws mid-loop and rolls back the whole
-// tick, silently stalling every OTHER schedule too (vault sampling, wallet
-// balances, buybacks, projects pipelines, analytics), repeatedly, every tick,
-// until fixed. Before this env-configurability landed, the five swarm.*
-// crons were fixed literals that could never be wrong; now an operator typo
-// in SWARM_*_CRON is user-reachable. Validate at config-resolution time
-// (seed-time) so a bad value fails the `bun run migrate` deploy step loudly,
-// instead of degrading the shared scheduler at runtime.
-function assertValidCron(envVarName: string, cron: string): void {
-  try {
-    parser.parseExpression(cron);
-  } catch (e) {
-    throw new Error(`invalid ${envVarName} "${cron}": ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-export function resolveSwarmSchedules(
-  env: Record<string, string | undefined> = process.env,
-): SwarmScheduleConfig[] {
-  const enabled = env.SWARM_SCHEDULES_ENABLED === "1" || env.SWARM_SCHEDULES_ENABLED === "true";
-  const windowMinutesRaw = Number(env.SWARM_WINDOW_MINUTES ?? "");
-  const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
-  const timezone = "UTC";
-  const cronVars: Record<string, string> = {
-    SWARM_OPEN_SESSION_CRON: env.SWARM_OPEN_SESSION_CRON || "0 6 * * *",
-    SWARM_PUBLISH_BRIEF_CRON: env.SWARM_PUBLISH_BRIEF_CRON || "0 7 * * *",
-    SWARM_CLOSE_WINDOW_CRON: env.SWARM_CLOSE_WINDOW_CRON || "0 8 * * *",
-    SWARM_AGGREGATE_CRON: env.SWARM_AGGREGATE_CRON || "0 9 * * *",
-    SWARM_PUBLISH_CRON: env.SWARM_PUBLISH_CRON || "0 10 * * *",
-  };
-  for (const [name, cron] of Object.entries(cronVars)) assertValidCron(name, cron);
-  return [
-    { kind: "swarm.open_session", cron: cronVars.SWARM_OPEN_SESSION_CRON, enabled, payload: {}, timezone },
-    // windowMinutes rides on the publish_brief job's payload — publishBrief()
-    // reads it to compute window_closes_at, so SWARM_WINDOW_MINUTES is the
-    // single knob that keeps the publish_brief -> close_window cron gap
-    // (default 07:00 -> 08:00 = 60 minutes) coherent with the actual window.
-    { kind: "swarm.publish_brief", cron: cronVars.SWARM_PUBLISH_BRIEF_CRON, enabled, payload: { windowMinutes }, timezone },
-    { kind: "swarm.close_window", cron: cronVars.SWARM_CLOSE_WINDOW_CRON, enabled, payload: {}, timezone },
-    { kind: "swarm.aggregate", cron: cronVars.SWARM_AGGREGATE_CRON, enabled, payload: {}, timezone },
-    { kind: "swarm.publish", cron: cronVars.SWARM_PUBLISH_CRON, enabled, payload: {}, timezone },
-  ];
 }
 
 // --- Swarm public base URL ----------------------------------------------

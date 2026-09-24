@@ -90,7 +90,7 @@ export const swarmPipelineLeg: VerifyLeg = {
         "swarm:published-sessions",
         "FAIL",
         `fewer than ${MIN_PUBLISHED_SESSIONS} published session(s) within the deadline`,
-        "One published session is the #101 single-lane starvation signature: the swarm lane claimed a job, published, and stopped. Check worker-swarm's heartbeat and the swarm.* job rows.",
+        "One published session is the #101 starvation signature: one epoch turned over and nothing after it. Sessions are timed by `system-scheduler` now (system-scheduler-spec.md §1), so check that container's /health — an unauthenticated, unsynchronized or exhausted scheduler answers 503 with the subject and the last error.",
       );
       return; // every check below reads from this feed; continuing would report noise
     }

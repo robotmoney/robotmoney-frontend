@@ -32,7 +32,7 @@ import {
   LIVE_SMOKE_DEADLINE_MS,
   RESEARCH_KEYS,
 } from "../../smoke-live-smoke.ts";
-import { resolveSmokeCadence } from "../../lib/smoke-schedule.ts";
+import { resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 

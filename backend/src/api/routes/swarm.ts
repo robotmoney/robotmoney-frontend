@@ -11,7 +11,6 @@ import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } f
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
 import { parseSnapshots } from "./analytics.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged, hasAutomationRole } from "../auth.ts";
-import { jsonValue, sql } from "../../db/client.ts";
 import {
   CONTACT_EMAIL_RE,
   isIsoDate,
@@ -456,98 +455,24 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
         return { status: 200, body: await ic.publishSession(sessionId) };
       }
       case "enqueue-job": {
-        const actionMap: Record<string, string> = {
-          open_session: "swarm.open_session",
-          publish_brief: "swarm.publish_brief",
-          close_window: "swarm.close_window",
-          aggregate: "swarm.aggregate",
-          // Issue #752, scheduled since #767: `swarm.judge` is now in
-          // SESSION_JOB_KINDS (swarm/admin.ts), so every session created
-          // through the admin path already has one queued. This stays the
-          // manual lever — re-judging, and repairing a session scheduled
-          // before #767 shipped, which carries only the original four jobs.
-          judge: "swarm.judge",
-          publish: "swarm.publish",
-        };
-        const queueAction = requiredString(b, "action", 100);
-        const kind = queueAction ? actionMap[queueAction] : undefined;
-        if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
-        const { action: _, force: _force, ...payload } = b;
-        // THE JUDGE, AND ONLY THE JUDGE, IS DEDUPLICATED HERE (issue #806).
+        // GONE WITH THE QUEUE IT FED (issue #1026 W4). This endpoint inserted a
+        // `swarm.%` row for one of six lifecycle actions. No handler for any of
+        // them is registered any more (worker/handlers/index.ts) and no lane
+        // claims them (worker/lanes.ts), so an insert here would be a row that
+        // sits pending forever while the caller waits on a state it can never
+        // reach — worse than a refusal.
         //
-        // WHY IT IS DEDUPLICATED. This endpoint INSERTed with no key at all.
-        // Executed: two `judge` enqueues for one session both succeeded and
-        // produced TWO judgement rows — in `enforce` both said `applied: true`
-        // and the recommendation was rewritten twice, second write winning. The
-        // advisory lock serializes them; it does not deduplicate them, and
-        // `transitionWithin` treats `judged -> judged` as idempotent success. A
-        // driver restart that re-adopts an in-flight session (the case
-        // `waitForSubjectSession` exists for) is enough to trigger it.
-        //
-        // WHY ONLY THE JUDGE. `jobs_dedupe_key_idx` is
-        // `UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL` across the WHOLE
-        // table INCLUDING TERMINAL ROWS, so a key makes a job that once died
-        // permanently un-re-enqueueable. `worker/handlers/repair.ts` documents
-        // the same hazard and deliberately carries no key for it. Applied to
-        // `close_window`, that is fatal to the driver rather than merely lossy:
-        // the job goes `dead`, `openSession` keeps returning the same still-
-        // `collecting` session, every later re-enqueue is suppressed, and
-        // `waitForSessionState` times out — a wedged subject, not a degraded one.
-        // The judge is the one action that can carry the key safely, because it
-        // is the one step whose absence the driver tolerates by design
-        // (`runJudgeStep` publishes anyway and says so).
-        //
-        // THE KEY IS STICKY ACROSS TERMINAL STATES, and that is the point rather
-        // than an oversight: treating a `succeeded` judge job as re-enqueueable
-        // would hand a re-adopting driver a second judging of a session that has
-        // already been judged, which is precisely the defect above.
-        //
-        // MANUAL RE-JUDGING STAYS AVAILABLE, EXPLICITLY. It is a real lever —
-        // re-running a judging after fixing a model, repairing a pre-#767
-        // session — so it is kept, as `force: true`, which enqueues with NO
-        // dedupe key. What is gone is getting it by accident.
-        const rawSessionId = payload.sessionId;
-        const sessionId = typeof rawSessionId === "string" || typeof rawSessionId === "number"
-          ? String(rawSessionId).slice(0, 100)
-          : "";
-        const force = b.force === true;
-        const jobPayload = force ? { ...payload, force: true } : payload;
-        const dedupeKey = sessionId && !force && queueAction === "judge"
-          ? `swarm:${sessionId}:judge`
-          : null;
-        // SCOPE THE ROW TO ITS SESSION AT THE WRITER (T04, AC-FE-10).
-        //
-        // `createSessionAdmin` has always set `scope_type`/`scope_id`; this
-        // endpoint — the DRIVER'S path, and the one production actually uses —
-        // INSERTed `(kind, payload, dedupe_key)` and nothing else. So every
-        // consumer that asked "which job belongs to this session?" by the scope
-        // columns matched zero rows on the shape production writes, and a
-        // session that lost its consensus receipt to a judge outage was
-        // recorded as a clean success. `swarm/receipt-gap.ts` matches both
-        // shapes for the rows already on file; this stops new ones being
-        // written half-identified.
-        //
-        // Only for the SESSION kinds, which are every kind in `actionMap`: the
-        // scope is read off `payload.sessionId`, so a row without one carries
-        // no scope rather than a fabricated one.
-        const scopeType = sessionId ? "swarm_session" : null;
-        const rows = await sql`
-          INSERT INTO jobs (kind, payload, dedupe_key, scope_type, scope_id)
-          VALUES (${kind}, ${sql.json(jsonValue(jobPayload))}, ${dedupeKey}, ${scopeType}, ${sessionId || null})
-          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-          RETURNING id, kind`;
-        if (rows[0]) return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind, deduped: false } };
-        // Suppressed by the key: the job this caller asked for already exists.
-        // Answer with IT rather than with `undefined` — the driver logs the job
-        // id and then waits on a session state that this very row will produce.
-        const existing = (await sql`
-          SELECT id, kind, status FROM jobs WHERE dedupe_key = ${dedupeKey}`)[0] as
-          | { id: number; kind: string; status: string }
-          | undefined;
-        if (!existing) return { status: 500, body: { error: "enqueue-job: dedupe conflict with no surviving row" } };
+        // Per system-scheduler-spec.md §4.4 settlement is "not scheduled — a
+        // chain the scheduler drives through the API, each step as soon as the
+        // previous one returns", so the replacement is the epoch routes driven
+        // by `system-scheduler`, not a queued job. 410, not 404: the action was
+        // real and its absence is deliberate.
         return {
-          status: 200,
-          body: { jobId: existing.id, kind: existing.kind, deduped: true, existingStatus: existing.status },
+          status: 410,
+          body: {
+            error: "enqueue-job is gone: session lifecycle steps are no longer queue jobs — " +
+              "system-scheduler drives them through the epoch routes (system-scheduler-spec.md §4.4)",
+          },
         };
       }
       default: return { status: 404, body: { error: "unknown admin action" } };

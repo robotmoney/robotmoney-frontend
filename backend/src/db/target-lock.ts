@@ -24,9 +24,11 @@
 //
 // ── Why one protocol for every tool ─────────────────────────────────────────
 //
-// §2's first line names the callers: "`bun smoke`, `bun run migrate`,
-// `bun run schedules:enable`, `--spoof-keys`, and the production-initialization
-// commands (§9)." They are separate programs, started by different people from
+// §2's first line names the callers: `bun smoke`, `bun run migrate`,
+// `--spoof-keys`, and the production-initialization commands (§9). (§2 once
+// listed an enable command too; system-scheduler-spec.md §12 removed it from
+// that list along with the schedules it enabled.) They are separate programs,
+// started by different people from
 // different machines, and nothing on the host serializes them. The database is
 // the only thing all of them touch, so the database is the only place a lock
 // can live. A file lock on the deploy host does not protect a database that a
@@ -87,7 +89,6 @@
 //   §8.3  the migrate run is "fence (§2) → apply pending migrations … → grant
 //         reconciliation → publish the manifest".
 //   §6.4  the spoofed-key rebind is "one fenced transaction".
-//   §6.3  `schedules:enable` writes under the protocol.
 //   §9.1  the production-initialization commands are in the caller list.
 //
 // Acceptance gates served (spec §10, W1):
@@ -248,7 +249,7 @@ export function targetLockKey(identity: {
 
 /** Which tool holds (or wants) the lock, recorded so a contention refusal can name the holder. */
 export interface LockHolder {
-  /** `smoke` | `migrate` | `schedules:enable` | `spoof-keys` | a §9.1 command name. */
+  /** `smoke` | `migrate` | `spoof-keys` | a §9.1 command name. */
   readonly tool: string;
   /** The deployment instance (§1.1), when the tool has one. */
   readonly instance: string | null;

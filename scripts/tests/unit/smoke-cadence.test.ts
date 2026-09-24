@@ -8,7 +8,7 @@
 // smoke` and CI keep today's fast values byte for byte.
 //
 // A 6-hour timer cannot be observed in CI, so every cadence DECISION lives in
-// the pure, side-effect-free scripts/lib/smoke-schedule.ts and is EXECUTED here
+// the pure, side-effect-free scripts/lib/smoke-cadence.ts and is EXECUTED here
 // in the required per-PR `unit` workflow: the resolver, the subject planner, the
 // session-date rotation and the READY-line renderer, for BOTH profiles.
 //
@@ -36,9 +36,8 @@ import {
   resolveSmokeCadence,
   resolveSmokeCadenceForBoot,
   stageCadenceApplies,
-  swarmStaggerMsFor,
-  swarmWindowMinutes,
-} from "../../lib/smoke-schedule.ts";
+  subjectStaggerMsFor,
+} from "../../lib/smoke-cadence.ts";
 import { DEMO_SUBJECTS, SMOKE_SUBJECTS } from "../../lib/smoke-mode.ts";
 
 // The subject count is a property of the SCENARIO, and the two scenarios
@@ -79,7 +78,7 @@ describe("resolveSmokeCadence — one profile per invocation, selected by --stag
     const c = resolveSmokeCadence({ stage: false });
     expect(c.profile).toBe("fast");
     expect(c.swarmIntervalMs).toBe(120_000);
-    expect(swarmStaggerMsFor(c, DEMO_SUBJECT_COUNT)).toBe(60_000);
+    expect(subjectStaggerMsFor(c, DEMO_SUBJECT_COUNT)).toBe(60_000);
     // Onboarding admissions are unchanged on the fast path (AC6).
     expect(c.onboardingFirstMs).toBe(60_000);
     expect(c.onboardingIntervalMs).toBe(300_000);
@@ -96,8 +95,8 @@ describe("resolveSmokeCadence — one profile per invocation, selected by --stag
     // The ~90-minute spacing an outside observer sees on the public smoke is the
     // FOUR-subject smoke scenario staggered on that 6 h grid, not a 90-minute
     // per-subject period. With the simulation smoke's two subjects it is 3 h.
-    expect(swarmStaggerMsFor(c, SMOKE_SUBJECT_COUNT)).toBe(90 * 60_000);
-    expect(swarmStaggerMsFor(c, DEMO_SUBJECT_COUNT)).toBe(3 * HOUR);
+    expect(subjectStaggerMsFor(c, SMOKE_SUBJECT_COUNT)).toBe(90 * 60_000);
+    expect(subjectStaggerMsFor(c, DEMO_SUBJECT_COUNT)).toBe(3 * HOUR);
   });
 
   test("the stagger follows the scenario's OWN subject count — the two scenarios disagree", () => {
@@ -107,9 +106,9 @@ describe("resolveSmokeCadence — one profile per invocation, selected by --stag
     // one stack it described.
     expect(SMOKE_SUBJECT_COUNT).not.toBe(DEMO_SUBJECT_COUNT);
     const c = resolveSmokeCadence({ stage: true });
-    expect(swarmStaggerMsFor(c, SMOKE_SUBJECT_COUNT)).not.toBe(swarmStaggerMsFor(c, DEMO_SUBJECT_COUNT));
-    expect(() => swarmStaggerMsFor(c, 0)).toThrow(/at least one subject/);
-    expect(() => swarmStaggerMsFor(c, 2.5)).toThrow(/at least one subject/);
+    expect(subjectStaggerMsFor(c, SMOKE_SUBJECT_COUNT)).not.toBe(subjectStaggerMsFor(c, DEMO_SUBJECT_COUNT));
+    expect(() => subjectStaggerMsFor(c, 0)).toThrow(/at least one subject/);
+    expect(() => subjectStaggerMsFor(c, 2.5)).toThrow(/at least one subject/);
   });
 
   test("the submission window IS one full cadence interval, in BOTH profiles", () => {
@@ -122,14 +121,18 @@ describe("resolveSmokeCadence — one profile per invocation, selected by --stag
     }
   });
 
-  test("window minutes are whole and profile-specific: fast 2 min, realistic 6 h", () => {
-    expect(swarmWindowMinutes(resolveSmokeCadence({ stage: false }))).toBe(2);
-    expect(swarmWindowMinutes(resolveSmokeCadence({ stage: true }))).toBe(360);
-    // A window that cannot be stated faithfully in the publish_brief payload's
-    // unit must throw, never round: a rounded-down window is a brief promising
-    // less than it says.
-    const bogus = { ...resolveSmokeCadence({ stage: false }), swarmWindowMs: 90_000 };
-    expect(() => swarmWindowMinutes(bogus)).toThrow(/whole positive number of minutes/);
+  test("the window is a whole number of minutes in BOTH profiles: fast 2 min, realistic 6 h", () => {
+    // `swarmWindowMinutes()` is gone with the cron payload whose unit it spoke
+    // (issue #1026 — there is no publish_brief job to advertise a window on).
+    // The PROPERTY it protected is not: a window that is not a whole number of
+    // minutes cannot be stated faithfully to a submitter in any surface, so it
+    // is asserted here directly against both profiles rather than dropped with
+    // the helper.
+    expect(resolveSmokeCadence({ stage: false }).swarmWindowMs / 60_000).toBe(2);
+    expect(resolveSmokeCadence({ stage: true }).swarmWindowMs / 60_000).toBe(360);
+    for (const stage of [false, true]) {
+      expect(Number.isInteger(resolveSmokeCadence({ stage }).swarmWindowMs / 60_000)).toBe(true);
+    }
   });
 
   test("the FAST window is bounded so a CI e2e run cannot outlive its 105-minute step", () => {
@@ -216,10 +219,10 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
       for (let i = 1; i < merged.length; i++) expect(merged[i] - merged[i - 1]).toBe(offset);
     });
 
-    test(`[${label}] swarmStaggerMsFor IS the planner's phase offset, for EITHER scenario`, () => {
+    test(`[${label}] subjectStaggerMsFor IS the planner's phase offset, for EITHER scenario`, () => {
       for (const count of [DEMO_SUBJECT_COUNT, SMOKE_SUBJECT_COUNT]) {
         const plans = planSubjectSchedules(count, cadence, NOW);
-        expect(plans[1].phaseOffsetMs).toBe(swarmStaggerMsFor(cadence, count));
+        expect(plans[1].phaseOffsetMs).toBe(subjectStaggerMsFor(cadence, count));
       }
     });
   }
@@ -319,7 +322,7 @@ const architecture = readdirSync(join(repoRoot, "docs", "architecture"))
   .map((f) => readFileSync(join(repoRoot, "docs", "architecture", f), "utf8"))
   .join("\n");
 
-/** Every cadence magic number that must now live ONLY in smoke-schedule.ts. */
+/** Every cadence magic number that must now live ONLY in smoke-cadence.ts. */
 const CADENCE_LITERALS = [
   "120_000", "120000", "60_000", "60000", "300_000", "300000",
   "21_600_000", "21600000", "10_800_000", "10800000",
@@ -331,12 +334,12 @@ export function cadenceLiteralsIn(src: string): string[] {
   return CADENCE_LITERALS.filter((lit) => new RegExp(`(?<![\\w_])${lit}(?![\\w_])`).test(src));
 }
 
-/** null when the file imports its timings from smoke-schedule.ts; a reason otherwise. */
+/** null when the file imports its timings from smoke-cadence.ts; a reason otherwise. */
 export function importsCadenceProfile(src: string, expected: string[]): string | null {
-  const block = /import\s*\{([\s\S]*?)\}\s*from\s*"\.[^"]*smoke-schedule\.ts";/.exec(src);
-  if (!block) return "the file does not import from smoke-schedule.ts — its timings are not single-sourced";
+  const block = /import\s*\{([\s\S]*?)\}\s*from\s*"\.[^"]*smoke-cadence\.ts";/.exec(src);
+  if (!block) return "the file does not import from smoke-cadence.ts — its timings are not single-sourced";
   const missing = expected.filter((name) => !block[1].includes(name));
-  return missing.length === 0 ? null : `smoke-schedule.ts import is missing ${missing.join(", ")}`;
+  return missing.length === 0 ? null : `smoke-cadence.ts import is missing ${missing.join(", ")}`;
 }
 
 describe("cadence lives in ONE file — consumers carry no literal of their own", () => {
@@ -371,7 +374,7 @@ describe("cadence lives in ONE file — consumers carry no literal of their own"
 
   test("CI's swarm path DERIVES its window from the cadence profile (issue #570)", () => {
     // This test used to assert the opposite — that swarm/session.ts never reads
-    // smoke-schedule.ts, because "an import here would put the CI gate on a smoke
+    // this module, because "an import here would put the CI gate on a smoke
     // timer". That was right about the risk and wrong about the fix: the
     // submission window IS a cadence timing, and while it was NOT one, the
     // driver hardcoded `windowMinutes: 60` and then closed the window as soon as
@@ -379,7 +382,7 @@ describe("cadence lives in ONE file — consumers carry no literal of their own"
     // 1-3 minutes. The gate is protected by the FAST window being bounded
     // (asserted above), not by the driver being ignorant of the profile.
     const session = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
-    expect(importsCadenceProfile(session, ["resolveSmokeCadence", "swarmWindowMinutes"])).toBeNull();
+    expect(importsCadenceProfile(session, ["resolveSmokeCadence"])).toBeNull();
     expect(session).not.toContain("windowMinutes: 60");
   });
 });
@@ -401,11 +404,11 @@ describe("red controls: the graders must REPORT a regression", () => {
 
   test("importsCadenceProfile reports a file that dropped the import entirely", () => {
     const reason = importsCadenceProfile("const x = 1;\n", ["resolveSmokeCadence"]);
-    expect(reason).toContain("does not import from smoke-schedule.ts");
+    expect(reason).toContain("does not import from smoke-cadence.ts");
   });
 
   test("importsCadenceProfile reports a file that imports only part of the profile API", () => {
-    const partial = 'import { resolveSmokeCadence } from "./smoke-schedule.ts";\n';
+    const partial = 'import { resolveSmokeCadence } from "./smoke-cadence.ts";\n';
     expect(importsCadenceProfile(partial, ["resolveSmokeCadence", "planSubjectSchedules"]))
       .toContain("planSubjectSchedules");
   });
@@ -436,92 +439,57 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
   const realistic = resolveSmokeCadence({ stage: true });
   const fast = resolveSmokeCadence({ stage: false });
 
-  test("a real production boot passes — and it must EXPORT the switch to do so", () => {
-    const env = { SWARM_SCHEDULES_ENABLED: "0" };
-    expect(productionConstantMismatches(realistic, env, { production: true })).toEqual([]);
-    expect(() => assertProductionConstants(realistic, env, { production: true })).not.toThrow();
+  // WHAT THIS BLOCK STOPPED CHECKING, AND WHY THAT IS NOT A WEAKENING (issue
+  // #1026). It used to assert a fourth intent alongside the three below: that
+  // the api container's schedule master switch was exported as exactly "0",
+  // because compose defaulted it ON and an unset variable silently selected a
+  // third, unjudgeable cadence. That hazard has no referent any more. There is
+  // no switch, no cron string and no schedule row to be defaulted into
+  // (docs/technical/smoke-production-spec.md §6.3: "There is nothing to enable
+  // … There are no schedule rows, no cron strings, no `next_run_at`, and no
+  // enable command"), and the absence is asserted structurally, over the whole
+  // shipping tree, by scripts/tests/unit/no-swarm-cron.test.ts. The three
+  // remaining intents — profile, interval, window — are the ones this file was
+  // ever able to check, and every case below still runs.
+
+  test("a real production boot passes", () => {
+    expect(productionConstantMismatches(realistic, { production: true })).toEqual([]);
+    expect(() => assertProductionConstants(realistic, { production: true })).not.toThrow();
   });
 
   test("a CI/accelerated-clock boot CANNOT satisfy the production branch", () => {
     // The decisive property. A fast-profile boot claiming to be production is
     // fatal, so a green CI run can never be read as evidence about production
     // constants — it is structurally incapable of taking that branch.
-    const problems = productionConstantMismatches(fast, {}, { production: true });
+    const problems = productionConstantMismatches(fast, { production: true });
     expect(problems.join(" ")).toContain("resolved cadence profile is 'fast'");
     expect(problems.join(" ")).toContain("swarmIntervalMs is 120000");
     expect(problems.join(" ")).toContain("swarmWindowMs is 120000");
-    expect(() => assertProductionConstants(fast, {}, { production: true })).toThrow(/REFUSING TO BOOT/);
+    expect(() => assertProductionConstants(fast, { production: true })).toThrow(/REFUSING TO BOOT/);
   });
 
   test("a non-production boot must be the fast profile — the reverse is also fatal", () => {
-    expect(productionConstantMismatches(fast, {}, { production: false })).toEqual([]);
-    expect(() => assertProductionConstants(realistic, {}, { production: false }))
+    expect(productionConstantMismatches(fast, { production: false })).toEqual([]);
+    expect(() => assertProductionConstants(realistic, { production: false }))
       .toThrow(/resolved the 'realistic' profile/);
   });
 
-  test("SWARM_SCHEDULES_ENABLED=1 exported into a production boot is fatal", () => {
-    // The backend's shipped swarm crons are subject-blind (resolveSwarmSchedules
-    // emits no subjectId, so the handler calls openSession("")), and the host
-    // driver is the real scheduler. An operator's stale export must not reach a
-    // production boot unremarked.
-    const problems = productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: "1" }, { production: true });
-    expect(problems.join(" ")).toContain("SWARM_SCHEDULES_ENABLED='1'");
-    expect(() => assertProductionConstants(realistic, { SWARM_SCHEDULES_ENABLED: "1" }, { production: true }))
-      .toThrow(/REFUSING TO BOOT/);
-  });
-
-  // UNSET IS NOT SAFE (issue #806). This check used to SKIP when the variable
-  // was absent or empty, on the reading that "nobody exported one" means no
-  // crons. docker-compose.yml declares `SWARM_SCHEDULES_ENABLED:
-  // ${SWARM_SCHEDULES_ENABLED:-1}`, so unset is the CRON CADENCE — five
-  // subject-blind schedules seeded by resolveSwarmSchedules, none of them
-  // `swarm.judge`. A boot that merely failed to export the variable therefore
-  // ran a third cadence whose sessions can never be judged, and this assertion
-  // reported nothing wrong. The skip was the defect; the check now demands the
-  // literal "0".
-  test("SWARM_SCHEDULES_ENABLED UNSET in a production boot is fatal, not skipped", () => {
-    for (const env of [{}, { SWARM_SCHEDULES_ENABLED: "" }, { SWARM_SCHEDULES_ENABLED: undefined }]) {
-      const problems = productionConstantMismatches(realistic, env, { production: true });
-      expect(problems.join(" "), JSON.stringify(env)).toContain("SWARM_SCHEDULES_ENABLED");
-      expect(() => assertProductionConstants(realistic, env, { production: true }))
-        .toThrow(/REFUSING TO BOOT/);
-    }
-    // The message says WHY unset is not the same as "no crons", so the operator
-    // reading it does not conclude the check is being pedantic.
-    expect(productionConstantMismatches(realistic, {}, { production: true }).join(" "))
-      .toContain("(unset)");
-    expect(productionConstantMismatches(realistic, {}, { production: true }).join(" "))
-      .toContain("compose defaults this variable to '1'");
-  });
-
-  // Issue #888: the refusal used to name the fix ("intends '0'") without
-  // saying WHERE to make it. An operator reading this in a deploy log has no
-  // shell open on the box that ran the boot — the message must name the file.
-  test("the refusal message names the repo-root .env, not just the intended value", () => {
-    const message = productionConstantMismatches(realistic, {}, { production: true }).join(" ");
-    expect(message).toContain("repo-root .env");
-    expect(() => assertProductionConstants(realistic, {}, { production: true }))
-      .toThrow(/repo-root \.env/);
-  });
-
-  // The red control: the ONLY value that satisfies it is the intended one, so
-  // the check above cannot be green for the wrong reason.
-  test("exactly one value passes the schedules check", () => {
-    const failing = ["", "1", "true", "false", "0 ", "no", "off"];
-    for (const v of failing) {
-      expect(
-        productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: v }, { production: true }).join(" "),
-        `value ${JSON.stringify(v)}`,
-      ).toContain("SWARM_SCHEDULES_ENABLED");
-    }
-    expect(productionConstantMismatches(realistic, { SWARM_SCHEDULES_ENABLED: "0" }, { production: true }))
-      .toEqual([]);
+  test("the check reads NO environment — there is no variable left for a stale export to reach", () => {
+    // The red control for the removal above. `productionConstantMismatches` is
+    // a function of the cadence and the branch alone, so this file cannot
+    // regrow an environment-shaped scheduling knob without the signature
+    // changing and this test failing to compile.
+    expect(productionConstantMismatches.length).toBe(2);
+    expect(assertProductionConstants.length).toBe(2);
+    const cadenceSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-cadence.ts"), "utf8");
+    expect(cadenceSrc).not.toMatch(/process\.env/);
+    expect(cadenceSrc).not.toMatch(/SCHEDULES_ENABLED/);
   });
 
   test("a window that is no longer one full interval is fatal in EITHER branch", () => {
     const drifted = { ...realistic, swarmWindowMs: 60 * 60_000 }; // the old flat hour
     for (const production of [true, false]) {
-      expect(productionConstantMismatches(drifted, {}, { production }).join(" "))
+      expect(productionConstantMismatches(drifted, { production }).join(" "))
         .toContain("must equal swarmIntervalMs");
     }
   });
@@ -533,47 +501,34 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       profile: "realistic",
       swarmIntervalMs: 21_600_000,
       swarmWindowMs: 21_600_000,
-      swarmSchedulesEnabled: "0",
     });
     expect(realistic.swarmIntervalMs).toBe(PRODUCTION_CADENCE_INTENT.swarmIntervalMs);
     expect(realistic.swarmWindowMs).toBe(PRODUCTION_CADENCE_INTENT.swarmWindowMs);
   });
 
   test("resolveSmokeCadenceForBoot resolves AND proves, in one step nobody can half-perform", () => {
-    // A production boot must carry the switch explicitly since #806 — see the
-    // unset test above for why absent is not the same as "no crons".
-    expect(resolveSmokeCadenceForBoot({ stage: true, env: { SWARM_SCHEDULES_ENABLED: "0" } })).toEqual(realistic);
-    expect(resolveSmokeCadenceForBoot({ stage: false, env: {} })).toEqual(fast);
-    expect(() => resolveSmokeCadenceForBoot({ stage: true, env: { SWARM_SCHEDULES_ENABLED: "1" } }))
-      .toThrow(/REFUSING TO BOOT/);
-    expect(() => resolveSmokeCadenceForBoot({ stage: true, env: {} }))
-      .toThrow(/REFUSING TO BOOT/);
+    expect(resolveSmokeCadenceForBoot({ stage: true })).toEqual(realistic);
+    expect(resolveSmokeCadenceForBoot({ stage: false })).toEqual(fast);
   });
 
   test("a pinned-port boot with an explicit --cadence fast is a TEST boot: resolves fast, no production duties", () => {
     // The smoke-twin. `--static-port` pins the port FOR THE TUNNEL, but
     // `--cadence fast` declares this a TEST boot (production-shaped DATA at the
-    // test cadence), so it takes the non-production branch and owes none of the
-    // production claims — SWARM_SCHEDULES_ENABLED may even be absent, because
-    // the compose overlay pins it "0" in-container regardless.
-    expect(resolveSmokeCadenceForBoot({ stage: true, cadence: "fast", env: {} })).toEqual(fast);
+    // test cadence), so it takes the non-production branch.
+    expect(resolveSmokeCadenceForBoot({ stage: true, cadence: "fast" })).toEqual(fast);
   });
 
-  test("an explicit --cadence realistic on the pinned port IS production and must export the switch", () => {
+  test("an explicit --cadence realistic on the pinned port IS production", () => {
     // Saying the quiet part out loud is not a waiver: being explicit about the
     // default keeps the boot inside the production branch with all its duties.
-    expect(
-      resolveSmokeCadenceForBoot({ stage: true, cadence: "realistic", env: { SWARM_SCHEDULES_ENABLED: "0" } }),
-    ).toEqual(realistic);
-    expect(() => resolveSmokeCadenceForBoot({ stage: true, cadence: "realistic", env: {} }))
-      .toThrow(/REFUSING TO BOOT/);
+    expect(resolveSmokeCadenceForBoot({ stage: true, cadence: "realistic" })).toEqual(realistic);
   });
 
   test("a non-pinned boot cannot opt into the realistic profile — --cadence realistic dies", () => {
     // The one-argument rule holds in BOTH directions: only the port pin may
     // select realistic, so a fast-shaped boot demanding it is a lie the
     // assertion refuses to tell.
-    expect(() => resolveSmokeCadenceForBoot({ stage: false, cadence: "realistic", env: {} }))
+    expect(() => resolveSmokeCadenceForBoot({ stage: false, cadence: "realistic" }))
       .toThrow(/non-production boot resolved the 'realistic' profile/);
   });
 
@@ -581,12 +536,8 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     // The bare resolver would boot a stack whose constants nobody proved. A
     // separate assert line next to it is a line that can be deleted or omitted
     // from a new entry point; this cannot be.
-    // Both halves in one assertion: the DERIVED stage argument
-    // (stageCadenceApplies) and the explicit `--cadence` override the resolver
-    // now accepts. Split across two `toContain`s either half could be dropped
-    // while the other kept the test green.
     expect(smokeMain).toMatch(
-      /resolveSmokeCadenceForBoot\(\{\s*stage: stageCadenceApplies\(staticPortMode, twinBoot\),\s*cadence: parsed\.cadence,\s*env: process\.env,?\s*\}\)/,
+      /resolveSmokeCadenceForBoot\(\{\s*stage: stageCadenceApplies\(staticPortMode, twinBoot\),\s*cadence: parsed\.cadence,?\s*\}\)/,
     );
     expect(smokeMain).not.toMatch(/=\s*resolveSmokeCadence\(/);
     // The stage argument is DERIVED, not the raw flag: a twin wears the same
@@ -594,11 +545,18 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     expect(smokeMain).toContain("const twinBoot = requestsTwin(process.argv);");
   });
 
-  test("the smoke overlay still pins SWARM_SCHEDULES_ENABLED off", () => {
-    // The other half of the same invariant: even if nothing is exported, the
-    // compose overlay every smoke/stage boot uses must keep the backend crons off.
+  test("the smoke overlay pins NO scheduling switch, because there is none to pin", () => {
+    // The other half of the same invariant, inverted by issue #1026. The
+    // overlay used to be the belt to this check's braces; now neither has a
+    // subject. A reappearing pin here would mean the mechanism came back.
     const overlay = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
-    expect(overlay).toMatch(/SWARM_SCHEDULES_ENABLED:\s*"0"/);
+    expect(overlay).not.toMatch(/SCHEDULES_ENABLED/);
+    expect(overlay).not.toMatch(/_CRON:/);
+    // …and the two lanes that survive still receive the shared overlay, which
+    // no longer hangs off a service that can be deleted out from under them.
+    expect(overlay).toContain("x-smoke-worker: &smoke-worker");
+    expect(overlay).toContain("worker-analytics: *smoke-worker");
+    expect(overlay).toContain("worker-research: *smoke-worker");
   });
 });
 

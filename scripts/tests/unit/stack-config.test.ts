@@ -36,6 +36,7 @@ import {
   upArgs,
   WORKER_LANE_SERVICES,
   PRODUCER_SERVICES,
+  SCHEDULER_SERVICES,
   type StackConfig,
 } from "../../stack/index.ts";
 
@@ -64,9 +65,19 @@ describe("stack profiles", () => {
     expect(servicesFor("core")).not.toContain("member-agent");
   });
 
-  test("full is core plus worker lanes and the independent producer, in order", () => {
-    expect(servicesFor("full")).toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES]);
+  test("full is core plus worker lanes, the clock and the independent producer, in order", () => {
+    expect(servicesFor("full"))
+      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
+  });
+
+  test("the clock is in `full` but is NOT a worker lane (issue #1026)", () => {
+    // The distinction is load-bearing: anything reasoning about lanes (the
+    // external-pg `depends_on` surgery, the DB-writer quiesce list) must not
+    // pick it up, and anything reasoning about the full stack must.
+    expect(servicesFor("full")).toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).not.toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).toEqual(["worker-analytics", "worker-research"]);
   });
 
   test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {

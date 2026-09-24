@@ -384,15 +384,15 @@ describe("detector catches every spelling of the socket", () => {
     },
     {
       name: "compose's double-slash normalisation",
-      service: "worker-swarm",
-      cfg: { services: { "worker-swarm": { volumes: ["//var/run/docker.sock:/x"] } } },
+      service: "system-scheduler",
+      cfg: { services: { "system-scheduler": { volumes: ["//var/run/docker.sock:/x"] } } },
     },
     {
       name: "renamed socket (Docker Desktop's docker.sock.raw)",
-      service: "worker-swarm",
+      service: "system-scheduler",
       cfg: {
         services: {
-          "worker-swarm": { volumes: [{ source: "/var/run/docker.sock.raw", target: "/x" }] },
+          "system-scheduler": { volumes: [{ source: "/var/run/docker.sock.raw", target: "/x" }] },
         },
       },
     },
@@ -471,7 +471,7 @@ describe("red control: the detector catches a planted mount through a real rende
     "  api:",
     "    volumes:",
     "      - /var/run/docker.sock:/var/run/docker.sock",
-    "  worker-swarm:",
+    "  system-scheduler:",
     "    environment:",
     "      DOCKER_HOST: unix:///run/docker.sock",
     "",
@@ -492,11 +492,11 @@ describe("red control: the detector catches a planted mount through a real rende
     expect(findings.length).toBeGreaterThan(0);
     // `api` yields two findings (host source AND in-container target), so
     // compare the distinct set of offending services.
-    expect([...new Set(findings.map((f) => f.service))].sort()).toEqual(["api", "worker-swarm"]);
+    expect([...new Set(findings.map((f) => f.service))].sort()).toEqual(["api", "system-scheduler"]);
 
     const message = describeFindings("base + smoke + PLANTED overlay", findings);
     expect(message).toContain('service "api"');
-    expect(message).toContain('service "worker-swarm"');
+    expect(message).toContain('service "system-scheduler"');
     expect(message).toContain("base + smoke + PLANTED overlay");
 
     // And the real thing stays clean — the plant did not come from the repo.
@@ -513,11 +513,11 @@ describe("red control: the detector catches a planted mount through a real rende
             { type: "bind", source: "/var/run/docker.sock", target: "/var/run/docker.sock" },
           ],
         },
-        "worker-swarm": { environment: { DOCKER_HOST: "unix:///run/docker.sock" } },
+        "system-scheduler": { environment: { DOCKER_HOST: "unix:///run/docker.sock" } },
       },
     };
     const findings = findDockerSocketMounts(rendered);
-    expect(findings.map((f) => f.service).sort()).toEqual(["api", "api", "worker-swarm"]);
+    expect(findings.map((f) => f.service).sort()).toEqual(["api", "api", "system-scheduler"]);
     expect(describeFindings("planted", findings)).not.toBe("planted: no Docker socket");
   });
 });

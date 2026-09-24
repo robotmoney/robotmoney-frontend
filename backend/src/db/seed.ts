@@ -13,7 +13,6 @@ import { seedLiveRoster, pruneToLiveRoster, backfillMemberHandles } from "../swa
 import { seedSmokeProjects } from "../projects/smoke-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
-import { resolveSwarmSchedules } from "../config.ts";
 
 type CatchupPolicy = "all" | "collapse-per-bucket";
 
@@ -32,15 +31,10 @@ interface SeedSchedule {
 // Keep this list small and harmless. Each kind MUST have a handler registered in
 // backend/src/worker/handlers/index.ts and be idempotent on natural keys.
 //
-// Swarm lifecycle schedules are NOT in this list — they are seeded by
-// seedSwarmSchedules() below, which is environment-configurable (issue
-// #208): SWARM_SCHEDULES_ENABLED (disabled by default) switches the whole
-// swarm.* cron sequence on/off, SWARM_*_CRON / SWARM_WINDOW_MINUTES
-// tune it, and changed values are applied to EXISTING job_schedules rows on
-// every seed run. The smoke pins SWARM_SCHEDULES_ENABLED=0 and instead
-// enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
-// lets it control the pace while still exercising the real worker claim loop +
-// handler path.
+// Session scheduling is NOT in this list and has no row here at all. Per
+// docs/technical/system-scheduler-spec.md §2.2 a subject's epoch duration is
+// its entire schedule, so the cadence lives on the subject and is driven by
+// `system-scheduler` — there is nothing in job_schedules to seed for it.
 // Exported so tests can assert the production seed is byte-for-byte this list.
 export const SCHEDULES: SeedSchedule[] = [
   // Retired consumer-queue compatibility rows. The independent producer owns
@@ -108,12 +102,6 @@ export const SCHEDULES: SeedSchedule[] = [
   // proportional to how often it runs. Handler: worker/handlers/index.ts →
   // analytics/cutover/parity.ts::runParitySweep.
   { kind: "analytics.parity_sweep", cron: "20 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
-  // — issue #208 made their enabled/cron/window environment-configurable via
-  // resolveSwarmSchedules(), and (unlike every other row here) their
-  // enabled/cron ARE overwritten on every seed run so a changed
-  // SWARM_*_CRON / SWARM_SCHEDULES_ENABLED is actually applied to an
-  // existing deployment, not just a fresh database.
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast
@@ -175,33 +163,6 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // baseline for later test files sharing the same ephemeral Postgres, instead
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
-// Swarm lifecycle schedule rows (issue #208): a DELIBERATE exception to
-// the "never touch enabled/cron on an existing row" rule below. Their
-// enabled/cron/window are environment-configuration (resolveSwarmSchedules,
-// backend/src/config.ts), not operator-toggled state — an operator changing
-// SWARM_OPEN_SESSION_CRON (or flipping SWARM_SCHEDULES_ENABLED) and
-// re-running the migrate/seed step must see that value actually applied to the
-// existing deployment, so this is an explicit UPDATE-by-kind (not the
-// (kind, cron) natural key the general loop above uses — the cron itself is
-// exactly what may change here, so conflicting on it would leave a stale
-// duplicate row under the old cron instead of updating in place).
-export async function seedSwarmSchedules(): Promise<void> {
-  for (const s of resolveSwarmSchedules()) {
-    const updated = await sql`
-      UPDATE job_schedules
-         SET cron = ${s.cron}, enabled = ${s.enabled}, payload = ${sql.json(jsonValue(s.payload))}, timezone = ${s.timezone}
-       WHERE kind = ${s.kind}
-       RETURNING id`;
-    if (updated.length === 0) {
-      await sql`
-        INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-        VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
-      `;
-    }
-  }
-  console.log("seeded swarm.* job_schedules (5 definition(s), env-configured, applied to existing rows)");
-}
-
 export async function seedJobSchedules(): Promise<void> {
   const schedules = SCHEDULES;
   for (const s of schedules) {
@@ -215,7 +176,6 @@ export async function seedJobSchedules(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
-  await seedSwarmSchedules();
 
   // Phase 4: regime/research production moved to the independent producer.
   // Disable any legacy consumer-DB schedules left by an older deployment.

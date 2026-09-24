@@ -42,7 +42,15 @@ export const SMOKE_MIGRATE_ENV: Readonly<Record<string, string>> = Object.freeze
 export const DEMO_MIGRATE_ENV: Readonly<Record<string, string>> =
   Object.freeze({ SMOKE_SEED_PROJECTS: "1" });
 
-/** Demo schedules are an explicit migration action, not environment state. */
+/**
+ * Demo job_schedules are an explicit migration action, not environment state.
+ *
+ * NOT touched by issue #1026, despite the name. These are the sampler and
+ * producer rows a simulation boot wants — `wallet.sample_*` on an hourly beat,
+ * the retired regime/research markers — and nothing here is a session
+ * schedule. `scripts/tests/unit/no-swarm-cron.test.ts` matches the removed
+ * module by PATH for exactly this reason.
+ */
 export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-smoke-schedules"]);
 export const SMOKE_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze([]);
 

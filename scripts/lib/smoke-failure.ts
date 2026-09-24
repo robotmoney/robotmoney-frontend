@@ -31,10 +31,14 @@ import type { FatalState, WriterQuiesce } from "./smoke-tui-view.ts";
 export const DB_WRITER_SERVICES: readonly string[] = Object.freeze([
   "api",
   "analytics-producer",
-  "worker-swarm",
   "worker-analytics",
   "worker-research",
 ]);
+// `system-scheduler` is absent because it writes to no database: it holds one
+// API credential and no role password (system-scheduler-spec.md §7), so a
+// failed boot that leaves it running leaves nothing drifting. Quiescing the
+// `api` above already closes the only channel through which it can change
+// state.
 
 /**
  * One line stating, plainly, whether the database is still being written to.

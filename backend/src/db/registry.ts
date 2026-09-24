@@ -65,7 +65,7 @@
 //
 // Enumeration is only as complete as the module graph that has been imported,
 // which is why the lint test imports the application entry points (`api`,
-// `worker`, `worker-swarm`) before calling `registeredSites()`. A registration
+// `worker`, `worker-analytics`) before calling `registeredSites()`. A registration
 // that happens lazily inside a function body is therefore invisible to CI;
 // registrations are module-level by convention and the lint test pins that too.
 import type postgresTypes from "postgres";

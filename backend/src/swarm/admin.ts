@@ -990,15 +990,13 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
         ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // NO JOBS ARE ENQUEUED HERE ANY MORE (issue #1026 W4).
+    // NO JOBS ARE ENQUEUED HERE (issue #1026 W4). Creating a session enqueues
+    // nothing at all: the five deduplicated, session-scoped lifecycle rows this
+    // used to write — each with its own `run_after` derived from the admin's
+    // three instants, plus a clamp that kept them in order when the declared
+    // gaps were too narrow — are gone with the queue kinds they named.
     //
-    // WHAT WAS HERE. Five deduplicated, session-scoped rows —
-    // `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
-    // `swarm.judge`, `swarm.publish` — each with a `run_after` derived from the
-    // admin's three instants, plus a clamp that kept aggregate before judge
-    // before publish when the declared gaps were too narrow to hold three.
-    //
-    // WHY IT IS GONE. Scheduler spec §4 gives the lifecycle a different shape
+    // WHY. Scheduler spec §4 gives the lifecycle a different shape
     // entirely. A session is `collecting` from its first instant with no
     // deferred brief (§4.1); it closes when the scheduler fires the boundary it
     // holds, bound to a named epoch (§4.3); and settlement is "not scheduled —
@@ -1013,9 +1011,9 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
     // window, and `aggregateEpoch` / `requestJudging` / `finalizeEpoch` for
     // settlement, all driven by `system-scheduler` through the epoch routes.
     //
-    // WHAT IS UNTOUCHED. The job queue itself and every non-swarm kind — the
+    // WHAT IS UNTOUCHED. The job queue itself and every non-session kind — the
     // analytics, research, vault, wallet, buyback and project work — all still
-    // enqueue exactly as they did. This removes five swarm rows, not a queue.
+    // enqueue exactly as they did. This removed five rows, not a queue.
     await audit(actor, "session_create", { sessionId, date: input.date, subjectId: input.subjectId }, tx);
     return {
       ok: true,
@@ -1291,9 +1289,8 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
 //   4. Transition, record the judgement, and (in `enforce`) apply it — ALL IN
 //      ONE TRANSACTION, under an advisory lock on the session id. So the
 //      `judged` state and the row that justifies it commit together or not at
-//      all, and two judges racing the same session (the admin POST in the api
-//      process against a `swarm.judge` job in worker-swarm) are serialized
-//      rather than interleaved.
+//      all, and two judges racing the same session are serialized rather than
+//      interleaved.
 //
 // A judge that falls back to template prose is still a successful judging — see
 // swarm/judge.ts on why failure is an outcome here rather than an error.
@@ -1403,16 +1400,15 @@ export async function getJudgeConfigAdmin(): Promise<AdminResult<{ judge: JudgeC
  */
 export function judgeModeWarnings(mode: JudgeMode): string[] {
   if (mode === "off") return [];
-  const warnings = [
-    // Not a defect: `FOR UPDATE SKIP LOCKED` is what makes the queue safe under
-    // N workers, and the swarm lane's ordering is bought by run_after, which is
-    // a CLAIM-order property. It holds today by topology, not by construction.
-    "ordering assumes EXACTLY ONE `swarm`-lane worker: `FOR UPDATE SKIP LOCKED` hands " +
-      "`swarm.judge` and `swarm.publish` to two workers the instant both are due, and the judge " +
-      "holds its worker for up to 60s on the model call. docker-compose.yml declares one " +
-      "`worker-swarm` with no replicas; scaling the lane requires making the ordering " +
-      "independent of worker count first (docs/architecture.md §9.7).",
-  ];
+  // THE SINGLE-WORKER ORDERING WARNING IS DELETED, NOT SUPPRESSED (issue #1026
+  // W4). It said judging and publishing were two queue rows whose order held
+  // only because exactly one worker claimed the lane. Neither is a queue row
+  // any more: system-scheduler-spec.md §4.4 makes settlement "a chain the
+  // scheduler drives through the API, each step as soon as the previous one
+  // returns", so the steps are sequenced by the caller rather than by
+  // run_after and claim order. This file's own rule is that a warning naming a
+  // fixed problem is deleted rather than left standing.
+  const warnings: string[] = [];
   if (mode === "enforce") {
     // Not a defect either: the aggregator OWNS the recommendation, and #806
     // chose to report this loss rather than prevent it. But an operator reading

@@ -11,7 +11,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { SCHEDULES, seed, seedSmokeJobSchedules, seedJobSchedules } from "../../src/db/seed.ts";
-import { resolveSwarmSchedules } from "../../src/config.ts";
 import { tickScheduler } from "../../src/worker/scheduler.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
@@ -244,13 +243,13 @@ test("smoke guard (#399): a disabled schedule is never picked up by the schedule
   expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and smoke scores stay untouched
 });
 
-test("canonical seeded row set is byte-for-byte SCHEDULES plus swarm rows", async () => {
+test("canonical seeded row set is byte-for-byte SCHEDULES — nothing else is seeded", async () => {
   await sql`DELETE FROM job_schedules`; // re-seeded immediately below (fresh-boot shape)
   await seedJobSchedules();
   const rows = plain(await sql<ScheduleRow[]>`SELECT kind, cron, enabled FROM job_schedules`);
-  const expected = plain([
-    ...SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-    ...resolveSwarmSchedules().map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-  ]);
+  // SCHEDULES is the whole set now. Session cadence used to add five more rows
+  // here; system-scheduler-spec.md §2.2 makes a subject's epoch duration its
+  // entire schedule, so there is no schedule row for it to seed.
+  const expected = plain(SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })));
   expect(rows).toEqual(expected);
 });

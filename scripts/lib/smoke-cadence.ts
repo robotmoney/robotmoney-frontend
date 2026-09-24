@@ -1,5 +1,13 @@
 // Demo CADENCE PROFILE — the SINGLE source for how fast the standing smoke
-// publishes swarm sessions, admits newcomers, and refreshes analytics.
+// publishes sessions, admits newcomers, and refreshes analytics.
+//
+// NAMED FOR CADENCE, NOT FOR SCHEDULING (issue #1026). The previous filename
+// claimed a job this module never had: scheduling. Session timing belongs to
+// the `system-scheduler` container and to the subject's own epoch duration
+// (docs/technical/system-scheduler-spec.md §1, §2.2); what lives here is the
+// PACE a smoke invocation drives its own host-side harness at — how often it
+// asks for a session, how often it admits a newcomer, and the two producer
+// crons. Those are properties of one invocation, not of a deployment.
 //
 // Two profiles, selected by ONE invocation argument (`bun run smoke -- --stage`),
 // never by an env var — the same hard rule `--pg-data` and `--stage`'s port pin
@@ -35,8 +43,10 @@
 // reason (issue #570): it equals the subject's own full cadence interval, so
 // session N's advertised cutoff is session N+1's convene and an agent that
 // polls on its own schedule is never told "no window is open". It is selected
-// by the same one invocation argument — never by SWARM_WINDOW_MINUTES, which
-// already exists and means the api container's seed-time cron payload.
+// by the same one invocation argument, and by no environment variable at all —
+// the variable that used to be the near-miss for it is gone with the mechanism
+// it configured (issue #1026; system-scheduler-spec.md §2.3: "No environment
+// variable sets it").
 //
 // Every consumer derives its timings from here: scripts/lib/smoke-main.ts (the
 // orchestrator that drives sessions and admissions) and scripts/smoke-live-smoke.ts
@@ -50,7 +60,7 @@
 // This module is PURE and side-effect free: scripts/lib/smoke-main.ts boots a
 // stack at module load and cannot be imported by a test, so every cadence
 // DECISION lives here where the required per-PR `unit` workflow executes it
-// directly (scripts/tests/unit/smoke-schedule.test.ts).
+// directly (scripts/tests/unit/smoke-cadence.test.ts).
 
 // THE SUBJECT COUNT IS NOT A CONSTANT. It used to be (`DEMO_SUBJECT_COUNT = 2`,
 // "the standing smoke convenes exactly these subjects"), and REALISTIC derived
@@ -60,7 +70,7 @@
 // number could not be right for both — and the READY banner printed "2 subjects
 // staggered → one lands about every ~3 h" on a stack that was actually landing
 // one every ~90 min. The count is a property of the SCENARIO, so every consumer
-// now passes the count it is actually running (see swarmStaggerMsFor and
+// now passes the count it is actually running (see subjectStaggerMsFor and
 // renderCadenceLine, both of which require it).
 
 /**
@@ -99,11 +109,12 @@ export interface SmokeCadence {
    *
    * It is a property of the CADENCE PROFILE — selected by the `--static-port`
    * invocation argument like every other timing here — and NEVER of an env var.
-   * `SWARM_WINDOW_MINUTES` already exists (backend/src/config.ts) and means
-   * something else: it is the window carried on the seed-time
-   * `swarm.publish_brief` CRON payload inside the api container. Reusing that
-   * name here would give one variable two meanings and let a stale export in an
-   * operator's shell silently change production behaviour.
+   * There used to be a near-miss variable of the same meaning naming the api
+   * container's seed-time cron payload; it is gone with that mechanism (issue
+   * #1026), and its successor, the subject's epoch duration, is a database
+   * column reachable only through the admin API (system-scheduler-spec.md
+   * §2.2, §2.3). Neither was ever this number: this one is the pace the HOST
+   * harness drives one smoke invocation at.
    */
   swarmWindowMs: number;
   /**
@@ -126,7 +137,7 @@ export interface SmokeCadence {
 /**
  * The committed docker-compose.yml defaults for the analytics-producer, mirrored
  * here so the fast profile states the SAME schedule a non-stage stack resolves
- * from compose. scripts/tests/unit/smoke-schedule.test.ts pins these against the
+ * from compose. scripts/tests/unit/smoke-cadence.test.ts pins these against the
  * compose file itself, so drift in either direction is red.
  */
 export const COMMITTED_REGIME_CRON = "30 22 * * *";
@@ -221,31 +232,18 @@ export function resolveSmokeCadence(
  * scenario made wrong. planSubjectSchedules already derived the real offset
  * from the real count, so the field was a second, drifting statement of the
  * same rule — with nothing but the READY banner reading it, wrongly.
+ *
+ * Spelled `subject`, not `swarm` (issue #1026): the offset is a property of how
+ * many SUBJECTS this scenario seats, and nothing about it belonged to the lane
+ * whose name it used to carry.
  */
-export function swarmStaggerMsFor(cadence: SmokeCadence, subjectCount: number): number {
+export function subjectStaggerMsFor(cadence: SmokeCadence, subjectCount: number): number {
   if (!Number.isInteger(subjectCount) || subjectCount < 1) {
-    throw new Error(`swarmStaggerMsFor needs at least one subject, got ${subjectCount}`);
+    throw new Error(`subjectStaggerMsFor needs at least one subject, got ${subjectCount}`);
   }
   return cadence.swarmIntervalMs / subjectCount;
 }
 
-/**
- * The submission window in MINUTES — the unit the `swarm.publish_brief` job
- * payload and backend/src/swarm/domain.ts publishBrief() speak. Throws rather
- * than rounding: a window that is not a whole positive number of minutes cannot
- * be advertised faithfully through that payload, and silently truncating it is
- * how a brief comes to promise something the close path will not honour.
- */
-export function swarmWindowMinutes(cadence: SmokeCadence): number {
-  const minutes = cadence.swarmWindowMs / 60_000;
-  if (!Number.isInteger(minutes) || minutes <= 0) {
-    throw new Error(
-      `cadence profile '${cadence.profile}' has swarmWindowMs=${cadence.swarmWindowMs}, ` +
-        "which is not a whole positive number of minutes — publish_brief cannot advertise it faithfully",
-    );
-  }
-  return minutes;
-}
 
 // ── Production constants assertion (issue #570) ─────────────────────────────
 // The gap this closes is NOT "CI runs an accelerated clock" — it should. The
@@ -262,41 +260,27 @@ export function swarmWindowMinutes(cadence: SmokeCadence): number {
 // of the profile objects above. A check derived from the thing it is checking
 // is a tautology; these are written out so that changing REALISTIC without
 // meaning to is fatal at boot rather than invisible for a month.
+//
+// WHAT THIS CHECK NO LONGER CARRIES (issue #1026). It used to assert a fourth
+// thing: that the api container's schedule master switch was exported as
+// exactly "0", because an unset variable meant a third, unjudgeable cadence.
+// That hazard is not mitigated here now, it is GONE — there is no switch, no
+// cron row and no default-on cadence to be caught out by
+// (smoke-production-spec.md §6.3: "There is nothing to enable … There are no
+// schedule rows, no cron strings, no `next_run_at`, and no enable command").
+// With nothing left in the environment to disagree with, this function no
+// longer reads the environment at all, and dropping the parameter is what
+// stops a future reader from re-adding a variable to fill it.
 export interface ProductionCadenceIntent {
   profile: SmokeCadenceProfile;
   swarmIntervalMs: number;
   swarmWindowMs: number;
-  /**
-   * The backend's swarm CRON master switch. It must be OFF in production: the
-   * shipped crons are subject-blind (resolveSwarmSchedules emits no subjectId,
-   * so the handler calls openSession("") and hits a foreign-key violation) and
-   * the host driver is the real scheduler.
-   *
-   * docker-compose.smoke.yml ALSO pins the CONTAINER's own copy of this
-   * variable to "0", unconditionally — no shell export can change what the
-   * api process inside the container sees, on any boot that includes that
-   * overlay (every boot through smoke-main.ts does). So this check is not
-   * what stops the container from running the cron cadence; that hazard is
-   * already foreclosed by the overlay pin before this ever runs. What this
-   * buys instead: it runs HOST-side, before the container starts, against
-   * whatever the operator's own repo-root `.env` actually exports — so that
-   * file (and every runbook/dashboard that reads it) can never silently
-   * disagree with what the container is really doing, and the check keeps
-   * working as a safety net even if the overlay pin is ever refactored away.
-   *
-   * Absent is not acceptable (issue #806): docker-compose.yml declares
-   * `SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}`, so an unset
-   * variable IS the cron cadence — and that cadence seeds five schedules with
-   * no `swarm.judge` among them. The check demands the literal "0".
-   */
-  swarmSchedulesEnabled: "0";
 }
 
 export const PRODUCTION_CADENCE_INTENT: Readonly<ProductionCadenceIntent> = Object.freeze({
   profile: "realistic",
   swarmIntervalMs: 21_600_000, // 6 h per subject
   swarmWindowMs: 21_600_000, // …and the window IS that interval
-  swarmSchedulesEnabled: "0",
 });
 
 /**
@@ -312,11 +296,9 @@ export const PRODUCTION_CADENCE_INTENT: Readonly<ProductionCadenceIntent> = Obje
  */
 export function productionConstantMismatches(
   cadence: SmokeCadence,
-  env: Record<string, string | undefined>,
   opts: { production: boolean },
 ): string[] {
   const problems: string[] = [];
-  const schedules = env.SWARM_SCHEDULES_ENABLED;
   if (opts.production) {
     if (cadence.profile !== PRODUCTION_CADENCE_INTENT.profile) {
       problems.push(
@@ -334,24 +316,6 @@ export function productionConstantMismatches(
       problems.push(
         `swarmWindowMs is ${cadence.swarmWindowMs}, production intends ` +
           `${PRODUCTION_CADENCE_INTENT.swarmWindowMs}`,
-      );
-    }
-    // UNSET IS A FAILURE, NOT A PASS (issue #806). This used to skip when the
-    // variable was absent or empty, on the reading that "nobody exported one"
-    // is safe. It is the opposite of safe: docker-compose.yml declares
-    // `SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}`, so an unset
-    // variable is not "no crons" — it is the DEFAULT-ON cron cadence, whose five
-    // seeded `job_schedules` rows are subject-blind (`resolveSwarmSchedules`
-    // emits no subjectId) and, critically, include NO `swarm.judge`. A boot that
-    // simply failed to export it therefore got a third cadence, running sessions
-    // that can never be judged, past an assertion that reported nothing wrong.
-    // The intent is a literal "0" and the check now demands exactly that.
-    if (schedules !== PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled) {
-      problems.push(
-        `SWARM_SCHEDULES_ENABLED=${schedules === undefined ? "(unset)" : `'${schedules}'`} in a production boot; ` +
-          `production intends '${PRODUCTION_CADENCE_INTENT.swarmSchedulesEnabled}' (the host driver is the ` +
-          "scheduler, and compose defaults this variable to '1' when it is not exported). Export " +
-          "SWARM_SCHEDULES_ENABLED=0 in the repo-root .env.",
       );
     }
   } else {
@@ -378,10 +342,9 @@ export function productionConstantMismatches(
 /** Loudly fatal wrapper for productionConstantMismatches — called at smoke boot. */
 export function assertProductionConstants(
   cadence: SmokeCadence,
-  env: Record<string, string | undefined>,
   opts: { production: boolean },
 ): void {
-  const problems = productionConstantMismatches(cadence, env, opts);
+  const problems = productionConstantMismatches(cadence, opts);
   if (problems.length === 0) return;
   throw new Error(
     `[smoke] REFUSING TO BOOT — the constants in force are not the ones this invocation claims ` +
@@ -403,11 +366,11 @@ export function assertProductionConstants(
  * and pure for tests and for smoke-live-smoke.ts, which deliberately pins itself
  * to the FAST profile rather than to whatever is running.
  *
- * Throws — the boot dies here rather than serving a swarm whose cadence, window
- * or scheduler ownership is not what the invocation claims.
+ * Throws — the boot dies here rather than serving a swarm whose cadence or
+ * window is not what the invocation claims.
  */
 export function resolveSmokeCadenceForBoot(
-  opts: { stage: boolean; cadence?: SmokeCadenceProfile; env: Record<string, string | undefined> },
+  opts: { stage: boolean; cadence?: SmokeCadenceProfile },
 ): SmokeCadence {
   const cadence = resolveSmokeCadence({ stage: opts.stage, cadence: opts.cadence });
   // "Production" means exactly "realistic cadence on the pinned port". An
@@ -416,7 +379,7 @@ export function resolveSmokeCadenceForBoot(
   // so it takes the NON-production branch, which demands fast (as resolved here,
   // by construction). The opposite slip is equally fatal: a non-pinned boot
   // cannot claim the realistic profile either.
-  assertProductionConstants(cadence, opts.env, {
+  assertProductionConstants(cadence, {
     production: opts.stage && cadence.profile === "realistic",
   });
   return cadence;
@@ -522,11 +485,11 @@ export function describeCron(cron: string): string {
 /**
  * The READY banner's cadence line, RENDERED from the resolved profile rather
  * than hardcoded — the banner and the docs must state the cadence actually in
- * force. Pure, so scripts/tests/unit/smoke-schedule.test.ts executes it directly.
+ * force. Pure, so scripts/tests/unit/smoke-cadence.test.ts executes it directly.
  */
 export function renderCadenceLine(cadence: SmokeCadence, subjectCount: number): string {
   const perSubject = formatCadenceDuration(cadence.swarmIntervalMs);
-  const overall = formatCadenceDuration(swarmStaggerMsFor(cadence, subjectCount));
+  const overall = formatCadenceDuration(subjectStaggerMsFor(cadence, subjectCount));
   const window = formatCadenceDuration(cadence.swarmWindowMs);
   return (
     `Demo actions: a swarm session per subject every ~${perSubject} ` +

@@ -5,9 +5,9 @@
 -- never implied by any mode, and §10 W2 requires a snapshot-bootstrapped database
 -- to boot and pass preflight without it.
 --
--- The swarm.* schedules land DISABLED here on purpose: enablement is a production
--- initialization step (`bun run schedules:enable`, §6.3/§9.1), never a boot or a
--- bootstrap side-effect.
+-- There are no session-scheduling rows here. Per system-scheduler-spec.md §2.2 a
+-- subject's epoch duration IS its whole schedule, so §8.1 now says bootstrap data
+-- carries that duration on the subject; there is nothing to enable (§12).
 --
 -- PostgreSQL database dump
 --
@@ -65,11 +65,6 @@ INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, la
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (15, 'projects.snapshot_daily', '40 0 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (16, 'projects.sync_revenue', '50 1 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (17, 'projects.recompute_coverage', '0 3 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
-INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (18, 'swarm.open_session', '0 6 * * *', '{}', 'UTC', false, NULL, NULL, 'all');
-INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (19, 'swarm.publish_brief', '0 7 * * *', '{"windowMinutes": 60}', 'UTC', false, NULL, NULL, 'all');
-INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (20, 'swarm.close_window', '0 8 * * *', '{}', 'UTC', false, NULL, NULL, 'all');
-INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (21, 'swarm.aggregate', '0 9 * * *', '{}', 'UTC', false, NULL, NULL, 'all');
-INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (22, 'swarm.publish', '0 10 * * *', '{}', 'UTC', false, NULL, NULL, 'all');
 
 
 --
@@ -90,7 +85,7 @@ INSERT INTO public.swarm_judge_fault_injection (id, enabled, body, remaining, se
 -- Name: job_schedules_id_seq; Type: SEQUENCE SET; Schema: public; Owner: rm_owner
 --
 
-SELECT pg_catalog.setval('public.job_schedules_id_seq', 22, true);
+SELECT pg_catalog.setval('public.job_schedules_id_seq', 17, true);
 
 
 --

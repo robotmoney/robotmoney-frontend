@@ -43,7 +43,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //
 //   * SMOKE runs the full set (1-6) and refuses the cluster.
-//   * DATABASE-HOLDING CONTAINERS — `api`, `worker`, `worker-swarm` — run
+//   * DATABASE-HOLDING CONTAINERS — `api` and the worker lanes — run
 //     checks 1-3 at startup "against their own credential, log, and refuse to
 //     serve on failure". Their credential is one role, so they can only ask
 //     about that role; checks 4-6 are the operator's environment, which a
@@ -1105,7 +1105,7 @@ export async function checkSubjectEpochDurations(
 export type PreflightScope =
   /** Smoke: checks 1-6, refuses the cluster. */
   | "full"
-  /** `api` / `worker` / `worker-swarm` at startup: checks 1-3 against their own
+  /** `api` / a worker lane at startup: checks 1-3 against their own
    *  credential, log, refuse to serve on failure. */
   | "container";
 

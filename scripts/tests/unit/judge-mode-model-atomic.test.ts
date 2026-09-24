@@ -122,7 +122,11 @@ describe("no caller in this repo enables the judge in two steps", () => {
     expect(files).toContain(join("scripts", "lib", "smoke-twin.ts"));
     const calls = callsIn(readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8"));
     expect(calls.length).toBeGreaterThan(1);
-    expect(calls.some((c) => c.text.includes('"shadow", automationToken, selectedJudgeModel'))).toBe(true);
+    // `enforce`, not `shadow`: runJudgeRoleCoverage flips to the only mode D48
+    // still admits (backend/src/swarm/domain.ts's currentJudgeMode reduces a
+    // `shadow` switch to `off` when it stamps a closing session), and that call
+    // is the repo's one live two-argument-plus-model enable.
+    expect(calls.some((c) => c.text.includes('"enforce", automationToken, selectedJudgeModel'))).toBe(true);
   });
 
   test("the scan would CATCH a two-step enable — the control that keeps it honest", () => {

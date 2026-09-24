@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
-import * as swarm from "../src/swarm/domain.ts";
+import * as ic from "../src/swarm/domain.ts";
 import { judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -19,7 +19,7 @@ const rid = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 async function member(prefix: string) {
   const id = rid(prefix);
   const { publicKeyB64, privateKey } = await generateKeyPair();
-  const result = await swarm.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  const result = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
   if (!("token" in result) || !result.token) throw new Error(`registerMember failed: ${JSON.stringify(result)}`);
   return { id, token: result.token, privateKey };
 }
@@ -27,15 +27,15 @@ async function member(prefix: string) {
 async function session(prefix: string) {
   const subjectId = rid(prefix);
   await ensureProseSubject(subjectId, subjectId);
-  const opened = await swarm.openSession(subjectId);
-  await swarm.publishBrief(opened.id, 60);
+  const opened = await ic.openSession(subjectId);
+  await ic.publishBrief(opened.id, 60);
   return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };
 }
 
 async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subjectId: string) {
   const payload = { memberId: m.id, date, subjectId, nonce: rid("nonce"), stance: "neutral", confidence: 0.5, body: "signed take" };
   const signature = await signMessage(canonicalizeSubmission(payload), m.privateKey);
-  return swarm.submitRecommendation(m.token, { ...payload, signature });
+  return ic.submitRecommendation(m.token, { ...payload, signature });
 }
 
 const opinion = JSON.stringify({
@@ -49,8 +49,8 @@ async function aggregated(prefix: string) {
   const s = await session(prefix);
   const voters = [await member("voter_a"), await member("voter_b")];
   for (const voter of voters) expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
-  await swarm.closeWindow(s.session.id);
-  await swarm.aggregateSession(s.session.id);
+  await ic.closeWindow(s.session.id);
+  await ic.aggregateSession(s.session.id);
   return s;
 }
 
@@ -64,7 +64,7 @@ test("grant/revoke preserves the existing credential and makes judging immediate
   expect((grant as any).member.role).toBe("judge");
   // The token and key were not replaced: the same bearer still identifies this
   // identity, but the standing separation-of-duties gate refuses its take.
-  expect(await swarm.memberIdForToken(candidate.token)).toBe(candidate.id);
+  expect(await ic.memberIdForToken(candidate.token)).toBe(candidate.id);
   const whileJudge = await session("while_judge");
   expect((await submit(candidate, whileJudge.date, whileJudge.subjectId)).error).toBe("judge_role_cannot_submit_takes");
 
@@ -81,7 +81,7 @@ test("grant/revoke preserves the existing credential and makes judging immediate
   const rotated = await admin.rotateMemberKeyAdmin(candidate.id);
   expect(rotated.ok).toBe(true);
   candidate.token = (rotated as any).token;
-  expect(await swarm.memberIdForToken(candidate.token)).toBe(candidate.id);
+  expect(await ic.memberIdForToken(candidate.token)).toBe(candidate.id);
   const current = (await admin.listMembersAdmin()).find((m) => m.id === candidate.id)!;
   const revoke = await admin.setMemberRoleAdmin(candidate.id, current.version, "member");
   expect(revoke.ok).toBe(true);
@@ -142,8 +142,8 @@ test("a judge who already submitted a take in the session is refused before a ju
   // below happens strictly AFTER this take is on the session.
   expect((await submit(candidate, s.date, s.subjectId)).status).toBe(201);
   expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
-  await swarm.closeWindow(s.session.id);
-  await swarm.aggregateSession(s.session.id);
+  await ic.closeWindow(s.session.id);
+  await ic.aggregateSession(s.session.id);
 
   expect((await admin.setMemberRoleAdmin(candidate.id, 1, "judge")).ok).toBe(true);
 

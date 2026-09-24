@@ -62,7 +62,7 @@ const DECLARATION_SQL = [
     " FOR EACH ROW EXECUTE FUNCTION rm_append_only_guard();",
   "ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row;",
 ].join("\n");
-const BOOTSTRAP_DATA_SQL = "INSERT INTO job_schedules (kind, cron, enabled) VALUES ('swarm.open_session', '0 13 * * 1-5', false);";
+const BOOTSTRAP_DATA_SQL = "INSERT INTO job_schedules (kind, cron, enabled) VALUES ('vault.sample_share_price', '0 * * * *', true);";
 const GRANTS_SQL = "GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly;";
 
 let fixtures = "";
@@ -301,7 +301,7 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
       const ledger = await db<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
       expect(ledger.map((r) => r.name)).toEqual([...snapshot.filenames].sort());
       const [schedule] = await db<{ kind: string }[]>`SELECT kind FROM job_schedules`;
-      expect(schedule?.kind).toBe("swarm.open_session");
+      expect(schedule?.kind).toBe("vault.sample_share_price");
     });
   });
 

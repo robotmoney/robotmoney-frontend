@@ -19,6 +19,46 @@
 #
 # The two RM_STACK_* values are set by scripts/stack/config.ts's buildComposeEnv
 # and reproduced from .agents/smoke-state.json by smoke:down / smoke:status.
+
+# THE SHARED WORKER-LANE OVERLAY, AS A TOP-LEVEL EXTENSION FIELD.
+#
+# It used to be an anchor hung off the `worker-swarm` SERVICE (`worker-swarm:
+# &smoke-worker`), with worker-analytics and worker-research aliasing it. That
+# made one lane's existence a load-bearing fact about the other two: deleting
+# the swarm lane (issue #1026) would have silently emptied both survivors of
+# every label and all fourteen environment passthroughs, and compose would have
+# reported nothing — an alias to a deleted key is simply an absent merge.
+#
+# An `x-` extension field is the shape that cannot fail that way. It belongs to
+# no service, so no service's removal can take it with it, and compose ignores
+# top-level keys beginning with `x-` by specification.
+x-smoke-worker: &smoke-worker
+  labels:
+    robotmoney.smoke.project: ${SMOKE_PROJECT}
+    robotmoney.env: ${RM_STACK_ENV_CLASS}
+    robotmoney.env.hash: ${RM_STACK_ENV_HASH}
+  environment:
+    BASE_RPC_URL: ${BASE_RPC_URL:-}
+    BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
+    ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+    # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
+    # projects.* pipelines (unset = offline fixture directory; smoke-legal).
+    PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+    ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
+    FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
+    FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
+    HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+    TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+    # Shared Base RPC rate budget + repair-driver bounds (issue #709). Left
+    # UNSET for the smoke on purpose: the seeded ops.repair_gaps schedule is a
+    # no-op without a measured budget, so a smoke boot never starts sweeping
+    # months of history against the public RPC.
+    BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
+    BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
+    WALLET_BACKFILL_MAX_DAYS_PER_RUN: ${WALLET_BACKFILL_MAX_DAYS_PER_RUN:-}
+    WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
+    GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
+
 services:
   postgres:
     labels:
@@ -74,48 +114,37 @@ services:
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      # PINNED off (issue #208): repo smoke/e2e never auto-runs the swarm.*
-      # session crons — the smoke drives lifecycle jobs itself via the explicit
-      # admin enqueue-job endpoint (unaffected by this issue). This overrides
-      # docker-compose.yml's prod-shaped default (enabled) regardless of
-      # whatever SWARM_SCHEDULES_ENABLED the invoking shell happens to have.
-      SWARM_SCHEDULES_ENABLED: "0"
+      # NOTHING PINS SESSION SCHEDULING OFF HERE ANY MORE (issue #1026). There
+      # is no switch left to pin: a subject's epoch duration is the whole
+      # schedule and there is no disabled state (system scheduler spec §2.2,
+      # §2.4). Smoke-production spec §6.3: "There is nothing to enable … There
+      # are no schedule rows, no cron strings, no `next_run_at`, and no enable
+      # command." A smoke that wants a fast lifecycle sets short epoch
+      # durations through the admin API and runs the REAL scheduler (spec §8);
+      # it does not bypass it.
 
   # Internal worker lanes share smoke data-path knobs for their remaining queue
-  # work: worker-swarm owns lifecycle jobs and worker-analytics owns chain/
-  # projects samplers. worker-research remains only for unreachable legacy rows;
-  # the independent analytics-producer owns regime/research compute and cadence.
-  # The share-price sampler still reads the vault over eth_call.
-  worker-swarm: &smoke-worker
+  # work: worker-analytics owns chain/projects samplers. worker-research remains
+  # only for unreachable legacy rows; the independent analytics-producer owns
+  # regime/research compute and cadence. The share-price sampler still reads the
+  # vault over eth_call. Session timing is not here at all — `system-scheduler`
+  # below owns it and holds no queue, no database and no data-path knob.
+  worker-analytics: *smoke-worker
+
+  worker-research: *smoke-worker
+
+  # The clock (issue #1026). A standing core-shaped service like api and
+  # postgres, so it takes the same reap-by-label treatment (see this file's
+  # header) — a killed CI job must leave an attributable container behind. It
+  # takes NO part of *smoke-worker: every key in that anchor is a data-path or
+  # RPC credential for a queue lane, and the scheduler reads none of them (it
+  # holds exactly one credential, an API token, delivered as a file — system
+  # scheduler spec §7).
+  system-scheduler:
     labels:
       robotmoney.smoke.project: ${SMOKE_PROJECT}
       robotmoney.env: ${RM_STACK_ENV_CLASS}
       robotmoney.env.hash: ${RM_STACK_ENV_HASH}
-    environment:
-      BASE_RPC_URL: ${BASE_RPC_URL:-}
-      BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
-      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
-      # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
-      # projects.* pipelines (unset = offline fixture directory; smoke-legal).
-      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
-      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
-      FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
-      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
-      TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
-      # Shared Base RPC rate budget + repair-driver bounds (issue #709). Left
-      # UNSET for the smoke on purpose: the seeded ops.repair_gaps schedule is a
-      # no-op without a measured budget, so a smoke boot never starts sweeping
-      # months of history against the public RPC.
-      BASE_RPC_MAX_CALLS_PER_SEC: ${BASE_RPC_MAX_CALLS_PER_SEC:-}
-      BASE_RPC_RATE_BURST: ${BASE_RPC_RATE_BURST:-}
-      WALLET_BACKFILL_MAX_DAYS_PER_RUN: ${WALLET_BACKFILL_MAX_DAYS_PER_RUN:-}
-      WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY: ${WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY:-}
-      GECKO_OHLCV_MIN_INTERVAL_MS: ${GECKO_OHLCV_MIN_INTERVAL_MS:-}
-
-  worker-analytics: *smoke-worker
-
-  worker-research: *smoke-worker
 
   # The independent producer performs the heavy analytics HTTP fetches. Token
   # price caching is irrelevant to this service.

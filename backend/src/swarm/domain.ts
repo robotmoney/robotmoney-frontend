@@ -415,9 +415,9 @@ export interface ListSessionsOptions {
 // When the next session opens — issue #783's field, answered from the EPOCH
 // model (issue #1026 W4).
 //
-// WHAT IT USED TO READ. `SELECT next_run_at FROM job_schedules WHERE kind =
-// 'swarm.open_session' AND enabled`: the cron slot the old scheduler would next
-// fire at. Those rows are retired with the rest of the scheduled lifecycle, so
+// WHAT IT USED TO READ. `SELECT next_run_at FROM job_schedules` for the
+// session-opening kind: the cron slot the old scheduler would next fire at.
+// Those rows are retired with the rest of the scheduled lifecycle, so
 // the field needed a new source or it would have become permanently null on a
 // published contract (scripts/lib/agent-endpoints.ts documents it to outside
 // agents, and the /swarm view renders it).
@@ -1734,8 +1734,8 @@ export async function ensureSmokeSubjectFixtures(subjectId: string, name: string
  * synthetic future days and then TRUNCATE history to reuse them.
  *
  * Idempotent per OPEN session, not per day. An already-scheduled/collecting
- * session for this subject is returned as-is, so a retried `swarm.open_session`
- * job cannot convene a second one — but once that session publishes, the next
+ * session for this subject is returned as-is, so a re-delivered open request
+ * cannot convene a second one — but once that session publishes, the next
  * call correctly convenes a new one, however soon after. That is what allows a
  * cadence faster than daily without a session ever overwriting another.
  *
@@ -1900,10 +1900,9 @@ export async function buildBriefBody(
   // (applyCurrentProjections), so "froze regime rows" and "published the
   // regime rows the brief reads" are the same run.
   //
-  // NOT `rs.asof = s.date` either, which is what the committed schedules make
-  // permanently unsatisfiable: a session convenes 06:00 and publishes its
-  // brief 07:00 UTC on day D (SWARM_OPEN_SESSION_CRON / SWARM_PUBLISH_BRIEF_
-  // CRON, config.ts), but day D's regime run does not fire until 22:30 UTC
+  // NOT `rs.asof = s.date` either, which the old daily session cadence made
+  // permanently unsatisfiable: a session convened 06:00 and published its
+  // brief 07:00 UTC on day D, but day D's regime run does not fire until 22:30 UTC
   // (PRODUCER_REGIME_CRON) — 15.5 hours after the session is over. Keying on
   // the session date bound every real brief to NULL, and NULL is
   // indistinguishable from the legitimate "this subject has no analytics
@@ -2483,8 +2482,8 @@ export async function loadFrozenTakeSet(sessionId: string): Promise<FrozenTakeSe
 // `swarm_recommendation` wholesale — the judge's `rationale`, `disagreements`,
 // `release_safety` and `judge` fingerprint do not survive it — and it deliberately
 // does not decide whether that is allowed. Its two callers own that:
-// `aggregateSessionAdmin` (and therefore the `swarm.aggregate` handler and the
-// admin dispatcher, which both go through it) puts it behind `guardedTransition`,
+// `aggregateSessionAdmin` (and therefore the admin dispatcher and the epoch
+// settlement chain, which both go through it) puts it behind `guardedTransition`,
 // so `judged -> aggregated` and anything out of a terminal state are refused.
 // Do NOT call it from a new site without a guard in front of it.
 //
@@ -2616,7 +2615,7 @@ export async function aggregateSession(sessionId: string) {
  * WHERE id=$1`, with no state guard and no `published_at IS NULL` guard, while
  * `publishSessionAdmin` has both plus a `guardedTransition` that refuses
  * terminal states and writes session-event and audit rows. Two consequences,
- * both reachable from the `swarm.publish` job's ordinary retries:
+ * both reachable from an ordinary retry of the publish step:
  *
  *   * every retry RE-STAMPED `published_at`, so the recorded publication
  *     instant drifted and `swarm/receipt-gap.ts`'s alert named a time the

@@ -10,8 +10,6 @@
 // rescue `OPENCODE_API_KEY` needed in this release.
 import { describe, expect, test } from "bun:test";
 import { DEMO_COMPOSE_PASSTHROUGH, smokePassthroughEnv } from "../../lib/smoke-compose-passthrough.ts";
-import { JUDGE_LANE_CLAIM_SLACK_MS, JUDGE_WAIT_MS } from "../../lib/swarm/session.ts";
-import { DEFAULT_JUDGE_TIMEOUT_MS } from "../../../backend/src/swarm/judge-budget.ts";
 
 describe("judge transport settings reach the stack through the documented boot", () => {
   test.each(["SWARM_JUDGE_TIMEOUT_MS", "SWARM_JUDGE_BASE_URL"])("%s is on DEMO_COMPOSE_PASSTHROUGH", (key) => {
@@ -60,15 +58,12 @@ describe("judge fault-injection flags reach the stack through the documented boo
   });
 });
 
-// The driver's ceiling is DERIVED, not a coincidence: it used to be a bare
-// 120_000 whose comment claimed the model call was "bounded at ~60s" — true of
-// the old default and false of this one. A ceiling below the budget it is
-// waiting on guarantees the driver publishes before the judging can land.
-test("JUDGE_WAIT_MS is derived from the judge budget and leaves claim slack", () => {
-  expect(JUDGE_WAIT_MS).toBeGreaterThan(DEFAULT_JUDGE_TIMEOUT_MS);
-});
-
-test("the ceiling is the budget plus the named lane slack, not a literal", () => {
-  expect(JUDGE_WAIT_MS).toBe(DEFAULT_JUDGE_TIMEOUT_MS + JUDGE_LANE_CLAIM_SLACK_MS);
-  expect(JUDGE_LANE_CLAIM_SLACK_MS).toBeGreaterThan(0);
-});
+// THE DRIVER'S OWN JUDGE CEILING USED TO BE GRADED HERE and is gone with the
+// constant it graded. `JUDGE_WAIT_MS` was the model budget plus slack for the
+// `swarm.judge` job to be claimed off the single-concurrency swarm lane; there
+// is no such job and no such lane (issue #1026 W4). The driver's bound is now
+// the ABSOLUTE DEADLINE the API stores when judging is requested
+// (system-scheduler-spec.md §4.4), which no constant in this repository may
+// restate — §9: "a judging deadline is stored by the API when judging is
+// requested and is never restarted". The two settings above still have to reach
+// the containers, which is what the rest of this file grades.

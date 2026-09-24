@@ -7,17 +7,17 @@
 // `.env` into the driver's process.env, the allowlist forwarded it, and a twin
 // boot has no `postgres` service for the lanes to resolve — so every lane's
 // first query died with `getaddrinfo ESERVFAIL` and every enqueued
-// swarm.open_session sat `pending` at attempts=0.
+// lifecycle job sat `pending` at attempts=0.
 import { describe, expect, test } from "bun:test";
 import { shadowingStackEnvWarnings, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
 
 describe("smokePassthroughEnv", () => {
   test("forwards a documented operator knob", () => {
-    expect(smokePassthroughEnv({ SWARM_WINDOW_MINUTES: "5" })).toEqual({ SWARM_WINDOW_MINUTES: "5" });
+    expect(smokePassthroughEnv({ PROJECTS_SOURCE: "live" })).toEqual({ PROJECTS_SOURCE: "live" });
   });
 
   test("an empty value counts as unset", () => {
-    expect(smokePassthroughEnv({ SWARM_WINDOW_MINUTES: "" })).toEqual({});
+    expect(smokePassthroughEnv({ PROJECTS_SOURCE: "" })).toEqual({});
   });
 
   test("never forwards a stack-owned database URL", () => {

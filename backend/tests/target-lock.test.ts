@@ -215,11 +215,11 @@ describe("acquireTargetLock — §2, a session lock on its own dedicated connect
 describe("describeHolder — §2, a contention refusal must be able to name the holder [integration tier]", () => {
   test("reports the tool, instance, host and pid published at acquisition", async () => {
     const key = uniqueKey();
-    const first = await acquire(key, "schedules:enable", "rm_prod");
+    const first = await acquire(key, "spoof-keys", "rm_prod");
     if (!first.acquired) throw new Error("expected acquisition");
 
     const holder = await describeHolder(sql, key);
-    expect(holder?.tool).toBe("schedules:enable");
+    expect(holder?.tool).toBe("spoof-keys");
     expect(holder?.instance).toBe("rm_prod");
     expect(holder?.host).toBe("test-host");
     expect(holder?.pid).toBe(process.pid);

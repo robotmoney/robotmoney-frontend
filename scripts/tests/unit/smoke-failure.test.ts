@@ -18,10 +18,17 @@ describe("DB_WRITER_SERVICES — what a failed boot must stop", () => {
     expect(DB_WRITER_SERVICES).not.toContain("postgres");
   });
 
-  test("covers every lane that writes: the api and all four producer/worker lanes", () => {
+  test("covers every service that writes: the api, the producer and both worker lanes", () => {
     expect([...DB_WRITER_SERVICES].sort()).toEqual(
-      ["analytics-producer", "api", "worker-analytics", "worker-research", "worker-swarm"],
+      ["analytics-producer", "api", "worker-analytics", "worker-research"],
     );
+  });
+
+  test("never names system-scheduler: it holds no database credential to quiesce", () => {
+    // system-scheduler-spec.md §7 — it holds exactly one credential, an API
+    // token. Listing it here would claim a writer that cannot write, and would
+    // stop the one container whose /health explains a stalled boot.
+    expect(DB_WRITER_SERVICES).not.toContain("system-scheduler");
   });
 });
 

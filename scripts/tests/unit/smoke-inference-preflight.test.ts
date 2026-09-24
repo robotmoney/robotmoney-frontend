@@ -112,8 +112,8 @@ describe("a NON-standing boot is left exactly as it was", () => {
 
 // ── The delivery half, and the reason this module was wrong the first time ──
 //
-// The api and worker-swarm containers do NOT come up through the direct
-// `docker compose` calls that read `dockerEnv`; they come up through
+// The api container does NOT come up through the direct
+// `docker compose` calls that read `dockerEnv`; it comes up through
 // `stack.up()`, whose child env is `buildSpawnEnv()` — a fixed allowlist plus
 // `buildComposeEnv()`. Writing `process.env` alone therefore delivered nothing
 // for two of the three sources. These two tests are the ones that would have

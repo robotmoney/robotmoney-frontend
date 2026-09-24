@@ -48,9 +48,14 @@ import {
 export { HOME_ENV_FILE, CONNECTION_TOKENS, ROLES } from "./env-role.ts";
 export { urlForRole, redactedTarget } from "./env-role.ts";
 
+// `system-scheduler` is deliberately ABSENT, and its absence is the point of
+// issue #1026: it has no database connection at all to make external
+// (system-scheduler-spec.md §1 — database connection "**No.** Never."), so it
+// carries no `depends_on: postgres` for this overlay to drop. Adding it here
+// would be harmless today and wrong tomorrow: it would state that the clock
+// has a database, which is the exact claim the design removes.
 export const POSTGRES_DEPENDENT_SERVICES = [
   "api",
-  "worker-swarm",
   "worker-analytics",
   "worker-research",
 ] as const;

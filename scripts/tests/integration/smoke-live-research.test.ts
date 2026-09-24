@@ -2,10 +2,10 @@
 //
 //  1. Compose topology (docker compose config — offline interpolation, no
 //     containers): the smoke stack starts one worker container per execution
-//     lane (worker-swarm reserved / worker-analytics / worker-research),
-//     each with its WORKER_LANE pinned; the old undifferentiated `worker`
-//     service is gone. Fails loudly if the topology regresses to generic
-//     workers (which could consume the reserved swarm capacity).
+//     lane (worker-analytics / worker-research), each with its WORKER_LANE
+//     pinned; the old undifferentiated `worker` service is gone. Fails loudly
+//     if the topology regresses to generic workers. There is no session lane:
+//     issue #1026 moved session timing out of the queue entirely.
 //
 //  2. TUI wiring (source-level assertions on scripts/lib/smoke-main.ts, which
 //     cannot be imported without side effects): the Startup pane names each
@@ -21,7 +21,6 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "../../..");
 
 const WORKER_LANE_SERVICES: Record<string, string> = {
-  "worker-swarm": "swarm",
   "worker-analytics": "analytics",
   "worker-research": "research",
 };

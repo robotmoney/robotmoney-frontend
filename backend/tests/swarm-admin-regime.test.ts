@@ -118,6 +118,12 @@ test("the ADMIN_TOKEN classifier path is gone: POST /api/swarm/admin/regime is a
   expect((res!.body as { error: string }).error).toBe("unknown admin action");
 });
 
+// STILL THE SAME CLAIM, ANSWERED HARDER (issue #1026 W4). This used to assert
+// that `regime_classify` was not in `enqueue-job`'s action map, so the endpoint
+// refused it with 400. The endpoint itself is gone now — no `swarm.%` kind has
+// a handler or a lane, so it would only write rows nothing could claim — and it
+// answers 410 for every action. There is no enqueue path to reach regime
+// classification through, which is what the test was protecting.
 test("ADMIN_TOKEN cannot trigger classification through enqueue-job", async () => {
   config.adminToken = null;
   config.allowInsecure = true;
@@ -127,8 +133,8 @@ test("ADMIN_TOKEN cannot trigger classification through enqueue-job", async () =
     body: JSON.stringify({ action: "regime_classify", asof: "2031-06-17" }),
   });
   const res = await call(req);
-  expect(res!.status).toBe(400);
-  expect((res!.body as { error: string }).error).toContain("unknown action");
+  expect(res!.status).toBe(410);
+  expect((res!.body as { error: string }).error).toContain("enqueue-job is gone");
 });
 
 // Migration 0017 (admin surface, issue #150) against the suite's real,

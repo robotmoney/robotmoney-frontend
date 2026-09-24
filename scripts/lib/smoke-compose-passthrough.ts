@@ -26,15 +26,15 @@
  */
 export const DEMO_COMPOSE_PASSTHROUGH = [
   "BASE_RPC_URL",
-  "SWARM_AGGREGATE_CRON",
-  "SWARM_CLOSE_WINDOW_CRON",
-  "SWARM_OPEN_SESSION_CRON",
-  "SWARM_PUBLISH_BRIEF_CRON",
-  "SWARM_PUBLISH_CRON",
-  "SWARM_SCHEDULES_ENABLED",
-  "SWARM_WINDOW_MINUTES",
+  // NO SESSION-SCHEDULING VARIABLE (issue #1026). Seven used to sit here — an
+  // enable flag, five cron strings and a window. They are not merely
+  // unforwarded, they no longer exist: a subject's epoch duration is the whole
+  // schedule and it lives on the subject, set by bootstrap and changed only
+  // through the admin API (system-scheduler-spec.md §2.2, §2.3). An operator
+  // who exports one of the old names now gets exactly what the name deserves —
+  // nothing, in every container.
   // THE JUDGE'S TRANSPORT SETTINGS (this release). `docker-compose.yml` has
-  // interpolated both into api and worker-swarm since the judge shipped, but
+  // interpolated these into the api since the judge shipped, but
   // nothing carried them from the operator's shell to compose — so exporting
   // `SWARM_JUDGE_TIMEOUT_MS` produced an EMPTY variable in the container and
   // `resolveJudgeTimeoutMs()` fell back to the default, silently. The budget an
@@ -44,7 +44,7 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "SWARM_JUDGE_TIMEOUT_MS",
   // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (backend/src/swarm/
   // judge-fault-injection.ts, R13). `docker-compose.yml` interpolates both
-  // into api and worker-swarm, but the same gap as SWARM_JUDGE_TIMEOUT_MS
+  // into api, but the same gap as SWARM_JUDGE_TIMEOUT_MS
   // above meant exporting either produced an EMPTY variable in the
   // container: an operator staging AC-E2E-06 through the documented
   // `bun run smoke:stage` boot got a silent "flag_absent" refusal instead of

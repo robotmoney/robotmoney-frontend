@@ -32,7 +32,12 @@ const smokeMainSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.t
 describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared grant/flip/assert/restore sequence", () => {
   const FN_START = "export async function runJudgeRoleCoverage(";
   const GRANT = 'setMemberRole(memberId, "judge"';
-  const FLIP_SHADOW = 'setJudgeMode("shadow"';
+  // ENFORCE, not shadow. `currentJudgeMode` (backend/src/swarm/domain.ts)
+  // reduces a `shadow` switch to `off` when it stamps the closing session,
+  // because D48 forbids creating new shadow judgements — so a coverage run that
+  // flipped to `shadow` would settle every session as `not_judged` and fail the
+  // row-count assertion for a reason that has nothing to do with the judge.
+  const FLIP_ENFORCE = 'setJudgeMode("enforce"';
   const COUNT_JUDGEMENTS = "countJudgements(judged.sessionId";
   // Issue #922: a SECOND assertion alongside #845's row-count check — the
   // landed judgement must NAME the member this call granted the role to, not
@@ -47,7 +52,7 @@ describe("runJudgeRoleCoverage (scripts/lib/swarm/session.ts) — the shared gra
     return {
       fnStart: start,
       grant: src.indexOf(GRANT),
-      flip: src.indexOf(FLIP_SHADOW),
+      flip: src.indexOf(FLIP_ENFORCE),
       // The session under test is whatever `runJudgedSession()` returns — a
       // caller-supplied callback, not a literal call this function makes.
       count: src.indexOf(COUNT_JUDGEMENTS),

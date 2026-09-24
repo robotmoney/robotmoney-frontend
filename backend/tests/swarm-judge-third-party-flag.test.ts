@@ -23,7 +23,7 @@
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
-import * as swarm from "../src/swarm/domain.ts";
+import * as ic from "../src/swarm/domain.ts";
 import { getJudgeConfig, judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judge-session.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -41,7 +41,7 @@ const rid = (prefix: string) => `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 async function member(prefix: string) {
   const id = rid(prefix);
   const { publicKeyB64, privateKey } = await generateKeyPair();
-  const result = await swarm.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  const result = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
   if (!("token" in result) || !result.token) throw new Error(`registerMember failed: ${JSON.stringify(result)}`);
   return { id, token: result.token, privateKey };
 }
@@ -49,15 +49,15 @@ async function member(prefix: string) {
 async function session(prefix: string) {
   const subjectId = rid(prefix);
   await ensureProseSubject(subjectId, subjectId);
-  const opened = await swarm.openSession(subjectId);
-  await swarm.publishBrief(opened.id, 60);
+  const opened = await ic.openSession(subjectId);
+  await ic.publishBrief(opened.id, 60);
   return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };
 }
 
 async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subjectId: string) {
   const payload = { memberId: m.id, date, subjectId, nonce: rid("nonce"), stance: "neutral", confidence: 0.5, body: "signed take" };
   const signature = await signMessage(canonicalizeSubmission(payload), m.privateKey);
-  return swarm.submitRecommendation(m.token, { ...payload, signature });
+  return ic.submitRecommendation(m.token, { ...payload, signature });
 }
 
 const opinion = JSON.stringify({
@@ -71,8 +71,8 @@ async function aggregated(prefix: string) {
   const s = await session(prefix);
   const voters = [await member("voter_a"), await member("voter_b")];
   for (const voter of voters) expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
-  await swarm.closeWindow(s.session.id);
-  await swarm.aggregateSession(s.session.id);
+  await ic.closeWindow(s.session.id);
+  await ic.aggregateSession(s.session.id);
   return s;
 }
 
@@ -112,7 +112,7 @@ test("a self-declared operator='robotmoney' does not exempt a non-roster judge f
   await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL }); // thirdPartyEnabled left at its default: false
 
   const judge = await judgeRole("forger");
-  const patched = await swarm.updateMemberProfile(judge.token, judge.id, { operator: "robotmoney" });
+  const patched = await ic.updateMemberProfile(judge.token, judge.id, { operator: "robotmoney" });
   expect(patched.status).toBe(200);
   const row = await sql`SELECT operator FROM swarm_members WHERE id = ${judge.id}`;
   expect((row[0] as any).operator).toBe("robotmoney");

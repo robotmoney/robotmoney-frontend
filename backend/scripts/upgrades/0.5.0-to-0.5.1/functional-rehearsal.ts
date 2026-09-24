@@ -271,7 +271,7 @@ export async function runFunctionalRehearsal(db: Db, { record }: Checker, opts: 
     cOk
       ? `${last.newSessions.length} session(s) convened after the twin's postmaster started (${snapshot.bootAt.toISOString()}) — the system is opening new work, not only draining old work`
       : `no session convened after ${snapshot.bootAt.toISOString()} in ${Math.round((Date.now() - startedAt) / 60000)}m of observation`,
-    "Healing the old wedges is only half the claim. Note the smoke stack pins SWARM_SCHEDULES_ENABLED=0, so this exercises the steady-state session loop rather than cron.",
+    "Healing the old wedges is only half the claim. Sessions are opened by the epoch scheduler (system-scheduler-spec.md §4), so this exercises the steady-state session loop directly.",
   );
 
   // ── (d) a full session: proposers submitted, a judge judged ───────────────

@@ -402,7 +402,7 @@ export interface JudgeSessionOptions extends JudgeOptions {
  * ONE JUDGE AT A TIME, PER SESSION. Everything after the model call runs inside
  * a single transaction that first takes `pg_advisory_xact_lock` on the session
  * id. Concurrent callers are real — the admin POST runs in the api process
- * while a `swarm.judge` job runs in worker-swarm, and a reaped/retried job
+ * while a judging is in flight in its own process, and a reaped/retried attempt
  * re-enters the same way — and `guardedTransition` does NOT stop the second one
  * (re-requesting the current state is idempotent by design). Unserialized, the
  * read-modify-write in applyOpinion() interleaves as insert(A), insert(B),

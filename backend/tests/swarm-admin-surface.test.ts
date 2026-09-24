@@ -392,7 +392,7 @@ test("session create: a window too narrow to order aggregate/judge/publish is RE
 // RE-ARMED its five lifecycle jobs to the new timeline (issue #1019); the other
 // pinned that a pre-#767 session missing its `swarm.judge` row was repaired by
 // re-creating it. Both are statements about `createSessionAdmin` enqueuing
-// `swarm.publish_brief` / `close_window` / `aggregate` / `judge` / `publish`,
+// the five lifecycle steps,
 // and it no longer does: scheduler spec §4.4 makes settlement "not scheduled",
 // so there is no run_after to re-arm and no missing job to repair. They are
 // deleted rather than weakened — a test asserting a behaviour that has been

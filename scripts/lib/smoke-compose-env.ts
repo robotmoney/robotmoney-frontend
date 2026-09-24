@@ -89,12 +89,15 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 }
 
 /**
- * The judge's credential, for the two services that run the judge.
+ * The judge's credential, for the services that run the judge.
  *
  * SEPARATE FROM THE ALLOWLIST ABOVE, because it is not an operator knob — it is
- * the shared OpenCode Zen key, and docker-compose.yml names it on `api` and
- * `worker-swarm` ONLY (not on the *worker-env anchor), so worker-analytics and
- * worker-research never receive an inference credential they do not use.
+ * the shared OpenCode Zen key, and docker-compose.yml names it on `api` ONLY
+ * (not on the *worker-env anchor), so worker-analytics and worker-research
+ * never receive an inference credential they do not use. The lane that used to
+ * carry it alongside `api` was `worker-swarm`, removed by issue #1026;
+ * `system-scheduler`, which replaced it, calls no model at all
+ * (system-scheduler-spec.md §7).
  *
  * WHY IT HAS TO BE PASSED EXPLICITLY. It never was: `${OPENCODE_API_KEY:-}` was
  * filled by compose's own auto-load of the checkout's `.env`. Closing that hole
