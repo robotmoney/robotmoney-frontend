@@ -1,6 +1,6 @@
 {
   "name": "@robotmoney/contract",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "HTTP API contract shared by the robotmoney frontend and backend. Types + route paths only, zero runtime deps.",
   "type": "module",
   "main": "src/index.js",
@@ -11,6 +11,7 @@
       "import": "./src/index.js"
     },
     "./routes": "./src/routes.js",
+    "./package.json": "./package.json",
     "./consensus-receipt": {
       "types": "./src/consensus-receipt.d.ts",
       "import": "./src/consensus-receipt.js"
