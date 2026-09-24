@@ -1068,13 +1068,39 @@ async function main(): Promise<void> {
     await journal!.commitPhase({ ...EMPTY_OUTCOME, ...outcome });
     openRecord = undefined;
   };
-  const holdSchemaToJournal = (): void => {
-    if (!recheckSchema) return;
-    const schema = observeSchema();
-    if (!schema) return;
-    const mismatch = expectationMismatch(recheckSchema, schema);
+  // The schema as soon as it can be asked, waiting out a database that is
+  // still initializing (its entrypoint's temporary server answers health
+  // checks before the database exists). Null only if it never answers.
+  const observeSchemaSettled = async (): Promise<ReturnType<typeof observeSchema>> => {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const schema = observeSchema();
+      if (schema !== null || Date.now() >= deadline) return schema;
+      await sleep(1_000);
+    }
+  };
+  // A resumed run that could not see the schema at open holds it to the
+  // journal the moment it can. What it is held to is the journal AS IT NOW
+  // STANDS: the interrupted run's records plus every outcome this run has
+  // committed since (its own migrations included), never the expectations
+  // captured at open, which this run's own migrate would then contradict.
+  // Before a migration (`mustObserve`), a database that cannot be asked is a
+  // refusal: migrating an unverified schema is what the check exists to stop.
+  const holdSchemaToJournal = async (opts: { mustObserve?: boolean } = {}): Promise<ReturnType<typeof observeSchema>> => {
+    const schema = opts.mustObserve ? await observeSchemaSettled() : observeSchema();
+    if (!recheckSchema) return schema;
+    if (!schema) {
+      if (opts.mustObserve) {
+        throw new Error(`refusing to resume plan ${planId}: the database could not be asked about its schema before migrating, so the journal's expectations cannot be checked`);
+      }
+      return schema;
+    }
+    const current = readJournal(paths);
+    const expected = (current !== null ? projectExpectations(current) : null) ?? recheckSchema;
+    const mismatch = expectationMismatch(expected, schema);
     recheckSchema = null;
     if (mismatch) throw new Error(`refusing to resume plan ${planId}: ${mismatch}, and no journaled outcome accounts for the difference`);
+    return schema;
   };
 
   await begin("plan", decision.kind === "resume" ? "resume" : null);
@@ -1230,17 +1256,19 @@ async function main(): Promise<void> {
       if (composePostgres) await begin("prepare", "database");
     } else if (step === "preflight") {
       await commit();
-      holdSchemaToJournal();
+      await holdSchemaToJournal();
       await begin("prepare", "gate");
     } else if (step === "migrate") {
       await commit();
-      holdSchemaToJournal();
-      ledgerBeforeMigrate = observeSchema()?.ledger ?? [];
+      // Settled, and when migrating REQUIRED: both the resume check and the
+      // "before" ledger this migrate's outcome is computed against need the
+      // schema as it really is, not a still-initializing database's silence.
+      ledgerBeforeMigrate = (await holdSchemaToJournal({ mustObserve: migrates }))?.ledger ?? [];
       await begin("prepare", "migrate");
     } else if (step === "services") {
       const ledgerNow = observeSchema()?.ledger ?? ledgerBeforeMigrate;
       await commit(openRecord?.step === "migrate" ? { migrationsApplied: ledgerNow.filter((m) => !ledgerBeforeMigrate.includes(m)) } : {});
-      holdSchemaToJournal();
+      await holdSchemaToJournal();
       // `--seed`'s demo job_schedules: preparation, written before any service
       // that reads them starts. Not redone by a rerun that already committed it.
       if (seeds && !committedSteps.has("prepare:seed")) {

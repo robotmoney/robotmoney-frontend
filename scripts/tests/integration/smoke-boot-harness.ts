@@ -69,6 +69,8 @@ export interface RunningBoot {
   /** Everything the process wrote so far, stdout and stderr interleaved as read. */
   output(): string;
   readonly exited: Promise<number>;
+  /** The exit code once the process has exited, else null. */
+  exitCode(): number | null;
 }
 
 /** The argv an operator types, for this harness's instance. */
@@ -91,12 +93,14 @@ export function spawnBoot(h: BootHarness, extra: readonly string[] = [], opts: {
     for await (const chunk of stream) text += decoder.decode(chunk, { stream: true });
   };
   const pumps = Promise.all([pump(proc.stdout as ReadableStream<Uint8Array>), pump(proc.stderr as ReadableStream<Uint8Array>)]);
+  let code: number | null = null;
   const exited = (async () => {
-    const code = await proc.exited;
+    const c = await proc.exited;
     await pumps;
-    return code;
+    code = c;
+    return c;
   })();
-  return { proc, output: () => text, exited };
+  return { proc, output: () => text, exited, exitCode: () => code };
 }
 
 /** Run one of the instance's lifecycle commands (`smoke:status`, `smoke:tui`, `smoke:down`) as its own process. */
@@ -110,13 +114,28 @@ export function runCommand(h: BootHarness, script: string, args: readonly string
   return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
 }
 
+/** What a failed boot said about why: its refusal and failure lines, then the tail. */
+export function bootFailureReport(boot: RunningBoot): string {
+  const out = boot.output();
+  const causes = out.split(/\r?\n/).filter((l) => /startup failed|FATAL: (?!\s*database)|Refusing|stopped:/.test(l) && !/^postgres-1/.test(l));
+  return `${causes.join("\n")}\n--- tail ---\n${out.slice(-2000)}`;
+}
+
+/**
+ * Poll `check` until it holds. With `boot`, a boot that EXITS first fails the
+ * wait at once with its own failure lines, instead of burning the whole
+ * timeout waiting for a phase a dead process will never reach.
+ */
 export async function waitFor(check: () => boolean, timeoutMs: number, what: string, boot?: RunningBoot): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (check()) return;
+    if (boot && boot.exitCode() !== null) {
+      throw new Error(`the boot exited ${boot.exitCode()} before ${what}:\n${bootFailureReport(boot)}`);
+    }
     await Bun.sleep(150);
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}${boot ? `; boot output tail:\n${boot.output().slice(-3000)}` : ""}`);
+  throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}${boot ? `; boot output:\n${bootFailureReport(boot)}` : ""}`);
 }
 
 /** The journal on disk, or null while none exists (tolerating a write in flight). */
