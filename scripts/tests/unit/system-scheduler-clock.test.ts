@@ -180,12 +180,12 @@ describe("subjects are independent (§4.4, §10)", () => {
     expect(api.callsOf("turnover").map((c) => c.args.subjectId)).toEqual(["fast"]);
     expect(clock.boundaryAt("slow")).toBe(T0 + 600_000);
 
-    // The fast subject turns over ten times before the slow one turns over once.
-    for (let i = 2; i <= 10; i += 1) {
+    // The fast subject turns over nine times before the slow one's instant.
+    for (let i = 2; i <= 9; i += 1) {
       await timers.advanceTo(T0 + 60_000 * i);
       await clock.idle();
     }
-    expect(api.callsOf("turnover").filter((c) => c.args.subjectId === "fast")).toHaveLength(10);
+    expect(api.callsOf("turnover").filter((c) => c.args.subjectId === "fast")).toHaveLength(9);
     expect(api.callsOf("turnover").filter((c) => c.args.subjectId === "slow")).toHaveLength(0);
 
     await timers.advanceTo(T0 + 600_000);

@@ -22,6 +22,15 @@
 // the backend's declarations as TEXT and asserts the field names match, so the
 // two cannot drift silently without importing one into the other.
 
+/**
+ * A `fetch` a test can substitute.
+ *
+ * `typeof fetch` cannot be used: Bun's declaration carries a `preconnect`
+ * property, so every injected stub would have to invent one to typecheck. This
+ * is the call surface and nothing else.
+ */
+export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §3's full read
 // ─────────────────────────────────────────────────────────────────────────────

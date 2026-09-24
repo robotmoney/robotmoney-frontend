@@ -380,6 +380,10 @@ describe("bounded retry and degradation (§4.6, §10)", () => {
     api.recover("aggregate");
     const before = api.countCalls("aggregate");
     const b = boot({ maxAttempts: 3 });
+    // The container sets these two on a successful startup check and a live
+    // stream; a fresh clock claims neither until it is told.
+    b.markAuthenticated(true);
+    b.markStreamSynchronized(true);
     await b.rebuild(await api.fullRead());
     await b.idle();
 

@@ -251,11 +251,28 @@ describe("the fake is typed identically to the real handler", () => {
 });
 
 describe("smoke never restarts the scheduler container (§6.3)", () => {
-  test("the readiness module issues no docker restart and no compose restart", () => {
+  test("the readiness module runs no command at all, so it cannot restart anything", () => {
+    // The assertion is on EXECUTION, not on the word: the module's detail
+    // string tells the operator to restart the container, which is §6.3's
+    // intent — the recovery is theirs. What it must not do is act.
     const text = readFileSync(join(REPO, "scripts/lib/smoke-readiness-scheduler.ts"), "utf8");
     const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "");
-    expect(code).not.toMatch(/\brestart\b/);
-    expect(code).not.toContain("docker");
+    for (const runner of ["docker", "Bun.spawn", "Bun.$", "child_process", "execFile", "spawnSync"]) {
+      expect({ runner, found: code.includes(runner) }).toEqual({ runner, found: false });
+    }
+  });
+
+  test("the exhausted detail tells the operator the restart is theirs", () => {
+    const checks = evaluateSchedulerReadiness({
+      health: health({
+        exhausted: [
+          { item: "turnover:sub-a", subjectId: "sub-a", lastError: "503", attempts: 5, exhaustedAtMs: 0 },
+        ],
+      }),
+      activeSubjectIds: ["sub-a"],
+      collectingSubjectIds: ["sub-a"],
+    });
+    expect(checks.find((c) => c.check === "scheduler-no-exhausted-work")!.detail).toContain("restart");
   });
 
   test("the module states the recovery path is the operator's, so the omission is deliberate", () => {
