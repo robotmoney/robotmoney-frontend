@@ -8,11 +8,13 @@
 // every malformed shape is a loud refusal rather than a fabricated allocation.
 //
 // The publish-side half — the vector reaching the receipt as 10,000 bps, and
-// the named refusal when it does not — HAS NO TEST. Its pin was deleted in
-// 5d6476c4 with the swarm lane, because it drove publication through the
-// removed worker handler. Rewiring it onto the epoch finalize path is tracked
-// on #1026; the receipt tests that remain cover assembly, envelope shape, bare
-// bytes and the judge roundtrip, none of them the largest-remainder conversion.
+// the named refusal when it does not — is pinned against real Postgres in
+// backend/tests/swarm-analyst-weights-receipt.test.ts, on the epoch path the
+// system actually settles by: signed weighted takes, turnover, aggregate, the
+// judge of record's signed judgement, then `POST epochs/finalize` through the
+// admin handler, which publishes and assembles the receipt (issue #1026). Its
+// first version drove the removed worker handler and died with the swarm lane
+// in 5d6476c4; the rewrite ports every one of its scenarios.
 import { describe, expect, test } from "bun:test";
 import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import {

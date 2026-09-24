@@ -28,6 +28,7 @@ import { handleSchedulerStream } from "../src/api/routes/swarm-stream.ts";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { inHouseJudge } from "./support/stub-judge.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -538,11 +539,16 @@ test("the stream routes own only their own paths", async () => {
 
 const url = (p: string) => new URL(`http://test${p}`);
 
+// Authored by the session's judge of record: `recordJudgingConsensus` refuses
+// a consensus from anyone else (§4.4, issue #1026 wave 2).
 async function plantJudgement(sessionId: string): Promise<number> {
+  const judge = await inHouseJudge();
   const [j] = await sql<{ id: string }[]>`
     INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb)
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
+       judged_by, judged_by_member_id)
+    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
+            ${judge.id}, ${judge.id})
     RETURNING id`;
   return Number(j.id);
 }

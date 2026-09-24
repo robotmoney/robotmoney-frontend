@@ -319,7 +319,7 @@ describe("an 'already done' answer advances the chain (§4.6, §5)", () => {
 
     const clock = boot();
     await clock.rebuild({
-      subjects: [{ subjectId: "sub-a", name: "sub-a", epochDurationSeconds: 600 }],
+      subjects: [{ subjectId: "sub-a", name: "sub-a", epochDurationSeconds: 600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [
         { sessionId: "sa", subjectId: "sub-a", windowClosesAt: new Date(T0 + 10_000_000).toISOString() },
       ],
@@ -502,7 +502,7 @@ describe("bounded retry and degradation (§4.6, §10)", () => {
 
     const clock = boot();
     await clock.rebuild({
-      subjects: [{ subjectId: "sub-a", name: "sub-a", epochDurationSeconds: 600 }],
+      subjects: [{ subjectId: "sub-a", name: "sub-a", epochDurationSeconds: 600, epochAnchor: "1970-01-01T00:00:00.000Z", judgingDurationSeconds: 900 }],
       collecting: [
         { sessionId: "sa", subjectId: "sub-a", windowClosesAt: new Date(T0 + 10_000_000).toISOString() },
       ],
@@ -592,6 +592,15 @@ describe("bounded retry and degradation (§4.6, §10)", () => {
     expect(a.health.exhausted[0].subjectId).toBe("sub-a");
     // §4.6: "keeps its collecting session past `window_closes_at`; that is
     // harmless, because §4.2 refuses submissions by instant, not by state."
+    //
+    // THE REFUSAL ITSELF IS NOT PROVED HERE, and cannot be: this fake has no
+    // submission surface, and a fake that modelled one would only prove the
+    // fake. It is proved against the real API and real Postgres, in exactly
+    // this state — `collecting`, past `window_closes_at`, turnover not yet
+    // run — by backend/tests/epoch-window.test.ts ("a take after
+    // window_closes_at is refused even though the session is still collecting"
+    // and "…refused throughout an exhausted turnover…"), and across a real
+    // scheduler outage by scripts/tests/integration/scheduler-api-runtime.test.ts.
     expect(api.sessions.get("sa")!.state).toBe("collecting");
     a.stop();
 

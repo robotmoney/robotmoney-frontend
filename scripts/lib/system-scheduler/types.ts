@@ -40,17 +40,24 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
  *
  * §2.2 was amended on 2026-09-24 (D52) from one parameter to three:
  * `epoch_duration` (the grid spacing), `epoch_anchor` (one instant on the grid)
- * and `judging_duration`. The CLIENT reads none of them to compute anything —
- * every close instant arrives already decided, and the clock's whole job is to
- * wait for it — so this type carries the duration only because the full read
- * serves it, and carries no anchor because nothing here could correctly use one.
- * The API's declaration is the authority; `system-scheduler-wire-parity.test.ts`
+ * and `judging_duration`, carried with their unit suffix per D53 (7). §3 part 1
+ * says the full read returns every active subject "with its scheduling
+ * columns", so all three are here. The CLIENT computes nothing from them —
+ * every close instant and every judging deadline arrives already decided by
+ * the API, and the clock's whole job is to wait for it — so they are carried
+ * as read, for the operator's health surface, never as inputs to a timer. The
+ * API's declaration is the authority; `system-scheduler-wire-parity.test.ts`
  * compares the two as text.
  */
 export interface SchedulerSubject {
   subjectId: string;
   name: string;
+  /** The grid's spacing, and the length of every full window. */
   epochDurationSeconds: number;
+  /** One instant on the grid: every close is `epochAnchor + k × epochDurationSeconds`. */
+  epochAnchor: string;
+  /** How long judging waits for a consensus once requested (§4.4). Not part of the grid. */
+  judgingDurationSeconds: number;
 }
 
 /** §3 part 2: an open window and the instant it closes at. */

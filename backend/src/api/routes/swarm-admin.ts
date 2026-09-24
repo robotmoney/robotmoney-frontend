@@ -16,7 +16,6 @@ import {
   optionalString,
   parseExpectedVersion,
   parseManualMember,
-  parseSessionCreate,
   parseSubjectCreate,
   readJsonObject,
   requiredString,
@@ -338,10 +337,37 @@ export async function handleSwarmAdmin(
 
   // ── Sessions: creation, roster, guarded lifecycle ───────────────────────
   if (segs[0] === "sessions") {
-    if (segs.length === 1 && m === "POST") {
-      const parsed = parseSessionCreate(await readJsonObject(req));
-      if (!parsed) return { status: 400, body: { error: "date and subjectId required" } };
-      return fromResult(await admin.createSessionAdmin(parsed));
+    // THE PRE-EPOCH SESSION VERBS ARE RETIRED HERE, as their dispatcher copies
+    // are in routes/swarm.ts (issue #1026). Each moved a session outside the
+    // epoch transitions and wrote no stream event the scheduler hears:
+    //
+    //   create    inserted a `scheduled` session (a state §4.1 abolishes) on
+    //             an operator-chosen, off-grid `window_closes_at` (§2.2).
+    //   close     closed a window with no epoch binding and captured neither
+    //             judge mode nor judging duration (§4.3, §4.4) — the NULL-mode
+    //             source settlement now refuses as `judging_not_captured`.
+    //   aggregate / publish
+    //             settled with no captured mode and published with no
+    //             `judging_outcome` at all.
+    //   reopen    moved a closed epoch back to `collecting` beside its
+    //             successor, or under a deactivated subject.
+    //   cancel    ended a collecting epoch with no successor and no event.
+    //
+    // §4.3: "Turnover is the only way an epoch closes while its subject stays
+    // active. An operator ending a window early does it through the same
+    // endpoint." 410, not 404: the verbs were real and their absence is
+    // deliberate, so a stale client is told where to go.
+    if ((segs.length === 1 && m === "POST") ||
+        (segs.length === 3 && m === "POST" && ["cancel", "close", "reopen", "aggregate", "publish"].includes(segs[2]!))) {
+      const verb = segs.length === 1 ? "create" : segs[2]!;
+      return {
+        status: 410,
+        body: {
+          error: `the session ${verb} action is gone: epochs open, close and settle only through the epoch transitions ` +
+            "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}); an early close is a " +
+            "turnover naming its expectedSessionId, and stopping a subject is deactivation (system-scheduler-spec.md §4.3, §4.5)",
+        },
+      };
     }
     const sessionId = segs[1] ? decodeURIComponent(segs[1]) : undefined;
     // Every judgement a session received (issue #767, folded from #768).
@@ -398,15 +424,6 @@ export async function handleSwarmAdmin(
             "model key (system-scheduler-spec.md §1, §7). Use the epoch judging request, not this route",
         },
       };
-    }
-    if (sessionId && segs.length === 3 && ["cancel", "close", "reopen", "aggregate", "publish"].includes(segs[2]!) && m === "POST") {
-      const b = (await readJsonObject(req)) ?? {};
-      const expectedVersion = parseExpectedVersion(b) ?? undefined;
-      const fn = {
-        cancel: admin.cancelSessionAdmin, close: admin.closeSessionAdmin, reopen: admin.reopenSessionAdmin,
-        aggregate: admin.aggregateSessionAdmin, publish: admin.publishSessionAdmin,
-      }[segs[2] as "cancel" | "close" | "reopen" | "aggregate" | "publish"];
-      return fromResult(await fn(sessionId, expectedVersion));
     }
     return { status: 404, body: { error: "unknown sessions admin route" } };
   }

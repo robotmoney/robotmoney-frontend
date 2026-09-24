@@ -14,10 +14,16 @@
 // plants the retired shapes to show the scan catches them.
 //
 // SCOPE: SCRIPTS ONLY — this is the driver half of criterion 6, not all of it.
-// The admin route (backend/src/api/routes/swarm-admin.ts) still accepts and
-// writes `shadow`, and the judge-mode CHECK still admits it. Removing both is
-// D53 item 1, owned by the judge-server package and pinned in the backend
-// suite. Nothing here should be read as "no path writes `shadow`".
+// The admin route (backend/src/api/routes/swarm-admin.ts) no longer accepts
+// `shadow` — D53 item 1 removed it: the route refuses any mode but
+// `off|enforce`, and `swarm/judge-config.ts`, the one writer of the row,
+// stores `off` wherever a legacy `shadow` stood. That half is pinned in the
+// backend suite, against the route and the registry. The column CHECK does
+// NOT forbid it yet: `swarm_judge_config_mode_check` still admits
+// off|shadow|enforce (backend/schema/snapshot.sql, through migration 0078).
+// Tightening it to off|enforce is pending, in a separate migration owned by the
+// wave's migration package. This file claims only the scripts: no driver
+// enables the judge or names `shadow`.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";

@@ -498,7 +498,15 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
     if (this.#tokenRotated) throw new Error("full read failed: HTTP 403");
     const subjects = [...this.subjects.values()]
       .filter((s) => s.active)
-      .map((s) => ({ subjectId: s.subjectId, name: s.name, epochDurationSeconds: s.epochDurationSeconds }));
+      .map((s) => ({
+        subjectId: s.subjectId,
+        name: s.name,
+        // §3 part 1: every active subject "with its scheduling columns" — all
+        // three, exactly as `domain.fullRead` serves them.
+        epochDurationSeconds: s.epochDurationSeconds,
+        epochAnchor: new Date(s.epochAnchorMs).toISOString(),
+        judgingDurationSeconds: s.judgingDurationSeconds,
+      }));
     const collecting = [...this.sessions.values()]
       .filter((s) => s.state === "collecting")
       .map((s) => ({

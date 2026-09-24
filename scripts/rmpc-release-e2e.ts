@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
 import {
-  admin,
+  ensureSubjectViaAdmin,
   openEpoch,
   readSessionDate,
   runRegimeClassify,
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
   // These helpers read BACKEND_URL from env at call time; this script is
   // invoked with BACKEND_URL already set (smoke-main.ts or the operator), so
   // the import at the top of this file resolves the right base.
-  await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
+  await ensureSubjectViaAdmin({ id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this
   // script self-sufficient even if run before any other regime seed exists.
   // The snapshot is the PRODUCER's own regime.classify job (issue #361 Phase

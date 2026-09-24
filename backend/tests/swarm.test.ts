@@ -1492,3 +1492,42 @@ test("toTake constructs a public DTO where SwarmTake.weights === null if payload
   const takeDtoValid = toTake(rowValid as any);
   expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
 });
+
+// ── The dispatcher doors that bypassed the epoch model are gone (#1026) ─────
+//
+// system-scheduler-spec.md §2.3, §4 and §6.2. Each of these wrote state the
+// scheduler waits on without the event that tells it so: `subject` upserted an
+// active subject with no `subject.changed`, `open` inserted a `scheduled`
+// session, and `brief`/`close`/`aggregate`/`publish` moved a session with no
+// epoch binding and no captured judge mode. They answer 410 now, and write
+// nothing.
+test("the retired subject/open/brief/close/aggregate/publish dispatcher actions answer 410 and write nothing", async () => {
+  const post = async (action: string, body: Record<string, unknown>) => {
+    const req = new Request(`http://test${routePath(ROUTES.swarm.admin.action, { action })}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return (await handleSwarm(req, new URL(req.url))) as { status: number; body: { error: string } };
+  };
+  const subjectId = rid("retired_doors");
+  const before = await sql<{ subjects: number; sessions: number }[]>`
+    SELECT (SELECT count(*)::int FROM swarm_subjects) AS subjects, (SELECT count(*)::int FROM swarm_sessions) AS sessions`;
+
+  const subject = await post("subject", { id: subjectId, name: "should not exist" });
+  expect(subject.status).toBe(410);
+  expect(subject.body.error).toContain("POST /api/swarm/admin/subjects");
+  for (const action of ["open", "brief", "close", "aggregate", "publish"]) {
+    const res = await post(action, { subjectId, sessionId: "00000000-0000-4000-8000-000000000000" });
+    expect({ action, status: res.status }).toEqual({ action, status: 410 });
+    expect(res.body.error).toContain("epochs/");
+  }
+  // `subject_fixtures` stays for a subject that exists, and refuses to CREATE
+  // one: on an unknown id its upsert would be an active subject with no event.
+  const fixtures = await post("subject_fixtures", { id: subjectId, name: "should not exist" });
+  expect(fixtures.status).toBe(404);
+
+  const after = await sql<{ subjects: number; sessions: number }[]>`
+    SELECT (SELECT count(*)::int FROM swarm_subjects) AS subjects, (SELECT count(*)::int FROM swarm_sessions) AS sessions`;
+  expect(after).toEqual(before);
+});

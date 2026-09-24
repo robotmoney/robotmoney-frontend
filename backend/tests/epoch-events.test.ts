@@ -26,6 +26,7 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
+import { inHouseJudge } from "./support/stub-judge.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -174,6 +175,27 @@ test("a subject's duration change publishes subject.changed, and so do create an
   expect(rows.map((r) => r.payload.reason)).toEqual(["activated", "updated", "deactivated"]);
   expect(rows.every((r) => r.subject_id === id)).toBe(true);
   expect(rows[1].payload.epochDurationSeconds).toBe(90);
+  // The event carries all three scheduling columns (§2.2, §6.2), so the
+  // scheduler's re-read can be checked against what changed.
+  expect(Object.keys(rows[1].payload).sort()).toEqual(
+    ["epochAnchor", "epochDurationSeconds", "judgingDurationSeconds", "reason"],
+  );
+});
+
+test("a change to the anchor or the judging duration alone publishes subject.changed too", async () => {
+  // §6.2: `subject.changed` is caused by "a scheduling column changed" — any
+  // of the three, not only the duration.
+  const id = await activeSubject("ev_other_columns", 600);
+  const [{ version }] = await sql<{ version: number }[]>`SELECT version FROM swarm_subjects WHERE id = ${id}`;
+  const head = await epoch.streamHeadSequence();
+  const anchored = await admin.updateSubjectAdmin(id, version, { epochAnchor: "2026-01-01T22:45:00Z" });
+  expect(anchored.status).toBe(200);
+  const judged = await admin.updateSubjectAdmin(id, version + 1, { judgingDurationSeconds: 300 });
+  expect(judged.status).toBe(200);
+  const rows = await eventsAbove(head);
+  expect(rows.map((r) => r.kind)).toEqual(["subject.changed", "subject.changed"]);
+  expect(rows[0].payload.epochAnchor).toBe("2026-01-01T22:45:00.000Z");
+  expect(rows[1].payload.judgingDurationSeconds).toBe(300);
 });
 
 test("a refused subject edit publishes nothing", async () => {
@@ -184,11 +206,19 @@ test("a refused subject edit publishes nothing", async () => {
   expect((await eventsAbove(head)).length).toBe(0);
 });
 
+/**
+ * A judgement row authored by the session's judge of record — the only author
+ * `recordJudgingConsensus` accepts as a consensus (§4.4). The in-house judge
+ * is seated once and reused, so it stays the lowest-id eligible judge.
+ */
 async function plantJudgement(sessionId: string): Promise<number> {
+  const judge = await inHouseJudge();
   const [j] = await sql<{ id: string }[]>`
     INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb)
+      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
+       judged_by, judged_by_member_id)
+    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
+            ${judge.id}, ${judge.id})
     RETURNING id`;
   return Number(j.id);
 }

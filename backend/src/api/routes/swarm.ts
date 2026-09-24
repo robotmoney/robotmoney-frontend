@@ -5,7 +5,6 @@ import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../swarm/domain.ts";
 import * as judgements from "../../swarm/judgements.ts";
 import { projectBriefResearchSignals } from "../../swarm/projections.ts";
-import * as swarmAdmin from "../../swarm/admin.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
@@ -16,7 +15,6 @@ import {
   isIsoDate,
   parseApply,
   parseRegisterMember,
-  parsePositiveNumber,
   parseSigningDraft,
   parseSubmission,
   readJsonObject,
@@ -308,7 +306,9 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     // Shared with validateMemberAdminPatch (issue #567) so apply and the admin
     // edit route can never disagree about what an address is.
     if (!CONTACT_EMAIL_RE.test(b.contact)) {
-      return { status: 400, body: { error: "valid contact email required for activation notification" } };
+      // No notification rides on this address (D50: there is no activation
+      // email). It is the operator's way to reach an applicant, nothing more.
+      return { status: 400, body: { error: "valid contact email required" } };
     }
     if (!await isValidEd25519PublicKey(b.publicKey)) {
       // Also the refusal for the 14 low-order point encodings (issue #789):
@@ -404,55 +404,68 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
       // owns its own cadence; neither this dispatcher nor `enqueue-job` can
       // create a consumer-worker analytics job. An old caller reaching for the
       // removed action falls through to the 404 default — loud, not silent.
-      case "subject": {
-        const id = requiredString(b, "id", 100);
-        const name = requiredString(b, "name", 200);
-        return id && name
-          ? { status: 200, body: await ic.ensureSubject(id, name) }
-          : { status: 400, body: { error: "id and name required" } };
-      }
-      // Seed the reference-shaped smoke fixtures (subject row + subject snapshot the
+      // THE SUBJECT AND SESSION DOORS THAT BYPASSED THE EPOCH MODEL ARE GONE
+      // (issue #1026, scheduler spec §2.3, §4 and §6.2). Each wrote state the
+      // scheduler waits on without the event that tells it so:
+      //
+      //   subject    upserted an ACTIVE subject with no `subject.changed`, so
+      //              the clock never heard of it until its next rebuild.
+      //   open       inserted a `scheduled` session — a state §4.1 abolishes.
+      //   brief      moved a session to `collecting` on a window the API chose
+      //              off this process's clock, not the subject's grid (§2.2).
+      //   close      closed a window with no epoch binding and no captured
+      //   aggregate  judge mode or judging duration (§4.3, §4.4), which is the
+      //   publish    NULL-mode source the judge-server work traced; and
+      //              published with no judging outcome at all.
+      //
+      // The replacements are the admin subject routes (create, update,
+      // deactivate — each publishing `subject.changed` in its own transaction)
+      // and the five `epochs/*` transitions. 410, not 404: the verbs were real
+      // and their absence is deliberate, so a stale client is told where to go
+      // rather than that it mistyped a URL.
+      case "subject":
+        return {
+          status: 410,
+          body: {
+            error: "the subject action is gone: create a subject with POST /api/swarm/admin/subjects, which publishes " +
+              "subject.changed so the scheduler opens its first epoch (system-scheduler-spec.md §3, §6.2)",
+          },
+        };
+      case "open":
+      case "brief":
+      case "close":
+      case "aggregate":
+      case "publish":
+        return {
+          status: 410,
+          body: {
+            error: `the ${action} action is gone: sessions open, close and settle only through the epoch transitions ` +
+              "(POST /api/swarm/admin/epochs/{open,turnover,aggregate,request-judging,finalize}), which system-scheduler " +
+              "drives on the subject's grid (system-scheduler-spec.md §4)",
+          },
+        };
+      // Seed the reference-shaped smoke fixtures (subject snapshot the
       // portfolio donut reads + trailing regime history for the sparkline) so the
-      // LIVE session path renders the same charts as the committed archive. Called
-      // by the smoke before opening a session. Idempotent.
+      // LIVE session path renders the same charts as the committed archive.
+      // Idempotent.
+      //
+      // FIXTURES ONLY, NEVER A SUBJECT. `ensureSmokeSubjectFixtures` upserts the
+      // subject row, and on a missing subject that upsert is an INSERT of an
+      // active subject with no `subject.changed` — the same bypass the
+      // `subject` action above was removed for. So an unknown subject is
+      // refused here: it must be created through the admin subject route first.
       case "subject_fixtures": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);
         const date = typeof b.date === "string" ? b.date.slice(0, 10) : undefined;
-        return id && name
-          ? { status: 200, body: await ic.ensureSmokeSubjectFixtures(id, name, date) }
-          : { status: 400, body: { error: "id and name required" } };
-      }
-      case "open": {
-        // No `date` input. The session's date is derived from the convened_at
-        // Postgres stamps (migration 0022); a caller-supplied date is exactly
-        // the affordance the smoke used to invent synthetic days. A body that
-        // still carries one is accepted and ignored rather than rejected, so an
-        // older client keeps working.
-        const subjectId = requiredString(b, "subjectId", 100);
-        return subjectId
-          ? { status: 200, body: await ic.openSession(subjectId) }
-          : { status: 400, body: { error: "subjectId required" } };
-      }
-      case "brief":
-      case "close":
-      case "aggregate":
-      case "publish": {
-        const sessionId = requiredString(b, "sessionId", 100);
-        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
-        if (action === "brief") return { status: 200, body: await ic.publishBrief(sessionId, parsePositiveNumber(b.windowMinutes, 60)) };
-        if (action === "close") return { status: 200, body: await ic.closeWindow(sessionId) };
-        // STATE-GUARDED (issue #806). `domain.aggregateSession` replaces
-        // `swarm_recommendation` WHOLESALE and has no state opinion of its own,
-        // so reaching it directly here was a second unguarded door onto a
-        // judged or published session's prose. `aggregateSessionAdmin` is the
-        // same rollup behind `guardedTransition`; a caller that asked for an
-        // impossible aggregation is told 409 rather than silently getting one.
-        if (action === "aggregate") {
-          const res = await swarmAdmin.aggregateSessionAdmin(sessionId, undefined);
-          return { status: res.status, body: res };
+        if (!id || !name) return { status: 400, body: { error: "id and name required" } };
+        if (!(await ic.getSubject(id))) {
+          return {
+            status: 404,
+            body: { error: "subject not found: create it with POST /api/swarm/admin/subjects before seeding its fixtures" },
+          };
         }
-        return { status: 200, body: await ic.publishSession(sessionId) };
+        return { status: 200, body: await ic.ensureSmokeSubjectFixtures(id, name, date) };
       }
       case "enqueue-job": {
         // GONE WITH THE QUEUE IT FED (issue #1026 W4). This endpoint inserted a
