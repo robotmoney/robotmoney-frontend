@@ -22,7 +22,7 @@
 //      processes contending is the integration test that later #1026 work adds)
 //   - "`volume` reuse after restart."
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -35,6 +35,7 @@ import {
   resolveInstance,
   SERVICE_TOKEN_HOLDERS,
   stateRoot,
+  TOKEN_FILE_NAME,
   type InstanceResolutionInput,
 } from "../../lib/smoke-state.ts";
 import type { StackEnvironment } from "../../stack/naming.ts";
@@ -213,6 +214,7 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
       paths.nameFile,
       paths.rolePasswordsFile,
       paths.tokensDir,
+      ...Object.values(paths.tokenDirs),
       ...Object.values(paths.tokenFiles),
       paths.journalFile,
       paths.journalArchiveDir,
@@ -230,6 +232,7 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
       paths.nameFile,
       paths.rolePasswordsFile,
       paths.tokensDir,
+      ...Object.values(paths.tokenDirs),
       ...Object.values(paths.tokenFiles),
       paths.journalFile,
       paths.journalArchiveDir,
@@ -250,20 +253,40 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     expect(a.rolePasswordsFile).not.toBe(b.rolePasswordsFile);
   });
 
-  test("§3: one token file per holder, all inside a tokens directory that holds nothing else", () => {
+  test("§3: one token directory per holder, each holding exactly one token file, all under the tokens root", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
     expect(Object.keys(paths.tokenFiles).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+    expect(Object.keys(paths.tokenDirs).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
     expect([...SERVICE_TOKEN_HOLDERS].sort()).toEqual(["analytics-producer", "operator", "system-scheduler"]);
-    for (const file of Object.values(paths.tokenFiles)) {
-      expect(file.startsWith(`${paths.tokensDir}/`)).toBe(true);
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      expect(paths.tokenDirs[holder]).toBe(join(paths.tokensDir, holder));
+      expect(paths.tokenFiles[holder]).toBe(join(paths.tokenDirs[holder], TOKEN_FILE_NAME));
     }
     expect(new Set(Object.values(paths.tokenFiles)).size).toBe(SERVICE_TOKEN_HOLDERS.length);
   });
 
-  test("the tokens directory is separate from the role passwords: mounting it hands a holder no database password", () => {
-    // Compose mounts the token directory into system-scheduler (criterion 113).
-    // Nothing that is not a token may live under it, and it may not be the
-    // instance directory that holds role-passwords.json.
+  test("§3/§5: the path a holder's mount exposes holds its own token and no other holder's", () => {
+    // Compose mounts tokenDirs[holder] into that holder (criterion 113). With
+    // every token and the role passwords written, walk each holder's mount and
+    // prove it reaches exactly one file: its own token.
+    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+    generateRolePasswords(paths);
+    for (const holder of SERVICE_TOKEN_HOLDERS) writeFileSync(paths.tokenFiles[holder], `secret-of-${holder}\n`);
+
+    for (const holder of SERVICE_TOKEN_HOLDERS) {
+      const mount = paths.tokenDirs[holder];
+      const reachable = readdirSync(mount, { recursive: true }).map(String);
+      expect(reachable).toEqual([TOKEN_FILE_NAME]);
+      expect(readFileSync(join(mount, TOKEN_FILE_NAME), "utf8")).toBe(`secret-of-${holder}\n`);
+      for (const other of SERVICE_TOKEN_HOLDERS.filter((h) => h !== holder)) {
+        expect(paths.tokenFiles[other].startsWith(`${mount}/`)).toBe(false);
+        expect(paths.tokenDirs[other].startsWith(`${mount}/`)).toBe(false);
+      }
+      expect(paths.rolePasswordsFile.startsWith(`${mount}/`)).toBe(false);
+    }
+  });
+
+  test("the tokens directory is separate from the role passwords: mounting a holder's directory hands it no database password", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
     expect(paths.tokensDir).not.toBe(paths.dir);
     for (const other of [
@@ -278,13 +301,15 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     }
     expect(paths.dir.startsWith(`${paths.tokensDir}/`)).toBe(false);
     generateRolePasswords(paths);
-    expect(readdirSync(paths.tokensDir)).toEqual([]);
+    expect(readdirSync(paths.tokensDir).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+    for (const holder of SERVICE_TOKEN_HOLDERS) expect(readdirSync(paths.tokenDirs[holder])).toEqual([]);
   });
 
   test("the tokens directory is created owner-only, like the instance directory", () => {
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
     expect(statSync(paths.tokensDir).isDirectory()).toBe(true);
     expect(statSync(paths.tokensDir).mode & 0o777).toBe(0o700);
+    for (const holder of SERVICE_TOKEN_HOLDERS) expect(statSync(paths.tokenDirs[holder]).mode & 0o777).toBe(0o700);
     expect(statSync(paths.journalArchiveDir).mode & 0o777).toBe(0o700);
   });
 

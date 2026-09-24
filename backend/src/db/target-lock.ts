@@ -574,8 +574,19 @@ export async function acquireTargetLock(options: {
  * ledger, and the schema manifest".
  */
 export interface TargetState {
-  /** `deployment_identity.kind`. No row reads as `rehearsal` (§4.2). */
-  readonly identity: "production" | "rehearsal";
+  /**
+   * `deployment_identity.kind` (§4.2), or `missing` when the target is not
+   * enrolled: no table (a database without migration 0063, such as a fresh
+   * `--local blank` database before bootstrap, a fresh cluster before §9.1
+   * initialization, or a pre-0063 production) or a table with no row.
+   *
+   * `missing` is its own value and never reads as `rehearsal`: absence of
+   * evidence is not evidence of rehearsal (§4.3's "anything else" row). Keeping
+   * it distinct lets revalidation compare absent to absent, so the one
+   * `bun run migrate` that creates the table can still take the lock, while a
+   * table that APPEARED while the tool waited is a mismatch and refuses.
+   */
+  readonly identity: TargetIdentity;
   /**
    * EVERY applied migration filename, in filename order; `[]` when the ledger
    * is absent or empty. The whole list, never the head: spec §8.1 makes the
@@ -589,12 +600,43 @@ export interface TargetState {
 
 type Reading<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
-async function readIdentity(conn: DbHandle): Promise<Reading<"production" | "rehearsal">> {
+/** What {@link TargetState.identity} can hold. */
+export type TargetIdentity = "production" | "rehearsal" | "missing";
+
+/**
+ * Read the enrollment the way every other reader in the repo does
+ * (backend/scripts/migrate-run.ts, backend/src/db/preflight.ts,
+ * backend/src/db/schema-snapshot.ts):
+ *
+ *  - an ABSENT table is an answer (`missing`), like an absent ledger or manifest;
+ *  - the value is read from `kind` (§4.2, migration 0063), or from the legacy
+ *    `identity` column a database enrolled before 0063 carries, resolved from
+ *    the catalog so a column-name error never reads as "not enrolled";
+ *  - no row is `missing`; more than one row, an unknown value, a table with
+ *    neither column, or a table this role cannot read are NOT answers.
+ */
+async function readIdentity(conn: DbHandle): Promise<Reading<TargetIdentity>> {
   try {
-    const rows = await conn<{ kind: string }[]>`SELECT kind FROM deployment_identity LIMIT 1`;
-    const kind = rows[0]?.kind ?? "rehearsal";
-    if (kind !== "production" && kind !== "rehearsal") return { ok: false, error: `unknown kind ${kind}` };
-    return { ok: true, value: kind };
+    const [exists] = await conn<{ present: boolean }[]>`
+      SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`;
+    if (exists?.present !== true) return { ok: true, value: "missing" };
+    const columns = await conn<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'deployment_identity'
+         AND column_name IN ('kind', 'identity')`;
+    const names = new Set(columns.map((row) => row.column_name));
+    const column = names.has("kind") ? "kind" : names.has("identity") ? "identity" : null;
+    if (column === null) {
+      return { ok: false, error: "deployment_identity carries neither a `kind` nor an `identity` column" };
+    }
+    const rows = await conn.unsafe<{ value: string | null }[]>(
+      `SELECT ${column} AS value FROM public.deployment_identity LIMIT 2`,
+    );
+    if (rows.length === 0) return { ok: true, value: "missing" };
+    if (rows.length > 1) return { ok: false, error: "deployment_identity holds more than one row" };
+    const value = rows[0]?.value;
+    if (value !== "production" && value !== "rehearsal") return { ok: false, error: `unknown kind ${String(value)}` };
+    return { ok: true, value };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }

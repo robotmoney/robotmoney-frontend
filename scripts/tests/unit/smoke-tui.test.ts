@@ -54,7 +54,7 @@ const plan: DeploymentPlan = {
 };
 
 const expectations: StateExpectations = {
-  schemaHead: "0054_rm_worker_allowlist.sql",
+  ledger: ["0054_rm_worker_allowlist.sql"],
   manifestHash: "manifest-aaa",
   identity: "rehearsal",
   participants: ["athena"],

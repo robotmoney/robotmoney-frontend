@@ -114,6 +114,7 @@ function otherSpelling(url: string): string {
 async function withScratchDatabase<T>(
   ledger: readonly string[],
   body: (scratch: { url: string; conn: DbHandle }) => Promise<T>,
+  enrollment: "kind" | "legacy-identity-column" | "no-table" = "kind",
 ): Promise<T> {
   const name = `rm_tl_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   await sql.unsafe(`CREATE DATABASE "${name}"`);
@@ -122,9 +123,14 @@ async function withScratchDatabase<T>(
   const conn = postgres(url.toString(), { max: 1, onnotice: () => {} });
   try {
     await conn`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
-    await conn`CREATE TABLE deployment_identity (kind text NOT NULL)`;
     await conn`CREATE TABLE schema_manifest (content_hash text NOT NULL)`;
-    await conn`INSERT INTO deployment_identity (kind) VALUES ('rehearsal')`;
+    if (enrollment === "kind") {
+      await conn`CREATE TABLE deployment_identity (kind text NOT NULL)`;
+      await conn`INSERT INTO deployment_identity (kind) VALUES ('rehearsal')`;
+    } else if (enrollment === "legacy-identity-column") {
+      await conn`CREATE TABLE deployment_identity (identity text NOT NULL)`;
+      await conn`INSERT INTO deployment_identity (identity) VALUES ('production')`;
+    }
     for (const file of ledger) await conn`INSERT INTO schema_migrations (name) VALUES (${file})`;
     return await body({ url: url.toString(), conn });
   } finally {
@@ -391,10 +397,14 @@ describe("revalidateAfterAcquire — §2, the plan is re-checked against the loc
     const result = await acquire("smoke", "alpha");
     if (!result.acquired) throw new Error("expected acquisition");
 
-    const verdict = await revalidateAfterAcquire(result.lock, { ...(await present()), identity: "production" });
+    // The shared test database is migrated but never enrolled (the table has
+    // no row), so it reads `missing` — never `rehearsal` (§4.3).
+    const now = await present();
+    expect(now.identity).toBe("missing");
+    const verdict = await revalidateAfterAcquire(result.lock, { ...now, identity: "production" });
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error("expected a refusal");
-    expect(verdict.reason).toContain("deployment_identity is rehearsal");
+    expect(verdict.reason).toContain("deployment_identity is missing");
     expect(verdict.reason).toContain("built against production");
   });
 
@@ -507,6 +517,78 @@ describe("revalidateAfterAcquire — §2, the plan is re-checked against the loc
       if (result.acquired) throw new Error("expected a refusal");
       expect(result.reason).toContain("0 file(s)");
       expect(result.reason).toContain("0001_first.sql");
+    });
+  }, 20000);
+});
+
+describe("an unenrolled or legacy-enrolled target — §4.2/§4.3, absence is `missing`, never `rehearsal` [integration tier]", () => {
+  test("a database with NO deployment_identity table reads as missing and still acquires", async () => {
+    // A fresh `--local blank` database before bootstrap, a fresh cluster before
+    // §9.1, or a pre-0063 production: the `bun run migrate` that creates the
+    // table must be able to take the lock on it.
+    await withScratchDatabase(
+      ["0001_first.sql"],
+      async ({ url, conn }) => {
+        const planned = await readTargetState(conn);
+        expect(planned.identity).toBe("missing");
+        const result = await acquire("migrate", null, 500, { databaseUrl: url, expected: planned });
+        expect(result.acquired).toBe(true);
+      },
+      "no-table",
+    );
+  }, 20000);
+
+  test("an EMPTY deployment_identity table reads as missing, not rehearsal", async () => {
+    await withScratchDatabase(["0001_first.sql"], async ({ conn }) => {
+      await conn`DELETE FROM deployment_identity`;
+      expect((await readTargetState(conn)).identity).toBe("missing");
+    });
+  }, 20000);
+
+  test("a plan that saw NO table refuses when deployment_identity appeared while it waited", async () => {
+    await withScratchDatabase(
+      ["0001_first.sql"],
+      async ({ url, conn }) => {
+        const planned = await readTargetState(conn);
+        expect(planned.identity).toBe("missing");
+
+        const holder = await acquire("migrate", null, 500, { databaseUrl: url, expected: planned });
+        if (!holder.acquired) throw new Error("expected the holder to acquire");
+        const waiting = acquireTargetLockFor(url, planned);
+        await Bun.sleep(200);
+        await withMutationFence({ databaseUrl: url, label: "enroll" }, async (tx) => {
+          await tx`CREATE TABLE deployment_identity (kind text NOT NULL)`;
+          await tx`INSERT INTO deployment_identity (kind) VALUES ('production')`;
+        });
+        await holder.lock.release();
+
+        const result = await waiting;
+        expect(result.acquired).toBe(false);
+        if (result.acquired) throw new Error("expected a refusal");
+        expect(result.refusal).toBe("revalidation");
+        expect(result.reason).toContain("deployment_identity is production");
+        expect(result.reason).toContain("built against missing");
+      },
+      "no-table",
+    );
+  }, 20000);
+
+  test("a database enrolled through the legacy `identity` column reads its value", async () => {
+    await withScratchDatabase(
+      ["0001_first.sql"],
+      async ({ url, conn }) => {
+        const planned = await readTargetState(conn);
+        expect(planned.identity).toBe("production");
+        expect((await acquire("migrate", null, 500, { databaseUrl: url, expected: planned })).acquired).toBe(true);
+      },
+      "legacy-identity-column",
+    );
+  }, 20000);
+
+  test("more than one enrollment row is not an answer: readTargetState throws", async () => {
+    await withScratchDatabase(["0001_first.sql"], async ({ conn }) => {
+      await conn`INSERT INTO deployment_identity (kind) VALUES ('production')`;
+      await expect(readTargetState(conn)).rejects.toThrow(/more than one row/);
     });
   }, 20000);
 });

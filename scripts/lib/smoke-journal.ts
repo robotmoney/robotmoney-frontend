@@ -92,10 +92,23 @@ import { join } from "node:path";
 
 import type { InstancePaths } from "./smoke-state.ts";
 
-/** On-disk format version of the journal; an unknown one refuses. */
-const JOURNAL_FORMAT_VERSION = 1;
-/** On-disk format version of the receipt; an unknown one refuses. */
-const RECEIPT_FORMAT_VERSION = 1;
+/**
+ * On-disk format version of the journal; an unknown one refuses.
+ *
+ * 2: the plan carries images as `{source, digest}`, the roster as members and
+ * the target as kind/host/port or mode/volume, and expectations carry the
+ * whole migration `ledger` instead of a `schemaHead`. A version-1 journal
+ * refuses rather than parsing as the new type with those fields undefined.
+ */
+export const JOURNAL_FORMAT_VERSION = 2;
+/**
+ * On-disk format version of the receipt; an unknown one refuses.
+ *
+ * 2: the receipt gained `images` (the digests that ran) and carries the
+ * version-2 plan shape. A version-1 receipt refuses rather than reaching
+ * `receipt.images[name]` on an undefined `images`.
+ */
+export const RECEIPT_FORMAT_VERSION = 2;
 /** A built image identity: a digest, never a tag. */
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 /** An image source identity: a Git tree id (SHA-1 or SHA-256 repository). */
@@ -110,6 +123,8 @@ const HOST_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A
 const DBNAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/;
 /** A Docker volume name. */
 const VOLUME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** An image's service key: a compose service name. */
+const SERVICE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** A configuration key: an environment-variable name. */
 const CONFIG_KEY = /^[A-Z][A-Z0-9_]*$/;
 /**
@@ -267,6 +282,12 @@ export function assertPlanRedacted(plan: DeploymentPlan, options: RedactionOptio
   }
 
   for (const [service, image] of Object.entries(plan.images)) {
+    // The key is printed verbatim by renderPlan (`image: <service> ...`), so it
+    // is shape-checked like every other free-form printed string. The value is
+    // never echoed, so the path names the key's position, not the key.
+    if (!SERVICE_NAME.test(service) || credentialShape(service) !== null) {
+      refuseField("plan.images.<key>", "has a key that is not a compose service name");
+    }
     const path = `plan.images.${service}`;
     assertExactKeys(image, ["source", "digest"], path);
     if (!SOURCE_PATTERN.test(image.source)) {
@@ -564,13 +585,20 @@ export function renderPlan(plan: DeploymentPlan, id: PlanId, options: RedactionO
  * What a phase asserted was true when it BEGAN. Spec §1.3's middle term.
  *
  * Deliberately a bag of named, comparable facts rather than a snapshot blob: a
- * refusal has to be able to say WHICH expectation failed ("the schema version
- * moved from 0054 to 0056 while this journal was stopped"), and a blob
+ * refusal has to be able to say WHICH expectation failed ("the migration ledger
+ * gained 0056 while this journal was stopped"), and a blob
  * comparison can only say "something changed".
  */
 export interface StateExpectations {
-  /** Installed schema version / migration ledger head at phase start. */
-  readonly schemaHead: string | null;
+  /**
+   * EVERY applied migration filename at phase start, in filename order; `[]`
+   * when the ledger is absent or empty. The whole list, never the head: spec
+   * §8.1 makes the filename list the schema identity, and a migration with a
+   * LOWER filename than the head can land while a journal is stopped and leave
+   * the head unchanged. The same rule, for the same reason, as
+   * `TargetState.ledger` in backend/src/db/target-lock.ts.
+   */
+  readonly ledger: readonly string[];
   /** Content hash of the schema manifest (§8.3) at phase start. */
   readonly manifestHash: string | null;
   /** `deployment_identity.kind` at phase start. */
@@ -758,13 +786,19 @@ function projectExpectations(journal: Journal): StateExpectations | null {
   for (const name of done.participantsStarted) participants.add(name);
   for (const name of done.participantsStopped) participants.delete(name);
   return {
-    schemaHead: done.migrationsApplied.at(-1) ?? base.schemaHead,
+    ledger: [...new Set([...base.ledger, ...done.migrationsApplied])].sort(),
     manifestHash: done.manifestPublished ?? base.manifestHash,
     identity: base.identity,
     participants: [...participants],
     services: { ...base.services, ...done.servicesReplaced },
     spoofGeneration: done.spoofGenerationWritten ?? base.spoofGeneration,
   };
+}
+
+/** A ledger list, named by length and last file, for a refusal. */
+function describeLedger(ledger: readonly string[]): string {
+  const tail = ledger.at(-1);
+  return `${ledger.length} file(s)${tail === undefined ? "" : ` ending ${tail}`}`;
 }
 
 /** The phase a rerun continues at: the open phase, or the one after the last committed. */
@@ -803,7 +837,8 @@ function nextPhaseAfter(journal: Journal): DeploymentPhase {
  *
  * Refusal cases (the `refuse` arm), each reason naming the value the journal
  * expected AND the value observed: identity changed kind (the target was
- * re-enrolled underneath the journal); schema head moved; manifest hash moved;
+ * re-enrolled underneath the journal); the applied-migration list differs in any
+ * position, including below the head; manifest hash moved;
  * a spoofed-key generation nobody journaled; the running participants differ;
  * an expected service is not running; a service is on a digest neither the
  * journal nor the plan names.
@@ -844,9 +879,17 @@ export function decideResume(
       `the deployment identity is now ${observed.identity}, but this journal expects ${expected.identity}: the target was re-enrolled underneath it.`,
     );
   }
-  if (observed.schemaHead !== expected.schemaHead) {
+  const observedLedger = [...observed.ledger].sort();
+  const sameLedger =
+    observedLedger.length === expected.ledger.length &&
+    observedLedger.every((name, index) => name === expected.ledger[index]);
+  if (!sameLedger) {
+    let index = 0;
+    while (index < observedLedger.length && observedLedger[index] === expected.ledger[index]) index += 1;
     return refuse(
-      `the schema head is ${String(observed.schemaHead)}, but this journal expects ${String(expected.schemaHead)}, ${unaccounted}`,
+      `the migration ledger holds ${describeLedger(observedLedger)}, but this journal expects ` +
+        `${describeLedger(expected.ledger)}; the first difference is at position ${index + 1}: ` +
+        `${observedLedger[index] ?? "nothing"} where the journal expects ${expected.ledger[index] ?? "nothing"}, ${unaccounted}`,
     );
   }
   if (observed.manifestHash !== expected.manifestHash) {
@@ -944,13 +987,19 @@ function archiveJournal(paths: InstancePaths, journal: Journal): void {
  *  - a `resume` whose journal's plan id is not `computePlanId(plan)`, or a
  *    decision about a journal that is no longer the one on disk: a decision
  *    about another journal is not a decision about this one.
- *  - a plan {@link assertPlanRedacted} refuses: the journal is on disk.
+ *  - a plan {@link assertPlanRedacted} refuses, including on any of the run's
+ *    `options.secrets`: the journal is on disk.
  *  - the journal file is not writable, or the state directory is missing. A run
  *    that cannot journal must not mutate: the whole of §1.3's recoverability
  *    rests on the record existing, so an unjournalable run is a refusal, never
  *    a warning.
  */
-export function openJournal(paths: InstancePaths, decision: ResumeDecision, plan: DeploymentPlan): JournalWriter {
+export function openJournal(
+  paths: InstancePaths,
+  decision: ResumeDecision,
+  plan: DeploymentPlan,
+  options: RedactionOptions = {},
+): JournalWriter {
   if (decision.kind === "refuse") {
     throw new Error(`Refusing to open a journal: ${decision.reason}`);
   }
@@ -959,7 +1008,9 @@ export function openJournal(paths: InstancePaths, decision: ResumeDecision, plan
       `Refusing: the state directory ${paths.dir} does not exist, so this run cannot be written to a journal and must not mutate.`,
     );
   }
-  const planId = computePlanId(plan);
+  // The plan is persisted to disk below, so it gets the run's by-value secrets
+  // check too: the shape rule alone misses a shapeless secret.
+  const planId = computePlanId(plan, options);
   const onDisk = readJournal(paths);
   const same = (a: Journal | null, b: Journal): boolean =>
     a !== null && a.planId === b.planId && a.openedAt === b.openedAt && a.closedAt === null;
@@ -1161,19 +1212,27 @@ export interface Receipt {
  *  - the plan id does not match the open journal's, or is not the receipt
  *    plan's own content hash — a receipt describing a different intent than
  *    the run that produced it.
- *  - a recorded image is not a digest.
+ *  - the plan fails {@link assertPlanRedacted}, including on any of the run's
+ *    `options.secrets`: the receipt is on disk.
+ *  - a recorded image is not a digest, or is keyed by something that is not a
+ *    compose service name.
  *  - the write cannot be made durable.
  *
  * Serves spec §10 W1: "Receipt read by `smoke:status`."
  */
-export async function writeReceipt(paths: InstancePaths, receipt: Receipt): Promise<void> {
+export async function writeReceipt(
+  paths: InstancePaths,
+  receipt: Receipt,
+  options: RedactionOptions = {},
+): Promise<void> {
   const failed = receipt.readiness.filter((check) => !check.pass);
   if (failed.length > 0) {
     throw new Error(
       `Refusing: readiness did not pass (${failed.map((check) => check.check).join(", ")}), so there is no receipt to write.`,
     );
   }
-  if (computePlanId(receipt.plan) !== receipt.planId) {
+  // The receipt persists the plan, so the run's by-value secrets check applies.
+  if (computePlanId(receipt.plan, options) !== receipt.planId) {
     throw new Error(`Refusing: the receipt's plan id ${receipt.planId} is not the content hash of the plan it carries.`);
   }
   const journal = readJournal(paths);
@@ -1183,6 +1242,9 @@ export async function writeReceipt(paths: InstancePaths, receipt: Receipt): Prom
     );
   }
   for (const [service, digest] of Object.entries(receipt.images)) {
+    if (!SERVICE_NAME.test(service) || credentialShape(service) !== null) {
+      throw new Error("Refusing: the receipt records an image under a key that is not a compose service name.");
+    }
     if (!DIGEST_PATTERN.test(digest)) {
       throw new Error(`Refusing: the receipt records ${service} as ${digest}, which is not a sha256 digest.`);
     }

@@ -32,6 +32,7 @@ import {
   computePlanId,
   credentialShape,
   decideResume,
+  JOURNAL_FORMAT_VERSION,
   DEPLOYMENT_PHASES,
   openJournal,
   planHashMaterial,
@@ -39,6 +40,7 @@ import {
   readArchivedJournals,
   readJournal,
   readReceipt,
+  RECEIPT_FORMAT_VERSION,
   renderPlan,
   summarizeProgress,
   watchForInterrupt,
@@ -101,7 +103,7 @@ function plan(overrides: Partial<DeploymentPlan> = {}): DeploymentPlan {
 
 function expectations(overrides: Partial<StateExpectations> = {}): StateExpectations {
   return {
-    schemaHead: "0054_rm_worker_allowlist.sql",
+    ledger: ["0053_database_role_taxonomy.sql", "0054_rm_worker_allowlist.sql"],
     manifestHash: "manifest-aaa",
     identity: "rehearsal",
     participants: ["athena"],
@@ -145,7 +147,11 @@ async function journalWithCommittedPreparation(paths: InstancePaths): Promise<Jo
 
 /** State after journalWithCommittedPreparation's migration, as a rerun would observe it. */
 const afterPreparation = (overrides: Partial<StateExpectations> = {}): StateExpectations =>
-  expectations({ schemaHead: "0055_deployment_identity.sql", manifestHash: "manifest-bbb", ...overrides });
+  expectations({
+    ledger: ["0053_database_role_taxonomy.sql", "0054_rm_worker_allowlist.sql", "0055_deployment_identity.sql"],
+    manifestHash: "manifest-bbb",
+    ...overrides,
+  });
 
 function git(repo: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], {
@@ -332,6 +338,19 @@ describe("computePlanId — §1.2, the plan id is a content hash of exactly the 
     const first = computePlanId(plan());
     await Bun.sleep(5);
     expect(computePlanId(plan())).toBe(first);
+  });
+
+  test("an image keyed by a secret-shaped service name refuses without printing it — renderPlan prints the key", () => {
+    for (const key of ["user:hunter2@db", "Xk3v_9QpL2mZ7rT0bN4sW8cY1hJ6fD5g", "API"]) {
+      let message = "";
+      try {
+        computePlanId(plan({ images: { [key]: { source: SOURCE_A, digest: DIGEST_A } } }));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/plan field plan\.images\.<key> has a key that is not a compose service name/);
+      expect(message).not.toContain(key);
+    }
   });
 
   test("an image source that is not a Git tree id refuses", () => {
@@ -606,7 +625,7 @@ describe("decideResume rule 1 — §1.3, a matching plan id resumes and its own 
     const paths = freshPaths();
     openJournal(paths, { kind: "fresh-start", reason: "none" }, plan());
     const journal = readJournal(paths) as Journal;
-    const decision = decideResume(journal, journal.planId, expectations({ schemaHead: "0099_anything.sql" }));
+    const decision = decideResume(journal, journal.planId, expectations({ ledger: ["0099_anything.sql"] }));
     expect(decision).toEqual({ kind: "resume", journal, nextPhase: "plan" });
   });
 });
@@ -712,10 +731,46 @@ describe("decideResume rule 3 — §1.3, state changed by another operation refu
     return decision.reason;
   }
 
-  test("a schema head the journal's outcomes cannot account for refuses, naming both versions", async () => {
-    const reason = await refusal(afterPreparation({ schemaHead: "0056_someone_elses.sql", manifestHash: "manifest-ccc" }));
+  test("a migration the journal's outcomes cannot account for refuses, naming both lists", async () => {
+    const reason = await refusal(
+      afterPreparation({
+        ledger: [
+          "0053_database_role_taxonomy.sql",
+          "0054_rm_worker_allowlist.sql",
+          "0055_deployment_identity.sql",
+          "0056_someone_elses.sql",
+        ],
+        manifestHash: "manifest-ccc",
+      }),
+    );
     expect(reason).toContain("0056_someone_elses.sql");
-    expect(reason).toContain("0055_deployment_identity.sql");
+    expect(reason).toContain("3 file(s) ending 0055_deployment_identity.sql");
+  });
+
+  test("a migration applied BELOW the head refuses, though the head is unchanged — rule 3 compares the whole list", async () => {
+    // Another operation applied a lower-filename migration while the journal
+    // was stopped. The head is still 0055, so only a whole-list comparison sees
+    // it (the same case target-lock.test.ts proves for revalidation).
+    const reason = await refusal(
+      afterPreparation({
+        ledger: [
+          "0050_below_the_head.sql",
+          "0053_database_role_taxonomy.sql",
+          "0054_rm_worker_allowlist.sql",
+          "0055_deployment_identity.sql",
+        ],
+      }),
+    );
+    expect(reason).toContain("4 file(s) ending 0055_deployment_identity.sql");
+    expect(reason).toContain("3 file(s) ending 0055_deployment_identity.sql");
+    expect(reason).toContain("position 1: 0050_below_the_head.sql where the journal expects 0053_database_role_taxonomy.sql");
+  });
+
+  test("the journal's own committed migration advances the expected list, wherever it sorts", async () => {
+    // Rule 1: work the journal committed never refuses its own resume.
+    const paths = freshPaths();
+    const journal = await journalWithCommittedPreparation(paths);
+    expect(decideResume(journal, journal.planId, afterPreparation()).kind).toBe("resume");
   });
 
   test("a manifest hash that moved unaccountably refuses, naming both hashes", async () => {
@@ -758,7 +813,7 @@ describe("decideResume rule 3 — §1.3, state changed by another operation refu
   test("a refusal is a refusal, never a silent reconciliation", async () => {
     const paths = freshPaths();
     const journal = await journalWithCommittedPreparation(paths);
-    const decision = decideResume(journal, journal.planId, expectations({ schemaHead: "0099_foreign.sql" }));
+    const decision = decideResume(journal, journal.planId, expectations({ ledger: ["0099_foreign.sql"] }));
     expect(decision.kind).not.toBe("fresh-start");
     expect(decision.kind).not.toBe("resume");
   });
@@ -773,6 +828,19 @@ describe("readJournal / openJournal — §1.3, an unparseable record is never an
     const paths = freshPaths();
     writeFileSync(paths.journalFile, "{ truncated");
     expect(() => readJournal(paths)).toThrow(/journal|malformed|parse/i);
+  });
+
+  test("a version-1 journal (the pre-{source,digest} plan shape) refuses rather than parsing as the new type", () => {
+    const paths = freshPaths();
+    expect(JOURNAL_FORMAT_VERSION).toBe(2);
+    writeFileSync(
+      paths.journalFile,
+      JSON.stringify({
+        formatVersion: 1,
+        payload: { planId: "0".repeat(64), plan: { images: { api: DIGEST_A }, roster: ["athena"] }, phases: [] },
+      }),
+    );
+    expect(() => readJournal(paths)).toThrow(/unknown format version: 1/);
   });
 
   test("a journal with an unknown format version refuses", () => {
@@ -976,6 +1044,46 @@ describe("receipt — §1.4, the artifact that outlives the run", () => {
     await writeReceipt(paths, receiptFor(p));
     expect(readReceipt(paths)?.images).toEqual({ api: DIGEST_B, worker: DIGEST_B });
     expect(summarizeProgress(null, readReceipt(paths))).toContain(`service api: running ${DIGEST_B}`);
+  });
+
+  test("a version-1 receipt (no `images`) refuses rather than parsing as the new type", () => {
+    const paths = freshPaths();
+    expect(RECEIPT_FORMAT_VERSION).toBe(2);
+    writeFileSync(
+      paths.receiptFile,
+      JSON.stringify({ formatVersion: 1, payload: { planId: "0".repeat(64), instance: "alpha", schema: {} } }),
+    );
+    expect(() => readReceipt(paths)).toThrow(/unknown format version: 1/);
+  });
+
+  test("a shapeless secret in the plan's configuration refuses openJournal and writeReceipt when it is in the secrets list", async () => {
+    // The shape rule misses about 3 in 10,000 random tokens; the by-value list
+    // is the guarantee, and both files that persist the plan must apply it.
+    const clustered = "jbehcZSIMTwjYcojMIglixoZAn_IjwJC";
+    expect(credentialShape(clustered)).toBeNull();
+    const leaky = plan({ configuration: { SWARM_EPOCH_MINUTES: "15", NOTE: clustered } });
+
+    const refusedOpen = freshPaths();
+    expect(() =>
+      openJournal(refusedOpen, { kind: "fresh-start", reason: "none" }, leaky, { secrets: [clustered] }),
+    ).toThrow(/contains one of this run's secrets/);
+    expect(readJournal(refusedOpen)).toBeNull();
+
+    const paths = freshPaths();
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, leaky);
+    await expect(writeReceipt(paths, receiptFor(leaky), { secrets: [clustered] })).rejects.toThrow(
+      /contains one of this run's secrets/,
+    );
+    expect(readReceipt(paths)).toBeNull();
+  });
+
+  test("a receipt keyed by something that is not a service name refuses", async () => {
+    const paths = freshPaths();
+    const p = plan();
+    openJournal(paths, { kind: "fresh-start", reason: "none" }, p);
+    await expect(
+      writeReceipt(paths, receiptFor(p, { images: { "postgres://u:hunter2@db": DIGEST_B } })),
+    ).rejects.toThrow(/service name/);
   });
 
   test("a receipt recording a tag rather than a digest refuses", async () => {

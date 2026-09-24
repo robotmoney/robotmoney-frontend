@@ -293,6 +293,16 @@ export function stateRoot(env: Record<string, string | undefined>): string {
 }
 
 /**
+ * The three holders of a service token (spec §3): `system-scheduler`,
+ * `analytics-producer`, and the operator (the admin routes).
+ */
+export const SERVICE_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
+export type ServiceTokenHolder = (typeof SERVICE_TOKEN_HOLDERS)[number];
+
+/** The one file name inside each holder's token directory. */
+export const TOKEN_FILE_NAME = "token";
+
+/**
  * The per-instance layout. One interface so every W1 module agrees on where its
  * file lives, and so the set of files an instance owns can be read in one place
  * — which is what `smoke:down`, `smoke:clean` and the incident case need.
@@ -303,13 +313,6 @@ export function stateRoot(env: Record<string, string | undefined>): string {
  * refuse)", and the cheapest way to honour that is for this module to be
  * structurally incapable of naming it.
  */
-/**
- * The three holders of a service token (spec §3): `system-scheduler`,
- * `analytics-producer`, and the operator (the admin routes).
- */
-export const SERVICE_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
-export type ServiceTokenHolder = (typeof SERVICE_TOKEN_HOLDERS)[number];
-
 export interface InstancePaths {
   /** The instance directory itself. */
   readonly dir: string;
@@ -323,15 +326,33 @@ export interface InstancePaths {
    */
   readonly rolePasswordsFile: string;
   /**
-   * The service-token directory (§3): one file per holder, and nothing else.
-   *
-   * A directory of its own, never a file beside `role-passwords.json`, because
-   * compose mounts a token into its holder by mounting THIS directory. A mount
-   * of the instance directory would hand `system-scheduler` the database role
-   * passwords, and §3 gives it one API credential and no other kind.
+   * The service-token root (§3). It holds one directory per holder and nothing
+   * else, and it is NEVER mounted into a container itself: it contains every
+   * holder's token.
    */
   readonly tokensDir: string;
-  /** Each holder's token file, inside {@link tokensDir}. */
+  /**
+   * Each holder's OWN token directory, `tokens/<holder>/`, holding that
+   * holder's token file and nothing else. This is the path compose mounts into
+   * the holder (read-only), so the mount exposes exactly one credential.
+   *
+   * Why a directory per holder and not one shared `tokens/` directory: §3 and
+   * §5 say `system-scheduler` and `analytics-producer` "each receive only their
+   * API credential". A mount of a shared directory would hand the scheduler the
+   * operator's admin-route token and the producer's token too. A directory per
+   * holder (rather than a single-file bind mount) keeps rotation an atomic
+   * rename inside the mounted directory, which a single-file bind mount does
+   * not see.
+   *
+   * COMPOSE IS NOT YET ON THIS LAYOUT. docker-compose.yml's system-scheduler
+   * still mounts the whole instance directory and reads
+   * `/run/rm-state/${RM_INSTANCE}-scheduler-token`, which would also expose
+   * role-passwords.json. Moving that mount to `tokenDirs["system-scheduler"]`
+   * with `SCHEDULER_TOKEN_FILE=/run/rm-token/token` is owned by the wave-4
+   * service-token package (#1026, criterion 113), which owns docker-compose.yml.
+   */
+  readonly tokenDirs: Readonly<Record<ServiceTokenHolder, string>>;
+  /** Each holder's token file: `tokens/<holder>/token`, the only file in {@link tokenDirs}[holder]. */
   readonly tokenFiles: Readonly<Record<ServiceTokenHolder, string>>;
   /** The phase journal (§1.3). */
   readonly journalFile: string;
@@ -377,19 +398,25 @@ export function instancePaths(root: string, instance: string, options?: { readon
   if (options?.create === true) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o700);
-    for (const inner of [tokensDir, journalArchiveDir]) {
+  }
+  const tokenDirs = Object.fromEntries(
+    SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokensDir, holder)]),
+  ) as Record<ServiceTokenHolder, string>;
+  const tokenFiles = Object.fromEntries(
+    SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokenDirs[holder], TOKEN_FILE_NAME)]),
+  ) as Record<ServiceTokenHolder, string>;
+  if (options?.create === true) {
+    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir]) {
       mkdirSync(inner, { recursive: true, mode: 0o700 });
       chmodSync(inner, 0o700);
     }
   }
-  const tokenFiles = Object.fromEntries(
-    SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokensDir, `${holder}.token`)]),
-  ) as Record<ServiceTokenHolder, string>;
   return {
     dir,
     nameFile: join(dir, "instance-name"),
     rolePasswordsFile: join(dir, "role-passwords.json"),
     tokensDir,
+    tokenDirs,
     tokenFiles,
     journalFile: join(dir, "journal.jsonl"),
     journalArchiveDir,
