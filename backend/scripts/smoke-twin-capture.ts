@@ -19,9 +19,12 @@
 //      (connectReadOnly) and is PROVEN with `SHOW transaction_read_only`;
 //   2. pg_dump and pg_dumpall run with PGOPTIONS=-c default_transaction_read_only=on,
 //      so the dump's own sessions carry the same belt;
-//   3. the credential must be rm_readonly and hold no write or DDL capability
-//      at all (captureRefusal below), so the belt is never the only thing
-//      between the capture and a write.
+//   3. the credential must be rm_readonly and hold none of the write or DDL
+//      capabilities probeCaptureTarget() lists (table/column write grants,
+//      TRIGGER, MAINTAIN, ownership, sequence, schema and database CREATE, any
+//      non-read role membership), so the belt is never the only thing between
+//      the capture and a write. EXECUTE on a SECURITY DEFINER function is NOT
+//      probed: the read-only session (1, 2) is what stops a write through one.
 //
 // WHAT IT WRITES, and nothing else — exactly what resolveBackupFiles() requires:
 //   .last-stamp                      the stamp the restore half reads
@@ -163,6 +166,18 @@ export interface CaptureProbe {
   writeCapabilities: string[];
 }
 
+/**
+ * The only role memberships a read-only credential may hold: the predefined
+ * roles that grant reads and nothing else. Any other membership is refused.
+ */
+export const READ_ROLE_ALLOWLIST = [
+  "pg_monitor",
+  "pg_read_all_data",
+  "pg_read_all_settings",
+  "pg_read_all_stats",
+  "pg_stat_scan_tables",
+] as const;
+
 /** Relation owner / schema owner test, shared by the queries below. */
 const IS_ME = "(SELECT oid FROM pg_roles WHERE rolname = current_user)";
 
@@ -172,11 +187,12 @@ const IS_ME = "(SELECT oid FROM pg_roles WHERE rolname = current_user)";
  * out whether it would succeed.
  *
  * WRITE CAPABILITY is anything that lets the credential change the database:
- *   - INSERT/UPDATE/DELETE/TRUNCATE on any relation outside the system schemas,
+ *   - INSERT/UPDATE (table-wide OR on any single column), DELETE, TRUNCATE,
+ *     TRIGGER or (PG17+) MAINTAIN on any relation outside the system schemas,
  *     or ownership of one (an owner can grant itself the rest);
  *   - UPDATE or USAGE on a sequence (both allow nextval, which writes);
  *   - CREATE on, or ownership of, any schema; CREATE on the database;
- *   - membership in a role that is not a predefined read role. A NOINHERIT
+ *   - membership in any role outside READ_ROLE_ALLOWLIST. A NOINHERIT
  *     member (0053 creates rm_readonly NOINHERIT) reports no inherited grant
  *     through has_table_privilege, yet can still `SET ROLE` into its writer.
  */
@@ -211,24 +227,51 @@ export async function probeCaptureTarget(db: Db): Promise<CaptureProbe> {
     .filter(([k]) => who?.[k] === true)
     .map(([, label]) => label);
 
+  // MAINTAIN (REFRESH MATERIALIZED VIEW, LOCK, CLUSTER, REINDEX, VACUUM) is a
+  // PG17 privilege: has_table_privilege(…, 'MAINTAIN') is an error on older
+  // servers, so it is only asked where it exists.
+  const [ver] = (await db`
+    SELECT current_setting('server_version_num')::int AS num
+  `) as unknown as { num: number }[];
+  const hasMaintain = Number(ver?.num ?? 0) >= 170000;
+  // INSERT and UPDATE can be granted per COLUMN. has_table_privilege sees only
+  // the table-level grant, so a role holding `UPDATE (note)` would read as
+  // clean; has_any_column_privilege sees the table grant OR any column grant.
+  // DELETE, TRUNCATE, TRIGGER and MAINTAIN exist only at table level. TRIGGER
+  // counts as write capability: a trigger attached to a table runs whenever a
+  // writer touches it, with that writer's rights.
+  const maintainCol = hasMaintain ? "has_table_privilege(c.oid, 'MAINTAIN')" : "false";
   const relations = (await db.unsafe(`
-    SELECT format('%I.%I', n.nspname, c.relname) AS object,
-           c.relowner = ${IS_ME}                 AS owned,
-           has_table_privilege(c.oid, 'INSERT')   AS ins,
-           has_table_privilege(c.oid, 'UPDATE')   AS upd,
-           has_table_privilege(c.oid, 'DELETE')   AS del,
-           has_table_privilege(c.oid, 'TRUNCATE') AS trunc
+    SELECT format('%I.%I', n.nspname, c.relname)     AS object,
+           c.relowner = ${IS_ME}                     AS owned,
+           has_any_column_privilege(c.oid, 'INSERT') AS ins,
+           has_any_column_privilege(c.oid, 'UPDATE') AS upd,
+           has_table_privilege(c.oid, 'DELETE')      AS del,
+           has_table_privilege(c.oid, 'TRUNCATE')    AS trunc,
+           has_table_privilege(c.oid, 'TRIGGER')     AS trig,
+           ${maintainCol}                            AS maint
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
       AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
       AND (c.relowner = ${IS_ME}
-        OR has_table_privilege(c.oid, 'INSERT')
-        OR has_table_privilege(c.oid, 'UPDATE')
+        OR has_any_column_privilege(c.oid, 'INSERT')
+        OR has_any_column_privilege(c.oid, 'UPDATE')
         OR has_table_privilege(c.oid, 'DELETE')
-        OR has_table_privilege(c.oid, 'TRUNCATE'))
+        OR has_table_privilege(c.oid, 'TRUNCATE')
+        OR has_table_privilege(c.oid, 'TRIGGER')
+        OR ${maintainCol})
     ORDER BY 1
-  `)) as unknown as { object: string; owned: boolean; ins: boolean; upd: boolean; del: boolean; trunc: boolean }[];
+  `)) as unknown as {
+    object: string;
+    owned: boolean;
+    ins: boolean;
+    upd: boolean;
+    del: boolean;
+    trunc: boolean;
+    trig: boolean;
+    maint: boolean;
+  }[];
 
   const sequences = (await db.unsafe(`
     SELECT format('%I.%I', n.nspname, c.relname) AS object
@@ -253,19 +296,30 @@ export async function probeCaptureTarget(db: Db): Promise<CaptureProbe> {
            has_database_privilege(current_database(), 'CREATE') AS can_create
   `) as unknown as { name: string; can_create: boolean }[];
 
-  const memberships = (await db`
+  // An ALLOWLIST, not a denylist: every membership refuses except the
+  // predefined roles that only read. A denylist of named writer roles lets
+  // through whatever it forgot (pg_maintain, pg_signal_backend,
+  // pg_create_subscription, pg_checkpoint, …) and every role a future server adds.
+  const memberships = (await db.unsafe(`
     SELECT r.rolname::text AS name
     FROM pg_roles r
     WHERE r.rolname <> current_user
       AND pg_has_role(current_user, r.oid, 'MEMBER')
-      AND (r.rolname NOT LIKE 'pg\\_%'
-        OR r.rolname IN ('pg_write_all_data', 'pg_write_server_files', 'pg_execute_server_program', 'pg_database_owner'))
+      AND r.rolname NOT IN (${READ_ROLE_ALLOWLIST.map((n) => `'${n}'`).join(", ")})
     ORDER BY 1
-  `) as unknown as { name: string }[];
+  `)) as unknown as { name: string }[];
 
   const writeCapabilities = [
     ...relations.map((r) => {
-      const held = [r.ins && "INSERT", r.upd && "UPDATE", r.del && "DELETE", r.trunc && "TRUNCATE", r.owned && "OWNER"];
+      const held = [
+        r.ins && "INSERT",
+        r.upd && "UPDATE",
+        r.del && "DELETE",
+        r.trunc && "TRUNCATE",
+        r.trig && "TRIGGER",
+        r.maint && "MAINTAIN",
+        r.owned && "OWNER",
+      ];
       return `table ${r.object}: ${held.filter(Boolean).join(", ")}`;
     }),
     ...sequences.map((s) => `sequence ${s.object}: UPDATE/USAGE (nextval writes)`),

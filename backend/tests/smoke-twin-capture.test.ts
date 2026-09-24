@@ -262,6 +262,90 @@ describe("smoke:capture against the suite's PRIMARY — every non-readonly crede
     }
   });
 
+  // Column-level grants are invisible to has_table_privilege: a role holding
+  // only `UPDATE (note)` reads as clean there, yet `UPDATE planted SET note=…`
+  // succeeds. The probe must see the column grant.
+  test("rm_readonly holding a COLUMN-level UPDATE exits 2, and the grant really writes", async () => {
+    await adminDb.unsafe("GRANT UPDATE (note) ON public.planted TO rm_readonly");
+    try {
+      // Prove the shape is a real write capability, not a theoretical one.
+      const [t] = (await adminDb.unsafe(
+        "SELECT has_table_privilege('rm_readonly', 'public.planted', 'UPDATE') AS tbl, " +
+          "has_any_column_privilege('rm_readonly', 'public.planted', 'UPDATE') AS col",
+      )) as unknown as { tbl: boolean; col: boolean }[];
+      expect(t).toEqual({ tbl: false, col: true });
+      const out = freshOut();
+      const r = await runCapture(["--out", out, "--env-file", envPath]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("not a read-only credential");
+      expect(r.stderr).toContain("table public.planted: UPDATE");
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      await adminDb.unsafe("REVOKE UPDATE (note) ON public.planted FROM rm_readonly");
+    }
+  });
+
+  test("rm_readonly holding a COLUMN-level INSERT exits 2", async () => {
+    await adminDb.unsafe("GRANT INSERT (id) ON public.planted TO rm_readonly");
+    try {
+      const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("table public.planted: INSERT");
+    } finally {
+      await adminDb.unsafe("REVOKE INSERT (id) ON public.planted FROM rm_readonly");
+    }
+  });
+
+  test("rm_readonly holding TRIGGER on a table exits 2", async () => {
+    await adminDb.unsafe("GRANT TRIGGER ON public.planted TO rm_readonly");
+    try {
+      const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("table public.planted: TRIGGER");
+    } finally {
+      await adminDb.unsafe("REVOKE TRIGGER ON public.planted FROM rm_readonly");
+    }
+  });
+
+  test("rm_readonly holding MAINTAIN on a table exits 2", async () => {
+    await adminDb.unsafe("GRANT MAINTAIN ON public.planted TO rm_readonly");
+    try {
+      const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("table public.planted: MAINTAIN");
+    } finally {
+      await adminDb.unsafe("REVOKE MAINTAIN ON public.planted FROM rm_readonly");
+    }
+  });
+
+  // The membership rule is an allowlist of read roles. Each of these is a
+  // predefined role that is NOT a reader, and the old denylist let them pass.
+  for (const role of ["pg_maintain", "pg_signal_backend", "pg_create_subscription"]) {
+    test(`rm_readonly as a member of ${role} exits 2`, async () => {
+      await admin.unsafe(`GRANT ${role} TO rm_readonly`);
+      try {
+        const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain(`member of ${role}`);
+      } finally {
+        await admin.unsafe(`REVOKE ${role} FROM rm_readonly`);
+      }
+    });
+  }
+
+  test("membership in an allowlisted read role is not a write capability", async () => {
+    await admin.unsafe("GRANT pg_read_all_data TO rm_readonly");
+    try {
+      const r = await runCapture(["--out", freshOut(), "--env-file", envPath]);
+      // Still refused, but as a PRIMARY, not as a non-readonly credential.
+      expect(r.code).toBe(2);
+      expect(r.stderr).not.toContain("not a read-only credential");
+      expect(r.stderr).toContain("pg_is_in_recovery() is FALSE");
+    } finally {
+      await admin.unsafe("REVOKE pg_read_all_data FROM rm_readonly");
+    }
+  });
+
   test("rm_readonly holding CREATE on a schema exits 2", async () => {
     await adminDb.unsafe("GRANT CREATE ON SCHEMA public TO rm_readonly");
     try {
