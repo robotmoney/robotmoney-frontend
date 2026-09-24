@@ -166,11 +166,6 @@ const cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPo
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
 // rather than letting an operator believe a pin took effect.
 for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
-// Same rule for a stack-owned DATABASE URL (WORKER_DATABASE_URL) inherited from a
-// `.env` shared with the persistent deployment: dropped, and said out loud. It used
-// to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
-// does not have — see smoke-compose-env.ts.
-for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
 
 if (staticPortMode) {
   console.warn(
@@ -271,6 +266,12 @@ const redactedDbUrl = dataPath.kind === "ephemeral" ? undefined : dataPath.redac
 // Only a non-default data path gets the banner: an ordinary `bun run smoke` boots
 // its own container and has no consequence to warn about.
 if (!composePostgres) console.warn(bannerFor(dataPath));
+// Same rule for a stack-owned DATABASE URL (WORKER_DATABASE_URL) inherited from a
+// `.env` shared with the persistent deployment: dropped, and said out loud — except
+// on an --db external boot, whose database IS the deployment's and whose worker
+// lanes need exactly that URL. See smoke-compose-env.ts.
+const externalDataPath = dataPath.kind === "external";
+for (const warning of shadowingStackEnvWarnings(process.env, { external: externalDataPath })) console.warn(`[smoke] ${warning}`);
 
 // The baked-in smoke database credentials and the two derived URLs now come from
 // the shared stack config (scripts/stack/config.ts), which carries the
@@ -441,7 +442,7 @@ const smokeStackConfig: StackConfig = {
   environment: stackEnvironment,
   // judgeCredentialEnv LAST: the judge lane's key is not an operator knob and
   // must not be shadowable by one (see smoke-compose-env.ts).
-  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env), ...judgeCredentialEnv(process.env) },
+  extraComposeEnv: { ...smokeEnv.composeEnv, ...smokePassthroughEnv(process.env, { external: externalDataPath }), ...judgeCredentialEnv(process.env) },
 };
 
 // --- TUI + logging gating -------------------------------------------------

@@ -58,3 +58,21 @@ describe("shadowingStackEnvWarnings", () => {
     expect(shadowingStackEnvWarnings({ WORKER_DATABASE_URL: "  " })).toEqual([]);
   });
 });
+
+describe("an --db external boot (the deployment's own database)", () => {
+  // Production's worker lanes get their rm_worker URL through this path and no
+  // other; dropping it everywhere (the archived ffa431b6) stops every lane.
+  const url = "postgres://rm_worker:pw@db.example:25060/robotmoney";
+
+  test("forwards WORKER_DATABASE_URL", () => {
+    expect(smokePassthroughEnv({ WORKER_DATABASE_URL: url }, { external: true })).toEqual({ WORKER_DATABASE_URL: url });
+  });
+
+  test("does not warn that it is ignored, because it is not", () => {
+    expect(shadowingStackEnvWarnings({ WORKER_DATABASE_URL: url }, { external: true })).toEqual([]);
+  });
+
+  test("still forwards nothing off the allowlist", () => {
+    expect(smokePassthroughEnv({ DATABASE_URL: "postgres://x/y" }, { external: true })).toEqual({});
+  });
+});

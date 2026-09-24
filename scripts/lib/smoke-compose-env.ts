@@ -35,7 +35,8 @@ const DEMO_COMPOSE_PASSTHROUGH = [
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
   "RM_ENV",
-  "WORKER_DATABASE_URL",
+  // NOT "WORKER_DATABASE_URL" — except on an --db external boot, see
+  // EXTERNAL_ONLY_PASSTHROUGH below. It was on this list from the 2026-07-28 extraction
   // (9aaaaeec) until it cost a stage twin boot on 2026-09-18: the stage checkout's
   // `.env` carries the DEPLOYMENT's value (`…@postgres:5432/robotmoney`, the
   // rm_worker login of the persistent stack, deployment.md §4.3) and bun auto-loads
@@ -98,9 +99,29 @@ export function judgeCredentialEnv(env: Record<string, string | undefined>): Rec
   return out;
 }
 
-export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
+/**
+ * Forwarded ONLY on an `--db external` boot, where the database IS the
+ * deployment's and so is the operator's rm_worker URL: production's worker
+ * lanes receive WORKER_DATABASE_URL through this path and no other (the v0.5.0
+ * cutover, ec261867, which had put it back on the list above for every boot).
+ * Every other boot owns its database, so the same value is a deployment URL
+ * pointing at a host that boot does not have — the 2026-09-18 stage twin. There
+ * it is dropped, and shadowingStackEnvWarnings() says so.
+ */
+const EXTERNAL_ONLY_PASSTHROUGH = ["WORKER_DATABASE_URL"] as const;
+
+export interface PassthroughOptions {
+  /** The boot's data path is `--db external` (the deployment's own database). */
+  external?: boolean;
+}
+
+export function smokePassthroughEnv(
+  env: Record<string, string | undefined>,
+  opts: PassthroughOptions = {},
+): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const k of DEMO_COMPOSE_PASSTHROUGH) {
+  const names = opts.external ? [...DEMO_COMPOSE_PASSTHROUGH, ...EXTERNAL_ONLY_PASSTHROUGH] : DEMO_COMPOSE_PASSTHROUGH;
+  for (const k of names) {
     const v = env[k];
     if (v !== undefined && v !== "") out[k] = v;
   }
@@ -110,8 +131,12 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
 // A stack-owned value an operator's environment can no longer shadow, paired with
 // the reason its presence is worth a line of output rather than silence.
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
-  // WORKER_DATABASE_URL left this list in v0.5.0 (ec261867): an --db external
-  // boot takes the deployment's rm_worker URL through DEMO_COMPOSE_PASSTHROUGH.
+  [
+    "WORKER_DATABASE_URL",
+    "the worker lanes take the stack's own DATABASE_URL (the twin, under --db smoke-twin). " +
+      "Forwarding a deployment's rm_worker URL pointed them at a `postgres` host this stack does " +
+      "not have, and every lane died in DNS while the boot reported only unhealthy workers",
+  ],
 ];
 
 /**
@@ -120,9 +145,13 @@ const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
  * Pure, in the shape of stack/ports.ts's stalePortEnvWarnings: the caller passes
  * its own env in and printing is the caller's job. One line per var actually set.
  */
-export function shadowingStackEnvWarnings(env: Record<string, string | undefined>): string[] {
+export function shadowingStackEnvWarnings(
+  env: Record<string, string | undefined>,
+  opts: PassthroughOptions = {},
+): string[] {
   const out: string[] = [];
   for (const [name, why] of SHADOWING_STACK_ENV_VARS) {
+    if (opts.external && (EXTERNAL_ONLY_PASSTHROUGH as readonly string[]).includes(name)) continue;
     const raw = env[name];
     if (raw === undefined || raw.trim() === "") continue;
     out.push(
