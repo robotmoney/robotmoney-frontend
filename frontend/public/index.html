@@ -94,7 +94,7 @@
          then components. No @import; each file linked individually. -->
     <link rel="stylesheet" href="/assets/css/tokens.css?v=c84768eb" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=2a892fb2" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=05c22796" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
@@ -103,7 +103,7 @@
     <link rel="stylesheet" href="/assets/css/sections/token.css?v=96bbd723" />
     <link rel="stylesheet" href="/assets/css/sections/contract.css?v=0aeb4cb5" />
     <link rel="stylesheet" href="/assets/css/sections/governance.css?v=21436cd7" />
-    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=c4543416" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=8ea3deb4" />
 
     <!-- Data-driven view styles (regime + swarm). -->
     <link rel="stylesheet" href="/assets/css/views.css?v=7aa4f333" />
@@ -168,12 +168,12 @@
                       <p class="nav__label">Vaults</p>
                       <ul class="nav__list">
                         <li>
-                          <a class="nav__item nav__item--fig" href="/swarm/subjects/robotmoney-vault"><span class="nav__item-t">Robot Money Vault</span> <span class="nav__item-v" x-text="vaultFigure('total')"></span></a>
+                          <a class="nav__item nav__item--fig" href="/swarm/subjects/robotmoney-vault"><span class="nav__item-t">Robot Money Vault</span> <span class="nav__item-v"><span x-text="vaultFigure('total')" :class="vaultSoon('total') ? 'rm-soon' : ''"></span></span></a>
                           <ul class="nav__tree">
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmusdc"><span class="nav__item-t">Fixed Income</span> <span class="nav__item-f">rmUSDC</span> <span class="nav__item-v" x-text="vaultFigure('rmusdc')"></span></a></li>
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmagent"><span class="nav__item-t">Small Cap Tokens</span> <span class="nav__item-f">rmAGENT</span> <span class="nav__item-v" x-text="vaultFigure('rmagent')"></span></a></li>
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmproto"><span class="nav__item-t">Protocol Tokens</span> <span class="nav__item-f">rmPROTO</span> <span class="nav__item-v" x-text="vaultFigure('rmproto')"></span></a></li>
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmrwa"><span class="nav__item-t">Real World Assets</span> <span class="nav__item-f">rmRWA</span> <span class="nav__item-v" x-text="vaultFigure('rmrwa')"></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmusdc"><span class="nav__item-t">Fixed Income</span> <span class="nav__item-f">rmUSDC</span> <span class="nav__item-v"><span x-text="vaultFigure('rmusdc')" :class="vaultSoon('rmusdc') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmagent"><span class="nav__item-t">Small Cap Tokens</span> <span class="nav__item-f">rmAGENT</span> <span class="nav__item-v"><span x-text="vaultFigure('rmagent')" :class="vaultSoon('rmagent') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmproto"><span class="nav__item-t">Protocol Tokens</span> <span class="nav__item-f">rmPROTO</span> <span class="nav__item-v"><span x-text="vaultFigure('rmproto')" :class="vaultSoon('rmproto') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmrwa"><span class="nav__item-t">Real World Assets</span> <span class="nav__item-f">rmRWA</span> <span class="nav__item-v"><span x-text="vaultFigure('rmrwa')" :class="vaultSoon('rmrwa') ? 'rm-soon' : ''"></span></span></a></li>
                           </ul>
                         </li>
                       </ul>
@@ -195,7 +195,7 @@
                     <div class="nav__col">
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/swarm"><span class="nav__item-t">Overview</span></a></li>
-                        <li><a class="nav__item" href="/swarm/leaderboard"><span class="nav__item-t">Leaderboard</span></a></li>
+                        <li><span class="nav__item nav__item--soon" aria-disabled="true"><span class="nav__item-t">Leaderboard</span> <span class="rm-soon">Coming soon</span></span></li>
                         <li><a class="nav__item" href="/swarm#history"><span class="nav__item-t">Recommendation history</span></a></li>
                         <li><a class="nav__item" href="/swarm/apply"><span class="nav__item-t">Apply for a seat</span></a></li>
                       </ul>
@@ -211,9 +211,15 @@
                 <div class="nav__panel" id="nav-p-research" :class="{ 'nav__panel--open': isOpen('research') }" @keydown="onPanelKey($event, 'research')">
                   <div class="nav__card">
                     <div class="nav__col">
+                      <p class="nav__label">Signals</p>
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/regime"><span class="nav__item-t">Regime</span></a></li>
                         <li><a class="nav__item" href="/regime/indicators"><span class="nav__item-t">Indicators</span></a></li>
+                      </ul>
+                    </div>
+                    <div class="nav__col">
+                      <p class="nav__label">Publications</p>
+                      <ul class="nav__list">
                         <li><a class="nav__item" href="/blog"><span class="nav__item-t">Blog</span></a></li>
                         <li><a class="nav__item" href="/smart-contract-risks"><span class="nav__item-t">Smart contract risks</span></a></li>
                       </ul>
@@ -241,7 +247,6 @@
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/docs/investment-swarm/api-reference"><span class="nav__item-t">API reference</span></a></li>
                         <li><a class="nav__item" href="/changelog"><span class="nav__item-t">Changelog</span></a></li>
-                        <li><a class="nav__item" href="/llms.txt"><span class="nav__item-t">llms.txt</span></a></li>
                       </ul>
                     </div>
                   </div>
@@ -258,7 +263,7 @@
                       <p class="nav__label">About</p>
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/tokenomics"><span class="nav__item-t">Token</span></a></li>
-                        <li><a class="nav__item" href="/media"><span class="nav__item-t">Coverage</span></a></li>
+                        <li><a class="nav__item" href="/media"><span class="nav__item-t">Media coverage</span></a></li>
                       </ul>
                       <p class="nav__label">Community</p>
                       <ul class="nav__list">
@@ -270,6 +275,7 @@
                       <p class="nav__label">Transparency</p>
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/performance"><span class="nav__item-t">Protocol wallets</span></a></li>
+                        <li><a class="nav__item" href="/swarm/subjects/robotmoney-treasury"><span class="nav__item-t">RM Protocol Labs Treasury</span></a></li>
                         <li><a class="nav__item" href="/skills#contracts"><span class="nav__item-t">Contracts</span></a></li>
                       </ul>
                     </div>
@@ -341,7 +347,7 @@
                 Robot Money is the treasury layer for the agent economy. Built on Base by
                 <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__about-link">@JunoAgent</a>.
                 A
-                <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer" class="footer__about-link">Generative Ventures</a>
+                <a href="https://www.genventures.xyz/" target="_blank" rel="noopener noreferrer" class="footer__about-link">Generative Ventures</a>
                 x
                 <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__about-link">Institute for Zero-Human Companies</a>
                 collaboration.
@@ -369,7 +375,7 @@
               <h4 class="footer__heading">Swarm</h4>
               <div class="footer__links">
                 <a href="/swarm" class="footer__link">Overview</a>
-                <a href="/swarm/leaderboard" class="footer__link">Leaderboard</a>
+                <span class="footer__link footer__link--soon" aria-disabled="true">Leaderboard <span class="rm-soon">Coming soon</span></span>
                 <a href="/swarm#history" class="footer__link">Recommendation history</a>
                 <a href="/swarm/apply" class="footer__link">Apply for a seat</a>
               </div>
@@ -402,8 +408,9 @@
               <h4 class="footer__heading">Company</h4>
               <div class="footer__links">
                 <a href="/tokenomics" class="footer__link">Token</a>
-                <a href="/media" class="footer__link">Coverage</a>
+                <a href="/media" class="footer__link">Media coverage</a>
                 <a href="/performance" class="footer__link">Protocol wallets</a>
+                <a href="/swarm/subjects/robotmoney-treasury" class="footer__link">RM Protocol Labs Treasury</a>
                 <a href="/skills#contracts" class="footer__link">Contracts</a>
               </div>
             </div>

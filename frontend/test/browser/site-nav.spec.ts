@@ -164,6 +164,9 @@ test.describe("desktop", () => {
     const fig = (href: string) => panel(page, "vaults").locator(`a[href="${href}"] .nav__item-v`);
     await expect(fig("/vault/rmusdc")).toHaveText("$18,390");
     await expect(fig("/vault/rmagent")).toHaveText("Coming soon");
+    // Not on the network yet reads as a state, in a pill, not as a figure.
+    await expect(fig("/vault/rmagent").locator(".rm-soon")).toHaveText("Coming soon");
+    await expect(fig("/vault/rmusdc").locator(".rm-soon")).toHaveCount(0);
     await expect(fig("/swarm/subjects/robotmoney-vault")).toHaveText("$18,390");
     expect(reads).toBe(1);
 
@@ -178,6 +181,42 @@ test.describe("desktop", () => {
     await expect(test.locator("#nav-p-vaults")).toBeVisible();
     await test.waitForTimeout(500);
     await expect(test.locator("#nav-p-vaults .nav__item-v")).toHaveText(["", "", "", "", ""]);
+  });
+
+  test("a link off the site shows its arrow before any pointer reaches it; one on the site shows it on hover", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "company").click();
+    const arrow = (sel: string) => page.locator(sel).evaluate((el) => {
+      const c = getComputedStyle(el, "::after");
+      return { content: c.content, opacity: c.opacity, marginLeft: c.marginLeft };
+    });
+    const out = await arrow('#nav-p-company a[href^="https://t.me"]');
+    expect(out.opacity).toBe("1");
+    expect(out.content).toContain("\u2197");
+    const inside = await arrow('#nav-p-company a[href="/media"]');
+    expect(inside.opacity).toBe("0");
+    // Both sit at the row's right edge: the site-wide new-tab arrow does not
+    // pull the external one in beside the word.
+    const box = await page.locator('#nav-p-company a[href^="https://t.me"]').boundingBox();
+    expect(parseFloat(out.marginLeft)).toBeGreaterThan(box!.width / 3);
+
+    // A page not built yet is named, marked and not a link.
+    await top(page, "swarm").click();
+    const soon = panel(page, "swarm").locator(".nav__item--soon");
+    await expect(soon).toContainText("Leaderboard");
+    await expect(soon.locator(".rm-soon")).toHaveText("Coming soon");
+    await expect(panel(page, "swarm").locator('a:has-text("Leaderboard")')).toHaveCount(0);
+  });
+
+  test("a click on blank space inside a pinned card keeps it open", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "docs").click();
+    await expect(panel(page, "docs")).toBeVisible();
+    await panel(page, "docs").locator(".nav__label").first().click();
+    await expect(panel(page, "docs")).toBeVisible();
+    const card = await panel(page, "docs").locator(".nav__card").boundingBox();
+    await page.mouse.click(card!.x + card!.width - 6, card!.y + card!.height - 6);
+    await expect(panel(page, "docs")).toBeVisible();
   });
 
   test("the page behind an open card steps back, and a click on it closes the card", async ({ page }) => {

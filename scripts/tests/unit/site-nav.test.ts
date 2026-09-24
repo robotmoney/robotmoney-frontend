@@ -13,9 +13,6 @@ import { NOT_FOUND_VIEW, viewFor } from "../../../frontend/public/assets/js/app/
 import { VAULTS } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 
 const pub = join(import.meta.dir, "../../../frontend/public");
-// Linked ahead of the page that answers it. The swarm leaderboard is being
-// built on its own branch; this entry goes when that route lands.
-const PENDING = ["/swarm/leaderboard"];
 const html = readFileSync(join(pub, "index.html"), "utf8");
 const nav = html.slice(html.indexOf('<nav class="nav'), html.indexOf("</nav>"));
 
@@ -40,6 +37,7 @@ describe("navSectionFor", () => {
     ["/swarm", "swarm"],
     ["/swarm/", "swarm"],
     ["/swarm/subjects/robotmoney-allocation", "swarm"],
+    ["/swarm/subjects/robotmoney-treasury", "company"],
     ["/swarm/members/athena", "swarm"],
     ["/swarm/apply", "swarm"],
     ["/committee/members/athena", "swarm"],
@@ -101,7 +99,6 @@ describe("the nav markup", () => {
     const hrefs = [...nav.matchAll(/href="(\/[^"]*)"/g)].map((m) => m[1]);
     expect(hrefs.length).toBeGreaterThanOrEqual(20);
     for (const href of hrefs) {
-      if (PENDING.includes(href)) continue;
       const [path, hash] = href.split("#");
       if (/\.[a-z]+$/.test(path)) {
         expect(existsSync(join(pub, path)), href).toBe(true);
@@ -139,7 +136,6 @@ describe("the nav markup", () => {
     for (const href of navHrefs) expect(footer, href).toContain(`href="${href}"`);
     expect(footer).not.toContain('href="#"');
     for (const href of [...footer.matchAll(/href="(\/[^"#]*)[^"]*"/g)].map((m) => m[1])) {
-      if (PENDING.includes(href)) continue;
       if (/\.[a-z]+$/.test(href)) expect(existsSync(join(pub, href)), href).toBe(true);
       else expect(existsSync(join(pub, viewFor(href))), `${href} -> ${viewFor(href)}`).toBe(true);
     }
@@ -158,6 +154,18 @@ describe("the nav markup", () => {
 
   test("the primary action is to deposit, through the skill", () => {
     expect(nav).toMatch(/<a href="\/skills" class="btn-primary[^"]*nav__cta">Deposit<\/a>/);
+  });
+
+  test("what is not built yet is named, marked, and not a link", () => {
+    for (const where of [nav, html.slice(html.indexOf('<footer class="footer">'))]) {
+      expect(where).not.toContain("/swarm/leaderboard");
+      expect(where).toMatch(/<span class="[^"]*--soon" aria-disabled="true">(<span class="nav__item-t">)?Leaderboard(<\/span>)? <span class="rm-soon">Coming soon<\/span><\/span>/);
+    }
+  });
+
+  test("llms.txt is for machines: in the footer, not in the menu", () => {
+    expect(nav).not.toContain('href="/llms.txt"');
+    expect(html.slice(html.indexOf('<footer class="footer">'))).toContain('href="/llms.txt"');
   });
 
   test("a link off the site opens in a new tab and says so", () => {

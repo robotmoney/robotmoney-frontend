@@ -40,6 +40,7 @@ export function registerSiteNav(Alpine) {
     _intent: 0,
     _grace: 0,
     _figuresAsked: false,
+    _pressInside: false,
 
     init() {
       const mq = window.matchMedia(WIDE);
@@ -60,8 +61,12 @@ export function registerSiteNav(Alpine) {
         this.setSheet(false);
       });
       document.addEventListener("pointerdown", (e) => {
-        if (this.open && !this.$root.contains(e.target)) this.close();
+        this._pressInside = this.$root.contains(e.target);
+        if (this.open && !this._pressInside) this.close();
       });
+      const released = () => { this._pressInside = false; };
+      document.addEventListener("pointerup", released);
+      document.addEventListener("pointercancel", released);
       // Inside the nav, @keydown.escape (onEscape) handles it and returns focus.
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && this.open && !this.$root.contains(document.activeElement)) this.close();
@@ -80,7 +85,8 @@ export function registerSiteNav(Alpine) {
           import("../lib/vault-source.js"),
           import("../lib/vault-data.js"),
         ]);
-        const load = await loadVaultOverview({ recommendation: false });
+        // No recommendation and no policy: the card shows values, not weights.
+        const load = await loadVaultOverview({ recommendation: false, policy: Promise.resolve(null) });
         if (!load?.overview || load.error || load.label) return;
         const figures = {};
         for (const v of load.overview.vaults || []) {
@@ -97,6 +103,11 @@ export function registerSiteNav(Alpine) {
 
     vaultFigure(key) {
       return this.vaultFigures?.[key] || "";
+    },
+
+    // Not on the network yet: the slot shows a pill, not a figure.
+    vaultSoon(key) {
+      return this.vaultFigures?.[key] === "Coming soon";
     },
 
     isOpen(key) {
@@ -236,6 +247,9 @@ export function registerSiteNav(Alpine) {
 
     onFocusOut(e) {
       if (this.$root.contains(e.relatedTarget)) return;
+      // A click on blank space inside a card blurs the label with nowhere to
+      // go (relatedTarget null). That is a click inside, not focus leaving.
+      if (!e.relatedTarget && this._pressInside) return;
       if (this.open) this.close();
       // Tab past the sheet's last link: the page behind it is what takes focus.
       if (this.sheet && e.relatedTarget) this.setSheet(false);

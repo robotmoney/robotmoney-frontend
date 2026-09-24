@@ -21,8 +21,8 @@
 }
 
 /* The site index (RM-124): the brand on its own row, then six columns in
-   the nav's order. Two to a row on a phone, three on a tablet, all six in
-   one row from 1024px. */
+   the nav's order. Two to a row on a phone, three up to 1280px, then all six
+   in one row. */
 .footer__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -119,6 +119,9 @@
   text-decoration: underline;
   text-decoration-color: var(--color-link);
 }
+/* Listed, not linked yet (the leaderboard). */
+.footer__link--soon { display: flex; align-items: center; gap: 0.5rem; cursor: default; }
+.footer__link--soon:hover { color: var(--color-text-muted); text-decoration: none; }
 
 /* Bottom bar inner:
    <div className="... py-6 flex flex-col md:flex-row items-center justify-between gap-4"> */
@@ -139,19 +142,16 @@
   color: var(--color-text-muted);
 }
 
-/* legal blurb: max-w-2xl text-center md:text-left */
+/* The bottom bar: legal links and the copyright on one line, the disclaimer
+   under them (max-w-2xl, centred on a phone). */
 .footer__fineprint--legal {
+  order: 3;
   max-width: 42rem; /* max-w-2xl */
   text-align: center;
 }
-
-/* The bottom bar: legal links and the copyright on one line, the disclaimer
-   under them. */
-.footer__legal { order: 1; }
 .footer__bottom > .footer__fineprint:not(.footer__fineprint--legal) { order: 2; }
-.footer__fineprint--legal { order: 3; }
 /* Legal, in the bottom bar: the same quiet mono as the fine print beside it. */
-.footer__legal { display: flex; gap: 1.25rem; }
+.footer__legal { order: 1; display: flex; gap: 1.25rem; }
 .footer__legal-link {
   font-size: 10px;
   font-family: var(--font-mono);
@@ -166,11 +166,13 @@
 /* ── md: breakpoint (Tailwind md = 768px) ── */
 @media (min-width: 768px) {
   .footer__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.5rem 2rem; }
-  /* md:flex-row + md:text-left on the bottom bar */
+  /* md:flex-row + md:text-left on the bottom bar; the disclaimer wraps to
+     its own line */
   .footer__bottom {
     flex-direction: row;
+    flex-wrap: wrap;
+    row-gap: 0.75rem;
   }
-  .footer__bottom { flex-wrap: wrap; row-gap: 0.75rem; }
   .footer__fineprint--legal {
     flex: 1 1 100%;
     max-width: 48rem;
@@ -184,6 +186,8 @@
     padding-inline: 2rem; /* px-8 */
   }
 }
-@media (min-width: 1024px) {
+/* All six columns in one row once each is wide enough to hold its longest
+   link on one line ("Recommendation history" wrapped at 1024 and 1200). */
+@media (min-width: 1280px) {
   .footer__grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2.75rem 1.75rem; }
 }
