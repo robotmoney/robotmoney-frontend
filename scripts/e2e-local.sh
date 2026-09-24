@@ -42,27 +42,35 @@ bun install --frozen-lockfile
 bunx playwright install chromium
 
 export CI=true
-export SMOKE_PROJECT="rm_smoke_e2e_local_$(date +%s)"
-LOG="/tmp/rm-e2e-local-${SMOKE_PROJECT}.log"
-CONTAINER_LOG="/tmp/rm-e2e-local-${SMOKE_PROJECT}-containers.log"
+# NO SMOKE_PROJECT: spec §1 retires it with no alias, and the boot refuses it.
+# The boot names its own project and logs it (`project=<name>`) before it
+# creates anything; the teardown below reads it back from that line.
+RUN_ID="$(date +%s)"
+LOG="/tmp/rm-e2e-local-${RUN_ID}.log"
+CONTAINER_LOG="/tmp/rm-e2e-local-${RUN_ID}-containers.log"
 
 cleanup() {
+  PROJECT="$(grep -om1 'project=[A-Za-z0-9_]*' "$LOG" 2>/dev/null | cut -d= -f2)"
+  if [ -z "$PROJECT" ]; then
+    echo "::teardown skipped — the boot never logged its project (it refused before creating anything)::"
+    return
+  fi
   echo "::capturing full container logs to $CONTAINER_LOG::"
-  docker compose -p "$SMOKE_PROJECT" -f docker-compose.yml -f docker-compose.smoke.yml \
+  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml -f docker-compose.smoke.yml \
     logs --no-color > "$CONTAINER_LOG" 2>&1 || true
-  echo "::teardown $SMOKE_PROJECT::"
-  docker compose -p "$SMOKE_PROJECT" -f docker-compose.yml -f docker-compose.smoke.yml \
+  echo "::teardown $PROJECT::"
+  docker compose -p "$PROJECT" --env-file /dev/null -f docker-compose.yml -f docker-compose.smoke.yml \
     down -v --remove-orphans || true
-  WEB_PORT=1 POSTGRES_PORT=1 bun run scripts/smoke-clean.ts --project "$SMOKE_PROJECT" || true
+  WEB_PORT=1 POSTGRES_PORT=1 bun run scripts/smoke-clean.ts --project "$PROJECT" || true
 }
 trap cleanup EXIT
 
 set -o pipefail
-# --local --seed: the smoke flag surface defaults to the REMOTE ($HOME/.env)
-# database as of 5e4a26ec — this script already requires that same file for
-# OPENCODE_API_KEY, so a bare invocation would boot against whatever real
-# server its connection tokens name instead of a fresh local stack.
-bun run scripts/smoke.ts --local --seed 2>&1 | tee "$LOG"
+# --local blank --migrate --seed: no flag is the REMOTE ($HOME/.env) database,
+# and no local mode implies migrating or seeding (spec §4.3, §5), so this asks
+# for a fresh local stack, migrated, with demo data. --no-env-file: the boot
+# refuses an environment bun filled from the checkout's `.env`.
+bun --no-env-file scripts/smoke.ts --local blank --migrate --seed 2>&1 | tee "$LOG"
 STATUS=$?
 
 echo "combined runtime+test log: $LOG"

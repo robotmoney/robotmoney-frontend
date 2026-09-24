@@ -2,13 +2,10 @@
 // split rule): which services a failed boot stops, what it recovers out of the
 // log as a cause, and that the pane says whether the database is still moving.
 import { describe, expect, test } from "bun:test";
-import {
-  DB_WRITER_SERVICES,
-  renderFailurePane,
-  selectFailureDetail,
-  writerQuiesceLine,
-} from "../../lib/smoke-failure.ts";
-import type { FatalState } from "../../lib/smoke-tui-view.ts";
+import { DB_WRITER_SERVICES, selectFailureDetail } from "../../lib/smoke-failure.ts";
+// The painting half moved to the TUI view (issue #1026), so the decisions
+// `bun smoke` imports carry no TUI module; the assertions are unchanged.
+import { renderFailurePane, writerQuiesceLine, type FatalState } from "../../lib/smoke-tui-view.ts";
 
 const STRIP_ANSI = /\x1b\[[0-9;]*m/g;
 const plain = (s: string) => s.replace(STRIP_ANSI, "");

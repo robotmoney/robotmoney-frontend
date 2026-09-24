@@ -7,7 +7,7 @@
 // A THIN WRAPPER, not a fourth code path. It decides two things and then invokes
 // the ordinary commands with those decisions spelled out as flags, printing the
 // equivalent invocation so the choice is always reproducible by hand — the same
-// contract `bun run smoke:stage` follows:
+// contract every smoke wrapper follows:
 //
 //   1. smoke:capture   UNLESS --reuse. "The latest dump" is the point of this
 //                     command; a rehearsal against last week's copy answers a
@@ -18,16 +18,23 @@
 //   3. --cadence fast ALWAYS. A twin is a TEST environment — production-shaped
 //                     DATA, yes, but it must run at the short test cadence
 //                     (~2-min windows), never the 6 h production one the port
-//                     pin alone would select. smoke-main also defaults the
-//                     twin's consensus judge to ENFORCE for every smoke-twin
-//                     boot, so each judged session genuinely publishes a
-//                     validator consensus receipt.
+//                     pin alone would select. Nothing here touches the judge:
+//                     the judge is a participant (smoke spec §6.2), and no
+//                     boot writes judge mode (D48, D53).
+//   4. --migrate      ALWAYS. No mode implies it (spec §4.3, §5), and a dump
+//                     carries production's schema, which the checkout is
+//                     usually ahead of. Absent, the boot refuses the stale
+//                     schema rather than serving it.
+//
+// It runs as `bun --no-env-file` (package.json) and refuses otherwise, exactly
+// as the boot does: bun would load the checkout's `.env` into THIS process, and
+// the child inherits this process's environment (criterion 122).
 //
 // HOW IT DIFFERS FROM ITS NEIGHBOURS:
-//   bun run smoke:stage    standing smoke, SIMULATED committee, ephemeral or .env db
-//   bun run smoke:twin:once one-shot rehearsal, docker-assigned port, tears down
-//   bun run smoke:twin          standing smoke, PRODUCTION data, pinned tunnel port, stays up
-//                                     (short test cadence, judge enforced)
+//   bun smoke --static-port  standing smoke against the remote database
+//   bun run smoke:twin:once  one-shot rehearsal, docker-assigned port, tears down
+//   bun run smoke:twin       standing smoke, PRODUCTION data, pinned tunnel port, stays up
+//                            (short test cadence)
 //
 // ⛔ THIS PUBLISHES A COPY OF PRODUCTION ON A PUBLIC URL. cloudflared routes
 // stage.robotmoney-labs.dev to the pinned port, so everything below is reachable
@@ -47,6 +54,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveZenKey } from "./lib/smoke-twin-rehearsal.ts";
+import { refuseCheckoutEnvFile } from "./smoke.ts";
 
 const NAME = "smoke-twin";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,7 +73,8 @@ export interface SmokeTwinPlan {
  * scripts/tests/unit/smoke-twin-command.test.ts can pin it without a boot.
  */
 export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { error: string } {
-  const known = new Set(["--reuse", "--backup-dir", "--no-tui"]);
+  // `--no-tui` is gone with the TUI (smoke spec §1): refused as unknown.
+  const known = new Set(["--reuse", "--backup-dir"]);
   for (let i = 0; i < passthrough.length; i++) {
     const a = passthrough[i]!;
     if (!a.startsWith("--")) return { error: `unexpected argument "${a}".` };
@@ -81,23 +90,29 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
   const i = passthrough.indexOf("--backup-dir");
   const backupDir = i >= 0 ? passthrough[i + 1] : undefined;
 
-  // --static-port, --cadence fast and --smoke are NOT optional here: the first
-  // is what makes this the tunnel's boot, the second is what keeps this a TEST
-  // boot (short windows) rather than the 6 h cadence the pin alone would select,
-  // and the third is what --db smoke-twin requires (a restored database is
-  // populated, and the smoke scenario's fixtures overwrite by design).
-  const args = ["--smoke", "--db", "smoke-twin", "--static-port", "--cadence", "fast"];
-  if (backupDir) args.push("--backup-dir", backupDir);
-  if (passthrough.includes("--no-tui")) args.push("--no-tui");
+  // `--local dump`, --static-port and --cadence fast are NOT optional here: the
+  // first is the restored production copy (spec §5: a twin is a use case, not a
+  // mode), the second is what makes this the tunnel's boot, and the third is
+  // what keeps this a TEST boot (short windows) rather than the 6 h cadence the
+  // pin alone would select. The dump's directory rides on the mode itself.
+  // `--migrate` is explicit for the same reason: no mode implies it, and a
+  // fresh dump is on production's schema, which the checkout is usually ahead
+  // of. Without it the boot refuses the stale schema instead of serving it.
+  const args = ["--local", backupDir ? `dump=${backupDir}` : "dump", "--migrate", "--static-port", "--cadence", "fast"];
 
   return { capture: !passthrough.includes("--reuse"), args, ...(backupDir ? { backupDir } : {}) };
 }
 
 if (import.meta.main) {
+  const envFileRefusal = refuseCheckoutEnvFile(process.execArgv, { script: "smoke:twin", file: "scripts/smoke-twin.ts" });
+  if (envFileRefusal) {
+    console.error(`[${NAME}] FATAL: ${envFileRefusal}`);
+    process.exit(1);
+  }
   const plan = planTwin(process.argv.slice(2));
   if ("error" in plan) {
     console.error(`[${NAME}] ${plan.error}`);
-    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR] [--no-tui]`);
+    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR]`);
     process.exit(2);
   }
 
@@ -112,7 +127,7 @@ if (import.meta.main) {
 
   log(`host port: PINNED (--static-port) — this is the boot cloudflared points at.`);
   log(`database:  a LOCAL TWIN restored from ${plan.capture ? "a FRESH capture of the production replica" : "the existing backup"}.`);
-  log(`cadence:   FAST (~2-min windows), --cadence fast — a twin is a TEST boot. Judge enforced by default this boot.`);
+  log(`cadence:   FAST (~2-min windows), --cadence fast — a twin is a TEST boot.`);
   log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key.`);
   console.warn(
     `[${NAME}] ############################################################\n` +
@@ -127,7 +142,7 @@ if (import.meta.main) {
       `[${NAME}] #   bun run smoke:clean --project <project from smoke:status>\n` +
       `[${NAME}] ############################################################`,
   );
-  log(`equivalent: ${plan.capture ? "bun run smoke:capture && " : ""}bun run smoke -- ${plan.args.join(" ")}`);
+  log(`equivalent: ${plan.capture ? "bun run smoke:capture && " : ""}bun smoke ${plan.args.join(" ")}`);
 
   if (plan.capture) {
     const captureArgs = ["bun", "run", "--cwd", join(repoRoot, "backend"), "scripts/smoke-twin-capture.ts"];
@@ -147,7 +162,9 @@ if (import.meta.main) {
     }
   }
 
-  const proc = Bun.spawn(["bun", join(repoRoot, "scripts", "smoke.ts"), ...plan.args], {
+  // `--no-env-file`, exactly as `bun smoke` passes it: the boot refuses an
+  // environment bun filled from the checkout's `.env` (scripts/smoke.ts).
+  const proc = Bun.spawn(["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), ...plan.args], {
     cwd: repoRoot,
     // The key rides in the child's environment (a credential with a documented
     // env home), never a file — see smoke-twin-rehearsal.ts's resolveZenKey.

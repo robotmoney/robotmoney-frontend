@@ -36,17 +36,13 @@ pods:
 # pods/workers/composefile.yml below). A pod composefile choosing not to
 # reference a secret documents intent only — it is not an isolation boundary
 # stack enforces or even partially respects at deploy time.
-# docker-compose.yml deliberately keeps OPENCODE_API_KEY / SWARM_JUDGE_* off
-# the shared x-worker-env anchor and off every worker lane, so
-# worker-analytics/worker-research — which never call a model — never see a
-# live inference credential (issue #757 review; the lane that did call one was
-# removed by issue #1026). This stack's
-# pods/workers/composefile.yml preserves that same scoping by choice, at the
-# composefile-authoring level only — every worker lane and website still
-# receive OPENCODE_API_KEY (and every other declared secret) in their actual
-# process environment once deployed via `stack`, regardless of this file's
-# choices. This was accepted as a conscious tradeoff in the unadopted proposal,
-# not a current deployment invariant.
+# NO MODEL KEY IS DECLARED (D52). Because `stack deploy` writes every declared
+# secret into every container, declaring OPENCODE_API_KEY here would hand a
+# model key to `api`, the worker lanes and `website` alike, and no service in
+# this stack calls a model: the judge is a participant that takes its own key
+# from credential.json (smoke spec §6.1, §6.2), and participants are not part
+# of this stack. The secret slot is removed rather than left for a future pod
+# to pick up by accident.
 # ADMIN_TOKEN / AUTOMATION_TOKEN /
 # ANALYTICS_TOKEN are intentionally NOT declared here: their generation
 # ownership (stack `generate` vs. the credential doctor) is an open decision
@@ -61,8 +57,6 @@ pods:
 # issue's acceptance criteria, ahead of that fix landing.
 secrets:
   DATABASE_URL:
-    external: true
-  OPENCODE_API_KEY:
     external: true
   BASE_RPC_URL:
     external: true

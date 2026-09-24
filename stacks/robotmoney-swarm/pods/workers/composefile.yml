@@ -77,16 +77,21 @@ services:
     command: ["bun", "run", "src/producer/index.ts", "serve"]
     environment:
       ANALYTICS_API_URL: http://api:8787
-      # Plain env var, not ANALYTICS_TOKEN_FILE: stack has no docker-secrets-
-      # file mechanism, and producer/index.ts:23 already accepts either form
-      # (stack-orchestrator.md §6).
-      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      # A token FILE, never a plain env var (smoke spec §3): each service token
+      # is a file placed in the instance's state directory, named per instance
+      # and per holder, and mounted read-only, the same shape docker-compose.yml
+      # gives system-scheduler. producer/index.ts accepts ANALYTICS_TOKEN_FILE.
+      # A plain ANALYTICS_TOKEN put the secret in the container's environment,
+      # where every `docker inspect` shows it.
+      ANALYTICS_TOKEN_FILE: /run/rm-state/${RM_INSTANCE:-default}-analytics-producer-token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       # No inline default — docker-compose.yml defaults these two crons;
       # forwarding-only here, same reasoning as RM_ENV above.
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-}
+    volumes:
+      - ${RM_INSTANCE_STATE_DIR:-./.agents/state}:/run/rm-state:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]

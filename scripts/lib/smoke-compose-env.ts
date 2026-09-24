@@ -79,6 +79,34 @@ export const DEMO_COMPOSE_PASSTHROUGH: readonly string[] = Object.freeze([
   "MIGRATE_DATABASE_URL",
 ]);
 
+/**
+ * The migration credential an operator's shell may not supply.
+ *
+ * MIGRATE_DATABASE_URL is in the passthrough above for ONE reason: this process
+ * assigns it itself, for one migrate run (restore-container.ts's
+ * twinMigrationCredential() for a dump, the interactive prompt for the remote
+ * database). An EXPORTED value is a different thing: `--local blank --migrate`
+ * with a remote MIGRATE_DATABASE_URL in the shell would have run migrate.ts
+ * against that remote database, which is exactly the remote connection a local
+ * mode must never open (criterion 32, spec §3). So the shell's value is removed
+ * from `env` before anything reads it, and the caller says so out loud.
+ *
+ * Mutates `env` (the caller passes process.env, at the very top of the boot)
+ * and returns the warning to print, or null when nothing was exported.
+ */
+export function dropShellMigrationCredential(env: Record<string, string | undefined>): string | null {
+  const raw = env.MIGRATE_DATABASE_URL;
+  if (raw === undefined) return null;
+  delete env.MIGRATE_DATABASE_URL;
+  if (raw.trim() === "") return null;
+  return (
+    "WARNING: MIGRATE_DATABASE_URL is set in the environment and is being IGNORED for this boot. " +
+    "A boot builds its own migration credential for the one migrate run that needs it (a local mode " +
+    "from its container, the remote database from the interactive prompt); a shell value would point " +
+    "migrate.ts at whatever database it names. This message means the smoke did NOT forward it."
+  );
+}
+
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of DEMO_COMPOSE_PASSTHROUGH) {
@@ -88,49 +116,13 @@ export function smokePassthroughEnv(env: Record<string, string | undefined>): Re
   return out;
 }
 
-/**
- * The judge's credential, for the services that run the judge.
- *
- * SEPARATE FROM THE ALLOWLIST ABOVE, because it is not an operator knob — it is
- * the shared OpenCode Zen key, and docker-compose.yml names it on `api` ONLY
- * (not on the *worker-env anchor), so worker-analytics and worker-research
- * never receive an inference credential they do not use. The lane that used to
- * carry it alongside `api` was `worker-swarm`, removed by issue #1026;
- * `system-scheduler`, which replaced it, calls no model at all
- * (system-scheduler-spec.md §7).
- *
- * WHY IT HAS TO BE PASSED EXPLICITLY. It never was: `${OPENCODE_API_KEY:-}` was
- * filled by compose's own auto-load of the checkout's `.env`. Closing that hole
- * (composeArgs' `--env-file /dev/null`, which stopped a deployment's
- * WORKER_DATABASE_URL reaching the worker lanes) also cut this off — and the
- * failure is SILENT by design: an unconfigured transport is a legible state, so
- * the judge wrote `source='fallback'`, `fallback_reason='model_unconfigured'`
- * and carried on. docker-compose.yml:385 predicted exactly this ("the one
- * process that actually runs the judge on a schedule falls back to template
- * prose silently"). A boot that spends real money on member takes and then
- * judges them with a template is the worst of both, so the key travels
- * deliberately now rather than by accident.
- *
- * Absent key → absent entry, and `${VAR:-}` resolves empty exactly as before.
- */
-export function judgeCredentialEnv(env: Record<string, string | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  const key = env.OPENCODE_API_KEY?.trim();
-  if (key) out.OPENCODE_API_KEY = key;
-  // AND ENOUGH TIME TO THINK. backend's DEFAULT_JUDGE_TIMEOUT_MS is sized for
-  // the judge's original ask (summarise, list disagreements). The instruction
-  // now also demands a COHERENCE DETERMINATION — read every member's numbers
-  // against the position their prose argues — over take bodies that run to
-  // hundreds of words each, and the old bound stopped being enough: the first
-  // run under the new prompt timed out and fell back to template prose, which
-  // is the one outcome this release exists to prevent. A smoke/twin gets a
-  // bound that fits the question; production keeps its own default and its own
-  // operator-set value, which is honoured here when present (and also travels
-  // through the allowlist above, which names SWARM_JUDGE_TIMEOUT_MS — same
-  // value either way, so the two can never disagree).
-  out.SWARM_JUDGE_TIMEOUT_MS = env.SWARM_JUDGE_TIMEOUT_MS?.trim() || "180000";
-  return out;
-}
+// NO JUDGE CREDENTIAL (D52). A `judgeCredentialEnv()` used to live here and
+// hand `api` the shared OpenCode Zen key plus the judge's per-call bound, for
+// an inline judge. Nothing in the stack judges inline any more: the judge is a
+// participant that takes its model key from credential.json (smoke spec §6.1,
+// §6.2), and no rendered service other than a participant carries a model key
+// (scripts/tests/integration/no-docker-socket-compose-config.test.ts).
+
 
 // A stack-owned value an operator's environment can no longer shadow, paired with
 // the reason its presence is worth a line of output rather than silence.

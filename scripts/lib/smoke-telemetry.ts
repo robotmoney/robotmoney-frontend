@@ -146,11 +146,13 @@ export function sampleTelemetry(
   capture: (argv: readonly string[]) => string,
 ): { samples: ContainerTelemetry[]; errors: ContainerLogLine[] } {
   try {
-    const ids = capture(["compose", "ps", "-aq"]).split("\n").map((s) => s.trim()).filter(Boolean);
+    // `--env-file /dev/null` on every compose call: compose must not read the
+    // checkout's `.env` for interpolation (scripts/stack/config.ts composeArgs()).
+    const ids = capture(["compose", "--env-file", "/dev/null", "ps", "-aq"]).split("\n").map((s) => s.trim()).filter(Boolean);
     if (ids.length === 0) return { samples: [], errors: [] };
     const samples = parseTelemetry(capture(["inspect", "--format", TELEMETRY_FORMAT, ...ids]));
     // Only pay for logs when something is actually wrong.
-    const errors = samples.some(isTroubled) ? selectContainerErrors(capture(["compose", ...LOG_TAIL_ARGV])) : [];
+    const errors = samples.some(isTroubled) ? selectContainerErrors(capture(["compose", "--env-file", "/dev/null", ...LOG_TAIL_ARGV])) : [];
     return { samples, errors };
   } catch {
     return { samples: [], errors: [] };

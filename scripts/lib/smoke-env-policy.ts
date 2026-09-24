@@ -57,7 +57,8 @@
 //   §4.2  `deployment_identity.kind ∈ {production, rehearsal}` marks what the
 //         target is enrolled for. Not proof the data is disposable.
 //   §4.3  The matrix below, "enforced before any service starts".
-//   §4.4  `--allow-insecure` / `--schedules-off` are refusals on `RM_ENV=prod`.
+//   §4.4  `--allow-insecure` is a refusal on `RM_ENV=prod`. There is no
+//         `--schedules-off`: scheduling has no off state.
 //   §5    `--local <mode>` is a stage-only override.
 //   §7.5  Preflight re-checks `RM_ENV` × `deployment_identity` per §4.3.
 //
@@ -102,9 +103,9 @@ export type TargetConnection = "remote" | "local-blank" | "local-dump" | "local-
 
 /**
  * Everything the matrix needs, and nothing else. Deliberately not a "smoke
- * options" object: this function must be callable from `bun run migrate`,
- * `bun run schedules:enable` and the §9.1 production-initialization commands,
- * none of which have smoke's option shape.
+ * options" object: this function must be callable from `bun run migrate` and
+ * the §9.1 production-initialization commands, neither of which has smoke's
+ * option shape.
  */
 export interface PolicyInput {
   /** Raw `RM_ENV` as read from the process environment, before validation. */
@@ -126,8 +127,8 @@ export interface PolicyInput {
 
 /**
  * Which guard posture the run adopts once allowed. `production` arms every
- * production guard (§4.3 row 1) and makes `--allow-insecure`, `--schedules-off`,
- * `--migrate`, `--seed` and `--spoof-keys` refusals (§§4.4, 4.3, 6.4). `stage`
+ * production guard (§4.3 row 1) and makes `--allow-insecure`, `--migrate`,
+ * `--seed` and `--spoof-keys` refusals (§§4.4, 4.3, 6.4). `stage`
  * permits the rehearsal-only preparation flags, subject to their own guards.
  */
 export type PolicyPosture = "production" | "stage";
@@ -317,35 +318,35 @@ export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
 }
 
 /**
- * The §4.4 companion guard: the former `docker-compose.smoke.yml` knobs are now
- * explicit flags, and each is a refusal under `RM_ENV=prod`.
+ * The §4.4 companion guard: the former `docker-compose.smoke.yml` overlay's one
+ * surviving knob is an explicit flag, `--allow-insecure`, and it is a refusal
+ * under `RM_ENV=prod`.
+ *
+ * There is NO `--schedules-off`, and so no refusal for one: §4.4 says
+ * "scheduling has no off state". A guard for a flag that does not exist would
+ * read as evidence that it does.
  *
  * Kept beside the matrix rather than in the argv parser because it is the same
  * question — "does this policy permit this weakening?" — and because the argv
  * parser runs before the target is known while this does not need the target at
- * all: the flags are refused on `prod` regardless of what the database says.
+ * all: the flag is refused on `prod` regardless of what the database says.
  *
- * Refusal cases: `--allow-insecure` under `prod`; `--schedules-off` under
- * `prod`. Both name the flag and state that parity with production is a tested
- * property, not an overlay (§4.4). Under `stage` both are permitted and the
- * function returns no refusal.
+ * Refusal case: `--allow-insecure` under `prod`, naming the flag and stating
+ * that parity with production is a tested property, not an overlay (§4.4).
+ * Under `stage` it is permitted and the function returns no refusal.
  *
  * Serves spec §10 W1's "Overlay-free stage boots with the real scheduler" by
- * being the thing that makes the flags safe to have at all.
+ * being the thing that makes the flag safe to have at all.
  */
 export function refuseWeakeningFlagsOnProd(
   env: RmEnv,
-  flags: { readonly allowInsecure: boolean; readonly schedulesOff: boolean },
+  flags: { readonly allowInsecure: boolean },
 ): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
-  if (env !== "prod") return { allow: true };
-  const named: string[] = [];
-  if (flags.allowInsecure) named.push("--allow-insecure");
-  if (flags.schedulesOff) named.push("--schedules-off");
-  if (named.length === 0) return { allow: true };
+  if (env !== "prod" || !flags.allowInsecure) return { allow: true };
   return {
     allow: false,
     reason:
-      `${named.join(" and ")} refused under RM_ENV=prod: parity with production is a tested ` +
+      `--allow-insecure refused under RM_ENV=prod: parity with production is a tested ` +
       `property, not an overlay (spec §4.4).`,
   };
 }

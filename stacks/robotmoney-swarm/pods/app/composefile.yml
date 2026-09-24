@@ -15,9 +15,8 @@
 # declared secret into every service of every generated composefile
 # regardless of what this source file says — verified by inspecting a real
 # deployment directory, where `website` (no `environment:` block below at
-# all) and every worker lane still receive all 5 secrets. See stack.yml's
-# header comment for what that means for OPENCODE_API_KEY's intended
-# api-only scoping.
+# all) and every worker lane still receive every declared secret. See
+# stack.yml's header comment for why no model key is declared at all.
 #
 # All other (non-secret) values are forwarded as ${VAR} / ${VAR:-} — the same
 # env-var SET docker-compose.yml already forwards to `api`, but WITHOUT that
@@ -64,12 +63,8 @@ services:
       # epoch duration is the whole schedule, set by bootstrap on a blank
       # database and afterwards only through the admin API (system scheduler
       # spec §2.2, §2.3). There is no `--config` value to set.
-      # Consensus judge (issue #752): shared OpenCode Zen credential, endpoint,
-      # per-call bound. On/off and model choice are `swarm_judge_config` rows,
-      # not env vars (D22 rule 1).
-      OPENCODE_API_KEY: ${STACK_SECRET_OPENCODE_API_KEY:-}
-      SWARM_JUDGE_BASE_URL: ${SWARM_JUDGE_BASE_URL:-}
-      SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}
+      # No model key (D52): nothing in `api` judges. The judge is a participant
+      # and takes its own key from credential.json (smoke spec §6.1, §6.2).
       # No STATIC_DIR / _static bind mount here: this stack's app pod carries
       # a dedicated `website` service (website-server/Dockerfile, #892) for
       # static/SPA serving; wiring api's own STATIC_DIR would re-add the

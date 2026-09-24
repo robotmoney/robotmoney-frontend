@@ -39,12 +39,12 @@ export function zenApiKey(env: Record<string, string | undefined> = process.env)
 
 // ── Where the STANDING stack finds it (AC-MODEL-01) ─────────────────────────
 //
-// `bun run smoke:stage` is the staging deployment, and until now the ONLY thing
+// `bun smoke --static-port` is the staging deployment, and until now the ONLY thing
 // in this repo that read a credential out of a file was
 // scripts/lib/smoke-twin-rehearsal.ts, which reads `.env.readonly` and
 // deliberately refuses to read `.env` (that command family is defined by not
 // needing the writer credential). The standing stack has the opposite
-// constraint: `smoke:stage` already reads `.env` — that is how it finds
+// constraint: the standing boot read `.env` — that is how it found
 // DATABASE_URL — so a key sitting in the host's `.env` is exactly where an
 // operator would reasonably put it, and on 2026-09-13 one was, while the
 // running containers carried an empty `OPENCODE_API_KEY` baked in from a

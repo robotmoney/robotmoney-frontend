@@ -194,6 +194,8 @@ function baseEnv(): Record<string, string> {
 }
 
 const BASE = ["docker-compose.yml"] as const;
+const SMOKE = ["docker-compose.yml", "docker-compose.smoke.yml"] as const;
+const STAGE = ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml"] as const;
 
 interface Composition {
   label: string;
@@ -201,11 +203,32 @@ interface Composition {
   profiles: readonly string[];
 }
 
-/** Every composition this repo boots that exists at the time of writing. */
+/** The profiles a file set declares, as `docker compose config --profiles` lists them. */
+function profilesOf(files: readonly string[]): string[] {
+  const r = Bun.spawnSync(
+    ["docker", "compose", "--env-file", "/dev/null", ...files.flatMap((f) => ["-f", f]), "config", "--profiles"],
+    { cwd: repoRoot, env: baseEnv(), stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) {
+    throw new Error(`docker compose config --profiles failed for [${files.join(" ")}]: ${new TextDecoder().decode(r.stderr)}`);
+  }
+  return new TextDecoder().decode(r.stdout).split("\n").map((l) => l.trim()).filter(Boolean).sort();
+}
+
+/**
+ * Every composition this repo boots: the base file, the smoke overlay `bun
+ * smoke` renders, and the stage overlay `--static-port` adds — each by default
+ * and under every profile compose says it declares. "Any rendered compose
+ * config" (criterion 101) is only true of the configs actually rendered here.
+ */
 const COMPOSITIONS: readonly Composition[] = [
-  { label: "base (docker-compose.yml)", files: BASE, profiles: [] },
-  { label: "base [profile member-agent]", files: BASE, profiles: ["member-agent"] },
-];
+  { label: "base (docker-compose.yml)", files: BASE },
+  { label: "base + smoke", files: SMOKE },
+  { label: "base + smoke + stage", files: STAGE },
+].flatMap(({ label, files }) => [
+  { label, files, profiles: [] },
+  ...profilesOf(files).map((p) => ({ label: `${label} [profile ${p}]`, files, profiles: [p] })),
+]);
 
 function renderCompose(files: readonly string[], profiles: readonly string[]): string {
   const r = Bun.spawnSync(
@@ -273,6 +296,83 @@ describe("only the named services carry a database credential (§9, §10)", () =
     for (const forbidden of ["OPENCODE_API_KEY", "RM_CREDENTIALS", "RM_MEMBER_TOKEN", "ADMIN_TOKEN"]) {
       expect({ forbidden, present: forbidden in env }).toEqual({ forbidden, present: false });
     }
+  });
+
+  // Criterion 101: "its service carries ONLY the API URL and its token file".
+  // Asserted as the EXACT key set and the EXACT mount list, in every
+  // composition, rather than as the absence of a few named keys — a new key of
+  // any name is a new thing the clock holds, and must be argued for here.
+  test("`system-scheduler`'s environment is exactly its API URL, its token file and its health port — in every composition", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const env = normaliseEnvironment(composeConfig(files, profiles).services?.["system-scheduler"]?.environment);
+      expect({ label, keys: Object.keys(env).sort() }).toEqual({
+        label,
+        keys: ["SCHEDULER_API_URL", "SCHEDULER_HEALTH_PORT", "SCHEDULER_TOKEN_FILE"],
+      });
+      expect({ label, url: env.SCHEDULER_API_URL }).toEqual({ label, url: "http://api:8787" });
+    }
+  });
+
+  test("`system-scheduler` mounts exactly ONE volume, read-only: the state directory its token file lives in", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const svc = composeConfig(files, profiles).services?.["system-scheduler"];
+      const volumes = (svc as { volumes?: Array<{ target?: string; read_only?: boolean }> } | undefined)?.volumes ?? [];
+      expect({ label, count: volumes.length }).toEqual({ label, count: 1 });
+      expect({ label, target: volumes[0]?.target, readOnly: volumes[0]?.read_only }).toEqual({
+        label,
+        target: "/run/rm-state",
+        readOnly: true,
+      });
+      // …and the token file it names lives inside that one read-only mount.
+      const env = normaliseEnvironment(svc?.environment);
+      expect({ label, inMount: String(env.SCHEDULER_TOKEN_FILE).startsWith("/run/rm-state/") }).toEqual({ label, inMount: true });
+    }
+  });
+
+  // Criterion 119: `analytics-producer` carries only its API URL and token
+  // file — no database credential, no admin token — asserted on KEYS, because
+  // this render spreads the host environment and a value check could be masked
+  // by whatever the host happens to export.
+  const PRODUCER_KEYS = [
+    "ANALYTICS_API_URL",
+    "ANALYTICS_SOURCE",
+    "ANALYTICS_TOKEN_FILE",
+    "HTTP_FETCH_CACHE_TTL_MS",
+    "PRODUCER_REGIME_CRON",
+    "PRODUCER_RESEARCH_CRON",
+  ];
+  /** Keys shaped like a credential: a token, a password, a secret, a key, or a database URL. */
+  const CREDENTIAL_SHAPED = /TOKEN|PASSWORD|SECRET|_KEY$|DATABASE_URL|^PG/;
+
+  function producerCredentialKeys(env: Record<string, unknown>): string[] {
+    return Object.keys(env).filter((k) => CREDENTIAL_SHAPED.test(k)).sort();
+  }
+
+  test("`analytics-producer`'s only credential is its token FILE, in every composition", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const svc = composeConfig(files, profiles).services?.["analytics-producer"];
+      expect({ label, present: svc !== undefined }).toEqual({ label, present: true });
+      const env = normaliseEnvironment(svc?.environment);
+      expect({ label, credentials: producerCredentialKeys(env) }).toEqual({ label, credentials: ["ANALYTICS_TOKEN_FILE"] });
+      expect({ label, db: findDatabaseCredentials({ services: { "analytics-producer": svc } }) }).toEqual({ label, db: [] });
+      for (const forbidden of ["DATABASE_URL", "WORKER_DATABASE_URL", "ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN"]) {
+        expect({ label, forbidden, present: forbidden in env }).toEqual({ label, forbidden, present: false });
+      }
+      expect({ label, url: env.ANALYTICS_API_URL }).toEqual({ label, url: "http://api:8787" });
+    }
+  });
+
+  test("`analytics-producer`'s environment is exactly its URL, its token file and its non-secret knobs", () => {
+    const env = normaliseEnvironment(composeConfig(BASE, []).services?.["analytics-producer"]?.environment);
+    expect(Object.keys(env).sort()).toEqual(PRODUCER_KEYS);
+  });
+
+  test("red control: a DATABASE_URL or ADMIN_TOKEN planted on the producer is caught by name", () => {
+    const planted = { ANALYTICS_API_URL: "http://api:8787", ANALYTICS_TOKEN_FILE: "/run/secrets/x", DATABASE_URL: "", ADMIN_TOKEN: "x" };
+    expect(producerCredentialKeys(planted)).toEqual(["ADMIN_TOKEN", "ANALYTICS_TOKEN_FILE", "DATABASE_URL"]);
+    expect(
+      findDatabaseCredentials({ services: { "analytics-producer": { environment: planted } } }).map((f) => f.key),
+    ).toContain("DATABASE_URL");
   });
 
   test("no composition declares a session/swarm worker lane at all", () => {

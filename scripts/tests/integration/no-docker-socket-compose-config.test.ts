@@ -32,7 +32,7 @@
 // detector works even where Docker cannot be reached.
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -247,17 +247,34 @@ interface Composition {
   profiles: readonly string[];
 }
 
-// Every composition this repo actually boots. `member-agent` is profile-gated
-// in docker-compose.smoke.yml (never started by a bare `docker compose up`), so
-// it is invisible to a default render and needs its own entry — a socket mount
-// hiding behind a profile is exactly the regression this file exists to catch.
-const COMPOSITIONS: readonly Composition[] = [
-  { label: "base (docker-compose.yml)", files: BASE, profiles: [] },
-  { label: "base + smoke", files: SMOKE, profiles: [] },
-  { label: "base + smoke + stage", files: STAGE, profiles: [] },
-  { label: "base + smoke [profile member-agent]", files: SMOKE, profiles: ["member-agent"] },
-  { label: "base + smoke + stage [profile member-agent]", files: STAGE, profiles: ["member-agent"] },
+/** The profiles a file set declares, as `docker compose config --profiles` lists them. */
+function profilesOf(files: readonly string[]): string[] {
+  const r = Bun.spawnSync(
+    ["docker", "compose", "--env-file", "/dev/null", ...files.flatMap((f) => ["-f", f]), "config", "--profiles"],
+    { cwd: repoRoot, env: baseEnv(), stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) {
+    throw new Error(`docker compose config --profiles failed for [${files.join(" ")}]: ${new TextDecoder().decode(r.stderr)}`);
+  }
+  return new TextDecoder().decode(r.stdout).split("\n").map((l) => l.trim()).filter(Boolean).sort();
+}
+
+const FILE_SETS: readonly { label: string; files: readonly string[] }[] = [
+  { label: "base (docker-compose.yml)", files: BASE },
+  { label: "base + smoke", files: SMOKE },
+  { label: "base + smoke + stage", files: STAGE },
 ];
+
+// Every composition this repo actually boots: each file set by default, and
+// once more under EVERY profile it declares. A profile-gated service (today
+// `member-agent`; the participant profile when it lands) is invisible to a
+// default render, and a socket hiding behind a profile is exactly the
+// regression this file exists to catch. The profiles are read from compose
+// itself, never listed by hand, so a new profile is covered the day it lands.
+const COMPOSITIONS: readonly Composition[] = FILE_SETS.flatMap(({ label, files }) => [
+  { label, files, profiles: [] },
+  ...profilesOf(files).map((p) => ({ label: `${label} [profile ${p}]`, files, profiles: [p] })),
+]);
 
 function renderCompose(files: readonly string[], profiles: readonly string[]): string {
   const r = Bun.spawnSync(
@@ -343,6 +360,115 @@ describe("no service in any composition holds the Docker socket", () => {
       expect(`${label}:${names.includes("agent-launcher")}`).toBe(`${label}:false`);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// THE COMPOSITION LIST IS COMPOSE'S OWN (criterion 0). Hard-coding it would
+// leave the next profile — the participant profile the judge moves into — out
+// of every assertion in this file the day it lands.
+describe("the rendered compositions cover every profile compose declares", () => {
+  test("every declared profile of every file set has its own render", () => {
+    for (const { label, files } of FILE_SETS) {
+      for (const p of profilesOf(files)) {
+        expect(COMPOSITIONS.some((c) => c.label === `${label} [profile ${p}]`)).toBe(true);
+      }
+    }
+    // Non-vacuous: the smoke overlay really declares one today.
+    expect(profilesOf(SMOKE)).toContain("member-agent");
+  });
+
+  test("red control: a profile added in an overlay is discovered, not missed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-no-docker-socket-profile-"));
+    const overlay = join(dir, "docker-compose.participant.yml");
+    writeFileSync(overlay, "services:\n  judge-themis:\n    image: busybox\n    profiles: [\"participant\"]\n");
+    expect(profilesOf([...SMOKE, overlay])).toEqual(["member-agent", "participant"]);
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// #1014'S CREDENTIAL-BY-SOCKET STAYS REVERSED (criterion 1): no launcher
+// service (above), no launcher configuration in any rendered service, no
+// launcher URL for an operator to set, and no launcher module in the tree.
+const LAUNCHER_KEY = /LAUNCHER/i;
+const LAUNCHER_PATHS = ["scripts/lib/agent-launcher/", "scripts/agent/agent-launcher.ts", "backend/src/swarm/judge-launcher.ts"];
+
+/** `service: KEY` for every rendered environment key matching `pattern`. */
+function envKeysMatching(cfg: ComposeConfigLike, pattern: RegExp, skip: (svc: unknown) => boolean = () => false): string[] {
+  const out: string[] = [];
+  for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+    if (skip(svc)) continue;
+    const env = (svc as { environment?: Record<string, unknown> | string[] }).environment ?? {};
+    const keys = Array.isArray(env) ? env.map((e) => String(e).split("=")[0]!) : Object.keys(env);
+    for (const k of keys) if (pattern.test(k)) out.push(`${name}: ${k}`);
+  }
+  return out.sort();
+}
+
+function trackedUnder(prefixes: readonly string[]): string[] {
+  const r = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`git ls-files failed: ${new TextDecoder().decode(r.stderr)}`);
+  const files = new TextDecoder().decode(r.stdout).split("\n").filter(Boolean);
+  return files.filter((f) => prefixes.some((p) => (p.endsWith("/") ? f.startsWith(p) : f === p)));
+}
+
+describe("no agent launcher survives anywhere (issue #1014 reversed, criterion 1)", () => {
+  test("no rendered service in any composition carries a launcher environment key", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      expect({ label, keys: envKeysMatching(composeConfig(files, profiles), LAUNCHER_KEY) }).toEqual({ label, keys: [] });
+    }
+  });
+
+  test(".env.example names no SWARM_AGENT_LAUNCHER_URL for an operator to set", () => {
+    expect(readFileSync(join(repoRoot, ".env.example"), "utf8")).not.toContain("SWARM_AGENT_LAUNCHER_URL");
+  });
+
+  test("no launcher module, directory or Dockerfile is tracked", () => {
+    expect(trackedUnder(LAUNCHER_PATHS)).toEqual([]);
+    expect(trackedUnder(["scripts/agent/", "scripts/lib/", "backend/src/swarm/"]).length).toBeGreaterThan(10); // the listing is real
+  });
+
+  test("red control: a launcher key in a rendered service is caught and named", () => {
+    const planted: ComposeConfigLike = {
+      services: { api: { environment: { SWARM_AGENT_LAUNCHER_URL: "http://agent-launcher:9000" } } },
+    };
+    expect(envKeysMatching(planted, LAUNCHER_KEY)).toEqual(["api: SWARM_AGENT_LAUNCHER_URL"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NO MODEL KEY OUTSIDE A PARTICIPANT (D52, criterion 134, compose half). `api`
+// used to carry OPENCODE_API_KEY for an inline judge; the judge is a
+// participant now and takes its key from credential.json. A participant is a
+// service in the `participant` profile; no other rendered service may carry a
+// model key in any composition.
+const MODEL_KEY = /(^|_)(API_KEY|MODEL_KEY)$|^OPENCODE_API_KEY$|^ANTHROPIC_|^OPENAI_/;
+const isParticipant = (svc: unknown): boolean =>
+  ((svc as { profiles?: string[] }).profiles ?? []).includes("participant");
+
+describe("no rendered service other than a participant carries a model key (criterion 134)", () => {
+  test("every composition is clean", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      expect({ label, keys: envKeysMatching(composeConfig(files, profiles), MODEL_KEY, isParticipant) }).toEqual({ label, keys: [] });
+    }
+  });
+
+  test("the pattern is not over-broad: the worker lanes' OPENCODE_TIMEOUT_MS is not a key", () => {
+    const workers = envKeysMatching(composeConfig(SMOKE, []), /^OPENCODE_TIMEOUT_MS$/);
+    expect(workers.length).toBeGreaterThan(0); // present, and…
+    expect(envKeysMatching(composeConfig(SMOKE, []), MODEL_KEY)).toEqual([]); // …not flagged
+  });
+
+  test("red control: a model key planted on api through a real render is caught and named", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-no-model-key-control-"));
+    const overlay = join(dir, "docker-compose.planted.yml");
+    writeFileSync(
+      overlay,
+      "services:\n  api:\n    environment:\n      OPENCODE_API_KEY: planted\n" +
+        "  judge-themis:\n    image: busybox\n    profiles: [\"participant\"]\n    environment:\n      OPENCODE_API_KEY: allowed\n",
+    );
+    const cfg = JSON.parse(renderCompose([...SMOKE, overlay], ["participant"])) as ComposeConfigLike;
+    expect(envKeysMatching(cfg, MODEL_KEY, isParticipant)).toEqual(["api: OPENCODE_API_KEY"]);
+  }, 120_000);
 });
 
 // ---------------------------------------------------------------------------

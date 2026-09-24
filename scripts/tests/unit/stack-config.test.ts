@@ -257,11 +257,14 @@ describe("argv builders", () => {
   });
 
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
-    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-smoke-schedules"])).toEqual([
+    // The trailing script argument is a placeholder for the pass-through shape
+    // only. It used to be `--seed-smoke-schedules`, a flag src/db/migrate.ts
+    // stopped parsing in 17e978bf; no caller passes one now (issue #1026).
+    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--placeholder-arg"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
       "-e", "MIGRATE_DATABASE_URL",
       "-e", "DEMO_SEED_PROJECTS=1",
-      "api", "bun", "run", "src/db/migrate.ts", "--seed-smoke-schedules",
+      "api", "bun", "run", "src/db/migrate.ts", "--placeholder-arg",
     ]);
     expect(migrateArgs()).toEqual([
       "run", "--rm", "--no-deps", "-T",

@@ -105,7 +105,7 @@ export function createReadinessPolling(deps: ReadinessPollingDeps) {
     const argv = externalPgEnabled
       ? ["docker", "run", "--rm", "-e", "DATABASE_URL", "postgres:17-alpine", "sh", "-c",
          `psql "$DATABASE_URL" -tAF'|' -c ${JSON.stringify(q)}`]
-      : ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", dbUser, "-d", dbName, "-tAF", "|", "-c", q];
+      : ["docker", "compose", "--env-file", "/dev/null", "exec", "-T", "postgres", "psql", "-U", dbUser, "-d", dbName, "-tAF", "|", "-c", q];
     return Bun.spawnSync(argv, { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" });
   }
 
@@ -198,7 +198,8 @@ export function createReadinessPolling(deps: ReadinessPollingDeps) {
       // Async spawn (not spawnSync) so the render loop keeps animating the
       // refresh spinner while docker runs. `-a` includes stopped/exited
       // containers.
-      const proc = Bun.spawn(["docker", "compose", "ps", "-a", "--format", "json"], {
+      // `--env-file /dev/null`: compose must not read the checkout's `.env`.
+      const proc = Bun.spawn(["docker", "compose", "--env-file", "/dev/null", "ps", "-a", "--format", "json"], {
         cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe",
       });
       const out = await new Response(proc.stdout).text();

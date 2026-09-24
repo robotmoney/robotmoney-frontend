@@ -6,17 +6,15 @@
 // stack-purity.test.ts says so in as many words). Importing it from a test is
 // therefore not possible, so the one thing an operator most needs to be true —
 // "the variable I exported actually arrives in the container" — was asserted
-// nowhere. It cost this release two findings: `OPENCODE_API_KEY`, rescued
-// during the release itself, and `SWARM_JUDGE_TIMEOUT_MS`, whose absence made
-// the judge budget unreachable through the documented `bun run smoke:stage`
-// boot and forced a QA run to recreate a service by hand with 27 values
-// re-supplied.
+// nowhere. It cost one release two findings: `OPENCODE_API_KEY` and
+// `SWARM_JUDGE_TIMEOUT_MS`, both since removed from the stack entirely (D52:
+// the judge is a participant and no stack service carries a model key).
 //
 // Everything here is a constant and a pure function. No environment read at
 // module scope, nothing spawned.
 
 /**
- * Exported values `bun smoke` / `bun run smoke:stage` forwards to the compose
+ * Exported values `bun smoke` forwards to the compose
  * stack. Every entry must also be interpolated in `docker-compose.yml` with a
  * `:-default`, so an unset value behaves exactly as before.
  *
@@ -33,22 +31,16 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   // through the admin API (system-scheduler-spec.md §2.2, §2.3). An operator
   // who exports one of the old names now gets exactly what the name deserves —
   // nothing, in every container.
-  // THE JUDGE'S TRANSPORT SETTINGS (this release). `docker-compose.yml` has
-  // interpolated these into the api since the judge shipped, but
-  // nothing carried them from the operator's shell to compose — so exporting
-  // `SWARM_JUDGE_TIMEOUT_MS` produced an EMPTY variable in the container and
-  // `resolveJudgeTimeoutMs()` fell back to the default, silently. The budget an
-  // operator sets is the one lever over a judge that is timing out; it has to
-  // reach the container through the boot the runbook documents.
-  "SWARM_JUDGE_BASE_URL",
-  "SWARM_JUDGE_TIMEOUT_MS",
+  // NO JUDGE TRANSPORT SETTINGS. SWARM_JUDGE_BASE_URL and SWARM_JUDGE_TIMEOUT_MS
+  // were forwarded here for an inline judge inside `api`; `api` no longer
+  // interpolates either (D52: the judge is a participant), so forwarding them
+  // would only carry a value to nothing.
   // THE TEST-ONLY JUDGE FAULT-INJECTION LEVER (backend/src/swarm/
   // judge-fault-injection.ts, R13). `docker-compose.yml` interpolates both
-  // into api, but the same gap as SWARM_JUDGE_TIMEOUT_MS
-  // above meant exporting either produced an EMPTY variable in the
-  // container: an operator staging AC-E2E-06 through the documented
-  // `bun run smoke:stage` boot got a silent "flag_absent" refusal instead of
-  // the lever they set. Blank by default (never enabled unless set).
+  // into api, and until this list named them, exporting either produced an
+  // EMPTY variable in the container: an operator staging AC-E2E-06 through the
+  // documented boot got a silent "flag_absent" refusal instead of the lever
+  // they set. Blank by default (never enabled unless set).
   "SWARM_JUDGE_FAULT_INJECTION",
   "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
   "FETCH_CACHE_DIR",

@@ -143,8 +143,9 @@ export const judgeReceiptLeg: VerifyLeg = {
         "judge:consensus-receipt",
         "FAIL",
         lastSeen ?? "no published session served a consensus receipt within the deadline",
-        "A twin enables the judge at boot (enableTwinJudge) and only an ENFORCE judgement publishes a receipt. " +
-          "If swarm.judge died, read its last_error: an unsupported model id comes back as HTTP 401.",
+        "No boot enables the judge any more (D48 as waived by D53): the judge is a participant (smoke spec §6.2), " +
+          "and until one is seated nothing on the stack publishes a receipt, so this leg fails by construction. " +
+          "Once one is seated and it still fails, read the judge participant's own log.",
       );
       return;
     }

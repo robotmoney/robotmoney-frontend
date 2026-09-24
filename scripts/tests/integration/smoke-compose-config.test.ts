@@ -18,6 +18,8 @@
 // a missing docker CLI fails this test loudly — never a silent skip
 // (test-coverage policy).
 import { beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSmokeEnv } from "../../smoke.ts";
 import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
@@ -579,14 +581,23 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
     const twin = scenarioPlan(true);
 
     expect(smoke.migrateEnv).toEqual({ SMOKE_SEED_PROJECTS: "1" });
-    expect(smoke.migrateScriptArgs).toEqual(["--seed-smoke-schedules"]);
     expect(twin.migrateEnv).toEqual({});
-    expect(twin.migrateScriptArgs).toEqual([]);
+    // `--seed-smoke-schedules` is gone: backend/src/db/migrate.ts has parsed no
+    // such flag since 17e978bf, so every simulation boot passed an argument
+    // that reached nothing (issue #1026). No scenario carries script args now.
+    expect("migrateScriptArgs" in smoke).toBe(false);
+    expect("migrateScriptArgs" in twin).toBe(false);
 
     const smokeMain = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
     expect(smokeMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);
     expect(smokeMain).toContain("migrateEnv: scenario.migrateEnv");
-    expect(smokeMain).toContain("migrateScriptArgs: [...scenario.migrateScriptArgs]");
+    expect(smokeMain).not.toContain("migrateScriptArgs");
+    expect(smokeMain).not.toContain("--seed-smoke-schedules");
+    // No local mode implies --migrate or --seed (spec §4.3, §5): both are the
+    // operator's explicit flags on every data path.
+    expect(smokeMain).toContain("migrate: migrates,");
+    expect(smokeMain).toContain("const migrates = requestsMigrate(process.argv);");
+    expect(smokeMain).toContain("const seeds = shouldSeed(process.argv);");
     expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
     // Retired: smoke no longer calls prod-bootstrap.ts's archive-adopt pipeline
     // for any boot, twin included — a twin is already fully populated by its
@@ -713,6 +724,27 @@ describe("every long-running service reports its own health", () => {
       // the "declares a healthcheck" test above while proving nothing.
       expect(`${name}:${test_.join(" ")}`).toBe(`${name}:CMD bun run src/ops/healthcheck.ts`);
     }
+  });
+
+  // Criterion 25 (the compose half): Docker, not `bun smoke`, keeps the stack
+  // up (spec §1). Every standing service restarts itself after a crash or a
+  // daemon restart; postgres was the one that did not, so a reboot brought the
+  // services back against no database. Asserted over EVERY resolved service in
+  // every composition the smoke renders, not a named list, so a new service
+  // that omits the policy goes red on arrival.
+  test("every standing service carries `restart: unless-stopped`, in every composition", () => {
+    for (const files of ALL_COMPOSITIONS) {
+      const cfg = composeConfig({}, files);
+      const services = Object.entries(cfg.services);
+      expect(services.length).toBeGreaterThan(3);
+      for (const [name, svc] of services) {
+        expect({ files: files.join("+"), name, restart: svc.restart }).toEqual({ files: files.join("+"), name, restart: "unless-stopped" });
+      }
+    }
+  });
+
+  test("postgres in particular restarts itself: the stack is not up if its database is not", () => {
+    expect(composeConfig({}).services.postgres?.restart).toBe("unless-stopped");
   });
 
   test("the one-shot member-agent template is exempt BY PROFILE GATING, not by being forgotten", () => {
@@ -940,6 +972,43 @@ describe("no composition multiplies a service (issue #891, generalised by #1026)
       expect(`${file}:scale:${/scale\s*:\s*[2-9]/i.test(text)}`).toBe(`${file}:scale:false`);
     }
   });
+});
+
+
+// Criterion 122, the compose half, proven against the real CLI: compose loads
+// `<project dir>/.env` for interpolation by itself, whatever environment it is
+// handed, and `--env-file /dev/null` is what stops it. A planted `.env` in a
+// scratch project directory carries a value docker-compose.yml interpolates
+// into `api`; the render WITH the flag must not see it, and the render without
+// it (the red control) must — or the check proves nothing about the flag.
+// These two renders are deliberately one-off (not in PREWARM): they use their
+// own project directory, and carry an explicit budget.
+describe("compose never reads the project directory's .env (criterion 122)", () => {
+  const PLANTED = "planted-from-dotenv";
+  function renderWithPlantedDotenv(withFlag: boolean): string {
+    const dir = mkdtempSync(join(tmpdir(), "rm-compose-dotenv-"));
+    writeFileSync(join(dir, ".env"), `SWARM_JUDGE_FAULT_INJECTION=${PLANTED}\n`);
+    const r = Bun.spawnSync(
+      [
+        "docker", "compose",
+        ...(withFlag ? ["--env-file", "/dev/null"] : []),
+        "--project-directory", dir,
+        "-f", join(repoRoot, "docker-compose.yml"),
+        "config", "--format", "json",
+      ],
+      { cwd: dir, env: baseEnv(), stdout: "pipe", stderr: "pipe" },
+    );
+    if (r.exitCode !== 0) throw new Error(`docker compose config failed: ${new TextDecoder().decode(r.stderr)}`);
+    return JSON.stringify((JSON.parse(new TextDecoder().decode(r.stdout)) as ComposeConfig).services.api?.environment ?? {});
+  }
+
+  test("with --env-file /dev/null the planted value never reaches a container", () => {
+    expect(renderWithPlantedDotenv(true)).not.toContain(PLANTED);
+  }, 120_000);
+
+  test("red control: without the flag, compose DOES read the planted .env", () => {
+    expect(renderWithPlantedDotenv(false)).toContain(PLANTED);
+  }, 120_000);
 });
 
 

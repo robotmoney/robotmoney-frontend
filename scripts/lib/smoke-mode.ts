@@ -18,13 +18,10 @@ import { planAdoptions } from "./swarm/roster-plan.ts";
 import type { RosterMember } from "./swarm/session.ts";
 import { demoAttends } from "@robotmoney/contract";
 
-/** The one argv flag that selects a smoke boot. */
-export const SMOKE_MODE_FLAG = "--smoke";
-
-/** Is this argv a smoke boot? (`bun smoke` → `bun scripts/smoke.ts --smoke`.) */
-export function isSmokeMode(argv: readonly string[]): boolean {
-  return argv.includes(SMOKE_MODE_FLAG);
-}
+// NO `--smoke` FLAG. Smoke spec §1 retires it with no alias: the
+// production-shaped scenario is implied by the data, not by a switch — a
+// `--local dump` boot restores production and is the only boot that runs it
+// (scripts/lib/smoke-db-mode.ts's requestsDump()).
 
 /**
  * The migrate/seed one-shot's extra env for a SMOKE boot: empty.
@@ -42,17 +39,10 @@ export const SMOKE_MIGRATE_ENV: Readonly<Record<string, string>> = Object.freeze
 export const DEMO_MIGRATE_ENV: Readonly<Record<string, string>> =
   Object.freeze({ SMOKE_SEED_PROJECTS: "1" });
 
-/**
- * Demo job_schedules are an explicit migration action, not environment state.
- *
- * NOT touched by issue #1026, despite the name. These are the sampler and
- * producer rows a simulation boot wants — `wallet.sample_*` on an hourly beat,
- * the retired regime/research markers — and nothing here is a session
- * schedule. `scripts/tests/unit/no-swarm-cron.test.ts` matches the removed
- * module by PATH for exactly this reason.
- */
-export const DEMO_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze(["--seed-smoke-schedules"]);
-export const SMOKE_MIGRATE_SCRIPT_ARGS: readonly string[] = Object.freeze([]);
+// NO MIGRATE SCRIPT ARGUMENTS. `--seed-smoke-schedules` used to ride here, but
+// backend/src/db/migrate.ts has parsed no such flag since 17e978bf, so every
+// simulation boot passed an argument that reached nothing (issue #1026).
+// Bootstrap data seeds the pipeline worker's schedule rows (smoke spec §8.1).
 
 export interface ScenarioSubject { id: string; name: string }
 export interface ScenarioMember {
@@ -74,7 +64,6 @@ export interface ScenarioPlan {
   // `"simulation" | "archive-restore"`).
   kind: "smoke" | "simulation";
   migrateEnv: Readonly<Record<string, string>>;
-  migrateScriptArgs: readonly string[];
   subjects: readonly ScenarioSubject[];
   members: readonly ScenarioMember[];
   runsNewcomerOnboarding: boolean;
@@ -97,12 +86,6 @@ export const DEMO_MEMBERS: readonly ScenarioMember[] = Object.freeze([
   // judge-role member cannot hold a take in the session it judges.
   Object.freeze({ memberId: "themis", name: "Themis", lens: "consensus judge", bias: 0, present: demoAttends("themis") }),
 ]);
-
-/** The boot-step names the TUI/step list carries, per mode: a twin (`smoke`)
- *  starts its requested agents; everything else runs the simulation seed. */
-export function bootstrapStepNames(smoke: boolean): readonly string[] {
-  return smoke ? ["start agents"] : ["simulation seed"];
-}
 
 /**
  * The four subjects `backend/seed-data/v0-committee-archive.json.gz` restores,
@@ -157,7 +140,6 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
     ? {
         kind: "smoke",
         migrateEnv: SMOKE_MIGRATE_ENV,
-        migrateScriptArgs: SMOKE_MIGRATE_SCRIPT_ARGS,
         subjects: SMOKE_SUBJECTS,
         members: [],
         runsNewcomerOnboarding: false,
@@ -165,7 +147,6 @@ export function scenarioPlan(smoke: boolean): ScenarioPlan {
     : {
         kind: "simulation",
         migrateEnv: DEMO_MIGRATE_ENV,
-        migrateScriptArgs: DEMO_MIGRATE_SCRIPT_ARGS,
         subjects: DEMO_SUBJECTS,
         members: DEMO_MEMBERS,
         runsNewcomerOnboarding: true,
@@ -370,38 +351,6 @@ export function adoptRestoredRoster(
     }
   }
   return [...seated.map((m) => ({ ...m })), ...adopted];
-}
-
-// ── Judge role live-stack coverage on a `--twin` boot (issue #845) ──────────
-// `--twin` implies its own scenario, so smoke-main.ts's `process.env.CI &&
-// dataPath.kind === "smoke-twin"` branch — not scripts/lib/swarm/session.ts's
-// `main()` — is what a twin boot actually runs. `noop-analyst` is granted the
-// role for this coverage exercise specifically — it is NOT production's real
-// standing judge (that is `themis`, SMOKE_MEMBERS) — chosen because it is
-// guaranteed present and is not otherwise scheduled to hold the role, so
-// exercising grant/flip/assert/restore here never collides with `themis`'s
-// real assignment. Selected by its stable HANDLE (never by roster position,
-// which the DB query does not promise).
-
-/** The persona granted the judge role for issue #845's smoke-twin coverage —
- *  a coverage-exercise choice, not production's real standing judge. */
-export const JUDGE_COVERAGE_HANDLE = "noop-analyst";
-
-/** The restored persona to grant the judge role to; throws on a stale/mismatched restore rather than silently skipping. */
-export function judgeCoverageCandidate(roster: readonly RosterMember[]): RosterMember {
-  const found = roster.find((m) => m.handle === JUDGE_COVERAGE_HANDLE);
-  if (!found) {
-    throw new Error(
-      `smoke initializer restored no '${JUDGE_COVERAGE_HANDLE}' persona to grant the judge role to (issue #845) — ` +
-        `roster handles: ${roster.map((m) => m.handle).join(", ")}`,
-    );
-  }
-  return found;
-}
-
-/** `members` with `candidateId` marked absent — a local copy; never mutates the shared array. */
-export function withMemberAbsent(members: readonly ScenarioMember[], candidateId: string): ScenarioMember[] {
-  return members.map((m) => (m.memberId === candidateId ? { ...m, present: false } : m));
 }
 
 export interface ScenarioLifecycleHooks<Context, SessionResult> {

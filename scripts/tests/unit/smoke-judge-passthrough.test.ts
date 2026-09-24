@@ -1,34 +1,37 @@
-// F4/T18 — THE JUDGE BUDGET MUST BE REACHABLE THROUGH THE DOCUMENTED BOOT.
+// THE JUDGE'S TRANSPORT SETTINGS NO LONGER REACH THE STACK (D52, issue #1026).
 //
-// Written before the fix (QA plan §12.7.2). `docker-compose.yml` interpolates
-// `SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}` into api and
-// worker-swarm, but `bun run smoke:stage` builds the compose environment from
-// `DEMO_COMPOSE_PASSTHROUGH` — and neither the timeout nor the base URL was on
-// it. So an operator who exported the value got an EMPTY variable in the
-// container and the 60 s default anyway: the QA run had to bypass the boot and
-// recreate one service by hand with 27 values re-supplied. This is the same
-// rescue `OPENCODE_API_KEY` needed in this release.
+// F4/T18 once put SWARM_JUDGE_TIMEOUT_MS and SWARM_JUDGE_BASE_URL on
+// DEMO_COMPOSE_PASSTHROUGH, because `api` ran the judge inline and an exported
+// budget reached nothing without them. The judge is a participant now: it takes
+// its model key and its transport from credential.json, and `api` interpolates
+// neither setting (docker-compose.yml). Forwarding them would carry a value to
+// no service, so this suite now pins that they are NOT forwarded.
 import { describe, expect, test } from "bun:test";
 import { DEMO_COMPOSE_PASSTHROUGH, smokePassthroughEnv } from "../../lib/smoke-compose-passthrough.ts";
 
-describe("judge transport settings reach the stack through the documented boot", () => {
-  test.each(["SWARM_JUDGE_TIMEOUT_MS", "SWARM_JUDGE_BASE_URL"])("%s is on DEMO_COMPOSE_PASSTHROUGH", (key) => {
-    expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).toContain(key);
+describe("judge transport settings are not forwarded: no stack service judges", () => {
+  test.each(["SWARM_JUDGE_TIMEOUT_MS", "SWARM_JUDGE_BASE_URL", "OPENCODE_API_KEY"])("%s is NOT on DEMO_COMPOSE_PASSTHROUGH", (key) => {
+    expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).not.toContain(key);
   });
 
-  test("an exported budget survives into the compose environment", () => {
-    const out = smokePassthroughEnv({ SWARM_JUDGE_TIMEOUT_MS: "240000", SWARM_JUDGE_BASE_URL: "https://opencode.ai/zen/v1" });
-    expect(out.SWARM_JUDGE_TIMEOUT_MS).toBe("240000");
-    expect(out.SWARM_JUDGE_BASE_URL).toBe("https://opencode.ai/zen/v1");
+  test("an exported value never reaches the compose environment", () => {
+    const out = smokePassthroughEnv({
+      SWARM_JUDGE_TIMEOUT_MS: "240000",
+      SWARM_JUDGE_BASE_URL: "https://opencode.ai/zen/v1",
+      OPENCODE_API_KEY: "sk-planted",
+    });
+    expect(out).not.toHaveProperty("SWARM_JUDGE_TIMEOUT_MS");
+    expect(out).not.toHaveProperty("SWARM_JUDGE_BASE_URL");
+    expect(out).not.toHaveProperty("OPENCODE_API_KEY");
   });
 
-  test("an unset budget still passes nothing, so the compose default stands", () => {
-    expect(smokePassthroughEnv({})).not.toHaveProperty("SWARM_JUDGE_TIMEOUT_MS");
+  test("red control: a key that IS on the list does survive, so the check above is not vacuous", () => {
+    expect(smokePassthroughEnv({ SWARM_JUDGE_FAULT_INJECTION: "1" })).toHaveProperty("SWARM_JUDGE_FAULT_INJECTION", "1");
   });
 });
 
 // C-27 — THE FAULT-INJECTION LEVER MUST BE REACHABLE THROUGH THE DOCUMENTED
-// BOOT, same gap as SWARM_JUDGE_TIMEOUT_MS above and the same fix shape.
+// BOOT, the gap SWARM_JUDGE_TIMEOUT_MS once had and the same fix shape.
 // `docker-compose.yml` interpolates `SWARM_JUDGE_FAULT_INJECTION` and
 // `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` into api and worker-swarm,
 // but until DEMO_COMPOSE_PASSTHROUGH named them an operator exporting either

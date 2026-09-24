@@ -1,15 +1,14 @@
 import { mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveSmokeEnv } from "./smoke-env.ts";
 import { DB_PREFLIGHT_STEP, dbPreflightArgv, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData, parseDataPath, requestsMigrate, requestsTwin, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { bannerFor, bootPreflightPlan, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { refuseIfSchemaBehind, resolveExternalMigrationOptIn } from "./smoke-external-migrate.ts";
-import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
-import { assertSmokeTwinIsTarget, defaultSmokeTwinJudgeMode, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
+import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsTokenAfterPreflight, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
@@ -45,10 +44,6 @@ import {
   SMOKE_MEMBERS,
   adoptRestoredRoster,
   simulatedSigners,
-  judgeCoverageCandidate,
-  withMemberAbsent,
-  bootstrapStepNames,
-  isSmokeMode,
   resolveSeatAllRestored,
   scenarioPlan,
 } from "./smoke-mode.ts";
@@ -56,11 +51,10 @@ import { admissionDelayMs, decideAdmission } from "./swarm/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
+  buildSpawnEnv,
   createStack,
   DEFAULT_STACK_DATABASE,
   describePortHolders,
-  ENV_CLASS_COMPOSE_VAR,
-  ENV_HASH_COMPOSE_VAR,
   generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
@@ -76,36 +70,7 @@ import {
   type StackHostPorts,
 } from "../stack/index.ts";
 import { SWARM_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
-import {
-  columns,
-  columnWidth,
-  swarmProgress,
-  fmtCountdown,
-  fmtDuration,
-  memberGlyph,
-  onboardGlyph,
-  phaseGlyph,
-  renderResearchPane,
-  setContainer,
-  setFatal,
-  setFatalWriters,
-  setOnboardStep,
-  setStep,
-  STAGE_COLOR,
-  startOnboarding,
-  stepGlyph,
-  ticks,
-  type SmokeState,
-  type UpcomingMember,
-  type WriterQuiesce,
-} from "./smoke-tui-view.ts";
-import { createReadinessPolling, probeAdminClaimed } from "./smoke-readiness-polling.ts";
-import {
-  DB_WRITER_SERVICES,
-  renderFailurePane,
-  selectFailureDetail,
-} from "./smoke-failure.ts";
-import { renderTelemetryPane, startTelemetryPolling } from "./smoke-telemetry.ts";
+import { DB_WRITER_SERVICES, selectFailureDetail } from "./smoke-failure.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -114,6 +79,16 @@ const repoRoot = join(scriptDir, "..", "..");
 const stateFile = join(repoRoot, ".agents", "smoke-state.json");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// --- Refusals that precede everything ---------------------------------------
+// Spec §1 retires SMOKE_PROJECT with no alias, and smoke-db-mode.ts owns the
+// refusal text. Checked before any argument is read, any port probed or any
+// credential minted, so a refused boot leaves the host exactly as it found it.
+const retiredEnv = refuseRetiredEnv(process.env);
+if (retiredEnv) {
+  console.error(`[smoke] FATAL: ${retiredEnv}`);
+  process.exit(1);
+}
 
 // --- Run config -----------------------------------------------------------
 // HOST PORTS ARE ASSIGNED BY DOCKER. Both published ports (api and postgres)
@@ -137,7 +112,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 //
 // THE ONE EXCEPTION: `bun run smoke -- --static-port` appends docker-compose.stage.yml,
 // which pins the api's host port (only) to 48787, the tunnel origin. It is a
-// CLI ARGUMENT, never an env var — the same hard rule `--pg-data` follows (no
+// CLI ARGUMENT, never an env var — the same hard rule every data-path flag follows (no
 // per-property env config) — because pinning the tunnel port is a property of
 // one deliberate invocation, never of a shell that happens to have something
 // exported. It FAILS LOUDLY when the port is held rather than falling back,
@@ -147,14 +122,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // one fixed number in the system instead of letting Docker assign one. The old
 // name, `--stage`, described an environment rather than an effect, which made it
 // read like "boot the staging environment" — it never did that; it only pinned a
-// port. Still accepted, with a warning, so a committed cloudflared runbook or an
-// operator's muscle memory keeps working.
+// port. `--stage` is now refused by name (smoke-db-mode.ts RETIRED_FLAGS).
 const STATIC_PORT_FLAG = "--static-port";
-// A twin implies the production-shaped scenario: it is restored, populated real
-// data, so the boot must never run the simulation seed against it. The
-// deprecated `--smoke` flag forces the same thing. (smoke-mode.ts holds the
-// scenario decisions; this file is only the wiring.)
-const smokeMode = isSmokeMode(process.argv) || requestsTwin(process.argv);
+// A dump implies the production-shaped scenario: it is restored, populated real
+// data, so the boot must never run the simulation seed against it. Nothing else
+// selects that scenario: the retired `--smoke` flag is refused. (smoke-mode.ts
+// holds the scenario decisions; this file is only the wiring.)
+const smokeMode = requestsDump(process.argv);
 const scenario = scenarioPlan(smokeMode);
 const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 // AC-ID-05 — wiring only; the decision is scripts/lib/smoke-images-override.ts.
@@ -168,12 +142,12 @@ const imagesOverride = imagesOverrideDecision.path;
 // subject); every other boot, CI included, keeps today's fast ~2-min values.
 // Every number lives in scripts/lib/smoke-cadence.ts, which also ASSERTS that
 // the constants resolved here are the ones this invocation claims — fatal if not.
-// …EXCEPT on a twin, which is a test instrument and runs FAST however the port
+// …EXCEPT on a dump, which is a test instrument and runs FAST however the port
 // is pinned — see stageCadenceApplies() in smoke-cadence.ts for why, and the
 // smoke-twin's explicit `--cadence fast` override says the same thing out loud.
 // The profile itself is RESOLVED with the data path below, which owns the FATAL
-// for both; only the twin question is answered here, because the flags say it.
-const twinBoot = requestsTwin(process.argv);
+// for both; only the dump question is answered here, because the flags say it.
+const twinBoot = requestsDump(process.argv);
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -184,6 +158,13 @@ for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] $
 // to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
 // does not have — see smoke-compose-env.ts.
 for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
+// And the migration credential: only this process may set it, for one migrate
+// run (below). An exported one is dropped HERE, before twinMigrationCredential()
+// or the remote prompt assigns the real one, and before extraComposeEnv reads it.
+{
+  const dropped = dropShellMigrationCredential(process.env);
+  if (dropped) console.warn(`[smoke] ${dropped}`);
+}
 
 if (staticPortMode) {
   console.warn(
@@ -198,7 +179,7 @@ if (staticPortMode) {
   );
 }
 
-// --stage PRE-FLIGHT. The pin now lives entirely in docker-compose.stage.yml,
+// --static-port PRE-FLIGHT. The pin now lives entirely in docker-compose.stage.yml,
 // so a held 48787 would surface as compose's own bind failure — accurate but
 // opaque, buried in build output, and silent about WHO holds the port. This
 // check runs BEFORE `compose up` so the operator gets the actionable version:
@@ -227,32 +208,63 @@ async function stagePreflight(): Promise<void> {
     throw err;
   }
 }
-if (staticPortMode) await stagePreflight();
-const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
-
-// --- Which database this boot runs against (--db) ----------------------------
+// --- Which database this boot runs against (--local <mode>) ------------------
 // Every decision the flag implies — the three modes, the refusals, the banner —
 // lives in scripts/lib/smoke-db-mode.ts (executed directly by
 // scripts/tests/unit/smoke-db-mode.test.ts); this file holds only the wiring.
-// Resolved HERE, before any credential is minted or any container is created, so
-// a bad invocation or a missing DATABASE_URL fails on an untouched host rather
-// than half-way through a bring-up.
+// Resolved HERE, before the port preflight, before any credential is minted and
+// before any container is created, so a bad or retired invocation fails on an
+// untouched host rather than half-way through a bring-up.
 let requestedDataPath: ReturnType<typeof parseDataPath>["dataPath"];
 let cadence: ReturnType<typeof resolveSmokeCadenceForBoot>;
 try {
   const parsed = parseDataPath(process.argv, { envFilePath: homeEnvFilePath() });
   requestedDataPath = parsed.dataPath;
   cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), cadence: parsed.cadence });
-  for (const w of parsed.warnings) console.warn(`[smoke] ${w}`);
 } catch (err) {
   console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
+// `--local volume` with no name reattaches the volume the last boot from this
+// checkout recorded. Refused, not guessed, when there is none: a fresh volume
+// under a reattach flag would boot green on an empty database.
+if (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach && !requestedDataPath.reattach.volume) {
+  let saved: string | undefined;
+  try { saved = (JSON.parse(readFileSync(stateFile, "utf8")) as { pgVolume?: string }).pgVolume; } catch { /* no state */ }
+  if (!saved) {
+    console.error(`[smoke] FATAL: ${LOCAL_FLAG} volume found no saved volume in ${stateFile}; name one with ${LOCAL_FLAG} volume=<name>.`);
+    process.exit(1);
+  }
+  requestedDataPath = { kind: "ephemeral", reattach: { volume: saved } };
+}
+// …and refused while a running container still mounts it, named or saved: the
+// saved one is usually the previous boot's, which is usually still up. Checked
+// before any overlay is written or container created. Fails closed when the
+// daemon cannot be asked: an unknown holder is not an absent one.
+if (requestedDataPath.kind === "ephemeral" && requestedDataPath.reattach?.volume) {
+  const volume = requestedDataPath.reattach.volume;
+  const ps = Bun.spawnSync(
+    ["docker", "ps", "--filter", `volume=${volume}`, "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}'],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (ps.exitCode !== 0) {
+    console.error(`[smoke] FATAL: ${LOCAL_FLAG} volume=${volume}: could not ask Docker which containers mount it: ${ps.stderr.toString().trim()}`);
+    process.exit(1);
+  }
+  const inUse = refuseVolumeInUse(volume, parseVolumeHolders(ps.stdout.toString()));
+  if (inUse) {
+    console.error(`[smoke] FATAL: ${inUse}`);
+    process.exit(1);
+  }
+}
+
+if (staticPortMode) await stagePreflight();
+const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
 // Twin/stage: seat the FULL restored committee, not just the three committed
 // personas. Enrollment rotates each restored member's key (register rebinds by
-// member id) so every member can sign a real take. Gated to production-shaped
-// (--smoke) boots on the pinned tunnel port or the smoke-twin data path.
-// Reasoning in smoke-mode.ts, pin in roster-plan.test.ts: `--db external` never qualifies.
+// member id) so every member can sign a real take. Gated to a `--local dump`
+// boot, alone or on the pinned tunnel port. Reasoning in smoke-mode.ts, pin in
+// roster-plan.test.ts: the remote database never qualifies.
 const seatAllRestored = resolveSeatAllRestored({ smoke: smokeMode, stage: staticPortMode, dataPath: requestedDataPath });
 // Two DIFFERENT questions, and for a smoke-twin they disagree — see smoke-db-mode.ts.
 // Both read only the mode, so they are known before a smoke-twin has been restored.
@@ -277,12 +289,13 @@ let backendUrl = "";
 // created it instead of being unreapable on a host shared by the stage smoke,
 // the CI runner and local evals.
 const stackEnvironment = resolveStackEnvironment(process.env);
-// Pin the compose project name when SMOKE_PROJECT is set (re-runs reuse/tear down the
-// same containers); otherwise the environment-scoped default, e.g.
-// `rm_smoke_stack_9f2a1c4b7d` locally or `rm_ci_stack_…` under Actions.
-// dockerEnv sets SMOKE_PROJECT=project either way, so the compose label stays
-// consistent.
-const project = process.env.SMOKE_PROJECT?.trim() || stackProjectName("stack", stackEnvironment);
+// The compose project is ALWAYS the environment-scoped name, e.g.
+// `rm_smoke_stack_9f2a1c4b7d` locally or `rm_ci_stack_…` under Actions. It
+// used to be overridable by an exported SMOKE_PROJECT; spec §1 retires that
+// with no alias (refused at the top of this file). The compose interpolation
+// variable of the same name is still set from `project` by buildComposeEnv(),
+// which is what stamps the project label on every container.
+const project = stackProjectName("stack", stackEnvironment);
 // A smoke-twin is restored HERE: after `project` (its container and volume carry that
 // project's labels, so smoke:down and smoke:clean scope to them like anything else
 // this boot created) and before `database` below, which needs its URL. The
@@ -322,7 +335,7 @@ if (dataPath.kind === "external") await resolveExternalMigrationOptIn(requestsMi
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
 //
-// The --stage overlay belongs to the BASE list, not to the run-only extension:
+// The --static-port overlay belongs to the BASE list, not to the run-only extension:
 // it is the one file that names a host port, so smoke:status must resolve the
 // same topology when it asks `docker compose port` what is actually published.
 const composeFilesBase = [
@@ -333,11 +346,11 @@ const composeFilesBase = [
 let composeFilesRun = composeFilesBase;
 
 // The no-compose-postgres overlay, generated the same way (and for the same
-// reason) as the --pg-data bind overlay below: a GENERATED file appended LAST,
+// reason) as the `--local volume` reattach overlay below: a GENERATED file appended LAST,
 // never a committed one, because it encodes one invocation's choice rather than a
 // property of the repo. It removes the postgres service and the pgdata volume
 // and drops every `depends_on: postgres`, so `docker compose up` cannot pull the
-// container back in through a dependency edge. Run-only (like --pg-data):
+// container back in through a dependency edge. Run-only (like the reattach overlay):
 // smoke:down / smoke:status stop and inspect BY PROJECT, and learn what database
 // this boot used from the state file's `db` field instead.
 if (!composePostgres) {
@@ -348,28 +361,15 @@ if (!composePostgres) {
 }
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
-// --- Optional resumable postgres data (--pg-data) -----------------------------
-// Wiring only. What the flag means, why it is a CLI argument, its reuse
-// constraints and why exclusivity with the other data paths is now STRUCTURAL
-// rather than a precedence check all live with the union, in smoke-db-mode.ts.
-const rawPgData = dataPath.kind === "ephemeral" ? dataPath.pgDataDir : undefined;
-const pgDataDir = rawPgData ? resolve(rawPgData) : undefined;
-if (pgDataDir) {
-  mkdirSync(pgDataDir, { recursive: true }); // created if absent; same value across runs = same data
-  // Generated bind overlay: a short-syntax bind whose TARGET is the postgres data
-  // dir. Compose merges service volumes by target path, so this REPLACES the base
-  // named-volume mount (verified via `docker compose config`) — no named volume is
-  // created. Kept on disk across teardown so it stays valid; safe to delete when
-  // idle. Lives in .agents/ (the repo's runtime cache dir).
-  const overrideFile = join(repoRoot, ".agents", `smoke-${project}-pgdata.yml`);
+// --- `--local volume`: reattach a previous run's data ------------------------
+// Wiring only; reattachOverlayYaml() in smoke-db-mode.ts owns the shape. The
+// saved volume replaces the fresh per-project pgdata mount, and is declared
+// external so no teardown of THIS project can delete it.
+const reattachedVolume = dataPath.kind === "ephemeral" ? dataPath.reattach?.volume : undefined;
+if (reattachedVolume) {
+  const overrideFile = join(repoRoot, ".agents", `smoke-${project}-reattach.yml`);
   mkdirSync(dirname(overrideFile), { recursive: true });
-  writeFileSync(
-    overrideFile,
-    `# GENERATED by scripts/lib/smoke-main.ts for \`bun run smoke -- --pg-data ${rawPgData}\`.\n` +
-      `# Bind-mounts postgres data to a host dir so the smoke resumes from it.\n` +
-      `# Safe to delete when no smoke is using this dir.\n` +
-      `services:\n  postgres:\n    volumes:\n      - ${pgDataDir}:/var/lib/postgresql/data\n`,
-  );
+  writeFileSync(overrideFile, reattachOverlayYaml(reattachedVolume));
   composeFilesRun = `${composeFilesRun}:${overrideFile}`;
 }
 
@@ -390,9 +390,8 @@ if (imagesOverride) composeFilesRun = `${composeFilesRun}:${imagesOverride}`;
 // `automationToken` parameter (sessionRail.automationToken below), and every
 // genuine child process gets an explicit `AUTOMATION_TOKEN: automationToken` entry
 // object — never via `...process.env` inheriting a value this process
-// happened to have mutated onto itself. It is printed ONLY to the
-// interactive TUI (see render()): never passed to log(), never serialized by
-// writeStateFile() (smoke-state.json), and never printed in the plain non-TUI
+// happened to have mutated onto itself. It is never printed: not passed to
+// log(), not serialized by writeStateFile() (smoke-state.json), not in the
 // READY block. Both secrets are minted by the shared stack config's
 // generateStackCredentials() (a FUNCTION, never executed on import) so the
 // smoke and every other consumer of the stack mint them identically.
@@ -404,8 +403,7 @@ const automationToken = credentials.automationToken;
 // updater jobs submit computed outputs through the authenticated
 // /api/analytics/* boundary; the api verifies this same shared secret. A FRESH
 // random value per launch, set here (before compose interpolation) so both
-// containers agree. NEVER printed — not in logs, not in the TUI, not in
-// smoke-state.json.
+// containers agree. NEVER printed — not in logs, not in smoke-state.json.
 const analyticsToken = credentials.analyticsToken;
 // Host-side Docker secret material belongs outside the checkout. A read-only
 // repo mount still exposes .agents, so keeping credentials there made any such
@@ -427,41 +425,6 @@ delete process.env.ANALYTICS_TOKEN;
 // were removed entirely — every boot, local or CI, is production parity: live
 // Base mainnet RPC + live analytics + floor seed).
 
-// Env shared by every `docker compose` call — pins the project, selects the
-// smoke override, resolves the data path, and sets credentials. NO host ports:
-// the compose files publish container ports only and Docker picks the host
-// side, so there is nothing left for WEB_PORT/POSTGRES_PORT to interpolate.
-const dockerEnv: Record<string, string> = {
-  ...process.env,
-  ...smokeEnv.composeEnv,
-  COMPOSE_PROJECT_NAME: project,
-  COMPOSE_FILE: composeFilesRun,
-  SMOKE_PROJECT: project,
-  // Environment labels (scripts/stack/naming.ts) — docker-compose.smoke.yml
-  // stamps these on every service and on the pgdata volume so a reaper can
-  // select by label instead of by name substring. Set here as well as in
-  // buildComposeEnv because this map drives the direct `docker compose` calls
-  // below, which do not go through the shared stack's spawn env.
-  [ENV_CLASS_COMPOSE_VAR]: stackEnvironment.class,
-  [ENV_HASH_COMPOSE_VAR]: stackEnvironment.hash,
-  DATABASE_URL: databaseUrl,
-  // Guards the human /admin task-queue dashboard. Random
-  // per launch; the value is shown ONLY in the interactive TUI (render()).
-  // Here as well as in buildComposeEnv(), for the same reason as the labels
-  // above: this map drives the DIRECT `docker compose` calls, which would
-  // otherwise fall back to the compose interpolation default (D13).
-  RM_ENV: stackRmEnv,
-  ADMIN_TOKEN: adminPassword,
-  AUTOMATION_TOKEN: automationToken,
-  // Only the path crosses the host/compose environment. Docker mounts the
-  // secret into API (verifier) + analytics-producer; no other process receives
-  // the credential value in its environment.
-  ANALYTICS_TOKEN_FILE_HOST: analyticsTokenFile,
-  POSTGRES_USER: DB_USER,
-  POSTGRES_PASSWORD: DB_PASSWORD,
-  POSTGRES_DB: DB_NAME,
-} as Record<string, string>;
-
 // The smoke's own StackConfig (docs/architecture.md §11.3 E5, §3 L2). PURE data:
 // nothing spawns until main() calls `stack.up()`. This is what makes the `full`
 // profile a real RUNTIME consumer of the shared bring-up rather than a test-only
@@ -476,153 +439,71 @@ const smokeStackConfig: StackConfig = {
   environment: stackEnvironment,
   rmEnv: stackRmEnv,
   imagesOverride,
-  // judgeCredentialEnv LAST: the judge lane's key is not an operator knob and
-  // must not be shadowable by one (see smoke-compose-env.ts).
+  // NO MODEL KEY. The judge that used to read OPENCODE_API_KEY inside `api` is
+  // gone: the judge is a participant and takes its key from credential.json
+  // (smoke spec §6.1, D52). No service this stack starts calls a model.
   extraComposeEnv: {
     ...smokeEnv.composeEnv,
     ...smokePassthroughEnv(process.env),
     ...inferenceComposeEnv,
-    ...judgeCredentialEnv(process.env),
   },
 };
 
-// --- TUI + logging gating -------------------------------------------------
-// The TUI activates ONLY for an interactive local run. CI and piped/non-TTY runs
-// keep the EXACT plain behaviour (console narration, "inherit" child stdio).
-const noTuiArg = process.argv.includes("--no-tui");
-const tuiActive = Boolean(process.stdout.isTTY) && !process.env.CI && !process.env.NO_TUI && !noTuiArg;
+// Env for every DIRECT `docker compose` call below (diagnostics, teardown,
+// quiesce). It is the stack's own spawn env — allowlisted docker-client
+// plumbing plus buildComposeEnv()'s explicit map — and nothing else. It used to
+// start from `...process.env`, so whatever the operator's shell (or a bun
+// auto-loaded `.env`) held reached compose interpolation; spec §4.4 and
+// criterion 122 say every value a boot interpolates comes from smoke's explicit
+// map. COMPOSE_FILE / COMPOSE_PROJECT_NAME select the topology these calls act
+// on; the stack's own calls pass the same thing as `-p` / `-f`.
+const dockerEnv: Record<string, string> = {
+  ...buildSpawnEnv(smokeStackConfig, process.env),
+  COMPOSE_PROJECT_NAME: project,
+  COMPOSE_FILE: composeFilesRun,
+};
 
-// Per-project append log. All raw subprocess + orchestrator output lands here so
-// the TUI screen can show only distilled state. Opened for every LOCAL run (CI
-// keeps pure console). A fresh run gets its own file (project is random).
+// Per-project append log: every orchestrator line lands here as well as on the
+// console, for post-mortem. Opened for every LOCAL run (CI keeps pure console).
+// A fresh run gets its own file (project is random).
+//
+// NO TUI (smoke spec §1): `bun smoke` never draws one, on a TTY or off it, and
+// imports no TUI module (scripts/tests/unit/smoke-tui.test.ts walks the import
+// graph). A running stack is observed from another terminal with
+// `bun smoke:status` or `bun smoke:tui`.
 const logFile = join(repoRoot, ".agents", `smoke-${project}.log`);
 let logFd: number | undefined;
 if (!process.env.CI) {
   mkdirSync(dirname(logFile), { recursive: true });
   logFd = openSync(logFile, "a"); // 'a' → re-running never crashes on an existing file
 }
-// Child stdio target: raw fd in TUI mode (keeps the screen clean), else "inherit"
-// exactly as before. logFd is always defined when tuiActive (tuiActive ⇒ !CI).
-const outFd: number | "inherit" = tuiActive ? logFd! : "inherit";
-const errFd: number | "inherit" = outFd;
+const outFd = "inherit" as const;
+const errFd = outFd;
 
-const startTime = Date.now();
 const ts = () => new Date().toISOString();
 
-// --- SmokeState (drives the TUI panes) -------------------------------------
-// The state shape, its transitions, and the pure display helpers now live in
-// ./smoke-tui-view.ts (issue #456) — this file just owns the ONE instance for
-// this boot and threads it through. Local structural mirror of the swarm
-// session driver's OnboardedMemberHome (agent.ts). The driver is loaded via a
-// dynamic import() (untyped) so the driver's module-load reads BACKEND_URL
-// AFTER it is set below; this local alias keeps our annotations decoupled
-// from that dynamic boundary.
+// Local structural mirror of the swarm session driver's OnboardedMemberHome
+// (agent.ts). The driver is loaded via a dynamic import() (untyped) so the
+// driver's module-load reads BACKEND_URL AFTER it is set below; this local alias
+// keeps our annotations decoupled from that dynamic boundary.
 type OnboardedMemberHome = { volume: string; passphrase?: string };
-// The route table, rebuilt once the api's host port is known. Before that the
-// base is "" and every row says so rather than rendering a link to a port
-// nobody has been given — Docker assigns it when the container starts, which is
-// several minutes into a cold build.
-function serviceRoutes(base: string): { name: string; url: string }[] {
-  const at = (p: string) => (base ? `${base}${p}` : "(pending — Docker assigns the host port when api starts)");
-  return [
-    { name: "Site", url: at("/") },
-    { name: "Regime", url: at("/regime") },
-    { name: "Swarm", url: at("/swarm") },
-    ...researchKeys.map((k) => ({ name: "Research", url: at(`/research/${k}`) })),
-    // Admin task-queue jobs dashboard. URL only here (safe to appear anywhere);
-    // the password is rendered on its own line in the TUI Services pane, never
-    // stored in state.services.
-    { name: "Admin", url: at("/admin") },
-  ];
-}
-const state: SmokeState = {
-  services: serviceRoutes(""),
-  containers: [
-    // Only an ephemeral boot starts a postgres container, so only it gets a tile
-    // — a green ✓ postgres beside five real services reads as a sixth container
-    // that `docker ps` would never show.
-    ...(composePostgres ? [{ name: "postgres", phase: "pending" as const }] : []),
-    { name: "api", phase: "pending" },
-    // One container per worker execution lane (issue #107): analytics (regime +
-    // pipelines) and research run independently so a blocked research fetch
-    // can't starve the others.
-    { name: "worker-analytics", phase: "pending" },
-    { name: "worker-research", phase: "pending" },
-    // The clock (issue #1026) — not a lane: it claims no jobs and holds no
-    // database credential (system-scheduler-spec.md §1, §7). It gets a tile
-    // because a stalled one is why no session turns over.
-    { name: "system-scheduler", phase: "pending" },
-  ],
-  steps: [
-    // Only a pre-populated database carries the guard, so only it shows the step.
-    ...(composePostgres ? [] : [{ name: "db preflight", status: "pending" as const }]),
-    { name: "migrate", status: "pending" },
-    { name: "api /health", status: "pending" },
-    ...bootstrapStepNames(smokeMode).map((name) => ({ name, status: "pending" as const })),
-  ],
-  research: [],
-  swarms: {},
-  onboarded: [],
-  upcoming: [],
-  messages: [],
-  telemetry: [],
-  containerErrors: [],
-};
-
-// setContainer / setStep / startOnboarding / setOnboardStep (and the
-// ONBOARD_STEPS checklist they drive) now live in ./smoke-tui-view.ts — every
-// call site below passes `state` explicitly (e.g.
-// `setContainer(state, "postgres", "healthy")`). The checklist tracks
-// docs/architecture.md §11.2 exactly: connect→claim are driven by the
-// real-inference eval harness's observed step-state record
-// (scripts/lib/onboarding-eval.ts), and session/memo/admitted flip when the
-// newly-admitted member is separately observed submitting a signed take +
-// posting a memo in a live swarm session (via swarmProgress).
 
 // --- Logging --------------------------------------------------------------
-// Orchestrator narration: always append a timestamped line to the log file; in
-// TUI mode push a short line into the footer buffer (last ~8); in non-TUI mode
-// also console.log exactly as the smoke did before.
+// Orchestrator narration: append a timestamped line to the log file and print
+// it. There is no screen to protect, so nothing is ever redirected.
 function log(msg: string): void {
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] ${msg}\n`); } catch { /* best effort */ } }
-  if (tuiActive) {
-    state.messages.push(msg);
-    if (state.messages.length > 8) state.messages.shift();
-  } else {
-    console.log(msg);
-  }
+  console.log(msg);
 }
 
-// In TUI mode, dynamically-imported modules (e2e.ts) and any stray console.*
-// would corrupt the alternate screen. Redirect console.* to the log file while
-// the TUI is up. The TUI itself paints via process.stdout.write (untouched), so
-// only console.* is captured. Restored before any normal-screen printing.
-const origConsole = { log: console.log, error: console.error, warn: console.warn };
-let consolePatched = false;
-function patchConsole(): void {
-  if (consolePatched) return;
-  consolePatched = true;
-  const toLog = (...a: unknown[]) => {
-    if (logFd !== undefined) { try { writeSync(logFd, a.map((x) => String(x)).join(" ") + "\n"); } catch { /* ignore */ } }
-  };
-  console.log = toLog; console.error = toLog; console.warn = toLog;
-}
-function unpatchConsole(): void {
-  if (!consolePatched) return;
-  consolePatched = false;
-  console.log = origConsole.log; console.error = origConsole.error; console.warn = origConsole.warn;
-}
-
-// One line naming the run's identity: the compose project (annotated "(fixed)"
-// when SMOKE_PROJECT overrode the environment-scoped default) and the
-// environment class + hash that every container label carries. The host ports
-// are DELIBERATELY absent here — they do not exist yet; applyHostPorts() logs
-// them the moment the daemon reports them.
-const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
+// One line naming the run's identity: the compose project and the environment
+// class + hash that every container label carries. The host ports are
+// DELIBERATELY absent here — they do not exist yet; applyHostPorts() logs them
+// the moment the daemon reports them.
 log(
-  `project=${project}${fx(Boolean(process.env.SMOKE_PROJECT?.trim()))}  ` +
+  `project=${project}  ` +
     `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
-    `host ports=(assigned by Docker at start${staticPortMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
+    `host ports=(assigned by Docker at start${staticPortMode ? "; web PINNED to :" + STAGE_WEB_PORT + " by --static-port" : ""})`,
 );
 
 // The single point at which this process learns its host ports. Everything
@@ -635,7 +516,6 @@ function applyHostPorts(ports: StackHostPorts): void {
   webPort = ports.webPort;
   pgPort = ports.pgPort;
   backendUrl = hostBackendUrl(webPort);
-  state.services = serviceRoutes(backendUrl);
   log(
     `host ports (Docker-assigned): api=:${apiPort} web=:${webPort}${staticPortMode ? " (web STAGE-PINNED — cloudflared origin)" : ""}  ` +
       `pg=${pgPort === null ? `${dataPath.kind.toUpperCase()} (${redactedDbUrl}) — no container, no published port` : `:${pgPort}`}`,
@@ -654,8 +534,11 @@ log(
 );
 
 // --- Container lifecycle --------------------------------------------------
+// `--env-file /dev/null` on EVERY compose call: compose otherwise loads the
+// checkout's `.env` for interpolation by itself, whatever env it was handed
+// (scripts/stack/config.ts composeArgs() explains the leak it caused).
 function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
-  const r = Bun.spawnSync(["docker", "compose", ...args], {
+  const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", ...args], {
     cwd: repoRoot,
     env: dockerEnv,
     stdout: outFd,
@@ -668,10 +551,9 @@ function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
 }
 
 // On a startup failure, the containers are about to be torn down (CI) or left up
-// (local) — capture their state and logs FIRST so the real cause is visible. In
-// TUI mode this lands in the log file (outFd), else on the console as before.
+// (local) — capture their state and logs FIRST so the real cause is visible.
 function dumpDiagnostics(): void {
-  const diag = (m: string) => { if (logFd !== undefined) { try { writeSync(logFd, m + "\n"); } catch {} } else console.error(m); };
+  const diag = (m: string) => { if (logFd !== undefined) { try { writeSync(logFd, m + "\n"); } catch {} } console.error(m); };
   diag("\n[smoke] --- container diagnostics ---");
   dockerCompose(["ps", "-a"], false);
   dockerCompose(["logs", "--no-color", "--tail", "60"], false);
@@ -681,8 +563,8 @@ function dumpDiagnostics(): void {
 let cleaned = false;
 let downStack: (() => { exitCode: number }) | undefined;
 // Teardown = `docker compose down` WITHOUT `-v` (issue: smoke persistent volumes):
-// containers + network are removed but the postgres data volume (or --pg-data host
-// dir) SURVIVES, so a reboot resumes from where it left off. Deleting smoke data is
+// containers + network are removed but the postgres data volume (a fresh one or a
+// reattached one) SURVIVES, so a reboot resumes from where it left off. Deleting smoke data is
 // now ONLY ever `bun run smoke:clean` (or, in CI, the scoped cleanCiVolume() below).
 function cleanup(): void {
   if (cleaned) return;
@@ -712,7 +594,7 @@ function cleanup(): void {
     teardownContainer(smokeTwinContainer, (m) => console.log(`[smoke] ${m}`));
     console.log(`[smoke] ${smokeTwinTeardownNarration(dataPath)}`);
   }
-  const where = keptDataDescription(dataPath, project, pgDataDir);
+  const where = keptDataDescription(dataPath, project);
   console.log(
     r.exitCode !== 0
       ? `[smoke] teardown exited ${r.exitCode}`
@@ -723,8 +605,8 @@ function cleanup(): void {
 // CI ONLY: a required per-PR e2e boot runs on the SHARED self-hosted runner; with
 // keep-by-default (above) its pgdata volume would leak on the host forever. After
 // teardown, delete THIS run's volume — scoped by the robotmoney.smoke.project label
-// so a co-tenant standing smoke's volume is never touched. CI never passes
-// --pg-data, so there is exactly one named volume to reclaim. Loud, best-effort:
+// so a co-tenant standing smoke's volume is never touched. CI never reattaches a
+// volume, so there is exactly one named volume to reclaim. Loud, best-effort:
 // a failure here is logged, never silent (it would otherwise hide a leak).
 function cleanCiVolume(): void {
   try {
@@ -746,9 +628,9 @@ function cleanCiVolume(): void {
 // stopped smoke's surviving data stays discoverable. It is KEPT through teardown
 // (data survives, so its pointer must too), overwritten by the next boot, and only
 // cleared when smoke:clean deletes the volume it names. Records composeFilesBase
-// (down/status stop/inspect by project — the pg-data bind overlay is irrelevant to
-// them) plus the data location (pgDataDir for a --pg-data bind, else the named
-// volume) so `smoke:status` can report where the data lives and how to resume.
+// (down/status stop/inspect by project — the generated overlays are irrelevant to
+// them) plus the named volume the data lives in, so `smoke:status` can report it
+// and `--local volume` can reattach it.
 function writeStateFile(): void {
   mkdirSync(dirname(stateFile), { recursive: true });
   const state = {
@@ -766,7 +648,7 @@ function writeStateFile(): void {
     // SPA shell for /views/* and makes every content assertion miss.
     webPort,
     pgPort,
-    // Was the api port PINNED by `--stage` (i.e. did this boot apply
+    // Was the api port PINNED by `--static-port` (i.e. did this boot apply
     // docker-compose.stage.yml)? Recorded so smoke:down / smoke:status
     // reconstruct the same compose topology, and so `smoke:status` can say out
     // loud that this smoke is the one the tunnel points at. Provenance only —
@@ -802,14 +684,14 @@ function writeStateFile(): void {
     // per-session secret directory after it has successfully stopped Compose.
     analyticsTokenFile,
     logFile,
-    // Data location (issue: smoke persistent volumes). Exactly one is set:
-    //   pgDataDir → a `--pg-data` host bind dir (resume with the same flag);
-    //   pgVolume  → the fresh-per-run named volume (survives; reclaim via smoke:clean).
-    // NEITHER is set for a non-ephemeral boot: this stack created no compose
-    // volume and bound no host dir, and naming one would send smoke:clean after
-    // storage that does not exist. (A smoke-twin owns a volume of its own; C5 records
-    // it under its own key rather than overloading pgVolume.)
-    ...(composePostgres ? (pgDataDir ? { pgDataDir } : { pgVolume: `${project}_pgdata` }) : {}),
+    // Data location (issue: smoke persistent volumes): the volume a blank boot
+    // created, or the one a `--local volume` boot reattached. Survives teardown;
+    // `--local volume` with no name reattaches exactly this. NOT set for a
+    // remote or dump boot: this stack created no compose volume, and naming one
+    // would send smoke:clean after storage that does not exist. (A dump owns a
+    // volume of its own, recorded under its own key rather than overloading
+    // pgVolume.)
+    ...(composePostgres ? { pgVolume: reattachedVolume ?? `${project}_pgdata` } : {}),
     createdAt: new Date().toISOString(),
   };
   writeFileSync(stateFile, JSON.stringify(state, null, 2));
@@ -818,33 +700,30 @@ function writeStateFile(): void {
 // After a signal teardown, tell the operator their data survived and how to resume
 // or reclaim it (issue: smoke persistent volumes — teardown keeps the data now).
 function printResumeHint(): void {
+  const pin = staticPortMode ? " --static-port" : "";
   if (!reclaimable) {
-    console.log(`[smoke] the database was EXTERNAL (${redactedDbUrl}) — its data was never this smoke's to keep or reclaim.`);
-    // EVERY flag this boot ran with, not just the pg one: both are CLI-only by
-    // design, so nothing about the next boot is inferred from state. A hint that
-    // dropped --static-port would resume the smoke on a Docker-assigned port,
-    // leaving the tunnel pointing at nothing.
-    console.log(`[smoke]   resume:  bun run smoke --${staticPortMode ? " --static-port" : ""} ${DB_FLAG} external`);
+    console.log(`[smoke] the database was REMOTE (${redactedDbUrl}) — its data was never this smoke's to keep or reclaim.`);
+    // EVERY flag this boot ran with: all are CLI-only by design, so nothing
+    // about the next boot is inferred from state. A hint that dropped
+    // --static-port would resume the smoke on a Docker-assigned port, leaving
+    // the tunnel pointing at nothing.
+    console.log(`[smoke]   resume:  bun smoke${pin}`);
     return;
   }
   if (dataPath.kind === "smoke-twin") {
     for (const line of smokeTwinResumeHint(dataPath)) console.log(`[smoke] ${line}`);
     return;
   }
-  if (pgDataDir) {
-    console.log(`[smoke] postgres data kept in --pg-data dir ${pgDataDir}.`);
-    console.log(`[smoke]   resume:  bun run smoke -- --pg-data ${pgDataDir}`);
-  } else {
-    console.log(`[smoke] postgres data kept in volume ${project}_pgdata (fresh-per-run).`);
-    console.log(`[smoke]   for a resumable smoke, boot with: bun run smoke -- --pg-data <host-dir>`);
-  }
+  const volume = reattachedVolume ?? `${project}_pgdata`;
+  console.log(`[smoke] postgres data kept in volume ${volume}.`);
+  console.log(`[smoke]   resume:  bun smoke${pin} ${LOCAL_FLAG} volume=${volume}`);
   console.log(`[smoke]   reclaim smoke volumes: bun run smoke:clean`);
 }
 
 // Wiring only; DB_WRITER_SERVICES carries which services and why. Best-effort
 // and non-throwing — raising from the failure path would replace the real cause
 // with a teardown error.
-function quiesceWriters(): WriterQuiesce {
+function quiesceWriters(): "stopped" | "failed" {
   try {
     return dockerCompose(["stop", ...DB_WRITER_SERVICES], false).exitCode === 0 ? "stopped" : "failed";
   } catch {
@@ -867,15 +746,12 @@ function printLeaveRunning(): void {
 }
 
 // Ctrl-C / SIGTERM tear the stack down (containers + network) and exit, KEEPING the
-// postgres data (issue: smoke persistent volumes). In TUI mode restore the terminal
-// FIRST so the teardown narration prints on the normal screen with a visible cursor.
-// The log file and smoke-state.json BOTH persist after teardown: the log for
-// post-mortem, the state file as the pointer to the surviving data (smoke:status
-// reads it; a future boot resumes via `--pg-data`). (The CI flow calls cleanup() +
+// postgres data (issue: smoke persistent volumes). The log file and
+// smoke-state.json BOTH persist after teardown: the log for post-mortem, the
+// state file as the pointer to the surviving data (smoke:status reads it; a
+// future `--local volume` boot reattaches it). (The CI flow calls cleanup() +
 // cleanCiVolume(); the startup-failure path leaves containers up for inspection.)
 function onSignal(): void {
-  if (tui) tui.stop();
-  unpatchConsole();
   console.log(`\n[smoke] logs: ${logFile}`);
   cleanup();
   printResumeHint();
@@ -888,166 +764,25 @@ process.on("SIGTERM", onSignal);
 // waitForPostgres/waitForHttp used to live here as hand-rolled copies; they are
 // now scripts/stack/stack.ts's, reached through the `stack` handle in main().
 
+// Every bun child this boot starts runs with `--no-env-file`, as the boot itself
+// does (package.json's `smoke` script): bun would otherwise auto-load the
+// checkout's `.env` into the child, and a boot reads no env file from the
+// checkout (criterion 122). The child's environment is the map handed to it.
+function withoutEnvFile(cmd: string[]): string[] {
+  return cmd[0] === "bun" ? ["bun", "--no-env-file", ...cmd.slice(1)] : cmd;
+}
+
 async function run(cmd: string[], cwd: string, env: Record<string, string>, label: string): Promise<void> {
-  const proc = Bun.spawn(cmd, { cwd, env, stdout: outFd, stderr: errFd });
+  const proc = Bun.spawn(withoutEnvFile(cmd), { cwd, env, stdout: outFd, stderr: errFd });
   const code = await proc.exited;
   if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
 }
 
 async function expectRunFailure(cmd: string[], cwd: string, env: Record<string, string>, label: string): Promise<void> {
-  const proc = Bun.spawn(cmd, { cwd, env, stdout: outFd, stderr: errFd });
+  const proc = Bun.spawn(withoutEnvFile(cmd), { cwd, env, stdout: outFd, stderr: errFd });
   const code = await proc.exited;
   if (code === 0) throw new Error(`${label} unexpectedly exited 0`);
 }
-
-// --- Readiness-probe polling (research queue + container health) ----------
-// Moved to ./smoke-readiness-polling.ts (issue #456): legacy research-queue
-// polling (D25 moved regime/research cadence to the independent
-// analytics-producer; these polls still read the retired
-// regime.classify/research.refresh queue rows for historical TUI
-// compatibility) and container health polling (the REAL docker container
-// status, not just the HTTP /health endpoint). One instance per boot, created
-// here once every dependency it needs (dockerEnv, the DB credentials, the
-// live backendUrl) is in scope; getBackendUrl is a getter (not a snapshot)
-// because backendUrl is not resolved until applyHostPorts() runs, later in
-// main().
-const readinessPolling = createReadinessPolling({
-  repoRoot,
-  dockerEnv,
-  externalPgEnabled: !composePostgres,
-  dbUser: DB_USER,
-  dbName: DB_NAME,
-  researchKeys,
-  getBackendUrl: () => backendUrl,
-  state,
-  log,
-});
-
-// --- TUI render -----------------------------------------------------------
-let tui: Tui | undefined;
-let frame = 0;
-// readinessPolling.isHealthChecking() replaces the old module-level
-// healthChecking flag — true while a docker-container health poll is in flight.
-
-// fmtDuration / fmtCountdown / phaseGlyph / stepGlyph / onboardGlyph / ticks /
-// STAGE_COLOR / memberGlyph / columnWidth / columns now live in
-// ./smoke-tui-view.ts (issue #456) — imported above. The glyph functions take
-// `frame` explicitly (this module's own spinner-frame counter) instead of
-// closing over it.
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-const renderResearch = (height: number): string[] =>
-  renderResearchPane(state, height, fmtCountdown(readinessPolling.secsUntilNext("regime.classify")),
-    fmtCountdown(readinessPolling.secsUntilNext("research.refresh")));
-
-function renderSwarm(subjectId: string, height: number): string[] {
-  const c = state.swarms[subjectId];
-  if (!c) return [color("2", "(no data)")];
-  const nextTxt = c.nextAt > 0 ? `next ${fmtDuration(Math.max(0, c.nextAt - Date.now()))}` : "running…";
-  const out = [
-    color("1", c.subjectName) + color("2", `  [${c.sessionState}] pub:${c.publishedCount} · ${nextTxt}`),
-  ];
-  const ids = Object.keys(c.members);
-  for (const id of ids) {
-    const m = c.members[id];
-    const stance = m.stance ? color(STAGE_COLOR[m.stage] || "37", ` ${m.stance}${m.confidence != null ? ` c=${m.confidence}` : ""}`) : "";
-    out.push(`${memberGlyph(m, frame)} ${cap(id).padEnd(9)} ${m.stage.padEnd(9)}${stance}`);
-  }
-  if (ids.length === 0) out.push(color("2", "  (waiting…)"));
-  if (c.history.length) {
-    out.push(color("2", "recent:"));
-    for (const h of c.history.slice(-Math.max(1, height - ids.length - 3))) {
-      out.push(color("2", `  ${h.date}: ${h.synthesis}`));
-    }
-  }
-  return out;
-}
-
-function render(): string[] {
-  frame++;
-  const W = tui ? tui.columns : 80;
-  const H = tui ? tui.rows : 24;
-  const lines: string[] = [];
-
-  // Header
-  lines.push(color("1;36", "Robot Money — standing smoke") + color("2", `   ${project}   up ${fmtDuration(Date.now() - startTime)}`));
-  lines.push(color("2", `log: ${logFile}`));
-
-  // Services pane
-  lines.push(hr(W, "Services"));
-  for (const s of state.services) lines.push(`  ${color("36", s.name.padEnd(10))} ${s.url}`);
-  // The admin dashboard password — shown ONLY here in the interactive TUI (never
-  // logged/persisted), and only once probed CONFIRMED-unclaimed (#553/D32).
-  if (state.adminClaimed === false) lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
-
-  // Startup pane
-  lines.push(hr(W, readinessPolling.isHealthChecking() ? `Startup ${spinner(frame)}` : "Startup"));
-  lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase, frame)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
-  lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status, frame)} ${s.name}`).join("   "));
-
-  if (state.fatal) lines.push(...renderFailurePane(state.fatal, W, project));
-  lines.push(...renderTelemetryPane(state.telemetry, state.containerErrors, W));
-
-  // Onboarding strip (full width): every prospective member keeps its join checklist
-  // after admission (status checks stay visible), plus a queue of upcoming members with
-  // a live countdown to when each is admitted.
-  lines.push(hr(W, "Onboarding"));
-  if (state.onboarded.length === 0) {
-    lines.push(color("2", "  · waiting for the first prospective member…"));
-  } else {
-    const MAX_SHOWN = 6; // keep the strip from crowding out the panes on a long run
-    const hidden = state.onboarded.length - MAX_SHOWN;
-    if (hidden > 0) lines.push(color("2", `  (+${hidden} earlier admitted — checks retained)`));
-    for (const ob of state.onboarded.slice(-MAX_SHOWN)) {
-      const cells = ob.steps.map((s) => `${onboardGlyph(s.status, frame)} ${s.key}`).join("  ");
-      lines.push(truncate(`  ${color("36", ob.name.padEnd(10))} ${color("2", `(${ob.memberId})`)}  ${cells}`, W));
-    }
-  }
-  if (state.upcoming.length > 0) {
-    const now = Date.now();
-    const items = state.upcoming
-      .map((u) => `${color("36", u.name)} ${color("2", `in ${fmtDuration(Math.max(0, u.at - now))}`)}`)
-      .join("    ");
-    lines.push(truncate(`  ${color("2", "upcoming →")} ${items}`, W));
-  }
-
-  // Footer (built first so the middle region can claim the rest of the height)
-  const footer: string[] = [hr(W, "Log")];
-  for (const m of state.messages) footer.push(color("2", `  ${m}`));
-  footer.push(color("2", "  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept)."));
-
-  // Middle region: Research + one pane per swarm subject, splitting the largest
-  // remaining space. Side-by-side columns when they fit; stacked when too narrow.
-  const midH = Math.max(3, H - lines.length - footer.length - 1);
-  lines.push(hr(W));
-  const subjectIds = Object.keys(state.swarms);
-  const paneCount = 1 + subjectIds.length;
-  const fits = W >= 72 && columnWidth(W, paneCount) >= 22;
-  if (fits) {
-    const panes = [
-      renderResearch(midH),
-      ...subjectIds.map((id) => renderSwarm(id, midH)),
-    ].map((p) => p.slice(0, midH));
-    for (const l of columns(panes, W)) lines.push(l);
-  } else {
-    // Too narrow for columns: stack each pane, dividing the height evenly.
-    const each = Math.max(2, Math.floor(midH / paneCount));
-    const panes = [
-      renderResearch(each),
-      ...subjectIds.map((id) => renderSwarm(id, each)),
-    ];
-    for (let p = 0; p < panes.length; p++) {
-      if (p > 0) lines.push(color("2", "·".repeat(Math.min(W, 24))));
-      for (const l of panes[p].slice(0, each)) lines.push(truncate(l, W));
-    }
-  }
-
-  return [...lines, ...footer];
-}
-
-// swarmProgress (maps the additive runSession/runAgent callback events
-// onto swarm state) now lives in ./smoke-tui-view.ts — every call site
-// passes `state` and `log` explicitly: `swarmProgress(state, subject.id, log)`.
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
@@ -1069,68 +804,34 @@ async function main(): Promise<void> {
   // `workflow_dispatch` with real_eval=true — NOT a plain push to main (#803
   // removed that route). A push run leaves this empty too and skips this
   // resolve correctly: no eval to fail early for.
-  if (tuiActive) {
-    tui = createTui({ render });
-    tui.start();
-    patchConsole(); // capture stray console.* (incl. imported e2e.ts) into the log file
-  }
-  // Observe from here on, including through a failed boot. Keep the last good
-  // sample: an empty sweep means docker hiccuped, not that the lanes vanished.
-  startTelemetryPolling({ repoRoot, dockerEnv, onSample: ({ samples, errors }) => {
-    if (samples.length > 0) { state.telemetry = samples; state.containerErrors = errors; }
-  } });
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
   // build → postgres + wait → migrate → services → /health, in ONE shared
   // implementation. The smoke contributes only what is genuinely smoke-specific:
-  // the `full` profile, its migrate flags, and the TUI rendering below.
-  //
-  // StackHooks is how the TUI is driven WITHOUT scripts/stack importing a
-  // renderer: each lifecycle event maps onto the panes exactly as the
-  // hand-rolled sequence did, so the visible boot is unchanged.
-  // The standing non-api containers this boot starts. `system-scheduler` is
-  // here because `up` starts it and its tile must track that; it is NOT a
-  // worker lane (issue #1026) and holds no queue.
-  const WORKER_LANES = ["worker-analytics", "worker-research", "system-scheduler", "analytics-producer"];
+  // the `full` profile, its migrate flags, and the narration below. StackHooks
+  // is how the boot narrates WITHOUT scripts/stack importing a renderer.
   const onStackEvent = (e: StackEvent): void => {
     if (e.phase === "log") return void log(e.message);
     const { phase, status } = e;
     if (phase === "build") {
-      if (status === "start") {
-        log("building compose images…");
-        for (const c of state.containers) setContainer(state, c.name, "building");
-      } else {
-        for (const c of state.containers) setContainer(state, c.name, "pending");
-      }
+      if (status === "start") log("building compose images…");
     } else if (phase === "postgres") {
       const n = postgresPhaseNarration(!composePostgres, status, e.detail);
-      if (n.container) setContainer(state, "postgres", n.container);
       if (n.log) log(n.log);
     } else if (phase === "migrate") {
-      if (status === "start") {
-        log("running migrations…");
-        setStep(state, "migrate", "running");
-      } else {
-        setStep(state, "migrate", "done");
-      }
+      // A skipped migrate still emits start/done, carrying the reason as detail.
+      if (e.detail) { if (status === "start") log(`migrate: ${e.detail}`); }
+      else log(status === "start" ? "running migrations…" : "migrations done");
     } else if (phase === "services") {
-      if (status === "start") {
-        log("starting api, worker lanes (analytics/research), system-scheduler…");
-        for (const n of ["api", ...WORKER_LANES]) setContainer(state, n, "starting");
-      } else {
-        // No /health endpoint on a lane — `up` ⇒ running (unchanged semantics).
-        // system-scheduler serves one, but §6.3 reports it separately.
-        for (const n of WORKER_LANES) setContainer(state, n, "healthy", "running");
-        setStep(state, "api /health", "running");
-      }
+      // system-scheduler is started here too, but it is NOT a worker lane
+      // (issue #1026): it claims no jobs and holds no database credential.
+      if (status === "start") log("starting api, worker lanes (analytics/research), system-scheduler…");
     } else if (phase === "ports" && status === "done") {
       // The daemon has been asked what it published (`docker compose port`).
       // Narrated because a boot that hangs here is hanging on the readback, not
       // on the health check — a distinction that is invisible otherwise.
       log(`host ports discovered: ${e.detail ?? "?"}`);
     } else if (phase === "health" && status === "done") {
-      setContainer(state, "api", "healthy");
-      setStep(state, "api /health", "done");
       log("api healthy");
     }
   };
@@ -1151,66 +852,81 @@ async function main(): Promise<void> {
   // worst outcome this repo has.
   if (dataPath.kind === "smoke-twin") assertSmokeTwinIsTarget(stack.spawnEnv, dataPath.url);
 
+  // `--seed` on a blank or remote database: demo job_schedules, then the
+  // simulation analytics seed. A dump or reattached volume refuses `--seed` at
+  // parse time (smoke-db-mode.ts), so this only ever meets an empty database or
+  // one db-preflight has just classified.
   async function initializeScenario(): Promise<void> {
-    const step = bootstrapStepNames(smokeMode)[0]!;
-    setStep(state, step, "running");
-    // migrate() no longer seeds job_schedules; this non-twin branch only runs
-    // via explicit --seed, so "not twin" here IS simulation (idempotent on twin).
+    log("simulation seed…");
     await stack.composeAsync(
-      ["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/seed.ts",
-        ...(dataPath.kind !== "smoke-twin" ? ["--smoke-schedules"] : [])],
+      ["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/seed.ts", "--smoke-schedules"],
       "seed job_schedules",
       { stdout: outFd, stderr: errFd },
     );
-    if (dataPath.kind === "smoke-twin") {
-      // Restored full already; retired archive-adopt pipeline is gone —
-      // requested agents start in the live-session block below, not here.
-      log("twin already has real, full data — no further initializer to run");
-    } else {
-      // Simulation data only — does not restore the retired v0 archive.
-      await stack.composeAsync(
-        ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
-        "simulation analytics seed",
-        { stdout: outFd, stderr: errFd },
-      );
-      log("simulation schedules/projects/analytics initialized (archive omitted)");
-    }
-    setStep(state, step, "done");
+    // Simulation data only — does not restore the retired v0 archive.
+    await stack.composeAsync(
+      ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
+      "simulation analytics seed",
+      { stdout: outFd, stderr: errFd },
+    );
+    log("simulation schedules/projects/analytics initialized (archive omitted)");
   }
 
-  const seeds = shouldSeed(dataPath.kind, process.argv);
-  if (dataPath.kind !== "smoke-twin" && !seeds) console.warn(`[smoke] no --seed: no archive/simulation init. Schema currency is still checked.`);
+  // NO MODE IMPLIES --seed OR --migrate (spec §4.3, §5, §8.5). Each runs only
+  // when the operator asked for it, on every data path.
+  const seeds = shouldSeed(process.argv);
+  const migrates = requestsMigrate(process.argv);
+  if (!seeds) console.warn(`[smoke] no --seed: no simulation init. Schema currency is still checked.`);
+  // Which read-only checks run between postgres and migrate(): the decision and
+  // its reasoning are bootPreflightPlan() in smoke-db-mode.ts. Schema currency
+  // runs on EVERY path that skips migrate, local ones included.
+  const preflightPlan = bootPreflightPlan({ composePostgres, seeds, migrates });
 
   async function classifyDatabase(): Promise<void> {
-    setStep(state, DB_PREFLIGHT_STEP, "running");
-    if (seeds) { await stack.composeAsync(dbPreflightArgv(dataPath.kind === "smoke-twin" ? "adopt" : "simulation"), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
-    if (dataPath.kind === "external" && !requestsMigrate(process.argv)) refuseIfSchemaBehind(stack.compose, log);
-    setStep(state, DB_PREFLIGHT_STEP, "done");
+    log(`${DB_PREFLIGHT_STEP}…`);
+    if (preflightPlan.classify) { await stack.composeAsync(dbPreflightArgv("simulation"), "external database preflight", { stdout: outFd, stderr: errFd }); log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log"); }
+    if (preflightPlan.schemaCurrent) refuseStaleSchema();
+  }
+
+  // refuseIfSchemaBehind()'s own message is about the remote path (a doadmin
+  // prompt). A local mode migrates with its own container's credential, so it
+  // gets its own remedy rather than a prompt it will never see.
+  function refuseStaleSchema(): void {
+    const mode = localModeOf(dataPath);
+    try {
+      refuseIfSchemaBehind(stack.compose, log);
+    } catch (err) {
+      if (mode === null) throw err;
+      throw new Error(
+        `${LOCAL_FLAG} ${mode}: --migrate was not passed and the schema is not current (named above). ` +
+          `No mode implies --migrate (spec §4.3, §5), and serving this boot would run current code on a stale schema. ` +
+          `Re-run with --migrate; a local mode needs no password.`,
+      );
+    }
   }
 
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
-    migrateScriptArgs: [...scenario.migrateScriptArgs],
-    migrate: dataPath.kind !== "external" || requestsMigrate(process.argv),
-    preflight: composePostgres ? undefined : classifyDatabase,
+    migrate: migrates,
+    preflight: preflightPlan.classify || preflightPlan.schemaCurrent ? classifyDatabase : undefined,
     initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
   }));
 
-  if (dataPath.kind === "smoke-twin") await defaultSmokeTwinJudgeMode(backendUrl, automationToken); // the CI block below restores what IT read — enforce, because this ran first
-
   if (process.env.CI && dataPath.kind === "smoke-twin") {
-    // ── CI TWIN: the bounded end-to-end verdict (issue #537) ───────────────
+    // ── CI DUMP: the bounded end-to-end verdict (issue #537) ───────────────
     // A production-shaped boot's checks are NOT the demo's checks. Proves,
     // against the real HTTP API: (1) the restore brought over real, queryable
     // committee data, (2) one NEW live session completes with the restored
     // personas, (3) imported history still serves under #498's archival
-    // semantics. Same runSession() as twin and standing mode; only the
-    // typed subjects/members input differs.
-    console.log("\n[smoke] twin: running one live swarm session with the restored personas…");
+    // semantics. Same runSession() as the standing loop; only the typed
+    // subjects/members input differs. No judge coverage: nothing on this stack
+    // judges inline, and the judge-mode flip that used to wrap this session is
+    // gone with it (D48/D53) — it returns with the participant judge.
+    console.log("\n[smoke] dump: running one live swarm session with the restored personas…");
     process.env.BACKEND_URL = backendUrl;
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, automationToken);
-    if (roster === null) throw new Error("twin restored no readable IC roster");
+    if (roster === null) throw new Error("dump restored no readable IC roster");
     const members = adoptRestoredRoster(scenario, roster, undefined, { twin: true, seatAllActive: seatAllRestored });
     const rail = {
       repoRoot,
@@ -1222,21 +938,13 @@ async function main(): Promise<void> {
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       automationToken,
     };
+    await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: "adopt", cadence });
 
-    // Judge role coverage (issue #845): the ONLY thing `--db smoke-twin` runs,
-    // so session.ts `main()`'s own coverage never reaches it — see
-    // smoke-mode.ts's judgeCoverageCandidate/withMemberAbsent for the choice.
-    const judgeCandidate = judgeCoverageCandidate(roster);
-    await session.runJudgeRoleCoverage(judgeCandidate.id, automationToken, () =>
-      session.runSession(scenario.subjects[0]!, 1, {
-        rail, members: withMemberAbsent(members, judgeCandidate.id), initializer: "adopt", cadence,
-      }));
-
-    console.log("[smoke] twin: asserting restored subjects, personas, live take and archival history…");
+    console.log("[smoke] dump: asserting restored subjects, personas, live take and archival history…");
     await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "smoke e2e assertions");
 
-    console.log("\n[smoke] CI twin — scenario assertions passed");
+    console.log("\n[smoke] CI dump — scenario assertions passed");
   }
 
   if (process.env.CI && dataPath.kind !== "smoke-twin") {
@@ -1309,15 +1017,16 @@ async function main(): Promise<void> {
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
 
     // PRODUCT invariants, via the same driver a cutover runs (scripts/verify-live.ts).
-    // tier=full is ONLY ever for a smoke-twin boot (the twin-roster and judge
-    // legs assert what a TWIN owes: every restored member seated, an ENFORCE
+    // tier=full is ONLY ever for a dump boot (the twin-roster and judge legs
+    // assert what a TWIN owes: every restored member seated, an ENFORCE
     // judgement with a receipt) — and this branch is never reached by one
-    // (twin always takes the CI-twin block above). This demo boot's
+    // (a dump always takes the CI-dump block above). This demo boot's
     // simulation roster carries deliberate no-shows (draco, themis) and
-    // fixtures (cross-role-test, starter-rest) that never file takes, and its
-    // judge coverage is shadow-only (issue #845), so those legs FAIL here by
-    // construction — tier=readonly still asserts the swarm pipeline legs
-    // (published sessions, lifecycle completeness, D42 recompute).
+    // fixtures (cross-role-test, starter-rest) that never file takes, and no
+    // judge runs on it (the judge is a participant, not yet started here), so
+    // those legs FAIL here by construction — tier=readonly still asserts the
+    // swarm pipeline legs (published sessions, lifecycle completeness, D42
+    // recompute).
     const verifyTier = "readonly";
     console.log(`[smoke] verifying product invariants (verify-live, tier=${verifyTier})…`);
     await run(["bun", "run", "scripts/verify-live.ts", "--base", backendUrl, "--tier", verifyTier], repoRoot,
@@ -1442,39 +1151,32 @@ async function main(): Promise<void> {
   }
 
   // ── LOCAL: standing smoke ────────────────────────────────────────────────
-  // Phase A done (stack healthy). Record state, print/route the READY routes, then
+  // Phase A done (stack healthy). Record state, print the READY routes, then
   // start the staggered ~2-min action loops. Never auto-tears-down.
 
   // Phase A: persist the state file so smoke:down/smoke:status can rebuild the env.
   writeStateFile();
 
-  state.adminClaimed = await probeAdminClaimed(backendUrl); // #553/D32: claimed ⇒ never display the per-boot token
-
-  // Non-TUI keeps the exact plain READY table; TUI shows it in the Services pane.
-  if (!tuiActive) {
-    console.log("\n" + "── Robot Money smoke — READY ──".padEnd(68, "─"));
-    console.log(`  Site:       ${backendUrl}/`);
-    console.log(`  Regime:     ${backendUrl}/regime`);
-    console.log(`  Swarm:  ${backendUrl}/swarm`);
-    for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
-    console.log(`  Admin:      ${backendUrl}/admin  ${state.adminClaimed ? "(claimed credential — D32)" : "(password shown in the interactive TUI only)"}`);
-    console.log(`  State file: ${stateFile}`);
-    console.log(`  Log file:   ${logFile}`);
-    console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);
-    console.log("");
-    // Rendered from the RESOLVED profile, never hardcoded — the banner must
-    // state the cadence actually in force for this invocation.
-    console.log(`  ${renderCadenceLine(cadence, scenario.subjects.length)}`);
-    console.log("  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).");
-    console.log("  Reclaim stopped smokes' data volumes with: bun run smoke:clean");
-    console.log("");
-  }
+  // The READY table. The per-boot admin token is never printed: it used to be
+  // shown only inside the TUI, and there is no TUI (spec §1).
+  console.log("\n" + "── Robot Money smoke — READY ──".padEnd(68, "─"));
+  console.log(`  Site:       ${backendUrl}/`);
+  console.log(`  Regime:     ${backendUrl}/regime`);
+  console.log(`  Swarm:  ${backendUrl}/swarm`);
+  for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
+  console.log(`  Admin:      ${backendUrl}/admin`);
+  console.log(`  State file: ${stateFile}`);
+  console.log(`  Log file:   ${logFile}`);
+  console.log(`  PG data:    ${keptDataDescription(dataPath, project) ?? `remote (${redactedDbUrl})`}`);
+  console.log("");
+  // Rendered from the RESOLVED profile, never hardcoded — the banner must
+  // state the cadence actually in force for this invocation.
+  console.log(`  ${renderCadenceLine(cadence, scenario.subjects.length)}`);
+  console.log("  Observe from another terminal: bun smoke:status · bun smoke:tui");
+  console.log("  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).");
+  console.log("  Reclaim stopped smokes' data volumes with: bun run smoke:clean");
+  console.log("");
   log(`READY — Site ${backendUrl}/  ·  state ${stateFile}`);
-
-  // Research pane: begin polling the worker's real job queue (TUI mode only).
-  if (tuiActive) readinessPolling.startResearchPolling();
-  // Startup pane: begin live-checking the real docker container status (TUI only).
-  if (tuiActive) readinessPolling.startHealthPolling();
 
   // Frontend check — ONCE at startup, non-fatal (unchanged behaviour). Runs in a
   // child process, so its process.exit on failure can't take the smoke down.
@@ -1593,7 +1295,6 @@ async function main(): Promise<void> {
   } else if (smokeMode) {
     log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   }
-  if (twinRoster) await e2e.enableTwinJudge(resolveModelConfig(process.env).model, automationToken); // production ships the judge off; a twin must exercise it
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
@@ -1606,14 +1307,6 @@ async function main(): Promise<void> {
     // this stack minted, so the cheapest place to state that is where it happens.
     const simulated = simulatedSigners(sessionMembers);
     if (simulated.length) log(`${simulated.length} seat(s) sign with a SIMULATED per-boot key: ${simulated.join(", ")}`);
-  }
-
-  // Populate the per-subject panes and seed their countdowns.
-  for (const sch of schedules) {
-    state.swarms[sch.subject.id] = {
-      subjectName: sch.subject.name, sessionState: "idle", members: {},
-      publishedCount: 0, history: [], nextAt: sch.nextAt,
-    };
   }
 
   // Real-onboarded members' persistent homes (issue #361 Phase 3): the eval
@@ -1640,8 +1333,6 @@ async function main(): Promise<void> {
     automationToken,
   };
 
-
-
   async function swarmDriver(): Promise<void> {
     for (;;) {
       // Pick the earliest-due subject and wait until its slot.
@@ -1649,7 +1340,6 @@ async function main(): Promise<void> {
       const wait = due.nextAt - Date.now();
       if (wait > 0) await sleep(wait);
       const subject = due.subject;
-      const c = state.swarms[subject.id];
       // NO DATE IS COMPUTED HERE. This used to be
       // `sessionDateFor(Date.now(), due.runs)` — today plus one synthetic day
       // per run — invented so repeat sessions would not collide on the old
@@ -1659,8 +1349,6 @@ async function main(): Promise<void> {
       // row Postgres stamped (convened_at, migration 0022), so the only clock
       // that dates a session is the database's.
       log(`swarm → ${subject.id} (convening; the database dates the session)`);
-      c.members = {};
-      c.nextAt = 0; // running now → pane shows "running…"
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
@@ -1673,13 +1361,8 @@ async function main(): Promise<void> {
           // both hold real subjects that must never be overwritten with
           // fiction — only a local demo database is fictional to begin with.
           initializer: dataPath.kind === "ephemeral" ? "simulation" : "adopt",
-          onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
-        c.publishedCount++;
-        const synth: string = res?.pub?.session?.synthesis ?? "";
         const date: string = res?.pub?.session?.date ?? "(unknown)";
-        c.history.push({ date, synthesis: synth });
-        if (c.history.length > 4) c.history.shift();
         log(`swarm published ${date}/${subject.id}`);
       } catch (err) {
         log(`swarm session failed (stack still running): ${err instanceof Error ? err.message : err}`);
@@ -1689,7 +1372,6 @@ async function main(): Promise<void> {
       // literal here; clamped to "not in the past" so a session that overran its
       // slot reschedules immediately instead of firing a backlog.
       due.nextAt = Math.max(plannedRunAt(due.plan, due.runs), Date.now());
-      c.nextAt = due.nextAt;
     }
   }
   void swarmDriver();
@@ -1735,7 +1417,7 @@ async function main(): Promise<void> {
   // ADMISSION CADENCE comes from the profile (scripts/lib/smoke-cadence.ts), not
   // from literals here: the first admission stays prompt under both profiles
   // (after the base swarm shows), and later admissions ride the fast
-  // profile's 5-min beat or, under `--stage`, the realistic swarm interval.
+  // profile's 5-min beat or, under `--static-port`, the realistic swarm interval.
   // Adapt the shared finite-roster planner (smoke-newcomers.ts) to the
   // real-inference driver's identity shape. `identity.runId` is a LOCAL slug
   // only (this driver's bookkeeping key + the container's --title); the real
@@ -1769,15 +1451,7 @@ async function main(): Promise<void> {
       // Counted from ADMISSIONS, not from loop passes, so the first character
       // this boot actually admits still arrives promptly.
       const delay = admissionDelayMs(admitted, cadence.onboardingFirstMs, cadence.onboardingIntervalMs);
-      const dueAt = Date.now() + delay;
-      // Preview the next few admissions (this one + its successors, if any are
-      // left in the fixed list) with countdowns.
-      const upcoming: UpcomingMember[] = [];
-      for (const k of [0, 1, 2]) {
-        const p = plannedNewcomer(n + k);
-        if (p) upcoming.push({ memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * cadence.onboardingIntervalMs });
-      }
-      state.upcoming = upcoming;
+      if (upNext) log(`onboarding ${upNext.identity.name} next, in ${Math.round(delay / 1000)}s`);
       await sleep(delay);
       const planned = plannedNewcomer(n);
       if (!planned) break; // exhausted the fixed roster — stop, no generated fallback
@@ -1794,7 +1468,6 @@ async function main(): Promise<void> {
       // a second stack) in the meantime.
       const decision = decideAdmission(identity.name, await e2e.existingMemberNames(undefined, automationToken));
       if (!decision.admit) {
-        state.upcoming = [];
         log(
           decision.reason === "roster-unreadable"
             ? `onboarding ${identity.name} skipped — roster is unreadable, refusing to risk a duplicate`
@@ -1811,12 +1484,10 @@ async function main(): Promise<void> {
       // silently waving one through.
       const active = await e2e.activeMemberCount();
       if (active >= SWARM_ROSTER_CAP) {
-        state.upcoming = [];
         log(`onboarding ${identity.name} skipped — roster full (${active}/${SWARM_ROSTER_CAP})`);
         continue;
       }
-      startOnboarding(state, identity.runId, identity.name); // append to the persistent pane + drop from upcoming
-      setOnboardStep(state, identity.runId, "connect", "running"); // container is about to launch
+      log(`onboarding ${identity.name}: launching the member-agent container`);
       // Owner-held for this member's LIFETIME in this smoke (issue #361 Phase
       // 3): the same passphrase must unlock the keystore in every later
       // session run. Never logged; redacted from transcripts at the source.
@@ -1855,31 +1526,13 @@ async function main(): Promise<void> {
         });
         transcript.finish(result, Date.now() - attemptStartedAt);
 
-        // Rekey the pane entry to the server-minted memberId (§11 R2) as soon as
-        // it's known, so swarmProgress's later ev.memberId lookups match.
-        const ob = state.onboarded.find((o) => o.memberId === identity.runId);
-        if (ob && result.memberId) ob.memberId = result.memberId;
-        const entryId = result.memberId ?? identity.runId;
-
-        // The strip renders straight from the harness's OBSERVED step-state
-        // record — no fabricated sub-steps. Drop the harness's own trailing
-        // "session" entry (it means "reached the active roster", which this
-        // driver already tracks via `admitted` below); the strip's OWN
-        // session/memo/admitted tail tracks real swarm participation.
-        for (const s of result.steps) {
-          if (s.step === "session") continue;
-          setOnboardStep(state, entryId, s.step, s.status === "done" ? "done" : "pending");
-        }
+        // The harness's OBSERVED step-state record, on one line — no fabricated
+        // sub-steps. Its trailing "session" entry means "reached the active
+        // roster", which `admitted` below already reports.
+        const steps = result.steps.filter((st) => st.step !== "session").map((st) => `${st.step}:${st.status}`);
+        log(`onboarding ${identity.name} steps: ${steps.join(" ")}`);
 
         if (!result.admitted) {
-          // Mark the FIRST not-yet-done step in the pane's own (full 9-step)
-          // checklist as failed — not just among the harness's first 6: a
-          // member that reaches "claim" but never lands on the active roster
-          // (e.g. the auto-approve call itself failing) would otherwise render
-          // all-green with nothing visibly red.
-          const stalledOb = state.onboarded.find((o) => o.memberId === entryId);
-          const stalledAt = stalledOb?.steps.find((s) => s.status !== "done");
-          if (stalledAt) setOnboardStep(state, entryId, stalledAt.key, "failed");
           // Which KIND of failure this was is the whole point (§11.3 E4): a
           // refusal and a navigation failure look identical in the step strip
           // but mean opposite things about our own instructions. Any attempt
@@ -1912,7 +1565,6 @@ async function main(): Promise<void> {
         });
         sessionMembers.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
         admitted++; // paces the NEXT wait — skipped names must not count
-        setOnboardStep(state, entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves
         // the SAME outcome vocabulary in the log — a run that reads "admitted"
         // and one that reads "refused" are then directly comparable.
@@ -1923,7 +1575,6 @@ async function main(): Promise<void> {
         transcript.finishThrew(err, Date.now() - attemptStartedAt);
       }
     }
-    state.upcoming = [];
     log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
   // Scripted newcomers are a DEMO narrative. A smoke boot shows the restored
@@ -1943,13 +1594,10 @@ function failureDetail(): readonly string[] {
 main().catch((err) => {
   const em = err instanceof Error ? err.message : String(err);
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] startup failed: ${em}\n`); } catch {} }
-  for (const c of state.containers) if (c.phase === "starting" || c.phase === "building") setContainer(state, c.name, "failed");
 
-  // CI tears the stack down, which also stops the writers. Unchanged: a CI boot
-  // has no TUI to display in and must exit non-zero for the job to fail.
+  // CI tears the stack down, which also stops the writers, and must exit
+  // non-zero for the job to fail.
   if (process.env.CI) {
-    if (tui) tui.stop();      // restore terminal FIRST (never leave escape junk)
-    unpatchConsole();
     console.error("[smoke] startup failed:", em);
     if (!cleaned) dumpDiagnostics();
     cleanup();
@@ -1959,34 +1607,23 @@ main().catch((err) => {
 
   // LOCAL: the stack stays up for inspection, so the writers must be stopped
   // EXPLICITLY — leaving them running is what let a failed boot go on mutating
-  // the database (an external one, under --external-pg, that no teardown can
-  // roll back) for as long as the operator took to read the error.
-  setFatal(state, em, { step: state.steps.find((s) => s.status === "running")?.name, detail: failureDetail() });
-  setFatalWriters(state, quiesceWriters());
-  for (const c of state.containers) {
-    if (c.name !== "postgres" && c.phase === "healthy") setContainer(state, c.name, "failed", "stopped");
-  }
+  // the database (a remote one, that no teardown can roll back) for as long as
+  // the operator took to read the error.
+  const writers = quiesceWriters();
   // Failure may have happened before Phase A wrote the state file, yet the
   // containers can already be up. Write it best-effort so `smoke:down` can find
   // and tear them down. Never auto-teardown locally.
   try { writeStateFile(); } catch { /* best effort */ }
 
-  if (tui) {
-    // Stay resident and keep painting: the TUI IS the error report. Exiting here
-    // is what used to tear the screen down and leave the operator with a bare
-    // sentence on the normal screen. Ctrl-C/SIGTERM still tears down via
-    // onSignal(), and `bun run smoke:down` still works from another shell.
-    if (!cleaned) dumpDiagnostics(); // console is patched → lands in the log file
-    tui.repaint();
-    return;
-  }
-  // No TUI (non-TTY, --no-tui, NO_TUI): nothing would ever repaint, so staying
-  // resident would just hang. Print and exit exactly as before.
-  unpatchConsole();
+  // Print and exit: nothing stays resident to repaint an error (spec §1: no TUI).
   console.error("[smoke] startup failed:", em);
   for (const d of failureDetail()) console.error(`[smoke]   ${d}`);
   if (!cleaned) dumpDiagnostics();
-  console.log(`[smoke] database writers: ${state.fatal?.writers ?? "unknown"}`);
+  console.log(
+    writers === "stopped"
+      ? "[smoke] database writers: stopped — nothing is still writing"
+      : "[smoke] database writers: could NOT be stopped — they may STILL be writing; run `bun run smoke:down`",
+  );
   printLeaveRunning();
   process.exit(1);
 });

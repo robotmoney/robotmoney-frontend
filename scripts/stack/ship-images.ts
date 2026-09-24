@@ -237,5 +237,5 @@ if (import.meta.main) {
     );
   }
   console.log(`\n[ship-images] DONE. ${built.length} images built on $(hostname) at ${args.tag} and verified on ${args.host}.`);
-  console.log(`[ship-images] Next: on ${args.host}, RM_IMAGES_OVERRIDE=${HOST_IMAGES_OVERRIDE_PATH} bun run smoke:stage`);
+  console.log(`[ship-images] Next: on ${args.host}, bun smoke --static-port --images-override ${HOST_IMAGES_OVERRIDE_PATH}`);
 }

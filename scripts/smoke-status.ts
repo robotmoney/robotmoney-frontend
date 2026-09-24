@@ -3,7 +3,7 @@
 // is still up. Teardown (`bun run smoke:down` or Ctrl-C) KEEPS the postgres data
 // (issue: smoke persistent volumes), so this state file may describe a STOPPED smoke
 // whose data survives — `docker compose ps` then shows no running containers while
-// the PG-data line below still points at the kept volume / --pg-data dir. Tear down
+// the PG-data line below still points at the kept volume. Tear down
 // with `bun run smoke:down`; reclaim stopped smokes' data with `bun run smoke:clean`.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,9 +29,9 @@ interface SmokeState {
   // it, but an older standing smoke's state file may still carry it.
   mcpPort?: number;
   pgPort?: number;
-  // Did this boot apply docker-compose.stage.yml (`bun run smoke -- --stage`),
+  // Did this boot apply docker-compose.stage.yml (`bun smoke --static-port`),
   // pinning the api to the cloudflared origin? Provenance only; optional
-  // because a state file written before --stage existed has no such flag.
+  // because a state file written before the pin existed has no such flag.
   stage?: boolean;
   // Environment class + hash (scripts/stack/naming.ts) so the labels compose
   // interpolates here match the ones `up` stamped. Optional for the same
@@ -54,9 +54,8 @@ interface SmokeState {
   dbPassword: string;
   dbName: string;
   logFile?: string;
-  // Data location (issue: smoke persistent volumes): exactly one is set — a
-  // `--pg-data` host bind dir, or the fresh-per-run named volume kept on teardown.
-  pgDataDir?: string;
+  // Data location (issue: smoke persistent volumes): the named volume kept on
+  // teardown, and the one `--local volume` reattaches.
   pgVolume?: string;
   createdAt: string;
 }
@@ -84,7 +83,8 @@ const dockerEnv = buildSmokeLifecycleComposeEnv(s, process.env);
 // exact failure was hit on this host. `docker compose port` asks what is
 // published RIGHT NOW; an unrunning service simply yields nothing.
 function livePort(service: string, containerPort: number): number | undefined {
-  const r = Bun.spawnSync(["docker", "compose", ...portArgs(service, containerPort)], {
+  // `--env-file /dev/null`: compose must not read the checkout's `.env`.
+  const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", ...portArgs(service, containerPort)], {
     cwd: repoRoot,
     env: dockerEnv,
     stdin: "ignore",
@@ -142,14 +142,13 @@ if (mode === "external") {
   console.log(`[smoke:status]   pg data:    TWIN volume ${s.smokeTwinVolume ?? "(unrecorded)"}  (restored from backup ${s.smokeTwinBackupStamp ?? "?"}; kept on teardown; reclaim: bun run smoke:clean)`);
   console.log(`[smoke:status]               it holds a copy of production, including real credential material.`);
   if (s.smokeTwinContainer) console.log(`[smoke:status]   smoke-twin:       container ${s.smokeTwinContainer}`);
-} else if (s.pgDataDir) {
-  console.log(`[smoke:status]   pg data:    --pg-data ${s.pgDataDir}  (bind; resume: bun run smoke -- --pg-data ${s.pgDataDir})`);
 } else {
-  console.log(`[smoke:status]   pg data:    volume ${s.pgVolume ?? `${s.project}_pgdata`}  (kept on teardown; reclaim: bun run smoke:clean)`);
+  const volume = s.pgVolume ?? `${s.project}_pgdata`;
+  console.log(`[smoke:status]   pg data:    volume ${volume}  (kept on teardown; reattach: bun smoke --local volume=${volume}; reclaim: bun run smoke:clean)`);
 }
 console.log("");
 
-const r = Bun.spawnSync(["docker", "compose", "ps"], {
+const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "ps"], {
   cwd: repoRoot,
   env: dockerEnv,
   stdout: "inherit",
