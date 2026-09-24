@@ -114,7 +114,8 @@ roadmaps, task checklists, or phase ordering to `docs/`.
 - [Architecture](../architecture.md) — product and system boundaries, runtime
   components, data flow, and the D13 network topology.
 - [Decisions](../decisions.md) — accepted decision records; D47 owns deployment
-  mechanism authority and D48 records the judge-mode product decision.
+  mechanism authority, D48 records the judge-mode product decision, D51 the
+  final-take rule, and D52 the credential, scope and epoch-grid decisions.
 - [System scheduler spec](../technical/system-scheduler-spec.md) — session
   lifecycle, epoch timing, the API event stream, recovery after downtime, and
   the scheduler acceptance gates. Prescriptive; not yet shipped.

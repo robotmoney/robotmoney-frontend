@@ -46,9 +46,9 @@ Each subject's windows close on a fixed wall-clock **grid**. Three columns on th
 
 The grid keeps windows from drifting. A late turnover does not push later windows back, and a daily subject anchored after the analytics producer's 22:30 UTC regime refresh closes after it every day.
 
-- **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2).
+- **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2). An operator's early turnover (§4.3) follows the same rule, so the next window runs to the grid instant after the early-closed window's scheduled close and is longer than one duration.
 - **First epoch.** An epoch opened with no predecessor (a fresh database, an activation, a reactivation) closes at the first grid instant after now. Its window can therefore be shorter than one duration.
-- **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction. The current window is unchanged, and the grid continues from its close with the new spacing.
+- **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction; a subject with no open window keeps its anchor. The current window is unchanged, and the grid continues from its close with the new spacing.
 
 ### 2.3 Where it lives and who sets it
 
@@ -111,7 +111,7 @@ While a session is `collecting` **and now is before its `window_closes_at`**, pa
 
 **One clock.** Every comparison against a stored instant — a take against `window_closes_at`, an absence, a consensus against the judging deadline, finalize's time guard — reads the database clock with `clock_timestamp()` inside the deciding transaction. Never the application's clock, and never `now()`, which is the transaction's start time and would let a slow transaction accept a late take. The instants the API stores are taken from the same clock.
 
-The window is the only timed part of a session's life, and the only part with a fixed duration.
+The window is the only scheduled part of a session's life. The judging deadline is a timeout inside settlement, not a schedule (§6.1).
 
 ### 4.3 The boundary
 
@@ -147,7 +147,7 @@ The scheduler waits for **either** `session.judged` **or** its deadline timer, w
 
 Then it publishes. A repeated finalize returns the outcome already decided; it never re-decides. A consensus recorded after the deadline is kept as a record but does not change a `no_consensus` outcome.
 
-**Finalize is time-guarded as well as state-guarded.** Under `enforce`, the API accepts finalize before the deadline only if an eligible consensus is already recorded, in which case it publishes `judged` at once. With no eligible consensus it refuses finalize as a reasoned no-op until the deadline has passed by the API's own clock, because absence of a consensus before the deadline proves nothing. At the exact deadline instant: a consensus recorded *at or before* it is eligible, and finalize is accepted *at or after* it. This is request validation, not an API timer; the scheduler still holds the deadline and issues the call.
+**Finalize is time-guarded as well as state-guarded.** Under `enforce`, the API accepts finalize before the deadline only if an eligible consensus is already recorded, in which case it publishes `judged` at once. With no eligible consensus it refuses finalize as a reasoned no-op until the deadline has passed by the database clock (§4.2), because absence of a consensus before the deadline proves nothing. At the exact deadline instant: a consensus recorded *at or before* it is eligible, and finalize is accepted *at or after* it. This is request validation, not an API timer; the scheduler still holds the deadline and issues the call.
 
 **No consensus.** A session finalized as `no_consensus` is published in that state with no consensus certificate. Nothing is fabricated: no template opinion, no placeholder certificate, no default verdict. A session with no consensus says so. Its aggregate and its signed takes are published unchanged.
 
@@ -218,7 +218,7 @@ There are four kinds of credential in this system, and they must not be confused
 | **Signing** — an Ed25519 key | authorship of a take or judgement | participants only | `credential.json` (`smoke-production-spec.md` §6.1) |
 | **API** — a bearer token | that the caller may call the API | anything that calls the API | a service token (scheduler, analytics producer, operator admin) is a per-instance file whose hash and rights sit in the API's token store; a participant's bearer is in its `credential.json` entry (`smoke-production-spec.md` §3) |
 | **Database** — a Postgres role password | that the process may open a database connection | the API and the pipeline worker, at runtime | `~/.env` (`smoke-production-spec.md` §3) |
-| **Model** — a third-party LLM key (e.g. `OPENCODE_API_KEY`) | that the holder may call a model vendor | participants that call a model: agents, judges | delivered to those containers only |
+| **Model** — a third-party LLM key (e.g. `OPENCODE_API_KEY`) | that the holder may call a model vendor | participants that call a model: agents, judges | each participant's own `credential.json` entry, delivered to its container only |
 
 `system-scheduler` holds exactly one: an **API credential**, an automation token with the rights to read subjects and sessions and to perform lifecycle transitions. It signs nothing, so it has no signing key and no entry in `credential.json`. It never touches the database, so it has no role password. It calls no model, so it has no model key. It holds no Docker socket.
 
@@ -236,7 +236,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 - Event sequence numbers are gapless and assigned in commit order.
 - Every comparison against a stored instant uses the database clock.
 - An active subject has at most one `collecting` session, enforced by the database.
-- The submission window is the only timed part of a session. Settlement is never scheduled.
+- The submission window is the only scheduled part of a session. Settlement is never scheduled; the judging deadline is a timeout inside it.
 - A submission after `window_closes_at` is refused regardless of state.
 - Turnover is bound to a named epoch and never retargets its successor.
 - `system-scheduler` never polls the API on an interval, and never re-reads on a timer. Failure-triggered, bounded retries are not polling.
@@ -251,7 +251,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 Timing gates distinguish **dispatch** (the scheduler issued the call at the instant) from **completion** (the API transaction committed); each names a tolerance.
 
 - A blank-database boot sets every subject's `epoch_duration`, `epoch_anchor` and `judging_duration` from the snapshot; a boot on a populated database changes none of them.
-- No service other than `api` carries a database credential in any composition in this document's scope, asserted by rendering the compose config.
+- No service other than `api` and the pipeline worker carries a database credential in any composition, asserted by rendering the compose config; `system-scheduler` carries none.
 - For an active subject, closing epoch N and opening N+1 happen in one transaction; turnover is dispatched within one second of `window_closes_at`; the new session's `window_closes_at` is the first grid instant after N's close, and a first epoch closes at the first grid instant after its open instant.
 - **Epoch binding:** drop a successful turnover's response and retry; fire a stale timer after an operator's early turnover; race two schedulers against the same epoch. Each yields exactly one successor and one reasoned no-op or replayed result; N+1 is never closed by a retry aimed at N.
 - Two concurrent first-openings for one subject yield one `collecting` session.
@@ -269,7 +269,7 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - **Isolation:** a judge wait on one session and a failed transition on another do not delay any subject's boundary or any other session's settlement.
 - Transient aggregate failure with a healthy stream is retried and succeeds; a refusal with a reason is not retried.
 - Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action; activation during scheduler downtime yields one fresh epoch on rebuild, not backdated.
-- An operator turning over an epoch early through the admin API settles it and opens the next exactly as the boundary would, and the scheduler's timer moves to the new instant.
+- An operator turning over an epoch early through the admin API settles it and opens the next exactly as the boundary would, the new window closes on the grid instant after the early-closed window's scheduled close, and the scheduler's timer moves to that instant.
 - Killing `system-scheduler` mid-window and restarting it after the window instant fires the boundary once on rebuild; a window that should have turned over three times during the outage turns over once.
 - Deactivating a subject closes and settles its open epoch and opens no new one.
 - **Handoff:** a turnover committed by an operator between the scheduler's full read and its subscription is delivered on the stream above the cursor, not lost.
@@ -310,7 +310,7 @@ The companion's participant model — agents polling for a new window, judges su
 
 ## 13. Amendments (2026-09-24)
 
-Decided with the owner on 2026-09-24. Each row records what changed so the edit is auditable from this document alone.
+Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52). Each row records what changed so the edit is auditable from this document alone.
 
 | clause | said before | says now |
 |---|---|---|

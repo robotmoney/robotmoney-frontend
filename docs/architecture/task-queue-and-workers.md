@@ -19,7 +19,7 @@ and §9.4 below. The `swarm` lane, the `worker-swarm` container and the five
 `worker/lanes.ts`, the container is no longer in any composition, the schedule
 rows are deleted by migration 0072, and nothing enqueues those kinds. What
 this section describes below is the queue that remains, which the vault,
-wallet, buyback, project, analytics and research work still depends on.
+wallet, buyback and project pipelines depend on.
 
 Each worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`)
 runs three loops:
@@ -54,7 +54,7 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 | Lane | Claims | Purpose |
 |------|--------|---------|
 | `analytics` | everything except `research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
-| `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. |
+| `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. Removed under smoke spec §7.2 (2026-09-24). |
 | `generic` | everything | Single-process dev convenience; never part of the compose topology. |
 
 There is no `swarm` lane. It was removed with the job chain it reserved
@@ -68,8 +68,10 @@ The Compose topology is one container per surviving lane
 (`worker-analytics`/`worker-research` in `docker-compose.yml`), the non-queue
 `analytics-producer`, and `system-scheduler`, which is not a queue lane at all
 — it holds one API token, no database credential, and drives epochs over HTTP.
-The analytics and research workers keep their lanes and database credentials
-until a later specification moves them (smoke spec §7.2; scheduler spec §11). Worker lanes
+The pipeline worker (`worker-analytics`, lane `analytics`, running the vault,
+wallet, buyback and project jobs) holds `rm_worker` and runs preflight checks
+1–3 at startup; `worker-research` serves only retired rows and is removed
+([smoke spec §7.2](../technical/smoke-production-spec.md#72-one-library-three-callers)). Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
 dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a
@@ -103,7 +105,9 @@ serving `/api/admin/*`, and the buildless `/admin` frontend view
 - `POST /api/admin/auth` — validates the password for the login form.
 
 All four are PRIVILEGED with the same guard the swarm/projects admin routes
-use: `ADMIN_TOKEN` presented as `X-Admin-Token` (constant-time compared), or —
+use: the operator's admin service token presented as `X-Admin-Token` and
+validated against the API's token store (smoke spec §3; this replaces the
+`ADMIN_TOKEN` environment variable), or —
 only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
 403 check runs before any DB work. The `/admin` view is intentionally NOT in the
 public nav; the token is kept in `sessionStorage` for the tab. The old smoke
@@ -226,8 +230,8 @@ Nothing called them: the offline eq-snapshot import (`db/import-regime-eq.ts`)
 and `POST /api/swarm/regime` reach `store/regime-store.ts` in process and never
 went through the HTTP boundary
 (`api/routes/analytics.ts`) with the analytics-provider bearer
-(`ANALYTICS_TOKEN_FILE`; wiring: `ANALYTICS_API_URL`). Only the producer and API
-verifier mount that secret; the producer has no `DATABASE_URL` or admin token.
+(a per-instance token file validated against the API's token store, smoke
+spec §3; wiring: `ANALYTICS_API_URL`). Only the producer mounts that file; the producer has no `DATABASE_URL` or admin token.
 Mutations validate the entire payload before opening a transaction, are
 idempotent on natural keys, and there is NO generic SQL-over-HTTP endpoint. The
 API process injects the direct service (`analytics/store/direct.ts`) instead.

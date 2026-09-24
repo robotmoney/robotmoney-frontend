@@ -63,9 +63,9 @@ flowchart LR
     style External fill:#dc26261a,stroke:#dc2626,stroke-width:2px
 ```
 
-Only `api` (and, until their own specification moves them, the analytics and
-research workers) hold a database credential; `system-scheduler` and every
-participant reach the stack over HTTP only, and no container holds a Docker
+Only `api` and the pipeline worker hold a database credential;
+`system-scheduler`, `analytics-producer` and every participant reach the stack
+over HTTP only, and no container holds a Docker
 socket ([smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials),
 [scheduler spec §7](../technical/system-scheduler-spec.md#7-credentials)).
 
@@ -167,8 +167,8 @@ must **degrade gracefully**; the page never hard-depends on the API.
 Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
-- **`swarm.`** — this repo's Bun `api`, the analytics/research `worker`
-  lanes, `system-scheduler` (API credential only; it replaced the container
+- **`swarm.`** — this repo's Bun `api`, the pipeline `worker`,
+  `analytics-producer`, `system-scheduler` (API credential only; it replaced the container
   formerly called `worker-swarm`), and the standing participant containers from the credential
   file; `website-server` (issue #892) co-serves this surface's SPA assets
   (`STATIC_DIR`) same-origin at the subdomain root, proxying `/api/` through

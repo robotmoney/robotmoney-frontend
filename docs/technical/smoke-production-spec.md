@@ -58,7 +58,7 @@ It then holds two locks for the whole run: a **deployment lock** on the instance
 Phases: plan → prepare (each committed preparation recorded separately) → preflight → replace service 1..n → participants → readiness. The journal is written before each phase and marked after. It separates the operator's **desired plan** (plan id), the **state expectations** recorded when a phase began, and the **outcomes** it committed.
 
 - A rerun resumes a journal only when the plan id matches. The journal's own committed work (a migration it applied, a manifest it wrote) never invalidates its resume.
-- A different plan id (roster, digest, or target changed) closes the old journal, reports what it reached, and starts a fresh reconciliation from current state. Completed phases are never reused under a different plan.
+- A different plan id (roster, image source, or target changed) closes the old journal, reports what it reached, and starts a fresh reconciliation from current state. Completed phases are never reused under a different plan.
 - State changed by another operation fails the expectation check and refuses.
 
 ### 1.4 Interruption and receipt
@@ -98,7 +98,7 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it is never on disk: typed for the one run that needs it, gone after. Runtime role passwords are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Service tokens are stored only as hashes in the database, so a leaked dump holds no usable token. Preflight refuses a `~/.env` that holds `rm_owner` or `doadmin` because a host that keeps an owner password on disk has no reason left to type one.
 
-**No container holds a Docker socket.** Not a participant, and not `api`, `worker` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that reach the API over HTTP only (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
+**No container holds a Docker socket.** Not a participant, and not `api`, the pipeline worker, `analytics-producer` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that reach the API over HTTP only (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
 
 **What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
 
@@ -132,7 +132,7 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 
 **Rehearsal-only preparation:** `--migrate`, `--seed`, `--spoof-keys` require `rehearsal` in addition to their own guards.
 
-**Production initialization** (§9.1) is a set of separate commands allowed on `production`, each gated by `RM_ENV=prod`, typed `rm_owner`, `y/n`, and a receipt. None is reachable through `bun smoke`.
+**Production initialization** (§9.1) is a set of separate commands allowed on `production`, each gated by `RM_ENV=prod`, `y/n`, a receipt and the target lock. A command that writes the database directly also requires a typed `rm_owner`; the key rotation of §9.1 step 6 goes through the admin API with the operator's admin service token instead. None is reachable through `bun smoke`.
 
 ### 4.4 No smoke overlay
 
@@ -178,7 +178,7 @@ Each roster entry is one long-lived container (`restart: unless-stopped`) that b
 - **Agents poll.** An agent polls the API for `collecting` sessions it has not yet taken, submits, and sleeps.
 - **Judges subscribe.** A judge holds an authenticated stream to the API and receives judging requests created by the scheduler's request-judging transition (scheduler spec §4.4). The request is state, not a fleeting event: on every connect or reconnect the API serves every session in `judging` for which this judge has not yet submitted, so a judge that was down when the request was created still obtains it if it returns before the deadline. The judge performs its model work and submits its judgement through the participant API. Redelivery can never change an outcome: a submission after finalize is recorded as late evidence (scheduler spec §4.4). The deadline and finalization belong to the scheduler, never to the judge, so an absent judge delays nothing and yields `no_consensus`. Readiness (§6.3) never requires a judge to be connected or a consensus to exist.
 
-**Idempotent submission, one final take.** A submission is identified by its signed `nonce`. A participant writes its signed submission into its workspace before sending it, so a crash-restart resends the same bytes. A resubmission whose nonce is already recorded for that member and session is a retry: it returns the existing record and the participant treats it as success. A new nonce is an intentional amendment, allowed while the window is open: each is its own signed row, and accepting one marks it final and unsets the member's previous one ([D51](../decisions.md#d51)). A partial unique index on `(session, member) WHERE final` makes two final takes impossible even when two submissions race, and `rm_app` may `UPDATE` only the `final` column of that table. An old and a new container overlapping during a roster change can therefore produce an amendment, never a second final take. One take in flight per participant.
+**Idempotent submission, one final take.** A submission is identified by its signed `nonce`. A participant writes its signed submission into its workspace before sending it, so a crash-restart resends the same bytes. A resubmission whose nonce is already recorded for that member and session is a retry: it returns the existing record and the participant treats it as success. A new nonce is an intentional amendment, allowed while the window is open: each is its own signed row, and accepting one marks it final and unsets the member's previous one ([D51](../decisions.md#d51)). A partial unique index on `(session, member) WHERE final` makes two final takes impossible even when two submissions race, and `rm_app` may `UPDATE` only the `final` column of `swarm_recommendations`. An old and a new container overlapping during a roster change can therefore produce an amendment, never a second final take. One take in flight per participant.
 
 **The judge is a participant** exactly like an agent. No component of the stack judges inline, and nothing but the admin route writes `swarm_judge_config`.
 
@@ -312,7 +312,7 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Restart after a subject's window instant has passed: the boundary fires once on rebuild (scheduler spec §3.2).
 - `volume` reuse after restart.
 - Receipt read by `smoke:status`.
-- Overlay-free stage boots with the real `system-scheduler` against short epoch durations.
+- Overlay-free stage boots with the real `system-scheduler` against short epoch and judging durations.
 - A fresh `--local blank` boot authenticates the real scheduler with no production initialization; `--local dump` yields a token that works against the restored rehearsal; `volume` reuse and an interrupted-then-retried preparation keep the same token; two concurrent CI instances never share a token file.
 - With `collecting` rows already present, a scheduler that cannot authenticate or synchronize fails readiness. Exhaust turnover retries: degradation is visible in `smoke:status` with subject and last error. Restore the dependency and restart the scheduler: degradation clears and the boundary fires once.
 - Disconnect a judge at the judging request, reconnect it before the deadline: it obtains the pending request. Leave it disconnected: the session publishes `no_consensus` and readiness still passes.
@@ -329,7 +329,7 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Old release reads compat metadata written by a newer one and refuses unknown `metadata_version`.
 - Migrate fails between commits and during grant reconciliation; rerun reaches a verified final state.
 - Denylist: runtime role with `rm_owner` membership, object ownership, or DELETE on an append-only table fails preflight.
-- `rm_app` can `UPDATE` only the `final` column of the takes table.
+- `rm_app` can `UPDATE` only the `final` column of `swarm_recommendations`.
 - Production baseline: a live schema that differs from the snapshot blocks the first manifest publication.
 - Registry structurally enforced; execution under each role on a disposable database.
 - Test database off superuser.
@@ -352,7 +352,7 @@ The design does not specify an admin UI for judge settings. D48 owns the accepte
 
 ## 12. Amendments (2026-09-24)
 
-Decided with the owner on 2026-09-24. Each row records what changed so the edit is auditable from this document alone.
+Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52). Each row records what changed so the edit is auditable from this document alone.
 
 | clause | said before | says now |
 |---|---|---|

@@ -27,7 +27,8 @@ CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (swarm). Full schema in
   keys (e.g. `(ts, …)`, `(date)`) so reruns overwrite rather than duplicate; the
   API reads these.
 - **Task queue** (`0003_task_queue.sql`): `jobs`, `job_schedules`, `job_runs`.
-  These serve the vault, wallet, buyback and project pipelines (§7). Under the
+  These serve the vault, wallet, buyback and project pipelines (§7), whose
+  `job_schedules` rows are bootstrap data in the schema snapshot. Under the
   adopted design the swarm session lifecycle has no rows here: a subject's
   scheduling columns (epoch duration, epoch anchor, judging duration) live on
   `swarm_subjects`, set by bootstrap data and changed only through the admin

@@ -37,7 +37,10 @@ admin dispatcher.
 These points are settled for this surface. Where one touches session timing or
 lifecycle, the scheduler spec governs and this list only summarizes it:
 
-- Keep the existing `ADMIN_TOKEN` and `X-Admin-Token` authentication model.
+- Keep the `X-Admin-Token` header. The value is the operator's admin service
+  token, a per-instance file validated against the API's token store
+  ([smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials));
+  the `ADMIN_TOKEN` environment variable is retired.
   Role-based admin accounts are out of scope for this phase.
 - Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
 - Research and queue admin requests still go through the Postgres queue. Swarm
@@ -76,7 +79,8 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
   before/after checksums, warnings, and outcome; this phase does not introduce
   versioned copies of every raw time-series row.
 - There are no swarm schedule rows, cron strings or enable switches in the
-  target. A topic's epoch duration is its whole schedule: set by bootstrap data
+  target. A topic's grid (epoch duration and anchor) and judging duration are
+  its whole schedule: set by bootstrap data
   on a blank database, changed afterwards only through the admin API (US-C1),
   and never disabled. Schedule toggles in this UI concern analytics rows only.
   See [smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)
@@ -237,7 +241,7 @@ Acceptance:
 - The retired authenticated `research-eligibility` path returns
   `409 producer_owned` and performs zero queue/schedule mutations.
 - Operational reruns execute from the independent producer environment under
-  its own scoped credential, not through `ADMIN_TOKEN`.
+  its own scoped credential, not through the admin service token.
 
 ### US-Q1 — Inspect and retry queue work
 
@@ -255,30 +259,34 @@ Acceptance:
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
 - No swarm lifecycle work appears in this queue in the target: sessions are
-  driven by `system-scheduler` through the API, and a topic's epoch duration
-  (US-C1) is the only schedule
+  driven by `system-scheduler` through the API, and a topic's scheduling
+  columns (US-C1) are the only schedule
   ([smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)).
   Legacy `swarm.*` rows from the pre-scheduler worker are history only.
 
 ### US-C1 — Create and edit a swarm topic
 
-As a swarm manager, I can add a topic, set its epoch duration, and make it
+As a swarm manager, I can add a topic, set its schedule, and make it
 eligible for sessions.
 
 Acceptance:
 
 - Create and edit support every durable `swarm_subjects` field, including the
-  **epoch duration**. That duration is the topic's whole schedule
-  ([scheduler spec §2.2](../technical/system-scheduler-spec.md#22-the-one-duration)).
+  **epoch duration**, **epoch anchor** and **judging duration**. Windows close
+  on the grid `epoch_anchor + k × epoch_duration`; those three columns are the
+  topic's whole schedule
+  ([scheduler spec §2.2](../technical/system-scheduler-spec.md#22-the-schedule-a-grid)).
 - Changing the duration is an ordinary authenticated update. It publishes
-  `subject.changed`; the current window keeps the `window_closes_at` it was
-  opened with, and the epoch opened at the next boundary uses the new value
-  (scheduler spec §6.2). No restart is needed.
+  `subject.changed` and re-anchors the grid at the current window's close in
+  the same transaction; the current window keeps its `window_closes_at`, and
+  the epoch opened at the next boundary uses the new value (scheduler spec
+  §6.2). A new judging duration applies to sessions that close afterwards. No
+  restart is needed.
 - Activating a topic causes the scheduler to open its first epoch; the admin
   surface does not open sessions itself (scheduler spec §3).
 - New topic ids match `^[a-z0-9][a-z0-9-]{1,63}$` and are immutable after create.
 - Required fields are id, name, operator, thesis, source type,
-  recommendation type, and epoch duration.
+  recommendation type, epoch duration, epoch anchor and judging duration.
 - Source type is `rpc`, `manual`, `vault_tvl`, or `framework`.
 - Recommendation type is `position_actions` or `bucket_weights`.
 - Wallet and NFT entries have `address`, `chain`, and optional `label` strings.
@@ -339,13 +347,13 @@ Acceptance:
 - There is no session create form. Sessions are opened by `system-scheduler`
   (first epoch on activation or rebuild, every later one at turnover) through
   the API's atomic open, which creates the session, publishes its brief and
-  sets `window_closes_at = open instant + epoch duration`
+  sets `window_closes_at` to the topic's next grid instant
   ([scheduler spec §4.1](../technical/system-scheduler-spec.md#41-epoch-open)).
   The admin surface reads the result; it does not choose instants.
 - The topic detail shows the current `collecting` session (at most one per
   topic, enforced by the database) with its `window_closes_at` in UTC and
-  browser-local time, a countdown, and the epoch duration the next window will
-  use.
+  browser-local time, a countdown, and the grid instant and duration the next
+  window will use.
 - Session identity is the session id. Several sessions per topic on one date
   are normal; the display date is derived from the open instant and is not a
   key.
@@ -530,7 +538,7 @@ migration added `brief_opens_at`, `publish_at` and `cancelled_at` to
 schema guidance: the target session carries `window_closes_at`, the judge
 mode captured at turnover, the judging request instant and deadline, the
 consensus acceptance instant, the judging outcome, and `published_at`. The
-subject carries its epoch duration. The enforced uniqueness is at most one
+subject carries its epoch duration, epoch anchor and judging duration. The enforced uniqueness is at most one
 `collecting` session per subject; there is no `(date, subject_id)`
 uniqueness, because a subject runs many epochs per day and a session's
 display date is not its identity
@@ -638,7 +646,7 @@ Add analytics-provider-only endpoints alongside existing ingestion routes:
   finish one stage;
 - `POST /api/analytics/runs/:id/artifacts` — add bounded artifact metadata.
 
-They use `ANALYTICS_TOKEN`, validate complete payloads before transactions, and
+They use the analytics service token, validate complete payloads before transactions, and
 redact/reject forbidden keys matching `token`, `authorization`, `header`,
 `cookie`, `secret`, or `password` case-insensitively. Preview payloads larger
 than 256 KiB or more than 250 entries return 400.
@@ -728,7 +736,9 @@ type TopicWriteRequest = {
   linkedMemberId?: string | null;
   structuralNotes: string[];
   lastReviewed?: string | null; // YYYY-MM-DD
-  epochDurationSeconds: number; // the topic's whole schedule (scheduler spec §2.2)
+  epochDurationSeconds: number; // grid spacing (scheduler spec §2.2)
+  epochAnchor: string; // ISO instant on the grid
+  judgingDurationSeconds: number;
   reason: AdminReason;
 };
 
@@ -892,7 +902,8 @@ Add tests proving:
 - opening an epoch snapshots the roster, publishes the brief and sets
   `window_closes_at` in one transaction, and creates no queue job;
 - changing a topic's epoch duration leaves the current window's
-  `window_closes_at` unchanged and applies at the next boundary;
+  `window_closes_at` unchanged, re-anchors the grid there, and applies at the
+  next boundary; every later close lands on the grid;
 - turnover with a stale `expected_session_id` returns the original result or
   a reasoned no-op and never closes the successor;
 - each legal state transition, every illegal transition (including reopen,
@@ -962,7 +973,7 @@ Implement in this order so every phase leaves a usable product:
 4. analytics telemetry tables, authenticated write client, observer, and stage
    instrumentation;
 5. admin shell, routing, overview, queue, and research read-only views;
-6. topic (including epoch duration), member, and lifecycle mutation UI;
+6. topic (including its schedule), member, and lifecycle mutation UI;
 7. audit UI, all browser tests, integration tests, and documentation updates.
 
 The first production deployment must run the migration before API or worker code
@@ -974,7 +985,7 @@ analytics telemetry endpoints exist, and the frontend last.
 The phase is done when all user stories in section 4 pass, no existing public
 swarm/research route regresses, production admin and telemetry routes fail
 closed, a research job can be traced through all six stages, and a swarm
-manager can create a topic and set its epoch duration, manage members,
+manager can create a topic and set its schedule, manage members,
 observe the current epoch and each session's state and judging outcome,
 inspect every accepted member datapoint, fire guarded lifecycle transitions,
 and explain every mutation from the audit log.

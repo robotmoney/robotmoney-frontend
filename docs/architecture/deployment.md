@@ -13,8 +13,9 @@ create an exact-SHA runbook when a release is scheduled and the required tools
 exist.
 
 The repository's Compose topology contains Postgres, API, static web server,
-the analytics and research worker lanes (§7), and `system-scheduler` (API
-credential only), which replaced `worker-swarm`. Standing participant
+the pipeline worker (§7), `analytics-producer`, and `system-scheduler` (API
+credential only), which replaced `worker-swarm`. The smoke production spec
+governs every one of them. Standing participant
 containers are defined by the credential file. The adopted design owns how those
 services are prepared, checked, replaced and kept running. Its credentials and
 target identity rules are in smoke-production-spec §§3–5; participants and

@@ -33,8 +33,8 @@ only uniqueness the database enforces is at most one `collecting` session per
 subject ([scheduler spec §2.1](../technical/system-scheduler-spec.md#21-the-model)).
 Each session advances through
 `collecting → window_closed → aggregated → [judging → judged] → published`
-(§9.4). `judged` is optional — see §9.7. Each member posts at most one signed **recommendation** (a "take") per
-session; a non-submitting member is recorded **absent**, never fabricated. The
+(§9.4). `judged` is optional — see §9.7. A member may amend its signed **recommendation** (a "take") while the window
+is open, and exactly one of its takes per session is final ([D51](../decisions.md#d51)); a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple swarms.
 
@@ -60,9 +60,9 @@ the earlier MCP-server surface).
 | Actor | Identity | Scoped writes | Reads |
 |---|---|---|---|
 | **Swarm member** | access-key hash for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
-| **RM analytics provider** | service credential / role | **regime snapshots** (+ RM-run subject snapshots) | — |
+| **RM analytics provider** | its analytics service token, issued by the API's token store | **regime snapshots** (+ RM-run subject snapshots) | — |
 | **`system-scheduler`** (the clock) | API automation token; no signing key, no database password, no model key | lifecycle transitions only: open, turn over, aggregate, request judging, finalize — each a state-guarded API call | subjects, sessions, the event stream |
-| **Consensus judge** (a participant) | access key + its own signing key from `credential.json`; its own model key | its **own signed judgement** for a `judging` session | pending judging requests via its subscription |
+| **Consensus judge** (a participant) | a member with the `judge` role (issue 812): its bearer token, signing key and model key, all from its own `credential.json` entry | its **own signed judgement** for a `judging` session | pending judging requests via its subscription |
 | **API** | the only swarm-scope service with a database role password | performs every transition as one guarded transaction; serves subscriptions; no background orchestration | all |
 | **Public reader** | anonymous | nothing | published sessions, regime, memo links |
 
@@ -99,11 +99,13 @@ A swarm migration extends §6 with append-only, audit-flavored tables:
 `swarm_members`, `swarm_member_keys` (public-key + access-key-hash
 registry), `swarm_subjects`, `swarm_sessions`, `swarm_briefs`,
 **`swarm_recommendations`** (append-only — payload + signature + nonce +
-`revision` + `verified`; the canonical store behind a take/submission. Target:
-one immutable take per member per epoch, identity `(session, member)`, a
-a member may amend while the window is open and the newest take is marked final, unsetting the prior ([D51](../decisions.md#d51)); a retry of the same submission returns the existing row. Legacy rows
-with `revision > 1` exist from the D33 era and stay readable; nothing is ever
-edited in place),
+`revision` + `verified` + `final`; the canonical store behind a take/submission.
+A member may amend while the window is open: each amendment is its own signed
+row, accepting it marks it final and unsets the prior, and a partial unique
+index on `(session, member) WHERE final` keeps exactly one final take
+([D51](../decisions.md#d51)). A retry resends the same signed nonce and returns
+the existing row. Legacy rows with `revision > 1` from the D33 era stay
+readable; no take's content is ever edited in place),
 `swarm_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
 data is written by the analytics provider (§9.6).
 
@@ -116,13 +118,15 @@ this is the summary, not a second copy:
 collecting → window_closed → aggregated → [judging → judged] → published
 ```
 
-- **Epochs.** A subject's sessions run back to back. Its one scheduling
-  parameter is its **epoch duration**, a column on the subject set by bootstrap
-  data and changed afterwards only through the admin API. There is no
+- **Epochs.** A subject's sessions run back to back, closing on a fixed
+  wall-clock **grid**: `epoch_anchor + k × epoch_duration`. Those two columns
+  and a `judging_duration` are the whole schedule, set by bootstrap data and
+  changed afterwards only through the admin API. A late turnover never shifts
+  later windows, and downtime skips to the next future grid instant. There is no
   `scheduled` state, no "brief opens later," no on/off switch and no idle gap
   (§§2.1–2.4).
 - **Open is atomic.** Opening an epoch creates the session, publishes its
-  brief and sets `window_closes_at = now + duration` in one API call. The
+  brief and sets `window_closes_at` to the next grid instant in one API call. The
   session is `collecting` from its first instant (§4.1). A brief is keyed on
   its **session** (migration 0028), not on the day.
 - **Window.** Members submit via the REST `submit` endpoint, which calls the
@@ -217,7 +221,7 @@ binary, not a service RM operates.
 **Required boundary (D25).** The regime classifier runs on the provider's own
 infrastructure and **submits computed regime snapshots through the authenticated
 `/api/analytics` boundary under its exclusive scoped credential**
-(`ANALYTICS_TOKEN`; issue #106 — never direct SQL), the same pattern as a member
+(its analytics service token; issue #106 — never direct SQL), the same pattern as a member
 posting a take, different scope. Members consume it **optionally** via the regime
 read (`ROUTES.dashboards.regimeSnapshots`) and may record which RM tools vs.
 their own data they used. The API validates and persists provider output; it
@@ -226,8 +230,9 @@ substitute for the analytics role.
 
 **Implemented boundary.** `analytics-producer` has no database or admin
 credential, owns the regime/research cron timers, computes on its side, and
-submits through the typed analytics routes. Its bearer is file-mounted only into
-the producer and API verifier; shared workers, the smoke host, and swarm
+submits through the typed analytics routes. Its token is a per-instance file
+mounted only into the producer, and the API validates it against its token
+store ([smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)); shared workers, the smoke host, and swarm
 members do not receive it. Consumer schedules are disabled and legacy queued
 analytics jobs are dead-lettered. Admin retry/toggle/rerun/enqueue operations and
 the retired research-eligibility endpoint fail closed, so no supported consumer
@@ -248,8 +253,8 @@ Existing code may still expose `shadow` until that accepted change ships;
 D48 records the replay prerequisite for removing it.
 
 For deployment, the judge is a roster participant like an agent. It runs in
-its own standing container, receives only its own signing key from
-`credential.json`, and talks to the stack over HTTP. No worker judges inline,
+its own standing container, receives only its own `credential.json`
+entry (bearer token, signing key, model key), and talks to the stack over HTTP. No worker judges inline,
 and no container in the stack — participant or service — holds a Docker
 socket: `bun smoke` starts every container from the host and exits, so
 nothing spawns a container at runtime and nothing needs the means to. This
@@ -259,12 +264,15 @@ that launcher, its socket mount and its injection are gone. Roster, lifecycle
 and credential delivery are defined only by
 [smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials)
 and [§6](../technical/smoke-production-spec.md#6-participants-agents-and-judges).
-The admin API remains the sole writer of `swarm_judge_config`.
+The admin API remains the sole writer of `swarm_judge_config`. A judge whose
+member `operator` is `robotmoney` is in-house and passes the third-party gate;
+any other judge's judgement is refused while `third_party_enabled` is false
+([smoke-production-spec §6.2](../technical/smoke-production-spec.md#62-standing-participant-containers)).
 
 Sessions run in epochs, timed per subject by `system-scheduler`, independent
-of whether this host runs an in-house judge. There are no schedule rows and
-nothing to enable: a subject's epoch duration is set at bootstrap and changed
-only through the admin API. See
+of whether this host runs an in-house judge. Sessions have no schedule rows
+and nothing to enable: a subject's grid and judging duration are set at
+bootstrap and changed only through the admin API. See
 [system-scheduler-spec](../technical/system-scheduler-spec.md) for the
 scheduling architecture and
 [smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)

@@ -55,16 +55,17 @@ Four distinctions, kept deliberately separate:
   produces **on their own side**; the backend only **verifies** it against the
   member's registered public key. The API never holds a member's signing key.
   (This is the on-chain seam: later only the signature is anchored.)
-- **Four credential kinds, four holders.** Signing keys (Ed25519) are held by
-  participants only, in `credential.json`; the API automation token is held by
-  `system-scheduler`; database role passwords are held by the `api` process at
-  runtime; model keys are held by the agents and judges that call a model.
-  `system-scheduler` holds no signing key, no database password and no model
-  key. See
+- **Four credential kinds.** Signing keys (Ed25519) are held by participants
+  only, each in its own `credential.json` entry. API bearer tokens are each
+  participant's bearer (in its entry) and three service tokens — scheduler,
+  analytics producer and operator admin — which are per-instance files whose
+  hashes and rights sit in the API's token store. Database role passwords are
+  held at runtime by `api` and the pipeline worker. Model keys are held by the
+  agents and judges that call a model. `system-scheduler` holds only its
+  service token. No secret or env file lives in repository source. See
   [system-scheduler-spec §7](../technical/system-scheduler-spec.md#7-credentials)
   and [smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials).
-  The analytics and research workers keep their database credentials until
-  their own specification moves them (smoke spec §7.2; scheduler spec §11).
+  The pipeline worker's `rm_worker` role is governed by smoke spec §7.2.
 - **Credential exchange and membership are separate.** Active members exchange
   their member ID and bearer credential by signing a server-issued key-proof
   challenge (`token-claim/challenge` → `token-claim`, issue #205). Swarm
@@ -72,8 +73,9 @@ Four distinctions, kept deliberately separate:
   administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
   own recommendations, the analytics provider only analytics data (the regime
-  recompute + the typed `/api/analytics/*` ingestion routes, `ANALYTICS_TOKEN`
-  bearer — `ADMIN_TOKEN` and member bearers are never substitutes),
+  recompute + the typed `/api/analytics/*` ingestion routes, the analytics
+  service token — the admin service token and member bearers are never
+  substitutes),
   `system-scheduler` only session lifecycle transitions under its automation
   token (scheduler spec §7), the public reads only — enforced in the API layer
   (`src/api/auth.ts` holds the shared constant-time credential checks). The

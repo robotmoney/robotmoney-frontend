@@ -1893,7 +1893,7 @@ a host-side session driver, or direct SQL as a recovery procedure.
 
 ## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
 
-> **Superseded by [D49](#d49) on 2026-09-23.** New sessions take one immutable take per member. Kept for the history of the revision rows that exist.
+> **Superseded by [D49](#d49) on 2026-09-23, which [D51](#d51) superseded on 2026-09-24.** Amendments are allowed again: each is its own signed row and the newest is marked final. Kept for the history of the revision rows that exist.
 
 **Decision.** A seated swarm member may amend and resubmit its take inside a
 session. Amendment is **append-only**: each revision is its own immutable row in
@@ -3787,3 +3787,42 @@ the accepting transaction; resolve reads and `loadFrozenTakeSet` from the flag
 instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
 extend it for the flag. Tracked under the deployment refactor issue (#1026),
 W3.
+
+## D52 — File credentials are final, the smoke spec governs the whole stack, and epochs close on a grid (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from a three-question
+decision session on issue #1026. The specifications carry the detail:
+[`smoke-production-spec.md`](technical/smoke-production-spec.md) §12 and
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13.
+
+**Decision 1: D47's file credentials are the lasting design.** Secrets live in
+files outside every checkout: runtime role passwords in the deploying user's
+`~/.env`, each participant's signing key, bearer token and model key in its
+`credential.json` entry, and the three service tokens (scheduler, analytics
+producer, operator admin) as per-instance files whose hashes and rights sit in
+the API's token store. The `ADMIN_TOKEN` environment variable and the shared
+analytics secret are retired into that one model. No secret or env file lives
+in repository source. This retires the 2026-09-18 in-memory lease direction.
+
+**Decision 2: the smoke spec governs every service in the stack.** That brings
+`analytics-producer` and the pipeline worker into its credentials, bootstrap
+data and readiness. The ban on schedule rows covers sessions only: bootstrap
+data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
+`rm_worker` and runs preflight checks 1-3; the research lane, which serves only
+retired rows, is removed.
+
+**Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
+close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
+windows, downtime skips to the next future grid instant, and a duration change
+re-anchors the grid at the current window's close. The judging duration becomes
+a subject column captured at turnover.
+
+**Defaults taken with these decisions.** Event sequence numbers come from one
+counter row, gapless and in commit order; the event log is never pruned; job
+pushes are cut; every instant comparison uses the database clock; a consensus is
+the first eligible judgement until a multi-judge document exists; a judge whose
+member operator is `robotmoney` passes the third-party gate; production key
+rotation uses the existing `rotate-key` admin route; a roster role that
+disagrees with the database refuses the boot; the target lock uses one constant
+key over a direct connection.
+
