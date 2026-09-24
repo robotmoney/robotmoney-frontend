@@ -338,7 +338,10 @@ async function assertFilenamesMatchMigrations(filenames: readonly string[]): Pro
  * The one writer of the fingerprint. Run it after editing snapshot.sql,
  * bootstrap-data.sql or grants.sql, or after adding a migration, from
  * `backend/`: `RM_SNAPSHOT_REGENERATE=1 bun test tests/schema-snapshot.test.ts`
- * (the test harness supplies the blank database and the cluster's roles).
+ * (the test harness supplies the blank database and the cluster's roles). That
+ * run FAILS when the file it rewrote had been stale — commit the rewrite and
+ * rerun without the variable — and refuses under CI, so the verifying test is
+ * never also the writer.
  */
 export async function regenerateSnapshotMetadata(blank: SnapshotDb, dir?: string): Promise<SnapshotMetadata> {
   const base = dir ?? BACKEND_ROOT;

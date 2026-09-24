@@ -15,6 +15,9 @@
 // for this file alone, because "the column does not exist" and "the column is
 // NULL" are different database states and §8.4 turns on the difference.
 import { afterEach, describe, expect, test } from "bun:test";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
@@ -26,12 +29,17 @@ import {
 } from "../src/db/preflight.ts";
 import {
   MANIFEST_FORMAT_VERSION,
-  fingerprintCatalog,
   hashManifest,
   serializeDeclaration,
   writeManifest,
+  type SchemaDeclaration,
 } from "../src/db/schema-manifest.ts";
-import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
+import {
+  SNAPSHOT_FILES,
+  bootstrapBlankDatabase,
+  loadSnapshot,
+  regenerateSnapshotMetadata,
+} from "../src/db/schema-snapshot.ts";
 import {
   COMPAT_COLUMNS,
   COMPAT_HEADER_BASELINE,
@@ -608,8 +616,9 @@ describe("recordMigrationCompat — the declaration commits with the DDL, never 
 // (b) the ledger surplus against the booting code's filename list. So this runs
 // both, on ONE database that carries a real manifest: a snapshot bootstrap
 // (version N), then an additive migration committed the way the migrate run
-// commits one and the manifest for the new version M published by the real
-// writer, then genuine drift.
+// commits one and the manifest for the new version M — whose fingerprint comes
+// from bootstrapping M's snapshot into a different database — published by the
+// real writer, then genuine drift.
 //
 // What this does NOT prove: that a container boots. Nothing calls
 // `runPreflight` at container startup yet (criterion 44's wiring wave); this is
@@ -646,6 +655,51 @@ async function withSnapshotDatabase(
   } finally {
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await admin.end({ timeout: 5 });
+  }
+}
+
+/**
+ * Version M's snapshot, produced the way every snapshot is: N's three parts
+ * copied into a scratch directory, M's DDL appended to the declaration, and
+ * `regenerateSnapshotMetadata` bootstrapping them into a SEPARATE blank
+ * database and fingerprinting THAT. Returns M's declaration.
+ *
+ * The separate database is the point. Fingerprinting the database under test
+ * would make the pass below prove only that a database matches its own
+ * fingerprint; this makes it prove that N + the additive migration equals a
+ * bootstrap of M's declaration — §8.4's "snapshot N + migrations = snapshot
+ * N+1" — before old code is asked to boot against it.
+ */
+async function snapshotForVersionM(additiveDdl: string): Promise<SchemaDeclaration> {
+  const root = mkdtempSync(join(tmpdir(), "rm-snapshot-m-"));
+  const name = `rmt_compat_snapshot_m_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    mkdirSync(join(root, "schema"));
+    for (const part of Object.values(SNAPSHOT_FILES)) {
+      copyFileSync(join(import.meta.dir, "..", part), join(root, part));
+    }
+    const declarationPath = join(root, SNAPSHOT_FILES.declaration);
+    writeFileSync(declarationPath, `${readFileSync(declarationPath, "utf8")}\n${additiveDdl}\n`, "utf8");
+
+    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
+    const blank = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    try {
+      await blank.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+      await blank.unsafe("SET ROLE rm_owner");
+      const metadata = await regenerateSnapshotMetadata(blank, root);
+      return serializeDeclaration({
+        sql: readFileSync(declarationPath, "utf8").replace(/\s+$/, ""),
+        exclusions: metadata.exclusions,
+        fingerprint: metadata.fingerprint,
+      });
+    } finally {
+      await blank.end({ timeout: 5 });
+    }
+  } finally {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin.end({ timeout: 5 });
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -693,15 +747,13 @@ describe("old code at N against a database at N + additive — and genuine drift
         await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
         await recordMigrationCompat(tx, parseMigrationHeader(file, ddl));
       });
-      // …then the manifest for the final state M, published by the real writer
-      // in the reconciliation transaction (step 6). M's declaration is what the
-      // newer release's snapshot would carry: its SQL, the same exclusion list,
-      // and the fingerprint of the catalog that SQL produces.
-      const declaration = serializeDeclaration({
-        sql: `${snapshot.declarationSql}\n${ddl}`,
-        exclusions: snapshot.exclusions,
-        fingerprint: await fingerprintCatalog(db, snapshot.exclusions),
-      });
+      // …then the manifest for the final state M, written by `writeManifest`
+      // (the writer migrate-run.ts step 6 calls) in an rm_owner transaction.
+      // M's declaration is what the newer release's snapshot carries, built by
+      // the real snapshot generator from M's SQL on ANOTHER database — never a
+      // fingerprint of this one. (`runMigrate` itself cannot publish it: step 6
+      // reads this checkout's snapshot, which is N's.)
+      const declaration = await snapshotForVersionM("ALTER TABLE public.job_schedules ADD COLUMN operator_note text;");
       expect(JSON.parse(declaration.text).fingerprint["column public.job_schedules.operator_note"]).toEqual({
         type: "text",
         notnull: "no",

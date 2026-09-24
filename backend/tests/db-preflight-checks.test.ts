@@ -59,6 +59,7 @@ import {
   writeManifest,
 } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
+import { runMigrate } from "../scripts/migrate-run.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
@@ -188,13 +189,13 @@ async function ledgerNames(db: PreflightDb = sql): Promise<string[]> {
  *
  * THE FINGERPRINT DESCRIBES THIS CLONE, not the shipped snapshot. The clone is
  * built by replaying migrations under the harness superuser (tests/preload.ts),
- * and that catalog differs from a snapshot bootstrap in ways that are not these
- * tests' subject: the superuser's own 0016 default privileges, `public`'s owner
- * and the default privileges 0053/0062 leave, which grants.sql states
- * differently. Whether migrations and the snapshot agree is schema-equivalence's
- * question; these cases ask what 3a does with a manifest that is TRUE of the
- * database it is stored in. The every-class drift cases below run against a
- * real snapshot bootstrap instead, where the shipped fingerprint is the truth.
+ * and that catalog differs from a snapshot bootstrap in one way that is not
+ * these tests' subject: the superuser's own 0016 default privileges (in
+ * production they are doadmin's, which the exclusion list names). These cases
+ * ask what 3a does with a manifest that is TRUE of the database it is stored
+ * in. Whether the manifest the REAL migrate run publishes passes on a
+ * migration-built database is the "real migrate run" block below; the
+ * every-class drift cases run against a real snapshot bootstrap.
  */
 async function publishManifest(): Promise<void> {
   const snapshot = await loadSnapshot();
@@ -1135,6 +1136,98 @@ describe("check 3a — every §8.1 object class, against a real snapshot bootstr
       const refused = await integrity(db);
       expect(naming(refused, "table public.rm_unlisted_extra")).toContain("not declared by the installed manifest");
       expect(naming(refused, "function public.rm_unlisted_probe()")).toContain("not declared by the installed manifest");
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Check 3a against the manifest the REAL migrate run publishes
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Every case above either fingerprints the database under test or bootstraps
+// it from the snapshot, so none of them asks the production question: a
+// long-lived database built by MIGRATIONS, migrated by `runMigrate`, which
+// publishes the shipped snapshot's declaration (scripts/migrate-run.ts step 6)
+// — does that database pass 3a against what was just published? If the
+// snapshot and the migrations disagree on anything 3a compares, the first
+// manifest §9.1 step 2 publishes refuses on every boot. These cases run the
+// real publisher and then the real check, and nothing in between.
+
+/** The real migrate run against `database`, on a second handle acting as
+ *  rm_owner — the effective role it requires. One connection, so the SET ROLE
+ *  holds for the whole run. */
+async function migrateAsOwner(database: string): Promise<void> {
+  const owner = postgres(databaseUrl(database), { max: 1, onnotice: () => {} });
+  try {
+    await owner.unsafe("SET ROLE rm_owner");
+    await runMigrate(owner, {
+      caller: "smoke_flag",
+      env: "stage",
+      connection: "local",
+      lockKey: 10260054n,
+      sessionLockHeld: false,
+      nonInteractive: true,
+    });
+  } finally {
+    await owner.end({ timeout: 5 });
+  }
+}
+
+async function currentDatabaseOf(db: PreflightDb): Promise<string> {
+  const [row] = (await db.unsafe("SELECT current_database() AS name")) as unknown as { name: string }[];
+  return row!.name;
+}
+
+describe("check 3a against the manifest the real migrate run publishes", () => {
+  test("a MIGRATION-built database passes 3a after runMigrate publishes the shipped snapshot's manifest", async () => {
+    // This clone was built by replaying every migration (tests/preload.ts), the
+    // way production's database was. The run publishes loadSnapshot()'s
+    // declaration — the fingerprint of a snapshot bootstrap — onto it.
+    await enrollRehearsal();
+    await migrateAsOwner(await currentDatabaseOf(sql));
+    expect((await detectManifestState(sql)).kind).toBe("published");
+
+    // THE ONE DIFFERENCE LEFT is the BOOTSTRAP LOGIN's own default privileges:
+    // 0016 ran `ALTER DEFAULT PRIVILEGES IN SCHEMA public ...` with no FOR
+    // ROLE, so they belong to whichever login applied it. In production that
+    // login is doadmin, which the snapshot's exclusion list names; in this
+    // harness it is the container superuser, which it does not. Pinned exactly,
+    // so any rm_owner-side disagreement between the snapshot and the migrations
+    // (schema owner, rm_owner's default ACLs, a column, a grant) fails here.
+    const login = new URL(config.databaseUrl).username;
+    expect(await integrity(sql)).toEqual([
+      `default privileges for ${login} in schema public on sequences is in the live catalog but not declared by ` +
+        `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
+      `default privileges for ${login} in schema public on tables is in the live catalog but not declared by ` +
+        `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
+    ]);
+
+    // With the bootstrap login's leftovers gone — production's state, where
+    // that login is a listed provider role — nothing refuses.
+    await sql.unsafe(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`,
+    );
+    await sql.unsafe(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`,
+    );
+    expect(await integrity(sql)).toEqual([]);
+  });
+
+  test("RED CONTROL: after the real publisher, genuine drift on the migrated database still refuses by name", async () => {
+    await enrollRehearsal();
+    await migrateAsOwner(await currentDatabaseOf(sql));
+    await sql.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+    await sql.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");
+    const refused = await integrity(sql);
+    expect(naming(refused, "column public.job_schedules.last_enqueued_at")).toContain("absent from the live catalog");
+    expect(naming(refused, "schema public")).toContain("pg_database_owner");
+  });
+
+  test("a SNAPSHOT-bootstrapped database passes 3a after runMigrate republishes over it (§10 W2 bootstrap then --migrate)", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await migrateAsOwner(await currentDatabaseOf(db));
+      expect((await detectManifestState(db)).kind).toBe("published");
+      expect(await integrity(db)).toEqual([]);
     });
   });
 });

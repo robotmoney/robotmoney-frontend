@@ -106,7 +106,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "706ddf3ab4d2a109e3ad288879985e8da0aa98af85c67c094c78b7381a31b296",
+  "contentHash": "69c0956c365168303a4e218f1386e31e568584a71db9975ac82a38ab06e86b5c",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4832,8 +4832,11 @@
     "constraint public.wallet_sleeve_samples.wallet_sleeve_samples_snapshot_run_id_fkey": {
       "definition": "FOREIGN KEY (snapshot_run_id) REFERENCES public.wallet_aum_snapshot_runs(run_id) DEFERRABLE INITIALLY DEFERRED"
     },
+    "default privileges for rm_owner in schema public on sequences": {
+      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
+    },
     "default privileges for rm_owner in schema public on tables": {
-      "privileges": "rm_app=arw/rm_owner,rm_readonly=r/rm_owner"
+      "privileges": "rm_app=arw/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
     },
     "function public.rm_analytics_cutover_immutable()": {
       "owner": "rm_owner",
@@ -5578,7 +5581,7 @@
       "definition": "CREATE INDEX wallet_sleeve_samples_wallet_sym_date_idx ON public.wallet_sleeve_samples USING btree (wallet_address, symbol, sample_date)"
     },
     "schema public": {
-      "owner": "pg_database_owner"
+      "owner": "rm_owner"
     },
     "sequence public.analytics_artifacts_id_seq": {
       "owner": "rm_owner",
