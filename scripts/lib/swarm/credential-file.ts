@@ -51,7 +51,45 @@
 // credential. It never writes the credential file — provisioning is an
 // operator act (spec §9.2), not a side effect of a boot.
 import { readFileSync, statSync } from "node:fs";
-import type { PersonaIdentity } from "./persona-keys.ts";
+
+/**
+ * A participant's signing identity: the Ed25519 public key the API holds and
+ * the private JWK the participant signs with. It lives here, beside the file
+ * that carries it; persona-keys.ts re-exports it for the smoke fixtures.
+ */
+export interface PersonaIdentity {
+  /** Raw Ed25519 public key, base64 — the form /api/swarm/register takes. */
+  publicKeyB64: string;
+  /** Private key as a JWK, seeded into the member container's client keystore. */
+  privateJwk: Record<string, unknown>;
+}
+
+/**
+ * One `credential.json` entry (spec §6.1, D52 Decision 1): everything ONE
+ * participant container needs, and nothing another container needs.
+ *
+ * ```json
+ * { "memberId": "…", "publicKeyB64": "…", "privateJwk": { … },
+ *   "bearer": "…", "modelKey": "…" }
+ * ```
+ *
+ * All five fields are required and non-empty. D52 moved the bearer and the
+ * model key out of `~/.env` and into the entry, so a container handed its entry
+ * holds its own identity, its own API token and its own model key — and a
+ * judge's model key never reaches an agent container, or the other way round.
+ *
+ * The member id is carried so the boot can check the entry against the
+ * database's `swarm_members.role` (an `agents` entry must be role `member`, a
+ * `judges` entry role `judge`) and refuse naming the entry on a mismatch.
+ */
+export interface CredentialEntry extends PersonaIdentity {
+  /** The server-minted member id this entry signs and authenticates as. */
+  memberId: string;
+  /** This participant's API bearer token. Never another participant's. */
+  bearer: string;
+  /** This participant's model (inference) key. Delivered to its container only. */
+  modelKey: string;
+}
 
 /**
  * The two namespaces of spec §6.1. They are distinct on purpose: a name may
@@ -72,25 +110,27 @@ export type ParticipantKind = "agent" | "judge";
  * Both keys are REQUIRED and both may be empty — `{ "agents": {}, "judges": {} }`
  * is the explicit empty roster, the only way to remove every participant.
  * Zero agents with several judges is valid; several judges are allowed.
- * Each value is a `PersonaIdentity` (public key + private JWK), the same shape
- * the member container's client keystore adopts, so nothing has to translate
- * between the file and the container.
+ * Each value is a `CredentialEntry`: member id, signing key, bearer token and
+ * model key (D52). No two entries may share a member id, a public key or a
+ * bearer, in either namespace: one member cannot be both an agent and a judge,
+ * and a judge's key is never an agent's key.
  */
 export interface CredentialFile {
-  agents: Record<string, PersonaIdentity>;
-  judges: Record<string, PersonaIdentity>;
+  agents: Record<string, CredentialEntry>;
+  judges: Record<string, CredentialEntry>;
 }
 
 /**
  * One roster line, flattened out of the two namespaces. `name` is the stable
- * handle (the file's key), NOT a member id: ids are minted server-side and a
- * host's file cannot know them before the first boot rotates the seated
- * fixture members by id (spec §9.3).
+ * handle (the file's key) that containers and the plan are named by. The
+ * server-minted member id travels inside `credential` (D52), because the boot
+ * checks it against the database's role for this namespace.
  */
 export interface RosterEntry {
   name: string;
   kind: ParticipantKind;
-  identity: PersonaIdentity;
+  /** The whole entry: this container's credential and no other's. */
+  credential: CredentialEntry;
 }
 
 /**
@@ -121,11 +161,16 @@ export type CredentialPathResolution =
  * - `missing`            — a configured path does not exist. NOT an empty roster.
  * - `unreadable`         — it exists but cannot be read (permissions, I/O).
  * - `malformed`          — it read but is not JSON, or is missing `agents`/
- *                          `judges`, or an entry is not a well-formed
- *                          `PersonaIdentity`.
+ *                          `judges`, or an entry lacks one of the five
+ *                          `CredentialEntry` fields.
  * - `duplicate-name`     — the same name appears twice within ONE namespace
  *                          (JSON allows it; the last-wins default would hand a
  *                          container a key its operator did not intend).
+ * - `shared-identity`    — two entries carry the same member id, public key
+ *                          or bearer, in one namespace or across the two. One
+ *                          member is one participant with one role, so a
+ *                          shared identity is a copy-paste mistake that would
+ *                          hand one container another's credential.
  * - `unconfigured-with-running` — no path is configured but participants are
  *                          running. Refuse and name them; never interpret
  *                          absent configuration as "stop everyone".
@@ -135,6 +180,7 @@ export type CredentialRefusalReason =
   | "unreadable"
   | "malformed"
   | "duplicate-name"
+  | "shared-identity"
   | "unconfigured-with-running";
 
 /**
@@ -240,13 +286,17 @@ export function resolveCredentialPath(
  *
  * Validation is total and strict: the top level must be an object carrying
  * exactly the `agents` and `judges` keys; each namespace must be an object;
- * each entry must carry a non-empty `publicKeyB64` and a `privateJwk` object.
- * A namespace may be empty. An unknown top-level key is `malformed` rather
+ * each entry must carry a non-empty `memberId`, `publicKeyB64`, `bearer` and
+ * `modelKey`, and a `privateJwk` object (D52). A namespace may be empty. An
+ * unknown top-level key is `malformed` rather
  * than ignored — silently dropping a namespace an operator invented (say,
  * `"observers"`) would run a host with fewer participants than its file says.
  *
  * Refusals: `malformed` for any of the above; `duplicate-name` if a name
- * repeats within one namespace after normalization.
+ * repeats within one namespace after normalization; `shared-identity` if two
+ * entries share a member id, public key or bearer. A refusal names the entries
+ * and the field, never the value: a bearer in an error message is a bearer in
+ * a log.
  *
  * Gate (spec §10 W3): the "file disappears" gate needs `missing` and
  * `malformed` to be distinguishable at the call site, which starts here.
@@ -277,7 +327,7 @@ export function parseCredentialFile(text: string, path: string): CredentialFile 
       );
     }
   }
-  const namespaces: Record<ParticipantKind, Record<string, PersonaIdentity>> = {
+  const namespaces: Record<ParticipantKind, Record<string, CredentialEntry>> = {
     agent: {},
     judge: {},
   };
@@ -298,20 +348,24 @@ export function parseCredentialFile(text: string, path: string): CredentialFile 
       );
     }
     for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-      const entry = value as Partial<PersonaIdentity> | null;
-      if (entry === null || typeof entry !== "object") {
+      const entry = value as Partial<CredentialEntry> | null;
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
         throw new CredentialFileRefusal(
           "malformed",
           `${path}: ${namespace} entry "${name}" is not an object`,
           { path },
         );
       }
-      if (typeof entry.publicKeyB64 !== "string" || entry.publicKeyB64.trim() === "") {
-        throw new CredentialFileRefusal(
-          "malformed",
-          `${path}: ${namespace} entry "${name}" has no usable publicKeyB64`,
-          { path },
-        );
+      // Every string field by NAME, so the refusal says which one is missing.
+      for (const field of ENTRY_STRING_FIELDS) {
+        const v = entry[field];
+        if (typeof v !== "string" || v.trim() === "") {
+          throw new CredentialFileRefusal(
+            "malformed",
+            `${path}: ${namespace} entry "${name}" has no usable ${field}; ${ENTRY_FIELD_PURPOSE[field]}`,
+            { path },
+          );
+        }
       }
       if (
         entry.privateJwk === null
@@ -324,7 +378,13 @@ export function parseCredentialFile(text: string, path: string): CredentialFile 
           { path },
         );
       }
-      namespaces[kind][name] = { publicKeyB64: entry.publicKeyB64, privateJwk: entry.privateJwk };
+      namespaces[kind][name] = {
+        memberId: (entry.memberId as string).trim(),
+        publicKeyB64: entry.publicKeyB64 as string,
+        privateJwk: entry.privateJwk,
+        bearer: entry.bearer as string,
+        modelKey: entry.modelKey as string,
+      };
     }
   }
   // JSON.parse collapses a repeated key to the last value, so the file's TEXT
@@ -337,7 +397,52 @@ export function parseCredentialFile(text: string, path: string): CredentialFile 
       { path },
     );
   }
-  return { agents: namespaces.agent, judges: namespaces.judge };
+  const file: CredentialFile = { agents: namespaces.agent, judges: namespaces.judge };
+  const shared = firstSharedIdentity(file);
+  if (shared) {
+    throw new CredentialFileRefusal(
+      "shared-identity",
+      `${path}: ${shared.first} and ${shared.second} carry the same ${shared.field}; `
+        + "each entry is one participant with its own identity, and one member cannot hold two roles",
+      { path },
+    );
+  }
+  return file;
+}
+
+/** The four string fields of a `CredentialEntry`, validated by name. */
+const ENTRY_STRING_FIELDS = ["memberId", "publicKeyB64", "bearer", "modelKey"] as const;
+
+/** Why each field is required, so a refusal tells the operator what it is for. */
+const ENTRY_FIELD_PURPOSE: Record<(typeof ENTRY_STRING_FIELDS)[number], string> = {
+  memberId: "the boot checks the entry's role against the member it names",
+  publicKeyB64: "the API verifies this participant's signatures with it",
+  bearer: "the participant authenticates to the API with it",
+  modelKey: "the participant runs its model work on its own key (D52)",
+};
+
+/**
+ * The first pair of entries sharing a member id, public key or bearer, across
+ * both namespaces. A model key MAY be shared (one operator account can fund
+ * several participants); an identity may not. Field names are reported, never
+ * values.
+ */
+function firstSharedIdentity(
+  file: CredentialFile,
+): { first: string; second: string; field: "memberId" | "publicKeyB64" | "bearer" } | undefined {
+  for (const field of ["memberId", "publicKeyB64", "bearer"] as const) {
+    const seen = new Map<string, string>();
+    for (const [namespace, entries] of [["agents", file.agents], ["judges", file.judges]] as const) {
+      for (const [name, entry] of Object.entries(entries)) {
+        const label = `${namespace} entry "${name}"`;
+        const value = entry[field].trim();
+        const prior = seen.get(value);
+        if (prior !== undefined) return { first: prior, second: label, field };
+        seen.set(value, label);
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -498,8 +603,8 @@ export function rosterEntries(file: CredentialFile): RosterEntry[] {
   const entries: RosterEntry[] = [];
   for (const [kind, namespace] of [["agent", file.agents], ["judge", file.judges]] as const) {
     for (const name of Object.keys(namespace).sort()) {
-      const identity = namespace[name];
-      if (identity) entries.push({ name, kind, identity });
+      const credential = namespace[name];
+      if (credential) entries.push({ name, kind, credential });
     }
   }
   return entries;
@@ -575,6 +680,51 @@ export function reconcileRoster(
     if (!claimed.has(key(live))) stop.push(live);
   }
   return { start, keep, stop };
+}
+
+/**
+ * The ONE composition a boot uses: path resolution → load → reconcile.
+ *
+ * Inputs: the resolved path, what is running, the loader (injectable so the
+ * gates can observe whether it was called), and the spoof-keys generation, if
+ * any. Output: a `ReconciliationPlan`.
+ *
+ * WHY THIS EXISTS AS A FUNCTION. `reconcileRoster` already refuses `null` with
+ * participants running, but a caller decides what to pass it, and the natural
+ * one-liner — `resolution.configured ? rosterEntries(load(path)) : []` — maps
+ * "no path configured" to the EMPTY ROSTER, which is the explicit instruction
+ * to stop everyone. Every pure test of `reconcileRoster` passes with that
+ * caller in place, while it stops every participant on a host whose
+ * `RM_CREDENTIALS` line went missing. So the mapping lives here, once, and
+ * boot code calls only this (spec §6.1: "With no path configured, smoke
+ * proceeds with no participants only if none are running; otherwise it
+ * refuses and names them").
+ *
+ * An unconfigured resolution never calls `load`: there is no path to read,
+ * and reading a default would invent configuration nobody wrote.
+ *
+ * Refusals: `unconfigured-with-running` from `reconcileRoster`; every load
+ * refusal, rethrown with the setting that pointed at the path, so the operator
+ * knows whether to fix a shell command or `~/.env`.
+ */
+export function planParticipants(
+  resolution: CredentialPathResolution,
+  running: readonly RunningParticipant[],
+  load: (path: string) => CredentialFile = loadCredentialFile,
+  currentGeneration?: string,
+): ReconciliationPlan {
+  if (!resolution.configured) return reconcileRoster(null, running, currentGeneration);
+  let file: CredentialFile;
+  try {
+    file = load(resolution.path);
+  } catch (err) {
+    if (!(err instanceof CredentialFileRefusal)) throw err;
+    const setting = resolution.origin === "flag" ? "--credentials" : "RM_CREDENTIALS in ~/.env";
+    throw new CredentialFileRefusal(err.reason, `${err.message} (path set by ${setting})`, {
+      path: resolution.path,
+    });
+  }
+  return reconcileRoster(rosterEntries(file), running, currentGeneration);
 }
 
 /**
