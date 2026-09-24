@@ -13,6 +13,10 @@
 // Moving it onto this module is the smoke-lifecycle work of issue #1026, not
 // this file's.
 //
+// NOT YET POSSIBLE: publishing a database's FIRST manifest from the operator's
+// command. Spec §9.1 step 2 requires a baseline comparison first, and none
+// exists, so `assertBaselineForOperator` refuses that case outright.
+//
 // Governed by smoke-production-spec.md §8.3 (the run), §8.5 (`--migrate` and
 // production upgrades), §2 (the fence), §3 (the credential), §4.3 (the policy
 // matrix).
@@ -110,6 +114,7 @@ import {
 } from "../src/db/schema-compat.ts";
 import {
   MANIFEST_FORMAT_VERSION,
+  detectManifestState,
   hashManifest,
   resumePlan,
   writeManifest,
@@ -233,6 +238,8 @@ export interface MigrateRunResult {
  *     that fails its post-state check).
  *   - The database is blank (no ledger). A blank database is the snapshot's
  *     bootstrap (§8.1), never a replay (§8.2).
+ *   - `caller: "operator"` against a database with no manifest. §9.1 step 2's
+ *     baseline comparison must gate the first publish, and this run has none.
  *   - A pending migration above the pre-compat baseline (0063, D53) has no
  *     parseable compat header, or any pending file declares one badly (§8.2).
  *     The refusal names the file.
@@ -275,6 +282,7 @@ export async function runMigrate(
       throw new Error(`Refusing the migrate run: ${refusals.map((r) => r.message).join(" ")}`);
     }
     await assertNotBlank(session.handle);
+    await assertBaselineForOperator(session.handle, options);
 
     // 3. RESUME. The append-only trigger inventory is checked first: it is the
     //    one post-state this repository declares machine-readably, and a
@@ -387,6 +395,38 @@ async function relationAcls(tx: MigrateDb): Promise<Map<string, string>> {
 
 function changedAcls(before: Map<string, string>, after: Map<string, string>): string[] {
   return [...after.keys()].filter((name) => before.get(name) !== after.get(name)).sort();
+}
+
+/**
+ * The operator's command never publishes a database's FIRST manifest.
+ *
+ * Spec §9.1 step 2: "Baseline — compare production's live schema with the
+ * snapshot for its installed filename list. Any difference is repaired by a
+ * migration first; the first `bun run migrate` publishes a manifest only when
+ * the live schema matches." This run compares nothing: its resume check reads
+ * the append-only trigger inventory and no more (`verifyCommittedPostState`).
+ * A first manifest published here would claim a schema nobody compared, and
+ * every later boot's check 3a would trust that claim.
+ *
+ * So `caller: "operator"` refuses a database with no manifest, before anything
+ * is applied, until a baseline comparison exists to gate the first publish.
+ * `--migrate` (`smoke_flag`) is unaffected: it runs only against a rehearsal
+ * identity, whose database smoke bootstrapped from the snapshot itself or
+ * restored as a disposable copy.
+ *
+ * This is a BLOCKER for the production transition, stated as a refusal rather
+ * than left as a silent publish.
+ */
+async function assertBaselineForOperator(db: MigrateDb, options: MigrateRunOptions): Promise<void> {
+  if (options.caller !== "operator") return;
+  const state = await detectManifestState(db);
+  if (state.kind !== "absent") return;
+  throw new Error(
+    "Refusing the migrate run: this database has no schema manifest, and `bun run migrate` does not publish a " +
+      "first one. Spec §9.1 step 2 publishes the first manifest only after production's live schema has been " +
+      "compared with the snapshot for its installed filename list, and this command performs no such " +
+      "comparison. Nothing was applied.",
+  );
 }
 
 /**

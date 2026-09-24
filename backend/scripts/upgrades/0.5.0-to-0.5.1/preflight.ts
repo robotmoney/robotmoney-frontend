@@ -69,10 +69,10 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
   };
 
   const roles = (await db`
-    SELECT rolname, rolcanlogin, rolsuper
+    SELECT rolname, rolcanlogin, rolsuper, rolcreaterole
       FROM pg_roles
      WHERE rolname = ANY(${[...TAXONOMY_ROLES]})
-  `) as unknown as { rolname: string; rolcanlogin: boolean; rolsuper: boolean }[];
+  `) as unknown as { rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolcreaterole: boolean }[];
   const roleByName = new Map(roles.map((r) => [r.rolname, r]));
 
   const missing = TAXONOMY_ROLES.filter((n) => !roleByName.has(n));
@@ -83,8 +83,17 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
     );
   } else {
     const owner = roleByName.get("rm_owner")!;
-    if (owner.rolcanlogin) fail("rm_owner is LOGIN — 0053 creates it NOLOGIN (no process may authenticate as the owner)");
+    // D47 made rm_owner the migration login, and 0053 now creates it LOGIN.
+    // LOGIN is therefore the expected state, not a failure. A NOLOGIN owner is
+    // a database that recorded 0053 before that change: legal, but the next
+    // `bun run migrate` needs spec §9.1 step 1 first, so the record says so.
+    if (!owner.rolcanlogin) {
+      lines.push(
+        "rm_owner is NOLOGIN — this database recorded 0053 before it said LOGIN; before the next `bun run migrate`, apply spec §9.1 step 1 through doadmin (ALTER ROLE rm_owner LOGIN PASSWORD …)",
+      );
+    }
     if (owner.rolsuper) fail("rm_owner is SUPERUSER — 0053 creates it NOSUPERUSER");
+    if (owner.rolcreaterole) fail("rm_owner holds CREATEROLE — 0053 never grants it, and role creation is doadmin's (spec §3)");
     for (const name of ["rm_app", "rm_worker", "rm_readonly"] as const) {
       const r = roleByName.get(name)!;
       if (!r.rolcanlogin) fail(`${name} is NOLOGIN — 0053 creates it LOGIN`);
@@ -174,6 +183,8 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
       "taxonomy roles exist with 0053's attributes; a LOGIN role holds rm_owner membership and neither runtime role does; rm_worker holds the 0054 allow-list grants",
       `rm_owner members: ${memberNames.join(", ") || "none"}`,
       `API boot role derived from legacy v0.5.x conventions: ${API_BOOT_ROLE} — NOT VERIFIED READ-ONLY, confirm on the cutover host: DATABASE_URL names rm_app, never doadmin (config.ts:710-712); WORKER_DATABASE_URL names rm_worker (worker-client.ts:20-22).`,
+      // Informational lines (a NOLOGIN owner) survive a PASS.
+      ...lines,
     ],
   );
 }

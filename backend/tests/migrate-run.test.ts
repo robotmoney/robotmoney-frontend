@@ -189,12 +189,21 @@ const plantedDirs: string[] = [];
 
 const ADDITIVE = "-- compat: additive\n-- metadata_version: 1\n--\n";
 
+// rm_owner is a CLUSTER-wide role, and the next test file in sorted order
+// (migration-0053-creates-every-role-it-alters.test.ts) reads its LOGIN
+// attribute as evidence of what 0053 did. So this file records the attribute
+// before touching the role and puts back exactly that value, never a forced
+// LOGIN. Only the password this file set is cleared.
+let ownerCanLogin: boolean | null = null;
+const ownerLoginClause = (): string => (ownerCanLogin === false ? "NOLOGIN" : "LOGIN");
+
 beforeAll(async () => {
+  ownerCanLogin = (await ownerAttributes()).rolcanlogin;
   await sql.unsafe(`ALTER ROLE rm_owner PASSWORD '${OWNER_PASSWORD}'`);
 });
 
 afterAll(async () => {
-  await sql.unsafe("ALTER ROLE rm_owner LOGIN PASSWORD NULL");
+  await sql.unsafe(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD NULL`);
   for (const dir of plantedDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -390,7 +399,8 @@ describe("rm_owner — LOGIN, the migration login, never CREATEROLE", () => {
         await owner.end({ timeout: 5 });
       }
     } finally {
-      await sql.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+      // Back to the attribute this file found, with this file's password.
+      await sql.unsafe(`ALTER ROLE rm_owner ${ownerLoginClause()} PASSWORD '${OWNER_PASSWORD}'`);
     }
     expect((await ownerAttributes()).rolcreaterole).toBe(false);
   });
@@ -401,6 +411,9 @@ describe("rm_owner — LOGIN, the migration login, never CREATEROLE", () => {
     plantedDirs.push(stateDir);
     const owner = connect(await currentDatabase(), OWNER);
     try {
+      // The operator never publishes a FIRST manifest (§9.1 step 2), so the
+      // stage convenience publishes it, the way a rehearsal database gets one.
+      await runMigrate(owner, options({ caller: "smoke_flag" }));
       const startedAt = new Date();
       const result = await runMigrate(owner, options({ caller: "operator" }));
       const path = await writeMigrateReceipt(migrateReceiptPath(stateDir, startedAt), result, {
@@ -522,6 +535,108 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     // No receipt, because nothing ran.
     expect(() => statSync(join(home, ".local", "state", "robotmoney-smoke", "rm_prod"))).toThrow();
   });
+
+  test("under a real terminal the whole sequence runs: gates, masked rm_owner prompt, y, run, receipt", async () => {
+    // Criterion 70 as a PROCESS, not a module call. `script` gives the command
+    // a pseudo-terminal, so `process.stdin.isTTY` is true and the real
+    // hiddenPrompt and confirmation run. The password is written as ONE chunk
+    // ending in Enter, which is what a paste delivers.
+    await setIdentity("rehearsal");
+    // The operator's command never publishes a first manifest (§9.1 step 2);
+    // the stage convenience publishes it, as a rehearsal database gets one.
+    await runMigrate(sql, options());
+    const manifestBefore = await readManifest(sql);
+
+    const home = mkdtempSync(join(tmpdir(), "rm-migrate-pty-"));
+    plantedDirs.push(home);
+    writeFileSync(join(home, ".env"), await envFileFor(), "utf8");
+    const receipt = join(home, "receipts", "migrate.json");
+
+    const child = Bun.spawn(["script", "-qefc", `bun scripts/migrate.ts --receipt ${receipt}`, "/dev/null"], {
+      cwd: BACKEND,
+      env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage", TERM: "dumb" },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let screen = "";
+    const decoder = new TextDecoder();
+    const pump = (async () => {
+      for await (const chunk of child.stdout) screen += decoder.decode(chunk);
+    })();
+    const waitFor = async (text: string): Promise<void> => {
+      const deadline = Date.now() + 20_000;
+      while (!screen.includes(text)) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for "${text}"; terminal so far:\n${screen}`);
+        await Bun.sleep(25);
+      }
+    };
+
+    try {
+      await waitFor("rm_owner password (not echoed");
+      child.stdin.write(`${OWNER_PASSWORD}\r`);
+      await child.stdin.flush();
+      await waitFor("type y to continue");
+      child.stdin.write("y\r");
+      await child.stdin.flush();
+      await waitFor("[migrate] receipt ");
+      const code = await child.exited;
+      await pump;
+      expect({ code, screen }).toEqual({ code: 0, screen: expect.any(String) });
+    } finally {
+      if (child.exitCode === null) child.kill();
+      try {
+        child.stdin.end();
+      } catch {
+        // already closed with the process
+      }
+    }
+
+    // The receipt is at the path named, is a real record of this run, and
+    // holds no owner password. Nor does anything else the command wrote.
+    const text = readFileSync(receipt, "utf8");
+    const written = JSON.parse(text) as { kind: string; manifest: { contentHash: string; filenames: string[] } };
+    expect(written.kind).toBe("migrate-receipt");
+    expect(text).not.toContain(OWNER_PASSWORD);
+    expect(screen).not.toContain(OWNER_PASSWORD);
+    for (const file of readdirSync(home, { recursive: true }) as string[]) {
+      const path = join(home, file);
+      if (statSync(path).isFile()) expect(readFileSync(path, "utf8")).not.toContain(OWNER_PASSWORD);
+    }
+
+    // The run published the manifest the receipt names, for the full ledger.
+    const published = await readManifest(sql);
+    expect(published?.contentHash).toBe(written.manifest.contentHash);
+    expect(published?.filenames).toEqual(await ledgerNames());
+    expect(published?.contentHash).toBe(manifestBefore?.contentHash);
+    expect((await detectManifestState(sql)).kind).toBe("published");
+  }, 60_000);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// `bun run migrate` has one meaning
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("`bun run migrate` resolves to backend/scripts/migrate.ts from BOTH package.json files", () => {
+  // The root script runs the gated command. backend/package.json used to map
+  // the same name to the legacy ungated runner (src/db/migrate.ts), so
+  // `cd backend && bun run migrate` skipped every gate, the rm_owner prompt
+  // and the receipt. Each script is resolved against the directory it runs in.
+  function resolveMigrateScript(manifest: string): string {
+    const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { scripts: Record<string, string> };
+    const argv = (pkg.scripts.migrate ?? "").split(/\s+/);
+    const cwdAt = argv.indexOf("--cwd");
+    const base = join(manifest, "..", cwdAt >= 0 ? argv[cwdAt + 1] ?? "" : "");
+    const entry = argv.find((token) => token.endsWith(".ts"));
+    if (!entry) throw new Error(`${manifest}: the migrate script names no .ts entry point`);
+    return join(base, entry);
+  }
+
+  test("root and backend `migrate` both run the gated command", () => {
+    const expected = join(BACKEND, "scripts", "migrate.ts");
+    expect(resolveMigrateScript(join(BACKEND, "..", "package.json"))).toBe(expected);
+    expect(resolveMigrateScript(join(BACKEND, "package.json"))).toBe(expected);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -593,6 +708,35 @@ describe("runMigrate — fence, per-migration transactions, always reconcile, pu
     // …and the repair list is a measurement, not a constant: a run that found
     // nothing to repair says so.
     expect((await runMigrate(sql, options())).grantsRepaired).toEqual([]);
+  });
+
+  test("the operator's run never publishes a FIRST manifest: it refuses, naming §9.1 step 2, and applies nothing", async () => {
+    // Spec §9.1 step 2: "the first `bun run migrate` publishes a manifest only
+    // when the live schema matches". No baseline comparison exists, so the
+    // operator caller refuses a database with no manifest, before any apply.
+    await withClone(async ({ admin, owner }) => {
+      await setIdentity("production", admin);
+      expect(await readManifest(admin)).toBeNull();
+      const ledgerBefore = await ledgerNames(admin);
+      const dir = migrationsWith({
+        "0099_first_manifest_probe.sql": `${ADDITIVE}CREATE TABLE rm_first_manifest_probe (id integer);\n`,
+      });
+      await expect(
+        runMigrate(owner, options({ caller: "operator", env: "prod", connection: "remote" }), { migrationsDir: dir }),
+      ).rejects.toThrow("§9.1 step 2");
+      expect(await ledgerNames(admin)).toEqual(ledgerBefore);
+      expect(await readManifest(admin)).toBeNull();
+
+      // With a manifest in place the same run proceeds and applies the file.
+      await setIdentity("rehearsal", admin);
+      await runMigrate(owner, options({ caller: "smoke_flag" }));
+      await setIdentity("production", admin);
+      const result = await runMigrate(owner, options({ caller: "operator", env: "prod", connection: "remote" }), {
+        migrationsDir: dir,
+      });
+      expect(result.applied).toEqual(["0099_first_manifest_probe.sql"]);
+      expect(await readManifest(admin)).toEqual(result.manifest);
+    });
   });
 
   test("the published manifest describes the FINAL state and equals what readManifest returns", async () => {
@@ -803,6 +947,9 @@ describe("runMigrate — recovery from an interrupted run", () => {
     expect(result.applied).toEqual([]);
     expect(await appliedAtFor(witness)).toEqual(before);
     expect((await ledgerNames()).length).toBe(names.length);
+    // …and the resumed run published a manifest for the FULL ledger.
+    expect(result.manifest.filenames).toEqual(names);
+    expect(await readManifest(sql)).toEqual(result.manifest);
   });
 
   test("a second rerun after a completed one is a no-op that still reconciles", async () => {

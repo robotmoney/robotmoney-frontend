@@ -157,6 +157,90 @@ describe("parseMigrationHeader — the declaration §8.2 requires of every migra
 // The pre-compat baseline (D53 decision 3)
 // ───────────────────────────────────────────────────────────────────────────
 
+/** Every migration at or below the 0063 baseline that has no compat header,
+ *  as of D53 (2026-09-24). Closed: see the test that pins it. */
+const PRE_COMPAT_HEADERLESS: string[] = [
+  "0001_backends.sql",
+  "0002_dashboards.sql",
+  "0003_task_queue.sql",
+  "0004_committee.sql",
+  "0005_job_schedules_seed.sql",
+  "0006_committee_reconcile.sql",
+  "0007_committee_rls_stub.sql",
+  "0008_committee_memos.sql",
+  "0009_analytics_v2.sql",
+  "0010_backtest_correlations.sql",
+  "0011_regime_dashboard_extras.sql",
+  "0012_vault_share_price_history.sql",
+  "0013_projects.sql",
+  "0014_projects_pipelines.sql",
+  "0014_wallet_balance_samples.sql",
+  "0015_buyback_swaps.sql",
+  "0016_worker_role.sql",
+  "0017_admin_surface.sql",
+  "0018_research_telemetry.sql",
+  "0019_committee_self_serve_claim.sql",
+  "0020_committee_agent_health.sql",
+  "0021_chain_indexer_samples.sql",
+  "0021_committee_waitlist.sql",
+  "0022_committee_application_received_notification.sql",
+  "0022_committee_session_convened_at.sql",
+  "0023_agent_activity_log.sql",
+  "0023_analytics_submissions.sql",
+  "0023_list2_leaderboard.sql",
+  "0024_analytics_provenance_source.sql",
+  "0025_swarm_rename.sql",
+  "0026_swarm_sessions_legacy_takes.sql",
+  "0027_drop_swarm_sessions_legacy_takes.sql",
+  "0028_admin_credential.sql",
+  "0028_swarm_briefs_session_key.sql",
+  "0028_swarm_take_revisions.sql",
+  "0029_admin_auth_recovery.sql",
+  "0029_admin_passkey.sql",
+  "0030_swarm_member_handle.sql",
+  "0031_swarm_member_handle_namespace.sql",
+  "0032_append_only_history.sql",
+  "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
+  "0033_swarm_member_uuid_ids.sql",
+  "0033_wallet_backfill.sql",
+  "0034_job_schedules_catchup_policy.sql",
+  "0035_swarm_member_avatar_bytes.sql",
+  "0036_quarantine_backfilled_samples.sql",
+  "0037_aum_repairable_quarantine.sql",
+  "0038_wallet_aum_snapshot_foundation.sql",
+  "0039_swarm_judge.sql",
+  "0040_swarm_judgements_append_only.sql",
+  "0041_swarm_judgement_soak_record.sql",
+  "0042_swarm_consensus_receipts.sql",
+  "0043_swarm_member_judges.sql",
+  "0044_wallet_backfill_leg_terminal.sql",
+  "0045_chain_address_floors.sql",
+  "0046_asset_prices.sql",
+  "0047_swarm_session_subject_name_backfill.sql",
+  "0048_swarm_judge_third_party_flag.sql",
+  "0049_swarm_recommendations_signing_key.sql",
+  "0050_swarm_member_keys_append_only.sql",
+  "0051_swarm_vault_recommendation_type_repair.sql",
+  "0052_swarm_judgement_digest_scheme.sql",
+  "0054_rm_worker_allowlist.sql",
+  "0055_swarm_recommendations_member_received_idx.sql",
+  "0056_analytics_overwrite_events.sql",
+  "0056_swarm_judge_requires_model.sql",
+  "0057_source_acquisition_ledger.sql",
+  "0057_swarm_judge_policy_stamp.sql",
+  "0058_analytics_run_ledger.sql",
+  "0058_swarm_judge_fault_injection.sql",
+  "0059_analytics_output_and_report_snapshots.sql",
+  "0059_swarm_framework_subject_snapshot_cleanup.sql",
+  "0059_swarm_judgement_completion_usage.sql",
+  "0060_analytics_ledger_cutover.sql",
+  "0061_rm_worker_wallet_backfill_grant.sql",
+  "0061_source_value_provenance.sql",
+  "0062_rm_readonly_sequence_select.sql",
+  "0062_rm_worker_analytics_ledger_read_grant.sql",
+  "0063_deployment_identity.sql",
+];
+
 describe("the pre-compat baseline — 0001-0063 may be header-less, nothing after may", () => {
   const dir = `${import.meta.dir}/../migrations`;
   async function migrations(): Promise<{ file: string; text: string }[]> {
@@ -186,6 +270,19 @@ describe("the pre-compat baseline — 0001-0063 may be header-less, nothing afte
     );
     expect(headerless.length).toBeGreaterThan(0);
     expect(headerless.map((m) => m.file)).toContain("0001_backends.sql");
+  });
+
+  test("the header-less set at or below 0063 is CLOSED: a new low-numbered file cannot skip the header", async () => {
+    // The baseline is a number, and this repo already repeats numbers (two or
+    // three files each at 0021-0023, 0028-0029, 0032-0033, 0056-0062). A new
+    // header-less `0059_x.sql` would therefore pass `parsePendingHeader` for
+    // ever, and the "above 0063" test cannot see it. So the exact set of
+    // pre-compat files that carry no header is pinned here: today's list, no
+    // more. A new migration takes a number above 0063 and declares itself.
+    const headerless = (await migrations())
+      .filter(({ file, text }) => !requiresCompatHeader(file) && parsePendingHeader(file, text) === null)
+      .map((m) => m.file);
+    expect(headerless).toEqual(PRE_COMPAT_HEADERLESS);
   });
 
   test("a header-less file at or below the baseline is pre-compat: null, not a default", () => {

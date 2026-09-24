@@ -118,9 +118,11 @@ export const COMPAT_METADATA_VERSION = 1;
  * Every file ABOVE this number must declare itself, and
  * backend/tests/schema-compat.test.ts proves each one does.
  *
- * A number, not a filename, because it bounds a RANGE: a second 0063 added
- * after the fact would still be pre-compat by construction, and anything new
- * gets a number above it.
+ * A number, not a filename, because it bounds a RANGE. A range alone would
+ * let a new header-less file slip in under a repeated low number (this repo
+ * already has two or three files at several numbers), so
+ * backend/tests/schema-compat.test.ts also pins the exact set of header-less
+ * files at or below it. Anything new gets a number above it.
  */
 export const COMPAT_HEADER_BASELINE = 63;
 

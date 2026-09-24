@@ -88,7 +88,11 @@ POSTGRES_PORT=5433 docker compose up -d postgres   # local Postgres
 
 cd backend
 bun install
-bun run migrate                           # apply backend/migrations/*.sql
+# Local dev database only: the ungated runner the test harness uses. It is NOT
+# `bun run migrate`, which is the production operator command in both
+# package.json files (backend/scripts/migrate.ts): it prompts for rm_owner,
+# runs the §8.5 gates and writes a receipt (smoke-production-spec.md §8.5).
+bun run src/db/migrate.ts                 # apply backend/migrations/*.sql
 
 # one process serves the API + the static site (same origin, matches prod).
 # Point STATIC_DIR at the ASSEMBLED dir, not the source tree: `_static/` is

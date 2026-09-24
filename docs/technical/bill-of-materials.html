@@ -1850,7 +1850,7 @@ footer {
 
   <div class="cmd">bun run smoke:stage<br># Standing/public smoke: passes --static-port (pins the web port to the tunnel origin 48787)<br># and --external-pg when .env describes a Postgres</div>
 
-  <div class="cmd">cd backend<br>bun install<br>bun run migrate  # apply SQL migrations (and seed)<br>bun run api     # start API server only<br>WORKER_LANE=generic bun run worker  # WORKER_LANE is required — no default</div>
+  <div class="cmd">cd backend<br>bun install<br>bun run src/db/migrate.ts  # local dev only: apply SQL migrations (production: root `bun run migrate`)<br>bun run api     # start API server only<br>WORKER_LANE=generic bun run worker  # WORKER_LANE is required — no default</div>
 
   <h3>Testing & Validation</h3>
   <div class="cmd">bun test                # root suite: bun test scripts/tests</div>
