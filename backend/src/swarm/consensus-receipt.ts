@@ -45,9 +45,8 @@ import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalizati
 import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
 import { sql } from "../db/client.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
-import { loadFrozenTakeSet, normalizedTakeWeights } from "./domain.ts";
+import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
-import { judgeInputFromFrozen } from "./judge-session.ts";
 
 /** One contributing analyst, as the assembler needs them. */
 export interface ConsensusReceiptAnalystInput {
@@ -115,7 +114,7 @@ export type ConsensusReceiptRefusalReason =
   | "not_judged"
   | "judgement_not_adopted"
   // The adopted judgement exists and the session took it, but no MODEL wrote
-  // it — `source='fallback'`, i.e. templateOpinion()'s prose. A receipt is a
+  // it — `source='fallback'`, i.e. the retired template fallback's prose. A receipt is a
   // claim about authorship, so this is a refusal and not a warning.
   | "judgement_not_authored"
   | "judgement_stale"
@@ -638,16 +637,16 @@ async function loadAssemblyInput(
     throw new ConsensusReceiptRefusal(
       "judgement_not_adopted",
       `session ${sessionId} has ${onFile.n} judgement(s) on file but carries no judge block on its own record, so no opinion has ever reached it. ` +
-        "A judgement recorded in `shadow` is deliberately withheld from the session — that is the whole point of the mode — and the receipt carries " +
-        "only an opinion the session adopted, so judge the session in `enforce` mode before publishing its receipt.",
+        "Only the judge of record's judgement reaches the session; a second judge's, late evidence after publication and a historical " +
+        "`shadow` row never do, and the receipt carries only an opinion the session adopted.",
     );
   }
   // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
-  // row came from templateOpinion() — the aggregator's own sentences — and a
-  // certificate saying "the judge read the takes and concluded this" over them
-  // attests something that never happened. The refusal is separate from
-  // `judgement_not_adopted` because the fix is different: that one says judge in
-  // enforce, this one says give the judge a model it can actually reach.
+  // row came from the retired template fallback — the aggregator's own
+  // sentences — and a certificate saying "the judge read the takes and
+  // concluded this" over them attests something that never happened. Only
+  // pre-#969 history can carry one; nothing writes it now. The refusal is kept
+  // separate from `judgement_not_adopted` because it names a different fact.
   const authored = (await sql`
     SELECT source, fallback_reason FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
@@ -659,7 +658,7 @@ async function loadAssemblyInput(
       `session ${sessionId}'s adopted judgement has source='${authored[0].source}'` +
         `${authored[0].fallback_reason ? ` (${authored[0].fallback_reason})` : ""} — its opinion is TEMPLATE PROSE, not a model's. ` +
         "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
-        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
+        "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
     );
   }
   const candidates = (await sql`
@@ -692,17 +691,17 @@ async function loadAssemblyInput(
     );
   }
   // AND IT MUST BE THE MODEL'S. `source='fallback'` means the opinion in that
-  // row came from templateOpinion() — the aggregator's own sentences — and a
-  // certificate saying "the judge read the takes and concluded this" over them
-  // attests something that never happened. The refusal is separate from
-  // `judgement_not_adopted` because the fix is different: that one says judge in
-  // enforce, this one says give the judge a model it can actually reach.
+  // row came from the retired template fallback — the aggregator's own
+  // sentences — and a certificate saying "the judge read the takes and
+  // concluded this" over them attests something that never happened. Only
+  // pre-#969 history can carry one; nothing writes it now. The refusal is kept
+  // separate from `judgement_not_adopted` because it names a different fact.
   if (judgement.source !== "model") {
     throw new ConsensusReceiptRefusal(
       "judgement_not_authored",
       `session ${sessionId}'s adopted judgement has source='${judgement.source}' — its opinion is TEMPLATE PROSE, not a model's. ` +
         "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
-        "Configure swarm_judge_config.model and give the judge lane OPENCODE_API_KEY, then re-judge in enforce.",
+        "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
     );
   }
 

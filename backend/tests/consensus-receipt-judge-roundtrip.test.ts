@@ -20,12 +20,16 @@
 // change to either bound turns this red rather than producing an opinion the
 // signed artifact cannot represent.
 //
-// NO MOCKING OF EITHER SIDE. `parseJudgeResponse` and `judge()` are the shipped
-// functions, the transport is injected rather than reached over a network, and
-// the validator is the same `contract/src/consensus-receipt.js` module the
-// contract fixture test and issue #754's assembler use.
+// NO MOCKING OF EITHER SIDE. `parseJudgeResponse` is the shipped parser the API
+// runs over every judgement, the model's answer arrives through the shipped
+// participant runner (`scripts/agent/participant/judge-runner.ts`) on its real
+// transport against a local vendor-shaped endpoint, and the validator is the
+// same `contract/src/consensus-receipt.js` module the contract fixture test and
+// issue #754's assembler use. The backend `judge()` this file used to drive is
+// deleted (D53 point 4): the judge is a participant, and this is its path.
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalizeReceipt,
@@ -33,14 +37,11 @@ import {
   receiptSemanticErrors,
   validateReceipt,
 } from "@robotmoney/contract";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
 import {
-  judge, parseJudgeResponse, templateOpinion,
-  type JudgeInput, type JudgeOpinion, type JudgeOutcome, type JudgeTransport,
+  parseJudgeResponse, renderJudgePrompt,
+  type JudgeInput, type JudgeOpinion,
 } from "../src/swarm/judge.ts";
+import { runJudge } from "../../scripts/agent/participant/judge-runner.ts";
 
 const FIXTURES = join(import.meta.dir, "../../contract/src/__fixtures__");
 const readJson = (name: string): any => JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
@@ -166,35 +167,46 @@ test("the two lower bounds coincide: zero positions is refused by the parser AND
   expect(schema.definitions.disagreement.properties.positions.minItems).toBe(1);
 });
 
-// ISSUE #969 REMOVED ONE OF THE TWO SOURCES, AND a42d6c5a REMOVED THE OTHER
-// HALF OF IT. This used to assert that a template "fallback" opinion
-// round-trips into an anchorable receipt too — which is precisely the defect:
-// a receipt is a signed attestation, and one carrying template prose under the
-// judge's name attests to a judging that never happened. A NEW receipt can now
-// carry exactly one source.
-test("a model judgement round-trips into an anchorable receipt, and `source` records that it was one", async () => {
-  // The MODEL path, through the shipped orchestration rather than the parser
-  // alone: a transport that returns the one-position answer.
-  const transport: JudgeTransport = { model: "test-model", complete: async () => ONE_POSITION_ANSWER };
-  const modelOutcome = await judge(input, { transport, timeoutMs: 5_000 });
-  expect(modelOutcome.source).toBe("model");
-  expect(modelOutcome.opinion.disagreements[0].positions).toHaveLength(1);
+/** Run the participant's runner against a local endpoint answering `status`/`body`. */
+async function throughTheRunner(status: number, body: string) {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response(body, { status, headers: { "content-type": "application/json" } }),
+  });
+  const dir = mkdtempSync(join(tmpdir(), "rm-roundtrip-"));
+  const promptFile = join(dir, "prompt.txt");
+  writeFileSync(promptFile, renderJudgePrompt(input));
+  try {
+    return await runJudge({
+      promptFile, endpoint: `http://127.0.0.1:${server.port}`, model: "deepseek-v4-flash", apiKey: "k", timeoutMs: 5_000,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    server.stop(true);
+  }
+}
 
-  // THERE IS NO SECOND PATH ANY MORE. This used to assert the fallback half of
-  // the round trip — templateOpinion() prose recorded with `source:
-  // "fallback"`, identical to the model path in every other pinned field. That
-  // similarity was the danger, not the feature: a receipt could attest prose no
-  // model wrote and look exactly like one that did. A judge with no transport
-  // now refuses — and so does one whose model was asked and did not answer, so
-  // the only thing that can reach a NEW receipt is the path above.
-  await expect(judge(input, {})).rejects.toThrow("model_unconfigured");
-  const brokenTransport: JudgeTransport = {
-    model: "test-model",
-    complete: async () => { throw new Error("connect ECONNREFUSED"); },
-  };
-  await expect(judge(input, { transport: brokenTransport, timeoutMs: 5_000 }))
-    .rejects.toThrow("model_unavailable:");
-  const receipt = assembleReceipt(modelOutcome.opinion, modelOutcome.source);
+// ISSUE #969 REMOVED ONE OF THE TWO SOURCES, AND D53 DELETED THE CODE THAT HAD
+// IT. A receipt is a signed attestation, and one carrying template prose under
+// the judge's name attests to a judging that never happened. A NEW receipt can
+// carry exactly one source: a model's answer, parsed by the API.
+test("a model judgement round-trips into an anchorable receipt, and `source` records that it was one", async () => {
+  // The MODEL path, as it runs now: the participant's runner receives the
+  // model's text on its real transport, and the API's parser turns it into
+  // the opinion the session adopts.
+  const answer = await throughTheRunner(200, JSON.stringify({ choices: [{ message: { content: ONE_POSITION_ANSWER } }] }));
+  expect(answer).toEqual({ kind: "ok", body: ONE_POSITION_ANSWER });
+  const opinion = parseJudgeResponse(answer.kind === "ok" ? answer.body : "", input);
+  expect(opinion.disagreements[0].positions).toHaveLength(1);
+
+  // THERE IS NO SECOND PATH. A vendor that refuses produces no text at all —
+  // the runner reports the status and there is nothing to parse, so nothing
+  // can reach a receipt.
+  const refused = await throughTheRunner(402, '{"error":"Payment Required"}');
+  expect(refused.kind).toBe("model_status");
+
+  const receipt = assembleReceipt(opinion, "model");
   assertAnchorable(receipt);
   expect(receipt.judge.source).toBe("model");
   expect(canonicalizeReceipt(receipt, spec)).toContain('"source":"model"');
@@ -203,9 +215,15 @@ test("a model judgement round-trips into an anchorable receipt, and `source` rec
 // …but a receipt WRITTEN BEFORE the fallback was removed must still read and
 // validate. Those rows are append-only history and some of them are already
 // signed and served, so the schema keeps `source: "fallback"` legal even
-// though nothing emits it any more.
+// though nothing emits it any more. The opinion below is written out as such a
+// row held it — nothing in the codebase can produce one now.
 test("a pre-#969 fallback receipt still validates — history stays readable", () => {
-  const historical = assembleReceipt(templateOpinion(input), "fallback");
+  const HISTORICAL_FALLBACK: JudgeOpinion = {
+    rationale: "Treasury allocation: 1 constructive, 1 neutral across 2 takes (mean confidence 0.78).",
+    disagreements: [],
+    release_safety: { release: "safe", thinly_supported: false, take_count: 2, min_takes: 2, concerns: [] },
+  };
+  const historical = assembleReceipt(HISTORICAL_FALLBACK, "fallback");
   assertAnchorable(historical);
   expect(historical.judge.source).toBe("fallback");
   expect(canonicalizeReceipt(historical, spec)).toContain('"source":"fallback"');
@@ -216,7 +234,7 @@ test("every JudgeOpinion field has a receipt field, and the receipt invents none
   // property set is the opinion's property set plus exactly the two ENVELOPE
   // fields — `source` (which produced the prose) and `mode` (whether the
   // session adopted it). Neither is part of JudgeOpinion; both come off the
-  // JudgeOutcome envelope and the judgement row, so the split is stated here
+  // judgement row, so the split is stated here
   // rather than left to whichever list happens to be longer.
   const ENVELOPE = ["source", "mode"];
   const opinion = parseJudgeResponse(ONE_POSITION_ANSWER, input);

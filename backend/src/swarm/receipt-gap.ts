@@ -39,43 +39,16 @@
 // stops matching. An event row would need a migration, a writer at every
 // refusal site, and its own resolution path — three more places to be wrong
 // about the same fact.
+//
+// NO QUEUE JOB IS READ ANY MORE (issue #1026). This module used to find a
+// session's `swarm.judge` job to tell "the judge is off" apart from "the judge
+// was asked and never answered". There is no such job now: the judge is a
+// participant that subscribes over HTTP (smoke-production-spec.md §6.2), and
+// the session itself records the answer. `judge_mode` is captured at turnover
+// and `judging_outcome` is decided once by finalize (system-scheduler-spec.md
+// §4.4), so a session published `no_consensus` under `enforce` is the durable,
+// per-session record that its judge was asked and did not answer in time.
 import { sql as defaultSql, type DbHandle } from "../db/client.ts";
-
-/**
- * THIS SESSION'S `swarm.judge` JOB — one definition, three consumers.
- *
- * A judge job reaches the queue by two paths that write DIFFERENT COLUMNS:
- *
- *   * `createSessionAdmin` (swarm/admin.ts) INSERTs with
- *     `scope_type='swarm_session'` + `scope_id`;
- *   * the DRIVER — `scripts/lib/swarm/session.ts` → `POST
- *     /api/swarm/admin/enqueue-job` — INSERTs `(kind, payload, dedupe_key)`
- *     and nothing else, so the only link to the session is
- *     `payload->>'sessionId'`.
- *
- * Matching on the admin columns alone therefore matched ZERO rows on the shape
- * production writes, and it did so in three places at once: this module's
- * report, `judgeLaneFailureFor()`, and — through it —
- * `worker/handlers/swarm.ts`'s publish degrade, which has no second clause at
- * all and so recorded a session that lost its receipt to a judge outage as a
- * clean SUCCESS. The writer has since been closed too (`enqueue-job` now sets
- * the scope columns from `payload.sessionId`), but the predicate stays
- * two-clause on purpose: every job row enqueued before that fix is still on
- * file, and an alert about a permanent loss may not depend on when the row was
- * written.
- *
- * `sessionId` is a fragment rather than a value so the same definition serves
- * both a parameterised lookup (`${id}`) and a correlated lateral join
- * (`s.id::text`). One function, one rule, no second copy to drift.
- */
-export function judgeJobFor(db: DbHandle, sessionId: unknown) {
-  return db`
-    SELECT status, attempts, last_error FROM jobs
-     WHERE kind = 'swarm.judge'
-       AND ((scope_type = 'swarm_session' AND scope_id = ${sessionId as never})
-            OR (payload->>'sessionId') = ${sessionId as never})
-     ORDER BY id DESC LIMIT 1`;
-}
 
 /**
  * How far back to look. A published session that has been receiptless for a
@@ -88,7 +61,7 @@ export const MISSING_RECEIPT_LOOKBACK_DAYS = 7;
 /** How many sessions the report names individually before it just counts. */
 export const MISSING_RECEIPT_REPORT_LIMIT = 20;
 
-export type MissingReceiptTrigger = "eligible_take_count" | "judge_lane_failure";
+export type MissingReceiptTrigger = "eligible_take_count" | "no_consensus";
 
 export interface MissingReceiptSession {
   sessionId: string;
@@ -99,26 +72,24 @@ export interface MissingReceiptSession {
   /**
    * The threshold and mode THAT APPLIED TO THIS SESSION, not today's.
    *
-   * Read off the session's own `swarm_session_judgements` row when it has one
-   * (it records both, at the moment the judging happened), and off the live
-   * config only for a session that was never judged. See the eligibility
-   * comment on `detectMissingReceiptSessions` for why a live-config-only test
-   * hands an operator a lever that retracts the alert.
+   * The mode is read off the session's own record — a judgement row when it
+   * has one, else the `judge_mode` it captured at turnover — and the threshold
+   * off its judgement row. The live config is consulted only for what the
+   * session never recorded. See the eligibility comment on
+   * `detectMissingReceiptSessions` for why a live-config-only test hands an
+   * operator a lever that retracts the alert.
    */
   minTakesApplied: number;
   judgeModeApplied: string;
-  /** Which clause named this session — the take count, or its own judge failure. */
+  /** Which clause named this session — the take count, or its own `no_consensus` outcome. */
   trigger: MissingReceiptTrigger;
   /**
-   * The session's OWN `swarm.judge` job outcome, which is how "the judge is
-   * off, as configured" is told apart from "the judge was on, was asked N
-   * times, and never answered". A retry-exhausted degrade settles `failed`
-   * since R16 and settled `succeeded` before it, so the status alone cannot say
-   * it on every database — `last_error` can.
+   * The judging outcome finalize recorded on the session (`judged`,
+   * `no_consensus`, `not_judged`), or null for a session published outside the
+   * epoch lifecycle. This is how "the judge is off" is told apart from "the
+   * judge was asked and never answered".
    */
-  judgeJobStatus: string | null;
-  judgeJobAttempts: number | null;
-  judgeLastError: string | null;
+  judgingOutcome: string | null;
 }
 
 export interface MissingReceiptReport {
@@ -139,65 +110,37 @@ export interface MissingReceiptReport {
  * scheduled work" be distinguished from "missing/failed publication", and
  * `swarm_judge_config.min_takes` is where the product draws that line: the
  * receipt's own `release_safety.min_takes` records it. A zero-take session is
- * correctly NOT reported — it is the `nothing_to_judge` case, and the N5
- * staging run had one (b1d5242d, robotmoney-allocation, zero takes) sitting
- * beside the real failure as a live control.
+ * correctly NOT reported — it is the `nothing_to_judge` case.
  *
  * BUT THE TEST MUST NOT BE TODAY'S CONFIG, and that is the RC2 correction.
  * v0.5.0-rc.2's first cut read `mode` and `min_takes` LIVE and compared every
- * session against them. Because the signal is derived rather than recorded,
- * that made two ordinary operator actions into silent retractions of an alert
- * about a permanent loss:
+ * session against them, which made two ordinary operator actions — raising
+ * `min_takes`, and setting `mode: off` — into silent retractions of an alert
+ * about a permanent loss. "Cannot disappear silently" has to survive an
+ * unrelated config change, so the question is asked of the session, three
+ * ways:
  *
- *   * raising `min_takes` (the same admin patch path the release runbook uses)
- *     dropped a session that is still receiptless, with nothing left behind;
- *   * setting `mode: off` did the same, wholesale.
+ *   1. THE APPLIED MODE AND THRESHOLD, NOT THE CURRENT ONES. A judged session
+ *      carries both in its `swarm_session_judgements` row, and every epoch
+ *      session carries the `judge_mode` it captured at turnover. Neither can be
+ *      moved by a later patch. The live config is consulted only for what the
+ *      session never recorded.
+ *   2. ITS OWN `no_consensus` IS DURABLE EVIDENCE IN ITS OWN RIGHT. A session
+ *      finalized `no_consensus` under `enforce` was ASKED to be judged and got
+ *      no eligible consensus by its deadline. It is named whatever the take
+ *      count is against today's `min_takes`, so raising the threshold cannot
+ *      retract it.
+ *   3. TODAY'S CONFIG MAY ONLY VOUCH FOR A SESSION IT PREDATES. When the
+ *      policy stamp (`policy_updated_at`) is LATER than the session's
+ *      `published_at` and the session recorded no mode of its own, the mode on
+ *      file is not the mode that applied, and it is trusted in NEITHER
+ *      direction: it may not silence a session carrying its own `no_consensus`,
+ *      and it may not flag one carrying nothing. Turning the judge ON does not
+ *      retro-flag every session published while it was off.
  *
- * "Cannot disappear silently" has to survive an unrelated config change, so
- * the question is asked of the session, three ways:
- *
- *   1. THE APPLIED THRESHOLD, NOT THE CURRENT ONE. A session that was judged
- *      carries the mode and the `min_takes` that applied to it in its own
- *      `swarm_session_judgements` row. That row is append-only, so it cannot
- *      be moved by a later patch. The live config is consulted only for a
- *      session that has no judgement at all.
- *   2. ITS OWN JUDGE FAILURE IS DURABLE EVIDENCE IN ITS OWN RIGHT. A session
- *      whose `swarm.judge` job recorded a `last_error` was ASKED and never
- *      answered — that is the 1.13 N5 loss exactly, and it has no judgement
- *      row to carry a threshold. It is named whatever the take count is
- *      against today's `min_takes`, so raising the threshold cannot retract
- *      it. A retry-exhausted degrade settles `failed` since R16 and settled
- *      `succeeded` before it, so the job STATUS is not a fact that holds across
- *      databases and `last_error` is the one that does.
- *   3. TODAY'S CONFIG MAY ONLY VOUCH FOR A SESSION IT PREDATES. When
- *      `swarm_judge_config.updated_at` is LATER than the session's
- *      `published_at`, the mode on file is not the mode that applied, and it
- *      is trusted in NEITHER direction for a never-judged session: it may not
- *      silence one that carries its own judge failure, and it may not flag one
- *      that carries none. That closes the `mode: off` lever without inventing
- *      a row — an operator turning the judge off after a loss moves
- *      `updated_at`, and the loss keeps its name — while also keeping the
- *      opposite case quiet: turning the judge ON does not retro-flag every
- *      session published while it was off.
- *
- * RESIDUAL, RECORDED RATHER THAN HIDDEN. A never-judged session with NO judge
- * failure of its own stops being named if the config is touched after it
- * published. There is no durable record anywhere of the mode that applied to
- * such a session, and it is unreachable in practice: a session that lost a
- * receipt under `enforce` has either a judgement row (clause 1, immune) or a
- * failed judge job (clause 2, immune). Closing it completely needs a written
- * row at the moment of loss — a migration, a writer at every refusal site, and
- * its own resolution path — which is the trade this module's header declines.
- *
- * A JUDGE IN `off` OR `shadow` REPORTS NOTHING, and `shadow` is the other RC2
- * correction. The first cut suppressed only `off`, which made every eligible
- * session in `shadow` permanently red — in `shadow` a judgement is withheld
- * from the session BY DESIGN (`judge-session.ts`: "SHADOW NEVER APPLIES"), so
- * `publishConsensusReceiptAdmin` refuses with `judgement_not_adopted`, which
- * `worker/handlers/swarm.ts` lists as a benign refusal for exactly that
- * reason. A receipt is unreachable in `off` and in `shadow` alike, and an
- * alert that fires on a control working as designed buries the ones that mean
- * something — this module's own rule, applied to the mode it missed.
+ * A JUDGE IN `off` REPORTS NOTHING: a receipt is unreachable by construction,
+ * and an alert that fires on a control working as designed buries the ones that
+ * mean something.
  */
 export async function detectMissingReceiptSessions(
   db: DbHandle = defaultSql,
@@ -207,30 +150,26 @@ export async function detectMissingReceiptSessions(
   const cfg = (await db`SELECT mode, min_takes, updated_at FROM swarm_judge_config WHERE id = 1`)[0] as
     | { mode: string; min_takes: number; updated_at: Date | string | null }
     | undefined;
-  const judgeMode = cfg?.mode ?? "off";
+  // A legacy `shadow` is `off` for every purpose (D53).
+  const judgeMode = cfg?.mode === "enforce" ? "enforce" : "off";
   const minTakes = Number(cfg?.min_takes ?? 3);
 
   const since = new Date(now.getTime() - lookbackDays * 86_400_000);
   const rows = (await db`
     WITH cfg AS (SELECT mode, min_takes, policy_updated_at FROM swarm_judge_config WHERE id = 1),
     candidate AS (
-      SELECT s.id, s.subject_id, s.published_at, t.take_count,
-             j.status AS judge_status, j.attempts AS judge_attempts, j.last_error AS judge_last_error,
-             COALESCE(g.mode, c.mode) AS mode_applied,
+      SELECT s.id, s.subject_id, s.published_at, s.judging_outcome, t.take_count,
+             COALESCE(g.mode, s.judge_mode, c.mode) AS mode_applied,
              COALESCE(g.min_takes, c.min_takes)::int AS min_takes_applied,
-             -- The session carries its OWN record of what applied to it.
-             (g.mode IS NOT NULL) AS was_judged,
-             -- Durable, per-session evidence that the judge was asked and never
-             -- answered. An exhausted degrade settles failed since R16 and
-             -- settled succeeded before it, so the STATUS is not a fact this
-             -- alert can rest on across databases — last_error is.
-             (j.last_error IS NOT NULL AND btrim(j.last_error) <> '') AS judge_failed,
+             -- The session carries its OWN record of the mode that applied.
+             (g.mode IS NOT NULL OR s.judge_mode IS NOT NULL) AS carries_mode,
+             -- Durable, per-session evidence that the judge was asked and gave
+             -- no eligible consensus: finalize's own recorded outcome.
+             (s.judge_mode = 'enforce' AND s.judging_outcome = 'no_consensus') AS judge_failed,
              -- Today's config may only speak for a session it predates, and
              -- "today's config" means the POLICY — mode and min_takes.
-             -- updated_at moves on every patch, so reading it here let a
-             -- model rotation retract an alert about a permanent loss;
-             -- policy_updated_at (migration 0057) moves only when one of the
-             -- two columns this predicate is about actually changed value.
+             -- policy_updated_at (migration 0057) moves only when one of those
+             -- two columns actually changed value.
              (COALESCE(c.policy_updated_at, to_timestamp(0)) <= s.published_at) AS config_predates
         FROM swarm_sessions s
         CROSS JOIN cfg c
@@ -239,11 +178,9 @@ export async function detectMissingReceiptSessions(
             FROM swarm_recommendations r
            WHERE r.session_id = s.id AND r.verified
         ) t ON true
-        LEFT JOIN LATERAL (${judgeJobFor(db, db`s.id::text`)}) j ON true
-        -- THE SESSION'S OWN RECORD OF WHAT APPLIED TO IT. An enforce row is
-        -- preferred over a later shadow one: enforce is the mode under which a
-        -- receipt was reachable, and a session judged both ways (shadow soak,
-        -- then enforce) really did lose a receipt it could have had.
+        -- THE SESSION'S OWN JUDGEMENT RECORD. An enforce row is preferred over
+        -- a historical shadow one: enforce is the mode under which a receipt
+        -- was reachable.
         LEFT JOIN LATERAL (
           SELECT mode, min_takes FROM swarm_session_judgements
            WHERE session_id = s.id
@@ -258,32 +195,23 @@ export async function detectMissingReceiptSessions(
          AND NOT EXISTS (SELECT 1 FROM swarm_consensus_receipts rc WHERE rc.session_id = s.id)
     ),
     -- (1) THE MODE AND THRESHOLD THAT APPLIED made a receipt reachable and this
-    --     session met it. Off a judgement row those are the session's own
-    --     recorded values and no later patch can move them; without one the
-    --     live config decides, and only for a session it predates.
-    --
-    -- COMPUTED ONCE. This predicate is both a filter and the reported
-    -- trigger, and it used to be written out twice in one statement — two
-    -- copies that had to stay identical for the alert to say which clause was
-    -- speaking. One CTE column, read by both.
+    --     session met it. COMPUTED ONCE: this predicate is both a filter and
+    --     the reported trigger, so it is one CTE column read by both.
     scored AS (
       SELECT *,
              (mode_applied = 'enforce' AND take_count >= min_takes_applied
-              AND (was_judged OR config_predates)) AS elig_takes
+              AND (carries_mode OR config_predates)) AS elig_takes
         FROM candidate
     )
     SELECT * FROM scored
      WHERE elig_takes
-       -- (2) OR its own judge job recorded a failure — evidence in its own
-       --     right, independent of any threshold. Silenced only by a mode
-       --     entitled to speak for this session, i.e. one already in force when
-       --     it published. This is what keeps a loss named after min_takes is
-       --     raised or the judge is switched off.
-       OR (judge_failed AND (mode_applied = 'enforce' OR NOT config_predates))
+       -- (2) OR its own no_consensus under enforce — evidence in its own
+       --     right, independent of any threshold, and recorded on the session
+       --     so no later config change can move it.
+       OR judge_failed
      ORDER BY published_at DESC`) as unknown as {
       id: string; subject_id: string; published_at: Date | string; take_count: number;
-      judge_status: string | null; judge_attempts: number | null; judge_last_error: string | null;
-      mode_applied: string; min_takes_applied: number; elig_takes: boolean;
+      judging_outcome: string | null; mode_applied: string; min_takes_applied: number; elig_takes: boolean;
     }[];
 
   return {
@@ -299,58 +227,27 @@ export async function detectMissingReceiptSessions(
       minTakesApplied: Number(r.min_takes_applied),
       judgeModeApplied: String(r.mode_applied),
       // Which clause named it. The take-count clause is the ordinary one; the
-      // judge-failure clause is the one that keeps a loss named after an
+      // `no_consensus` clause is the one that keeps a loss named after an
       // unrelated config change, so an operator can see which is speaking.
-      trigger: r.elig_takes ? "eligible_take_count" : "judge_lane_failure",
-      judgeJobStatus: r.judge_status ?? null,
-      judgeJobAttempts: r.judge_attempts == null ? null : Number(r.judge_attempts),
-      judgeLastError: r.judge_last_error ?? null,
+      trigger: r.elig_takes ? "eligible_take_count" : "no_consensus",
+      judgingOutcome: r.judging_outcome ?? null,
     })),
   };
 }
 
 /**
  * One line per unreceipted session, for the alert feed. SESSION-SCOPED on
- * purpose: an operator reading "swarm.judge last run: degraded" learns that the
- * lane is unwell and nothing about which artifact was lost, and that line is
- * gone the moment the next session succeeds. This one names the session, stays
- * for as long as the receipt is missing, and carries the judge job's own
- * `last_error` so "the judge was asked and never answered" is distinguishable
- * from "the judge was never asked".
+ * purpose: it names the session, stays for as long as the receipt is missing,
+ * and carries the session's own judging outcome so "the judge was asked and
+ * never answered" is distinguishable from "a consensus was recorded and the
+ * receipt still did not publish".
  */
 export function describeMissingReceipt(s: MissingReceiptSession): string {
-  // THE THIRD BRANCH IS A CLAIM ABOUT THE QUEUE, and for the whole of rc.2 it
-  // was false: the lookup matched only the admin-shaped job columns, so every
-  // DRIVER-enqueued job — the shape production writes — read as "no job on
-  // file" while the row sat in `jobs` with its `last_error` recorded. It now
-  // says only what this report can actually see.
-  const judged = s.judgeLastError
-    ? `its swarm.judge job ended ${s.judgeJobStatus ?? "?"} after ${s.judgeJobAttempts ?? "?"} attempt(s) with last_error ${JSON.stringify(s.judgeLastError)}`
-    : s.judgeJobStatus
-      ? `its swarm.judge job ended ${s.judgeJobStatus} with no recorded error`
-      : "no swarm.judge job for this session was found in the queue";
+  const judged = s.judgingOutcome === "no_consensus"
+    ? "its judge was asked and no eligible consensus was recorded by the judging deadline (published no_consensus)"
+    : s.judgingOutcome
+      ? `its judging outcome was ${s.judgingOutcome}`
+      : "it was published outside the epoch lifecycle, with no judging outcome recorded";
   return `session ${s.sessionId} (${s.subjectId}) published ${s.publishedAt} with ${s.takeCount} verified take(s) ` +
     `(judge ${s.judgeModeApplied}, min_takes ${s.minTakesApplied} as applied to this session) and NO consensus receipt — ${judged}`;
-}
-
-/**
- * The session's OWN judge job, when it was ASKED and failed — the fact that
- * tells `not_judged because the judge is off` apart from `not_judged after the
- * judge lane exhausted its retries on this session`.
- *
- * Returns the recorded `last_error`, or null when the judge was never asked (no
- * job), was asked and succeeded, or is still to run. `worker/loop.ts` settled a
- * job `succeeded` once `max_attempts` was spent, so the STATUS could not carry
- * this and the error column had to: in the 1.13 N5 run the session's judge job
- * read `SUCCEEDED, attempts 5, last_error judge_unavailable`, and every surface
- * downstream read the word "succeeded". R16 settles that case `failed` now, and
- * `last_error` is still what this reads — the fact that is true on both sides of
- * the change, and on every row written before it.
- *
- * No new state: this is the row `worker/loop.ts` already writes.
- */
-export async function judgeLaneFailureFor(sessionId: string, db: DbHandle = defaultSql): Promise<string | null> {
-  const row = (await judgeJobFor(db, sessionId))[0] as { last_error: string | null } | undefined;
-  const lastError = row?.last_error == null ? "" : String(row.last_error).trim();
-  return lastError === "" ? null : lastError;
 }

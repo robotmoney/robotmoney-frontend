@@ -58,8 +58,12 @@ export interface AdminEnabledSchedule {
   nextRunAt: string | null;
 }
 
+// The next epoch boundary (issue #1026): the earliest open window's close. It
+// is read off the sessions, not the job queue — no queue job drives a session —
+// so `jobId` is null, `kind` is "session.window_close" and `scopeId` names the
+// session whose window closes.
 export interface AdminNextSwarmEvent {
-  jobId: number;
+  jobId: number | null;
   kind: string;
   runAfter: string;
   scopeType: string | null;
@@ -448,25 +452,27 @@ export type SwarmSessionState =
 /** The only 6 lifecycle actions the admin HTTP surface exposes
  * (swarm-admin.ts sessions dispatcher). scheduled→collecting
  * ("publish_brief" in the job-kind vocabulary) is worker/job-queue-driven
- * only — there is no manual admin action for it. `judge` (issue #752) is
- * refused with 409 `judge_disabled` while the judge's runtime mode is off,
- * which is its shipped default. */
+ * only — there is no manual admin action for it. `judge` (issue #752) answers
+ * 410 since issue #1026: the API does not judge, a judge participant does
+ * (system-scheduler-spec.md §1, §7). */
 export type SwarmSessionAction = "cancel" | "close" | "reopen" | "aggregate" | "publish" | "judge";
 
 /** The consensus judge's runtime switch (issue #752), read and written over
- * ROUTES.swarm.admin.judgeConfig. `off` is the shipped default and reproduces
- * pre-#752 behaviour exactly; `shadow` computes and stores an opinion without
- * it reaching a session; `enforce` lets it through. It lives in the database
- * rather than the environment so it can be flipped without a redeploy. */
-export type SwarmJudgeMode = "off" | "shadow" | "enforce";
+ * ROUTES.swarm.admin.judgeConfig. `off` is the shipped default: a session
+ * closing under it requests no judging and publishes `not_judged`; `enforce`
+ * requests judging from the judge participants. `shadow` is retired (D48, its
+ * replay prerequisite waived by D53): no write accepts it, and a legacy row
+ * holding it reads as `off`. It lives in the database rather than the
+ * environment so it can be flipped without a redeploy. */
+export type SwarmJudgeMode = "off" | "enforce";
 
 export interface SwarmJudgeConfig {
   mode: SwarmJudgeMode;
   /** Take count below which the release-safety opinion flags thin support. */
   minTakes: number;
-  /** The model the judge reaches, or null. A ROW rather than an env var: D22
-   * rule 1 keeps model selection to one reviewable signal, and null means the
-   * judge records template prose with `model_unconfigured` against it. */
+  /** The model the judge participants are expected to run, or null. A ROW
+   * rather than an env var: D22 rule 1 keeps model selection to one reviewable
+   * signal. `enforce` requires one (migration 0056). */
   model: string | null;
   updatedAt: string | null;
 }

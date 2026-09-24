@@ -1,38 +1,40 @@
-// WHAT THIS FILE PROTECTS (issue #796).
+// WHAT THIS FILE PROTECTS (issue #796, re-keyed by D52).
 //
-// #812 gave a graduated member (`swarm_members.role = 'judge'`) an identity
-// and a fail-closed authorization seam inside `judgeSession()` — but it left
-// that seam permanently open: any active judge-role member could already
-// author a judgement, with no admin control over whether THIRD-PARTY judging
-// is permitted at all. That is this issue's whole job: a single admin-
-// flippable, no-redeploy gate — `swarm_judge_config.third_party_enabled` —
-// that refuses every judgeMemberId judgement while off, and leaves the
-// built-in worker's judgements (no judgeMemberId) completely unaffected
-// either way.
+// smoke-production-spec.md §6.2, "Third-party gate": "A judgement from a judge
+// whose member `operator` is `robotmoney` is in-house and is accepted whatever
+// `swarm_judge_config.third_party_enabled` says. A judgement from any other
+// judge is refused while that flag is false." D52's defaults say the same.
 //
-// The three promises graded here, each with its own way to break quietly:
-//   1. Flag off -> a third-party judgement is refused BEFORE any row lands,
-//      with a named reason (`third_party_judging_disabled`), not a generic
-//      409 and not a silent skip.
-//   2. Flag off -> the in-house worker (no judgeMemberId) is NOT gated by
-//      this flag at all — enabling third parties must never become a
-//      prerequisite for the in-house rollout stage.
-//   3. Flag on -> a third-party judgement proceeds to the #812 checks
-//      (role/status/no-take-in-session) exactly as before, and the row it
-//      writes still names its judging party.
+// THE GATE LIVES WHERE JUDGEMENTS ENTER: `submitJudgement` (domain.ts), the
+// participant route's one entry point. The inline `judgeSession()` this file
+// used to drive is deleted (D53 point 4), and so is its in-house worker path
+// with no judge member at all — every judgement now comes from a seated judge
+// signing its own submission.
+//
+// KEYED ON OPERATOR, AND THE #925 FORGERY STAYS CLOSED. `operator` is a
+// profile column, and #925 showed a member writing `robotmoney` into its own
+// row to pass as in-house. Keying the gate on `handle` instead was the old
+// answer; D52 keys it on `operator`, which is only sound because no non-admin
+// writer may set that literal. That reservation is asserted here at the
+// writer (`updateMemberProfile`), not merely at the route's validator.
+//
+// The promises graded, each with its own way to break quietly:
+//   1. Flag off → a third-party judgement is refused BEFORE any row lands,
+//      with a named reason, not a generic 409 and not a silent skip.
+//   2. Flag off → the in-house judge (operator `robotmoney`) is accepted.
+//   3. Flag on → the third-party judge is accepted and its row names it.
+//   4. The flag is read inside the write transaction.
+//   5. A member cannot make itself in-house through self-service.
 import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import * as admin from "../src/swarm/admin.ts";
 import * as ic from "../src/swarm/domain.ts";
-import { getJudgeConfig, judgeSession, latestJudgement, setJudgeConfig } from "../src/swarm/judge-session.ts";
+import { getJudgeConfig, setJudgeConfig } from "../src/swarm/judge-config.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-import { STUB_JUDGE_MODEL, useStubJudge } from "./support/stub-judge.ts";
-// A judgement is a model's opinion now — there is no modelless path — so a
-// suite that needs one on file answers through the stub endpoint.
-useStubJudge();
+import { requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -46,136 +48,132 @@ async function member(prefix: string) {
   return { id, token: result.token, privateKey };
 }
 
-async function session(prefix: string) {
-  const subjectId = rid(prefix);
-  await ensureProseSubject(subjectId, subjectId);
-  const opened = await ic.openSession(subjectId);
-  await ic.publishBrief(opened.id, 60);
-  return { subjectId, session: opened, date: opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10) };
-}
-
 async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subjectId: string) {
   const payload = { memberId: m.id, date, subjectId, nonce: rid("nonce"), stance: "neutral", confidence: 0.5, body: "signed take" };
   const signature = await signMessage(canonicalizeSubmission(payload), m.privateKey);
   return ic.submitRecommendation(m.token, { ...payload, signature });
 }
 
-const opinion = JSON.stringify({
-  rationale: "The takes are coherent enough to publish.",
-  disagreements: [],
-  release_safety: { release: "safe", concerns: [] },
-});
-const transport = { model: "test/judge", complete: async () => opinion };
-
-async function aggregated(prefix: string) {
-  const s = await session(prefix);
-  const voters = [await member("voter_a"), await member("voter_b")];
-  for (const voter of voters) expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
-  await ic.closeWindow(s.session.id);
-  await ic.aggregateSession(s.session.id);
-  return s;
+/** An aggregated session in `judging`, two signed takes on file. */
+async function judging(prefix: string) {
+  const subjectId = rid(prefix);
+  await ensureProseSubject(subjectId, subjectId);
+  const opened = await ic.openSession(subjectId);
+  await ic.publishBrief(opened.id, 60);
+  const date = opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10);
+  for (const voter of [await member("voter_a"), await member("voter_b")]) {
+    expect((await submit(voter, date, subjectId)).status).toBe(201);
+  }
+  await ic.closeWindow(opened.id);
+  await ic.aggregateSession(opened.id);
+  await requestJudgingFor(opened.id);
+  return opened.id as string;
 }
 
-async function judgeRole(prefix: string) {
-  const m = await member(prefix);
-  expect((await admin.setMemberRoleAdmin(m.id, 1, "judge")).ok).toBe(true);
-  return m;
-}
+const judgementRows = async (sessionId: string) =>
+  (await sql`SELECT judged_by, judged_by_member_id FROM swarm_session_judgements WHERE session_id = ${sessionId}`) as any[];
 
 test("shipped default is off, and off refuses a third-party judgement before any row lands", async () => {
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
+  const thirdParty = await seatJudge({ prefix: "candidate", operator: "peaq" });
+  const sessionId = await judging("flag_off");
 
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL }); // thirdPartyEnabled left at its default: false
-  const judge = await judgeRole("candidate");
-  const s = await aggregated("flag_off");
-
-  const result = await judgeSession(s.session.id, { judgeMemberId: judge.id, transport });
-  expect(result).toMatchObject({ ok: false, status: 403, error: "third_party_judging_disabled" });
-
-  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
-  expect(rows).toHaveLength(0);
-  expect(await latestJudgement(s.session.id)).toBeNull();
+  const result = await ic.submitJudgement(thirdParty.token, await signedJudgement(thirdParty, sessionId));
+  expect(result).toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
+  expect(await judgementRows(sessionId)).toHaveLength(0);
+  expect(((await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any).state).toBe("judging");
 });
 
-// Issue #925 (review-security-001): a self-declared `operator: 'robotmoney'`
-// must not exempt a non-roster judge from this gate. This is the exact
-// regression the security review specified as currently-failing before the
-// in-house exemption was re-keyed off `handle` — a non-roster member cannot
-// forge its way past `third_party_enabled` merely because SOME writer once
-// stamped its `operator` column with the in-house value. Written against the
-// domain function directly, bypassing validateMemberProfile's own reservation
-// of that literal (#925's separate defense-in-depth fix) — the point here is
-// that judge-session.ts's exemption check is independent of `operator`
-// entirely, not merely that one caller of it is blocked.
-test("a self-declared operator='robotmoney' does not exempt a non-roster judge from the third-party gate", async () => {
+test("a judge with NO operator is third-party too — only the in-house literal is exempt", async () => {
+  const anonymous = await seatJudge({ prefix: "anonymous", operator: null });
+  const sessionId = await judging("flag_off_null_operator");
+  const result = await ic.submitJudgement(anonymous.token, await signedJudgement(anonymous, sessionId));
+  expect(result).toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
+  expect(await judgementRows(sessionId)).toHaveLength(0);
+});
+
+test("the in-house judge (operator 'robotmoney') is accepted with the flag off — third parties are never a prerequisite", async () => {
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL }); // thirdPartyEnabled left at its default: false
+  const inHouse = await seatJudge({ prefix: "themis", operator: "robotmoney" });
+  const sessionId = await judging("in_house_flag_off");
 
-  const judge = await judgeRole("forger");
-  const patched = await ic.updateMemberProfile(judge.token, judge.id, { operator: "robotmoney" });
-  expect(patched.status).toBe(200);
-  const row = await sql`SELECT operator FROM swarm_members WHERE id = ${judge.id}`;
-  expect((row[0] as any).operator).toBe("robotmoney");
-
-  const s = await aggregated("forged_operator");
-  const result = await judgeSession(s.session.id, { judgeMemberId: judge.id, transport });
-  expect(result).toMatchObject({ ok: false, status: 403, error: "third_party_judging_disabled" });
-
-  const rows = await sql`SELECT id FROM swarm_session_judgements WHERE session_id = ${s.session.id}`;
-  expect(rows).toHaveLength(0);
-  expect(await latestJudgement(s.session.id)).toBeNull();
+  const result = await ic.submitJudgement(inHouse.token, await signedJudgement(inHouse, sessionId));
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (!result.ok) return;
+  expect(result.judgeOfRecord).toBe(true);
+  expect(result.state).toBe("judged");
+  expect(await judgementRows(sessionId)).toEqual([{ judged_by: inHouse.id, judged_by_member_id: inHouse.id }]);
 });
 
-test("the in-house worker succeeds with the flag off — third parties are never a prerequisite for the in-house stage", async () => {
-  await setJudgeConfig({ mode: "shadow", model: STUB_JUDGE_MODEL });
-  expect((await getJudgeConfig()).thirdPartyEnabled).toBe(false);
-
-  const s = await aggregated("in_house_unaffected");
-  const result = await judgeSession(s.session.id, { transport }); // no judgeMemberId
-  expect(result.ok).toBe(true);
-  const row = await latestJudgement(s.session.id) as any;
-  expect(row.judged_by).toBe("robotmoney-in-house");
-  expect(row.judged_by_member_id).toBeNull();
+test("while the flag is off a third-party judge is not the judge of record, even with the lowest member id", async () => {
+  // Scheduler spec §4.4: the judge of record is chosen by member id among the
+  // ELIGIBLE judges, and "it passes the third-party gate" is part of eligible.
+  // A third-party judge sorting first must not displace the in-house one.
+  const thirdParty = await seatJudge({ prefix: "aaa_third_party", operator: "peaq" });
+  const inHouse = await seatJudge({ prefix: "zzz_in_house", operator: "robotmoney" });
+  const sessionId = await judging("of_record_gate");
+  expect((await ic.submitJudgement(thirdParty.token, await signedJudgement(thirdParty, sessionId))).ok).toBe(false);
+  const result = await ic.submitJudgement(inHouse.token, await signedJudgement(inHouse, sessionId));
+  expect(result).toMatchObject({ ok: true, judgeOfRecord: true, state: "judged" });
 });
 
-test("turning the flag on permits a graduated judge, and every row still names its judging party", async () => {
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
+test("turning the flag on permits a third-party judge, and its row names it", async () => {
+  await setJudgeConfig({ thirdPartyEnabled: true });
   expect((await getJudgeConfig()).thirdPartyEnabled).toBe(true);
+  const thirdParty = await seatJudge({ prefix: "permitted", operator: "peaq" });
+  const sessionId = await judging("flag_on");
 
-  const judge = await judgeRole("permitted");
-  const s = await aggregated("flag_on");
-  const result = await judgeSession(s.session.id, { judgeMemberId: judge.id, transport });
-  expect(result.ok).toBe(true);
-
-  const row = await latestJudgement(s.session.id) as any;
-  expect(row.judged_by).toBe(judge.id);
-  expect(row.judged_by_member_id).toBe(judge.id);
+  const result = await ic.submitJudgement(thirdParty.token, await signedJudgement(thirdParty, sessionId));
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect(await judgementRows(sessionId)).toEqual([{ judged_by: thirdParty.id, judged_by_member_id: thirdParty.id }]);
 });
 
-test("the flag is read fresh inside the write transaction — turning it off after the model call still refuses the row", async () => {
-  // Same shape as #812's role-revocation race: the model call happens outside
-  // the transaction and can take up to 60s, so an admin flipping the switch
-  // mid-flight must be observed before any judgement row can land.
-  await setJudgeConfig({ mode: "shadow", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
-  const judge = await judgeRole("raced");
-  const s = await aggregated("raced_off");
+test("the flag is read inside the write transaction — turning it off after the model answered still refuses the row", async () => {
+  // The model call happens in the judge's own container and can take minutes.
+  // An admin flipping the switch in that window must be observed at
+  // submission: the judgement below was signed while the flag was ON.
+  await setJudgeConfig({ thirdPartyEnabled: true });
+  const thirdParty = await seatJudge({ prefix: "raced", operator: "peaq" });
+  const sessionId = await judging("raced_off");
+  const signedWhileOn = await signedJudgement(thirdParty, sessionId, STUB_JUDGE_REPLY);
 
-  const slowTransport = {
-    model: "test/judge",
-    complete: async () => {
-      // The flag flips to off while this "model call" is in flight, i.e.
-      // before judgeSession()'s write transaction opens.
-      await setJudgeConfig({ thirdPartyEnabled: false });
-      return opinion;
-    },
-  };
-  const result = await judgeSession(s.session.id, { judgeMemberId: judge.id, transport: slowTransport });
-  expect(result).toMatchObject({ ok: false, status: 403, error: "third_party_judging_disabled" });
-  expect(await latestJudgement(s.session.id)).toBeNull();
+  await setJudgeConfig({ thirdPartyEnabled: false });
+  const result = await ic.submitJudgement(thirdParty.token, signedWhileOn);
+  expect(result).toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
+  expect(await judgementRows(sessionId)).toHaveLength(0);
+});
+
+// Issue #925: the forgery the gate must not reopen. Keyed on `operator`, the
+// gate is only as good as the rule that no non-admin writer can set it.
+test("a member cannot make itself in-house: self-service refuses the reserved operator at the writer", async () => {
+  const forger = await seatJudge({ prefix: "forger", operator: "peaq" });
+  for (const spelling of ["robotmoney", "RobotMoney", " robotmoney "]) {
+    const patched = await ic.updateMemberProfile(forger.token, forger.id, { operator: spelling });
+    expect({ spelling, status: patched.status, ok: patched.ok }).toEqual({ spelling, status: 403, ok: false });
+  }
+  expect(((await sql`SELECT operator FROM swarm_members WHERE id = ${forger.id}`)[0] as any).operator).toBe("peaq");
+
+  // …so the forger is still third-party, and still refused.
+  const sessionId = await judging("forged_operator");
+  const result = await ic.submitJudgement(forger.token, await signedJudgement(forger, sessionId));
+  expect(result).toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
+  expect(await judgementRows(sessionId)).toHaveLength(0);
+
+  // An ordinary operator string still goes through — the reservation is of one
+  // literal, not of the field.
+  expect((await ic.updateMemberProfile(forger.token, forger.id, { operator: "self" })).status).toBe(200);
+});
+
+test("the route's validator refuses the reserved operator too", async () => {
+  // The self-service route and the domain writer agree; the domain rule above
+  // is the one that holds for any future caller.
+  const { validateMemberProfile } = await import("../src/api/validation.ts");
+  const parsed = validateMemberProfile({ operator: "robotmoney" } as any);
+  expect(parsed.ok).toBe(false);
 });
 
 test("turning the flag on and off is a database row, audited like mode already is, and needs no redeploy", async () => {
-  const on = await admin.setJudgeConfigAdmin({ mode: "shadow", thirdPartyEnabled: true, model: "test/judge-model" });
+  const on = await admin.setJudgeConfigAdmin({ mode: "enforce", thirdPartyEnabled: true, model: STUB_JUDGE_MODEL });
   expect(on).toMatchObject({ ok: true, status: 200, judge: { thirdPartyEnabled: true } });
 
   const off = await admin.setJudgeConfigAdmin({ thirdPartyEnabled: false });

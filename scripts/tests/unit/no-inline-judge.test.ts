@@ -99,6 +99,60 @@ describe("nothing at all reaches the inline judge", () => {
   });
 });
 
+describe("the inline judge is DELETED, not merely uncalled (D53 point 4)", () => {
+  // Criterion: "`templateOpinion` is deleted, not merely uncalled". The same
+  // holds for the rest of the backend judge — its session runner, its model
+  // transport and `judge()` itself. An uncalled function is one import away
+  // from being called again; a deleted one is not.
+  const RETIRED = ["templateOpinion", "judgeSession", "judgeSessionAdmin", "resolveJudgeTransport", "JudgeTransport"];
+
+  /** Every retired identifier still present in CODE (comments stripped) under a tree. */
+  function survivors(files: Iterable<string>, text: (rel: string) => string): string[] {
+    const found: string[] = [];
+    for (const rel of files) {
+      const body = text(rel);
+      for (const name of RETIRED) {
+        if (new RegExp(`\\b${name}\\b`).test(body)) found.push(`${rel}: ${name}`);
+      }
+      if (/export\s+(async\s+)?function\s+judge\s*\(/.test(body)) found.push(`${rel}: judge()`);
+    }
+    return found;
+  }
+
+  test("no retired judge identifier exists anywhere under backend/src", () => {
+    const files = [...new Glob("backend/src/**/*.ts").scanSync({ cwd: REPO })];
+    expect(files.length).toBeGreaterThan(50);
+    expect(survivors(files, code)).toEqual([]);
+  });
+
+  test("the scan is not vacuous — a planted definition or call of each is found", () => {
+    const planted: Record<string, string> = {
+      "a.ts": "export function templateOpinion(input: unknown) { return input; }",
+      "b.ts": "const r = await judgeSession(id, {});",
+      "c.ts": "export async function judge(input: unknown) {}",
+      "d.ts": "// templateOpinion is gone\nconst ok = 1;",
+    };
+    const stripped = (rel: string) =>
+      planted[rel]!.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\n)\s*\/\/.*/g, "");
+    expect(survivors(Object.keys(planted), stripped)).toEqual([
+      "a.ts: templateOpinion",
+      "b.ts: judgeSession",
+      "c.ts: judge()",
+    ]);
+  });
+
+  test("the inline judge's session module is gone", () => {
+    expect(existsSync(join(REPO, "backend/src/swarm/judge-session.ts"))).toBe(false);
+  });
+
+  test("what remains of judge.ts is pure: no database, no environment, no network", () => {
+    const text = code("backend/src/swarm/judge.ts");
+    expect(text).not.toMatch(/from "\.\.\/db\//);
+    expect(text).not.toContain("process.env");
+    expect(text).not.toMatch(/\bfetch\(/);
+  });
+});
+
 describe("the judge still runs, as a participant over HTTP", () => {
   test("a judge client exists and submits through the participant routes", () => {
     const rel = "scripts/agent/participant/judge-client.ts";
@@ -116,6 +170,23 @@ describe("the judge still runs, as a participant over HTTP", () => {
     for (const word of ["fallback", "template", "placeholder", "default verdict"]) {
       expect({ word, found: text.includes(word) }).toEqual({ word, found: false });
     }
+  });
+
+  test("the judge client SIGNS what it submits, over the contract's canonical judgement bytes", () => {
+    // Criterion 123: "its judgement arriving over HTTP from that container
+    // signed with that key". The behaviour is proven in
+    // participant-judge-client.test.ts (the signature verifies); this pins that
+    // the client builds the bytes from the contract rather than a local copy.
+    const text = code("scripts/agent/participant/judge-client.ts");
+    expect(text).toContain("canonicalizeJudgement");
+    expect(text).toContain("crypto.subtle.sign");
+    expect(text).toMatch(/signature/);
+  });
+
+  test("the judge client names its refusals from the D-A7 taxonomy, not free text", () => {
+    const text = code("scripts/agent/participant/judge-client.ts");
+    expect(text).toContain("failureCodeForAnswer");
+    expect(text).not.toMatch(/model refused with HTTP/);
   });
 
   test("`PARTICIPANT_PENDING_PATH` is in the contract, not a client-side literal", () => {

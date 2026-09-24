@@ -5,7 +5,8 @@
 //
 //   GET  …/participants/judge/subscribe — hold the connection, receive the
 //        sessions in `judging` this judge has not submitted, on every connect.
-//   POST …/participants/judgement      — submit one judgement.
+//   POST …/participants/judgement      — submit one judgement, signed with the
+//        judge's own Ed25519 key over `canonicalizeJudgement` (@robotmoney/contract).
 //
 // THE CREDENTIAL IS THE POINT. Scheduler spec §7 keeps four kinds of credential
 // apart and warns they "must not be confused". The scheduler's automation token
@@ -49,14 +50,18 @@ export async function handleJudgeParticipant(
     const token = bearer(req);
     if (!token) return { status: 401, body: { error: "missing bearer token" } };
     const b = (await readJsonObject(req)) ?? {};
+    // Passed through as received: the domain function validates every field,
+    // because the signature covers them as the judge sent them. Nothing the
+    // judge sends decides the take count or the threshold — the API derives
+    // both from the frozen take set it holds.
     const result = await submitJudgement(token, {
       sessionId: typeof b.sessionId === "string" ? b.sessionId : "",
       opinion: b.opinion,
-      model: typeof b.model === "string" ? b.model : undefined,
-      promptHash: typeof b.promptHash === "string" ? b.promptHash : undefined,
-      inputsDigest: typeof b.inputsDigest === "string" ? b.inputsDigest : undefined,
-      takeCount: typeof b.takeCount === "number" ? b.takeCount : undefined,
-      minTakes: typeof b.minTakes === "number" ? b.minTakes : undefined,
+      model: b.model,
+      promptHash: b.promptHash,
+      inputsDigest: b.inputsDigest,
+      nonce: b.nonce,
+      signature: b.signature,
     });
     if (!result.ok) return { status: result.status, body: { error: result.error } };
     const { ok: _ok, status, ...body } = result;

@@ -6,6 +6,7 @@
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
 import { sql } from "../db/client.ts";
+import { getNextSwarmSession } from "../swarm/domain.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
 import {
@@ -47,20 +48,16 @@ export const SAMPLER_KINDS = [
   "buybacks.refresh",
 ] as const;
 
-// The consensus judge's cadence job. Monitored because the D-A7 ruling makes a
-// judge that cannot be ASKED — no model on `swarm_judge_config`, or no funded
-// OPENCODE_API_KEY in the swarm lane — fail closed with a 503, which the worker
-// records as a degraded `swarm.judge` run. Without this entry that degradation
-// was invisible in the one place an operator looks: the exact shape of the
-// failure that let production publish template prose under the judge's name for
-// months (issue #969, AC-MODEL-01). `judge_disabled` is deliberately NOT this —
-// worker/handlers/swarm.ts translates the shipped `off` default into a clean
-// `succeeded` run precisely so a control working as designed raises nothing.
-export const JUDGE_KIND = "swarm.judge" as const;
-
+// NO JUDGE KIND. `swarm.judge` used to be monitored here as the judge's lane,
+// and it is deliberately gone (issue #1026): no queue job judges any more — the
+// judge is a participant that subscribes over HTTP (smoke-production-spec.md
+// §6.2) — so a monitored `swarm.judge` could only ever report "not run", which
+// is a green-looking line about nothing. What an operator needs from the judge
+// is per SESSION and is still here: a session published `no_consensus`, or one
+// that lost a receipt it could have had, is named by `missingReceipts` below
+// (swarm/receipt-gap.ts) from the session's own stored outcome.
 export const MONITORED_KINDS = [
   ...PRODUCTION_KINDS,
-  JUDGE_KIND,
   "projects.discover",
   "projects.refresh_coins",
   "projects.refresh_wallets",
@@ -116,16 +113,15 @@ export interface AdminOverview {
   regime: RegimeStaleness;
   research: Array<{ signalKey: string; latestDate: string | null; ageDays: number | null; stale: boolean }>;
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
-  nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
+  nextSwarmEvent: { jobId: number | null; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
   rosterSeed: RosterSeedHealth;
   /**
    * AC-FE-10. Published sessions that lost a consensus receipt they could have
-   * had — the one question `JUDGE_KIND` above cannot answer, because it is a
-   * question about SESSIONS and that alert is about the LANE. Eligibility is
-   * judged against the mode and threshold that applied to each session rather
-   * than against today's config, so an unrelated config change cannot retract
-   * it. See swarm/receipt-gap.ts for the staging episode that made the
-   * difference concrete, and for what `off`/`shadow` deliberately do not
+   * had — a question about SESSIONS, which no lane alert can answer.
+   * Eligibility is judged against the mode and threshold that applied to each
+   * session rather than against today's config, so an unrelated config change
+   * cannot retract it. See swarm/receipt-gap.ts for the staging episode that
+   * made the difference concrete, and for what `off` deliberately does not
    * report.
    */
   missingReceipts: MissingReceiptReport;
@@ -269,20 +265,21 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     nextRunAt: r.next_run_at ? new Date(r.next_run_at).toISOString() : null,
   }));
 
-  // ── Next swarm event (derived from the queue only — swarm session
-  // scheduling itself is out of this issue's scope) ─────────────────────
-  const [swarmJob] = await sql`
-    SELECT id, kind, run_after, scope_type, scope_id
-      FROM jobs
-     WHERE kind LIKE 'swarm.%' AND status = 'pending'
-     ORDER BY run_after ASC LIMIT 1`;
-  const nextSwarmEvent = swarmJob
+  // ── Next swarm event: the next epoch boundary ─────────────────────────
+  // Read off the SESSIONS, not the job queue (issue #1026). No queue job drives
+  // a session any more: the scheduler turns an epoch over at its stored
+  // `window_closes_at` (system-scheduler-spec.md §4.3), so the earliest open
+  // window's close IS the next swarm event, and a pending `swarm.*` job row in
+  // an upgraded database is a leftover that schedules nothing. `jobId` is null
+  // because there is no job.
+  const nextSession = await getNextSwarmSession();
+  const nextSwarmEvent = nextSession
     ? {
-        jobId: Number(swarmJob.id),
-        kind: swarmJob.kind,
-        runAfter: new Date(swarmJob.run_after).toISOString(),
-        scopeType: swarmJob.scope_type ?? null,
-        scopeId: swarmJob.scope_id ?? null,
+        jobId: null,
+        kind: "session.window_close",
+        runAfter: nextSession.at,
+        scopeType: "swarm_session",
+        scopeId: nextSession.sessionId,
       }
     : null;
 
@@ -377,9 +374,8 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
           `for a consensus receipt and have none; the ${missingReceipts.sessions.length} most recent are listed individually`,
       });
     } else if (missingReceipts.judgeMode === "enforce" && missingReceipts.count === 0) {
-      // ONLY IN `enforce`. In `off` and in `shadow` a receipt is unreachable by
-      // construction (`shadow` withholds the judgement from the session), so
-      // "every eligible session has a consensus receipt" would be a healthy
+      // ONLY IN `enforce`. In `off` a receipt is unreachable by construction,
+      // so "every eligible session has a consensus receipt" would be a healthy
       // line about a thing that cannot happen.
       alerts.push({
         level: "healthy",

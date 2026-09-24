@@ -4,10 +4,11 @@
 // ITS OWN MODULE, AND THAT IS THE POINT. This is the one place in the swarm
 // tree outside `domain.ts` permitted to CALL `meanTakeWeights()`, and
 // `backend/tests/swarm-consensus-weights.test.ts` allowlists exactly this file
-// for it. Keeping it out of `judge-session.ts` is what lets that guard stay
-// absolutely strict about the production seam: the judging path still may not
-// reach the derivation, may not author a `weights` field, and is still pinned
-// by the same test. An auditor that reads the derivation and a writer that must
+// for it. Keeping it out of the judging modules is what lets that guard stay
+// absolutely strict about the production seam: the judging path — judge.ts,
+// judge-config.ts and domain.ts's `applyOpinion` — still may not reach the
+// derivation, may not author a `weights` field, and is still pinned by the
+// same test. An auditor that reads the derivation and a writer that must
 // never touch it do not belong in one file.
 //
 // NOTHING HERE WRITES. No judgement row, no session update, no state
@@ -18,13 +19,15 @@
 // this paragraph.
 import { STANCES } from "@robotmoney/contract";
 import { sql } from "../db/client.ts";
-import { buildRationale, loadFrozenTakeSet, majorityStance, meanTakeWeights } from "./domain.ts";
-import { DIGEST_SCHEME, inputsDigest, type JudgeOptions } from "./judge.ts";
-import { getJudgeConfig, judgeInputFromFrozen, latestJudgement } from "./judge-session.ts";
+import {
+  buildRationale, judgeInputFromFrozen, latestJudgement, loadFrozenTakeSet, majorityStance, meanTakeWeights,
+} from "./domain.ts";
+import { DIGEST_SCHEME, inputsDigest } from "./judge.ts";
+import { getJudgeConfig } from "./judge-config.ts";
 
 // WHAT IT USED TO CHECK, AND WHY THAT WAS WORTHLESS (issue #766). The original
-// version read `swarm_recommendation.weights`, called `judge()` — which writes
-// nothing, as judge-session.ts's header says — then re-read the SAME COLUMN and
+// version read `swarm_recommendation.weights`, called the (since deleted)
+// backend `judge()` — which wrote nothing — then re-read the SAME COLUMN and
 // compared the two. A comparison of a value against itself across a call that
 // cannot write is true by construction: the only defect it could ever report is
 // `judge()` starting to write. docs/architecture.md presented that as the
@@ -177,7 +180,6 @@ function canonicalWeights(value: unknown): string | null {
 
 export async function replaySessionJudge(
   sessionId: string,
-  opts: JudgeOptions = {},
   minTakesOverride?: number,
 ): Promise<JudgeReplayResult | null> {
   const config = await getJudgeConfig();

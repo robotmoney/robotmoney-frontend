@@ -176,23 +176,29 @@ test("the replay audit is READ ONLY — it may recompute a vector, it may not wr
   expect(/\bweights\s*[:=][^=]/.test(src), "swarm/judge-replay.ts must not author a weights field").toBe(false);
 });
 
-test("swarm_recommendation is written from exactly two files, and only one of them may touch weights", () => {
+test("swarm_recommendation is written from exactly one file", () => {
   // The recommendation object is where a weight vector would have to land to
   // reach a receipt. Pinning the set of files that WRITE it keeps that a
-  // reviewable list of two rather than an open question about the tree.
+  // reviewable list rather than an open question about the tree. It was two
+  // until the inline judge's session module was deleted (issue #1026, D53):
+  // the judge's opinion now reaches the session through `applyOpinion` in
+  // domain.ts, which the next test holds to the same rule the judge's own
+  // module was held to.
   const writers = tsFiles(SRC)
     .filter((f) => /UPDATE\s+swarm_sessions[\s\S]{0,400}?swarm_recommendation\s*=/.test(codeOnly(f)))
     .map((f) => f.replace(`${SRC}/`, ""))
     .sort();
-  expect(writers).toEqual(["swarm/domain.ts", "swarm/judge-session.ts"]);
+  expect(writers).toEqual(["swarm/domain.ts"]);
 });
 
 test("the judge modules never reach the derivation and never ASSIGN a weights field", () => {
   // DELIBERATELY NOT WIDENED FOR #766. The replay audit that does read the
-  // derivation was moved OUT of judge-session.ts into its own module precisely
-  // so this list — the production judging path, the one that writes — could
-  // stay exactly as strict as it was.
-  for (const rel of ["swarm/judge.ts", "swarm/judge-session.ts"]) {
+  // derivation was moved OUT of the judging modules into its own module
+  // precisely so this list — the judging path — could stay exactly as strict
+  // as it was. The inline judge's session module is deleted (D53); what is
+  // left of the judge is these two modules, plus the one domain.ts function
+  // that writes an opinion onto the session, checked on its own below.
+  for (const rel of ["swarm/judge.ts", "swarm/judge-config.ts"]) {
     const src = codeOnly(join(SRC, rel));
     expect(src.includes("meanTakeWeights"), `${rel} must not reach the derivation`).toBe(false);
     // `weights:` in an object literal or `weights =` as an assignment. READING
@@ -202,12 +208,30 @@ test("the judge modules never reach the derivation and never ASSIGN a weights fi
   }
 });
 
+test("the one function that writes a judgement onto the session never reaches the derivation or authors a weight", () => {
+  // `applyOpinion` (domain.ts) is where a judge's opinion lands on
+  // `swarm_recommendation`. domain.ts as a whole OWNS the derivation, so the
+  // file cannot be held to the rule above — the function is. Its body is cut
+  // out by its signature and its closing brace at column 0.
+  const src = codeOnly(join(SRC, "swarm/domain.ts"));
+  const start = src.indexOf("async function applyOpinion(");
+  expect(start, "applyOpinion must exist in domain.ts").toBeGreaterThan(-1);
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  expect(body.length).toBeGreaterThan(200);
+  expect(body.includes("meanTakeWeights"), "applyOpinion must not reach the derivation").toBe(false);
+  expect(/\bweights\s*[:=][^=]/.test(body), "applyOpinion must not author a weights field").toBe(false);
+  // It copies exactly the three opinion fields and the judge fingerprint.
+  for (const field of ["rec.rationale", "rec.disagreements", "rec.release_safety", "rec.judge"]) {
+    expect(body).toContain(field);
+  }
+});
+
 // ── The template producers are order-independent ────────────────────────────
 // Promoting the derivation to load-bearing means the prose that describes it
-// has to be reproducible too: the judge's fallback re-derives it from a stored
-// `swarm_recommendation.stances`, and postgres does not preserve jsonb key
-// order. A rationale that depended on key order would make "the fallback is
-// exactly today's prose" false on any tie.
+// has to be reproducible too: the judge's retired fallback re-derived it from a
+// stored `swarm_recommendation.stances`, the D42 ladder audit still does, and
+// postgres does not preserve jsonb key order. A rationale that depended on key
+// order would make a re-derivation disagree with the prose on any tie.
 
 test("buildRationale and buildSynthesis do not depend on the key order of the stance counts", () => {
   const forward = { neutral: 1, bullish: 1, cautious: 1 };

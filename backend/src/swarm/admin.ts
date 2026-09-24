@@ -17,18 +17,20 @@ import {
   activateMember,
   aggregateSession as domainAggregateSession,
   assertRosterCapacity,
-  getMember,
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   appendStreamEvent,
   closeEpochForDeactivation,
+  listJudgements,
+  sessionJudgeFingerprint,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
-// Issue #752 — the consensus judge. Its runtime switch is a DATABASE row, not
-// an env var, because the swarm is live and an operator must be able to take
-// the judge off published sessions without restarting anything.
-import { getJudgeConfig, judgeSession, listJudgements, sessionJudgeFingerprint, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-session.ts";
+// Issue #752 — the consensus judge's runtime switch. A DATABASE row, not an env
+// var, because the swarm is live and an operator must be able to take the
+// judge off without restarting anything. The judge itself is a participant
+// (issue #1026): nothing in this module judges.
+import { getJudgeConfig, setJudgeConfig, type JudgeConfig, type JudgeMode } from "./judge-config.ts";
 import { ConsensusReceiptRefusal, publishConsensusReceipt } from "./consensus-receipt.ts";
 // R13 — the TEST-ONLY judge fault-injection lever (AC-E2E-06). Its ONLY writer
 // is the admin path below, so that every transition is an audited admin action
@@ -1203,11 +1205,11 @@ export async function guardedTransition(
 }
 
 /**
- * The same guard, run inside a transaction the CALLER owns. Extracted for
- * judgeSessionAdmin, which has to put the transition, the judgement row and the
- * opinion's effect on the session in ONE transaction — a transition that
- * commits on its own advertises a fact (`judged`) that no row yet supports, and
- * anything failing afterwards strands the session there.
+ * The guard's body, on a transaction handle. It was split out so the retired
+ * inline judge could put a transition and a judgement row in one transaction;
+ * the judge is a participant now (issue #1026) and `guardedTransition` is the
+ * only caller, but the handle keeps the transition, its event row and its audit
+ * row visibly in one transaction.
  */
 async function transitionWithin(
   tx: DbHandle,
@@ -1236,25 +1238,6 @@ async function transitionWithin(
   return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
 }
 
-/**
- * A READ-ONLY dry run of the same guard, so a caller that must do expensive
- * work BEFORE the transition (judgeSessionAdmin: a model call of up to 60s) can
- * refuse an illegal one without paying for it. It is not a substitute for the
- * guard — `transitionWithin` re-checks under `FOR UPDATE` inside the
- * transaction, and that check is the authority.
- */
-async function preflightTransition(sessionId: string, toState: string, expectedVersion?: number): Promise<AdminResult> {
-  const row = (await sql`SELECT state, version FROM swarm_sessions WHERE id = ${sessionId}`)[0] as
-    | { state: string; version: number }
-    | undefined;
-  if (!row) return err(404, "session not found");
-  if (expectedVersion != null && Number(row.version) !== expectedVersion) return err(409, "stale_version");
-  if (row.state === toState) return { ok: true, status: 200 };
-  if (TERMINAL.has(row.state)) return err(409, `terminal_state:${row.state}`);
-  if (!(TRANSITIONS[row.state] ?? []).includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
-  return { ok: true, status: 200 };
-}
-
 export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
   return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
 }
@@ -1272,102 +1255,6 @@ export async function aggregateSessionAdmin(sessionId: string, expectedVersion: 
   if (!t.ok) return t;
   const rollup = await domainAggregateSession(sessionId);
   return { ...t, ...rollup, status: t.status };
-}
-
-// Judge a session that has already been aggregated. THE ORDER MATTERS, and it
-// is not the obvious one:
-//
-//   1. Read the mode ONCE. It is then passed down to judgeSession() rather than
-//      re-read there. Reading it twice meant an operator flipping the switch to
-//      `off` mid-run — precisely what the switch exists for — got a session
-//      advanced to `judged` and then a 409, i.e. a state whose name asserts a
-//      fact no row supports.
-//   2. Dry-run the state guard. A disabled judge or an illegal transition costs
-//      no model call.
-//   3. Form the opinion. OUTSIDE any transaction: this is a network call of up
-//      to 60s and nothing may hold a row lock or a pooled connection across it.
-//   4. Transition, record the judgement, and (in `enforce`) apply it — ALL IN
-//      ONE TRANSACTION, under an advisory lock on the session id. So the
-//      `judged` state and the row that justifies it commit together or not at
-//      all, and two judges racing the same session are serialized rather than
-//      interleaved.
-//
-// A judge that falls back to template prose is still a successful judging — see
-// swarm/judge.ts on why failure is an outcome here rather than an error.
-export async function judgeSessionAdmin(
-  sessionId: string,
-  expectedVersion: number | undefined,
-  actor: Actor = ADMIN_ACTOR,
-  opts: { force?: boolean } = {},
-) {
-  const config = await getJudgeConfig();
-  if (config.mode === "off") return err(409, "judge_disabled");
-  const pre = await preflightTransition(sessionId, "judged", expectedVersion);
-  if (!pre.ok) return pre;
-
-  // Named-judge attribution (issue #918). Resolved by HANDLE, not hardcoded to
-  // an id, because the id is generated per deployment (roster-seed.ts). An
-  // environment that has not run seedLiveRoster() — most of this repo's own
-  // tests — resolves nothing here, and `judgeMemberId` MUST then stay
-  // `undefined` (never `""`) so judgeSession() takes its unnamed-judge path
-  // and every judgement keeps naming 'robotmoney-in-house', unchanged.
-  //
-  // NO STATUS/ROLE/CONFLICT CHECK HERE. judgeSession() already runs all three
-  // — active-status, role==='judge', and the take-conflict check — inside its
-  // own transaction once `judgeMemberId` is passed (judge-session.ts). Redoing
-  // any of them here would be a second, separately-maintained copy of a rule
-  // that must have exactly one source.
-  const namedJudge = await getMember("themis");
-  const judgeMemberId = namedJudge?.id;
-
-  let t: GuardedTransitionResult | undefined;
-  const result = await judgeSession(sessionId, {
-    config,
-    judgeMemberId,
-    force: opts.force,
-    // Runs inside the judge's transaction, after its advisory lock and before
-    // the judgement row is written. A refusal here rolls the whole thing back.
-    beforeRecord: async (tx) => {
-      t = await transitionWithin(tx, sessionId, "judged", actor, { expectedVersion });
-      return t;
-    },
-  });
-  // PRESERVE THE FULL RESULT, not just status/error via err()'s minimal shape.
-  // `judgeUnavailableReason` (credit_exhausted / credential_rejected /
-  // model_not_supported — see JudgeUnavailableError in judge.ts) is the one
-  // field that says WHICH fail-closed class this is, and `err()` here used to
-  // drop it silently: qualifyJudgeUnavailable() (worker/handlers/swarm.ts)
-  // reads exactly this field to turn the bare `judge_unavailable` into
-  // `judge_unavailable:<reason>` before it reaches job_runs.last_error and the
-  // console — but by the time judgeSession()'s cron handler received this
-  // object, the field was already gone, so the qualifier had nothing to
-  // qualify and every occurrence logged as the bare word forever. Confirmed
-  // against a real staging failure (2026-09-18): the actual cause was
-  // unrecoverable once the session/job was gone, because nothing between the
-  // throw site and the console ever wrote it down.
-  if (!result.ok) return { ...result, ok: false as const, error: result.error ?? "judge failed" };
-  await audit(actor, "session_judged", {
-    sessionId, mode: result.mode, applied: result.applied === true,
-    appliedSkippedReason: result.appliedSkippedReason ?? null,
-    source: result.outcome?.source, fallbackReason: result.outcome?.fallbackReason ?? null,
-    promptHash: result.outcome?.promptHash, inputsDigest: result.outcome?.inputsDigest,
-  });
-  return {
-    ...(t ?? { ok: true, status: 200 }),
-    status: t?.status ?? 200,
-    judge: {
-      mode: result.mode,
-      applied: result.applied === true,
-      appliedSkippedReason: result.appliedSkippedReason ?? null,
-      judgementId: result.judgementId,
-      source: result.outcome?.source,
-      fallbackReason: result.outcome?.fallbackReason ?? null,
-      model: result.outcome?.model ?? null,
-      promptHash: result.outcome?.promptHash,
-      inputsDigest: result.outcome?.inputsDigest,
-      releaseSafety: result.outcome?.opinion.release_safety,
-    },
-  };
 }
 
 // The runtime switch itself. Audited like every other admin write, because
@@ -1534,18 +1421,18 @@ export async function setJudgeFaultInjectionAdmin(
   };
 }
 
-// ── The soak's read path (issue #767, folded from #768) ────────────────────
+// ── The judgement record's read path (issue #767, folded from #768) ────────
 //
-// `shadow` exists to accumulate judge opinions against live traffic until they
-// can be trusted. Until this route existed there was nothing to accumulate them
-// INTO that anyone could read: `swarm_session_judgements` had no admin route, no
-// UI, and `latestJudgement()` had no production caller at all — inspecting a
-// soak meant `psql` against production. A soak nobody can read is not a soak.
+// Built for the `shadow` soak, which D53 retired; it stays because it is the
+// only place an operator can read every judgement a session received — the
+// judge of record's, a second seated judge's that changed no outcome, late
+// evidence after publication, and historical `shadow` rows — beside what the
+// session itself carries.
 //
-// PRIVILEGED like everything else under /api/swarm/admin/*. The opinions include
-// model-authored prose about named members that `shadow` deliberately keeps off
-// the public session page; serving it unauthenticated would publish, through the
-// read path, exactly what the mode exists to withhold.
+// PRIVILEGED like everything else under /api/swarm/admin/*. Rows that never
+// reached the session carry model-authored prose about named members that the
+// public session page does not show; serving them unauthenticated would publish
+// through the read path what the lifecycle kept off the session.
 
 /**
  * One judgement row, camelCased and with the operator-facing facts up front.
@@ -1556,7 +1443,7 @@ export async function setJudgeFaultInjectionAdmin(
  */
 function toJudgementAdmin(
   r: Record<string, unknown>,
-  carried: { promptHash: string; inputsDigest: string } | null,
+  carried: { promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null,
 ) {
   const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
   // Does the session STILL carry this opinion? (issue #806.) `applied` is a
@@ -1567,9 +1454,14 @@ function toJudgementAdmin(
   // replaces `swarm_recommendation` wholesale and the judge's prose,
   // release_safety and fingerprint go with it. So the read path reconciles
   // instead of trusting the column.
+  //
+  // The JUDGE is compared too: two seated judges reading the same take set
+  // under the same prompt share both digests, and only the judge of record's
+  // judgement is on the session (system-scheduler-spec.md §4.4).
   const carriedBySession = carried != null
     && carried.inputsDigest === String(r.inputs_digest)
-    && carried.promptHash === String(r.prompt_hash);
+    && carried.promptHash === String(r.prompt_hash)
+    && carried.judgedByMemberId === ((r.judged_by_member_id as string | null) ?? null);
   return {
     id: String(r.id),
     mode: String(r.mode),
@@ -1602,7 +1494,8 @@ function toJudgementAdmin(
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     // Reconciliation against the session as it stands NOW (issue #806).
     carriedBySession,
-    // Only an `applied` row can be SUPERSEDED — a shadow row was never on the
+    // Only an `applied` row can be SUPERSEDED — an unapplied row (a second
+    // judge's, late evidence, a historical shadow row) was never on the
     // session, and saying "superseded" about it would invent a loss.
     supersededReason: r.applied === true && !carriedBySession
       ? (carried == null ? "recommendation_overwritten" : "session_carries_a_different_opinion")
@@ -1662,10 +1555,11 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
 // the receipt's bytes stay immutable and anchored. A session an operator may
 // still want to reopen must be reopened BEFORE its receipt exists.
 //
-// AND JUDGE IT IN `enforce`. A `shadow` judgement is deliberately withheld from
-// the session, so there is nothing for a receipt to attest to
-// (`judgement_not_adopted`): the receipt embeds the session's own judge block
-// or it embeds nothing.
+// AND IT MUST HAVE A CONSENSUS. Only the judge of record's judgement reaches the
+// session's own record; any other judgement (a second judge's, late evidence,
+// a historical `shadow` row) is never on the session, so there is nothing for a
+// receipt to attest to (`judgement_not_adopted`): the receipt embeds the
+// session's own judge block or it embeds nothing.
 //
 // EVERY REFUSAL REACHES THE OPERATOR with its reason code. Besides the two
 // above: `session_not_reaggregated` (a late FIRST take arrived after the rollup

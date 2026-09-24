@@ -47,7 +47,7 @@ const JUDGEMENT_ID_RE = /^\d{1,18}$/;
  * party, or one row's own (session, party) — so narrowing first cannot change
  * which row wins a group. Newest first, by `id`: the bigserial is drawn inside
  * the judge's advisory lock, so it is the order the rows were written in
- * (judge-session.ts's listJudgements makes the same argument against
+ * (domain.ts's listJudgements makes the same argument against
  * `created_at`).
  */
 async function publicJudgements(scope: Fragment, limit?: number): Promise<SwarmJudgement[]> {

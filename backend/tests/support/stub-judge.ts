@@ -1,23 +1,39 @@
-// A local stand-in for the OpenCode Zen endpoint, for tests that need a
-// judgement to EXIST.
+// A stand-in JUDGE PARTICIPANT, for backend tests that need a judgement to
+// EXIST (issue #1026, D53 point 4).
 //
-// WHY THIS HAS TO EXIST NOW. The judge has no modelless path any more: it
-// returns a model's opinion or throws (see judge.ts, "NO FALLBACK"). Before
-// that, a test could reach a recorded judgement with `transport: null` and get
-// template prose — which is exactly the thing the product must never record, so
-// it could not stay as the tests' cheap default either. Everything that needs a
-// judgement on file now answers with this.
+// WHAT CHANGED. This file used to be a local stand-in for the OpenCode Zen
+// endpoint, because the judge ran inside the API and a test reached a recorded
+// judgement by letting that inline judge call it. The inline judge is deleted;
+// the judge is a participant that subscribes, runs its own model and submits a
+// SIGNED judgement (smoke-production-spec.md §6.2). So a test now does exactly
+// what `scripts/agent/participant/judge-client.ts` does, minus the HTTP hop:
+// seat a real member with `role = 'judge'` and its own Ed25519 key, read the
+// input the subscription serves, sign the model's answer over the contract's
+// canonical judgement bytes, and hand it to `submitJudgement` — which verifies
+// the signature, re-checks the digest and parses the answer exactly as it does
+// for a real judge.
 //
-// It speaks the chat-completions shape the real transport posts to, so
-// `resolveJudgeTransport()` and `wireModelId()` run for real rather than being
-// stubbed around — the bare-vs-qualified model id bug that cost this release a
-// day (Zen answers a qualified id with HTTP 401) would surface here.
-import { afterAll } from "bun:test";
+// NOTHING HERE IS A FALLBACK. The "model answer" is a fixed string a test
+// chooses; it goes through the same parser and the same refusals as any other.
+import { canonicalizeJudgement } from "@robotmoney/contract";
+import { sql } from "../../src/db/client.ts";
+import {
+  judgeInputFromFrozen,
+  loadFrozenTakeSet,
+  registerMember,
+  requestJudging,
+  submitJudgement,
+  type JudgementSubmission,
+  type SubmitJudgementResult,
+} from "../../src/swarm/domain.ts";
+import { getJudgeConfig } from "../../src/swarm/judge-config.ts";
+import { inputsDigest, JUDGE_PROMPT_HASH } from "../../src/swarm/judge.ts";
+import { generateKeyPair, signMessage } from "../../src/lib/signing.ts";
 
-/** The selector to put in `swarm_judge_config.model` to reach this server. */
+/** The model a stub judgement names. Any non-keyless id; nothing calls it. */
 export const STUB_JUDGE_MODEL = "stub/judge";
 
-/** A valid judge response. `disagreements` is empty so one reply serves every
+/** A valid judge answer. `disagreements` is empty so one reply serves every
  *  session — an empty array is a correct answer, and it needs no real member
  *  ids, which a `positions[]` entry would. */
 export const STUB_JUDGE_REPLY = JSON.stringify({
@@ -26,34 +42,112 @@ export const STUB_JUDGE_REPLY = JSON.stringify({
   release_safety: { release: "safe", concerns: [] },
 });
 
-let body = STUB_JUDGE_REPLY;
-
-/** Make the next answers something else — malformed output, a refusal, a
- *  smuggled weight. Resets with `stubJudgeReset()`. */
-export function stubJudgeAnswers(text: string): void {
-  body = text;
+export interface TestJudge {
+  id: string;
+  token: string;
+  privateKey: CryptoKey;
 }
-
-export function stubJudgeReset(): void {
-  body = STUB_JUDGE_REPLY;
-}
-
-const server = Bun.serve({
-  port: 0,
-  hostname: "127.0.0.1",
-  fetch: async () => Response.json({ choices: [{ message: { content: body } }] }),
-});
 
 /**
- * Point the judge at this server. Call once per suite, at import time — it sets
- * the two environment variables `resolveJudgeTransport()` reads.
- *
- * The key is only set when absent, so a runner that carries a real
- * OPENCODE_API_KEY keeps it (the base URL still redirects the call here, so no
- * test spends money).
+ * Seat an active judge. `operator` defaults to the in-house `robotmoney`, which
+ * passes the third-party gate whatever `third_party_enabled` says (§6.2); pass
+ * another value (or null) for a third-party judge.
  */
-export function useStubJudge(): void {
-  process.env.SWARM_JUDGE_BASE_URL = `http://127.0.0.1:${server.port}`;
-  process.env.OPENCODE_API_KEY ||= "sk-stub-judge-key";
+export async function seatJudge(
+  opts: { prefix?: string; operator?: string | null } = {},
+): Promise<TestJudge> {
+  const id = `${opts.prefix ?? "judge"}_${crypto.randomUUID().slice(0, 8)}`;
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const r = await registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  if (!("token" in r) || !r.token) throw new Error(`seatJudge(): registerMember failed: ${JSON.stringify(r)}`);
+  const operator = opts.operator === undefined ? "robotmoney" : opts.operator;
+  await sql`UPDATE swarm_members SET role = 'judge', operator = ${operator} WHERE id = ${id}`;
+  return { id, token: r.token, privateKey };
 }
 
+let standing: TestJudge | null = null;
+
+/**
+ * THE in-house judge for a test file: seated once and reused while its row
+ * exists, re-seated after a per-test database reset. Reuse matters: the judge
+ * of record is the lowest-id eligible judge (scheduler spec §4.4), so seating a
+ * fresh judge for every session would let a later one outrank the judge whose
+ * judgements a test expects to be the consensus.
+ */
+export async function inHouseJudge(): Promise<TestJudge> {
+  if (standing) {
+    const [row] = await sql<{ id: string }[]>`
+      SELECT id FROM swarm_members WHERE id = ${standing.id} AND status = 'active' AND role = 'judge'`;
+    if (row) return standing;
+  }
+  standing = await seatJudge({ prefix: "in_house_judge" });
+  return standing;
+}
+
+/** The digest of what the subscription would serve for this session right now. */
+export async function servedDigest(sessionId: string): Promise<string> {
+  const frozen = await loadFrozenTakeSet(sessionId);
+  if (!frozen) throw new Error(`servedDigest(): no session ${sessionId}`);
+  return inputsDigest(await judgeInputFromFrozen(frozen, (await getJudgeConfig()).minTakes));
+}
+
+/** A signed submission, exactly as judge-client.ts builds one. Fields can be overridden to forge. */
+export async function signedJudgement(
+  judge: TestJudge,
+  sessionId: string,
+  opinion: string = STUB_JUDGE_REPLY,
+  over: Partial<{ model: string; promptHash: string; inputsDigest: string; nonce: string; signAs: string }> = {},
+): Promise<JudgementSubmission> {
+  const body = {
+    sessionId,
+    opinion,
+    model: over.model ?? STUB_JUDGE_MODEL,
+    promptHash: over.promptHash ?? JUDGE_PROMPT_HASH,
+    inputsDigest: over.inputsDigest ?? await servedDigest(sessionId),
+    nonce: over.nonce ?? crypto.randomUUID(),
+  };
+  const signature = await signMessage(
+    canonicalizeJudgement({ ...body, memberId: over.signAs ?? judge.id }),
+    judge.privateKey,
+  );
+  return { ...body, signature };
+}
+
+/** Sign and submit, as the participant route would. */
+export async function submitSigned(
+  judge: TestJudge,
+  sessionId: string,
+  opinion: string = STUB_JUDGE_REPLY,
+): Promise<SubmitJudgementResult> {
+  return submitJudgement(judge.token, await signedJudgement(judge, sessionId, opinion));
+}
+
+/**
+ * Put an AGGREGATED session into `judging`, as the scheduler's request-judging
+ * step does (system-scheduler-spec.md §4.4).
+ *
+ * A session built through the legacy fixtures (`openSession` → `closeWindow` →
+ * `aggregateSession`) never captured a judge mode at turnover, so the capture
+ * is written here — the fixture standing in for the turnover it skipped.
+ */
+export async function requestJudgingFor(sessionId: string): Promise<void> {
+  await sql`UPDATE swarm_sessions SET judge_mode = 'enforce' WHERE id = ${sessionId} AND judge_mode IS NULL`;
+  const requested = await requestJudging(sessionId);
+  if (!requested.ok) throw new Error(`requestJudgingFor(): ${JSON.stringify(requested)}`);
+}
+
+/**
+ * The whole participant path for one session: request judging, seat an
+ * in-house judge (or use the one given), and submit its signed judgement. On
+ * success the session is `judged` and carries the opinion, which is what a
+ * consensus receipt embeds.
+ */
+export async function judgeViaParticipant(
+  sessionId: string,
+  opts: { judge?: TestJudge; opinion?: string } = {},
+): Promise<{ judge: TestJudge; result: SubmitJudgementResult }> {
+  await requestJudgingFor(sessionId);
+  const judge = opts.judge ?? await inHouseJudge();
+  const result = await submitSigned(judge, sessionId, opts.opinion ?? STUB_JUDGE_REPLY);
+  return { judge, result };
+}

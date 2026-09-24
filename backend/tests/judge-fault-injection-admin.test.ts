@@ -1,94 +1,33 @@
-// THE LEVER'S ADMIN PATH AND ITS EFFECT ON A REAL SESSION (R13), and the
-// persisted completion spend (R19).
+// THE LEVER'S ADMIN PATH (R13).
 //
 // The pure gates are covered by judge-fault-injection.test.ts. This file is the
-// half that needs a database, and it protects four things:
+// half that needs a database, and it protects two things:
 //
 //   1. ARMING IS REFUSED ON THE DEFAULT PATH, and the refusal is a 403 an
 //      operator can act on rather than an inert row they believe is working.
 //   2. ARMING WRITES AN AUDIT ROW — the artifact an acceptance bundle cites to
 //      bound the window during which the stack was mutated — and that row does
 //      NOT carry the injected body.
-//   3. AN ARMED LEVER FAULTS A REAL JUDGING: the judging REFUSES with
-//      `malformed_output`, the session gets NO judgement row at all, and the
-//      SESSION'S WEIGHT VECTOR IS BYTE-FOR-BYTE WHAT IT WAS BEFORE. (It used to
-//      record a `source='fallback'` row; judge() has no fallback any more, so
-//      "no row" is what the same guarantee looks like now.)
-//   4. THE JUDGEMENT ROW RECORDS WHAT THE COMPLETION COST when the provider
-//      reports it, and NULL — not zero — when it does not.
+//
+// WHAT IT NO LONGER PROTECTS (issue #1026, D53 point 4). "An armed lever faults
+// a real judging" and "the judgement row records what the completion cost"
+// drove the backend `judgeSession()`, the lever's only consumer and the only
+// writer of the spend columns. That judge is deleted — the judge is a
+// participant — so those tests went with it. Until a participant consumes the
+// lever, arming it changes no judging; that gap is recorded on the issue
+// rather than hidden behind a test of deleted code.
 import { afterEach, beforeAll, afterAll, expect, test } from "bun:test";
-import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
-import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { judgeSession, setJudgeConfig } from "../src/swarm/judge-session.ts";
 import {
   consumeJudgeFaultInjection,
   FAULT_INJECTION_ACCEPTANCE_ENV,
   FAULT_INJECTION_FLAG_ENV,
   getJudgeFaultInjection,
 } from "../src/swarm/judge-fault-injection.ts";
-import type { JudgeTransport } from "../src/swarm/judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
-
-const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
-const sessionDate = (s: Record<string, unknown>): string =>
-  s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
-
-async function activeMember() {
-  const id = rid("m");
-  const { publicKeyB64, privateKey } = await generateKeyPair();
-  const r = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
-  if (!("token" in r) || !r.token) throw new Error(`activeMember() failed: ${JSON.stringify(r)}`);
-  return { id, token: r.token, privateKey };
-}
-
-// The CANONICAL FOUR, one entry each. Since T17/D14 a take filed against a
-// `bucket_weights` subject that names anything else is refused at submission
-// with a 400 `weights_not_canonical_four`, so the two-bucket fixture this test
-// was written against can no longer reach a session at all.
-const W = [
-  { bucket: "agent_tokens", weight: 2 },
-  { bucket: "conservative_defi_yield", weight: 1 },
-  { bucket: "protocol_tokens", weight: 1 },
-  { bucket: "real_world_assets", weight: 0 },
-];
-
-async function aggregatedSession(prefix: string, count = 3) {
-  const subj = rid(prefix);
-  await ic.ensureSubject(subj, `${prefix} subject`);
-  await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subj}`;
-  const session = await ic.openSession(subj);
-  await ic.publishBrief(session.id, 60);
-  const date = sessionDate(session);
-  const stances = ["bullish", "cautious", "neutral"];
-  for (let i = 0; i < count; i++) {
-    const m = await activeMember();
-    const sub = {
-      memberId: m.id, date, subjectId: subj, nonce: rid("n"),
-      stance: stances[i % stances.length]!, confidence: 0.5 + i * 0.1,
-      body: `take ${i} on ${subj}`, weights: W,
-    };
-    const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
-    const res = await ic.submitRecommendation(m.token, { ...sub, signature });
-    if (res.status !== 201) throw new Error(`submit failed: ${JSON.stringify(res)}`);
-  }
-  await ic.closeWindow(session.id);
-  await ic.aggregateSession(session.id);
-  return { subj, session, date };
-}
-
-const recOf = async (sessionId: string) =>
-  ((await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any)
-    .swarm_recommendation as Record<string, any>;
-
-const judgementOf = async (sessionId: string) =>
-  (await sql`
-    SELECT source, fallback_reason, model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_cost_usd
-    FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id DESC LIMIT 1`)[0] as any;
 
 const MALFORMED = "}{ not json — injected by the AC-E2E-06 lever";
 
@@ -169,127 +108,4 @@ test("consuming the lever disarms it at zero", async () => {
   // A spent lever cannot go negative.
   await consumeJudgeFaultInjection();
   expect((await getJudgeFaultInjection()).remaining).toBe(0);
-});
-
-// ── 3. A real judging, faulted ────────────────────────────────────────────
-
-test("an armed lever faults a real judging: refused, named reason, no row, weights untouched", async () => {
-  const { session } = await aggregatedSession("fault-lever");
-  const before = await recOf(session.id);
-  expect(before.weights?.length).toBeGreaterThan(0);
-
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: MALFORMED, remaining: 1 });
-
-  // A transport that WOULD have answered perfectly well. The lever is what
-  // decides the outcome, not a broken stub.
-  const honest: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "A perfectly good model opinion nobody will see.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  const result = await judgeSession(session.id, { transport: honest });
-  // A REFUSAL, NOT A FALLBACK ROW. The judging does not happen: a 503 the queue
-  // retries, carrying the lever's reason under its own name.
-  expect(result.ok).toBe(false);
-  expect(result.status).toBe(503);
-  expect(result.error).toBe("judge_unavailable");
-  expect(result.judgeUnavailableReason).toBe("malformed_output");
-
-  // NOTHING WAS WRITTEN. The faulted session has no judgement row at all —
-  // which is the stronger form of what this test used to assert about a row
-  // reading `source='fallback'`.
-  expect(await judgementOf(session.id)).toBeUndefined();
-  // THE PROPERTY AC-E2E-06 IS ABOUT: the vector did not move.
-  const after = await recOf(session.id);
-  expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
-  expect(after.rationale).not.toContain("nobody will see");
-  // …and the lever spent its one call, disarming itself.
-  expect(await getJudgeFaultInjection()).toMatchObject({ enabled: false, remaining: 0 });
-});
-
-test("a weight-smuggling injected body is ignored, vector unchanged — and the CONTROL that the judge was otherwise live", async () => {
-  const { session } = await aggregatedSession("fault-smuggle");
-  const before = await recOf(session.id);
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  process.env[FAULT_INJECTION_FLAG_ENV] = "1";
-  const smuggled = JSON.stringify({
-    rationale: "Rebalance to these targets.",
-    weights: [{ bucket: "agent_tokens", weight: 0.99 }, { bucket: "protocol", weight: 0.01 }],
-    disagreements: [],
-    release_safety: { release: "safe", concerns: [] },
-  });
-  await admin.setJudgeFaultInjectionAdmin({ enabled: true, body: smuggled, remaining: 1 });
-
-  const honest: JudgeTransport = { model: "test/judge-model", complete: async () => smuggled };
-  const faulted = await judgeSession(session.id, { transport: honest });
-  expect(faulted.ok).toBe(false);
-  expect(faulted.judgeUnavailableReason).toBe("malformed_output");
-  const after = await recOf(session.id);
-  expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
-  expect(JSON.stringify(after)).not.toContain("0.99");
-
-  // THE CONTROL (C-21). With the lever disarmed, the SAME wiring produces a
-  // model-sourced judgement — so the assertions above are about the lever and
-  // not about a judge that was never running.
-  const { session: live } = await aggregatedSession("fault-control");
-  await admin.setJudgeFaultInjectionAdmin({ enabled: false });
-  const good: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "The takes converge on a constructive read of the subject.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  const honestRun = await judgeSession(live.id, { transport: good });
-  expect(honestRun.outcome?.source).toBe("model");
-  expect((await judgementOf(live.id)).fallback_reason).toBeNull();
-});
-
-// ── 4. R19 — the spend lands on the judgement row ─────────────────────────
-
-test("the judgement row records the completion spend the provider reported", async () => {
-  const { session } = await aggregatedSession("judge-spend");
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  const paid: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => ({
-      text: JSON.stringify({
-        rationale: "The takes converge on a constructive read of the subject.",
-        disagreements: [],
-        release_safety: { release: "safe", concerns: [] },
-      }),
-      usage: { inputTokens: 1820, outputTokens: 611, totalTokens: 2431, costUsd: 0.00042 },
-    }),
-  };
-  const run = await judgeSession(session.id, { transport: paid });
-  expect(run.ok).toBe(true);
-  const row = await judgementOf(session.id);
-  expect(row.source).toBe("model");
-  expect(Number(row.usage_input_tokens)).toBe(1820);
-  expect(Number(row.usage_output_tokens)).toBe(611);
-  expect(Number(row.usage_total_tokens)).toBe(2431);
-  expect(Number(row.usage_cost_usd)).toBeCloseTo(0.00042, 8);
-});
-
-test("a provider that reports no usage leaves NULL, not zero", async () => {
-  const { session } = await aggregatedSession("judge-nospend");
-  await setJudgeConfig({ mode: "enforce", model: "test/judge-model" });
-  const silent: JudgeTransport = {
-    model: "test/judge-model",
-    complete: async () => JSON.stringify({
-      rationale: "The takes converge on a constructive read of the subject.",
-      disagreements: [],
-      release_safety: { release: "safe", concerns: [] },
-    }),
-  };
-  await judgeSession(session.id, { transport: silent });
-  const row = await judgementOf(session.id);
-  expect(row.usage_total_tokens).toBeNull();
-  expect(row.usage_cost_usd).toBeNull();
 });

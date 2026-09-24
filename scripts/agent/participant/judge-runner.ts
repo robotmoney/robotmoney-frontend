@@ -43,13 +43,18 @@
 // partial line; answer before "never launched", because a run that answered
 // and then died still answered.
 //
-// ── THE THREE-CASE UNION, AND WHY TWO OF ITS ARMS MUST NEVER MERGE ──────────
+// ── THE ANSWER UNION, AND WHY TWO OF ITS ARMS MUST NEVER MERGE ──────────────
 // `model_status` means the VENDOR refused: the request reached the model
 // provider and the provider returned a non-success status. That is a product
 // fact. It feeds the D-A7 taxonomy (`credit_exhausted`, `credential_rejected`,
-// `model_not_supported`), it tells an operator to add credit or fix a key, and
-// under "the judge refuses instead of faking" it is a legitimate, honest
-// no-judgement outcome.
+// `model_not_supported` — judge-reasons.ts), it tells an operator to add credit
+// or fix a key, and under "the judge refuses instead of faking" it is a
+// legitimate, honest no-judgement outcome.
+//
+// `timeout` means the vendor was ASKED and did not answer inside the judge's
+// wall-clock ceiling: D-A7's `model_timeout`. It is neither of the other two —
+// no status came back, and nothing in this shim failed — so it is its own arm
+// rather than a `runner` message a caller would have to pattern-match.
 //
 // `runner` means THIS SHIM, its network, or its launch failed: a malformed
 // prompt file, a DNS failure, a crash, a process that never started. That is an
@@ -73,7 +78,7 @@ import { readFileSync } from "node:fs";
 export const JUDGE_ANSWER_TAG = "RM_JUDGE_ANSWER";
 
 /**
- * The three-case answer union. Exactly one is printed, exactly once.
+ * The answer union. Exactly one is printed, exactly once.
  *
  * - `ok`           — the model answered; `body` is its raw answer text for the
  *                    caller to parse. The runner does not interpret it: a shim
@@ -81,12 +86,15 @@ export const JUDGE_ANSWER_TAG = "RM_JUDGE_ANSWER";
  * - `model_status` — the vendor refused. `status` is the HTTP status and `body`
  *                    is a BOUNDED excerpt of the response, because a provider
  *                    error body can be large and can echo request content.
+ * - `timeout`      — the vendor was asked and did not answer within
+ *                    `timeoutMs`. D-A7's `model_timeout`.
  * - `runner`       — this shim, its network, or its launch failed. Never used
- *                    for a vendor response of any status.
+ *                    for a vendor response of any status, nor for a timeout.
  */
 export type JudgeAnswer =
   | { kind: "ok"; body: string }
   | { kind: "model_status"; status: number; body: string }
+  | { kind: "timeout"; timeoutMs: number }
   | { kind: "runner"; message: string };
 
 /** Everything one judge run needs. A judge run reads nothing ambient. */
@@ -183,6 +191,9 @@ export function parseAnswerLine(line: string): JudgeAnswer | null {
       const m = answer as { status: number; body: string };
       return { kind: "model_status", status: m.status, body: m.body };
     }
+    if (answer.kind === "timeout" && typeof (answer as { timeoutMs?: unknown }).timeoutMs === "number") {
+      return { kind: "timeout", timeoutMs: (answer as { timeoutMs: number }).timeoutMs };
+    }
     if (answer.kind === "runner" && typeof (answer as { message?: unknown }).message === "string") {
       return { kind: "runner", message: (answer as { message: string }).message };
     }
@@ -202,8 +213,8 @@ export function parseAnswerLine(line: string): JudgeAnswer | null {
  * belongs to the caller that owns the session window.
  *
  * Refusals: none thrown. Every failure becomes an answer — a non-success
- * vendor status becomes `model_status`, and anything else (DNS, timeout,
- * malformed response) becomes `runner`.
+ * vendor status becomes `model_status`, the wall-clock ceiling becomes
+ * `timeout`, and anything else (DNS, a malformed response) becomes `runner`.
  */
 export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer> {
   let prompt: string;
@@ -226,6 +237,10 @@ export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer
       }),
     });
   } catch (err) {
+    // THE CEILING, told apart from the rail. `AbortSignal.timeout` rejects the
+    // fetch with a `TimeoutError`: the request went out and nothing came back
+    // in time, which is D-A7's `model_timeout`, not a fault of this shim.
+    if (isTimeout(err)) return { kind: "timeout", timeoutMs: options.timeoutMs };
     // The vendor was never reached: the RAIL, not a verdict about the model.
     return { kind: "runner", message: `model endpoint unreachable: ${message(err)}` };
   }
@@ -253,6 +268,11 @@ export async function runJudge(options: JudgeRunnerOptions): Promise<JudgeAnswer
   // Raw and uninterpreted: a shim that reshapes a judgement is a shim that
   // could manufacture one.
   return { kind: "ok", body: content };
+}
+
+function isTimeout(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === "TimeoutError";
 }
 
 /** Env names this shim reads. The credential's name is the registry's, not ours. */

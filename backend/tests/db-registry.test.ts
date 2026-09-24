@@ -1,10 +1,10 @@
 // The registered query interface (spec §7.1) — the ONE place a database
 // statement may be issued from, and the input to preflight check 2.
 //
-// These tests are the specification for src/db/registry.ts. They are written
-// against the module as it is DOCUMENTED, not as it currently behaves: every
-// function in that file throws `NOT IMPLEMENTED` today, so every test here
-// fails, and that is the deliverable of #1026 W2 step 2.
+// These tests are the specification for src/db/registry.ts, written against
+// the module as it is DOCUMENTED (issue #1026 W2). The module is implemented
+// and application modules register their call sites through it;
+// tests/swarm-judge-config-registry.test.ts reads the first real declarations.
 //
 // WHY THE ASSERTIONS ARE ABOUT SHAPE AND NOT ABOUT SQL. §7.1 is explicit that
 // the registry "is not a runtime proof: execution under each role against a
@@ -42,6 +42,7 @@ function declaration(over: Partial<QueryDeclaration> = {}): QueryDeclaration {
     privileges: ["SELECT"],
     site: site("fixture"),
     purpose: "Fixture declaration for the registry specification tests.",
+    callers: ["src/api/routes/fixture"],
     ...over,
   };
 }
@@ -88,6 +89,44 @@ describe("registerQuery — one declaration per call site", () => {
 
   test("refuses an object name containing whitespace", () => {
     expect(() => registerQuery(declaration({ object: "jobs " }))).toThrow("object");
+  });
+});
+
+describe("callers — every declaration names the entry modules that may reach it", () => {
+  // Spec §6.2: "nothing but the admin route writes `swarm_judge_config`". A
+  // statement about a call site can only be asserted from the registry if the
+  // registry records it, so a declaration with no caller is refused rather
+  // than read as "anyone".
+  test("a declaration carries its callers back, frozen", () => {
+    const query = registerQuery(declaration({ callers: ["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"] }));
+    expect(query.declaration.callers).toEqual(["src/api/routes/swarm-admin", "scripts/swarm-judge-replay"]);
+    expect(Object.isFrozen(query.declaration.callers)).toBe(true);
+  });
+
+  test("refuses an empty callers list", () => {
+    expect(() => registerQuery(declaration({ callers: [] }))).toThrow("declared no callers");
+  });
+
+  test("refuses a missing callers field — a JS caller cannot skip the declaration the type demands", () => {
+    const { callers: _omitted, ...rest } = declaration();
+    expect(() => registerQuery(rest as unknown as QueryDeclaration)).toThrow("declared no callers");
+  });
+
+  test("refuses a caller that is not a module id under src/ or scripts/", () => {
+    for (const bad of ["swarm-admin", "src/api/routes/swarm-admin.ts", "/src/api/routes/swarm-admin", "src/", "tests/x", ""]) {
+      expect(() => registerQuery(declaration({ callers: [bad] })), bad).toThrow("caller");
+    }
+  });
+
+  test("refuses the same caller twice", () => {
+    expect(() => registerQuery(declaration({ callers: ["src/api/routes/a", "src/api/routes/a"] }))).toThrow("same caller twice");
+  });
+
+  test("a re-registration that changes only the callers is a DIFFERENT declaration, and is refused", () => {
+    const id = site("callers_changed");
+    registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin"] }));
+    expect(() => registerQuery(declaration({ site: id, callers: ["src/api/routes/swarm-admin", "src/worker/loop"] })))
+      .toThrow(id);
   });
 });
 
@@ -275,7 +314,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/domain",
     "src/swarm/judge-fault-injection",
     "src/swarm/judge-replay",
-    "src/swarm/judge-session",
     "src/swarm/judgements",
     "src/swarm/receipt-gap",
     "src/swarm/roster-seed",
