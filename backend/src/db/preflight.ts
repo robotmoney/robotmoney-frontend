@@ -193,8 +193,10 @@ export interface PreflightReport {
  * Refusals: any role whose token fails authentication. A role in
  * `context.roles` with no token supplied is also a refusal — an absent token is
  * how a container ends up falling back to some other credential. A handle that
- * does not expose its server (a transaction handle) refuses every role rather
- * than guessing a target.
+ * does not expose its server refuses every role rather than guessing a target.
+ * Only a top-level `postgres(...)` pool exposes it: neither a `sql.begin`
+ * transaction handle nor a `sql.reserve()` connection carries the parsed
+ * options, so a caller must pass the pool itself.
  *
  * Serves spec §10 W2 "Test database off superuser" and "Unattended CI boot
  * `--local blank --migrate --seed`" — both require that the runtime roles
@@ -226,8 +228,9 @@ export async function checkRoleTokens(
         check: "roles_authenticate",
         severity: "refuse",
         message:
-          `${role} could not be tested: the handle does not expose which server it points at (a transaction ` +
-          "handle), and a password proven against any other server proves nothing about this one",
+          `${role} could not be tested: the handle does not expose which server it points at (only a top-level ` +
+          "postgres() pool does, not a transaction or a reserved connection), and a password proven against any " +
+          "other server proves nothing about this one",
       });
       continue;
     }
@@ -287,9 +290,11 @@ interface ProbeTarget {
 
 /**
  * The server a handle points at, from the options postgres.js parsed when the
- * pool was built. A pool (`postgres(...)`) and a reserved connection carry
- * them; a `sql.begin` transaction handle does not, and `null` makes check 1
- * refuse rather than fall back to some other database.
+ * pool was built. Only the top-level pool (`postgres(...)`) carries them:
+ * postgres.js attaches `options` to the pool object alone, and both a
+ * `sql.begin` transaction handle and a `sql.reserve()` connection are bare
+ * query functions without it. `null` makes check 1 refuse rather than fall
+ * back to some other database.
  */
 function probeTarget(db: PreflightDb): ProbeTarget | null {
   const options = (db as { options?: postgresTypes.ParsedOptions<{}> }).options;
@@ -363,9 +368,10 @@ export type DenylistRule =
    *  can rewrite writes it could never issue itself. */
   | "trigger_privilege"
   /** `DELETE` or `TRUNCATE` on any table in `APPEND_ONLY_TABLES` or in
-   *  `LEDGER_IMMUTABLE_FAMILIES` (./append-only-guard.ts). The ledger families
-   *  count per decision D53 (6): losing a ledger row is the same harm as
-   *  losing a history row.
+   *  `LEDGER_IMMUTABLE_FAMILIES` (./append-only-guard.ts), or in
+   *  `RUNTIME_DELETE_REVOKED_TABLES` below. The ledger families count per
+   *  decision D53 (6): losing a ledger row is the same harm as losing a
+   *  history row. The grant-only tables count per D53 (2).
    *
    *  Migration 0065 is spec §9.1 step 2, the transition that revokes 0053's
    *  `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO
@@ -509,6 +515,12 @@ function denylistMessage(violation: DenylistViolation): string {
         "and DDL is not a runtime privilege"
       );
     case "append_only_write":
+      if (violation.object !== null && isGrantOnlyProtected(violation.object)) {
+        return (
+          `${violation.role} holds DELETE/TRUNCATE on ${violation.object}, which D53 (2) keeps revoked from the ` +
+          "runtime roles: only rm_owner prunes it, past the oldest servable cursor"
+        );
+      }
       return (
         `${violation.role} holds DELETE/TRUNCATE on the append-only table ${violation.object}: ` +
         "spec §9.1 step 2's grant transition has not landed on this database, or a grant re-widened it"
@@ -516,14 +528,39 @@ function denylistMessage(violation: DenylistViolation): string {
   }
 }
 
-/** Every table the `append_only_write` rule protects: the append-only set and
- *  the immutable ledger families (D53 (6)), deduplicated, in a stable order. */
-function protectedFromDeletion(): string[] {
+/**
+ * Tables whose DELETE and TRUNCATE stay revoked from the runtime roles although
+ * they are not append-only. Decision D53 (2): `swarm_stream_events` loses its
+ * DELETE/TRUNCATE triggers so rm_owner can prune rows older than the oldest
+ * servable cursor (D52 retention), and it leaves `APPEND_ONLY_TABLES` — but
+ * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker".
+ *
+ * Listed here, independently of ./append-only-guard.ts, on purpose: if check 2
+ * derived its protected set from `APPEND_ONLY_TABLES` alone, taking the table
+ * out of that list would silently stop check 2 refusing a runtime-role DELETE
+ * grant on it. A table leaves this list only by a decision that says so.
+ */
+export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze(["swarm_stream_events"]);
+
+/** Every table the `append_only_write` rule protects: the append-only set, the
+ *  immutable ledger families (D53 (6)) and the grant-only tables (D53 (2)),
+ *  deduplicated, in a stable order. */
+export function protectedFromDeletion(): string[] {
   const tables = new Set<string>(APPEND_ONLY_TABLES);
   for (const family of LEDGER_IMMUTABLE_FAMILIES) {
     for (const table of family.tables) tables.add(table);
   }
+  for (const table of RUNTIME_DELETE_REVOKED_TABLES) tables.add(table);
   return [...tables].sort();
+}
+
+/** True when `table` is protected only by D53 (2)'s grant rule — neither
+ *  append-only nor an immutable ledger — so its refusal must not call it
+ *  append-only. */
+function isGrantOnlyProtected(table: string): boolean {
+  if (!RUNTIME_DELETE_REVOKED_TABLES.includes(table)) return false;
+  if ((APPEND_ONLY_TABLES as readonly string[]).includes(table)) return false;
+  return !LEDGER_IMMUTABLE_FAMILIES.some((family) => (family.tables as readonly string[]).includes(table));
 }
 
 /**
@@ -643,7 +680,8 @@ export async function findDenylistViolations(
     ORDER BY r.rolname, c.oid::regclass::text`) as unknown as { role: RmRole; object: string }[];
 
   // APPEND-ONLY WRITE. The protected set is APPEND_ONLY_TABLES plus every
-  // LEDGER_IMMUTABLE_FAMILIES table (D53 (6)), resolved through `to_regclass`
+  // LEDGER_IMMUTABLE_FAMILIES table (D53 (6)) plus RUNTIME_DELETE_REVOKED_TABLES
+  // (D53 (2)), resolved through `to_regclass`
   // so a table this database has not reached yet is skipped rather than
   // raising.
   const appendOnly = (await db`
@@ -1091,8 +1129,10 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
  * Reads only the KEY NAMES. It never logs, hashes or compares a value, and a
  * finding names the offending key and nothing else — the same posture
  * `redactedTarget` takes in backend/scripts/db-preflight.ts. A non-blank,
- * non-comment line that is not `KEY = VALUE` at all (a bare pasted secret) is
- * reported by line number, never by content.
+ * non-comment line that is not `KEY = VALUE` at all (a bare pasted secret), or
+ * whose key is not a plain name, is reported by line number, never by content.
+ * The key is the text before the first `=`, exactly as env-role.ts's
+ * `parseEnvFile` reads it (`envLines`).
  *
  * Refusals: on `prod`, any key outside the allowlist. On `stage` the same
  * finding is severity `warn` and the boot proceeds (§7 check 4). When `env` is
@@ -1127,12 +1167,26 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         check: "env_credentials",
         severity,
         message:
-          `${path} line ${line.number} is not a KEY = VALUE line: §3 allows only the connection values, the three ` +
+          `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the three ` +
           "runtime role passwords, RM_ENV and RM_CREDENTIALS, and a bare value is none of them",
       });
       continue;
     }
     if (allowed.has(line.key)) continue;
+    if (!line.plain) {
+      // Not printed: a key holding `:`, spaces or quotes may be half a secret.
+      const reason = dangerousTokenReason(line.key);
+      findings.push({
+        check: "env_credentials",
+        severity,
+        message:
+          `${path} line ${line.number} has a key that is not a plain name, ` +
+          `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
+          "(host, port, database/dbname, sslmode), the rm_app, rm_worker and rm_readonly passwords, RM_ENV and " +
+          "RM_CREDENTIALS",
+      });
+      continue;
+    }
     const reason = dangerousKeyReason(line.key);
     findings.push({
       check: "env_credentials",
@@ -1148,27 +1202,60 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
 }
 
 /** One meaningful line of an env file: its 1-based number and its KEY, or
- *  `null` when the line is not `KEY = VALUE` at all. Values are never
- *  returned, so nothing downstream can print one by accident. */
+ *  `null` when the line has no `=` at all. `plain` says whether the key is a
+ *  bare name that is safe to print; a key that is not (it holds `:`, spaces or
+ *  anything a pasted secret might) is reported by line number instead. Values
+ *  are never returned, so nothing downstream can print one by accident. */
 interface EnvLine {
   readonly number: number;
   readonly key: string | null;
+  readonly plain: boolean;
 }
 
-/** The meaningful lines of an env file, in file order. Blank lines and `#`
- *  comments are skipped. An `export ` prefix is stripped, as env-role.ts's
- *  `parseEnvFile` strips it, so `export rm_owner=…` cannot hide from the
- *  check. `:` is accepted as a separator too: nothing READS a `key: value`
- *  line, but a secret stored that way is still stored, and still named. */
+/** A key that is safe to name in a finding. */
+const PLAIN_ENV_KEY = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * The meaningful lines of an env file, in file order. Blank lines and `#`
+ * comments are skipped.
+ *
+ * The KEY is derived exactly as env-role.ts's `parseEnvFile` derives it — the
+ * text before the FIRST `=`, an `export ` prefix stripped, trimmed — and the
+ * whole of it is what the allowlist tests. Anything looser lets a line pass as
+ * one key while the reader stores it as another: with a `[=:]` separator,
+ * `host:OPENCODE_API_KEY=sk-…` read as the allowed `host`, while parseEnvFile
+ * stores the disallowed key `host:OPENCODE_API_KEY`.
+ *
+ * A line with no `=` is not something parseEnvFile reads, but a secret stored
+ * that way (a bare paste, or `rm_owner: …`) is still stored, so it is a finding
+ * by line number.
+ */
 function envLines(text: string): EnvLine[] {
   const lines: EnvLine[] = [];
   for (const [index, raw] of text.split("\n").entries()) {
     const trimmed = raw.trim();
     if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const match = /^(?:export\s+)?([A-Za-z0-9_.-]+)\s*[=:]/.exec(trimmed);
-    lines.push({ number: index + 1, key: match?.[1] ?? null });
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) {
+      lines.push({ number: index + 1, key: null, plain: false });
+      continue;
+    }
+    const key = trimmed.slice(0, eq).replace(/^export\s+/, "").trim();
+    lines.push({ number: index + 1, key, plain: PLAIN_ENV_KEY.test(key) });
   }
   return lines;
+}
+
+/** The first dangerous credential named anywhere in a non-plain key, split on
+ *  anything that is not a name character, so `rm_worker: rm_owner` is still
+ *  called the migration credential without printing the key itself. */
+function dangerousTokenReason(key: string): string | null {
+  for (const token of key.split(/[^A-Za-z0-9_.-]+/)) {
+    if (token === "") continue;
+    const reason = dangerousKeyReason(token);
+    if (reason !== null) return reason;
+  }
+  return null;
 }
 
 /** What a disallowed key IS, when it is one of the credentials §7 check 4 says

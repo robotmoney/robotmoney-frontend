@@ -28,6 +28,7 @@ import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-
 import { sql } from "../src/db/client.ts";
 import {
   ENV_FILE_ALLOWED_KEYS,
+  RUNTIME_DELETE_REVOKED_TABLES,
   checkEnvCredentials,
   checkEnvIdentity,
   checkPrivileges,
@@ -39,13 +40,14 @@ import {
   homeEnvPath,
   missingPrivileges,
   preflightReportLines,
+  protectedFromDeletion,
   runPreflight,
   type PreflightContext,
   type PreflightDb,
   type PreflightFinding,
   type PreflightReport,
 } from "../src/db/preflight.ts";
-import { registerQuery, requiredPrivileges, type RmRole } from "../src/db/registry.ts";
+import { registerQuery, registeredSites, requiredPrivileges, type RmRole } from "../src/db/registry.ts";
 import { parseMigrationHeader, recordMigrationCompat } from "../src/db/schema-compat.ts";
 import { MANIFEST_FORMAT_VERSION, detectManifestState, hashManifest, writeManifest } from "../src/db/schema-manifest.ts";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
@@ -114,6 +116,48 @@ function tokens(over: Partial<Record<RmRole, string>> = {}): ReadonlyMap<RmRole,
 
 function refusals(findings: readonly PreflightFinding[]): readonly PreflightFinding[] {
   return findings.filter((f) => f.severity === "refuse");
+}
+
+/** The site-id prefix of every declaration THIS file registers. */
+const OWN_SITE_PREFIX = "tests/db-preflight-checks:";
+
+/**
+ * Check 2's findings without the required-half findings owed to declarations
+ * that OTHER TEST FILES registered.
+ *
+ * The registry is process-global and backend CI runs every file in one `bun
+ * test` process. db-registry.test.ts registers rm_worker UPDATE and rm_app
+ * DELETE on relations that do not exist, and those stay registered for every
+ * file that runs after it. Without this scope, whether a zero-finding
+ * assertion here holds would depend on which files happen to sort before this
+ * one — a verdict about file order, not about the check.
+ *
+ * What is dropped is narrow: a finding of check `privileges` that names a
+ * `tests/…` site id from another file and no site id of this file's. A
+ * required-half finding always names its declarants (`declarantsFor`); a
+ * denylist finding never names a site id, so every denylist finding is kept.
+ * So is every finding for a REAL call site, whose id is `<module>:<function>`
+ * and never starts with `tests/`: a production declaration this database
+ * cannot satisfy still fails these tests.
+ */
+function scoped(findings: readonly PreflightFinding[]): readonly PreflightFinding[] {
+  const sites = registeredSites().map((declaration) => declaration.site);
+  const foreign = sites.filter((site) => site.startsWith("tests/") && !site.startsWith(OWN_SITE_PREFIX));
+  const own = sites.filter((site) => site.startsWith(OWN_SITE_PREFIX));
+  return findings.filter(
+    (finding) =>
+      finding.check !== "privileges" ||
+      !foreign.some((site) => finding.message.includes(site)) ||
+      own.some((site) => finding.message.includes(site)),
+  );
+}
+
+/** A report with `scoped` applied to every check and `passed` recomputed the
+ *  way `runPreflight` computes it. */
+function scopedReport(report: PreflightReport): PreflightReport {
+  const results = report.results.map((result) => ({ ...result, findings: [...scoped(result.findings)] }));
+  const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));
+  return { results, passed };
 }
 
 function writeEnvFile(name: string, lines: readonly string[]): string {
@@ -196,9 +240,11 @@ async function flushStats(db: postgres.Sql<{}>): Promise<void> {
  * still empty (no call site uses `registerQuery` yet), so without this every
  * required-half assertion below would loop over nothing.
  *
- * rm_readonly SELECT on `jobs` is a declaration the template database
- * satisfies, so registering it — the registry is process-global — changes
- * nothing for any other file.
+ * rm_readonly SELECT on `jobs` is a declaration every migrated database
+ * satisfies. The registry is process-global and has no unregister, so this
+ * declaration stays registered for every file that runs after this one; it is
+ * chosen so that it can never be the reason another file's check 2 refuses.
+ * The site id starts with OWN_SITE_PREFIX, which `scoped` relies on.
  */
 const REQUIRED_FIXTURE = registerQuery({
   role: "rm_readonly",
@@ -302,7 +348,24 @@ describe("check 1 — every role token smoke will hand to a container authentica
     // containers may never meet.
     const result = await sql.begin((tx) => checkRoleTokens(tx, context(), tokens()));
     expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
-    for (const finding of result.findings) expect(finding.message).toContain("transaction handle");
+    for (const finding of result.findings) expect(finding.message).toContain("only a top-level postgres() pool");
+  });
+
+  test("a reserved connection cannot say either — only the top-level pool carries the server", async () => {
+    // postgres.js attaches `options` to the pool object alone; `sql.reserve()`
+    // returns a bare query function. A caller that wires check 1 to a reserved
+    // handle refuses every role, so wiring must pass the pool itself.
+    const reserved = await sql.reserve();
+    try {
+      expect((reserved as unknown as { options?: unknown }).options).toBeUndefined();
+      const result = await checkRoleTokens(reserved, context(), tokens());
+      expect(refusals(result.findings)).toHaveLength(RUNTIME_ROLES.length);
+      for (const finding of result.findings) expect(finding.message).toContain("only a top-level postgres() pool");
+    } finally {
+      reserved.release();
+    }
+    // The control: the pool the reserved connection came from works.
+    expect((await checkRoleTokens(sql, context(), tokens())).findings).toEqual([]);
   });
 });
 
@@ -347,7 +410,7 @@ describe("check 2, required half — the registry says what each role's programs
   test("a declared privilege that is held produces no finding", async () => {
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
     expect(result.check).toBe("privileges");
-    expect(result.findings).toEqual([]);
+    expect(scoped(result.findings)).toEqual([]);
   });
 
   test("a missing required privilege refuses, naming the call site that declared it", async () => {
@@ -355,7 +418,7 @@ describe("check 2, required half — the registry says what each role's programs
     // test's cloned database, so the next test starts from the template again.
     await sql.unsafe(`REVOKE SELECT ON ${REQUIRED_FIXTURE.object} FROM rm_readonly`);
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
-    const refused = refusals(result.findings);
+    const refused = refusals(scoped(result.findings));
     expect(refused).toHaveLength(1);
     // Actionable means "which declaration asked for this", not "something is
     // missing somewhere": the site id is `<module>:<function>`.
@@ -590,7 +653,7 @@ describe("check 2, the asymmetry — the registry is not an allowlist", () => {
     expect(held?.held).toBe(true);
 
     const result = await checkPrivileges(sql, context({ roles: ["rm_readonly"] }));
-    expect(result.findings).toEqual([]);
+    expect(scoped(result.findings)).toEqual([]);
   });
 
   test("rm_app holding DELETE on an append-only table FAILS check 2 — the grant §9.1 step 2 exists to remove", async () => {
@@ -688,7 +751,7 @@ describe("check 2 fails before the append-only grant transition and passes after
 
     // BEFORE: check 2 refuses, exactly once per role per table.
     const before = await checkPrivileges(sql, context({ roles: WRITERS }));
-    const appendOnly = refusals(before.findings).filter((f) => f.message.includes("append-only table"));
+    const appendOnly = refusals(scoped(before.findings)).filter((f) => f.message.includes("append-only table"));
     const named = appendOnly.map((f) => {
       const match = /^(rm_\w+) holds DELETE\/TRUNCATE on the append-only table (\w+):/.exec(f.message);
       return match ? `${match[1]}/${match[2]}` : f.message;
@@ -698,14 +761,14 @@ describe("check 2 fails before the append-only grant transition and passes after
 
     // AFTER: the migration text itself, not a hand-written REVOKE.
     await applyTransition();
-    expect((await checkPrivileges(sql, context({ roles: WRITERS }))).findings).toEqual([]);
+    expect(scoped((await checkPrivileges(sql, context({ roles: WRITERS }))).findings)).toEqual([]);
     expect(await findDenylistViolations(sql, WRITERS)).toEqual([]);
     const once = await grantMatrix();
 
     // AGAIN: idempotent — no error, the same grants, the same verdict.
     await applyTransition();
     expect(await grantMatrix()).toEqual(once);
-    expect((await checkPrivileges(sql, context({ roles: WRITERS }))).findings).toEqual([]);
+    expect(scoped((await checkPrivileges(sql, context({ roles: WRITERS }))).findings)).toEqual([]);
   });
 
   test("the transition's arrays cover every APPEND_ONLY_TABLES entry — no append-only table can skip it", () => {
@@ -720,14 +783,35 @@ describe("check 2 fails before the append-only grant transition and passes after
     ]);
     expect([...APPEND_ONLY_TABLES].filter((table) => !union.has(table))).toEqual([]);
 
-    // The other direction: nothing the transition protects is unknown to the
-    // guard, except a table D53 (2) moved to grant-only protection
-    // (`swarm_stream_events`: its triggers go so rm_owner can prune past the
-    // oldest servable cursor, while DELETE/TRUNCATE stay revoked from the
-    // runtime roles — which is exactly what 0072's REVOKE still does).
-    const grantOnlyByD53 = new Set(["swarm_stream_events"]);
-    const known = new Set<string>(APPEND_ONLY_TABLES);
-    expect([...union].filter((table) => !known.has(table) && !grantOnlyByD53.has(table))).toEqual([]);
+    // The other direction: nothing the transition protects is unknown to
+    // check 2. D53 (2) moves `swarm_stream_events` to grant-only protection
+    // (its triggers go so rm_owner can prune past the oldest servable cursor;
+    // DELETE/TRUNCATE stay revoked from the runtime roles, which is what 0072's
+    // REVOKE does). So the comparison is against check 2's own protected set,
+    // not APPEND_ONLY_TABLES: a table the transition revokes on must stay one
+    // check 2 refuses a DELETE grant on.
+    const protectedSet = new Set(protectedFromDeletion());
+    expect([...union].filter((table) => !protectedSet.has(table))).toEqual([]);
+  });
+
+  test("check 2 refuses a runtime-role DELETE grant on swarm_stream_events whether or not it is append-only (D53 (2))", async () => {
+    // Listed on its own, independently of APPEND_ONLY_TABLES: when wave 3
+    // takes the table out of the append-only set, check 2 must keep refusing.
+    expect(RUNTIME_DELETE_REVOKED_TABLES).toContain("swarm_stream_events");
+    expect(protectedFromDeletion()).toContain("swarm_stream_events");
+
+    // The control: the clean clone does not already say it.
+    expect(
+      (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_events"),
+    ).toEqual([]);
+
+    await sql.unsafe("GRANT DELETE ON swarm_stream_events TO rm_app");
+    await sql.unsafe("GRANT TRUNCATE ON swarm_stream_events TO rm_worker");
+    const result = await checkPrivileges(sql, context({ roles: WRITERS }));
+    const named = refusals(result.findings)
+      .filter((f) => f.message.includes("swarm_stream_events"))
+      .map((f) => /^(rm_\w+) holds DELETE\/TRUNCATE on /.exec(f.message)?.[1]);
+    expect(named.sort()).toEqual(["rm_app", "rm_worker"]);
   });
 });
 
@@ -952,6 +1036,39 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect(refusals(result.findings)).toHaveLength(1);
     expect(result.findings[0]?.message).toContain(`line ${SAFE.length + 1}`);
     expect(result.findings[0]?.message).not.toContain(pasted);
+  });
+
+  test("the key is everything before the first `=`, as env-role.ts reads it — an allowed prefix cannot hide a key", async () => {
+    // `host:OPENCODE_API_KEY=…` and `rm_worker: rm_owner=…` start with an
+    // allowed key, but parseEnvFile stores them under the keys
+    // `host:OPENCODE_API_KEY` and `rm_worker: rm_owner`, neither of which §3
+    // allows. Each is its own refusal on prod, by line number, and neither
+    // the value nor the key text is printed.
+    const modelKey = "sk-live-secret-behind-an-allowed-prefix";
+    const ownerPassword = "owner-password-behind-an-allowed-prefix";
+    const envFilePath = writeEnvFile("colon-prefix.env", [
+      ...SAFE,
+      `host:OPENCODE_API_KEY=${modelKey}`,
+      `rm_worker: rm_owner=${ownerPassword}`,
+    ]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    const refused = refusals(result.findings);
+    expect(refused).toHaveLength(2);
+    expect(refused[0]?.message).toContain(`line ${SAFE.length + 1}`);
+    expect(refused[1]?.message).toContain(`line ${SAFE.length + 2}`);
+    expect(refused[1]?.message).toContain("the migration credential");
+    const text = result.findings.map((f) => f.message).join("\n");
+    expect(text).not.toContain(modelKey);
+    expect(text).not.toContain(ownerPassword);
+    expect(text).not.toContain("host:OPENCODE_API_KEY");
+  });
+
+  test("a `key: value` line with no `=` is still a stored credential — refused by line number", async () => {
+    const envFilePath = writeEnvFile("colon-only.env", [...SAFE, "rm_owner: typed-once-never-stored"]);
+    const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain(`line ${SAFE.length + 1}`);
+    expect(result.findings[0]?.message).not.toContain("typed-once-never-stored");
   });
 
   test("refuses an rm_owner token on prod", async () => {
@@ -1317,7 +1434,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
       const ctx = context({ env: "stage", connection: "local", codeFilenames: await ledgerNames(), envFilePath });
 
       const before = await tupleWrites();
-      const report = await readOnlyRun(ctx);
+      const report = scopedReport(await readOnlyRun(ctx));
       expect(preflightReportLines(report)).toEqual([]);
       expect(report.passed).toBe(true);
       expect(await tupleWrites()).toEqual(before);
