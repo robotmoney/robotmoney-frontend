@@ -18,6 +18,9 @@
 //      is a duplicate of the other.
 //   4. `--credentials` beats `RM_CREDENTIALS`, and every refusal names which
 //      setting pointed at the failing path.
+//   5. Each entry carries member id, signing key, bearer and model key (D52),
+//      each refused by name when missing, and no two entries share a member
+//      id, key or bearer — one member holds one role.
 //
 // Cost class `unit` (docs/architecture.md §3 L1): bun plus a temp directory,
 // no Docker and no network. Reconciliation — the pure desired-state half of
@@ -34,15 +37,23 @@ import {
   resolveCredentialPath,
   rosterEntries,
   rosterPlanLines,
+  type CredentialEntry,
   type CredentialFile,
   type RosterEntry,
   type RunningParticipant,
 } from "../../lib/swarm/credential-file.ts";
-import type { PersonaIdentity } from "../../lib/swarm/persona-keys.ts";
 
-const identity = (seed: string): PersonaIdentity => ({
+/**
+ * A complete D52 entry: member id, signing key, bearer and model key. Each
+ * seed yields its own member id, key and bearer, so two seeds never share an
+ * identity by accident.
+ */
+const identity = (seed: string): CredentialEntry => ({
+  memberId: `m-${seed}`,
   publicKeyB64: `pub-${seed}`,
   privateJwk: { kty: "OKP", crv: "Ed25519", x: `pub-${seed}`, d: `priv-${seed}` },
+  bearer: `tok-${seed}`,
+  modelKey: `zen-${seed}`,
 });
 
 const PROD_ROSTER: CredentialFile = {
@@ -186,26 +197,74 @@ describe("parseCredentialFile — the spec §6.1 shape, validated in full", () =
   });
 
   test("an entry missing `publicKeyB64` is `malformed` and the message names the entry", () => {
-    const text = JSON.stringify({ agents: { athena: { privateJwk: { kty: "OKP" } } }, judges: {} });
+    const { publicKeyB64: _dropped, ...rest } = identity("athena");
+    const text = JSON.stringify({ agents: { athena: rest }, judges: {} });
     const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
     expect(r.reason).toBe("malformed");
     expect(r.message).toContain("athena");
+    expect(r.message).toContain("publicKeyB64");
   });
 
   test("an entry with an EMPTY `publicKeyB64` is `malformed` — present is not the same as usable", () => {
-    const text = JSON.stringify({ agents: { athena: { publicKeyB64: "", privateJwk: { kty: "OKP" } } }, judges: {} });
+    const text = JSON.stringify({ agents: { athena: { ...identity("athena"), publicKeyB64: "" } }, judges: {} });
     expect(refusal(() => parseCredentialFile(text, "/etc/rm/credential.json")).reason).toBe("malformed");
   });
 
   test("an entry missing `privateJwk` is `malformed` — a container cannot sign with a public key", () => {
-    const text = JSON.stringify({ agents: {}, judges: { themis: { publicKeyB64: "pub-themis" } } });
+    const { privateJwk: _dropped, ...rest } = identity("themis");
+    const text = JSON.stringify({ agents: {}, judges: { themis: rest } });
     const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
     expect(r.reason).toBe("malformed");
     expect(r.message).toContain("themis");
   });
 
   test("an entry whose `privateJwk` is not an object is `malformed`", () => {
-    const text = JSON.stringify({ agents: { athena: { publicKeyB64: "pub", privateJwk: "priv" } }, judges: {} });
+    const text = JSON.stringify({ agents: { athena: { ...identity("athena"), privateJwk: "priv" } }, judges: {} });
+    expect(refusal(() => parseCredentialFile(text, "/etc/rm/credential.json")).reason).toBe("malformed");
+  });
+
+  // D52: each entry carries its member id, signing key, bearer and model key.
+  // A missing one refuses by NAME, in either namespace, and never falls back to
+  // `~/.env` — that is where the bearer and model key used to live.
+  test.each(["memberId", "bearer", "modelKey"] as const)(
+    "an entry missing `%s` is `malformed`, and the refusal names the entry and the field",
+    (field) => {
+      for (const namespace of ["agents", "judges"] as const) {
+        const { [field]: _dropped, ...rest } = identity("athena");
+        const text = JSON.stringify({ agents: {}, judges: {}, [namespace]: { athena: rest } });
+        const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
+        expect(r.reason).toBe("malformed");
+        expect(r.message).toContain(`${namespace} entry "athena"`);
+        expect(r.message).toContain(field);
+      }
+    },
+  );
+
+  test.each(["memberId", "bearer", "modelKey"] as const)(
+    "an entry whose `%s` is empty or not a string is `malformed` — present is not usable",
+    (field) => {
+      for (const bad of ["", "   ", 42, null, { nested: true }]) {
+        const text = JSON.stringify({ agents: { athena: { ...identity("athena"), [field]: bad } }, judges: {} });
+        expect(refusal(() => parseCredentialFile(text, "/etc/rm/credential.json")).reason).toBe("malformed");
+      }
+    },
+  );
+
+  test("all five fields are carried through, per entry, into the parsed file", () => {
+    const parsed = parseCredentialFile(JSON.stringify(PROD_ROSTER), "/etc/rm/credential.json");
+    expect(parsed.agents.athena).toEqual({
+      memberId: "m-athena",
+      publicKeyB64: "pub-athena",
+      privateJwk: { kty: "OKP", crv: "Ed25519", x: "pub-athena", d: "priv-athena" },
+      bearer: "tok-athena",
+      modelKey: "zen-athena",
+    });
+    expect(parsed.judges.themis?.bearer).toBe("tok-themis");
+    expect(parsed.judges.themis?.modelKey).toBe("zen-themis");
+  });
+
+  test("an entry that is an array, not an object, is `malformed`", () => {
+    const text = JSON.stringify({ agents: { athena: [identity("athena")] }, judges: {} });
     expect(refusal(() => parseCredentialFile(text, "/etc/rm/credential.json")).reason).toBe("malformed");
   });
 
@@ -213,8 +272,8 @@ describe("parseCredentialFile — the spec §6.1 shape, validated in full", () =
     // JSON.parse collapses a repeated key to the last value, which would hand
     // the container a key its operator did not intend. The file's TEXT is the
     // authority here.
-    const text = '{"agents":{"athena":{"publicKeyB64":"pub-a","privateJwk":{"kty":"OKP"}},'
-      + '"athena":{"publicKeyB64":"pub-b","privateJwk":{"kty":"OKP"}}},"judges":{}}';
+    const text = `{"agents":{"athena":${JSON.stringify(identity("a"))},`
+      + `"athena":${JSON.stringify(identity("b"))}},"judges":{}}`;
     const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
     expect(r.reason).toBe("duplicate-name");
     expect(r.message).toContain("athena");
@@ -232,6 +291,71 @@ describe("parseCredentialFile — the spec §6.1 shape, validated in full", () =
 
   test("the refusal carries the path it was given, so an operator knows which file to fix", () => {
     expect(refusal(() => parseCredentialFile("{", "/etc/rm/credential.json")).path).toBe("/etc/rm/credential.json");
+  });
+});
+
+// ── NAMESPACE SEPARATION: one member, one role, one entry ──────────────────
+// Spec §6.1: "Agents and judges are distinct namespaces with distinct keys",
+// and an `agents` entry must be a role-`member` member while a `judges` entry
+// must be a role-`judge` member. One member id cannot satisfy both, so an entry
+// that shares a member id, key or bearer with another is refused here, before
+// any database is asked — the role check against `swarm_members` is the boot's.
+describe("parseCredentialFile — agents and judges never share an identity", () => {
+  test("the SAME member id as an agent and as a judge is `shared-identity`, naming both entries", () => {
+    const text = JSON.stringify({
+      agents: { themis: identity("themis-agent") },
+      judges: { themis: { ...identity("themis-judge"), memberId: "m-themis-agent" } },
+    });
+    const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
+    expect(r.reason).toBe("shared-identity");
+    expect(r.message).toContain('agents entry "themis"');
+    expect(r.message).toContain('judges entry "themis"');
+    expect(r.message).toContain("memberId");
+  });
+
+  test("a judge's signing key reused by an agent is `shared-identity` — a judge's key is never an agent's", () => {
+    const text = JSON.stringify({
+      agents: { athena: { ...identity("athena"), publicKeyB64: "pub-themis" } },
+      judges: { themis: identity("themis") },
+    });
+    const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
+    expect(r.reason).toBe("shared-identity");
+    expect(r.message).toContain("publicKeyB64");
+  });
+
+  test("a bearer shared by two agents is `shared-identity`, and the refusal never prints the bearer", () => {
+    const text = JSON.stringify({
+      agents: { athena: identity("athena"), "robot-money": { ...identity("robot-money"), bearer: "tok-athena" } },
+      judges: {},
+    });
+    const r = refusal(() => parseCredentialFile(text, "/etc/rm/credential.json"));
+    expect(r.reason).toBe("shared-identity");
+    expect(r.message).toContain("bearer");
+    expect(r.message).not.toContain("tok-athena");
+  });
+
+  test("a shared MODEL key is allowed — one operator account may fund several participants", () => {
+    const text = JSON.stringify({
+      agents: { athena: { ...identity("athena"), modelKey: "zen-shared" } },
+      judges: { themis: { ...identity("themis"), modelKey: "zen-shared" } },
+    });
+    const parsed = parseCredentialFile(text, "/etc/rm/credential.json");
+    expect(parsed.agents.athena?.modelKey).toBe("zen-shared");
+    expect(parsed.judges.themis?.modelKey).toBe("zen-shared");
+  });
+
+  test("an agent entry flattens to kind `agent` and a judge entry to kind `judge`, each with only its own credential", () => {
+    const file = parseCredentialFile(
+      JSON.stringify({ agents: { themis: identity("themis-agent") }, judges: { themis: identity("themis-judge") } }),
+      "/etc/rm/credential.json",
+    );
+    const [agent, judge] = rosterEntries(file);
+    expect(agent?.kind).toBe("agent");
+    expect(agent?.credential.memberId).toBe("m-themis-agent");
+    expect(agent?.credential.bearer).toBe("tok-themis-agent");
+    expect(judge?.kind).toBe("judge");
+    expect(judge?.credential.memberId).toBe("m-themis-judge");
+    expect(judge?.credential.modelKey).toBe("zen-themis-judge");
   });
 });
 
@@ -376,7 +500,7 @@ describe("rosterEntries — one list, judges included, in a stable order", () =>
     expect(entries).toHaveLength(4);
     const themis = entries.find((e) => e.name === "themis");
     expect(themis?.kind).toBe("judge");
-    expect(themis?.identity).toEqual(identity("themis"));
+    expect(themis?.credential).toEqual(identity("themis"));
   });
 
   test("GATE 'judge runs as a participant': the judge is on the list like any agent", () => {
@@ -431,11 +555,13 @@ describe("rosterPlanLines — redacted; a plan is pasted into issues and chat lo
     expect(lines.some((l) => l.includes("agent") && l.includes("athena"))).toBe(true);
   });
 
-  test("NO private key material appears", () => {
+  test("NO private key material appears, nor any bearer or model key", () => {
     const text = rosterPlanLines(entries()).join("\n");
     expect(text).not.toContain("priv-athena");
     expect(text).not.toContain("privateJwk");
     expect(text).not.toContain("Ed25519");
+    expect(text).not.toContain("tok-athena");
+    expect(text).not.toContain("zen-athena");
   });
 
   test("NOT even the public key — it is still an identity an onlooker can correlate", () => {

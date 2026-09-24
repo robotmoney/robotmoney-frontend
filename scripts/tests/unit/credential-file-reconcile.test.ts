@@ -11,29 +11,38 @@
 // containers: one take", and the spoof-keys generation sweep of §6.4 step (3)
 // — have to be drivable with a FABRICATED running set and no Docker daemon.
 // Every case below is exactly that: plain records in, a plan out, no clock,
-// no filesystem, no socket.
+// no filesystem, no socket. The one exception is the closing ratchet, which
+// reads source to keep boot code on `planParticipants`: the composition that
+// never maps an unconfigured path to the empty roster.
 //
 // Cost class `unit` (docs/architecture.md §3 L1). Parsing, loading and the
 // refusal taxonomy live in credential-file.test.ts.
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   CredentialFileRefusal,
+  planParticipants,
   reconcileRoster,
+  type CredentialEntry,
+  type CredentialFile,
   type ParticipantKind,
   type RosterEntry,
   type RunningParticipant,
 } from "../../lib/swarm/credential-file.ts";
-import type { PersonaIdentity } from "../../lib/swarm/persona-keys.ts";
 
-const identity = (seed: string): PersonaIdentity => ({
+const identity = (seed: string): CredentialEntry => ({
+  memberId: `m-${seed}`,
   publicKeyB64: `pub-${seed}`,
   privateJwk: { kty: "OKP", crv: "Ed25519", x: `pub-${seed}`, d: `priv-${seed}` },
+  bearer: `tok-${seed}`,
+  modelKey: `zen-${seed}`,
 });
 
 const entry = (name: string, kind: ParticipantKind = "agent"): RosterEntry => ({
   name,
   kind,
-  identity: identity(`${kind}-${name}`),
+  credential: identity(`${kind}-${name}`),
 });
 
 const running = (
@@ -62,7 +71,7 @@ describe("reconcileRoster — named-and-running is kept, named-and-not is starte
   test("a participant on the roster and NOT running is STARTED, carrying its own key", () => {
     const plan = reconcileRoster([entry("athena")], []);
     expect(names(plan.start)).toEqual(["athena"]);
-    expect(plan.start[0]?.identity).toEqual(identity("agent-athena"));
+    expect(plan.start[0]?.credential).toEqual(identity("agent-athena"));
     expect(plan.keep).toEqual([]);
     expect(plan.stop).toEqual([]);
   });
@@ -227,6 +236,151 @@ describe("reconcileRoster — `null` desired means unconfigured, and that is not
     const live = [running("athena")];
     expect(names(reconcileRoster([], live).stop)).toEqual(["athena"]);
     expect(() => reconcileRoster(null, live)).toThrow(CredentialFileRefusal);
+  });
+});
+
+// ── THE ONE COMPOSITION A BOOT CALLS ───────────────────────────────────────
+// The bug this block exists for is in a CALLER, not in `reconcileRoster`: a
+// boot that writes `configured ? rosterEntries(load(path)) : []` maps "no path
+// configured" to the empty roster, which stops every participant on the host.
+// Every pure case above passes with that caller in place. `planParticipants`
+// is the mapping, written once; the ratchet at the end keeps boot code from
+// writing its own.
+describe("planParticipants — resolution → load → reconcile, with unconfigured never read as empty", () => {
+  const FILE: CredentialFile = {
+    agents: { athena: identity("agent-athena") },
+    judges: { themis: identity("judge-themis") },
+  };
+
+  /** A loader that records every call, so a test can prove it was never made. */
+  function recordingLoader(result: CredentialFile | Error = FILE) {
+    const calls: string[] = [];
+    const load = (path: string): CredentialFile => {
+      calls.push(path);
+      if (result instanceof Error) throw result;
+      return result;
+    };
+    return { calls, load };
+  }
+
+  test("unconfigured WITH participants running throws `unconfigured-with-running` and never calls load", () => {
+    const loader = recordingLoader();
+    let thrown: unknown;
+    try {
+      planParticipants({ configured: false }, [running("athena"), running("themis", { kind: "judge" })], loader.load);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CredentialFileRefusal);
+    expect((thrown as CredentialFileRefusal).reason).toBe("unconfigured-with-running");
+    expect(names((thrown as CredentialFileRefusal).running)).toEqual(["athena", "themis"]);
+    expect(loader.calls).toEqual([]);
+  });
+
+  test("unconfigured with nothing running is an EMPTY plan, and load is still never called", () => {
+    const loader = recordingLoader();
+    expect(planParticipants({ configured: false }, [], loader.load)).toEqual({ start: [], keep: [], stop: [] });
+    expect(loader.calls).toEqual([]);
+  });
+
+  test("the empty-roster caller bug is exactly what this refuses: [] would have stopped everyone", () => {
+    // The buggy composition, spelled out, against the same inputs.
+    const live = [running("athena"), running("themis", { kind: "judge" })];
+    const buggy = reconcileRoster([], live);
+    expect(names(buggy.stop)).toEqual(["athena", "themis"]);
+    // The real one refuses and stops nobody.
+    expect(() => planParticipants({ configured: false }, live, recordingLoader().load)).toThrow(CredentialFileRefusal);
+  });
+
+  test("a configured path is loaded ONCE, by that path, and reconciled against what runs", () => {
+    const loader = recordingLoader();
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "env" },
+      [running("athena"), running("boreas")],
+      loader.load,
+    );
+    expect(loader.calls).toEqual(["/etc/rm/credential.json"]);
+    expect(tagged(plan.keep)).toEqual(["agent:athena"]);
+    expect(tagged(plan.start)).toEqual(["judge:themis"]);
+    expect(names(plan.stop)).toEqual(["boreas"]);
+  });
+
+  test("a load refusal keeps its reason and names the setting that pointed at the path", () => {
+    const missing = new CredentialFileRefusal("missing", "credential file /etc/rm/credential.json does not exist", {
+      path: "/etc/rm/credential.json",
+    });
+    const viaEnv = recordingLoader(missing);
+    let thrown: unknown;
+    try {
+      planParticipants({ configured: true, path: "/etc/rm/credential.json", origin: "env" }, [running("athena")], viaEnv.load);
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as CredentialFileRefusal).reason).toBe("missing");
+    expect((thrown as CredentialFileRefusal).message).toContain("RM_CREDENTIALS");
+    expect(() =>
+      planParticipants({ configured: true, path: "/x.json", origin: "flag" }, [], recordingLoader(missing).load),
+    ).toThrow(/--credentials/);
+  });
+
+  test("the spoof-keys generation is passed through: a superseded container is replaced", () => {
+    const plan = planParticipants(
+      { configured: true, path: "/etc/rm/credential.json", origin: "flag" },
+      [running("athena", { generation: "gen-1" })],
+      recordingLoader({ agents: { athena: identity("agent-athena") }, judges: {} }).load,
+      "gen-2",
+    );
+    expect(names(plan.stop)).toEqual(["athena"]);
+    expect(names(plan.start)).toEqual(["athena"]);
+  });
+
+  test("RATCHET: outside credential-file.ts, no production code names reconcileRoster or rosterEntries at all", () => {
+    // A boot that calls `reconcileRoster` itself chooses its own mapping for an
+    // unconfigured path — the bug above — and so does one that builds its own
+    // stop list from `rosterEntries(...)`. Boot code calls `planParticipants`.
+    //
+    // The rule is the IDENTIFIER, not a call shape: an aliased import
+    // (`import { reconcileRoster as r }`) or a namespace access
+    // (`cf.reconcileRoster(...)`) still names it, so both are caught. Every
+    // production tree is walked: scripts/, backend/ and website-server/.
+    //
+    // This is a SOURCE ratchet. It does not prove a boot calls
+    // `planParticipants`; that proof needs the boot entry itself to be driven
+    // (issue #1026 wave 2/5, smoke-main.ts), and criterion 137 stays PARTIAL
+    // until it is.
+    const repo = join(import.meta.dir, "..", "..", "..");
+    const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      let names: string[];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        if (name === "node_modules" || name === "tests" || name.startsWith(".")) continue;
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          walk(path);
+          continue;
+        }
+        if (!/\.(ts|js|mjs|cjs)$/.test(name) || /\.test\.(ts|js)$/.test(name)) continue;
+        const rel = relative(repo, path);
+        if (rel === join("scripts", "lib", "swarm", "credential-file.ts")) continue;
+        if (forbidden.test(readFileSync(path, "utf8"))) offenders.push(rel);
+      }
+    };
+    for (const tree of ["scripts", "backend", "website-server"]) walk(join(repo, tree));
+    expect(offenders).toEqual([]);
+  });
+
+  test("RATCHET control: the identifier rule catches an aliased import and a namespace call", () => {
+    const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
+    expect(forbidden.test('import { reconcileRoster as r } from "./credential-file.ts";')).toBe(true);
+    expect(forbidden.test("const plan = cf.reconcileRoster(null, running);")).toBe(true);
+    expect(forbidden.test("const stop = diff(rosterEntries(emptyFile), running);")).toBe(true);
+    expect(forbidden.test("const plan = planParticipants(resolution, running, load);")).toBe(false);
   });
 });
 
