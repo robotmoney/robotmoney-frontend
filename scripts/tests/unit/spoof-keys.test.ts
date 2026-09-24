@@ -13,7 +13,15 @@
 //     table row is the target's own answer.
 //   - THE OUTPUT PATH IS NEVER `RM_CREDENTIALS`. Overwriting it on a
 //     mistargeted run destroys the only copy of a host's real participant
-//     keys. Equal paths refuse; they never overwrite.
+//     keys. Paths naming the same file refuse — including a `..`, relative or
+//     symlinked spelling, which a string comparison would wave through.
+//   - THE PATH IS THE INSTANCE STATE DIRECTORY'S, COMPUTED BY THE MODULE.
+//     `spoofKeys` takes the state root and instance and writes
+//     `instancePaths(stateRoot, instance).spoofGenerationFile`; no caller can
+//     point the generation anywhere else.
+//   - EACH MEMBER GETS A KEYPAIR AND A BEARER, both issued inside the fence,
+//     and while a generation exists a plain boot's roster takes those
+//     members' key and bearer from it rather than from `RM_CREDENTIALS`.
 //   - THE ORDER IS (1) write generation → (2) fenced rebind by MEMBER ID →
 //     (3) stop old-generation participants → (4) start them. The generation is
 //     written BEFORE the rebind: a generation written after a crashed rebind
@@ -27,15 +35,26 @@
 // Cost class `unit` (docs/architecture.md §3 L1): a temp state directory and
 // injected database/container dependencies — no Postgres, no Docker, no clock.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { instancePaths } from "../../lib/smoke-state.ts";
 import {
   assertSpoofKeysAllowed,
+  effectiveRoster,
   readSpoofGeneration,
   rebindSpoofedKeys,
   replaceSpoofedParticipants,
-  spoofGenerationPath,
   spoofKeys,
   SpoofKeysRefusal,
   writeSpoofGeneration,
@@ -44,7 +63,7 @@ import {
   type SpoofGuardContext,
   type SpoofRebindDeps,
 } from "../../lib/swarm/spoof-keys.ts";
-import type { RunningParticipant } from "../../lib/swarm/credential-file.ts";
+import type { RosterEntry, RunningParticipant } from "../../lib/swarm/credential-file.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "rm-spoof-keys-"));
@@ -56,10 +75,15 @@ const allowed = (over: Partial<SpoofGuardContext> = {}): SpoofGuardContext => ({
   deploymentIdentity: "rehearsal",
   hasOwnerCredential: true,
   flagExplicit: true,
-  outputPath: "/var/lib/rm/rm_twin/spoof-generation.json",
   credentialPath: "/etc/rm/credential.json",
   ...over,
 });
+
+/** Where `spoofKeys` would write for instance `rm_twin` under `/var/lib/rm`. */
+const GEN = instancePaths("/var/lib/rm", "rm_twin").spoofGenerationFile;
+
+/** The generation file `spoofKeys` owns for `instance` under `root`. */
+const genFile = (root: string, instance = "rm_twin") => instancePaths(root, instance).spoofGenerationFile;
 
 function spoofRefusal(fn: () => unknown): SpoofKeysRefusal {
   try {
@@ -98,6 +122,7 @@ const THIRD_PARTY = { name: "outsider", memberId: "m-outsider", operator: "acme"
 function fakeDb(initialInstalled: string | null = null) {
   const calls: string[] = [];
   const rebinds: { memberId: string; publicKeyB64: string; generationId: string }[] = [];
+  const tokens: { memberId: string; bearer: string; generationId: string }[] = [];
   let installed = initialInstalled;
   let inFence = false;
   let onFenceOpen: (() => void) | undefined;
@@ -119,6 +144,11 @@ function fakeDb(initialInstalled: string | null = null) {
       rebinds.push({ memberId, publicKeyB64, generationId });
       installed = generationId;
     },
+    async issueMemberToken(memberId: string, bearer: string, generationId: string): Promise<void> {
+      if (!inFence) throw new Error(`issueMemberToken(${memberId}) ran OUTSIDE the fenced transaction`);
+      calls.push(`token:${memberId}`);
+      tokens.push({ memberId, bearer, generationId });
+    },
     async readInstalledGeneration(): Promise<string | null> {
       calls.push("readInstalled");
       return installed;
@@ -128,6 +158,7 @@ function fakeDb(initialInstalled: string | null = null) {
     deps,
     calls,
     rebinds,
+    tokens,
     installedGeneration: () => installed,
     onFenceOpen: (fn: () => void) => {
       onFenceOpen = fn;
@@ -151,50 +182,50 @@ function fakeContainers() {
 // ── THE FOUR GUARDS, EACH REFUSING ON ITS OWN ──────────────────────────────
 describe("assertSpoofKeysAllowed — four guards, each independently fatal", () => {
   test("a rehearsal twin with an owner credential and an explicit flag is allowed", () => {
-    expect(assertSpoofKeysAllowed(allowed())).toBeUndefined();
+    expect(assertSpoofKeysAllowed(allowed(), GEN)).toBeUndefined();
   });
 
   test("RM_ENV = prod refuses — spoofing production keys is never a rehearsal flag's business", () => {
-    expect(spoofRefusal(() => assertSpoofKeysAllowed(allowed({ rmEnv: "prod" }))).reason).toBe("rm_env_prod");
+    expect(spoofRefusal(() => assertSpoofKeysAllowed(allowed({ rmEnv: "prod" }), GEN)).reason).toBe("rm_env_prod");
   });
 
   test("deployment_identity = production refuses even when RM_ENV says stage", () => {
     // The env var is the operator's CLAIM; the row is the target's own
     // enrollment. A mistyped RM_ENV must not reach a production database.
     const r = spoofRefusal(() =>
-      assertSpoofKeysAllowed(allowed({ rmEnv: "stage", deploymentIdentity: "production" })),
+      assertSpoofKeysAllowed(allowed({ rmEnv: "stage", deploymentIdentity: "production" }), GEN),
     );
     expect(r.reason).toBe("identity_not_rehearsal");
   });
 
   test("an UNENROLLED target (no deployment_identity row) refuses too — unknown is not rehearsal", () => {
     expect(
-      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ deploymentIdentity: null }))).reason,
+      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ deploymentIdentity: null }), GEN)).reason,
     ).toBe("identity_not_rehearsal");
   });
 
   test("no rm_owner credential refuses UP FRONT, not halfway through the rebind", () => {
     expect(
-      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ hasOwnerCredential: false }))).reason,
+      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ hasOwnerCredential: false }), GEN)).reason,
     ).toBe("no_owner_credential");
   });
 
   test("a flag that was not passed explicitly refuses — never implied, defaulted, or inherited", () => {
     expect(
-      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ flagExplicit: false }))).reason,
+      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ flagExplicit: false }), GEN)).reason,
     ).toBe("flag_not_explicit");
   });
 
   test("passing one guard never excuses another: an explicit flag on prod still refuses", () => {
     expect(
-      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ flagExplicit: true, rmEnv: "prod" }))).reason,
+      spoofRefusal(() => assertSpoofKeysAllowed(allowed({ flagExplicit: true, rmEnv: "prod" }), GEN)).reason,
     ).toBe("rm_env_prod");
   });
 
   test("a rehearsal identity does not excuse a missing owner credential", () => {
     expect(
       spoofRefusal(() =>
-        assertSpoofKeysAllowed(allowed({ deploymentIdentity: "rehearsal", hasOwnerCredential: false })),
+        assertSpoofKeysAllowed(allowed({ deploymentIdentity: "rehearsal", hasOwnerCredential: false }), GEN),
       ).reason,
     ).toBe("no_owner_credential");
   });
@@ -206,13 +237,13 @@ describe("assertSpoofKeysAllowed — four guards, each independently fatal", () 
       hasOwnerCredential: false,
       flagExplicit: false,
     });
-    expect(spoofRefusal(() => assertSpoofKeysAllowed(allBad)).reason).toBe("rm_env_prod");
-    expect(spoofRefusal(() => assertSpoofKeysAllowed({ ...allBad, rmEnv: "stage" })).reason).toBe(
+    expect(spoofRefusal(() => assertSpoofKeysAllowed(allBad, GEN)).reason).toBe("rm_env_prod");
+    expect(spoofRefusal(() => assertSpoofKeysAllowed({ ...allBad, rmEnv: "stage" }, GEN)).reason).toBe(
       "identity_not_rehearsal",
     );
     expect(
       spoofRefusal(() =>
-        assertSpoofKeysAllowed({ ...allBad, rmEnv: "stage", deploymentIdentity: "rehearsal" }),
+        assertSpoofKeysAllowed({ ...allBad, rmEnv: "stage", deploymentIdentity: "rehearsal" }, GEN),
       ).reason,
     ).toBe("no_owner_credential");
     expect(
@@ -222,7 +253,7 @@ describe("assertSpoofKeysAllowed — four guards, each independently fatal", () 
           rmEnv: "stage",
           deploymentIdentity: "rehearsal",
           hasOwnerCredential: true,
-        }),
+        }, GEN),
       ).reason,
     ).toBe("flag_not_explicit");
   });
@@ -232,67 +263,198 @@ describe("assertSpoofKeysAllowed — four guards, each independently fatal", () 
 describe("assertSpoofKeysAllowed — the generation is never written over RM_CREDENTIALS", () => {
   test("an output path equal to the credential path refuses instead of overwriting", () => {
     const path = "/etc/rm/credential.json";
-    const r = spoofRefusal(() =>
-      assertSpoofKeysAllowed(allowed({ outputPath: path, credentialPath: path })),
-    );
+    const r = spoofRefusal(() => assertSpoofKeysAllowed(allowed({ credentialPath: path }), path));
     expect(r.reason).toBe("credential_path_collision");
     expect(r.message).toContain(path);
   });
 
   test("a DIFFERENT credential path is fine — the collision is about equality, not about existing", () => {
-    expect(
-      assertSpoofKeysAllowed(
-        allowed({ outputPath: "/var/lib/rm/rm_twin/spoof-generation.json", credentialPath: "/etc/rm/credential.json" }),
-      ),
-    ).toBeUndefined();
+    expect(assertSpoofKeysAllowed(allowed({ credentialPath: "/etc/rm/credential.json" }), GEN)).toBeUndefined();
   });
 
   test("no credential path configured at all cannot collide", () => {
-    expect(assertSpoofKeysAllowed(allowed({ credentialPath: null }))).toBeUndefined();
+    expect(assertSpoofKeysAllowed(allowed({ credentialPath: null }), GEN)).toBeUndefined();
   });
 
-  test("GATE '--spoof-keys with RM_CREDENTIALS set writes elsewhere': the instance path is not the credential path", () => {
-    const stateDir = "/var/lib/rm/rm_twin";
-    const out = spoofGenerationPath(stateDir, "rm_twin");
-    expect(out.startsWith(stateDir)).toBe(true);
-    expect(out).not.toBe("/etc/rm/credential.json");
-    expect(assertSpoofKeysAllowed(allowed({ outputPath: out, credentialPath: "/etc/rm/credential.json" }))).toBeUndefined();
+  test("a `..` spelling of the generation path refuses — RM_CREDENTIALS is taken verbatim, not normalized", () => {
+    // /var/lib/rm/rm_twin/../rm_twin/spoof-generation is the generation file.
+    const dotted = GEN.replace("/rm_twin/", "/rm_twin/../rm_twin/");
+    expect(dotted).not.toBe(GEN);
+    const r = spoofRefusal(() => assertSpoofKeysAllowed(allowed({ credentialPath: dotted }), GEN));
+    expect(r.reason).toBe("credential_path_collision");
+  });
+
+  test("a RELATIVE spelling of the generation path refuses — it is resolved against the working directory", () => {
+    const root = tempDir();
+    try {
+      const gen = genFile(root);
+      const rel = relative(process.cwd(), gen);
+      expect(rel.startsWith("/")).toBe(false);
+      const r = spoofRefusal(() => assertSpoofKeysAllowed(allowed({ credentialPath: rel }), gen));
+      expect(r.reason).toBe("credential_path_collision");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a SYMLINKED directory spelling refuses even before the generation file exists", () => {
+    const root = tempDir();
+    try {
+      const paths = instancePaths(root, "rm_twin", { create: true });
+      const alias = join(root, "alias");
+      symlinkSync(paths.dir, alias, "dir");
+      const viaAlias = join(alias, "spoof-generation");
+      expect(existsSync(paths.spoofGenerationFile)).toBe(false);
+      const r = spoofRefusal(() =>
+        assertSpoofKeysAllowed(allowed({ credentialPath: viaAlias }), paths.spoofGenerationFile),
+      );
+      expect(r.reason).toBe("credential_path_collision");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a credential file that is a SYMLINK to the generation file refuses", () => {
+    const root = tempDir();
+    try {
+      const paths = instancePaths(root, "rm_twin", { create: true });
+      writeFileSync(paths.spoofGenerationFile, "{}");
+      const cred = join(root, "credential.json");
+      symlinkSync(paths.spoofGenerationFile, cred, "file");
+      const r = spoofRefusal(() =>
+        assertSpoofKeysAllowed(allowed({ credentialPath: cred }), paths.spoofGenerationFile),
+      );
+      expect(r.reason).toBe("credential_path_collision");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a HARD LINK to the generation file refuses — one inode is one file whatever its names", () => {
+    const root = tempDir();
+    try {
+      const paths = instancePaths(root, "rm_twin", { create: true });
+      writeFileSync(paths.spoofGenerationFile, "{}");
+      const cred = join(root, "credential.json");
+      linkSync(paths.spoofGenerationFile, cred);
+      const r = spoofRefusal(() =>
+        assertSpoofKeysAllowed(allowed({ credentialPath: cred }), paths.spoofGenerationFile),
+      );
+      expect(r.reason).toBe("credential_path_collision");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a sibling file in the same directory is NOT a collision — canonicalizing must not over-refuse", () => {
+    const root = tempDir();
+    try {
+      const paths = instancePaths(root, "rm_twin", { create: true });
+      writeFileSync(paths.spoofGenerationFile, "{}");
+      const cred = join(paths.dir, "credential.json");
+      writeFileSync(cred, "{}");
+      expect(assertSpoofKeysAllowed(allowed({ credentialPath: cred }), paths.spoofGenerationFile)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("GATE '--spoof-keys with RM_CREDENTIALS set writes elsewhere': the credential file is untouched", async () => {
+    const root = tempDir();
+    try {
+      const cred = join(root, "credential.json");
+      const original = JSON.stringify({ agents: { athena: { real: true } }, judges: {} });
+      writeFileSync(cred, original);
+      const outcome = await spoofKeys({
+        guards: allowed({ credentialPath: cred }),
+        instance: "rm_twin",
+        stateRoot: root,
+        names: [],
+        members: IN_HOUSE,
+        running: [],
+        db: fakeDb(null).deps,
+        containers: fakeContainers().deps,
+      });
+      expect(outcome.generationPath).toBe(genFile(root));
+      expect(outcome.generationPath).not.toBe(cred);
+      expect(readFileSync(cred, "utf8")).toBe(original);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
-// ── THE INSTANCE-SCOPED PATH ───────────────────────────────────────────────
-describe("spoofGenerationPath — instance-scoped, so two rehearsals cannot read each other's generation", () => {
-  test("it lands inside the instance's state directory", () => {
-    const p = spoofGenerationPath("/var/lib/rm/rm_twin", "rm_twin");
-    expect(p.startsWith("/var/lib/rm/rm_twin/")).toBe(true);
-    expect(p.endsWith(".json")).toBe(true);
+// ── THE INSTANCE-SCOPED PATH, COMPUTED BY THE MODULE ───────────────────────
+describe("spoofKeys — the generation lands in instancePaths(stateRoot, instance), which the module computes", () => {
+  test("given only a state root and an instance, the file appears at instancePaths(...).spoofGenerationFile", async () => {
+    // Fails if `stateRoot` is ignored: nothing else in the options names a
+    // directory, so the file could only land here by reading it.
+    const root = tempDir();
+    try {
+      const outcome = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: root,
+        names: [],
+        members: IN_HOUSE,
+        running: [],
+        db: fakeDb(null).deps,
+        containers: fakeContainers().deps,
+      });
+      const expected = instancePaths(root, "rm_twin").spoofGenerationFile;
+      expect(outcome.generationPath).toBe(expected);
+      expect(existsSync(expected)).toBe(true);
+      expect(JSON.parse(readFileSync(expected, "utf8")).generationId).toBe(outcome.generationId);
+      // Nothing written anywhere else under the root.
+      expect(readdirSync(root)).toEqual(["rm_twin"]);
+      expect(readdirSync(instancePaths(root, "rm_twin").dir)).toEqual(["spoof-generation"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  test("two instances get two different paths", () => {
-    expect(spoofGenerationPath("/var/lib/rm/a", "twin-a")).not.toBe(spoofGenerationPath("/var/lib/rm/b", "twin-b"));
+  test("two instances under one root get two files — neither reads the other's generation", async () => {
+    const root = tempDir();
+    try {
+      const run = (instance: string) =>
+        spoofKeys({
+          guards: allowed(),
+          instance,
+          stateRoot: root,
+          names: [],
+          members: IN_HOUSE,
+          running: [],
+          db: fakeDb(null).deps,
+          containers: fakeContainers().deps,
+        });
+      const a = await run("twin-a");
+      const b = await run("twin-b");
+      expect(a.generationPath).toBe(genFile(root, "twin-a"));
+      expect(b.generationPath).toBe(genFile(root, "twin-b"));
+      expect(a.generationId).not.toBe(b.generationId);
+      expect(readSpoofGeneration(root, "twin-a")?.generationId).toBe(a.generationId);
+      expect(readSpoofGeneration(root, "twin-b")?.generationId).toBe(b.generationId);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  test("it is stable — the same instance resolves to the same path, so a rerun finds its own file", () => {
-    expect(spoofGenerationPath("/var/lib/rm/rm_twin", "rm_twin")).toBe(
-      spoofGenerationPath("/var/lib/rm/rm_twin", "rm_twin"),
-    );
+  test("the file name is smoke-state's `spoof-generation` — one name, not a second spelling", () => {
+    expect(genFile("/var/lib/rm")).toBe("/var/lib/rm/rm_twin/spoof-generation");
   });
 });
 
 // ── STEP (1): WRITE THE GENERATION ─────────────────────────────────────────
-describe("writeSpoofGeneration — fresh keypairs, persisted before anything else happens", () => {
+describe("writeSpoofGeneration — fresh keypairs and bearers, persisted before anything else happens", () => {
+  const TWO = [
+    { name: "athena", memberId: "m-athena" },
+    { name: "robot-money", memberId: "m-robot-money" },
+  ];
+
   test("it persists a generation carrying one entry per member, keyed by name", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
     try {
-      const gen = writeSpoofGeneration(
-        [
-          { name: "athena", memberId: "m-athena" },
-          { name: "robot-money", memberId: "m-robot-money" },
-        ],
-        out,
-        "rm_twin",
-      );
+      const gen = writeSpoofGeneration(TWO, dir, "rm_twin");
       expect(Object.keys(gen.members).sort()).toEqual(["athena", "robot-money"]);
       expect(gen.members.athena?.memberId).toBe("m-athena");
       expect(gen.instance).toBe("rm_twin");
@@ -303,11 +465,11 @@ describe("writeSpoofGeneration — fresh keypairs, persisted before anything els
     }
   });
 
-  test("the file is on disk when the call returns — the rebind must never precede it", () => {
+  test("the file is on disk at the instance path when the call returns — the rebind must never precede it", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
     try {
-      const gen = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], out, "rm_twin");
+      const gen = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], dir, "rm_twin");
+      const out = genFile(dir);
       expect(existsSync(out)).toBe(true);
       expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(JSON.parse(JSON.stringify(gen)));
     } finally {
@@ -317,16 +479,8 @@ describe("writeSpoofGeneration — fresh keypairs, persisted before anything els
 
   test("each member gets its OWN keypair — two members never share a key", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
     try {
-      const gen = writeSpoofGeneration(
-        [
-          { name: "athena", memberId: "m-athena" },
-          { name: "robot-money", memberId: "m-robot-money" },
-        ],
-        out,
-        "rm_twin",
-      );
+      const gen = writeSpoofGeneration(TWO, dir, "rm_twin");
       const a = gen.members.athena?.identity;
       const b = gen.members["robot-money"]?.identity;
       expect(a?.publicKeyB64).toBeTruthy();
@@ -338,23 +492,46 @@ describe("writeSpoofGeneration — fresh keypairs, persisted before anything els
     }
   });
 
-  test("two separate generations are distinct — a fresh call mints fresh keys", () => {
+  test("each member gets its OWN bearer, in the server's token shape, persisted with the keys", () => {
+    // A shared bearer would let any container holding it act as every
+    // spoofed member; a missing one leaves the twin's members unable to call
+    // the API at all, since their real bearers are not on this host.
     const dir = tempDir();
     try {
-      const first = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], join(dir, "a.json"), "rm_twin");
-      const second = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], join(dir, "b.json"), "rm_twin");
-      expect(first.generationId).not.toBe(second.generationId);
-      expect(first.members.athena?.identity.publicKeyB64).not.toBe(second.members.athena?.identity.publicKeyB64);
+      const gen = writeSpoofGeneration(TWO, dir, "rm_twin");
+      const a = gen.members.athena?.bearer;
+      const b = gen.members["robot-money"]?.bearer;
+      expect(a).toMatch(/^tok_m-athena_[0-9a-f-]{36}$/);
+      expect(b).toMatch(/^tok_m-robot-money_[0-9a-f-]{36}$/);
+      expect(a).not.toBe(b);
+      const onDisk = JSON.parse(readFileSync(genFile(dir), "utf8")) as SpoofGeneration;
+      expect(onDisk.members.athena?.bearer).toBe(a as string);
+      expect(onDisk.members["robot-money"]?.bearer).toBe(b as string);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("two separate generations are distinct — a fresh call mints fresh keys and bearers", () => {
+    const a = tempDir();
+    const b = tempDir();
+    try {
+      const first = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], a, "rm_twin");
+      const second = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], b, "rm_twin");
+      expect(first.generationId).not.toBe(second.generationId);
+      expect(first.members.athena?.identity.publicKeyB64).not.toBe(second.members.athena?.identity.publicKeyB64);
+      expect(first.members.athena?.bearer).not.toBe(second.members.athena?.bearer);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   });
 
   test("the write leaves no temp file behind — it is a write-then-rename", () => {
     const dir = tempDir();
     try {
-      writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], join(dir, "spoof-generation.json"), "rm_twin");
-      expect(readdirSync(dir)).toEqual(["spoof-generation.json"]);
+      writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], dir, "rm_twin");
+      expect(readdirSync(instancePaths(dir, "rm_twin").dir)).toEqual(["spoof-generation"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -363,24 +540,31 @@ describe("writeSpoofGeneration — fresh keypairs, persisted before anything els
 
 // ── READING IT BACK: absent is null, corrupt is a refusal ──────────────────
 describe("readSpoofGeneration — a corrupt generation is NOT an absent one", () => {
+  /** Put raw text where the instance's generation file lives. */
+  function plant(root: string, text: string): string {
+    const out = instancePaths(root, "rm_twin", { create: true }).spoofGenerationFile;
+    writeFileSync(out, text);
+    return out;
+  }
+
   test("no file at all is `null` — a first run", () => {
     const dir = tempDir();
     try {
-      expect(readSpoofGeneration(join(dir, "spoof-generation.json"))).toBeNull();
+      expect(readSpoofGeneration(dir, "rm_twin")).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("a persisted generation round-trips with its member ids and keys", () => {
+  test("a persisted generation round-trips with its member ids, keys and bearers", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
     try {
-      const written = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], out, "rm_twin");
-      const read = readSpoofGeneration(out);
+      const written = writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], dir, "rm_twin");
+      const read = readSpoofGeneration(dir, "rm_twin");
       expect(read?.generationId).toBe(written.generationId);
       expect(read?.members.athena?.memberId).toBe("m-athena");
       expect(read?.members.athena?.identity.publicKeyB64).toBe(written.members.athena?.identity.publicKeyB64);
+      expect(read?.members.athena?.bearer).toBe(written.members.athena?.bearer as string);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -388,13 +572,12 @@ describe("readSpoofGeneration — a corrupt generation is NOT an absent one", ()
 
   test("a MALFORMED file refuses rather than reporting `null` and minting a second generation", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
-    writeFileSync(out, "{ half a file");
+    plant(dir, "{ half a file");
     try {
       // Reporting a corrupt generation as absent would mint a SECOND
       // generation while the database may already hold the first, stranding
       // the members the write-first ordering exists to protect.
-      expect(() => readSpoofGeneration(out)).toThrow(/spoof-generation\.json/);
+      expect(() => readSpoofGeneration(dir, "rm_twin")).toThrow(/spoof-generation/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -402,12 +585,133 @@ describe("readSpoofGeneration — a corrupt generation is NOT an absent one", ()
 
   test("a well-formed JSON file that is not a generation also refuses", () => {
     const dir = tempDir();
-    const out = join(dir, "spoof-generation.json");
-    writeFileSync(out, JSON.stringify({ hello: "world" }));
+    plant(dir, JSON.stringify({ hello: "world" }));
     try {
-      expect(() => readSpoofGeneration(out)).toThrow(/generationId/);
+      expect(() => readSpoofGeneration(dir, "rm_twin")).toThrow(/generationId/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a member entry with no bearer refuses — a plain boot would start it unable to authenticate", () => {
+    const dir = tempDir();
+    plant(
+      dir,
+      JSON.stringify({
+        generationId: "gen-x",
+        createdAt: "2026-09-24T00:00:00.000Z",
+        instance: "rm_twin",
+        members: {
+          athena: { name: "athena", memberId: "m-athena", identity: { publicKeyB64: "pub", privateJwk: { kty: "OKP" } } },
+        },
+      }),
+    );
+    try {
+      expect(() => readSpoofGeneration(dir, "rm_twin")).toThrow(/athena lacks/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file naming ANOTHER instance refuses — it was copied or misplaced, and holds someone else's keys", () => {
+    const dir = tempDir();
+    try {
+      writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], dir, "twin-a");
+      const foreign = readFileSync(genFile(dir, "twin-a"), "utf8");
+      plant(dir, foreign);
+      expect(() => readSpoofGeneration(dir, "rm_twin")).toThrow(/twin-a, not rm_twin/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── ROSTER PRECEDENCE: the generation wins for its members, only while it exists
+describe("effectiveRoster — while a generation exists, its members boot on its key and bearer", () => {
+  const fileEntry = (name: string, kind: "agent" | "judge" = "agent"): RosterEntry => ({
+    name,
+    kind,
+    identity: { publicKeyB64: `file-pub-${name}`, privateJwk: { kty: "OKP", d: `file-${name}` } },
+  });
+  const FILE = [fileEntry("athena"), fileEntry("noop-analyst"), fileEntry("themis", "judge")];
+  const generation: SpoofGeneration = {
+    generationId: "gen-p",
+    createdAt: "2026-09-24T00:00:00.000Z",
+    instance: "rm_twin",
+    members: {
+      athena: {
+        name: "athena",
+        memberId: "m-athena",
+        identity: { publicKeyB64: "spoof-pub-athena", privateJwk: { kty: "OKP", d: "spoof-athena" } },
+        bearer: "tok_m-athena_spoofed",
+      },
+    },
+  };
+
+  test("with a generation, a spoofed member takes the GENERATION's key and bearer, not RM_CREDENTIALS'", () => {
+    const roster = effectiveRoster(FILE, generation);
+    const athena = roster.find((e) => e.name === "athena");
+    expect(athena?.identity.publicKeyB64).toBe("spoof-pub-athena");
+    expect(athena?.identity.privateJwk).toEqual({ kty: "OKP", d: "spoof-athena" });
+    expect(athena?.bearer).toBe("tok_m-athena_spoofed");
+  });
+
+  test("with a generation, a member it does NOT name keeps the file's entry untouched", () => {
+    const roster = effectiveRoster(FILE, generation);
+    expect(roster.find((e) => e.name === "noop-analyst")).toEqual(fileEntry("noop-analyst"));
+    expect(roster.find((e) => e.name === "themis")).toEqual(fileEntry("themis", "judge"));
+  });
+
+  test("with NO generation, the file is returned unchanged — RM_CREDENTIALS is the roster", () => {
+    expect(effectiveRoster(FILE, null)).toEqual(FILE);
+  });
+
+  test("the generation never ADDS a member — the credential file stays the roster, order preserved", () => {
+    const withExtra: SpoofGeneration = {
+      ...generation,
+      members: {
+        ...generation.members,
+        "robot-money": {
+          name: "robot-money",
+          memberId: "m-robot-money",
+          identity: { publicKeyB64: "spoof-pub-r", privateJwk: { kty: "OKP" } },
+          bearer: "tok_m-robot-money_spoofed",
+        },
+      },
+    };
+    expect(effectiveRoster(FILE, withExtra).map((e) => e.name)).toEqual(["athena", "noop-analyst", "themis"]);
+  });
+
+  test("names match the way reconcileRoster matches them — trimmed and case-folded", () => {
+    const roster = effectiveRoster([fileEntry(" Athena ")], generation);
+    expect(roster[0]?.identity.publicKeyB64).toBe("spoof-pub-athena");
+  });
+
+  test("end to end: a spoof run's generation, read back by instance, overrides the file on the next plain boot", async () => {
+    const root = tempDir();
+    try {
+      const outcome = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: root,
+        names: ["athena"],
+        members: IN_HOUSE,
+        running: [],
+        db: fakeDb(null).deps,
+        containers: fakeContainers().deps,
+      });
+      const persisted = readSpoofGeneration(root, "rm_twin");
+      expect(persisted?.generationId).toBe(outcome.generationId);
+      const roster = effectiveRoster(FILE, persisted);
+      const athena = roster.find((e) => e.name === "athena");
+      expect(athena?.identity.publicKeyB64).toBe(persisted?.members.athena?.identity.publicKeyB64 as string);
+      expect(athena?.bearer).toBe(persisted?.members.athena?.bearer as string);
+      expect(athena?.identity.publicKeyB64).not.toBe("file-pub-athena");
+      // A different instance under the same root was never spoofed: its plain
+      // boot keeps RM_CREDENTIALS.
+      expect(effectiveRoster(FILE, readSpoofGeneration(root, "other-twin"))).toEqual(FILE);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -419,11 +723,17 @@ describe("rebindSpoofedKeys — one fenced transaction, keyed by member id, idem
     createdAt: "2026-09-23T00:00:00.000Z",
     instance: "rm_twin",
     members: {
-      athena: { name: "athena", memberId: "m-athena", identity: { publicKeyB64: "pub-a", privateJwk: { kty: "OKP" } } },
+      athena: {
+        name: "athena",
+        memberId: "m-athena",
+        identity: { publicKeyB64: "pub-a", privateJwk: { kty: "OKP" } },
+        bearer: "tok_m-athena_a",
+      },
       "robot-money": {
         name: "robot-money",
         memberId: "m-robot-money",
         identity: { publicKeyB64: "pub-r", privateJwk: { kty: "OKP" } },
+        bearer: "tok_m-robot-money_r",
       },
     },
   };
@@ -441,6 +751,18 @@ describe("rebindSpoofedKeys — one fenced transaction, keyed by member id, idem
     expect(db.rebinds.every((r) => r.generationId === "gen-abc")).toBe(true);
   });
 
+  test("every named member's bearer is ISSUED, by member id, with the generation id", async () => {
+    // A rebound key with the old bearer still active would leave the twin's
+    // members unable to authenticate from this host.
+    const db = fakeDb(null);
+    await rebindSpoofedKeys(generation, db.deps);
+    expect(db.tokens.map((t) => [t.memberId, t.bearer]).sort()).toEqual([
+      ["m-athena", "tok_m-athena_a"],
+      ["m-robot-money", "tok_m-robot-money_r"],
+    ]);
+    expect(db.tokens.every((t) => t.generationId === "gen-abc")).toBe(true);
+  });
+
   test("all rebinds happen inside ONE fence — a partial rebind is not a state this design has", async () => {
     const db = fakeDb(null);
     await rebindSpoofedKeys(generation, db.deps);
@@ -448,7 +770,7 @@ describe("rebindSpoofedKeys — one fenced transaction, keyed by member id, idem
     const open = db.calls.indexOf("fence:open");
     const close = db.calls.indexOf("fence:close");
     for (const [i, call] of db.calls.entries()) {
-      if (call.startsWith("rebind:")) {
+      if (call.startsWith("rebind:") || call.startsWith("token:")) {
         expect(i).toBeGreaterThan(open);
         expect(i).toBeLessThan(close);
       }
@@ -459,6 +781,7 @@ describe("rebindSpoofedKeys — one fenced transaction, keyed by member id, idem
     const db = fakeDb("gen-abc");
     await rebindSpoofedKeys(generation, db.deps);
     expect(db.rebinds).toEqual([]);
+    expect(db.tokens).toEqual([]);
     expect(db.calls.filter((c) => c.startsWith("rebind:"))).toEqual([]);
   });
 
@@ -476,7 +799,12 @@ describe("replaceSpoofedParticipants — stop-then-start, never a rolling restar
     createdAt: "2026-09-23T00:00:00.000Z",
     instance: "rm_twin",
     members: {
-      athena: { name: "athena", memberId: "m-athena", identity: { publicKeyB64: "pub-a", privateJwk: { kty: "OKP" } } },
+      athena: {
+        name: "athena",
+        memberId: "m-athena",
+        identity: { publicKeyB64: "pub-a", privateJwk: { kty: "OKP" } },
+        bearer: "tok_m-athena_a",
+      },
     },
   };
 
@@ -496,6 +824,7 @@ describe("replaceSpoofedParticipants — stop-then-start, never a rolling restar
           name: "robot-money",
           memberId: "m-robot-money",
           identity: { publicKeyB64: "pub-r", privateJwk: { kty: "OKP" } },
+          bearer: "tok_m-robot-money_r",
         },
       },
     };
@@ -528,14 +857,14 @@ describe("replaceSpoofedParticipants — stop-then-start, never a rolling restar
 describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
   test("a full first run writes the generation, rebinds by id, and replaces the containers", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     const db = fakeDb(null);
     const containers = fakeContainers();
     try {
       const outcome = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: IN_HOUSE,
         running: [running("athena", "gen-old"), running("robot-money", "gen-old")],
@@ -547,7 +876,8 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
       expect([...outcome.rebound].sort()).toEqual(["athena", "robot-money"]);
       expect([...outcome.restarted].sort()).toEqual(["athena", "robot-money"]);
       expect(db.installedGeneration()).toBe(outcome.generationId);
-      expect(readSpoofGeneration(out)?.generationId).toBe(outcome.generationId);
+      expect(db.tokens.map((t) => t.memberId).sort()).toEqual(["m-athena", "m-robot-money"]);
+      expect(readSpoofGeneration(dir, "rm_twin")?.generationId).toBe(outcome.generationId);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -557,7 +887,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     // Written after a crashed rebind, the database would hold keys no file
     // records and the members would be permanently unusable.
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     const db = fakeDb(null);
     let fileWhenFenceOpened = false;
     db.onFenceOpen(() => {
@@ -565,9 +895,9 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     });
     try {
       await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: IN_HOUSE,
         running: [],
@@ -582,28 +912,28 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("GATE 'crash after rebind commit before container replacement recovers': the RERUN reuses the persisted generation", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       // First run: reaches the commit, then the process dies before (3)/(4).
       const first = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: IN_HOUSE,
         running: [],
         db: fakeDb(null).deps,
         containers: fakeContainers().deps,
       });
-      const persistedKey = readSpoofGeneration(out)?.members.athena?.identity.publicKeyB64;
+      const persistedKey = readSpoofGeneration(dir, "rm_twin")?.members.athena?.identity.publicKeyB64;
 
       // The rerun: the database already reports the persisted generation.
       const db2 = fakeDb(first.generationId);
       const containers2 = fakeContainers();
       const second = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: IN_HOUSE,
         running: [running("athena", "gen-old")],
@@ -616,8 +946,8 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
       expect(second.rebound).toEqual([]);
       expect(db2.rebinds).toEqual([]);
       // No second generation was minted: the file still holds the first keys.
-      expect(readSpoofGeneration(out)?.generationId).toBe(first.generationId);
-      expect(readSpoofGeneration(out)?.members.athena?.identity.publicKeyB64).toBe(persistedKey);
+      expect(readSpoofGeneration(dir, "rm_twin")?.generationId).toBe(first.generationId);
+      expect(readSpoofGeneration(dir, "rm_twin")?.members.athena?.identity.publicKeyB64).toBe(persistedKey);
       // And the stale container was still replaced — steps (3) and (4) ran.
       expect(containers2.calls).toContain("stop:athena");
       expect(containers2.calls).toContain(`start:athena@${first.generationId}`);
@@ -628,18 +958,18 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("GATE 'interrupted rebind then rerun': a rerun before the commit rebinds under the SAME generation", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       const first = writeSpoofGeneration(
         IN_HOUSE.map((m) => ({ name: m.name, memberId: m.memberId })),
-        out,
+        dir,
         "rm_twin",
       );
       const db = fakeDb(null); // the interrupted run never committed
       const outcome = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: IN_HOUSE,
         running: [],
@@ -649,6 +979,10 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
       expect(outcome.generationId).toBe(first.generationId);
       expect(db.rebinds.map((r) => r.memberId).sort()).toEqual(["m-athena", "m-robot-money"]);
       expect(db.rebinds.every((r) => r.generationId === first.generationId)).toBe(true);
+      // The rerun issues the PERSISTED bearers, not freshly minted ones.
+      expect(db.tokens.map((t) => t.bearer).sort()).toEqual(
+        Object.values(first.members).map((m) => m.bearer).sort(),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -656,12 +990,12 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("with no names given, the default membership is every `operator = robotmoney` member", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       const outcome = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: [],
         members: [...IN_HOUSE, THIRD_PARTY],
         running: [],
@@ -670,7 +1004,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
       });
       expect([...outcome.rebound].sort()).toEqual(["athena", "robot-money"]);
       expect(outcome.rebound).not.toContain("outsider");
-      expect(Object.keys(readSpoofGeneration(out)?.members ?? {})).not.toContain("outsider");
+      expect(Object.keys(readSpoofGeneration(dir, "rm_twin")?.members ?? {})).not.toContain("outsider");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -678,13 +1012,13 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("an EXPLICIT name list still never reaches a third party's member — their key is theirs", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       await expect(
         spoofKeys({
-          guards: allowed({ outputPath: out }),
+          guards: allowed(),
           instance: "rm_twin",
-          stateDir: dir,
+          stateRoot: dir,
           names: ["outsider"],
           members: [...IN_HOUSE, THIRD_PARTY],
           running: [],
@@ -699,12 +1033,12 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("an explicit name list spoofs exactly those in-house members", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       const outcome = await spoofKeys({
-        guards: allowed({ outputPath: out }),
+        guards: allowed(),
         instance: "rm_twin",
-        stateDir: dir,
+        stateRoot: dir,
         names: ["athena"],
         members: IN_HOUSE,
         running: [],
@@ -712,7 +1046,7 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
         containers: fakeContainers().deps,
       });
       expect(outcome.rebound).toEqual(["athena"]);
-      expect(Object.keys(readSpoofGeneration(out)?.members ?? {})).toEqual(["athena"]);
+      expect(Object.keys(readSpoofGeneration(dir, "rm_twin")?.members ?? {})).toEqual(["athena"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -720,15 +1054,15 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("a refused run generates NOTHING — no file, no rebind, no container touched", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     const db = fakeDb(null);
     const containers = fakeContainers();
     try {
       const r = await asyncSpoofRefusal(() =>
         spoofKeys({
-          guards: allowed({ outputPath: out, rmEnv: "prod" }),
+          guards: allowed({ rmEnv: "prod" }),
           instance: "rm_twin",
-          stateDir: dir,
+          stateRoot: dir,
           names: [],
           members: IN_HOUSE,
           running: [running("athena", "gen-old")],
@@ -747,13 +1081,13 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
 
   test("a credential-path collision refuses without writing anywhere", async () => {
     const dir = tempDir();
-    const out = spoofGenerationPath(dir, "rm_twin");
+    const out = genFile(dir);
     try {
       const r = await asyncSpoofRefusal(() =>
         spoofKeys({
-          guards: allowed({ outputPath: out, credentialPath: out }),
+          guards: allowed({ credentialPath: out }),
           instance: "rm_twin",
-          stateDir: dir,
+          stateRoot: dir,
           names: [],
           members: IN_HOUSE,
           running: [],
@@ -761,6 +1095,32 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
           containers: fakeContainers().deps,
         }),
       );
+      expect(r.reason).toBe("credential_path_collision");
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a `..`-spelled credential path that names the generation file refuses without writing anywhere", async () => {
+    const dir = tempDir();
+    const out = genFile(dir);
+    // A raw string, as RM_CREDENTIALS would carry it: not normalized.
+    const dotted = `${dir}/rm_twin/../rm_twin/spoof-generation`;
+    try {
+      const r = await asyncSpoofRefusal(() =>
+        spoofKeys({
+          guards: allowed({ credentialPath: dotted }),
+          instance: "rm_twin",
+          stateRoot: dir,
+          names: [],
+          members: IN_HOUSE,
+          running: [],
+          db: fakeDb(null).deps,
+          containers: fakeContainers().deps,
+        }),
+      );
+      expect(dotted).not.toBe(out);
       expect(r.reason).toBe("credential_path_collision");
       expect(existsSync(out)).toBe(false);
     } finally {

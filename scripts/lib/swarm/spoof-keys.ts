@@ -25,7 +25,10 @@
 // The order (spec §6.4) is:
 //
 //   (1) write the generation to an INSTANCE-SCOPED file in the state
-//       directory — never the `RM_CREDENTIALS` path; equal paths refuse;
+//       directory — `instancePaths(stateRoot, instance).spoofGenerationFile`
+//       (smoke-state.ts), computed HERE and never supplied by the caller — and
+//       never the `RM_CREDENTIALS` path; paths naming the same file refuse,
+//       however they are spelled;
 //   (2) rebind every named member's key in ONE fenced transaction, keyed by
 //       MEMBER ID (not by name: names are display handles and two members can
 //       share one after an onboarding, while the id is what the signature
@@ -55,6 +58,19 @@
 // member's current key, it does not delete the key history that past
 // judgements and takes were verified against, so old receipts stay verifiable.
 //
+// Each spoofed member also gets a fresh BEARER (spec §6.4 "keypairs and bearer
+// tokens"): a keypair alone cannot drive a twin, because the member's real
+// bearer is as absent from the twin's host as its private key. The bearer is
+// minted with the keypair in step (1), persisted in the same file, and issued
+// server-side inside the same fenced transaction as the key in step (2).
+//
+// ── ROSTER PRECEDENCE (spec §6.4, D52) ──────────────────────────────────────
+// While a generation exists for an instance, a later PLAIN boot must keep the
+// spoofed members on the keys the database now accepts. `effectiveRoster`
+// replaces those members' key and bearer from the generation file; without
+// it, the next boot would read `RM_CREDENTIALS`, start them on keys the
+// database no longer holds, and every one of their takes would be refused.
+//
 // ── GOVERNING SPEC SECTIONS ─────────────────────────────────────────────────
 // §6.4 (this module in full), §2 (the fence — the rebind transaction takes
 // `pg_advisory_xact_lock` on the same key as every other mutation), §4.3
@@ -66,8 +82,10 @@
 // an overwrite, because overwriting it on a mistargeted run would destroy the
 // only copy of a host's real participant keys. It never runs on production:
 // four independent guards below each refuse on their own.
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { instancePaths } from "../smoke-state.ts";
 import type { PersonaIdentity } from "./persona-keys.ts";
 import type { RunningParticipant } from "./credential-file.ts";
 
@@ -82,6 +100,13 @@ export interface SpoofedMember {
   name: string;
   memberId: string;
   identity: PersonaIdentity;
+  /**
+   * The member's fresh bearer token, in the server's own `tok_<memberId>_<uuid>`
+   * shape (swarm/admin.ts rotate-key). Minted per member: a shared bearer would
+   * let any container holding it act as every spoofed member. Issued
+   * server-side by `SpoofRebindDeps.issueMemberToken` inside the fence.
+   */
+  bearer: string;
 }
 
 /**
@@ -121,8 +146,14 @@ export interface SpoofGeneration {
  * - `flag_not_explicit`       — `--spoof-keys` was not passed explicitly. It is
  *                               never implied by a mode, never defaulted on,
  *                               never inherited from a previous run's state.
- * - `credential_path_collision` — the resolved output path equals the resolved
- *                               `RM_CREDENTIALS`/`--credentials` path.
+ * - `credential_path_collision` — the generation path and the
+ *                               `RM_CREDENTIALS`/`--credentials` path name the
+ *                               same file. Compared as files, not strings: both
+ *                               are `path.resolve`d, then realpath'd (the file,
+ *                               or its nearest existing ancestor), and when both
+ *                               exist their device and inode are compared, so a
+ *                               `..`, relative, symlinked or hard-linked
+ *                               spelling still refuses.
  */
 export type SpoofRefusalReason =
   | "rm_env_prod"
@@ -156,8 +187,6 @@ export interface SpoofGuardContext {
   hasOwnerCredential: boolean;
   /** True only when `--spoof-keys` appeared in argv. */
   flagExplicit: boolean;
-  /** Where the generation will be written (instance state directory). */
-  outputPath: string;
   /** The resolved credential-file path, or `null` when none is configured. */
   credentialPath: string | null;
 }
@@ -166,7 +195,8 @@ export interface SpoofGuardContext {
  * Run all four guards plus the path-collision check, in that order, before
  * anything is generated or written.
  *
- * Input: the gathered context. Output: nothing on success.
+ * Inputs: the gathered context and the generation path `spoofKeys` computed
+ * from the instance state directory. Output: nothing on success.
  *
  * Refusals: any `SpoofRefusalReason`, thrown as `SpoofKeysRefusal`. They are
  * checked independently and the FIRST failure refuses — there is no "any one
@@ -174,10 +204,10 @@ export interface SpoofGuardContext {
  * excuses another.
  *
  * Gate (spec §10 W3): "`--spoof-keys` with `RM_CREDENTIALS` set writes
- * elsewhere" is this function's `credential_path_collision` plus
- * `spoofGenerationPath` below.
+ * elsewhere" is this function's `credential_path_collision` plus the
+ * instance-scoped path `spoofKeys` computes from `instancePaths`.
  */
-export function assertSpoofKeysAllowed(context: SpoofGuardContext): void {
+export function assertSpoofKeysAllowed(context: SpoofGuardContext, generationPath: string): void {
   if (context.rmEnv === "prod") {
     throw new SpoofKeysRefusal(
       "rm_env_prod",
@@ -204,36 +234,68 @@ export function assertSpoofKeysAllowed(context: SpoofGuardContext): void {
       "--spoof-keys refuses: the flag was not passed explicitly, and it is never implied, defaulted or inherited",
     );
   }
-  if (context.credentialPath !== null && context.credentialPath === context.outputPath) {
+  if (context.credentialPath !== null && sameFile(context.credentialPath, generationPath)) {
     throw new SpoofKeysRefusal(
       "credential_path_collision",
-      `--spoof-keys refuses: the generation would be written over the credential file ${context.outputPath}`,
+      `--spoof-keys refuses: the generation ${generationPath} would be written over the credential file ${context.credentialPath}`,
     );
   }
 }
 
 /**
- * The instance-scoped path the generation is written to.
- *
- * Inputs: the instance's state directory (spec §1.1 — state directories are
- * scoped per instance, so two concurrent rehearsals cannot read each other's
- * generation) and the instance name. Output: an absolute path inside that
- * directory.
- *
- * Refusals: none here; collision with the credential path is
- * `assertSpoofKeysAllowed`'s job, so that the refusal happens before any write
- * rather than as a side effect of computing a name.
+ * True when two spellings name the same file. A string comparison is not
+ * enough: `RM_CREDENTIALS` is taken verbatim (credential-file.ts
+ * `resolveCredentialPath`), so a `..` segment, a path relative to the working
+ * directory, or a symlink into the state directory would all slip past `===`
+ * and let step (1) overwrite the host's only copy of its real keys.
  */
-export function spoofGenerationPath(stateDir: string, instance: string): string {
-  const safe = instance.trim().replace(/[^A-Za-z0-9._-]/g, "_") || "instance";
-  return `${stateDir.replace(/\/+$/, "")}/spoof-generation-${safe}.json`;
+function sameFile(a: string, b: string): boolean {
+  const ca = canonicalPath(a);
+  const cb = canonicalPath(b);
+  if (ca === cb) return true;
+  // A hard link, or the same directory reached through a bind mount, has two
+  // canonical paths and one inode.
+  try {
+    const sa = statSync(ca);
+    const sb = statSync(cb);
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false; // at least one does not exist, so they are not one file
+  }
+}
+
+/**
+ * `path.resolve`, then `realpath` of the file itself when it exists, else of
+ * its nearest existing ancestor with the missing tail re-appended. The
+ * generation file usually does not exist yet on a first run, and its parent
+ * may be the symlinked hop.
+ */
+function canonicalPath(p: string): string {
+  const absolute = resolve(p);
+  const missing: string[] = [];
+  let probe = absolute;
+  for (;;) {
+    try {
+      return join(realpathSync(probe), ...missing);
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) return absolute;
+      missing.unshift(basename(probe));
+      probe = parent;
+    }
+  }
 }
 
 /**
  * Step (1): generate fresh keypairs for the named members and persist them.
  *
  * Inputs: the members to spoof (name plus the member id resolved under the
- * target lock) and the output path. Output: the persisted `SpoofGeneration`.
+ * target lock), the state root and the instance. The file is written to
+ * `instancePaths(stateRoot, instance).spoofGenerationFile`, creating the
+ * owner-only instance directory when it is missing; no caller chooses the
+ * path. Output: the persisted `SpoofGeneration`.
+ *
+ * Each member gets its own keypair AND its own bearer token (spec §6.4).
  *
  * The default membership when no names are given is every member with
  * `operator = robotmoney` — the in-house members. A third party's member is
@@ -252,14 +314,20 @@ export function spoofGenerationPath(stateDir: string, instance: string): string 
  */
 export function writeSpoofGeneration(
   members: readonly { name: string; memberId: string }[],
-  outputPath: string,
+  stateRoot: string,
   instance: string,
 ): SpoofGeneration {
+  const outputPath = instancePaths(stateRoot, instance, { create: true }).spoofGenerationFile;
   const spoofed: Record<string, SpoofedMember> = {};
   for (const member of members) {
-    // Each member gets its OWN keypair: sharing one would let any container
-    // holding it sign as any other spoofed member.
-    spoofed[member.name] = { name: member.name, memberId: member.memberId, identity: freshIdentity() };
+    // Each member gets its OWN keypair and bearer: sharing either would let
+    // any container holding it act as any other spoofed member.
+    spoofed[member.name] = {
+      name: member.name,
+      memberId: member.memberId,
+      identity: freshIdentity(),
+      bearer: `tok_${member.memberId}_${randomUUID()}`,
+    };
   }
   const createdAt = new Date().toISOString();
   const generationId = `gen-${createHash("sha256")
@@ -294,17 +362,22 @@ function freshIdentity(): PersonaIdentity {
 /**
  * Read a previously persisted generation for this instance.
  *
- * Input: the generation path. Output: the generation, or `null` when no file
- * exists (a first run).
+ * Inputs: the state root and the instance; the file is
+ * `instancePaths(stateRoot, instance).spoofGenerationFile`. Output: the
+ * generation, or `null` when no file exists (a first run, or an instance that
+ * was never spoofed — a plain boot then reads `RM_CREDENTIALS` unchanged).
  *
  * Refusals: a file that exists but is malformed REFUSES rather than returning
  * `null`. Treating a corrupt generation file as absent would generate a second
  * generation while the database may already hold the first, stranding the
- * members exactly the way the write-first ordering exists to prevent.
+ * members exactly the way the write-first ordering exists to prevent. The same
+ * holds for a member entry missing its id, key or bearer, and for a file whose
+ * `instance` names a different instance than the directory it sits in.
  *
  * Gate (spec §10 W3): "interrupted rebind then rerun".
  */
-export function readSpoofGeneration(generationPath: string): SpoofGeneration | null {
+export function readSpoofGeneration(stateRoot: string, instance: string): SpoofGeneration | null {
+  const generationPath = instancePaths(stateRoot, instance).spoofGenerationFile;
   if (!existsSync(generationPath)) return null;
   let parsed: unknown;
   try {
@@ -323,12 +396,68 @@ export function readSpoofGeneration(generationPath: string): SpoofGeneration | n
   if (!gen.members || typeof gen.members !== "object") {
     throw new Error(`${generationPath} carries no members; it is not a spoof generation`);
   }
+  if (gen.instance !== instance) {
+    // An instance-scoped file that names another instance was copied or
+    // misplaced; applying it would rebind this target to someone else's keys.
+    throw new Error(`${generationPath} belongs to instance ${String(gen.instance)}, not ${instance}`);
+  }
+  for (const [name, member] of Object.entries(gen.members as Record<string, Partial<SpoofedMember> | null>)) {
+    const complete =
+      member !== null &&
+      typeof member === "object" &&
+      typeof member.memberId === "string" &&
+      member.memberId !== "" &&
+      typeof member.bearer === "string" &&
+      member.bearer !== "" &&
+      typeof member.identity?.publicKeyB64 === "string" &&
+      member.identity.publicKeyB64 !== "" &&
+      typeof member.identity.privateJwk === "object" &&
+      member.identity.privateJwk !== null;
+    if (!complete) {
+      // A plain boot would otherwise start this member with no key or bearer.
+      throw new Error(`${generationPath} member ${name} lacks its member id, keypair or bearer`);
+    }
+  }
   return {
     generationId: gen.generationId,
     createdAt: typeof gen.createdAt === "string" ? gen.createdAt : "",
-    instance: typeof gen.instance === "string" ? gen.instance : "",
+    instance,
     members: gen.members as Record<string, SpoofedMember>,
   };
+}
+
+/**
+ * Roster precedence (spec §6.4, D52): the entries a boot reconciles against.
+ *
+ * Inputs: the credential file's roster entries and the instance's generation
+ * (`readSpoofGeneration`), or `null` when none exists. Output: the same
+ * entries, in the same order, except that every entry named in the generation
+ * carries the generation's keypair and bearer instead of the file's.
+ *
+ * With no generation the file is returned unchanged. The generation never ADDS
+ * a member: the credential file stays the roster (spec §6.1), and the
+ * generation only decides which key and bearer a listed member boots with.
+ * Names match the way `reconcileRoster` matches them (trimmed, case-folded).
+ *
+ * Refusals: none; `readSpoofGeneration` already refused a malformed file.
+ */
+export function effectiveRoster<E extends { name: string; identity: PersonaIdentity }>(
+  fileEntries: readonly E[],
+  generation: SpoofGeneration | null,
+): (E & { bearer?: string })[] {
+  if (generation === null) return [...fileEntries];
+  const fold = (name: string) => name.trim().toLowerCase();
+  const spoofed = new Map<string, SpoofedMember>();
+  for (const member of Object.values(generation.members)) spoofed.set(fold(member.name), member);
+  return fileEntries.map((entry) => {
+    const member = spoofed.get(fold(entry.name));
+    if (!member) return entry;
+    return {
+      ...entry,
+      identity: { ...entry.identity, publicKeyB64: member.identity.publicKeyB64, privateJwk: member.identity.privateJwk },
+      bearer: member.bearer,
+    };
+  });
 }
 
 /** What the caller supplies so this module performs no database access itself. */
@@ -346,6 +475,13 @@ export interface SpoofRebindDeps {
    * historical verification keys so past receipts stay verifiable.
    */
   rebindMemberKey(memberId: string, publicKeyB64: string, generationId: string): Promise<void>;
+  /**
+   * Issue the generation's bearer to the member BY MEMBER ID (the server stores
+   * only its hash), superseding the member's previous bearer. Called inside the
+   * same fence as `rebindMemberKey`, so a member never holds a new key with an
+   * old bearer or the reverse.
+   */
+  issueMemberToken(memberId: string, bearer: string, generationId: string): Promise<void>;
   /** The generation id the database currently records, or `null`. */
   readInstalledGeneration(): Promise<string | null>;
 }
@@ -377,6 +513,7 @@ export async function rebindSpoofedKeys(
   await deps.withFencedTransaction(async () => {
     for (const member of Object.values(generation.members)) {
       await deps.rebindMemberKey(member.memberId, member.identity.publicKeyB64, generation.generationId);
+      await deps.issueMemberToken(member.memberId, member.bearer, generation.generationId);
     }
   });
 }
@@ -441,9 +578,13 @@ function spoofReplacementPlan(
 /** Everything one `--spoof-keys` invocation needs. */
 export interface SpoofKeysOptions {
   guards: SpoofGuardContext;
-  /** The deployment instance and its state directory (spec §1.1). */
+  /**
+   * The deployment instance and the state root (spec §1.1). The generation
+   * file is `instancePaths(stateRoot, instance).spoofGenerationFile`; the
+   * caller cannot point it anywhere else.
+   */
   instance: string;
-  stateDir: string;
+  stateRoot: string;
   /** Explicit names from `--spoof-keys a,b`; empty means every in-house member. */
   names: readonly string[];
   /** Resolved under the target lock, after revalidation (spec §2). */
@@ -475,17 +616,17 @@ export interface SpoofKeysOutcome {
  * container replacement recovers."
  */
 export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOutcome> {
-  assertSpoofKeysAllowed(options.guards);
-  const generationPath = options.guards.outputPath;
+  const generationPath = instancePaths(options.stateRoot, options.instance).spoofGenerationFile;
+  assertSpoofKeysAllowed(options.guards, generationPath);
   const targets = selectSpoofTargets(options.names, options.members);
 
   // (1) A persisted generation is REUSED, never replaced: minting a second one
   // while the database may already hold the first strands the members.
-  const persisted = readSpoofGeneration(generationPath);
+  const persisted = readSpoofGeneration(options.stateRoot, options.instance);
   const generation = persisted
     ?? writeSpoofGeneration(
       targets.map((m) => ({ name: m.name, memberId: m.memberId })),
-      generationPath,
+      options.stateRoot,
       options.instance,
     );
 
