@@ -69,6 +69,7 @@ import {
 } from "./smoke-state.ts";
 import {
   closeOpenJournal,
+  JournalClosedUnderneathError,
   computePlanId,
   decideResume,
   expectationMismatch,
@@ -935,13 +936,20 @@ const MANIFEST_SQL = "SELECT content_hash FROM schema_manifest";
  * asked right now (its container is not running yet, or a remote server does
  * not answer). Always a `psql` SUBPROCESS, never a client in this process: in
  * this instance's postgres (or the restored dump's) container, and for a
- * remote target in a throwaway container of the stack's own Postgres image,
- * with the password handed through the environment (`-e PGPASSWORD` names the
- * variable, never its value, so it is in no argv and no container config).
+ * remote target in a throwaway container of the stack's own Postgres image.
+ * That container gets the password on its STDIN, which a shell reads into
+ * PGPASSWORD before it execs psql: so the password is in no argv and in no
+ * container config. (`docker run -e PGPASSWORD` would copy the client's value
+ * into the container's Config.Env, where `docker inspect` shows it for as long
+ * as the container exists.)
  */
 function observeSchema(): { ledger: string[]; manifestHash: string | null } | null {
-  const run = (argv: string[], env?: Record<string, string>) =>
-    Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe", ...(env ? { env: { ...dockerClientHostEnv(process.env), ...env } } : {}) });
+  const run = (argv: string[], stdin?: string) =>
+    Bun.spawnSync(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(stdin !== undefined ? { stdin: Buffer.from(`${stdin}\n`), env: dockerClientHostEnv(process.env) } : {}),
+    });
   const read = (query: (sql: string) => ReturnType<typeof run>) => {
     const ledger = query(LEDGER_SQL);
     if (ledger.exitCode !== 0 && !/does not exist/.test(ledger.stderr.toString())) return null;
@@ -966,10 +974,10 @@ function observeSchema(): { ledger: string[]; manifestHash: string | null } | nu
   const url = new URL(dataPath.url);
   return read((sql) =>
     run(
-      ["docker", "run", "--rm", "-e", "PGPASSWORD", POSTGRES_IMAGE, "psql",
+      ["docker", "run", "--rm", "-i", POSTGRES_IMAGE, "sh", "-c", 'IFS= read -r PGPASSWORD && export PGPASSWORD && exec psql "$@"', "psql",
         "-h", url.hostname, "-p", url.port || "5432", "-U", decodeURIComponent(url.username), "-d", decodeURIComponent(url.pathname.slice(1)),
         "-tAq", "-c", sql],
-      { PGPASSWORD: decodeURIComponent(url.password) },
+      decodeURIComponent(url.password),
     ));
 }
 
@@ -1076,6 +1084,12 @@ async function main(): Promise<void> {
   // The instance's generated files: the analytics bearer (§3: a file in the
   // instance's state directory, per holder) and the compose overlays.
   await begin("prepare", "instance");
+  // The stack record FIRST, before any compose call or container: the compose
+  // project is fixed by the instance, and `smoke:status` / `smoke:down` find a
+  // stack only through this record. A boot stopped, killed or failed at any
+  // later point must leave a record naming the project whose containers it
+  // may have started. Readiness rewrites it with the ports Docker assigned.
+  writeStateFile();
   provisionSmokeAnalyticsToken(paths, analyticsToken);
   if (dataPathOverlay && dataPath.kind !== "smoke-twin") writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
   if (reattachOverlay && reattachedVolume) {
@@ -1096,6 +1110,9 @@ async function main(): Promise<void> {
     if (dataPath.kind === "smoke-twin") twinMigrationCredential(dataPath.url, (m) => log(m));
     runSecrets.push(...urlPassword(process.env.MIGRATE_DATABASE_URL));
     if (dataPathOverlay) writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
+    // The restored copy's container belongs in the record too, so smoke:down
+    // can remove it even if the boot stops before readiness.
+    writeStateFile();
     await commit();
   }
 
@@ -1520,6 +1537,16 @@ function failureDetail(): readonly string[] {
 main().catch(async (err) => {
   const em = err instanceof Error ? err.message : String(err);
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] ${err instanceof StoppedAtBoundary ? "stopped" : "startup failed"}: ${em}\n`); } catch {} }
+
+  // The journal was closed (or replaced) underneath this run — `smoke:down`
+  // stopped the instance. The operator's stop wins: this run neither journals
+  // nor touches a container again, and it does not rewrite the stack record.
+  if (err instanceof JournalClosedUnderneathError) {
+    console.error(`[smoke] ${em}`);
+    console.error(`[smoke] stopped: instance ${instance.name} was stopped underneath this run; nothing further was started or torn down.`);
+    console.error(`[smoke]   inspect:  bun smoke:status --instance ${instance.name}`);
+    process.exit(1);
+  }
 
   // §1.4: a stop at a phase boundary is journaled (by begin()), undoes nothing
   // and tears nothing down, and exits NON-ZERO: an interrupted deployment is not

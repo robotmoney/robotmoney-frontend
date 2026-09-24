@@ -22,7 +22,7 @@ import {
   type Receipt,
   type StateExpectations,
 } from "../../lib/smoke-journal.ts";
-import { instancePaths, type InstancePaths } from "../../lib/smoke-state.ts";
+import { instancePaths, instanceStackProject, type InstancePaths } from "../../lib/smoke-state.ts";
 import { classifyServices, statusReport } from "../../smoke-status.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -257,6 +257,30 @@ describe("the command, as its own process, with Docker unreachable (criterion 15
     expect(neither.code).toBe(1);
     expect(neither.out).toContain("several instances have state here");
   }, 30_000);
+
+  test("with NO stack record, services are UNKNOWN (read from the derived project), never 'not running'", async () => {
+    // A boot killed before its stack record: containers may be running under
+    // the project the instance fixes. The old code set live = {} and reported
+    // every service "not running".
+    const root = freshRoot();
+    await interruptedAfterReplace(instancePaths(root, "rm_local_norec", { create: true }), "rm_local_norec");
+    const r = run(root, ["--instance", "rm_local_norec"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`no stack record: live state read from the instance's derived compose project ${instanceStackProject("rm_local_norec", {})} (the daemon could not be asked: UNKNOWN)`);
+    expect(r.out).not.toContain(": not running");
+    expect(r.out).toContain("the daemon could not be asked; live service state is unknown");
+  }, 30_000);
+
+  test("a stale lock is reported as stale, not as a run in progress", () => {
+    const root = freshRoot();
+    const paths = instancePaths(root, "rm_local_stale", { create: true });
+    const lines = statusReport({
+      instance: "rm_local_stale", stateDir: paths.dir, journal: null, receipt: null, stack: null, live: null,
+      lockHolder: { pid: 4242, planId: "p", alive: false },
+    }).join("\n");
+    expect(lines).toContain("a STALE deployment lock names pid 4242");
+    expect(lines).not.toContain("IN PROGRESS");
+  });
 
   test("red control: the retired checkout state file is not how it finds anything", () => {
     const src = Bun.file(join(repoRoot, "scripts", "smoke-status.ts"));

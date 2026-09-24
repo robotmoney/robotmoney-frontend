@@ -34,6 +34,8 @@ import {
   credentialShape,
   decideResume,
   expectationMismatch,
+  INTERRUPT_SIGNALS,
+  JournalClosedUnderneathError,
   JOURNAL_FORMAT_VERSION,
   DEPLOYMENT_PHASES,
   openJournal,
@@ -1002,6 +1004,18 @@ describe("interruption — §1.4, Ctrl-C stops at the next phase boundary", () =
     }
   });
 
+  test("SIGHUP (a closed terminal, a dropped ssh session) is a stop request too, never an instant kill", () => {
+    expect([...INTERRUPT_SIGNALS]).toEqual(["SIGINT", "SIGTERM", "SIGHUP"]);
+    const watch = watchForInterrupt();
+    try {
+      expect(process.listenerCount("SIGHUP")).toBeGreaterThan(0);
+      process.emit("SIGHUP");
+      expect(watch.requested()).toBe(true);
+    } finally {
+      watch.dispose();
+    }
+  });
+
   test("installing the watch never fails a run", () => {
     expect(() => watchForInterrupt().dispose()).not.toThrow();
   });
@@ -1198,6 +1212,41 @@ describe("closeOpenJournal — the operator stopped the deployment (`smoke:down`
     closeOpenJournal(paths, "first");
     expect(closeOpenJournal(paths, "second")).toBe(false);
     expect(readJournal(paths)!.closeReport).toBe("first");
+  });
+
+  test("a live writer whose journal was closed underneath it (smoke:down) refuses its next write and does NOT reopen it", async () => {
+    const paths = freshPaths();
+    const p = plan();
+    const writer = openJournal(paths, { kind: "fresh-start", reason: "no journal" }, p);
+    await writer.beginPhase("plan", null, expectations());
+    await writer.commitPhase(outcome());
+    // Another process — the operator's `smoke:down` — closes it.
+    expect(closeOpenJournal(paths, "stopped by bun smoke:down")).toBe(true);
+    const closed = readFileSync(paths.journalFile, "utf8");
+    // The run's next boundary: the write is refused, so its phase never acts.
+    expect(() => writer.beginPhase("prepare", "images", expectations())).toThrow(JournalClosedUnderneathError);
+    expect(() => writer.beginPhase("prepare", "images", expectations())).toThrow(/closed underneath this run .*stopped by bun smoke:down/);
+    // The operator's stop stands: the file is byte-for-byte the closed one.
+    expect(readFileSync(paths.journalFile, "utf8")).toBe(closed);
+    expect(readJournal(paths)!.closedAt).not.toBeNull();
+  });
+
+  test("a live writer whose journal was replaced by another plan's refuses too", async () => {
+    const paths = freshPaths();
+    const writer = openJournal(paths, { kind: "fresh-start", reason: "no journal" }, plan());
+    await writer.beginPhase("plan", null, expectations());
+    closeOpenJournal(paths, "x");
+    openJournal(paths, { kind: "fresh-start", reason: "closed" }, plan({ instance: "rm_local_other" }));
+    expect(() => writer.commitPhase(outcome())).toThrow(/no longer this run's/);
+  });
+
+  test("red control: an untouched journal keeps accepting the writer's own begin, commit and close", async () => {
+    const paths = freshPaths();
+    const writer = openJournal(paths, { kind: "fresh-start", reason: "no journal" }, plan());
+    await writer.beginPhase("plan", null, expectations());
+    await writer.commitPhase(outcome());
+    await writer.close("done");
+    expect(readJournal(paths)!.closeReport).toBe("done");
   });
 
   test("red control: without the close, the same stop IS a refusal — the expected services are missing", async () => {

@@ -9,12 +9,14 @@
 // it is running, because that is the operator's next question.
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { readStackState } from "../../lib/smoke-state.ts";
 import {
   BOOT_TIMEOUT_MS,
   harness,
   journalNow,
   phaseList,
   projectContainers,
+  runCommand,
   spawnBoot,
   teardown,
   waitFor,
@@ -55,6 +57,19 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
     expect((JSON.parse(readFileSync(h.paths.lockFile, "utf8")) as { holderPid: number }).holderPid).toBe(holder.proc.pid);
     expect(out).not.toContain("phase: prepare");
 
+    // `smoke:down` while the holder deploys: refused, naming the holder, and
+    // nothing is stopped or closed. (Before, it tore the stack down and closed
+    // the journal, and the holder's next phase reopened both.)
+    const down = runCommand(h, "smoke-down.ts", ["--instance", h.instance]);
+    expect(down.code).not.toBe(0);
+    expect(down.out).toContain(`Refusing: a \`bun smoke\` run (pid ${holder.proc.pid}, plan ${planId})`);
+    expect(down.out).not.toContain("tearing down");
+    expect(journalNow(h)!.closedAt).toBeNull();
+    expect((JSON.parse(readFileSync(h.paths.lockFile, "utf8")) as { holderPid: number }).holderPid).toBe(holder.proc.pid);
+    // The stack record is written in the prepare step, before any compose
+    // call, so status and down can find this boot's project from here on.
+    expect(readStackState(h.paths)?.project).toBe(h.project);
+
     // The holder is still the one deploying. Stop it at its next boundary
     // (spec §1.4) and confirm it, not the refused process, released the lock.
     holder.proc.kill("SIGINT");
@@ -76,9 +91,12 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
       const j = journalNow(h!);
       return j !== null && j.phases.filter((r) => r.phase === "plan").length >= 2;
     }, 120_000, "the rerun to journal its plan", again);
-    again.proc.kill("SIGINT");
+    // SIGHUP this time (a closed terminal): a stop at the next boundary like
+    // SIGINT, journaled, never the default instant kill.
+    again.proc.kill("SIGHUP");
     const code = await again.exited;
     expect(again.output()).not.toContain("is locked by pid");
-    expect(code).not.toBe(0); // it was interrupted, which is not success
+    expect(code).toBe(130); // stopped at a boundary, which is not success
+    expect(journalNow(h!)!.phases.at(-1)?.status).toBe("interrupted");
   }, BOOT_TIMEOUT_MS);
 });

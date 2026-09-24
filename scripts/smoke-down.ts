@@ -10,6 +10,11 @@
 // reattaches it. Deleting smoke data is a SEPARATE, explicit act: `bun run
 // smoke:clean`, which never touches a volume a running smoke still uses.
 //
+// It REFUSES while a live `bun smoke` still holds the instance's deployment
+// lock: that run would undo the stop at its next phase (see below). And it
+// refuses when the instance has no stack record yet containers of its project
+// exist, rather than report "nothing to tear down" over a running stack.
+//
 // It also CLOSES the instance's open journal: the journal described a running
 // stack, and this command is the operator deliberately stopping it. A later
 // run then starts from current state instead of refusing over a stop the
@@ -20,15 +25,22 @@
 //
 // The stack record is KEPT (the data it points to survives, so the pointer must
 // too); the next boot of the instance overwrites it.
-import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
 import { removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
 import { buildSmokeLifecycleComposeEnv, dbModeFromState } from "./lib/smoke-lifecycle-env.ts";
-import { instanceFlag, readStackState, selectExistingInstance, stateRoot } from "./lib/smoke-state.ts";
+import {
+  deploymentLockHolder,
+  instanceFlag,
+  instanceStackProject,
+  readStackState,
+  selectExistingInstance,
+  stateRoot,
+} from "./lib/smoke-state.ts";
 import { closeOpenJournal } from "./lib/smoke-journal.ts";
 import { instanceComposeEnv } from "./stack/config.ts";
+import { dockerClientHostEnv } from "./stack/index.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -42,6 +54,32 @@ try {
 }
 const instance = paths.dir.split("/").at(-1)!;
 
+// A run still DEPLOYING this instance is not stopped from here. Its writer
+// holds the journal in memory, so tearing its stack down and closing the
+// journal underneath it would be undone by its next phase (which starts the
+// stack again); and a stop in the middle of a phase is exactly what §1.4
+// forbids. Refused, naming the holder and how to stop it at its next phase
+// boundary. A STALE lock (holder gone) does not block the stop.
+let holder;
+try {
+  holder = deploymentLockHolder(paths);
+} catch (err) {
+  console.error(`[smoke:down] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+if (holder !== null && holder.alive) {
+  console.error(
+    `[smoke:down] Refusing: a \`bun smoke\` run (pid ${holder.pid}, plan ${holder.planId ?? "unrecorded"}) is still deploying instance ${instance} and holds its deployment lock. ` +
+      "Nothing was stopped.",
+  );
+  console.error(`[smoke:down]   stop it at its next phase boundary: Ctrl-C in its terminal, or  kill -TERM ${holder.pid}`);
+  console.error(`[smoke:down]   then run this again:  bun smoke:down --instance ${instance}`);
+  process.exit(1);
+}
+if (holder !== null) {
+  console.warn(`[smoke:down] the deployment lock names pid ${holder.pid ?? "unknown"}, which is gone (a stale lock); stopping the stack.`);
+}
+
 let s;
 try {
   s = readStackState(paths);
@@ -50,17 +88,35 @@ try {
   process.exit(1);
 }
 if (s === null) {
-  console.log(`[smoke:down] instance ${instance} has no stack record (${paths.stackStateFile}); nothing to tear down.`);
+  // "No record" is not "no stack": a boot killed before it wrote one may still
+  // have started containers. The project is fixed by the instance, so ask the
+  // daemon about THAT project before saying there is nothing to stop.
+  const project = instanceStackProject(instance, process.env);
+  const ps = Bun.spawnSync(["docker", "ps", "-aq", "--filter", `label=com.docker.compose.project=${project}`], {
+    env: dockerClientHostEnv(process.env),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (ps.exitCode !== 0) {
+    console.error(
+      `[smoke:down] Refusing: instance ${instance} has no stack record (${paths.stackStateFile}), and the Docker daemon could not be asked ` +
+        `whether its project ${project} has containers. Nothing was stopped and its journal was left as it is.`,
+    );
+    process.exit(1);
+  }
+  const ids = ps.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean);
+  if (ids.length > 0) {
+    console.error(
+      `[smoke:down] Refusing: instance ${instance} has no stack record (${paths.stackStateFile}), yet ${ids.length} container(s) of its project ${project} exist. ` +
+        "Without the record the compose files and data path it ran with are unknown, so nothing was stopped and its journal was left open.",
+    );
+    console.error(`[smoke:down]   inspect:  docker ps -a --filter label=com.docker.compose.project=${project}`);
+    console.error(`[smoke:down]   remove them yourself (the data volume is kept):  docker rm -f $(docker ps -aq --filter label=com.docker.compose.project=${project})`);
+    process.exit(1);
+  }
+  console.log(`[smoke:down] instance ${instance} has no stack record and no container of its project ${project}; nothing to tear down.`);
   if (closeOpenJournal(paths, "stopped by bun smoke:down")) console.log(`[smoke:down] closed its open journal.`);
   process.exit(0);
-}
-
-// A run still holding the deployment lock is told nothing by this command; say
-// so, because its journal will describe a stack that no longer exists.
-if (existsSync(paths.lockFile)) {
-  let holder = "unknown";
-  try { holder = String((JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: number }).holderPid ?? "unknown"); } catch { /* still a lock */ }
-  console.warn(`[smoke:down] WARNING: a \`bun smoke\` run (pid ${holder}) holds instance ${instance}'s deployment lock; stopping its stack anyway.`);
 }
 
 // Rebuild the same compose env the boot used, so we target the right project:

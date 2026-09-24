@@ -12,17 +12,22 @@
 //          has begun: replacement finishes, the next boundary stops it,
 //          journals it, exits non-zero, and the new services stay up.
 //   run 3  the same command again. It resumes again and reaches readiness.
+//   run 4  an untracked source file is added to a build context: the plan id
+//          changes (criterion 38, D52's source identity), and the rerun
+//          supersedes the journal instead of resuming it.
 //
 // `smoke:status` is read between the runs, from its own process, so the report
 // an operator gets after each interruption is asserted too.
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
-import { DEPLOYMENT_PHASES, readReceipt, type Journal } from "../../lib/smoke-journal.ts";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DEPLOYMENT_PHASES, readArchivedJournals, readReceipt, type Journal } from "../../lib/smoke-journal.ts";
 import {
   BOOT_TIMEOUT_MS,
   harness,
   journalNow,
   projectContainers,
+  repoRoot,
   runCommand,
   spawnBoot,
   teardown,
@@ -95,7 +100,7 @@ describe("SIGINT at a phase boundary, and resume under the same plan id (criteri
     // Nothing torn down: the replaced services are still there.
     const containers = projectContainers(h!.project);
     for (const service of ["api", "website-server"]) {
-      expect({ service, alive: ["running", "restarting"].includes(containers[service] ?? "absent") }).toEqual({ service, alive: true });
+      expect({ service, state: containers[service] ?? "absent" }).toEqual({ service, state: "running" });
     }
     // smoke:status names the phase and lists each service new or old (§1.4).
     const status = runCommand(h!, "smoke-status.ts", ["--instance", h!.instance]);
@@ -119,5 +124,54 @@ describe("SIGINT at a phase boundary, and resume under the same plan id (criteri
     // The rebuild in each rerun kept the plan id: the id hashes image SOURCES,
     // not the digests a rebuild produces (D52).
     expect(current.output()).toContain(`plan id: ${before.planId}`);
+  }, BOOT_TIMEOUT_MS);
+
+  test("run 4 — criterion 38: a changed SOURCE in a build context changes the plan id, so the rerun SUPERSEDES", async () => {
+    // Run 3's volume now holds data, so `--local blank` would refuse; the
+    // reruns reattach it with `--local volume`. First WITHOUT a source change,
+    // to fix the plan id of that mode; then with an untracked, unignored file
+    // inside the repo-root build context (api and the workers build from `.`).
+    // Nothing about the digests is touched between the two: the plan id moves
+    // only because the source identity (the context's Git tree, computed from
+    // the working tree) moved.
+    const planOf = async (label: string): Promise<{ id: string; out: string }> => {
+      const before = journalNow(h!);
+      current = spawnBoot(h!, [], { local: "volume" });
+      let exited = false;
+      void current.exited.then(() => { exited = true; });
+      await waitFor(() => {
+        if (exited) return true;
+        const j = journalNow(h!);
+        return j !== null && (before === null || j.openedAt !== before.openedAt || j.phases.length > before.phases.length);
+      }, 180_000, `${label} to journal its plan`, current);
+      current.proc.kill("SIGINT");
+      await current.exited;
+      const out = current.output();
+      const id = out.match(/plan id: ([0-9a-f]{64})/)?.[1];
+      expect({ label, id: id ?? `none — ${out.slice(-2000)}` }).toEqual({ label, id: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      return { id: id!, out };
+    };
+
+    const unchanged = await planOf("run 4a (volume, sources unchanged)");
+    const baseline = journalNow(h!)!;
+    const probe = join(repoRoot, "scripts", "tests", "integration", `.plan-source-probe-${h!.instance}.txt`);
+    writeFileSync(probe, `criterion 38 probe ${Date.now()}\n`);
+    let changed: { id: string; out: string };
+    try {
+      changed = await planOf("run 4b (volume, one source file added)");
+    } finally {
+      rmSync(probe, { force: true });
+    }
+    expect(changed.id).not.toBe(unchanged.id);
+    expect(changed.out).toContain(`The previous plan ${unchanged.id} is superseded`);
+    // The superseded journal is archived with what it reached, not overwritten.
+    expect(readArchivedJournals(h!.paths).map((j) => String(j.planId))).toContain(unchanged.id);
+    // Only the images built from the changed context moved; website-server's did not.
+    const journal = journalNow(h!)!;
+    expect(journal.plan.images.api!.source).not.toBe(baseline.plan.images.api!.source);
+    expect(journal.plan.images["website-server"]!.source).toBe(baseline.plan.images["website-server"]!.source);
+    // Red control: with the probe gone the sources are back, and so is the id.
+    const restored = await planOf("run 4c (volume, probe removed)");
+    expect(restored.id).toBe(unchanged.id);
   }, BOOT_TIMEOUT_MS);
 });

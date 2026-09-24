@@ -71,7 +71,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { listInstances, readStackState, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
+import { instanceStackProject, listInstances, readStackState, stateRoot, type InstancePaths } from "./lib/smoke-state.ts";
 import { readJournal, readReceipt, type DeploymentPlan } from "./lib/smoke-journal.ts";
 
 /** Flags §1 retires "with no alias"; naming one in a refusal is the point. */
@@ -271,8 +271,7 @@ async function dockerRead(argv: string[]): Promise<string | null> {
  * instance name). `image` is the image DIGEST the container runs, so a service
  * can be compared with the digest the journal or receipt recorded.
  */
-async function seeContainers(project: string | null): Promise<{ containers: SeenContainer[]; note: string | null }> {
-  if (project === null) return { containers: [], note: "this instance has no stack record yet; no containers to show." };
+async function seeContainers(project: string): Promise<{ containers: SeenContainer[]; note: string | null }> {
   try {
     const ids = await dockerRead(["ps", "-aq", "--filter", `label=com.docker.compose.project=${project}`]);
     if (ids === null) return { containers: [], note: "docker is unreachable; container state is unknown." };
@@ -316,11 +315,20 @@ export async function observe(paths: InstancePaths): Promise<ObservedStack> {
     notes.push(`lock held by pid ${typeof holderPid === "number" ? holderPid : "unknown"}`);
   }
 
-  let project: string | null = null;
+  let recorded: string | null = null;
   try {
-    project = readStackState(paths)?.project ?? null;
+    recorded = readStackState(paths)?.project ?? null;
   } catch (error) {
     notes.push(String(error instanceof Error ? error.message : error));
+  }
+  let project: string;
+  if (recorded !== null) {
+    project = recorded;
+  } else {
+    // No record is not "no containers": a boot killed before it wrote one may
+    // have started some, and the project is fixed by the instance name.
+    project = instanceStackProject(instance, process.env);
+    notes.push(`no stack record; derived project ${project}`);
   }
   const { containers, note } = await seeContainers(project);
   if (note !== null) notes.push(note);

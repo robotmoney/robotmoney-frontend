@@ -22,7 +22,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { instancePaths, type InstancePaths } from "./../../lib/smoke-state.ts";
+import { instancePaths, instanceStackProject, type InstancePaths } from "./../../lib/smoke-state.ts";
 import {
   computePlanId,
   openJournal,
@@ -273,12 +273,31 @@ describe("observe — §1.4, receipt when present, journal when not", () => {
   // records in the instance's stack record: the project is derived from, but
   // is not, the instance name. An observer that filtered by the instance name
   // would show an empty stack for every real run.
-  test("with no stack record yet, the frame says there are no containers to show rather than guessing a project", async () => {
-    const paths = instancePaths(freshRoot(), "alpha", { create: true });
+  //
+  // With NO record (a boot killed before its prepare step wrote one), the frame
+  // must not claim there are no containers: the boot's project is fixed by the
+  // instance (smoke-state instanceStackProject), so the observer asks Docker
+  // about that derived project, and says it did.
+  test("with no stack record yet, the observer asks Docker about the instance's DERIVED project, never 'no containers'", () => {
+    const root = freshRoot();
+    const paths = instancePaths(root, "alpha", { create: true });
     openJournal(paths, { kind: "fresh-start", reason: "none" }, plan);
-    const frame = await observe(paths);
-    expect(frame.notes).toContain("this instance has no stack record yet; no containers to show.");
-  });
+    const env = { PATH: process.env.PATH ?? "", HOME: root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: "tcp://127.0.0.1:1" };
+    const derived = instanceStackProject("alpha", env);
+    expect(derived).not.toBe("alpha");
+    expect(derived).toBe(instanceStackProject("alpha", env)); // stable: the boot derives the same one
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(import.meta.dir, "..", "..", "smoke-tui.ts"), "--instance", "alpha", "--once"], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    const out = r.stdout.toString();
+    expect(out).toContain(`no stack record; derived project ${derived}`);
+    // The dead daemon makes the containers UNKNOWN — the old code said "no containers to show".
+    expect(out).toContain("docker is unreachable; container state is unknown.");
+    expect(out).not.toContain("no containers to show");
+  }, 30_000);
 
   test("with a stack record, the observer asks Docker about the recorded project (a dead daemon is a note)", () => {
     const root = freshRoot();

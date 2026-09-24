@@ -21,11 +21,12 @@
 //                 schema identity and preflight results the run wrote;
 //   (25, stack half) `bun smoke` exits 0 at readiness and the stack outlives it.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertPlanRedacted, DEPLOYMENT_PHASES, readReceipt, type DeploymentPlan } from "../../lib/smoke-journal.ts";
 import { instancePaths } from "../../lib/smoke-state.ts";
 import {
+  bootArgs,
   BOOT_TIMEOUT_MS,
   containerEnv,
   harness,
@@ -125,9 +126,21 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
   test("it exits 0 at readiness, and the stack outlives the process (spec §1)", () => {
     expect({ exitCode, tail: exitCode === 0 ? "" : boot.output().slice(-3000) }).toEqual({ exitCode: 0, tail: "" });
     // Docker keeps the stack up after `bun smoke` is gone (restart: unless-stopped).
-    for (const service of ["postgres", "api", "website-server", "system-scheduler"]) {
-      expect({ service, alive: ["running", "restarting"].includes(containersAfterExit[service] ?? "absent") }).toEqual({ service, alive: true });
+    // RUNNING, not merely present: a crash-looping container is `restarting`,
+    // and a service that never runs must not pass as one that survived.
+    for (const service of ["postgres", "api", "website-server"]) {
+      expect({ service, state: containersAfterExit[service] ?? "absent" }).toEqual({ service, state: "running" });
     }
+  });
+
+  test("KNOWN GAP (wave 4): system-scheduler outlives the boot as a container, but is not asserted running", () => {
+    // The scheduler exists and was not torn down with the process. Whether it
+    // RUNS is not claimed here: it crash-loops on "automation token file not
+    // found" until wave 4 provisions its token file (criterion 113's mount is
+    // in place; the token is not). This is recorded, not folded into "alive".
+    const state = containersAfterExit["system-scheduler"] ?? "absent";
+    expect(state).not.toBe("absent");
+    console.log(`[smoke-lifecycle] system-scheduler state after the boot exited: ${state} (wave-4 gap; not asserted running)`);
   });
 
   test("criterion 20: the plan is printed before the first mutation, and the journal's phase order proves it", () => {
@@ -178,6 +191,49 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
       expect({ kind, persisted: persisted.includes(secret) }).toEqual({ kind, persisted: false });
     }
   });
+
+  test("criterion 14, boot-level red control: a planted shapeless secret in a plan-carried value makes the REAL boot refuse before it prepares", () => {
+    // The plan's ANALYTICS_FLOOR_SEED is set equal to a saved role password,
+    // and separately to the saved OWNER password (rm_owner): both shapeless,
+    // so only the by-value list can catch them. If the boot's by-value secret
+    // list did not reach computePlanId, the plan would be printed, hashed and
+    // journaled with the secret in it.
+    //
+    // NOT driven here: the TYPED owner password. It exists only on the remote
+    // path, where `--migrate` prompts for it on a terminal and verifies it
+    // against a reachable server before the plan is built; a shell
+    // MIGRATE_DATABASE_URL is dropped at the top of every boot, so it is not a
+    // run secret at all (smoke-compose-env.ts dropShellMigrationCredential).
+    const cases: Array<{ what: string; secret: string; env: Record<string, string> }> = [
+      { what: "saved role password (rm_app)", secret: ROLE_PASSWORDS.rm_app, env: {} },
+      { what: "saved owner password (rm_owner)", secret: ROLE_PASSWORDS.rm_owner, env: {} },
+    ];
+    for (const c of cases) {
+      const r = harness("redctl");
+      try {
+        const paths = instancePaths(r.root, r.instance, { create: true });
+        writeFileSync(paths.rolePasswordsFile, JSON.stringify(ROLE_PASSWORDS), { mode: 0o600 });
+        chmodSync(paths.rolePasswordsFile, 0o600);
+        const proc = Bun.spawnSync(bootArgs(r, ["--credentials", r.emptyRoster]), {
+          cwd: repoRoot,
+          // A dead daemon: were the refusal ever lost, the boot fails at its
+          // Docker check (visibly past "phase: prepare") instead of leaving a
+          // real stack running behind a red test.
+          env: { ...r.env, ...c.env, ANALYTICS_FLOOR_SEED: c.secret, DOCKER_HOST: "tcp://127.0.0.1:1" },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+        expect({ what: c.what, code: proc.exitCode === 0 ? 0 : "non-zero" }).toEqual({ what: c.what, code: "non-zero" });
+        expect({ what: c.what, refused: out.includes("contains one of this run's secrets") }).toEqual({ what: c.what, refused: true });
+        expect({ what: c.what, prepared: out.includes("phase: prepare") }).toEqual({ what: c.what, prepared: false });
+        expect({ what: c.what, printed: out.includes(c.secret) }).toEqual({ what: c.what, printed: false });
+        expect(existsSync(paths.journalFile)).toBe(false);
+      } finally {
+        rmSync(r.root, { recursive: true, force: true });
+      }
+    }
+  }, 120_000);
 
   test("red control: these secrets have no shape — the heuristic alone would pass a plan that carried one", () => {
     const receipt = readReceipt(h.paths)!;

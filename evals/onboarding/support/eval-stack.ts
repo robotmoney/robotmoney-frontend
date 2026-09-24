@@ -43,7 +43,7 @@ export function imageOnlyStack(project: string): Stack {
   // (RM_INSTANCE_STATE_DIR, no fallback). Nothing here mounts it; a throwaway
   // one satisfies the interpolation.
   const instance = throwawayInstance(project);
-  return createStack(
+  const stack = createStack(
     {
       repoRoot,
       project,
@@ -56,7 +56,13 @@ export function imageOnlyStack(project: string): Stack {
     },
     { hostEnv: dockerClientHostEnv(), io: { stdout: "pipe", stderr: "pipe" } },
   );
+  throwawayDirs.set(stack, instance.dispose);
+  return stack;
 }
+
+// The throwaway state directory each imageOnlyStack() made, removed by
+// tearDown() so a claim leaves nothing behind in the temp dir.
+const throwawayDirs = new WeakMap<Stack, () => void>();
 
 // Build the vanilla member-agent image. THROWS when Docker is unusable — that
 // is the E2 behaviour, and it is why this is a plain call with no guard around
@@ -77,4 +83,8 @@ export function tearDown(stack: Stack | null, label: string): void {
   if (r.exitCode !== 0) {
     console.error(`[${label}] teardown for project ${stack.config.project} failed (exit ${r.exitCode}): ${r.stderr}`);
   }
+  // After `down`, which interpolates the compose file and so still needs the
+  // directory's path; nothing ever mounted it.
+  throwawayDirs.get(stack)?.();
+  throwawayDirs.delete(stack);
 }

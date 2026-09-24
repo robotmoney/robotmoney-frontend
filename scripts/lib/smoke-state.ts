@@ -84,7 +84,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
-import type { StackEnvironment } from "../stack/naming.ts";
+import { resolveStackEnvironment, stackProjectName, type StackEnvironment } from "../stack/naming.ts";
 import { WEB_DIR_NAME } from "./smoke-site.ts";
 
 /** A legal compose project name, which is also the instance's directory name. */
@@ -669,6 +669,42 @@ export function acquireDeploymentLock(paths: InstancePaths, planId: string): Dep
       }
     },
   };
+}
+
+/**
+ * Who holds an instance's deployment lock, read without taking it: for
+ * `smoke:status` (report the run in progress) and `smoke:down` (refuse to stop
+ * a stack a live run is still deploying). `null` when no lock file exists.
+ *
+ * `alive` is whether the recorded pid is a running process right now. A lock
+ * whose holder is gone is stale: the next `bun smoke` takes it over, and it
+ * must not block an operator's stop.
+ */
+export function deploymentLockHolder(paths: InstancePaths): {
+  readonly pid: number | null;
+  readonly planId: string | null;
+  readonly alive: boolean;
+} | null {
+  if (!existsSync(paths.lockFile)) return null;
+  try {
+    const held = JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: unknown; planId?: unknown };
+    const pid = typeof held.holderPid === "number" && held.holderPid > 0 ? held.holderPid : null;
+    return { pid, planId: typeof held.planId === "string" ? held.planId : null, alive: pid !== null && processIsAlive(pid) };
+  } catch {
+    return { pid: null, planId: null, alive: false };
+  }
+}
+
+/**
+ * The compose project a `bun smoke` of `instance` uses in this environment:
+ * the same derivation the boot makes (scripts/lib/smoke-main.ts, a stack
+ * environment seeded by the instance name). For `smoke:status` and
+ * `smoke:down` when the instance has no stack record, so "no record" is never
+ * read as "no stack": the containers of a boot killed before it recorded
+ * anything are still attributable to their instance.
+ */
+export function instanceStackProject(instance: string, env: Record<string, string | undefined>): string {
+  return stackProjectName("stack", resolveStackEnvironment(env, { seed: instance }));
 }
 
 /**

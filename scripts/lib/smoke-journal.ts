@@ -953,6 +953,20 @@ export function decideResume(
 }
 
 /**
+ * Thrown by a {@link JournalWriter} write when the journal on disk is no longer
+ * the open journal this writer holds: closed underneath it (`smoke:down`),
+ * replaced, removed or unreadable. The write did NOT happen, and the caller
+ * must stop without acting: the operator's stop, or the other operation's
+ * record, wins over the run's in-memory copy.
+ */
+export class JournalClosedUnderneathError extends Error {
+  constructor(message: string) {
+    super(`Refusing to write the journal: ${message}.`);
+    this.name = "JournalClosedUnderneathError";
+  }
+}
+
+/**
  * The live journal handle a run writes through. One object so the
  * before-write/after-write pairing of §1.3 is a method call rather than a
  * convention two call sites have to remember.
@@ -1087,8 +1101,36 @@ export function openJournal(
     journal = fresh();
   }
 
+  // Every write after the first re-reads the journal on disk first. The writer
+  // holds the whole journal in memory and rewrites it, so without this check a
+  // journal closed underneath the run (`smoke:down` closing it, spec §1.4:
+  // "`smoke:down` stops everything") would be silently reopened by the run's
+  // next begin or commit, and the run would go on to start the stack the
+  // operator just stopped. The run must stop instead, before its phase acts.
+  let persisted = false;
   function persist(): void {
+    if (persisted) {
+      let onDiskNow: Journal | null;
+      try {
+        onDiskNow = readJournal(paths);
+      } catch (error) {
+        throw new JournalClosedUnderneathError(
+          `the journal on disk can no longer be read (${error instanceof Error ? error.message : String(error)}); this run stops rather than overwrite it`,
+        );
+      }
+      if (onDiskNow === null || onDiskNow.planId !== journal.planId || onDiskNow.openedAt !== journal.openedAt) {
+        throw new JournalClosedUnderneathError(
+          "the journal on disk is no longer this run's (it was removed or replaced by another operation); this run stops rather than overwrite it",
+        );
+      }
+      if (onDiskNow.closedAt !== null) {
+        throw new JournalClosedUnderneathError(
+          `the journal was closed underneath this run at ${onDiskNow.closedAt} (${onDiskNow.closeReport ?? "no reason recorded"}); this run stops rather than reopen it`,
+        );
+      }
+    }
     writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: journal }, null, 2));
+    persisted = true;
   }
 
   function markOpenPhase(update: (record: PhaseRecord) => PhaseRecord): void {
@@ -1191,20 +1233,24 @@ export interface InterruptWatch {
  * preparation journaled not undone. Ctrl-C after: journal reported, rerun
  * resumes."
  */
+/** The signals {@link watchForInterrupt} turns into a stop at the next phase boundary. */
+export const INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
 export function watchForInterrupt(): InterruptWatch {
   let stopRequested = false;
   let disposed = false;
   const handler = (): void => {
     if (!disposed) stopRequested = true;
   };
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
+  // SIGHUP too: a closed terminal or a dropped ssh session must not kill the
+  // run mid-phase (its default action), which would leave a stack started with
+  // no stack record and a journal that never says where it stopped.
+  for (const signal of INTERRUPT_SIGNALS) process.on(signal, handler);
   return {
     requested: () => stopRequested,
     dispose: () => {
       disposed = true;
-      process.removeListener("SIGINT", handler);
-      process.removeListener("SIGTERM", handler);
+      for (const signal of INTERRUPT_SIGNALS) process.removeListener(signal, handler);
     },
   };
 }

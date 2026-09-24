@@ -30,6 +30,7 @@ import {
   generateRolePasswords,
   instanceFlag,
   instancePaths,
+  instanceStackProject,
   listInstances,
   PRODUCTION_INSTANCE,
   readRolePasswords,
@@ -671,6 +672,11 @@ describe("selectExistingInstance — lifecycle commands select, they never mint"
 // be touched except through the state directories, and so this runs wherever
 // the unit suite does (criterion 151). Each command is aimed at ONE instance,
 // and the other instance's files are byte-for-byte what they were.
+//
+// This half proves the STATE-DIRECTORY isolation only. That the named
+// instance's containers and volume are the only ones a down, a resume or a
+// reattach touches is a runtime claim, proved on real boots in
+// scripts/tests/integration/smoke-instance-isolation.test.ts.
 describe("two instances on one host: each command acts only on the named one (criterion 33)", () => {
   const repoRoot = join(import.meta.dir, "..", "..", "..");
   const DEAD_DOCKER = "tcp://127.0.0.1:1";
@@ -728,18 +734,58 @@ describe("two instances on one host: each command acts only on the named one (cr
     expect(snapshot(b)).toEqual(before);
   }, 30_000);
 
-  test("smoke:down stops and closes the named instance only; the other's journal stays open", async () => {
+  test("smoke:down with no stack record and a daemon it cannot ask REFUSES — 'no record' is never 'nothing running'", async () => {
     const root = freshRoot();
     const a = await instanceWithOpenJournal(root, "rm_local_alpha");
     const b = await instanceWithOpenJournal(root, "rm_local_bravo");
-    // No stack record on alpha: down has no containers to stop, and still closes its journal.
+    // No stack record on alpha (a boot killed before it wrote one). Its
+    // project is fixed by its name, but the dead daemon cannot say whether
+    // that project has containers: refused, alpha's journal left OPEN (the old
+    // code said "nothing to tear down" and closed it over a running stack).
     rmSync(a.stackStateFile);
+    const aBefore = snapshot(a);
     const before = snapshot(b);
     const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
-    expect(r.code).toBe(0);
-    expect(readJournal(a)!.closedAt).not.toBeNull();
-    expect(readJournal(b)!.closedAt).toBeNull();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Refusing: instance rm_local_alpha has no stack record");
+    expect(r.out).toContain(`its project ${instanceStackProject("rm_local_alpha", {})}`);
+    expect(r.out).not.toContain("nothing to tear down");
+    expect(snapshot(a)).toEqual(aBefore);
+    expect(readJournal(a)!.closedAt).toBeNull();
     expect(snapshot(b)).toEqual(before);
+  }, 30_000);
+
+  test("smoke:down refuses while a LIVE run holds the named instance's deployment lock, and stops nothing", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const b = await instanceWithOpenJournal(root, "rm_local_bravo");
+    // A live holder: this test process stands in for the `bun smoke` run.
+    const lock = acquireDeploymentLock(a, String(readJournal(a)!.planId));
+    try {
+      const aBefore = snapshot(a);
+      const before = snapshot(b);
+      const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`Refusing: a \`bun smoke\` run (pid ${process.pid}, plan ${readJournal(a)!.planId})`);
+      expect(r.out).toContain(`kill -TERM ${process.pid}`);
+      // Nothing was stopped or closed: the run's journal and lock are as they were.
+      expect(r.out).not.toContain("tearing down");
+      expect(snapshot(a)).toEqual(aBefore);
+      expect(readJournal(a)!.closedAt).toBeNull();
+      expect(snapshot(b)).toEqual(before);
+    } finally {
+      lock.release();
+    }
+  }, 30_000);
+
+  test("red control: a STALE lock (holder gone) does not block smoke:down", async () => {
+    const root = freshRoot();
+    const a = await instanceWithOpenJournal(root, "rm_local_alpha");
+    const gone = Bun.spawnSync(["true"]).pid;
+    writeFileSync(a.lockFile, `${JSON.stringify({ instance: "rm_local_alpha", holderPid: gone, planId: "p", acquiredAt: new Date().toISOString() })}\n`);
+    const r = run(root, "smoke-down.ts", ["--instance", "rm_local_alpha"]);
+    expect(r.out).not.toContain("Refusing: a `bun smoke` run");
+    expect(r.out).toContain(`the deployment lock names pid ${gone}, which is gone (a stale lock)`);
   }, 30_000);
 
   test("`--local volume` reattaches the NAMED instance's saved volume, never the other's", () => {
@@ -776,7 +822,7 @@ describe("two instances on one host: each command acts only on the named one (cr
     expect(none.out).toContain("instance rm_local_charlie has no stack record");
   }, 60_000);
 
-  test("journal resume decides on the named instance's journal only; the other's is untouched", async () => {
+  test("the resume decision reads the named instance's journal only (here it SUPERSEDES); the other's is untouched", async () => {
     const root = freshRoot();
     const a = await instanceWithOpenJournal(root, "rm_local_alpha");
     const b = await instanceWithOpenJournal(root, "rm_local_bravo");

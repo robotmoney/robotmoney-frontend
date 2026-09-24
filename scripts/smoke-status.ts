@@ -24,14 +24,15 @@
 //
 // It acts on ONE instance: `--instance`, or the only one with state here. It
 // writes nothing and takes no lock.
-import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { API_CONTAINER_PORT, parseComposePortOutput, portArgs, WEBSITE_SERVER_CONTAINER_PORT } from "./stack/index.ts";
+import { API_CONTAINER_PORT, dockerClientHostEnv, parseComposePortOutput, portArgs, WEBSITE_SERVER_CONTAINER_PORT } from "./stack/index.ts";
 import { instanceComposeEnv } from "./stack/config.ts";
 import { buildSmokeLifecycleComposeEnv, dbModeFromState } from "./lib/smoke-lifecycle-env.ts";
 import {
+  deploymentLockHolder,
   instanceFlag,
+  instanceStackProject,
   readStackState,
   selectExistingInstance,
   stateRoot,
@@ -49,8 +50,14 @@ export interface StatusInput {
   readonly stack: StackStateRecord | null;
   /** Running application services → image digest, or `null` when the daemon could not be asked. */
   readonly live: Readonly<Record<string, string>> | null;
-  /** The deployment lock's holder, when one is held. */
-  readonly lockHolder: { readonly pid: number | null; readonly planId: string | null } | null;
+  /** The deployment lock's holder, when one is held; `alive` false for a stale lock. */
+  readonly lockHolder: { readonly pid: number | null; readonly planId: string | null; readonly alive?: boolean } | null;
+  /**
+   * With no stack record: the project the instance's boot derives (smoke-state
+   * instanceStackProject), which `live` was read from. "No record" is never
+   * reported as "nothing running".
+   */
+  readonly derivedProject?: string;
 }
 
 /** One service's standing after a run, relative to what ran when replacement began (§1.4). */
@@ -116,8 +123,10 @@ function receiptIsCurrent(journal: Journal | null, receipt: Receipt): boolean {
 export function statusReport(input: StatusInput): string[] {
   const lines = [`[smoke:status] instance ${input.instance}  (state ${input.stateDir})`];
   const { journal, receipt } = input;
-  if (input.lockHolder) {
+  if (input.lockHolder && input.lockHolder.alive !== false) {
     lines.push(`[smoke:status]   a run is IN PROGRESS: pid ${input.lockHolder.pid ?? "unknown"} holds the deployment lock for plan ${input.lockHolder.planId ?? "unknown"}`);
+  } else if (input.lockHolder) {
+    lines.push(`[smoke:status]   a STALE deployment lock names pid ${input.lockHolder.pid ?? "unknown"} (plan ${input.lockHolder.planId ?? "unknown"}), which is gone; the next run takes it over`);
   }
 
   if (receipt !== null && receiptIsCurrent(journal, receipt)) {
@@ -161,6 +170,14 @@ export function statusReport(input: StatusInput): string[] {
   }
 
   const s = input.stack;
+  if (s === null) {
+    lines.push(
+      input.derivedProject === undefined
+        ? "[smoke:status]   no stack record: which containers are this instance's is UNKNOWN"
+        : `[smoke:status]   no stack record: live state read from the instance's derived compose project ${input.derivedProject}` +
+            (input.live === null ? " (the daemon could not be asked: UNKNOWN)" : `; ${Object.keys(input.live).length} application service(s) running`),
+    );
+  }
   if (s !== null) {
     const mode = dbModeFromState(s);
     lines.push(`[smoke:status]   compose project ${s.project}  (env ${s.envClass}/${s.envHash}${s.stage ? "; --static-port: the cloudflared origin" : ""})`);
@@ -173,17 +190,18 @@ export function statusReport(input: StatusInput): string[] {
 }
 
 /** Running application services of `project` → image digest, or `null` when the daemon cannot be asked. */
-function liveServices(project: string): Record<string, string> | null {
+function liveServices(project: string, env: Record<string, string | undefined>): Record<string, string> | null {
+  const dockerEnv = dockerClientHostEnv(env);
   const ps = Bun.spawnSync(
     ["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", "label=com.docker.compose.oneoff=False"],
-    { stdout: "pipe", stderr: "pipe" },
+    { env: dockerEnv, stdout: "pipe", stderr: "pipe" },
   );
   if (ps.exitCode !== 0) return null;
   const ids = ps.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean);
   if (ids.length === 0) return {};
   const inspect = Bun.spawnSync(
     ["docker", "inspect", "--format", '{{index .Config.Labels "com.docker.compose.service"}}\t{{.Image}}', ...ids],
-    { stdout: "pipe", stderr: "pipe" },
+    { env: dockerEnv, stdout: "pipe", stderr: "pipe" },
   );
   if (inspect.exitCode !== 0) return null;
   const out: Record<string, string> = {};
@@ -192,19 +210,6 @@ function liveServices(project: string): Record<string, string> | null {
     if (service && service !== "postgres") out[service] = image;
   }
   return out;
-}
-
-function lockHolder(paths: InstancePaths): StatusInput["lockHolder"] {
-  if (!existsSync(paths.lockFile)) return null;
-  try {
-    const held = JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: unknown; planId?: unknown };
-    return {
-      pid: typeof held.holderPid === "number" ? held.holderPid : null,
-      planId: typeof held.planId === "string" ? held.planId : null,
-    };
-  } catch {
-    return { pid: null, planId: null };
-  }
 }
 
 export function main(argv: readonly string[], env: Record<string, string | undefined>): number {
@@ -216,14 +221,18 @@ export function main(argv: readonly string[], env: Record<string, string | undef
     paths = selectExistingInstance(stateRoot(env), instanceFlag(argv));
     const instance = paths.dir.split("/").at(-1)!;
     const stack = readStackState(paths);
+    // No record is not "none running": a boot killed before it wrote one may
+    // have started containers, and its project is fixed by the instance.
+    const derivedProject = stack === null ? instanceStackProject(instance, env) : undefined;
     input = {
       instance,
       stateDir: paths.dir,
       journal: readJournal(paths),
       receipt: readReceipt(paths),
       stack,
-      live: stack === null ? {} : liveServices(stack.project),
-      lockHolder: lockHolder(paths),
+      live: liveServices(stack?.project ?? derivedProject!, env),
+      lockHolder: deploymentLockHolder(paths),
+      ...(derivedProject !== undefined ? { derivedProject } : {}),
     };
   } catch (err) {
     console.error(`[smoke:status] ${err instanceof Error ? err.message : String(err)}`);
