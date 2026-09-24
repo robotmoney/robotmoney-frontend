@@ -14,7 +14,9 @@
 // That is the point of it existing. §9's "never polls the API on an interval"
 // and §7's one-credential rule are both properties of the SET of calls the
 // process can make, and a set spread across four modules cannot be read. One
-// file, one token, nine methods.
+// file, one token, seven calls: five transitions, the full read and the
+// subscription. There is no job ack, because §6.3 (amended 2026-09-24, D52) has
+// no jobs: the stream carries change events only.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // CLASSIFYING A FAILURE, WHICH IS §4.6's WHOLE DISTINCTION
@@ -46,6 +48,13 @@ import type {
 } from "./types.ts";
 import type { ConsumerApi, FullReadSnapshot, StreamFrame } from "./stream-consumer.ts";
 
+/** Where the subscription's frames and its end are delivered. */
+export interface StreamHandlers {
+  onFrame(frame: StreamFrame): void | Promise<void>;
+  /** The CURRENT socket ended on its own. Never called for one this client replaced or closed. */
+  onClosed(reason: string): void;
+}
+
 export interface SchedulerApiOptions {
   apiUrl: string;
   token: string;
@@ -68,6 +77,7 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
   #timeoutMs: number;
   /** The live subscription, so a rebuild can close the old one before opening a new one. */
   #stream: { abort: AbortController } | null = null;
+  #handlers: StreamHandlers | null = null;
 
   constructor(opts: SchedulerApiOptions) {
     this.#base = opts.apiUrl.replace(/\/$/, "");
@@ -166,54 +176,104 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
   }
 
   /**
-   * Open the subscription from `cursor` and pump frames at `onFrame`.
-   *
-   * Returns as soon as the connection is ESTABLISHED, because the consumer's
-   * `start()` awaits it and must not block until the stream ends. The pump runs
-   * until the body closes, then reports the drop; §6.3 says a dropped
-   * connection is followed by a rebuild, and the caller owns that.
-   *
-   * There is no reconnect loop in here. That lives in the consumer, where the
-   * backoff and the "rebuild, never replay" rule already are.
+   * Say where frames go. Set once, before the first `subscribe`; every socket
+   * this client ever opens pumps into the same handlers, so a rebuild's new
+   * socket needs no re-wiring by the caller.
    */
-  async subscribeStream(
-    cursor: number,
-    onFrame: (frame: StreamFrame) => void | Promise<void>,
-    onClosed: (reason: string) => void,
-  ): Promise<void> {
+  attachStream(handlers: StreamHandlers): void {
+    this.#handlers = handlers;
+  }
+
+  /**
+   * Open the subscription from `cursor`, REPLACING any socket already open.
+   *
+   * This is `ConsumerApi.subscribe`, and it is a real reconnect, not a
+   * notification: the consumer calls it at the end of every full read, and the
+   * socket it leaves open is the one the rebuilt copy is current against. A
+   * stalled socket (§10 "Silent stall") delivers nothing ever again, so a
+   * subscribe that kept it would leave the keepalive watchdog re-reading once
+   * per budget for ever — a read on a timer, which §3.1 and §9 forbid.
+   *
+   * Returns as soon as the connection is ESTABLISHED, because the consumer
+   * awaits it inside its rebuild and must not block until the stream ends. The
+   * pump runs until the body closes, then reports the drop through
+   * `onClosed` — but only if the socket is still the current one. A socket this
+   * method or `closeStream` replaced was ended on purpose, and reporting it
+   * would turn every rebuild into a reconnect.
+   *
+   * There is no reconnect loop in here. That lives in the runtime, where the
+   * backoff and the "rebuild, never replay" rule already are.
+   *
+   * THE WAIT FOR RESPONSE HEADERS IS BOUNDED by the same per-request ceiling
+   * as every other call. The consumer awaits this inside its rebuild, and a
+   * rebuild that never settles is a stall §6.3's keepalive rule cannot see:
+   * the copy is not current, so the watchdog has nothing to compare, and the
+   * runtime's recovery paths are all waiting on the rebuild. An API that
+   * accepts the connection and never answers would wedge the scheduler until
+   * a restart. On the timeout this throws, and the runtime's dropped-
+   * connection path takes over. The bound covers ONLY the headers: once they
+   * arrive the timer is cleared, because the body is a stream that is meant
+   * to stay open, and a stall on it is the keepalive watchdog's to catch.
+   */
+  async subscribe(cursor: number): Promise<void> {
+    const handlers = this.#handlers;
+    if (!handlers) throw new Error("subscribe before attachStream: nowhere to deliver frames");
     this.closeStream();
     const abort = new AbortController();
-    this.#stream = { abort };
-    const res = await this.#fetch(
-      `${this.#base}${ROUTES.swarm.scheduler.subscribe}?cursor=${encodeURIComponent(String(cursor))}`,
-      { headers: this.#headers(false), signal: abort.signal },
-    );
-    if (!res.ok || !res.body) throw new Error(`subscribe failed: HTTP ${res.status}`);
+    const stream = { abort };
+    this.#stream = stream;
+    let res: Response;
+    let timedOut = false;
+    const headersTimer = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+    }, this.#timeoutMs);
+    try {
+      res = await this.#fetch(
+        `${this.#base}${ROUTES.swarm.scheduler.subscribe}?cursor=${encodeURIComponent(String(cursor))}`,
+        { headers: this.#headers(false), signal: abort.signal },
+      );
+    } catch (err) {
+      if (this.#stream === stream) this.#stream = null;
+      if (timedOut) throw new Error(`subscribe failed: no response headers within ${this.#timeoutMs}ms`);
+      throw err;
+    } finally {
+      clearTimeout(headersTimer);
+    }
+    if (!res.ok || !res.body) {
+      if (this.#stream === stream) this.#stream = null;
+      abort.abort();
+      throw new Error(`subscribe failed: HTTP ${res.status}`);
+    }
 
+    const body = res.body;
     void (async () => {
+      let reason = "stream ended";
       try {
-        for await (const frame of readSse(res.body!)) {
-          await onFrame(frame);
+        for await (const frame of readSse(body)) {
+          if (this.#stream !== stream) return;
+          await handlers.onFrame(frame);
         }
-        onClosed("stream ended");
       } catch (err) {
-        onClosed(String((err as Error)?.message ?? err));
+        reason = String((err as Error)?.message ?? err);
       }
+      if (this.#stream !== stream) return;
+      this.#stream = null;
+      abort.abort();
+      handlers.onClosed(reason);
     })();
   }
 
-  /** Satisfies `ConsumerApi`. The consumer subscribes; the pump is wired by the container. */
-  async subscribe(cursor: number): Promise<void> {
-    void cursor;
-  }
-
+  /** Close the live socket, if any. Its pump reports nothing: this was deliberate. */
   closeStream(): void {
-    this.#stream?.abort.abort();
+    const stream = this.#stream;
     this.#stream = null;
+    stream?.abort.abort();
   }
 
-  async ackJob(idempotencyKey: string): Promise<void> {
-    await this.#post(ROUTES.swarm.scheduler.jobAck, { idempotencyKey });
+  /** True while a socket this client opened is still the current one. */
+  get streamOpen(): boolean {
+    return this.#stream !== null;
   }
 }
 
@@ -273,16 +333,11 @@ export function parseSseFrame(chunk: string): StreamFrame | null {
       return { type: "keepalive", head: Number(data.head ?? 0) };
     case "resync":
       return { type: "resync", reason: String(data.reason ?? "unspecified") };
-    case "job":
-      return {
-        type: "job",
-        kind: String(data.kind),
-        target: String(data.target),
-        idempotencyKey: String(data.idempotencyKey),
-      };
     default:
       // An unknown frame is ignored, not a reason to rebuild: §3.1 makes a
-      // rebuild the answer to a provable loss, and this is not one.
+      // rebuild the answer to a provable loss, and this is not one. That
+      // includes `job`: §6.3 has no job pushes, so a server still sending one
+      // is sending work this client neither runs nor acknowledges.
       return null;
   }
 }

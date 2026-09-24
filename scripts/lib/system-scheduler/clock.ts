@@ -86,6 +86,20 @@ export interface ClockOptions {
   /** Injected so a test does not wait out a real budget. */
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string) => void;
+  /**
+   * §3.1's "if and only if", asked at the instant a boundary or deadline timer
+   * fires. The container passes the stream consumer's `current`; a clock with
+   * no stream (most unit tests) is always current.
+   *
+   * A timer that fires while this is false does NOTHING and is dropped, and
+   * that is safe rather than lossy: the only way back to current is a rebuild,
+   * and a rebuild re-arms every timer from the new snapshot and fires, once,
+   * every boundary whose instant has already passed (§3.2). What must not
+   * happen is the stale copy acting in the gap — §10's "Silent stall … no
+   * stale timer fires" and "a gap causes a full read and rebuild before any
+   * further fire".
+   */
+  isCurrent?: () => boolean;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -130,6 +144,7 @@ export class SchedulerClock {
   #backoff: readonly number[];
   #sleep: (ms: number) => Promise<void>;
   #log: (msg: string) => void;
+  #isCurrent: () => boolean;
 
   /** subjectId → the boundary timer it holds. */
   #boundaries = new Map<string, { at: number; sessionId: string; handle: TimerHandle }>();
@@ -143,6 +158,15 @@ export class SchedulerClock {
   #exhausted = new Map<string, ExhaustedItem>();
 
   #authenticated = false;
+  /**
+   * The API refused this token on a call it had accepted before (HTTP 401 or
+   * 403). STICKY for the life of the process: the automation-token criterion
+   * says that after re-provisioning "the running scheduler is unhealthy until
+   * restarted", and a token that the API has once disowned is not proven good
+   * again by a later read that happens to pass — a read right and a lifecycle
+   * right are separate grants.
+   */
+  #tokenRejected: string | null = null;
   #streamSynchronized = false;
   #initialRebuildComplete = false;
   #lastError: string | null = null;
@@ -157,6 +181,7 @@ export class SchedulerClock {
     this.#backoff = opts.backoffMs ?? DEFAULT_BACKOFF;
     this.#sleep = opts.sleep ?? ((ms) => Bun.sleep(ms));
     this.#log = opts.log ?? (() => {});
+    this.#isCurrent = opts.isCurrent ?? (() => true);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -165,13 +190,14 @@ export class SchedulerClock {
 
   get health(): SchedulerHealth {
     const exhausted = [...this.#exhausted.values()];
+    const authenticated = this.#authenticated && this.#tokenRejected === null;
     return {
-      authenticated: this.#authenticated,
+      authenticated,
       streamSynchronized: this.#streamSynchronized,
       initialRebuildComplete: this.#initialRebuildComplete,
       exhausted,
       healthy:
-        this.#authenticated &&
+        authenticated &&
         this.#streamSynchronized &&
         this.#initialRebuildComplete &&
         exhausted.length === 0,
@@ -195,7 +221,19 @@ export class SchedulerClock {
   markAuthenticated(ok: boolean, error?: string): void {
     this.#authenticated = ok;
     if (!ok && error) this.#lastError = error;
-    if (ok) this.#lastError = null;
+    // A disowned token keeps its reason on the health surface; see #tokenRejected.
+    if (ok) this.#lastError = this.#tokenRejected;
+  }
+
+  /**
+   * The API rejected this process's token. Unhealthy from here until a
+   * restart; nothing later in this process clears it.
+   */
+  markTokenRejected(error: string): void {
+    this.#tokenRejected = error;
+    this.#authenticated = false;
+    this.#lastError = error;
+    this.#log(`automation token rejected: ${error} — unhealthy until restarted`);
   }
 
   markStreamSynchronized(ok: boolean): void {
@@ -421,6 +459,12 @@ export class SchedulerClock {
     if (this.#stopped) return;
     const handle = this.#timers.set(at, () => {
       this.#boundaries.delete(subjectId);
+      // See ClockOptions.isCurrent: a copy that is not provably current does
+      // not act, and the rebuild that must follow re-arms this boundary.
+      if (!this.#isCurrent()) {
+        this.#log(`boundary for ${subjectId} fell while not current; the rebuild owns it`);
+        return;
+      }
       this.#track(this.#fireBoundary(subjectId, sessionId));
     });
     this.#boundaries.set(subjectId, { at, sessionId, handle });
@@ -437,6 +481,10 @@ export class SchedulerClock {
     if (this.#stopped) return;
     const handle = this.#timers.set(at, () => {
       this.#deadlines.delete(sessionId);
+      if (!this.#isCurrent()) {
+        this.#log(`deadline for ${sessionId} fell while not current; the rebuild owns it`);
+        return;
+      }
       this.#track(this.#finalizeChain(sessionId, subjectId, rearms));
     });
     this.#deadlines.set(sessionId, { at, handle, rearms });
@@ -660,6 +708,12 @@ export class SchedulerClock {
 
       if (!result.transient) {
         this.#recordRefusal(id, result.status, result.error);
+        // A refusal of the CREDENTIAL, not of the transition. Still final and
+        // not retried, but it is not this item's problem: every later call
+        // will meet it too, so the scheduler as a whole stops being healthy.
+        if (result.status === 401 || result.status === 403) {
+          this.markTokenRejected(`${id.item}: API rejected the automation token (HTTP ${result.status}): ${result.error}`);
+        }
         return { kind: "refused", status: result.status, error: result.error };
       }
 

@@ -19,8 +19,8 @@
 //
 // That separation is deliberate and is what makes the contract testable. The
 // failures this logic exists to survive — a dropped frame, a stalled socket, a
-// redelivered job — are hard to produce against a real connection and trivial
-// to produce against an injected one. `system-scheduler` (W4's third part)
+// resync notice — are hard to produce against a real connection and trivial to
+// produce against an injected one. `system-scheduler` (W4's third part)
 // supplies the transport, the timers and the domain reaction; this supplies the
 // rule about when any of that is allowed to run.
 //
@@ -60,25 +60,32 @@ export interface ResyncFrame {
   reason: string;
 }
 
-export interface JobFrame {
-  type: "job";
-  kind: string;
-  target: string;
-  idempotencyKey: string;
-}
-
-export type StreamFrame = StreamEventFrame | KeepaliveFrame | ResyncFrame | JobFrame;
+/**
+ * Every frame the stream carries. There is no job frame, and that is §6.3 as
+ * amended on 2026-09-24 (D52): "The stream carries change events only. Every
+ * piece of work the scheduler does follows from an event or a timer; there is
+ * no ad-hoc job kind for the API to push, ack or redeliver." A frame of any
+ * other type is dropped by the transport before it reaches `receive()`.
+ */
+export type StreamFrame = StreamEventFrame | KeepaliveFrame | ResyncFrame;
 
 /**
- * Everything this module asks of the API. Three calls, and they are the ONLY
+ * Everything this module asks of the API. Two calls, and they are the ONLY
  * calls it makes — which is what lets a test count them and assert §10's
  * "between instants, with a live stream and no events, `system-scheduler` makes
  * no API call".
+ *
+ * `subscribe(cursor)` REPLACES the connection: it closes whatever socket was
+ * open and opens a new one from `cursor`. It is not a notification. A rebuild
+ * triggered from inside the stream — a gap, a head-sequence mismatch, a missed
+ * keepalive — must leave the scheduler on a socket that starts at the new
+ * snapshot's cursor, and a stalled socket is exactly the one that never
+ * delivers anything again, so keeping it would re-read on every keepalive
+ * budget for ever (§3.1, §9).
  */
 export interface ConsumerApi {
   fullRead(): Promise<FullReadSnapshot>;
   subscribe(cursor: number): Promise<void> | void;
-  ackJob(idempotencyKey: string): Promise<void> | void;
 }
 
 export interface ConsumerHooks {
@@ -86,8 +93,6 @@ export interface ConsumerHooks {
   applyEvent?(event: StreamEventFrame): void | Promise<void>;
   /** Rebuild every timer from a fresh snapshot. Called after each full read. */
   onRebuild?(snapshot: FullReadSnapshot, trigger: RebuildTrigger): void | Promise<void>;
-  /** Do a pushed job's work. Throwing leaves the job unacked and unremembered. */
-  runJob?(job: JobFrame): void | Promise<void>;
 }
 
 /**
@@ -146,8 +151,17 @@ export class SchedulerStreamConsumer {
   #current = false;
   #lastKeepaliveAt = 0;
   #ignoredDuplicates = 0;
-  #seenJobKeys = new Set<string>();
   #backoffStep = 0;
+  /**
+   * Bumped by every rebuild and every drop. A rebuild only declares the copy
+   * current if nothing has happened since it started: a socket that died while
+   * the full read was in flight must not be followed by `current = true`.
+   */
+  #generation = 0;
+  /** Rebuilds in flight. While any is, frames are held rather than applied or lost. */
+  #rebuilding = 0;
+  /** Frames that arrived while a rebuild was in flight, in arrival order. */
+  #held: StreamFrame[] = [];
 
   constructor(api: ConsumerApi, hooks: ConsumerHooks = {}, opts: ConsumerOptions = {}) {
     this.#api = api;
@@ -176,11 +190,6 @@ export class SchedulerStreamConsumer {
     return this.#ignoredDuplicates;
   }
 
-  /** Idempotency keys whose work has completed. Exposed so a test can see a failed job is NOT here. */
-  get seenJobKeys(): string[] {
-    return [...this.#seenJobKeys];
-  }
-
   /** The first full read and subscription. Identical to any later rebuild, by design. */
   async start(): Promise<void> {
     await this.#rebuild("start");
@@ -195,11 +204,20 @@ export class SchedulerStreamConsumer {
    */
   markStale(_reason: RebuildTrigger): void {
     this.#current = false;
+    this.#generation += 1;
   }
 
-  /** The connection went away. §6.3: reconnect with backoff, then a full read. */
+  /**
+   * The connection went away. §6.3: reconnect with backoff, then a full read.
+   *
+   * Synchronous in effect: `current` is false before this returns, so a timer
+   * callback that runs next already sees a stopped clock. A rebuild that was
+   * in flight when the drop happened will not flip `current` back on.
+   */
   async connectionDropped(): Promise<void> {
     this.#current = false;
+    this.#generation += 1;
+    this.#held = [];
   }
 
   /**
@@ -249,6 +267,15 @@ export class SchedulerStreamConsumer {
 
   /** Handle one frame off the connection. */
   async receive(frame: StreamFrame): Promise<void> {
+    // A rebuild is in flight. The frame may come from the NEW socket, opened
+    // inside the rebuild before `current` is set — the API sends what it
+    // committed above the cursor straight away (§6.3's handoff) — so it is
+    // neither applied nor dropped. It waits, and is handled in order once the
+    // rebuild has either declared the copy current or failed.
+    if (this.#rebuilding > 0) {
+      this.#held.push(frame);
+      return;
+    }
     switch (frame.type) {
       case "event":
         return this.#receiveEvent(frame);
@@ -256,8 +283,9 @@ export class SchedulerStreamConsumer {
         return this.#receiveKeepalive(frame);
       case "resync":
         return this.#rebuild("resync", { reason: frame.reason });
-      case "job":
-        return this.#receiveJob(frame);
+      default:
+        // Not a frame §6.3 defines. Ignored, not a reason to rebuild.
+        return;
     }
   }
 
@@ -298,27 +326,6 @@ export class SchedulerStreamConsumer {
     }
   }
 
-  async #receiveJob(frame: JobFrame): Promise<void> {
-    // A job is not a stream event: it carries no sequence, moves no cursor and
-    // can leave no gap behind. §6.3 keeps the two apart, and so does this.
-    if (this.#seenJobKeys.has(frame.idempotencyKey)) {
-      // "a seen key produces no second effect" — but it is acked again, because
-      // a redelivery means the first ack never landed and silence would leave
-      // the job outstanding for ever.
-      await this.#api.ackJob(frame.idempotencyKey);
-      return;
-    }
-    try {
-      await this.#hooks.runJob?.(frame);
-    } catch {
-      // Not acked and not remembered: the API's redelivery is the retry, and
-      // marking it seen would turn one failure into permanent silent loss.
-      return;
-    }
-    this.#seenJobKeys.add(frame.idempotencyKey);
-    await this.#api.ackJob(frame.idempotencyKey);
-  }
-
   /**
    * Stop acting, read the whole world, subscribe from the cursor that read
    * returned, resume.
@@ -327,17 +334,70 @@ export class SchedulerStreamConsumer {
    * entire window in which the copy is unprovable is a window in which the
    * clock refuses to act. Every trigger reaches this one function, which is why
    * a gap, a resync, a stall and a restart cannot drift apart in behaviour.
+   *
+   * AN OVERTAKEN REBUILD DOES NOTHING. A drop, a `markStale` or a newer
+   * rebuild since this one started bumps the generation, and whoever bumped it
+   * owns the recovery. So the generation is checked after every await, and a
+   * rebuild that finds itself overtaken returns before its next side effect:
+   * it does not subscribe (which would replace the socket a newer rebuild
+   * declared current on), it does not rebuild the clock's timers from its
+   * older snapshot, it does not record itself, and it does not throw. A throw
+   * would reach the runtime as a dropped connection and invalidate the newer
+   * rebuild that superseded this one — which is exactly how an overtaken
+   * rebuild's subscribe fails, because the newer subscribe aborts it.
    */
   async #rebuild(trigger: RebuildTrigger, extra: Partial<RebuildRecord> = {}): Promise<void> {
     const lastApplied = this.#lastApplied;
     this.#current = false;
-    const snapshot = await this.#api.fullRead();
-    this.#cursor = snapshot.cursor;
-    this.#lastApplied = snapshot.cursor;
-    await this.#api.subscribe(snapshot.cursor);
-    this.#lastKeepaliveAt = this.#now();
-    await this.#hooks.onRebuild?.(snapshot, trigger);
-    this.#current = true;
-    this.rebuilds.push({ trigger, cursor: snapshot.cursor, lastApplied, ...extra });
+    const generation = ++this.#generation;
+    const overtaken = (): boolean => generation !== this.#generation;
+    this.#rebuilding += 1;
+    let declared = false;
+    try {
+      let snapshot: FullReadSnapshot;
+      try {
+        snapshot = await this.#api.fullRead();
+      } catch (err) {
+        if (overtaken()) return;
+        throw err;
+      }
+      if (overtaken()) return;
+      this.#cursor = snapshot.cursor;
+      this.#lastApplied = snapshot.cursor;
+      // Replaces the socket. Anything the old one still had in flight is gone
+      // with it, which is the point: §6.3 rebuilds, it never replays.
+      try {
+        await this.#api.subscribe(snapshot.cursor);
+      } catch (err) {
+        if (overtaken()) return;
+        throw err;
+      }
+      if (overtaken()) return;
+      this.#lastKeepaliveAt = this.#now();
+      await this.#hooks.onRebuild?.(snapshot, trigger);
+      this.rebuilds.push({ trigger, cursor: snapshot.cursor, lastApplied, ...extra });
+      // `onRebuild` awaits too. A drop during it still means this snapshot is
+      // not the one the clock may act on.
+      if (!overtaken()) {
+        this.#current = true;
+        declared = true;
+      }
+    } finally {
+      this.#rebuilding -= 1;
+      // A rebuild that failed or was overtaken hands its held frames to
+      // nobody: they belong to a socket whose copy was never declared current.
+      if (!declared && this.#rebuilding === 0) this.#held = [];
+    }
+    if (!declared) return;
+    // Frames that arrived during the rebuild, in order. An event at or below
+    // the new cursor is a duplicate, the next one is applied, and anything
+    // further is a gap — the ordinary rules, applied now that they can be.
+    // If one of them forces another rebuild, the rest came from the socket
+    // that rebuild replaced and are dropped with it.
+    const held = this.#held.splice(0);
+    for (const frame of held) {
+      if (generation !== this.#generation) break;
+      await this.receive(frame);
+    }
   }
 }

@@ -26,8 +26,14 @@
 // treated it as false, or worse, as absent-and-therefore-fine.
 //
 // WHAT THIS FILE DOES NOT PROVE. It does not prove a real scheduler container
-// serves this over HTTP and a real `bun smoke` consumes it; that is
-// scripts/tests/integration/smoke-readiness-scheduler.test.ts and the e2e gate.
+// serves this over HTTP, and it does not prove `bun smoke` consumes it — as of
+// this change nothing on smoke's boot path imports the gate at all (smoke marks
+// `system-scheduler` healthy when compose `up` returns). The integration file
+// scripts/tests/integration/smoke-readiness-scheduler.test.ts carries the same
+// gate over real sockets, not over smoke; wiring it into `bun smoke`, and the
+// e2e gate that would prove it, are later parts of #1026. The no-restart check
+// below greps this helper only, which is honest only while smoke's readiness
+// path is this helper.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

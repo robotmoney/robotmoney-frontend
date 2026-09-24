@@ -34,6 +34,13 @@ export interface StartupCheck {
   ok: boolean;
   apiReachable: boolean;
   tokenValid: boolean;
+  /**
+   * The API answered 401 or 403: it KNOWS it does not accept this token. The
+   * only failure that waiting cannot fix, and the one `main()` exits on. A
+   * reachable API answering 5xx is `tokenValid: false` too — nothing proved
+   * the token good — but it is not a rejection and must not end the process.
+   */
+  tokenRejected: boolean;
   /** Null only when both held. */
   error: string | null;
 }
@@ -67,6 +74,7 @@ export async function runStartupCheck(opts: StartupCheckOptions): Promise<Startu
       ok: false,
       apiReachable: false,
       tokenValid: false,
+      tokenRejected: false,
       error: `API unreachable at ${url}: ${String((err as Error)?.message ?? err)}`,
     };
   }
@@ -76,6 +84,7 @@ export async function runStartupCheck(opts: StartupCheckOptions): Promise<Startu
       ok: false,
       apiReachable: true,
       tokenValid: false,
+      tokenRejected: true,
       error: `API rejected the automation token (HTTP ${res.status})`,
     };
   }
@@ -86,10 +95,11 @@ export async function runStartupCheck(opts: StartupCheckOptions): Promise<Startu
       ok: false,
       apiReachable: true,
       tokenValid: false,
+      tokenRejected: false,
       error: `API answered HTTP ${res.status} to the full read`,
     };
   }
-  return { ok: true, apiReachable: true, tokenValid: true, error: null };
+  return { ok: true, apiReachable: true, tokenValid: true, tokenRejected: false, error: null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
