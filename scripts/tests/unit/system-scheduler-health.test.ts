@@ -462,30 +462,80 @@ function spawnScheduler(env: Record<string, string>) {
   return child;
 }
 
-/** Read stdout until `pattern` matches, or fail after `ms`. */
-async function waitForLine(stream: ReadableStream<Uint8Array>, pattern: RegExp, ms = 15_000): Promise<RegExpMatchArray> {
-  const reader = stream.getReader();
+/**
+ * Read a child's stdout ONCE, into one buffer, for the whole test.
+ *
+ * Not a read-until-match per call. Two lines the child writes back to back can
+ * arrive in a single chunk, and a per-call reader that stops at its match
+ * throws away the rest of that chunk — so a second wait for the second line
+ * would time out on a loaded host even though the line was printed. Here one
+ * pump owns the stream, every wait searches everything read so far, and a
+ * line can be waited for in any order, any number of times.
+ */
+function watchStdout(stream: ReadableStream<Uint8Array>) {
   const decoder = new TextDecoder();
   let seen = "";
-  const deadline = Date.now() + ms;
-  try {
-    while (Date.now() < deadline) {
-      const next = await Promise.race([
-        reader.read(),
-        Bun.sleep(Math.max(1, deadline - Date.now())).then(() => ({ done: true, value: undefined })),
-      ]);
-      if (next.done) break;
-      seen += decoder.decode(next.value, { stream: true });
-      const m = seen.match(pattern);
-      if (m) return m;
+  let ended = false;
+  const wakers = new Set<() => void>();
+  const wake = (): void => {
+    for (const w of [...wakers]) w();
+  };
+  void (async () => {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+        wake();
+      }
+    } catch {
+      /* the child was killed mid-read */
+    } finally {
+      ended = true;
+      wake();
     }
-  } finally {
-    reader.releaseLock();
-  }
-  throw new Error(`no line matching ${pattern} in: ${seen}`);
+  })();
+
+  return {
+    /** Resolve with the first match of `pattern` in everything read so far, or fail after `ms`. */
+    async waitFor(pattern: RegExp, ms = 15_000): Promise<RegExpMatchArray> {
+      const deadline = Date.now() + ms;
+      for (;;) {
+        const m = seen.match(pattern);
+        if (m) return m;
+        const left = deadline - Date.now();
+        if (ended || left <= 0) throw new Error(`no line matching ${pattern} in: ${seen}`);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(done, left);
+          function done(): void {
+            clearTimeout(timer);
+            wakers.delete(done);
+            resolve();
+          }
+          wakers.add(done);
+        });
+      }
+    },
+  };
 }
 
 describe("main() executed against a stub API", () => {
+  test("the stdout watcher finds two lines that arrived in ONE chunk, in either order", async () => {
+    // The flake this pins: a late reader got both startup lines in a single
+    // chunk, the first wait consumed both, and the second timed out.
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("health on :4321/health\nstartup check: API unreachable: refused\n"));
+      },
+    });
+    const stdout = watchStdout(stream);
+    const [, port] = await stdout.waitFor(/health on :(\d+)\/health/, 2_000);
+    expect(port).toBe("4321");
+    await stdout.waitFor(/startup check: API unreachable/, 2_000);
+    await stdout.waitFor(/health on :/, 2_000);
+  });
+
   test("a REJECTED token exits 1, naming the rejection", async () => {
     let fullReads = 0;
     const stub = Bun.serve({
@@ -520,8 +570,9 @@ describe("main() executed against a stub API", () => {
       SCHEDULER_TOKEN_FILE: tokenFile("rmat_fine"),
       SCHEDULER_HEALTH_PORT: "0",
     });
-    const [, port] = await waitForLine(child.stdout, /health on :(\d+)\/health/);
-    await waitForLine(child.stdout, /startup check: API unreachable/);
+    const stdout = watchStdout(child.stdout);
+    const [, port] = await stdout.waitFor(/health on :(\d+)\/health/);
+    await stdout.waitFor(/startup check: API unreachable/);
 
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(503);

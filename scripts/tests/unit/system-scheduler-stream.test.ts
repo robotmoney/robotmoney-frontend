@@ -28,10 +28,12 @@
 // an injected fetch. Everything here is module evidence against fakes; the
 // integration suite runs the same runtime over real sockets.
 import { describe, expect, test } from "bun:test";
+import { ROUTES } from "@robotmoney/contract";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseSseFrame, SchedulerHttpApi } from "../../lib/system-scheduler/api-client.ts";
 import { SchedulerRuntime } from "../../lib/system-scheduler/runtime.ts";
+import type { FetchLike, SchedulerFullRead } from "../../lib/system-scheduler/types.ts";
 import {
   SchedulerStreamConsumer,
   type ConsumerApi,
@@ -480,6 +482,64 @@ describe("SchedulerHttpApi.subscribe replaces the connection (§3.1, §6.3)", ()
     const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", fetchImpl: socketFetch().fetchImpl });
     await expect(http.subscribe(1)).rejects.toThrow("attachStream");
   });
+
+  // The defect these pin: subscribe awaited its response headers with only the
+  // abort signal, so an API that accepted the connection and never answered
+  // left the consumer's rebuild pending for ever — not current, so the
+  // keepalive watchdog had nothing to compare, and every recovery path waiting
+  // on that rebuild. The runtime test further down shows the consequence.
+
+  test("response headers that never arrive reject within the request ceiling, and leave no socket", async () => {
+    let signal: AbortSignal | undefined;
+    const http = new SchedulerHttpApi({
+      apiUrl: "http://api",
+      token: "rmat_t",
+      timeoutMs: 50,
+      fetchImpl: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init!.signal!;
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    });
+    http.attachStream({ onFrame: () => {}, onClosed: () => {} });
+    const started = Date.now();
+    await expect(http.subscribe(1)).rejects.toThrow("no response headers within 50ms");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(signal!.aborted).toBe(true);
+    expect(http.streamOpen).toBe(false);
+  });
+
+  test("the same, over a REAL socket: a server that accepts and never answers", async () => {
+    const server = Bun.serve({
+      port: 0,
+      // Accept, read the request, never send a status line.
+      fetch: () => new Promise<Response>(() => {}),
+    });
+    try {
+      const http = new SchedulerHttpApi({ apiUrl: `http://127.0.0.1:${server.port}`, token: "rmat_t", timeoutMs: 100 });
+      http.attachStream({ onFrame: () => {}, onClosed: () => {} });
+      await expect(http.subscribe(1)).rejects.toThrow("no response headers within 100ms");
+      expect(http.streamOpen).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("the ceiling bounds only the headers: an open stream outlives it, and still delivers", async () => {
+    const { opened, fetchImpl } = socketFetch();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: 50, fetchImpl });
+    const frames: StreamFrame[] = [];
+    const closed: string[] = [];
+    http.attachStream({ onFrame: (f) => void frames.push(f), onClosed: (r) => void closed.push(r) });
+    await http.subscribe(3);
+    await Bun.sleep(200);
+    expect(opened[0].signal.aborted).toBe(false);
+    expect(http.streamOpen).toBe(true);
+    expect(closed).toEqual([]);
+    opened[0].write(`event: keepalive\ndata: {"head":3}\n\n`);
+    await drain();
+    expect(frames).toEqual([{ type: "keepalive", head: 3 }]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -696,6 +756,215 @@ describe("the runtime: a stale copy never fires (§3.1, §10)", () => {
     const before = fake.calls.length;
     await liveUntil(T0 + 20 * 60_000);
     expect(fake.calls.slice(before)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A hung subscribe, through the real HTTP transport
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The runtime over `SchedulerHttpApi` itself, with only `fetch` injected, so
+// the subscribe under test is the one the container runs. A fake transport
+// whose subscribe never resolves would prove nothing about this: the bound
+// lives in the transport, and the runtime's job is to turn its rejection into
+// a reconnect.
+
+function httpApiFetch() {
+  let hang = false;
+  const subscribes: { cursor: number; signal: AbortSignal; hung: boolean }[] = [];
+  const fullReads: number[] = [];
+  const fetchImpl: FetchLike = async (input, init) => {
+    const url = new URL(String(input));
+    const signal = init!.signal!;
+    if (url.pathname === ROUTES.swarm.scheduler.fullRead) {
+      fullReads.push(fullReads.length + 1);
+      const body: SchedulerFullRead = { subjects: [], collecting: [], settling: [], cursor: 7 };
+      return Response.json(body);
+    }
+    if (url.pathname === ROUTES.swarm.scheduler.subscribe) {
+      const cursor = Number(url.searchParams.get("cursor"));
+      if (hang) {
+        // The connection is accepted and the status line never comes.
+        subscribes.push({ cursor, signal, hung: true });
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      subscribes.push({ cursor, signal, hung: false });
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          controller = c;
+        },
+      });
+      signal.addEventListener("abort", () => {
+        try {
+          controller.error(new Error("aborted"));
+        } catch {
+          /* already closed */
+        }
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }
+    return Response.json({ error: "not_found" }, { status: 404 });
+  };
+  return {
+    fetchImpl,
+    subscribes,
+    fullReads,
+    setHang: (on: boolean) => {
+      hang = on;
+    },
+  };
+}
+
+describe("the runtime: a subscribe that never answers is a drop, not a wedge (§6.3)", () => {
+  test("HUNG SUBSCRIBE: the watchdog's rebuild fails at the headers bound and a reconnect lands on a live socket", async () => {
+    const HEADERS_MS = 60;
+    const net = httpApiFetch();
+    const http = new SchedulerHttpApi({ apiUrl: "http://api", token: "rmat_t", timeoutMs: HEADERS_MS, fetchImpl: net.fetchImpl });
+    const timers = new FakeTimers(T0);
+    const logs: string[] = [];
+    const runtime = new SchedulerRuntime(http, {
+      timers,
+      probe: async () => ({ ok: true, apiReachable: true, tokenValid: true, tokenRejected: false, error: null }),
+      keepaliveBudgetMs: BUDGET,
+      watchdogMs: WATCHDOG,
+      log: (m) => void logs.push(m),
+    });
+    try {
+      await runtime.start();
+      expect(runtime.consumer.current).toBe(true);
+      expect(net.subscribes).toHaveLength(1);
+
+      // The socket goes quiet, and from now on the API accepts a subscribe
+      // and never sends its headers.
+      net.setHang(true);
+      await timers.advanceTo(T0 + BUDGET + WATCHDOG);
+      expect(net.subscribes).toHaveLength(2);
+      expect(net.subscribes[1].hung).toBe(true);
+      expect(runtime.consumer.current).toBe(false);
+
+      // Real time, because the headers bound is the transport's own timer.
+      await Bun.sleep(HEADERS_MS * 4);
+      await drain();
+      expect(net.subscribes[1].signal.aborted).toBe(true);
+      expect(logs.some((l) => l.includes(`no response headers within ${HEADERS_MS}ms`))).toBe(true);
+
+      // The rejection became a dropped connection, so a reconnect is waiting
+      // on its backoff. The API answers again.
+      net.setHang(false);
+      await timers.advanceBy(1_000);
+      await runtime.settled();
+
+      expect(runtime.consumer.rebuilds.map((r) => r.trigger)).toEqual(["start", "dropped_connection"]);
+      expect(net.subscribes).toHaveLength(3);
+      expect(net.subscribes[2]).toMatchObject({ hung: false, cursor: 7 });
+      expect(net.subscribes[2].signal.aborted).toBe(false);
+      expect(http.streamOpen).toBe(true);
+      expect(runtime.consumer.current).toBe(true);
+      expect(runtime.clock.health.streamSynchronized).toBe(true);
+    } finally {
+      runtime.stop();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// An overtaken rebuild does nothing (§3.1)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Two rebuilds can be in flight at once: a watchdog rebuild whose full read is
+// slow, and the reconnect a socket drop starts meanwhile. Only the newer one
+// may touch the socket, the clock or the record. The older one used to run to
+// the end regardless — replacing the newer one's socket, re-running the
+// clock's rebuild from its own snapshot, and logging a rebuild nobody acted on.
+
+describe("an overtaken rebuild does nothing", () => {
+  test("RUNTIME: a watchdog rebuild whose full read returns after a reconnect finished leaves the reconnect's socket and clock alone", async () => {
+    const { timers, fake, runtime, rebuildTriggers, liveUntil } = await runtimeWorld({ boundaryAt: 3_600_000 });
+    await liveUntil(T0 + 10_000);
+    const clockRebuilds: number[] = [];
+    const original = runtime.clock.rebuild.bind(runtime.clock);
+    runtime.clock.rebuild = async (snapshot) => {
+      clockRebuilds.push(snapshot.cursor);
+      await original(snapshot);
+    };
+
+    // A: the watchdog's rebuild, its full read held.
+    fake.stall();
+    const releaseA = fake.holdNextFullRead();
+    await timers.advanceTo(T0 + 45_000);
+    expect(fake.countCalls("fullRead")).toBe(2);
+    expect(runtime.consumer.current).toBe(false);
+
+    // B: the stalled socket is closed from the API's side, and the reconnect
+    // it starts completes while A is still held.
+    fake.dropConnection("peer reset");
+    await timers.advanceBy(1_000);
+    await runtime.settled();
+    expect(rebuildTriggers()).toEqual(["start", "dropped_connection"]);
+    expect(runtime.consumer.current).toBe(true);
+    const declared = fake.liveSocket;
+    expect(declared?.id).toBe(2);
+    expect(clockRebuilds).toHaveLength(1);
+
+    // A's full read comes back.
+    releaseA();
+    await drain();
+    await runtime.clock.idle();
+
+    expect(fake.countCalls("subscribe")).toBe(2);
+    expect(fake.sockets).toHaveLength(2);
+    expect(fake.liveSocket).toBe(declared);
+    expect(clockRebuilds).toHaveLength(1);
+    expect(rebuildTriggers()).toEqual(["start", "dropped_connection"]);
+    expect(runtime.consumer.current).toBe(true);
+    expect(runtime.clock.health.streamSynchronized).toBe(true);
+
+    // The watchdog is free again, and B's socket keeps the copy current.
+    await liveUntil(T0 + 46_000 + 3 * BUDGET);
+    expect(rebuildTriggers()).toEqual(["start", "dropped_connection"]);
+    expect(fake.countCalls("fullRead")).toBe(3);
+  });
+
+  test("CONSUMER: an overtaken rebuild whose subscribe the newer one aborted neither throws nor unseats the newer one", async () => {
+    // Like SchedulerHttpApi: a new subscribe aborts the one still in flight.
+    let inFlight: ((err: Error) => void) | null = null;
+    let hangNext = false;
+    const subscribed: number[] = [];
+    const api: ConsumerApi = {
+      fullRead: async () => ({ cursor: 100 }),
+      subscribe: (cursor) => {
+        const abortPrevious = inFlight;
+        inFlight = null;
+        abortPrevious?.(new Error("aborted"));
+        subscribed.push(cursor);
+        if (!hangNext) return Promise.resolve();
+        hangNext = false;
+        return new Promise<void>((_resolve, reject) => {
+          inFlight = reject;
+        });
+      },
+    };
+    const consumer = new SchedulerStreamConsumer(api, {}, { now: () => 0 });
+    await consumer.start();
+
+    // A: a resync forces a rebuild whose subscribe hangs.
+    hangNext = true;
+    const a = consumer.receive({ type: "resync", reason: "buffer_overflow" });
+    await drain();
+    expect(subscribed).toHaveLength(2);
+
+    // B: a drop, and the reconnect's subscribe aborts A's.
+    await consumer.connectionDropped();
+    await consumer.reconnect({ sleep: async () => {} });
+
+    // A throwing here is what used to reach the runtime as a second drop and
+    // invalidate B.
+    await expect(a).resolves.toBeUndefined();
+    expect(consumer.current).toBe(true);
+    expect(triggers(consumer)).toEqual(["start", "dropped_connection"]);
   });
 });
 

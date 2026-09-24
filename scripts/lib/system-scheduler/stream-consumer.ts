@@ -334,26 +334,51 @@ export class SchedulerStreamConsumer {
    * entire window in which the copy is unprovable is a window in which the
    * clock refuses to act. Every trigger reaches this one function, which is why
    * a gap, a resync, a stall and a restart cannot drift apart in behaviour.
+   *
+   * AN OVERTAKEN REBUILD DOES NOTHING. A drop, a `markStale` or a newer
+   * rebuild since this one started bumps the generation, and whoever bumped it
+   * owns the recovery. So the generation is checked after every await, and a
+   * rebuild that finds itself overtaken returns before its next side effect:
+   * it does not subscribe (which would replace the socket a newer rebuild
+   * declared current on), it does not rebuild the clock's timers from its
+   * older snapshot, it does not record itself, and it does not throw. A throw
+   * would reach the runtime as a dropped connection and invalidate the newer
+   * rebuild that superseded this one — which is exactly how an overtaken
+   * rebuild's subscribe fails, because the newer subscribe aborts it.
    */
   async #rebuild(trigger: RebuildTrigger, extra: Partial<RebuildRecord> = {}): Promise<void> {
     const lastApplied = this.#lastApplied;
     this.#current = false;
     const generation = ++this.#generation;
+    const overtaken = (): boolean => generation !== this.#generation;
     this.#rebuilding += 1;
     let declared = false;
     try {
-      const snapshot = await this.#api.fullRead();
+      let snapshot: FullReadSnapshot;
+      try {
+        snapshot = await this.#api.fullRead();
+      } catch (err) {
+        if (overtaken()) return;
+        throw err;
+      }
+      if (overtaken()) return;
       this.#cursor = snapshot.cursor;
       this.#lastApplied = snapshot.cursor;
       // Replaces the socket. Anything the old one still had in flight is gone
       // with it, which is the point: §6.3 rebuilds, it never replays.
-      await this.#api.subscribe(snapshot.cursor);
+      try {
+        await this.#api.subscribe(snapshot.cursor);
+      } catch (err) {
+        if (overtaken()) return;
+        throw err;
+      }
+      if (overtaken()) return;
       this.#lastKeepaliveAt = this.#now();
       await this.#hooks.onRebuild?.(snapshot, trigger);
       this.rebuilds.push({ trigger, cursor: snapshot.cursor, lastApplied, ...extra });
-      // A drop, a markStale or a newer rebuild since this one started means
-      // this snapshot is not the one the clock may act on.
-      if (generation === this.#generation) {
+      // `onRebuild` awaits too. A drop during it still means this snapshot is
+      // not the one the clock may act on.
+      if (!overtaken()) {
         this.#current = true;
         declared = true;
       }

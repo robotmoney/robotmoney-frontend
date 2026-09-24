@@ -203,6 +203,17 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
    *
    * There is no reconnect loop in here. That lives in the runtime, where the
    * backoff and the "rebuild, never replay" rule already are.
+   *
+   * THE WAIT FOR RESPONSE HEADERS IS BOUNDED by the same per-request ceiling
+   * as every other call. The consumer awaits this inside its rebuild, and a
+   * rebuild that never settles is a stall §6.3's keepalive rule cannot see:
+   * the copy is not current, so the watchdog has nothing to compare, and the
+   * runtime's recovery paths are all waiting on the rebuild. An API that
+   * accepts the connection and never answers would wedge the scheduler until
+   * a restart. On the timeout this throws, and the runtime's dropped-
+   * connection path takes over. The bound covers ONLY the headers: once they
+   * arrive the timer is cleared, because the body is a stream that is meant
+   * to stay open, and a stall on it is the keepalive watchdog's to catch.
    */
   async subscribe(cursor: number): Promise<void> {
     const handlers = this.#handlers;
@@ -212,6 +223,11 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
     const stream = { abort };
     this.#stream = stream;
     let res: Response;
+    let timedOut = false;
+    const headersTimer = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+    }, this.#timeoutMs);
     try {
       res = await this.#fetch(
         `${this.#base}${ROUTES.swarm.scheduler.subscribe}?cursor=${encodeURIComponent(String(cursor))}`,
@@ -219,7 +235,10 @@ export class SchedulerHttpApi implements TransitionApi, ConsumerApi {
       );
     } catch (err) {
       if (this.#stream === stream) this.#stream = null;
+      if (timedOut) throw new Error(`subscribe failed: no response headers within ${this.#timeoutMs}ms`);
       throw err;
+    } finally {
+      clearTimeout(headersTimer);
     }
     if (!res.ok || !res.body) {
       if (this.#stream === stream) this.#stream = null;

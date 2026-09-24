@@ -236,6 +236,7 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
   #unreachable = false;
   #tokenRotated = false;
   #fullReadGate: Promise<void> | null = null;
+  #nextFullReadGates: Promise<void>[] = [];
 
   constructor(opts: FakeApiOptions) {
     this.#now = opts.now;
@@ -411,6 +412,20 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
     };
   }
 
+  /**
+   * Hold only the NEXT full read, until the returned function is called.
+   * Later full reads run straight through, which is how a test makes an older
+   * rebuild's read come back after a newer rebuild has already finished.
+   */
+  holdNextFullRead(): () => void {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    this.#nextFullReadGates.push(gate);
+    return release;
+  }
+
   #record(call: string, args: Record<string, string>): RecordedCall {
     // The DISPATCH instant is the CALLER's clock — that is what §10's timing
     // gates measure — while every decision below reads the database clock.
@@ -476,6 +491,8 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
 
   async fullRead(): Promise<FullReadSnapshot & SchedulerFullRead> {
     this.#record("fullRead", {});
+    const once = this.#nextFullReadGates.shift();
+    if (once) await once;
     if (this.#fullReadGate) await this.#fullReadGate;
     if (this.#unreachable) throw new Error("full read failed: connect ECONNREFUSED");
     if (this.#tokenRotated) throw new Error("full read failed: HTTP 403");
