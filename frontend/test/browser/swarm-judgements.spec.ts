@@ -377,6 +377,36 @@ test("a judge with nothing published keeps the record's frame", async ({ page })
   await expect(page.locator(".rr-meta")).not.toContainText("Sessions judged");
 });
 
+// RM-130: a release that holds #1017 back serves no judgement route. Not
+// served is not "none yet": the judge's page leaves its record out rather
+// than say nothing was published, and a judged session keeps the opinion its
+// recommendation carries, with no way to a judgement page that is not there.
+test("a release that serves no judgements: the judge's page leaves its record out", async ({ page }) => {
+  const seen: string[] = [];
+  await stub(page, { "/api/swarm/members/themis": ROSTER.members[5] }, seen);
+  await page.goto("/swarm/members/themis");
+  await expect(page.locator(".rr-profile .rm-named .rm-role")).toHaveText("Judge");
+  await expect(page.locator("#record")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("No judgement published yet");
+  await expect(page.locator(".rr-meta")).not.toContainText("Sessions judged");
+  // Asked once, and the 404 is remembered for the visit.
+  expect(seen.filter((p) => p.includes("/judgements")).length).toBeLessThanOrEqual(1);
+});
+
+test("a release that serves no judgements: a judged session keeps its opinion, with no way to a judgement page", async ({ page }) => {
+  await stub(page, {
+    [`/api/swarm/sessions/${S1}`]: { session: judgedSession(S1, THEMIS_BLOCK), takes: TAKES },
+    "/api/swarm/members": ROSTER,
+  });
+  await page.goto(`/swarm/sessions/${S1}`);
+  const block = judgeBlock(page);
+  await expect(block).toHaveCount(1);
+  await expect(block.locator(".rr-advice-badge--hold")).toHaveText("Hold");
+  await expect(block.locator("a.rr-cta")).toHaveCount(0);
+  await expect(page.locator('a[href^="/swarm/judgements/"]')).toHaveCount(0);
+  await noSafe(page);
+});
+
 test("a member's page before the role existed reads as it always has", async ({ page }) => {
   const seen: string[] = [];
   await stub(page, {
