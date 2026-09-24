@@ -8,8 +8,8 @@
 --   * grants and default privileges -- they are part 3 (schema/grants.sql), because
 --     reconciliation runs on EVERY migrate run while this file runs only on a blank
 --     database (§8.3);
---   * `CREATE EXTENSION pgcrypto` -- provider-managed (PROVIDER_MANAGED_EXCLUSIONS in
---     src/db/schema-snapshot.ts); a managed cluster installs it and rm_owner may not.
+--   * `CREATE EXTENSION pgcrypto` -- provider-managed (the `exclusions` list in
+--     schema/snapshot.json); a managed cluster installs it and rm_owner may not.
 --
 -- Ownership: applied by rm_owner, so every object it creates is owned by rm_owner,
 -- which is what the check-2 denylist (`object_ownership`) requires.

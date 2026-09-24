@@ -2,10 +2,10 @@
 // SUPPOSED to have, so preflight can tell genuine drift from an ordinary
 // version difference.
 //
-// STUB. Every function throws `NOT IMPLEMENTED`; nothing imports this module
-// yet. Step 1 of issue #1026's W2 workstream. Governed by
-// smoke-production-spec.md §8.3, read by §7 check 3a, written by the migrate
-// run of §8.3 (see ../../scripts/migrate-run.ts).
+// Issue #1026, W2. Governed by smoke-production-spec.md §8.3, read by §7 check
+// 3a (./preflight.ts), written by blank bootstrap (./schema-snapshot.ts) and by
+// the migrate run of §8.3 (../../scripts/migrate-run.ts). Exercised against a
+// real Postgres by backend/tests/schema-manifest.test.ts.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY A MANIFEST AND NOT JUST THE LEDGER
@@ -94,23 +94,30 @@ export type ManifestDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}
  * release cannot parse it and must say so rather than guess, which is the same
  * argument as `metadata_version` on the ledger (§8.4, ./schema-compat.ts).
  */
-export const MANIFEST_FORMAT_VERSION = 1;
+//
+// Version 2 (issue #1026 W2) made the declaration a canonical JSON document of
+// three parts — the snapshot SQL, the provider exclusion list and the catalog
+// fingerprint check 3a compares against — where version 1 stored the SQL alone
+// and 3a could only look for `CREATE TABLE` names in it. No database was ever
+// published at version 1 outside tests: production's first manifest is §9.1
+// step 2's, which has not run.
+export const MANIFEST_FORMAT_VERSION = 2;
 
 /** The one-row table's name, so a refusal and a grant check can agree on it. */
 export const MANIFEST_TABLE = "schema_manifest";
 
 /**
- * The serialized schema declaration: every object class spec §8.1 lists
- * (tables, constraints, indexes, functions, triggers, policies, ownership,
- * default privileges), normalised so two databases at the same version produce
- * byte-identical output.
+ * The serialized schema declaration, exactly as the `declaration` column stores
+ * it and exactly the bytes `hashManifest` covers.
  *
  * Kept as an opaque string rather than a parsed structure because the hash is
  * over the bytes, and a parse/re-serialize round trip that is not exactly
- * stable turns a matching schema into a hash mismatch.
+ * stable turns a matching schema into a hash mismatch. At format version 2 the
+ * string is `serializeDeclaration()`'s canonical JSON; `parseDeclaration()`
+ * reads it back for check 3a.
  */
 export interface SchemaDeclaration {
-  /** The normalised declaration text. */
+  /** The serialized declaration text. */
   readonly text: string;
 }
 
@@ -341,6 +348,614 @@ export function hashManifest(declaration: SchemaDeclaration, filenames: readonly
     filenames: [...filenames],
   });
   return createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The catalog fingerprint — what check 3a actually compares
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Spec §7 check 3a: "live definitions of every object class in §8.1 match the
+// manifest for M stored in the database (§8.3), excluding the provider list."
+// §8.1's classes are "tables, constraints, indexes, functions, triggers,
+// policies, ownership, default privileges". Authored SQL cannot be compared to a
+// live catalog — the catalog does not re-serialize to the text a human wrote —
+// so the manifest carries the catalog's own answer for version M: every object
+// of those classes, keyed by what it is, with the definition Postgres itself
+// prints for it (`pg_get_indexdef`, `pg_get_constraintdef`,
+// `pg_get_functiondef`, `pg_get_triggerdef`, `pg_get_expr`). Check 3a asks the
+// live catalog the same questions and compares the two in BOTH directions: an
+// object the manifest declares that is gone or different, and an object the
+// live catalog has that the manifest does not declare.
+//
+// It is generated, never written by hand: `fingerprintCatalog()` against a
+// database bootstrapped from the snapshot (./schema-snapshot.ts,
+// `regenerateSnapshotMetadata`). Hand-writing it would make it a second
+// description of the schema free to disagree with the first.
+//
+// WHAT IT LEAVES OUT, ON PURPOSE:
+//   * Table and function GRANTS. They are §8.1's third part, reconciled on every
+//     migrate run, and check 2 owns them (required from the registry, forbidden
+//     from the denylist). Default privileges are a declaration class and are in.
+//   * Column ORDER. A column added by `ALTER TABLE ... ADD COLUMN` lands last,
+//     and pg_dump preserves whatever order history produced, so order is an
+//     accident of history rather than a property the application relies on.
+//   * `NOT NULL` constraint rows (Postgres 18 stores them in `pg_constraint`).
+//     The column's own `notnull` attribute states the same fact once; the
+//     generated constraint name is incidental.
+//   * Objects belonging to a listed extension (`pg_depend` deptype `'e'`), in
+//     both directions, and — only in the live-extra direction — objects owned by
+//     a listed provider role. See `ProviderExclusions`.
+
+/**
+ * The provider-managed exclusion list of spec §8.1: "an explicit exclusion list
+ * for provider-managed objects". Stored in the snapshot (schema/snapshot.json)
+ * and in the manifest, so check 3a honours the list the INSTALLED version was
+ * published with rather than whatever the booting image happens to ship.
+ *
+ * Two shapes, both narrow on purpose, because an entry too many is a blind spot
+ * in the drift check:
+ *   - `roles`: cluster roles outside the §3 taxonomy (`doadmin`, `postgres`).
+ *     An object the live catalog has, the manifest does not declare, and one of
+ *     these roles owns, is the provider's, not drift. A DECLARED object is
+ *     compared in full whoever owns it — re-owning an application table to
+ *     `doadmin` is an ownership change, and 3a says so.
+ *   - `extensions`: every member of these extensions, resolved through
+ *     `pg_depend` with `deptype = 'e'` — the identical test migration 0053's
+ *     two ownership loops use, for the identical reason ("re-owning an
+ *     extension's function fails with 'must be owner of function digest' for a
+ *     non-superuser"). A member of an extension NOT on the list is an
+ *     application object like any other.
+ *
+ * Names only, never a pattern: a pattern would silently exempt an application
+ * object the day someone names one badly.
+ */
+export interface ProviderExclusions {
+  readonly roles: readonly string[];
+  readonly extensions: readonly string[];
+}
+
+/**
+ * One object's normalized definition: attribute name → value. Attributes that
+ * do not apply (a column with no default, an enabled trigger's absent disable
+ * state) are omitted rather than stored empty, so the stored form stays small
+ * and a diff names only what is actually there.
+ */
+export type CatalogObject = Readonly<Record<string, string>>;
+
+/**
+ * Every declared object, keyed `<class> <qualified name>`: `table public.jobs`,
+ * `column public.jobs.note`, `index public.jobs_pkey`, `constraint
+ * public.jobs.jobs_pkey`, `function public.rm_append_only_guard()`, `trigger
+ * public.swarm_members.swarm_members_append_only`, `policy public.t.p`, `type
+ * public.mood`, `schema public`, `default privileges for rm_owner in schema
+ * public on tables`. The key is what a finding names.
+ */
+export type CatalogFingerprint = Readonly<Record<string, CatalogObject>>;
+
+/** A version 2 declaration, parsed. */
+export interface ParsedDeclaration {
+  /** The snapshot's schema-declaration SQL (schema/snapshot.sql), verbatim. */
+  readonly sql: string;
+  readonly exclusions: ProviderExclusions;
+  readonly fingerprint: CatalogFingerprint;
+}
+
+/**
+ * JSON with every object's keys sorted, recursively. The declaration's bytes are
+ * hashed, so its serialization must not depend on the order a query happened to
+ * return rows or a caller happened to build an object in.
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** The declaration `hashManifest` covers and the `declaration` column stores. */
+export function serializeDeclaration(parsed: ParsedDeclaration): SchemaDeclaration {
+  return {
+    text: canonicalJson({
+      sql: parsed.sql,
+      exclusions: { roles: [...parsed.exclusions.roles], extensions: [...parsed.exclusions.extensions] },
+      fingerprint: parsed.fingerprint,
+    }),
+  };
+}
+
+/**
+ * Read a declaration back. Throws, naming what is wrong, on anything that is not
+ * a version 2 declaration — check 3a turns that into a refusal, because a
+ * manifest whose declaration cannot be read is a manifest nothing can be
+ * verified against.
+ */
+export function parseDeclaration(declaration: SchemaDeclaration): ParsedDeclaration {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(declaration.text);
+  } catch {
+    throw new Error("the declaration is not a serialized version-2 declaration (it is not JSON)");
+  }
+  const record = parsed as Partial<Record<"sql" | "exclusions" | "fingerprint", unknown>>;
+  if (typeof record?.sql !== "string") throw new Error("the declaration carries no schema SQL");
+  assertExclusions(record.exclusions, "the declaration");
+  assertFingerprint(record.fingerprint, "the declaration");
+  return { sql: record.sql, exclusions: record.exclusions, fingerprint: record.fingerprint };
+}
+
+/** Throws unless `value` is a `ProviderExclusions`. Exported for the snapshot
+ *  loader, which validates the same shape out of schema/snapshot.json. */
+export function assertExclusions(value: unknown, where: string): asserts value is ProviderExclusions {
+  const record = value as Partial<Record<"roles" | "extensions", unknown>> | null | undefined;
+  const isNames = (list: unknown): list is string[] =>
+    Array.isArray(list) && list.every((item) => typeof item === "string" && /^[a-z_][a-z0-9_]*$/.test(item));
+  if (!record || !isNames(record.roles) || !isNames(record.extensions)) {
+    throw new Error(
+      `${where} must carry the provider exclusion list as { roles: [...], extensions: [...] } of plain names — spec §8.1`,
+    );
+  }
+  // The dangerous direction. A taxonomy role on the list would exempt every
+  // object it owns from the drift check — rm_owner owns the whole schema.
+  const taxonomy = record.roles.filter((role) => /^rm_/.test(role));
+  if (taxonomy.length > 0) {
+    throw new Error(
+      `${where} lists ${taxonomy.join(", ")} as provider-managed: a §3 taxonomy role is never provider-managed, ` +
+        "and excluding one would blind check 3a to the application's own objects",
+    );
+  }
+}
+
+/** Throws unless `value` is a `CatalogFingerprint`. */
+export function assertFingerprint(value: unknown, where: string): asserts value is CatalogFingerprint {
+  const fail = (): never => {
+    throw new Error(`${where} carries no catalog fingerprint (an object of object → attribute → string)`);
+  };
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail();
+  for (const object of Object.values(value as Record<string, unknown>)) {
+    if (object === null || typeof object !== "object" || Array.isArray(object)) fail();
+    for (const attribute of Object.values(object as Record<string, unknown>)) {
+      if (typeof attribute !== "string") fail();
+    }
+  }
+}
+
+/** One live object: its definition, and the role that owns it (the parent
+ *  relation's owner for a column, index, constraint, trigger or policy; the
+ *  grantor role for a default-privilege entry). The owner is used only to
+ *  apply `ProviderExclusions.roles` to undeclared objects. */
+interface LiveObject {
+  readonly definition: CatalogObject;
+  readonly owner: string;
+}
+
+/** Schemas the catalog reserves; everything else is an application namespace.
+ *  The same boundary check 2's `object_ownership` rule draws. */
+const APP_NAMESPACE = `n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'`;
+
+/** True when the object is a member of a LISTED extension. `$1` is the list. */
+function notExtensionMember(catalog: string, oid: string): string {
+  return `NOT EXISTS (
+    SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+     WHERE d.classid = '${catalog}'::regclass AND d.objid = ${oid}
+       AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e'
+       AND e.extname = ANY($1::text[]))`;
+}
+
+const RELATION_KIND: Readonly<Record<string, string>> = {
+  r: "table",
+  p: "table",
+  v: "view",
+  m: "materialized view",
+  S: "sequence",
+  f: "foreign table",
+  c: "composite type",
+};
+
+const TRIGGER_STATE: Readonly<Record<string, string>> = {
+  O: "origin",
+  D: "disabled",
+  R: "replica",
+  A: "always",
+};
+
+const POLICY_COMMAND: Readonly<Record<string, string>> = {
+  r: "select",
+  a: "insert",
+  w: "update",
+  d: "delete",
+  "*": "all",
+};
+
+const DEFAULT_ACL_OBJECTS: Readonly<Record<string, string>> = {
+  r: "tables",
+  S: "sequences",
+  f: "functions",
+  T: "types",
+  n: "schemas",
+  L: "large objects",
+};
+
+/** Keep only the attributes that carry a value. */
+function present(attributes: Record<string, string | null | undefined>): CatalogObject {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value !== null && value !== undefined && value !== "") out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Read every §8.1 object from the live catalog, members of the listed
+ * extensions excluded, each with its owner.
+ *
+ * READ-ONLY: catalog SELECTs and a transaction-local `search_path`. The path is
+ * emptied because every printer used here (`regclass`, `format_type`,
+ * `pg_get_expr`, `pg_get_indexdef`, ...) schema-qualifies a name only when the
+ * path does not already reach it, so the same database would print two
+ * different fingerprints to two sessions with different paths. With an empty
+ * path every name is qualified, whoever is asking.
+ */
+async function collectCatalog(db: ManifestDb, extensions: readonly string[]): Promise<Map<string, LiveObject>> {
+  return await withEmptySearchPath(db, async (q) => {
+    const live = new Map<string, LiveObject>();
+    const put = (key: string, owner: string, definition: CatalogObject): void => {
+      live.set(key, { definition, owner });
+    };
+    // `$1` is the extension list, bound only where a query filters on it: an
+    // unreferenced parameter has no type Postgres can infer (42P18).
+    const run = async <T>(text: string): Promise<T[]> =>
+      (await q.unsafe(text, text.includes("$1") ? [extensions as string[]] : [])) as unknown as T[];
+
+    for (const row of await run<{ name: string; owner: string }>(`
+      SELECT quote_ident(n.nspname) AS name, pg_get_userbyid(n.nspowner) AS owner
+        FROM pg_namespace n
+       WHERE ${APP_NAMESPACE} AND ${notExtensionMember("pg_namespace", "n.oid")}`)) {
+      put(`schema ${row.name}`, row.owner, { owner: row.owner });
+    }
+
+    const relations = await run<{
+      name: string;
+      kind: string;
+      owner: string;
+      persistence: string;
+      rls: boolean;
+      force_rls: boolean;
+      partitioned: boolean;
+      view: string | null;
+      seq_type: string | null;
+      seq_start: string | null;
+      seq_increment: string | null;
+      seq_min: string | null;
+      seq_max: string | null;
+      seq_cache: string | null;
+      seq_cycle: boolean | null;
+    }>(`
+      SELECT c.oid::regclass::text AS name, c.relkind AS kind, pg_get_userbyid(c.relowner) AS owner,
+             c.relpersistence AS persistence, c.relrowsecurity AS rls, c.relforcerowsecurity AS force_rls,
+             c.relkind = 'p' AS partitioned,
+             CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid) END AS view,
+             s.seqtypid::regtype::text AS seq_type, s.seqstart::text AS seq_start,
+             s.seqincrement::text AS seq_increment, s.seqmin::text AS seq_min, s.seqmax::text AS seq_max,
+             s.seqcache::text AS seq_cache, s.seqcycle AS seq_cycle
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_sequence s ON s.seqrelid = c.oid
+       WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c') AND ${APP_NAMESPACE}
+         AND ${notExtensionMember("pg_class", "c.oid")}`);
+    const relationOwner = new Map<string, string>();
+    for (const row of relations) {
+      relationOwner.set(row.name, row.owner);
+      put(
+        `${RELATION_KIND[row.kind] ?? `relation(${row.kind})`} ${row.name}`,
+        row.owner,
+        present({
+          owner: row.owner,
+          partitioned: row.partitioned ? "yes" : null,
+          unlogged: row.persistence === "u" ? "yes" : null,
+          "row level security": row.rls ? "enabled" : null,
+          "forced row level security": row.force_rls ? "enabled" : null,
+          definition: row.view,
+          type: row.seq_type,
+          start: row.seq_start,
+          increment: row.seq_increment,
+          min: row.seq_min,
+          max: row.seq_max,
+          cache: row.seq_cache,
+          cycle: row.seq_cycle === null ? null : row.seq_cycle ? "yes" : "no",
+        }),
+      );
+    }
+
+    // Everything below hangs off a relation and inherits its exclusion: the
+    // relation filter is repeated in each query rather than joined in JS, so a
+    // member of a listed extension never produces a single row.
+    const ownerOf = (relation: string): string => relationOwner.get(relation) ?? "";
+
+    for (const row of await run<{
+      relation: string;
+      name: string;
+      type: string;
+      notnull: boolean;
+      default_expr: string | null;
+      identity: string;
+      generated: string;
+      collation: string | null;
+    }>(`
+      SELECT c.oid::regclass::text AS relation, quote_ident(a.attname) AS name,
+             format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS notnull,
+             pg_get_expr(ad.adbin, ad.adrelid) AS default_expr, a.attidentity AS identity,
+             a.attgenerated AS generated,
+             CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation
+                  THEN a.attcollation::regcollation::text END AS collation
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_type t ON t.oid = a.atttypid
+        LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+       WHERE a.attnum > 0 AND NOT a.attisdropped
+         AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'c') AND ${APP_NAMESPACE}
+         AND ${notExtensionMember("pg_class", "c.oid")}`)) {
+      const generated = row.generated === "s" ? "stored" : row.generated === "v" ? "virtual" : null;
+      put(
+        `column ${row.relation}.${row.name}`,
+        ownerOf(row.relation),
+        present({
+          type: row.type,
+          notnull: row.notnull ? "yes" : "no",
+          default: generated ? null : row.default_expr,
+          generated: generated ? `${generated}: ${row.default_expr ?? ""}` : null,
+          identity: row.identity === "a" ? "always" : row.identity === "d" ? "by default" : null,
+          collation: row.collation,
+        }),
+      );
+    }
+
+    for (const row of await run<{ name: string; relation: string; definition: string; valid: boolean }>(`
+      SELECT i.indexrelid::regclass::text AS name, c.oid::regclass::text AS relation,
+             pg_get_indexdef(i.indexrelid) AS definition, i.indisvalid AS valid
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE ${APP_NAMESPACE} AND ${notExtensionMember("pg_class", "c.oid")}`)) {
+      put(
+        `index ${row.name}`,
+        ownerOf(row.relation),
+        present({ definition: row.definition, invalid: row.valid ? null : "yes" }),
+      );
+    }
+
+    for (const row of await run<{ parent: string; relation: string | null; name: string; definition: string; owner: string }>(`
+      SELECT COALESCE(c.oid::regclass::text, t.oid::regtype::text) AS parent,
+             c.oid::regclass::text AS relation, quote_ident(con.conname) AS name,
+             pg_get_constraintdef(con.oid) AS definition,
+             pg_get_userbyid(COALESCE(c.relowner, t.typowner)) AS owner
+        FROM pg_constraint con
+        JOIN pg_namespace n ON n.oid = con.connamespace
+        LEFT JOIN pg_class c ON c.oid = con.conrelid AND con.conrelid <> 0
+        LEFT JOIN pg_type t ON t.oid = con.contypid AND con.contypid <> 0
+       WHERE con.contype <> 'n' AND (c.oid IS NOT NULL OR t.oid IS NOT NULL) AND ${APP_NAMESPACE}
+         AND (c.oid IS NULL OR ${notExtensionMember("pg_class", "c.oid")})
+         AND (t.oid IS NULL OR ${notExtensionMember("pg_type", "t.oid")})`)) {
+      put(`constraint ${row.parent}.${row.name}`, row.owner, { definition: row.definition });
+    }
+
+    for (const row of await run<{ name: string; owner: string; kind: string; definition: string | null }>(`
+      SELECT p.oid::regprocedure::text AS name, pg_get_userbyid(p.proowner) AS owner, p.prokind AS kind,
+             CASE WHEN p.prokind <> 'a' THEN pg_get_functiondef(p.oid) END AS definition
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE ${APP_NAMESPACE} AND ${notExtensionMember("pg_proc", "p.oid")}`)) {
+      put(
+        `${row.kind === "p" ? "procedure" : row.kind === "a" ? "aggregate" : "function"} ${row.name}`,
+        row.owner,
+        present({ owner: row.owner, definition: row.definition }),
+      );
+    }
+
+    for (const row of await run<{ relation: string; name: string; definition: string; state: string }>(`
+      SELECT c.oid::regclass::text AS relation, quote_ident(t.tgname) AS name,
+             pg_get_triggerdef(t.oid) AS definition, t.tgenabled AS state
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE NOT t.tgisinternal AND ${APP_NAMESPACE} AND ${notExtensionMember("pg_class", "c.oid")}`)) {
+      put(`trigger ${row.relation}.${row.name}`, ownerOf(row.relation), {
+        definition: row.definition,
+        fires: TRIGGER_STATE[row.state] ?? row.state,
+      });
+    }
+
+    for (const row of await run<{
+      relation: string;
+      name: string;
+      command: string;
+      permissive: boolean;
+      roles: string;
+      using_expr: string | null;
+      check_expr: string | null;
+    }>(`
+      SELECT c.oid::regclass::text AS relation, quote_ident(p.polname) AS name, p.polcmd AS command,
+             p.polpermissive AS permissive,
+             array_to_string(ARRAY(
+               SELECT CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r) END FROM unnest(p.polroles) AS r ORDER BY 1
+             ), ',') AS roles,
+             pg_get_expr(p.polqual, p.polrelid) AS using_expr, pg_get_expr(p.polwithcheck, p.polrelid) AS check_expr
+        FROM pg_policy p
+        JOIN pg_class c ON c.oid = p.polrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE ${APP_NAMESPACE} AND ${notExtensionMember("pg_class", "c.oid")}`)) {
+      put(
+        `policy ${row.relation}.${row.name}`,
+        ownerOf(row.relation),
+        present({
+          command: POLICY_COMMAND[row.command] ?? row.command,
+          permissive: row.permissive ? "yes" : "no",
+          roles: row.roles,
+          using: row.using_expr,
+          "with check": row.check_expr,
+        }),
+      );
+    }
+
+    for (const row of await run<{
+      name: string;
+      kind: string;
+      owner: string;
+      labels: string | null;
+      base: string | null;
+      notnull: boolean;
+      default_expr: string | null;
+      subtype: string | null;
+    }>(`
+      SELECT t.oid::regtype::text AS name, t.typtype AS kind, pg_get_userbyid(t.typowner) AS owner,
+             CASE WHEN t.typtype = 'e' THEN (
+               SELECT string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder)
+                 FROM pg_enum e WHERE e.enumtypid = t.oid) END AS labels,
+             CASE WHEN t.typtype = 'd' THEN format_type(t.typbasetype, t.typtypmod) END AS base,
+             t.typnotnull AS notnull, t.typdefault AS default_expr,
+             (SELECT rngsubtype::regtype::text FROM pg_range WHERE rngtypid = t.oid) AS subtype
+        FROM pg_type t
+        JOIN pg_namespace n ON n.oid = t.typnamespace
+       WHERE t.typtype IN ('e', 'd', 'r') AND ${APP_NAMESPACE} AND ${notExtensionMember("pg_type", "t.oid")}`)) {
+      put(
+        `type ${row.name}`,
+        row.owner,
+        present({
+          kind: row.kind === "e" ? "enum" : row.kind === "d" ? "domain" : "range",
+          owner: row.owner,
+          labels: row.labels,
+          base: row.base,
+          notnull: row.kind === "d" ? (row.notnull ? "yes" : "no") : null,
+          default: row.default_expr,
+          subtype: row.subtype,
+        }),
+      );
+    }
+
+    for (const row of await run<{ role: string; schema: string | null; objects: string; acl: string }>(`
+      SELECT pg_get_userbyid(d.defaclrole) AS role, quote_ident(n.nspname) AS schema, d.defaclobjtype AS objects,
+             array_to_string(ARRAY(SELECT item::text FROM unnest(d.defaclacl) AS item ORDER BY 1), ',') AS acl
+        FROM pg_default_acl d
+        LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+       WHERE d.defaclnamespace = 0 OR (${APP_NAMESPACE})`)) {
+      const scope = row.schema === null ? "in every schema" : `in schema ${row.schema}`;
+      put(
+        `default privileges for ${row.role} ${scope} on ${DEFAULT_ACL_OBJECTS[row.objects] ?? row.objects}`,
+        row.role,
+        { privileges: row.acl },
+      );
+    }
+
+    return live;
+  });
+}
+
+/**
+ * Run `body` with `search_path` emptied, and leave the handle's path as it was.
+ *
+ * A pool gets a transaction and `SET LOCAL`, which ends with it. A handle that
+ * already is a transaction (or a reserved connection) cannot open one, so the
+ * previous value is read, replaced for the session, and written back — `SET` is
+ * not a write to any table, so this is still read-only against a
+ * `default_transaction_read_only` connection.
+ */
+async function withEmptySearchPath<T>(db: ManifestDb, body: (q: ManifestDb) => Promise<T>): Promise<T> {
+  const pool = db as postgresTypes.Sql<{}>;
+  if (typeof pool.begin === "function") {
+    return (await pool.begin(async (tx) => {
+      await tx.unsafe("SET LOCAL search_path = ''");
+      return body(tx as unknown as ManifestDb);
+    })) as T;
+  }
+  const [previous] = (await db`SELECT current_setting('search_path') AS path`) as unknown as { path: string }[];
+  await db`SELECT set_config('search_path', '', false)`;
+  try {
+    return await body(db);
+  } finally {
+    await db`SELECT set_config('search_path', ${previous?.path ?? ""}, false)`;
+  }
+}
+
+/**
+ * The fingerprint of the live catalog as a manifest records it: every §8.1
+ * object except members of the listed extensions and objects owned by a listed
+ * provider role. What `regenerateSnapshotMetadata` stores in the snapshot, and
+ * what a test publishes when it needs the manifest of a database it built.
+ */
+export async function fingerprintCatalog(db: ManifestDb, exclusions: ProviderExclusions): Promise<CatalogFingerprint> {
+  const providerRoles = new Set(exclusions.roles);
+  const live = await collectCatalog(db, exclusions.extensions);
+  const out: Record<string, CatalogObject> = {};
+  for (const key of [...live.keys()].sort()) {
+    const object = live.get(key)!;
+    if (providerRoles.has(object.owner)) continue;
+    out[key] = object.definition;
+  }
+  return out;
+}
+
+/** A long value (a function body, an index definition) is shown as a short
+ *  digest: the finding's job is to name the object and the attribute, and a
+ *  two-page function body in a boot log hides the one line that matters. */
+function shown(value: string | undefined): string {
+  if (value === undefined) return "(none)";
+  if (value.length <= 120) return JSON.stringify(value);
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12)} (${value.length} chars)`;
+}
+
+/**
+ * Check 3a's comparison: the live catalog against a declaration's fingerprint,
+ * in both directions, honouring the declaration's own exclusion list.
+ *
+ * Output: one operator-readable sentence per object that differs, sorted by
+ * object, each naming it. Empty when the live catalog is exactly what the
+ * declaration says.
+ *
+ *   - declared, absent live: dropped (a column, an index, a constraint, a
+ *     trigger, a function, a default-privilege entry, ...);
+ *   - declared, different live: changed (a column's type, a function's body, a
+ *     table's owner, a trigger disabled, a policy's expression, ...);
+ *   - live, undeclared: an extra object — refused unless a listed provider role
+ *     owns it. Members of listed extensions never reach this comparison.
+ */
+export async function compareCatalog(
+  db: ManifestDb,
+  declared: Pick<ParsedDeclaration, "exclusions" | "fingerprint">,
+): Promise<string[]> {
+  const live = await collectCatalog(db, declared.exclusions.extensions);
+  const providerRoles = new Set(declared.exclusions.roles);
+  const problems: string[] = [];
+
+  const keys = new Set([...Object.keys(declared.fingerprint), ...live.keys()]);
+  for (const key of [...keys].sort()) {
+    const expected = declared.fingerprint[key];
+    const actual = live.get(key);
+    if (expected === undefined) {
+      if (actual && providerRoles.has(actual.owner)) continue;
+      problems.push(
+        `${key} is in the live catalog but not declared by the installed manifest, and the provider exclusion ` +
+          `list does not cover it (owner ${actual?.owner || "unknown"})`,
+      );
+      continue;
+    }
+    if (actual === undefined) {
+      problems.push(`${key} is declared by the installed manifest but absent from the live catalog`);
+      continue;
+    }
+    const attributes = new Set([...Object.keys(expected), ...Object.keys(actual.definition)]);
+    const changed = [...attributes]
+      .sort()
+      .filter((attribute) => expected[attribute] !== actual.definition[attribute])
+      .map((attribute) => `${attribute}: ${shown(expected[attribute])} → ${shown(actual.definition[attribute])}`);
+    if (changed.length > 0) {
+      problems.push(`${key} differs from the installed manifest — ${changed.join("; ")}`);
+    }
+  }
+  return problems;
 }
 
 /**

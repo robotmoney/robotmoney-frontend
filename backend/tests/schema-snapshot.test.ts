@@ -2,37 +2,44 @@
 // schema, and the only way a blank database becomes a working one without
 // replaying five years of migrations.
 //
-// These tests are the specification for src/db/schema-snapshot.ts. Every
-// function there throws `NOT IMPLEMENTED` today, so every test here fails —
-// #1026 W2 step 2's deliverable.
+// These tests are the specification for src/db/schema-snapshot.ts (issue #1026,
+// W2), run against the real ephemeral Postgres.
 //
-// THE FIXTURE DIRECTORY IS THE POINT OF `loadSnapshot(dir?)`. The module
-// documents the override as the same affordance `checkSchemaCurrent(dir)` in
-// scripts/schema-current.ts already provides, so these tests build a snapshot
-// on disk and point at it instead of depending on `backend/schema/` — which
-// W2.5 creates and which does not exist while this file is being written.
+// TWO KINDS OF SNAPSHOT. The loader and bootstrap MECHANISM cases build a small
+// snapshot on disk and point `loadSnapshot(dir?)` at it — the same affordance
+// `checkSchemaCurrent(dir)` in scripts/schema-current.ts provides — so each
+// refusal can be provoked by editing one file. Everything the spec claims about
+// THIS repository's schema (bootstrap, preflight without `--seed`, the
+// fingerprint, the provider exclusion list) runs on the real snapshot under
+// backend/schema/, never on the fixture.
 //
 // The bootstrap tests use a genuinely fresh, unmigrated database on the suite's
 // ephemeral Postgres (the pattern tests/db-preflight.test.ts established for the
 // same reason): "blank" cannot be produced on the shared migrated database
 // without sabotaging every other file.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
-import { hashManifest, MANIFEST_FORMAT_VERSION } from "../src/db/schema-manifest.ts";
 import {
-  PROVIDER_MANAGED_EXCLUSIONS,
+  fingerprintCatalog,
+  hashManifest,
+  MANIFEST_FORMAT_VERSION,
+  serializeDeclaration,
+  type ProviderExclusions,
+} from "../src/db/schema-manifest.ts";
+import {
   SNAPSHOT_FILES,
   baselineLedger,
   bootstrapBlankDatabase,
   dumpSessionSettings,
   loadSnapshot,
+  regenerateSnapshotMetadata,
 } from "../src/db/schema-snapshot.ts";
-import { runPreflight, type PreflightContext, type PreflightReport } from "../src/db/preflight.ts";
+import { checkSchemaIntegrity, type PreflightContext, type PreflightReport } from "../src/db/preflight.ts";
 import type { RmRole } from "../src/db/registry.ts";
 import { SCHEDULES } from "../src/db/seed.ts";
 import { LEDGER_FAMILIES } from "../src/db/analytics-ledger-guard.ts";
@@ -67,10 +74,12 @@ const DECLARATION_SQL = [
 ].join("\n");
 const BOOTSTRAP_DATA_SQL = "INSERT INTO job_schedules (kind, cron, enabled) VALUES ('vault.sample_share_price', '0 * * * *', true);";
 const GRANTS_SQL = "GRANT SELECT ON ALL TABLES IN SCHEMA public TO rm_readonly;";
+const EXCLUSIONS: ProviderExclusions = { roles: ["doadmin", "postgres"], extensions: ["pgcrypto", "plpgsql"] };
 
 let fixtures = "";
 
-/** Write a complete, valid snapshot into a fresh directory and return its path. */
+/** Write a complete, valid snapshot into a fresh directory and return its path.
+ *  The fixture's fingerprint is empty: nothing here runs check 3a against it. */
 function writeSnapshot(
   name: string,
   over: Partial<{
@@ -80,6 +89,8 @@ function writeSnapshot(
     filenames: readonly string[];
     contentHash: string;
     formatVersion: number;
+    exclusions: unknown;
+    fingerprint: unknown;
     omit: keyof typeof SNAPSHOT_FILES;
   }> = {},
 ): string {
@@ -87,6 +98,21 @@ function writeSnapshot(
   mkdirSync(join(dir, "schema"), { recursive: true });
   const declarationSql = over.declarationSql ?? DECLARATION_SQL;
   const filenames = over.filenames ?? ON_DISK;
+  const exclusions = "exclusions" in over ? over.exclusions : EXCLUSIONS;
+  const fingerprint = "fingerprint" in over ? over.fingerprint : {};
+  // A metadata file missing either part has no declaration to hash; the
+  // loader refuses it before it reads the hash, so any value does.
+  const hash = (): string =>
+    exclusions === undefined || fingerprint === undefined
+      ? "0".repeat(64)
+      : hashManifest(
+      serializeDeclaration({
+        sql: declarationSql,
+        exclusions: exclusions as ProviderExclusions,
+        fingerprint: fingerprint as Record<string, Record<string, string>>,
+      }),
+      filenames,
+    );
 
   const parts: [keyof typeof SNAPSHOT_FILES, string][] = [
     ["declaration", declarationSql],
@@ -98,7 +124,9 @@ function writeSnapshot(
         {
           formatVersion: over.formatVersion ?? MANIFEST_FORMAT_VERSION,
           filenames,
-          contentHash: over.contentHash ?? hashManifest({ text: declarationSql }, filenames),
+          exclusions,
+          contentHash: over.contentHash ?? hash(),
+          fingerprint,
         },
         null,
         2,
@@ -145,43 +173,6 @@ async function withBlankDatabase(body: (db: postgres.Sql<{}>, name: string) => P
   }
 }
 
-/**
- * `runPreflight` against the named database, in a child process whose module
- * graph is preflight.ts alone — so check 2 reads a registry this test process's
- * other files cannot have populated. See the bootstrap-preflight case for why.
- */
-async function preflightInFreshProcess(dbName: string, context: PreflightContext): Promise<{ passed: boolean }> {
-  const url = new URL(config.databaseUrl);
-  url.pathname = `/${dbName}`;
-  const script = join(fixtures, `preflight-child-${crypto.randomUUID().slice(0, 8)}.ts`);
-  writeFileSync(script, [
-    `import postgres from ${JSON.stringify(Bun.resolveSync("postgres", import.meta.dir))};`,
-    `import { runPreflight } from ${JSON.stringify(join(import.meta.dir, "../src/db/preflight.ts"))};`,
-    `const db = postgres(process.env.RM_PREFLIGHT_CHILD_URL!, { max: 1, onnotice: () => {} });`,
-    `try {`,
-    `  const context = JSON.parse(process.env.RM_PREFLIGHT_CHILD_CONTEXT!);`,
-    `  const report = await runPreflight(db, context, "container", new Map([["rm_app", process.env.RM_PREFLIGHT_CHILD_PASSWORD!]]));`,
-    `  console.log("RM_PREFLIGHT_REPORT " + JSON.stringify(report));`,
-    `} finally {`,
-    `  await db.end({ timeout: 5 });`,
-    `}`,
-  ].join("\n"));
-  const child = Bun.spawnSync(["bun", "run", script], {
-    env: {
-      ...process.env,
-      RM_PREFLIGHT_CHILD_URL: url.toString(),
-      RM_PREFLIGHT_CHILD_CONTEXT: JSON.stringify(context),
-      RM_PREFLIGHT_CHILD_PASSWORD: RM_APP_PASSWORD,
-    },
-  });
-  const out = child.stdout.toString();
-  const line = out.split("\n").find((l) => l.startsWith("RM_PREFLIGHT_REPORT "));
-  if (child.exitCode !== 0 || !line) {
-    throw new Error(`preflight child failed (exit ${child.exitCode}):\n${out}\n${child.stderr.toString()}`);
-  }
-  return JSON.parse(line.slice("RM_PREFLIGHT_REPORT ".length)) as { passed: boolean };
-}
-
 /** The password the preflight case below hands `checkRoleTokens`. Preflight
  *  check 1 is "Every role token smoke will hand to a container authenticates"
  *  (§7), which it answers by actually logging in — so the fixture has to make
@@ -217,8 +208,11 @@ describe("loadSnapshot — three parts, three application rules, one identity", 
   });
 
   test("the grants part creates no roles — rm_owner never holds CREATEROLE (§3)", async () => {
-    const snapshot = await loadSnapshot(writeSnapshot("no-role-creation"));
-    expect(snapshot.grantsSql).not.toMatch(/CREATE\s+ROLE/i);
+    // The REAL backend/schema/grants.sql: a fixture that omits CREATE ROLE
+    // proves only that the fixture omits it.
+    const snapshot = await loadSnapshot();
+    expect(snapshot.grantsSql).toContain("rm_app");
+    expect(snapshot.grantsSql).not.toMatch(/CREATE\s+ROLE|ALTER\s+ROLE|DROP\s+ROLE/i);
   });
 
   test("the filename list is the snapshot's identity, carried through verbatim", async () => {
@@ -282,48 +276,129 @@ describe("loadSnapshot — three parts, three application rules, one identity", 
   });
 
   test("defaults to backend/schema/ when no directory is given", async () => {
-    // W2.5 creates those four paths; until it does, the default load refuses by
-    // naming the file it could not read, which is the correct message either way.
     const snapshot = await loadSnapshot();
     expect(snapshot.filenames).toEqual(ON_DISK);
   });
+
+  test("refuses metadata with no provider exclusion list, or no fingerprint — 3a would have nothing to honour or compare", async () => {
+    await expect(loadSnapshot(writeSnapshot("no-exclusions", { exclusions: undefined }))).rejects.toThrow(
+      "exclusion list",
+    );
+    await expect(loadSnapshot(writeSnapshot("no-fingerprint", { fingerprint: undefined }))).rejects.toThrow(
+      "fingerprint",
+    );
+  });
+
+  test("refuses a format-1 metadata file — it predates the fingerprint", async () => {
+    await expect(loadSnapshot(writeSnapshot("format-1", { formatVersion: 1 }))).rejects.toThrow("format version 1");
+  });
+
+  test("the content hash covers the fingerprint and the exclusion list, not only the SQL and the list", async () => {
+    // RED CONTROL for the two edits below: the untouched fixture verifies.
+    const dir = writeSnapshot("hash-covers-all");
+    await loadSnapshot(dir);
+    const path = join(dir, SNAPSHOT_FILES.metadata);
+    const original = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+
+    writeFileSync(path, JSON.stringify({ ...original, fingerprint: { "table public.sneaky": { owner: "rm_owner" } } }));
+    await expect(loadSnapshot(dir)).rejects.toThrow(/hash/i);
+
+    writeFileSync(path, JSON.stringify({ ...original, exclusions: { roles: ["doadmin"], extensions: [] } }));
+    await expect(loadSnapshot(dir)).rejects.toThrow(/hash/i);
+  });
 });
 
-describe("PROVIDER_MANAGED_EXCLUSIONS — narrow on purpose, because an entry too many is a blind spot", () => {
-  test("the list is specific names and extension memberships, and never a §3 taxonomy role", async () => {
-    expect(PROVIDER_MANAGED_EXCLUSIONS.roles).toEqual(["doadmin", "postgres"]);
-    expect(PROVIDER_MANAGED_EXCLUSIONS.extensions).toEqual(["pgcrypto", "plpgsql"]);
+describe("the provider exclusion list — explicit, carried by the snapshot, narrow on purpose", () => {
+  test("the real snapshot carries it: specific names, never a pattern, never a §3 taxonomy role", async () => {
+    const snapshot = await loadSnapshot();
+    expect(snapshot.exclusions).toEqual({ roles: ["doadmin", "postgres"], extensions: ["pgcrypto", "plpgsql"] });
     // Never a pattern: a pattern would silently exempt an application table the
     // day someone names one badly.
-    for (const entry of [...PROVIDER_MANAGED_EXCLUSIONS.roles, ...PROVIDER_MANAGED_EXCLUSIONS.extensions]) {
-      expect(entry).not.toMatch(/[*%_]$/);
+    for (const entry of [...snapshot.exclusions.roles, ...snapshot.exclusions.extensions]) {
+      expect(entry).toMatch(/^[a-z_][a-z0-9_]*$/);
     }
-    for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
-      expect(PROVIDER_MANAGED_EXCLUSIONS.roles as readonly string[]).not.toContain(role);
-    }
-    // And the snapshot it guards excludes none of the taxonomy's own grants.
-    const snapshot = await loadSnapshot(writeSnapshot("exclusions-taxonomy"));
-    expect(snapshot.grantsSql).toContain("rm_readonly");
+    // And it travels into the manifest the bootstrap publishes, inside the
+    // hashed declaration — 3a reads the INSTALLED version's list.
+    expect(JSON.parse(snapshot.manifest.declaration.text).exclusions).toEqual(snapshot.exclusions);
   });
 
-  test("an extension-owned function is skipped by check 3a, resolved through pg_depend deptype 'e'", async () => {
-    // The identical test 0053's two ownership loops already use, for the
-    // identical reason: re-owning an extension's function fails with "must be
-    // owner of function digest" for a non-superuser.
-    const rows = await sql<{ proname: string }[]>`
-      SELECT p.proname
-      FROM pg_proc p
-      JOIN pg_depend d ON d.objid = p.oid AND d.deptype = 'e'
-      JOIN pg_extension e ON e.oid = d.refobjid
-      WHERE e.extname = ANY(${[...PROVIDER_MANAGED_EXCLUSIONS.extensions]})`;
-    expect(rows.length).toBeGreaterThan(0);
-
-    const snapshot = await loadSnapshot(writeSnapshot("exclusions"));
-    for (const row of rows) {
-      expect(snapshot.declarationSql).not.toContain(`FUNCTION ${row.proname}`);
+  test("a snapshot listing a taxonomy role as provider-managed refuses to load — it would blind 3a to rm_owner's objects", async () => {
+    for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
+      const dir = writeSnapshot(`taxonomy-${role}`, { exclusions: { roles: ["doadmin", role], extensions: [] } });
+      await expect(loadSnapshot(dir)).rejects.toThrow(role);
     }
+    // A pattern is not a name either.
+    const dir = writeSnapshot("pattern", { exclusions: { roles: ["do%"], extensions: [] } });
+    await expect(loadSnapshot(dir)).rejects.toThrow("plain names");
+  });
+
+  test("check 3a skips members of a listed extension, resolved through pg_depend deptype 'e' — and refuses the same function once it is not one", async () => {
+    await withRealBootstrap(async ({ owner }) => {
+      // The provider's half: pgcrypto's functions live in `public` beside the
+      // application's, which is exactly why 3a needs the list at all.
+      const members = await owner<{ name: string }[]>`
+        SELECT p.oid::regprocedure::text AS name
+          FROM pg_proc p
+          JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+          JOIN pg_extension e ON e.oid = d.refobjid
+         WHERE e.extname = 'pgcrypto' AND p.pronamespace = 'public'::regnamespace`;
+      expect(members.length).toBeGreaterThan(10);
+      expect(members.map((m) => m.name)).toContain("digest(text,text)");
+
+      expect(await integrityRefusals(owner)).toEqual([]);
+
+      // Detach one function from the extension: the same object, now owned by
+      // nobody's exclusion. 3a must name it.
+      await owner.unsafe("ALTER EXTENSION pgcrypto DROP FUNCTION digest(text, text)");
+      const refused = await integrityRefusals(owner);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toContain("function public.digest(text,text)");
+      expect(refused[0]).toContain("not declared by the installed manifest");
+    });
+  });
+
+  test("an undeclared object owned by a listed provider role passes; the same object owned by anyone else refuses by name", async () => {
+    await withRealBootstrap(async ({ owner }) => {
+      // `doadmin` is the managed cluster's admin role. The ephemeral cluster has
+      // none, so the case creates it — and removes it, because roles outlive
+      // this database.
+      await owner.unsafe("CREATE ROLE doadmin NOLOGIN");
+      try {
+        await owner.unsafe("CREATE TABLE provider_monitoring (id integer)");
+        await owner.unsafe("CREATE FUNCTION provider_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'");
+        // Created by the harness superuser, which is NOT on the list: both refuse.
+        const unlisted = await integrityRefusals(owner);
+        expect(unlisted.some((f) => f.startsWith("table public.provider_monitoring "))).toBe(true);
+        expect(unlisted.some((f) => f.startsWith("function public.provider_probe() "))).toBe(true);
+
+        await owner.unsafe("ALTER TABLE provider_monitoring OWNER TO doadmin");
+        await owner.unsafe("ALTER FUNCTION provider_probe() OWNER TO doadmin");
+        expect(await integrityRefusals(owner)).toEqual([]);
+      } finally {
+        await owner.unsafe("DROP TABLE IF EXISTS provider_monitoring");
+        await owner.unsafe("DROP FUNCTION IF EXISTS provider_probe()");
+        await owner.unsafe("DROP ROLE IF EXISTS doadmin");
+      }
+    });
+  });
+
+  test("a DECLARED object re-owned to a provider role is still drift — the list covers extras, never the manifest's own objects", async () => {
+    await withRealBootstrap(async ({ owner }) => {
+      await owner.unsafe("CREATE ROLE doadmin NOLOGIN");
+      try {
+        await owner.unsafe("ALTER TABLE job_schedules OWNER TO doadmin");
+        const refused = await integrityRefusals(owner);
+        expect(refused.some((f) => f.startsWith("table public.job_schedules differs") && f.includes('"doadmin"'))).toBe(
+          true,
+        );
+      } finally {
+        await owner.unsafe("ALTER TABLE job_schedules OWNER TO rm_owner");
+        await owner.unsafe("DROP ROLE IF EXISTS doadmin");
+      }
+    });
   });
 });
+
 
 // ───────────────────────────────────────────────────────────────────────────
 // bootstrapBlankDatabase / baselineLedger
@@ -409,41 +484,6 @@ describe("bootstrapBlankDatabase — one transaction, blank in, version M out", 
       // design (`ON CONFLICT DO UPDATE`), so they must not travel with this.
       const [count] = await db<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM job_schedules`;
       expect(count?.count).toBe(1);
-    });
-  });
-
-  test("a snapshot-created database boots and passes preflight WITHOUT --seed", async () => {
-    // Spec §8.4's CI proof, and §10 W2's "snapshot bootstrap boots without
-    // `--seed`". The gate is meaningless unless bootstrap never seeds.
-    //
-    // IN A FRESH PROCESS, ON PURPOSE (issue #1026). Check 2 reads the query
-    // registry, and the registry is process-global: every module a process has
-    // loaded has registered its call sites. `bun test` runs every file in ONE
-    // process, so in-process this case asserted against whatever the files run
-    // before it had loaded — `swarm/judge-config.ts`'s writes on
-    // `swarm_judge_config` once any swarm test ran first, which this 3-table
-    // fixture cannot satisfy, and db-registry.test.ts's probe relations before
-    // that. The case never meant that: it has always measured the bootstrap and
-    // the structural checks against a process that registered nothing. A child
-    // process that imports only preflight.ts says so instead of depending on
-    // file order. Proving the real snapshot against the API's real registry is
-    // the §8.4 claim in full, and needs the real snapshot, not this fixture.
-    const snapshot = await loadSnapshot(writeSnapshot("bootstrap-preflight"));
-    await withBlankDatabase(async (db, name) => {
-      await db.unsafe("SET ROLE rm_owner");
-      await bootstrapBlankDatabase(db, snapshot);
-      await db.unsafe("RESET ROLE");
-
-      const context: PreflightContext = {
-        env: "stage",
-        connection: "local",
-        roles: ["rm_app"] as readonly RmRole[],
-        codeFilenames: snapshot.filenames,
-        envFilePath: join(fixtures, "bootstrap-preflight.env"),
-      };
-      writeFileSync(context.envFilePath, `rm_app=${RM_APP_PASSWORD}\n`, "utf8");
-      const report = await preflightInFreshProcess(name, context);
-      expect(report.passed, JSON.stringify(report)).toBe(true);
     });
   });
 
@@ -544,27 +584,23 @@ describe("baselineLedger — so `--migrate` never replays history", () => {
 // THE REAL SNAPSHOT — backend/schema/, not a fixture
 // ───────────────────────────────────────────────────────────────────────────
 //
-// Everything above runs on a three-table fixture, which proves the MECHANISM.
-// It cannot prove the thing §10 W2 actually asks for: that the snapshot this
-// repository ships bootstraps a blank database which then passes a real
-// preflight without `--seed`. These cases load `loadSnapshot()` with no
-// directory — the four files under backend/schema/ — and apply them.
+// Everything above the exclusion-list cases runs on a three-table fixture,
+// which proves the MECHANISM. It cannot prove the thing §10 W2 actually asks
+// for: that the snapshot this repository ships bootstraps a blank database
+// which then passes a real preflight without `--seed`. These cases load
+// `loadSnapshot()` with no directory — the four files under backend/schema/ —
+// and apply them.
 //
-// PREFLIGHT RUNS AS rm_app, in the `full` scope. The container scope skips
-// checks 4-6, and a superuser handle answers every catalog question as the one
-// role that can see everything. rm_app is the role the api boots under.
-//
-// WHAT CHECK 2 CAN AND CANNOT SEE HERE. Its denylist half (superuser,
-// CREATEROLE, rm_owner membership, ownership, DDL, append-only DELETE/TRUNCATE)
-// is exercised against the real grants. Its "required" half reads the query
-// registry, which is process-global: run alone, this file registers nothing
-// and that half has nothing to check; under `bun test` of the whole backend it
-// checks whatever the files run before it registered (judge-config.ts's
-// swarm_judge_config statements, db-registry and db-preflight-checks
-// fixtures). Either way it is NOT the API's full registry, so these cases do
-// not prove the real snapshot satisfies it (the bootstrap-preflight fixture
-// case above runs in a fresh process for the same reason). Stated rather than
-// hidden; the wave that registers every call site owns that proof.
+// FULL PREFLIGHT RUNS IN A CHILD PROCESS THAT LOADS THE API'S REGISTRY. Check
+// 2's required half reads the query registry, and the registry is
+// process-global: `bun test` runs every backend file in ONE process, so an
+// in-process run checks whatever the files before this one happened to
+// register — a verdict about file order, not about the snapshot. The child
+// imports exactly the modules backend/src/api/index.ts imports (read from that
+// file, so a route added there is covered without editing this one) and
+// nothing else, then runs `runPreflight` in the `full` scope as rm_app, the
+// role the api boots under. Its registry is the api's, whatever order the suite
+// runs in.
 
 /**
  * Bootstrap the REAL snapshot into a blank database owned by rm_owner, then
@@ -576,7 +612,12 @@ describe("baselineLedger — so `--migrate` never replays history", () => {
  * shortcut past the snapshot.
  */
 async function withRealBootstrap(
-  body: (ctx: { owner: postgres.Sql<{}>; app: postgres.Sql<{}>; snapshot: Awaited<ReturnType<typeof loadSnapshot>> }) => Promise<void>,
+  body: (ctx: {
+    owner: postgres.Sql<{}>;
+    app: postgres.Sql<{}>;
+    snapshot: Awaited<ReturnType<typeof loadSnapshot>>;
+    name: string;
+  }) => Promise<void>,
 ): Promise<void> {
   const snapshot = await loadSnapshot();
   await withBlankDatabase(async (owner, name) => {
@@ -585,24 +626,65 @@ async function withRealBootstrap(
     await bootstrapBlankDatabase(owner, snapshot);
     await owner.unsafe("RESET ROLE");
 
-    const url = new URL(config.databaseUrl);
-    url.pathname = `/${name}`;
-    url.username = "rm_app";
-    url.password = RM_APP_PASSWORD;
-    const app = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    const app = postgres(appUrl(name), { max: 1, onnotice: () => {} });
     try {
-      await body({ owner, app, snapshot });
+      await body({ owner, app, snapshot, name });
     } finally {
       await app.end({ timeout: 5 });
     }
   });
 }
 
-async function fullPreflightAsApp(
-  app: postgres.Sql<{}>,
+/** rm_app's login to the named database. */
+function appUrl(name: string): string {
+  const url = new URL(config.databaseUrl);
+  url.pathname = `/${name}`;
+  url.username = "rm_app";
+  url.password = RM_APP_PASSWORD;
+  return url.toString();
+}
+
+/** Check 3a's refusals against `db`, as sentences, so a failure prints them. */
+async function integrityRefusals(db: postgres.Sql<{}>): Promise<string[]> {
+  const context: PreflightContext = {
+    env: "stage",
+    connection: "local",
+    roles: ["rm_app"],
+    codeFilenames: [],
+    envFilePath: join(fixtures, "unused.env"),
+  };
+  const result = await checkSchemaIntegrity(db, context);
+  return result.findings.filter((f) => f.severity === "refuse").map((f) => f.message);
+}
+
+const API_ENTRY = join(import.meta.dir, "..", "src", "api", "index.ts");
+
+/** Every relative module backend/src/api/index.ts imports, as absolute paths:
+ *  the api's registrations without its `Bun.serve`. */
+function apiEntryModules(): string[] {
+  const text = readFileSync(API_ENTRY, "utf8");
+  const specifiers = [...text.matchAll(/^import\s[^;]*?\sfrom\s+"(\.{1,2}\/[^"]+)";/gm)].map((m) => m[1]!);
+  return specifiers.map((specifier) => join(dirname(API_ENTRY), specifier));
+}
+
+interface ChildSite {
+  readonly site: string;
+  readonly role: RmRole;
+  readonly object: string;
+  readonly privileges: readonly string[];
+  readonly callers: readonly string[];
+}
+
+/**
+ * `runPreflight(full)` as rm_app against the named database, in a child process
+ * whose registry is the api's (see the section header). Returns the report and
+ * the registry the child checked against.
+ */
+async function fullPreflightInApiProcess(
+  name: string,
   snapshot: Awaited<ReturnType<typeof loadSnapshot>>,
   envName: string,
-): Promise<PreflightReport> {
+): Promise<{ report: PreflightReport; sites: ChildSite[] }> {
   const context: PreflightContext = {
     env: "stage",
     connection: "local",
@@ -611,7 +693,51 @@ async function fullPreflightAsApp(
     envFilePath: join(fixtures, `${envName}.env`),
   };
   writeFileSync(context.envFilePath, `rm_app=${RM_APP_PASSWORD}\n`, "utf8");
-  return runPreflight(app, context, "full", new Map([["rm_app", RM_APP_PASSWORD]]));
+
+  const script = join(fixtures, `api-preflight-${crypto.randomUUID().slice(0, 8)}.ts`);
+  writeFileSync(
+    script,
+    [
+      ...apiEntryModules().map((module) => `import ${JSON.stringify(module)};`),
+      `import postgres from ${JSON.stringify(Bun.resolveSync("postgres", import.meta.dir))};`,
+      `import { runPreflight } from ${JSON.stringify(join(import.meta.dir, "../src/db/preflight.ts"))};`,
+      `import { registeredSites } from ${JSON.stringify(join(import.meta.dir, "../src/db/registry.ts"))};`,
+      `const db = postgres(process.env.RM_PREFLIGHT_CHILD_URL!, { max: 1, onnotice: () => {} });`,
+      `let code = 0;`,
+      `try {`,
+      `  const context = JSON.parse(process.env.RM_PREFLIGHT_CHILD_CONTEXT!);`,
+      `  const report = await runPreflight(db, context, "full", new Map([["rm_app", process.env.RM_PREFLIGHT_CHILD_PASSWORD!]]));`,
+      `  const sites = registeredSites().map(({ site, role, object, privileges, callers }) => ({ site, role, object, privileges, callers }));`,
+      `  console.log("RM_PREFLIGHT_REPORT " + JSON.stringify({ report, sites }));`,
+      `} catch (error) {`,
+      `  console.error(error);`,
+      `  code = 1;`,
+      `} finally {`,
+      `  await db.end({ timeout: 5 });`,
+      `}`,
+      // An api module may start a timer at import; the report is out, so leave.
+      `process.exit(code);`,
+    ].join("\n"),
+  );
+  const child = Bun.spawn(["bun", "run", script], {
+    env: {
+      ...process.env,
+      DATABASE_URL: appUrl(name),
+      RM_PREFLIGHT_CHILD_URL: appUrl(name),
+      RM_PREFLIGHT_CHILD_CONTEXT: JSON.stringify(context),
+      RM_PREFLIGHT_CHILD_PASSWORD: RM_APP_PASSWORD,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  const line = out.split("\n").find((l) => l.startsWith("RM_PREFLIGHT_REPORT "));
+  if (exitCode !== 0 || !line) throw new Error(`preflight child failed (exit ${exitCode}):\n${out}\n${err}`);
+  return JSON.parse(line.slice("RM_PREFLIGHT_REPORT ".length)) as { report: PreflightReport; sites: ChildSite[] };
 }
 
 /** Every finding, flattened, so a failure prints what refused rather than `false`. */
@@ -619,9 +745,40 @@ function findings(report: PreflightReport): string[] {
   return report.results.flatMap((r) => r.findings.map((f) => `${f.severity} ${f.check}: ${f.message}`));
 }
 
-describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstrap data, grid columns", () => {
-  test("the real snapshot bootstraps and passes full preflight without --seed", async () => {
-    await withRealBootstrap(async ({ owner, app, snapshot }) => {
+describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootstrap data, grid columns", () => {
+  test("the committed fingerprint is exactly the catalog a real bootstrap produces (regenerate: RM_SNAPSHOT_REGENERATE=1)", async () => {
+    // The one writer of snapshot.json's fingerprint and hash. Off by default;
+    // with the variable set it rewrites the file from a real bootstrap, and the
+    // assertion below then holds by construction.
+    if (process.env.RM_SNAPSHOT_REGENERATE === "1") {
+      await withBlankDatabase(async (db) => {
+        await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+        await db.unsafe("SET ROLE rm_owner");
+        await regenerateSnapshotMetadata(db);
+        await db.unsafe("RESET ROLE");
+      });
+    }
+    await withRealBootstrap(async ({ owner, snapshot }) => {
+      const live = await fingerprintCatalog(owner, snapshot.exclusions);
+      // Compared key by key first, so a stale snapshot names what moved.
+      expect(Object.keys(live).filter((key) => !(key in snapshot.fingerprint))).toEqual([]);
+      expect(Object.keys(snapshot.fingerprint).filter((key) => !(key in live))).toEqual([]);
+      expect(live).toEqual(snapshot.fingerprint);
+
+      // Every §8.1 class this schema has is in it, owners and default
+      // privileges included — not only table names.
+      const classes = new Set(Object.keys(snapshot.fingerprint).map((key) => key.split(" ")[0]));
+      for (const kind of ["schema", "table", "column", "sequence", "index", "constraint", "function", "trigger", "default"]) {
+        expect({ kind, present: classes.has(kind) }).toEqual({ kind, present: true });
+      }
+      expect(snapshot.fingerprint["table public.job_schedules"]?.owner).toBe("rm_owner");
+      // And no member of a listed extension leaked into it.
+      expect(Object.keys(snapshot.fingerprint).filter((key) => key.includes("digest("))).toEqual([]);
+    });
+  });
+
+  test("the real snapshot bootstraps and passes full preflight without --seed, against the api's own registry", async () => {
+    await withRealBootstrap(async ({ owner, app, snapshot, name }) => {
       const [who] = (await app`SELECT current_user AS role`) as unknown as { role: string }[];
       expect(who?.role).toBe("rm_app");
 
@@ -632,7 +789,7 @@ describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstra
       const identity = await owner<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
       expect(identity.map((r) => r.kind)).toEqual(["rehearsal"]);
 
-      const report = await fullPreflightAsApp(app, snapshot, "real-preflight");
+      const { report, sites } = await fullPreflightInApiProcess(name, snapshot, "real-preflight");
       expect(findings(report).filter((f) => f.startsWith("refuse"))).toEqual([]);
       expect(report.passed).toBe(true);
 
@@ -644,8 +801,13 @@ describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstra
         "schema_compatibility",
         "env_credentials",
         "env_identity",
-        "subject_epoch_durations",
+        "subject_scheduling",
       ]);
+
+      // The registry check 2 read is the api's: api call sites, and none of
+      // the test files' fixtures.
+      expect(sites.some((s) => s.role === "rm_app" && s.callers.some((c) => c.startsWith("src/api/")))).toBe(true);
+      expect(sites.filter((s) => s.site.startsWith("tests/"))).toEqual([]);
 
       // RECORDED, NOT HIDDEN: check 6 had no subject to check. The bootstrap
       // data seeds no subject, so on a blank database check 6 passes because
@@ -655,8 +817,22 @@ describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstra
     });
   });
 
+  test("RED CONTROL: the same child refuses once a privilege an api call site declares is revoked, naming the site", async () => {
+    await withRealBootstrap(async ({ owner, snapshot, name }) => {
+      const { sites } = await fullPreflightInApiProcess(name, snapshot, "real-preflight-control-probe");
+      const target = sites.find((s) => s.role === "rm_app" && s.privileges.includes("SELECT"));
+      expect(target).toBeDefined();
+      await owner.unsafe(`REVOKE SELECT ON ${target!.object} FROM rm_app`);
+
+      const { report } = await fullPreflightInApiProcess(name, snapshot, "real-preflight-control");
+      expect(report.passed).toBe(false);
+      const refused = findings(report).filter((f) => f.startsWith("refuse privileges"));
+      expect(refused.some((f) => f.includes(target!.site) && f.includes(target!.object))).toBe(true);
+    });
+  });
+
   test("check 6 passes again with a subject to check — every column from the declaration, none from a seed", async () => {
-    await withRealBootstrap(async ({ app, snapshot }) => {
+    await withRealBootstrap(async ({ app, snapshot, name }) => {
       // The minimal insert the admin route makes: it names no scheduling
       // column, so all three come from the schema declaration (§2.3, criterion
       // 81's "from the schema declaration").
@@ -674,7 +850,7 @@ describe("the real snapshot (backend/schema/) — bootstrap, preflight, bootstra
       expect(subject?.epoch_anchor.toISOString()).toBe("1970-01-01T00:00:00.000Z");
       expect(subject?.judging_duration_seconds).toBe(900);
 
-      const report = await fullPreflightAsApp(app, snapshot, "real-preflight-subject");
+      const { report } = await fullPreflightInApiProcess(name, snapshot, "real-preflight-subject");
       expect(findings(report).filter((f) => f.startsWith("refuse"))).toEqual([]);
       expect(report.passed).toBe(true);
     });

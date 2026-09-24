@@ -32,7 +32,8 @@ import {
   checkEnvCredentials,
   checkEnvIdentity,
   checkPrivileges,
-  checkSubjectEpochDurations,
+  SUBJECT_SCHEDULING_COLUMNS,
+  checkSubjectScheduling,
   checkRoleTokens,
   checkSchemaCompatibility,
   checkSchemaIntegrity,
@@ -49,13 +50,20 @@ import {
 } from "../src/db/preflight.ts";
 import { registerQuery, registeredSites, requiredPrivileges, type RmRole } from "../src/db/registry.ts";
 import { parseMigrationHeader, recordMigrationCompat } from "../src/db/schema-compat.ts";
-import { MANIFEST_FORMAT_VERSION, detectManifestState, hashManifest, writeManifest } from "../src/db/schema-manifest.ts";
-import { loadSnapshot } from "../src/db/schema-snapshot.ts";
+import {
+  MANIFEST_FORMAT_VERSION,
+  detectManifestState,
+  fingerprintCatalog,
+  hashManifest,
+  serializeDeclaration,
+  writeManifest,
+} from "../src/db/schema-manifest.ts";
+import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
-// DATABASE state rather than to cluster state: check 6 drops the
-// `epoch_duration_seconds` column and its constraint, check 3a drops an
+// DATABASE state rather than to cluster state: check 6 relaxes and drops the
+// subject scheduling columns, check 3a drops an
 // append-only trigger, and the check-2 cases grant and revoke privileges and
 // create objects owned by runtime roles. None of that is reversible by a
 // fixture — this repo's rule is a clean database per test via a template copy,
@@ -173,20 +181,36 @@ async function ledgerNames(db: PreflightDb = sql): Promise<string[]> {
   );
 }
 
-/** Publish the manifest for the current ledger the way a finished migrate run
- *  does (backend/scripts/migrate-run.ts step 6): as rm_owner, through
- *  `writeManifest`, with the snapshot's declaration and a hash from
- *  `hashManifest`. Nothing here is a hand-written row. */
+/**
+ * Publish a manifest for the current ledger through the real writer: as
+ * rm_owner, through `writeManifest`, with a hash from `hashManifest`. Nothing
+ * here is a hand-written row.
+ *
+ * THE FINGERPRINT DESCRIBES THIS CLONE, not the shipped snapshot. The clone is
+ * built by replaying migrations under the harness superuser (tests/preload.ts),
+ * and that catalog differs from a snapshot bootstrap in ways that are not these
+ * tests' subject: the superuser's own 0016 default privileges, `public`'s owner
+ * and the default privileges 0053/0062 leave, which grants.sql states
+ * differently. Whether migrations and the snapshot agree is schema-equivalence's
+ * question; these cases ask what 3a does with a manifest that is TRUE of the
+ * database it is stored in. The every-class drift cases below run against a
+ * real snapshot bootstrap instead, where the shipped fingerprint is the truth.
+ */
 async function publishManifest(): Promise<void> {
   const snapshot = await loadSnapshot();
+  const declaration = serializeDeclaration({
+    sql: snapshot.declarationSql,
+    exclusions: snapshot.exclusions,
+    fingerprint: await fingerprintCatalog(sql, snapshot.exclusions),
+  });
   await sql.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     const filenames = await ledgerNames(tx);
     await writeManifest(tx, {
       formatVersion: MANIFEST_FORMAT_VERSION,
-      declaration: snapshot.manifest.declaration,
+      declaration,
       filenames,
-      contentHash: hashManifest(snapshot.manifest.declaration, filenames),
+      contentHash: hashManifest(declaration, filenames),
     });
   });
 }
@@ -894,6 +918,227 @@ describe("check 3a — integrity against the manifest stored in the database", (
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// Check 3a — every §8.1 object class, against a REAL snapshot bootstrap
+// ───────────────────────────────────────────────────────────────────────────
+//
+// "Check 3a detects a dropped column, changed type, dropped index, dropped
+// constraint, changed function, trigger, policy, ownership and default
+// privilege, not only a missing CREATE TABLE name or guard trigger." Each case
+// starts from a database bootstrapped from backend/schema/ by the real
+// `bootstrapBlankDatabase`, whose published manifest carries the shipped
+// fingerprint — so the positive control is the shipped snapshot passing its own
+// check, and every refusal is a real catalog change measured against it.
+//
+// ONE BOOTSTRAP PER FILE, ONE CLONE PER TEST (tests/support/clean-db.ts's rule,
+// applied to a second template): the snapshot is bootstrapped once into a
+// template database, and each case copies it, mutates the copy and drops it.
+
+let snapshotTemplate: string | null = null;
+
+/** A URL for `database` on the suite's server, as the harness superuser. */
+function databaseUrl(database: string): string {
+  const url = new URL(config.databaseUrl);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+async function snapshotTemplateName(): Promise<string> {
+  if (snapshotTemplate) return snapshotTemplate;
+  const name = `rmt_preflight_snapshot_tmpl_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    // Owned by rm_owner, as `--local blank` hands it over; pgcrypto is the
+    // provider's half (the snapshot's exclusion list names it).
+    await admin.unsafe(`CREATE DATABASE ${name} OWNER rm_owner`);
+  } finally {
+    await admin.end({ timeout: 5 });
+  }
+  const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+  try {
+    await db.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    await db.unsafe("SET ROLE rm_owner");
+    await bootstrapBlankDatabase(db, await loadSnapshot());
+  } finally {
+    // Nothing may be connected to a template while it is copied.
+    await db.end({ timeout: 5 });
+  }
+  snapshotTemplate = name;
+  return name;
+}
+
+afterAll(async () => {
+  if (!snapshotTemplate) return;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${snapshotTemplate} WITH (FORCE)`);
+  } finally {
+    await admin.end({ timeout: 5 });
+  }
+});
+
+/** A fresh copy of the snapshot bootstrap, as the harness superuser. */
+async function withSnapshotDatabase(body: (db: postgres.Sql<{}>) => Promise<void>): Promise<void> {
+  const template = await snapshotTemplateName();
+  const name = `rmt_preflight_snapshot_${crypto.randomUUID().slice(0, 8)}`;
+  const admin = postgres(databaseUrl("postgres"), { max: 1, onnotice: () => {} });
+  try {
+    await admin.unsafe(`CREATE DATABASE ${name} TEMPLATE ${template}`);
+    const db = postgres(databaseUrl(name), { max: 1, onnotice: () => {} });
+    try {
+      await body(db);
+    } finally {
+      await db.end({ timeout: 5 });
+    }
+  } finally {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin.end({ timeout: 5 });
+  }
+}
+
+/** Check 3a's refusal sentences. */
+async function integrity(db: PreflightDb): Promise<string[]> {
+  return refusals((await checkSchemaIntegrity(db, context())).findings).map((f) => f.message);
+}
+
+/** The one refusal naming `object`, which must exist. */
+function naming(refused: readonly string[], object: string): string {
+  const found = refused.filter((message) => message.startsWith(`${object} `));
+  expect({ object, found: found.length }).toEqual({ object, found: 1 });
+  return found[0]!;
+}
+
+describe("check 3a — every §8.1 object class, against a real snapshot bootstrap", () => {
+  test("POSITIVE CONTROL: an untouched snapshot database carrying its published manifest passes 3a", async () => {
+    await withSnapshotDatabase(async (db) => {
+      expect((await detectManifestState(db)).kind).toBe("published");
+      expect(await integrity(db)).toEqual([]);
+    });
+  });
+
+  test("a dropped column refuses, naming the column", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
+      const refused = await integrity(db);
+      expect(naming(refused, "column public.job_schedules.last_enqueued_at")).toContain("absent from the live catalog");
+    });
+  });
+
+  test("a changed column type refuses, naming the column and both types", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE job_schedules ALTER COLUMN cron TYPE varchar(200)");
+      const message = naming(await integrity(db), "column public.job_schedules.cron");
+      expect(message).toContain('type: "text" → "character varying(200)"');
+    });
+  });
+
+  test("a changed column default or nullability refuses too — a column is more than its type", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE job_schedules ALTER COLUMN timezone DROP DEFAULT");
+      await db.unsafe("ALTER TABLE job_schedules ALTER COLUMN payload DROP NOT NULL");
+      const refused = await integrity(db);
+      expect(naming(refused, "column public.job_schedules.timezone")).toContain("default:");
+      expect(naming(refused, "column public.job_schedules.payload")).toContain('notnull: "yes" → "no"');
+    });
+  });
+
+  test("a dropped index refuses, naming the index", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("DROP INDEX jobs_scope_idx");
+      expect(naming(await integrity(db), "index public.jobs_scope_idx")).toContain("absent from the live catalog");
+    });
+  });
+
+  test("a dropped constraint refuses, naming the constraint", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE swarm_subjects DROP CONSTRAINT swarm_subjects_judging_duration_seconds_check");
+      const message = naming(await integrity(db), "constraint public.swarm_subjects.swarm_subjects_judging_duration_seconds_check");
+      expect(message).toContain("absent from the live catalog");
+    });
+  });
+
+  test("a changed function refuses, naming the function — a neutered guard is the case that matters", async () => {
+    await withSnapshotDatabase(async (db) => {
+      // Same name, same signature, same trigger wiring: only the body changed,
+      // and now the append-only guard lets every DELETE through.
+      await db.unsafe(`
+        CREATE OR REPLACE FUNCTION rm_append_only_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          RETURN OLD;
+        END;
+        $$`);
+      const message = naming(await integrity(db), "function public.rm_append_only_guard()");
+      expect(message).toContain("differs from the installed manifest — definition:");
+    });
+  });
+
+  test("a disabled trigger refuses, naming the trigger — it still exists, it just no longer fires", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_append_only");
+      const message = naming(await integrity(db), "trigger public.swarm_members.swarm_members_append_only");
+      expect(message).toContain('fires: "always" → "disabled"');
+    });
+  });
+
+  test("a policy the manifest does not declare refuses, naming the policy and the table's row-security change", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE job_schedules ENABLE ROW LEVEL SECURITY");
+      await db.unsafe("CREATE POLICY rm_sneaky_policy ON job_schedules USING (enabled)");
+      const refused = await integrity(db);
+      expect(naming(refused, "policy public.job_schedules.rm_sneaky_policy")).toContain(
+        "not declared by the installed manifest",
+      );
+      expect(naming(refused, "table public.job_schedules")).toContain('row level security: (none) → "enabled"');
+    });
+  });
+
+  test("an ownership change refuses, naming the object and both owners", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER TABLE job_schedules OWNER TO rm_worker");
+      await db.unsafe("ALTER FUNCTION rm_text_array_is_canonical_set(text[]) OWNER TO rm_app");
+      const refused = await integrity(db);
+      expect(naming(refused, "table public.job_schedules")).toContain('owner: "rm_owner" → "rm_worker"');
+      expect(naming(refused, "function public.rm_text_array_is_canonical_set(text[])")).toContain(
+        'owner: "rm_owner" → "rm_app"',
+      );
+    });
+  });
+
+  test("a default-privilege change refuses, naming the entry — future tables would be born with the grant", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT DELETE ON TABLES TO rm_app");
+      const message = naming(await integrity(db), "default privileges for rm_owner in schema public on tables");
+      expect(message).toContain("differs from the installed manifest — privileges:");
+      expect(message).toContain("rm_app=arwd/rm_owner");
+    });
+  });
+
+  test("an extension-owned object passes: pgcrypto's functions sit in public and are never compared", async () => {
+    await withSnapshotDatabase(async (db) => {
+      const [members] = (await db`
+        SELECT count(*)::int AS n
+          FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+         WHERE d.classid = 'pg_proc'::regclass AND d.deptype = 'e' AND e.extname = 'pgcrypto'`) as unknown as {
+        n: number;
+      }[];
+      expect(members?.n ?? 0).toBeGreaterThan(10);
+      const refused = await integrity(db);
+      expect(refused.filter((message) => /digest|crypt|gen_random/.test(message))).toEqual([]);
+      expect(refused).toEqual([]);
+    });
+  });
+
+  test("an unlisted extra table and an unlisted extra function refuse, each by name", async () => {
+    await withSnapshotDatabase(async (db) => {
+      await db.unsafe("CREATE TABLE rm_unlisted_extra (id integer PRIMARY KEY)");
+      await db.unsafe("CREATE FUNCTION rm_unlisted_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'");
+      const refused = await integrity(db);
+      expect(naming(refused, "table public.rm_unlisted_extra")).toContain("not declared by the installed manifest");
+      expect(naming(refused, "function public.rm_unlisted_probe()")).toContain("not declared by the installed manifest");
+    });
+  });
+});
+
 describe("check 3b — does the booting code support the installed version", () => {
   test("no surplus means no findings: the code ships exactly what the ledger records", async () => {
     const ledger = await sql<{ name: string }[]>`SELECT name FROM schema_migrations ORDER BY name`;
@@ -1234,93 +1479,104 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Check 6 — every active subject has an epoch duration
+// Check 6 — the scheduling check
 // ───────────────────────────────────────────────────────────────────────────
 //
-// REWRITTEN (issue #1026 W4). This block used to assert the five `swarm.*`
-// schedule rows were enabled and their crons parsed. The scheduler spec's §12
-// amendment table replaces that clause with "preflight: every active subject
-// has an epoch duration", and the same change retires the rows — so the old
-// assertions could only have been kept by keeping a check that refuses every
-// production boot for the absence of rows the design forbids.
+// Spec §7 check 6: "Every active subject has its epoch duration, epoch anchor
+// and judging duration. (Whether it has an open epoch is a readiness check, not
+// a preflight one — §6.3.)" This block used to assert the five `swarm.*`
+// schedule rows were enabled and their crons parsed, and later only the epoch
+// duration; the check now covers all three columns, in every environment.
+//
+// The columns are NOT NULL (0067, 0073), so a NULL is reachable only by
+// relaxing the column first — which is exactly the drift this check exists
+// for. This file clones a clean database per test, so nothing is restored.
 
-describe("check 6 — every active subject has an epoch duration", () => {
-  test("passes when every active subject has one", async () => {
-    const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
-    expect(result.check).toBe("subject_epoch_durations");
-    expect(result.findings).toEqual([]);
+/** Insert an active subject with every scheduling column set, and no session. */
+async function activeSubject(prefix: string): Promise<string> {
+  const id = `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
+  await sql`
+    INSERT INTO swarm_subjects (id, status, name, epoch_duration_seconds, epoch_anchor, judging_duration_seconds)
+    VALUES (${id}, 'active', 'pf', 3600, '2026-09-01T00:00:00Z', 900)`;
+  return id;
+}
+
+/** Relax one scheduling column so a NULL can be stored, then store it. */
+async function nullOut(subjectId: string, column: string): Promise<void> {
+  await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN ${column} DROP NOT NULL`);
+  await sql.unsafe(`UPDATE swarm_subjects SET ${column} = NULL WHERE id = $1`, [subjectId]);
+}
+
+describe("check 6 — every active subject has its epoch duration, epoch anchor and judging duration", () => {
+  test("the three columns are exactly the spec's three", () => {
+    expect([...SUBJECT_SCHEDULING_COLUMNS]).toEqual(["epoch_duration_seconds", "epoch_anchor", "judging_duration_seconds"]);
   });
 
-  test("has NO environment qualifier — stage is checked exactly like prod", async () => {
-    // The old check returned empty off `prod`, because the rows were
-    // legitimately disabled on stage. Nothing about a duration is
-    // environment-specific (spec §8), so both environments answer alike.
-    const subjectId = `pf_dur_${crypto.randomUUID().slice(0, 8)}`;
-    await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'active', 'pf')`;
-    await sql.unsafe(
-      `ALTER TABLE swarm_subjects DROP CONSTRAINT swarm_subjects_epoch_duration_seconds_check`,
+  test("an active subject with all three set and NO open epoch passes — an open epoch is readiness, not preflight", async () => {
+    const subjectId = await activeSubject("pf_sched_ok");
+    const [open] = (await sql`
+      SELECT count(*)::int AS n FROM swarm_sessions WHERE subject_id = ${subjectId}`) as unknown as { n: number }[];
+    expect(open?.n).toBe(0);
+
+    for (const env of ["prod", "stage"] as const) {
+      const result = await checkSubjectScheduling(sql, context({ env }));
+      expect(result.check).toBe("subject_scheduling");
+      expect(result.findings).toEqual([]);
+    }
+  });
+
+  for (const column of ["epoch_duration_seconds", "epoch_anchor", "judging_duration_seconds"]) {
+    test(`a NULL ${column} refuses, naming the subject and the column — identically on prod and stage`, async () => {
+      const subjectId = await activeSubject("pf_sched_null");
+      await nullOut(subjectId, column);
+
+      const prod = await checkSubjectScheduling(sql, context({ env: "prod" }));
+      const refused = refusals(prod.findings);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]?.check).toBe("subject_scheduling");
+      expect(refused[0]?.message).toContain(`active subject ${subjectId} has no ${column}`);
+
+      // No environment qualifier: stage says exactly what prod says.
+      const stage = await checkSubjectScheduling(sql, context({ env: "stage" }));
+      expect(stage.findings).toEqual(prod.findings);
+    });
+  }
+
+  test("one finding per subject per missing column — all three NULL is three refusals, each naming its column", async () => {
+    const subjectId = await activeSubject("pf_sched_all");
+    for (const column of SUBJECT_SCHEDULING_COLUMNS) await nullOut(subjectId, column);
+    const messages = refusals((await checkSubjectScheduling(sql, context({ env: "prod" }))).findings).map(
+      (f) => f.message,
     );
-    await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds DROP NOT NULL`);
-    try {
-      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${subjectId}`;
-      for (const env of ["prod", "stage"] as const) {
-        const result = await checkSubjectEpochDurations(sql, context({ env }));
-        const text = refusals(result.findings).map((f) => f.message).join("\n");
-        expect(text).toContain(subjectId);
-      }
-    } finally {
-      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = 3600 WHERE epoch_duration_seconds IS NULL`;
-      await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds SET NOT NULL`);
-      await sql.unsafe(
-        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
-      );
+    expect(messages).toHaveLength(3);
+    for (const column of SUBJECT_SCHEDULING_COLUMNS) {
+      expect(messages.some((m) => m.includes(`${subjectId} has no ${column}`))).toBe(true);
     }
   });
 
-  test("an INACTIVE subject without one is not a refusal — it runs no epochs", async () => {
-    const subjectId = `pf_dur_off_${crypto.randomUUID().slice(0, 8)}`;
-    await sql`INSERT INTO swarm_subjects (id, status, name) VALUES (${subjectId}, 'inactive', 'pf')`;
-    await sql.unsafe(
-      `ALTER TABLE swarm_subjects DROP CONSTRAINT swarm_subjects_epoch_duration_seconds_check`,
-    );
-    await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds DROP NOT NULL`);
-    try {
-      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = NULL WHERE id = ${subjectId}`;
-      const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
-      const text = refusals(result.findings).map((f) => f.message).join("\n");
-      expect(text).not.toContain(subjectId);
-    } finally {
-      await sql`UPDATE swarm_subjects SET epoch_duration_seconds = 3600 WHERE epoch_duration_seconds IS NULL`;
-      await sql.unsafe(`ALTER TABLE swarm_subjects ALTER COLUMN epoch_duration_seconds SET NOT NULL`);
-      await sql.unsafe(
-        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
-      );
-    }
+  test("an INACTIVE subject without them is not a refusal — it runs no epochs", async () => {
+    const subjectId = await activeSubject("pf_sched_off");
+    await sql`UPDATE swarm_subjects SET status = 'inactive' WHERE id = ${subjectId}`;
+    for (const column of SUBJECT_SCHEDULING_COLUMNS) await nullOut(subjectId, column);
+    const result = await checkSubjectScheduling(sql, context({ env: "prod" }));
+    expect(result.findings.map((f) => f.message).join("\n")).not.toContain(subjectId);
   });
 
-  test("refuses when the column itself is absent — the migration has not reached this database", async () => {
-    await sql.unsafe(`ALTER TABLE swarm_subjects DROP COLUMN epoch_duration_seconds`);
-    try {
-      const result = await checkSubjectEpochDurations(sql, context({ env: "prod" }));
-      expect(refusals(result.findings)).toHaveLength(1);
-      expect(result.findings[0]?.message).toContain("epoch_duration_seconds");
-    } finally {
-      await sql.unsafe(
-        `ALTER TABLE swarm_subjects ADD COLUMN epoch_duration_seconds integer NOT NULL DEFAULT 3600`,
-      );
-      await sql.unsafe(
-        `ALTER TABLE swarm_subjects ADD CONSTRAINT swarm_subjects_epoch_duration_seconds_check CHECK (epoch_duration_seconds > 0)`,
-      );
-    }
+  test("refuses when a column itself is absent — the migration has not reached this database", async () => {
+    await sql.unsafe("ALTER TABLE swarm_subjects DROP COLUMN epoch_anchor");
+    const result = await checkSubjectScheduling(sql, context({ env: "prod" }));
+    expect(refusals(result.findings)).toHaveLength(1);
+    expect(result.findings[0]?.message).toContain("swarm_subjects has no epoch_anchor column");
   });
 
   test("changes nothing — a preflight measures and never repairs", async () => {
-    const before = await sql<{ id: string; epoch_duration_seconds: number }[]>`
-      SELECT id, epoch_duration_seconds FROM swarm_subjects ORDER BY id`;
-    await checkSubjectEpochDurations(sql, context({ env: "prod" }));
-    const after = await sql<{ id: string; epoch_duration_seconds: number }[]>`
-      SELECT id, epoch_duration_seconds FROM swarm_subjects ORDER BY id`;
-    expect(after).toEqual(before);
+    const subjectId = await activeSubject("pf_sched_ro");
+    await nullOut(subjectId, "judging_duration_seconds");
+    const read = () =>
+      sql`SELECT id, epoch_duration_seconds, epoch_anchor, judging_duration_seconds FROM swarm_subjects ORDER BY id`;
+    const before = await read();
+    await checkSubjectScheduling(sql, context({ env: "prod" }));
+    expect(await read()).toEqual(before);
   });
 });
 
@@ -1338,7 +1594,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
       "schema_compatibility",
       "env_credentials",
       "env_identity",
-      "subject_epoch_durations",
+      "subject_scheduling",
     ]);
 
     const own = new Map<RmRole, string>([["rm_app", PASSWORDS.rm_app]]);
