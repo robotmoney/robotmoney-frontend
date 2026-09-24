@@ -3818,11 +3818,35 @@ re-anchors the grid at the current window's close. The judging duration becomes
 a subject column captured at turnover.
 
 **Defaults taken with these decisions.** Event sequence numbers come from one
-counter row, gapless and in commit order; the event log is never pruned; job
-pushes are cut; every instant comparison uses the database clock; a consensus is
-the first eligible judgement until a multi-judge document exists; a judge whose
+counter row, gapless and in commit order; job
+pushes are cut; every instant comparison uses the database clock; a judge whose
 member operator is `robotmoney` passes the third-party gate; production key
 rotation uses the existing `rotate-key` admin route; a roster role that
 disagrees with the database refuses the boot; the target lock uses one constant
 key over a direct connection.
+
+**Refined the same day, after review.** Five points were tightened before any of
+this was built:
+
+- **The judge of record, not a race.** A session has one judge of record and its
+  judgement is the session's consensus. Today one judge is seated, so it is that
+  judge. With several seated, the judge of record is chosen by member id, never
+  by which judgement arrived first, so nothing wins by being fastest. Other
+  judgements are recorded and change no outcome. Agreement among several judges
+  remains a later amendment.
+- **A first epoch's window has a floor** of half an `epoch_duration`. Without
+  one, a subject activated moments before a grid instant opened a window nobody
+  could submit into, then published a session recording every seated member
+  absent — a permanent record of an artefact of activation timing.
+- **The clock rule is narrowed.** A comparison of the present reads
+  `clock_timestamp()` at the comparison; a derived instant such as the next grid
+  close is read once per transaction and reused, so one transaction never acts
+  on two different presents.
+- **A transition transaction never spans a network or model call.** The event
+  counter therefore serializes only database work. Without this, the counter's
+  row lock and the isolation gate contradicted each other outright.
+- **The event log is retained past the oldest cursor the API may still be asked
+  to serve**, rather than never pruned. Pruning above that point is permitted;
+  below it is forbidden. "Never" foreclosed a retention policy that will be
+  needed.
 
