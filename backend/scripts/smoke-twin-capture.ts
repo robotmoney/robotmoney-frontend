@@ -49,10 +49,50 @@ export function defaultOutDir(): string {
   return process.env.RM_BACKUP_DIR?.trim() || join(process.env.HOME ?? "/root", "rm-backup-v022");
 }
 
+/**
+ * Where `smoke:twin` keeps ITS dumps: beside the backup directory, never in it.
+ * A slim twin dump is not a backup (it lacks the ledger's rows), so it must not
+ * be the file a restore-from-backup finds by its `.last-stamp`.
+ */
+export function twinOutDir(): string {
+  return `${defaultOutDir()}-twin`;
+}
+
+/**
+ * Tables whose ROWS a twin does not need, dumped schema-only under --twin-slim.
+ *
+ * By 2026-09-24 these held ~5.5 of production's 6.1 GB: the analytics ledger
+ * re-records every series on every fetch (issue 1035), and a full custom-format
+ * dump at --compress=9 took 20+ minutes on one core. Production's read mode is
+ * `compatibility` (analytics_read_mode), so nothing a twin serves reads them;
+ * the dual-write repopulates them from the twin's own fetches.
+ *
+ * The set is closed under foreign keys INTO it (source_fetches references
+ * source_payloads), so the restore never loads a row whose parent was skipped.
+ * analytics_report_snapshots keeps its rows: swarm_briefs, swarm_recommendations
+ * and swarm_brief_revisions reference it.
+ */
+export const TWIN_SLIM_EXCLUDED_TABLE_DATA = [
+  "source_value_versions",
+  "analytics_vintage_members",
+  "analytics_overwrite_events",
+  "source_payloads",
+  "source_fetches",
+] as const;
+
+/** PURE. The pg_dump argv for one capture. */
+export function pgDumpArgs(url: string, file: string, twinSlim: boolean): string[] {
+  const args = ["pg_dump", "--dbname", url, "--format=custom", `--compress=${twinSlim ? 1 : 9}`, "--no-owner", "--no-privileges"];
+  if (twinSlim) for (const t of TWIN_SLIM_EXCLUDED_TABLE_DATA) args.push(`--exclude-table-data=public.${t}`);
+  args.push(`--file=${file}`);
+  return args;
+}
+
 interface Args {
   out: string;
   envFile: string;
   allowPrimary: boolean;
+  twinSlim: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args | { error: string } {
@@ -65,14 +105,24 @@ export function parseArgs(argv: readonly string[]): Args | { error: string } {
   for (const flag of ["--out", "--env-file"]) {
     if (argv.includes(flag) && !val(flag)) return { error: `${flag} requires a value.` };
   }
-  const known = new Set(["--out", "--env-file", "--allow-primary"]);
+  const known = new Set(["--out", "--env-file", "--allow-primary", "--twin-slim"]);
   for (const a of argv) {
     if (a.startsWith("--") && !known.has(a)) return { error: `unknown flag "${a}".` };
   }
+  const out = resolve(val("--out") ?? defaultOutDir());
+  const twinSlim = argv.includes("--twin-slim");
+  if (twinSlim && out === resolve(defaultOutDir())) {
+    return {
+      error:
+        `--twin-slim cannot write to the backup directory ${out}: a slim dump lacks the ledger's rows and ` +
+        `must never be the file a restore-from-backup picks up. Pass --out ${twinOutDir()}.`,
+    };
+  }
   return {
-    out: resolve(val("--out") ?? defaultOutDir()),
+    out,
     envFile: resolve(val("--env-file") ?? homeEnvFilePath()),
     allowPrimary: argv.includes("--allow-primary"),
+    twinSlim,
   };
 }
 
@@ -130,7 +180,8 @@ async function main(argv: string[]): Promise<number> {
     err(parsed.error);
     return 2;
   }
-  const { out, envFile, allowPrimary } = parsed;
+  const { out, envFile, allowPrimary, twinSlim } = parsed;
+  if (twinSlim) log(`TWIN-SLIM: rows of ${TWIN_SLIM_EXCLUDED_TABLE_DATA.join(", ")} are NOT dumped (schema only). This is not a backup.`);
 
   // umask 077 for everything this process creates, the way §5.2's shell does.
   // pg_dump and gpg create their own output files, so per-write `mode` options
@@ -245,7 +296,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     log(`dumping (this is the long step) -> ${dumpPlain}`);
     const dump = run(
-      ["pg_dump", "--dbname", url, "--format=custom", "--compress=9", "--no-owner", "--no-privileges", `--file=${dumpPlain}`],
+      pgDumpArgs(url, dumpPlain, twinSlim),
     );
     if (dump.code !== 0) {
       err(`pg_dump exited ${dump.code}: ${dump.stderr}`);

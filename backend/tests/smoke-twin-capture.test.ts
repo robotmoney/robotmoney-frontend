@@ -7,7 +7,7 @@
 //   - dumping from the PRIMARY instead of the read-only replica;
 //   - starting a long dump with a client too old to finish it.
 import { afterEach, describe, expect, test } from "bun:test";
-import { assertOutsideRepo, clientVersionComplaint, majorOf, parseArgs } from "../scripts/smoke-twin-capture.ts";
+import { TWIN_SLIM_EXCLUDED_TABLE_DATA, assertOutsideRepo, defaultOutDir, pgDumpArgs, twinOutDir, clientVersionComplaint, majorOf, parseArgs } from "../scripts/smoke-twin-capture.ts";
 
 describe("parseArgs", () => {
   test("defaults to the same backup dir resolveBackupFiles() defaults to", () => {
@@ -115,5 +115,38 @@ describe("client/server version rule", () => {
   test("unknown versions do not block the dump — the guard refuses to guess", () => {
     expect(clientVersionComplaint(null, 18)).toBeUndefined();
     expect(clientVersionComplaint(18, null)).toBeUndefined();
+  });
+});
+
+describe("--twin-slim", () => {
+  test("a backup capture dumps every row, at full compression", () => {
+    const a = pgDumpArgs("postgres://x/y", "/tmp/d", false);
+    expect(a).toContain("--compress=9");
+    expect(a.some((x) => x.startsWith("--exclude-table-data"))).toBe(false);
+  });
+
+  test("a twin capture skips exactly the ledger tables' rows, and compresses lightly", () => {
+    const a = pgDumpArgs("postgres://x/y", "/tmp/d", true);
+    expect(a).toContain("--compress=1");
+    expect(a.filter((x) => x.startsWith("--exclude-table-data=")).sort()).toEqual(
+      TWIN_SLIM_EXCLUDED_TABLE_DATA.map((t) => `--exclude-table-data=public.${t}`).sort(),
+    );
+    expect(a.at(-1)).toBe("--file=/tmp/d");
+  });
+
+  test("keeps analytics_report_snapshots, which swarm_briefs and swarm_recommendations reference", () => {
+    expect(TWIN_SLIM_EXCLUDED_TABLE_DATA as readonly string[]).not.toContain("analytics_report_snapshots");
+  });
+
+  test("refuses to write a slim dump into the backup directory", () => {
+    const r = parseArgs(["--twin-slim"]);
+    expect("error" in r && r.error).toContain("cannot write to the backup directory");
+    expect(parseArgs(["--twin-slim", "--out", defaultOutDir()])).toHaveProperty("error");
+  });
+
+  test("accepts the twin directory", () => {
+    const r = parseArgs(["--twin-slim", "--out", twinOutDir()]);
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.twinSlim).toBe(true);
   });
 });

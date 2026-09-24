@@ -8,7 +8,7 @@
 //     populated and the smoke fixtures overwrite by design);
 //   - capture unless --reuse, because "the latest dump" is the whole point.
 import { describe, expect, test } from "bun:test";
-import { planTwin } from "../../smoke-twin.ts";
+import { defaultTwinDir, planTwin } from "../../smoke-twin.ts";
 import { resolveZenKey, READONLY_ENV_FILE } from "../../lib/smoke-twin-rehearsal.ts";
 
 const plan = (...a: string[]) => {
@@ -44,8 +44,21 @@ describe("planTwin — the decisions it will not let you skip", () => {
   });
 
   test("--no-tui passes through; nothing else is invented", () => {
-    expect(plan("--no-tui").args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--no-tui"]);
-    expect(plan().args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port"]);
+    const dir = defaultTwinDir();
+    expect(plan("--no-tui").args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--backup-dir", dir, "--no-tui"]);
+    expect(plan().args).toEqual(["--smoke", "--db", "smoke-twin", "--static-port", "--backup-dir", dir]);
+  });
+
+  test("boots from the twin's own directory, never the backup directory", () => {
+    const dir = defaultTwinDir({ HOME: "/home/op" });
+    expect(dir).toBe("/home/op/rm-backup-v022-twin");
+    expect(defaultTwinDir({ RM_BACKUP_DIR: "/srv/backups" })).toBe("/srv/backups-twin");
+    expect(plan().backupDir).toBe(defaultTwinDir());
+  });
+
+  test("captures slim by default; --full-dump captures every row", () => {
+    expect(plan().slim).toBe(true);
+    expect(plan("--full-dump").slim).toBe(false);
   });
 });
 

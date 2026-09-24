@@ -47,9 +47,21 @@ const log = (m: string) => console.log(`[${NAME}] ${m}`);
 export interface SmokeTwinPlan {
   /** Run smoke:capture first? */
   capture: boolean;
+  /** Capture with --twin-slim (ledger rows skipped)? False only under --full-dump. */
+  slim: boolean;
   /** The argv handed to scripts/smoke.ts. */
   args: string[];
-  backupDir?: string;
+  backupDir: string;
+}
+
+/**
+ * The twin's own dump directory, beside the backup directory and never in it —
+ * smoke-twin-capture.ts's twinOutDir(), restated here because this file runs
+ * from the repo root and does not import backend/. A slim dump is not a backup,
+ * so it must never be what a restore-from-backup finds by `.last-stamp`.
+ */
+export function defaultTwinDir(env: Record<string, string | undefined> = process.env): string {
+  return `${env.RM_BACKUP_DIR?.trim() || join(env.HOME ?? "/root", "rm-backup-v022")}-twin`;
 }
 
 /**
@@ -57,7 +69,7 @@ export interface SmokeTwinPlan {
  * scripts/tests/unit/smoke-twin-command.test.ts can pin it without a boot.
  */
 export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { error: string } {
-  const known = new Set(["--reuse", "--backup-dir", "--no-tui"]);
+  const known = new Set(["--reuse", "--backup-dir", "--no-tui", "--full-dump"]);
   for (let i = 0; i < passthrough.length; i++) {
     const a = passthrough[i]!;
     if (!a.startsWith("--")) return { error: `unexpected argument "${a}".` };
@@ -71,23 +83,23 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
     }
   }
   const i = passthrough.indexOf("--backup-dir");
-  const backupDir = i >= 0 ? passthrough[i + 1] : undefined;
+  const backupDir = i >= 0 ? passthrough[i + 1]! : defaultTwinDir();
 
   // --static-port and --smoke are NOT optional here: the first is what makes
   // this the tunnel's boot, the second is what --db smoke-twin requires (a restored
   // database is populated, and the smoke scenario's fixtures overwrite by design).
   const args = ["--smoke", "--db", "smoke-twin", "--static-port"];
-  if (backupDir) args.push("--backup-dir", backupDir);
+  args.push("--backup-dir", backupDir);
   if (passthrough.includes("--no-tui")) args.push("--no-tui");
 
-  return { capture: !passthrough.includes("--reuse"), args, ...(backupDir ? { backupDir } : {}) };
+  return { capture: !passthrough.includes("--reuse"), slim: !passthrough.includes("--full-dump"), args, backupDir };
 }
 
 if (import.meta.main) {
   const plan = planTwin(process.argv.slice(2));
   if ("error" in plan) {
     console.error(`[${NAME}] ${plan.error}`);
-    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR] [--no-tui]`);
+    console.error(`[${NAME}] usage: bun run smoke:twin [-- --reuse] [--backup-dir DIR] [--full-dump] [--no-tui]`);
     process.exit(2);
   }
 
@@ -120,7 +132,8 @@ if (import.meta.main) {
 
   if (plan.capture) {
     const captureArgs = ["bun", "run", "--cwd", join(repoRoot, "backend"), "scripts/smoke-twin-capture.ts"];
-    if (plan.backupDir) captureArgs.push("--out", plan.backupDir);
+    captureArgs.push("--out", plan.backupDir);
+    if (plan.slim) captureArgs.push("--twin-slim");
     log("capturing the latest dump from the production replica…");
     const cap = Bun.spawn(captureArgs, {
       cwd: repoRoot,
