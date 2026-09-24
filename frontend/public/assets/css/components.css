@@ -47,11 +47,12 @@
 
 /* ════════ Navigation ════════
    One list, two layouts (RM-124, index.html). At 1024px and up: a bar of
-   groups, each a label over a full-width panel. Below it: a sheet with every
-   group open under a mono-caps heading, the button pinned at the bottom.
-   Square, solid, hairline borders; no shadow, no gradient. Links stay
-   monochrome: muted and bare at rest, text colour on hover, and the current
-   section keeps the underline the hover draws in. */
+   groups, each dropping a card of links from its label over a quiet scrim.
+   Below it: a sheet with every group open under a mono-caps heading, Deposit
+   pinned at the bottom. Square, solid, hairlines; no shadow, no gradient.
+   Two treatments, never mixed: the bar's labels are muted words over a drawn
+   underline (the current section keeps it), and a card's items are single
+   lines that light a quiet row with an arrow. */
 .nav {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -69,8 +70,9 @@
 .nav__logo { display: flex; align-items: center; height: 4rem; padding-block: 0.5rem; flex: none; }
 .nav__logo img { height: 45px; width: auto; object-fit: contain; }
 
-.nav__groups, .nav__list { list-style: none; margin: 0; padding: 0; }
+.nav__groups, .nav__list, .nav__tree { list-style: none; margin: 0; padding: 0; }
 
+/* ── The bar's labels ── */
 .nav__top {
   position: relative;
   display: inline-flex;
@@ -110,33 +112,76 @@
 }
 .nav__top[aria-expanded="true"] .nav__chev { transform: rotate(-135deg); margin-top: 3px; }
 
+/* ── A card's items ── */
+.nav__label {
+  margin: 0 0 0.625rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+}
+/* A second section stacked in the same column (the Vaults card's Allocation). */
+.nav__list + .nav__label { margin-top: 1.25rem; }
 .nav__item {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem 0;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.5625rem 0.75rem;
+  margin-inline: -0.75rem;
   text-decoration: none;
+  transition: background-color 0.16s;
 }
 .nav__item-t {
   font-family: var(--font-sans);
   font-size: 0.9375rem;
+  letter-spacing: 0.005em;
   color: var(--color-text-soft);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 4px;
-  transition: color 0.2s;
+  white-space: nowrap;
+  transition: color 0.16s;
 }
 .nav__item-f {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   color: var(--color-text-muted);
 }
-.nav__item:hover .nav__item-t, .nav__item:focus-visible .nav__item-t {
-  color: var(--color-text);
-  text-decoration-line: underline;
-  text-decoration-color: var(--color-link-line);
+/* The arrow says where the row goes: across the site, or off it. Decorative,
+   so it is not part of the link's name (the second declaration; engines
+   without alt text keep the first). */
+.nav__item::after {
+  content: "\2192"; content: "\2192" / "";
+  margin-left: auto;
+  padding-left: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transform: translateX(-0.25rem);
+  transition: opacity 0.16s, transform 0.16s;
 }
+.nav__item--out::after { content: "\2197"; content: "\2197" / ""; }
+.nav__item:hover, .nav__item:focus-visible { background: rgba(255, 255, 255, 0.04); }
+.nav__item:hover .nav__item-t, .nav__item:focus-visible .nav__item-t,
 .nav__item[aria-current="page"] .nav__item-t { color: var(--color-text); }
+.nav__item:hover::after, .nav__item:focus-visible::after { opacity: 1; transform: none; }
+/* The four vaults hang from the Robot Money Vault on a hairline tree. Each
+   row draws its own stretch of the rule, so the last one stops at its tick,
+   and a row's highlight starts clear of the ticks. */
+.nav__tree { margin-left: 0.25rem; padding-left: 1rem; }
+.nav__tree > li { position: relative; }
+.nav__tree > li::before, .nav__tree > li::after {
+  content: "";
+  position: absolute;
+  left: -1rem;
+  border-color: var(--color-border-light);
+  border-style: solid;
+  border-width: 0;
+}
+.nav__tree > li::before { top: 0; bottom: 0; border-left-width: 1px; }
+.nav__tree > li:last-child::before { bottom: 50%; }
+.nav__tree > li::after { top: 50%; width: 0.625rem; border-top-width: 1px; }
+.nav__tree .nav__item { margin-left: -0.25rem; padding-left: 0.25rem; }
 .nav__top:focus-visible, .nav__item:focus-visible, .nav__toggle:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: 2px;
@@ -151,6 +196,7 @@
 .nav__bar { width: 1.25rem; height: 1px; background: var(--color-text); transition: all 0.3s; }
 .nav__bar--top-open { transform: rotate(45deg) translateY(3.5px); }
 .nav__bar--bot-open { transform: rotate(-45deg) translateY(-3.5px); }
+.nav__scrim { display: none; }
 
 /* ── Phone and tablet: the sheet ── */
 @media (max-width: 1023.98px) {
@@ -187,15 +233,16 @@
     color: var(--color-text-muted);
   }
   /* Token has no group under it, so its heading is the link: a full-width row
-     with an arrow, not a heading over nothing. The arrow is not part of its
-     name (the second declaration; engines without alt text keep the first). */
+     with an arrow, not a heading over nothing. */
   .nav__group--link { padding-block: 0.5rem; }
   a.nav__top { display: flex; justify-content: space-between; min-height: 2.75rem; color: var(--color-text); }
   a.nav__top::after { content: "\2192"; content: "\2192" / ""; font-size: 0.875rem; letter-spacing: 0; }
   .nav__top .nav__underline { display: none; }
-  .nav__panel-inner { padding-top: 0.5rem; }
-  .nav__list + .nav__list { margin-top: 0.75rem; }
-  .nav__item { min-height: 2.75rem; justify-content: center; padding: 0.375rem 0; }
+  .nav__card { padding-top: 0.5rem; }
+  .nav__label { display: none; }
+  .nav__col + .nav__col, .nav__col > .nav__list ~ .nav__list { margin-top: 0.5rem; }
+  .nav__item { min-height: 2.75rem; align-items: center; margin-inline: 0; padding-inline: 0; }
+  .nav__item::after { display: none; }
   .nav__ctas {
     position: sticky;
     bottom: 0;
@@ -208,7 +255,7 @@
   html.nav-sheet-open { overflow: hidden; }
 }
 
-/* ── Desktop: the bar and its panels ── */
+/* ── Desktop: the bar and its cards ── */
 @media (min-width: 1024px) {
   .nav__inner { padding-inline: 2rem; }
   .nav__row, .nav__logo { height: 5rem; }
@@ -222,36 +269,59 @@
     margin-left: 2rem;
   }
   /* Each group fills the bar's height, so the pointer never leaves it on the
-     way from a label down to its panel. */
+     way from a label down to its card. */
   .nav__groups { display: flex; align-self: stretch; gap: 0.25rem; }
-  .nav__group { display: flex; align-items: center; }
+  .nav__group { position: relative; display: flex; align-items: center; }
   .nav__ctas { display: flex; align-items: center; gap: 0.75rem; }
 
-  /* The panel hangs from the nav itself (the fixed bar is its containing
-     block), so it spans the viewport under the whole bar. */
+  /* The card drops from its own label. The panel around it is transparent and
+     starts at the bar's edge, so the gap above the card is still the group.
+     Offset by the card's padding less the label's, so the card's first column
+     lines up under the label's text (the last two groups, from the right). */
   .nav__panel {
     display: none;
     position: absolute;
-    top: 100%; left: 0; right: 0;
-    background: var(--color-deep);
-    border-top: 1px solid var(--color-border);
-    border-bottom: 1px solid var(--color-border);
+    top: 100%; left: -0.75rem;
+    padding-top: 0.5rem;
   }
+  .nav__panel--end { left: auto; right: -0.75rem; }
   .nav--js .nav__panel--open,
   .nav:not(.nav--js) .nav__group:hover > .nav__panel,
   .nav:not(.nav--js) .nav__group:focus-within > .nav__panel { display: block; }
-  .nav__panel-inner {
+  .nav__card {
     display: flex;
-    max-width: 80rem;
-    margin-inline: auto;
-    padding: 1.5rem 2rem 1.75rem;
+    gap: 3rem;
+    padding: 1.375rem 1.75rem 1.5rem;
+    background: rgba(11, 14, 20, 0.97);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--color-border);
   }
-  .nav__list { min-width: 15rem; padding-right: 2.5rem; }
-  .nav__list + .nav__list { padding-left: 2.5rem; border-left: 1px solid var(--color-border); }
+  .nav__col { min-width: 13rem; }
+  .nav--js .nav__panel--open .nav__card { animation: navCardIn 0.18s cubic-bezier(0.2, 0.7, 0.2, 1); }
+
+  /* The page behind a card steps back. It hangs from the bar like the cards,
+     under them, and a click on it closes the card. */
+  .nav__scrim {
+    display: block;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    height: 100vh;
+    z-index: -1;
+    background: rgba(3, 4, 6, 0.45);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0s linear 0.2s;
+  }
+  .nav--open .nav__scrim { opacity: 1; visibility: visible; transition: opacity 0.2s; }
+}
+@keyframes navCardIn {
+  from { opacity: 0; transform: translateY(-0.375rem); }
+  to { opacity: 1; transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nav__underline, .nav__chev, .nav__top, .nav__item-t { transition: none; }
+  .nav__underline, .nav__chev, .nav__top, .nav__item, .nav__item-t, .nav__item::after, .nav__scrim { transition: none; }
+  .nav--js .nav__panel--open .nav__card { animation: none; }
 }
 
 /* ════════ Hero ════════ */

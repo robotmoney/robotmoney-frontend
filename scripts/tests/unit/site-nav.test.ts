@@ -13,11 +13,15 @@ import { NOT_FOUND_VIEW, viewFor } from "../../../frontend/public/assets/js/app/
 import { VAULTS } from "../../../frontend/public/assets/js/app/lib/vault-data.js";
 
 const pub = join(import.meta.dir, "../../../frontend/public");
+// Linked ahead of the page that answers it. The swarm leaderboard is being
+// built on its own branch; this entry goes when that route lands.
+const PENDING = ["/swarm/leaderboard"];
 const html = readFileSync(join(pub, "index.html"), "utf8");
 const nav = html.slice(html.indexOf('<nav class="nav'), html.indexOf("</nav>"));
 
 // One entry per group, in bar order: its key and the links inside it.
 const groups = nav
+  .slice(0, nav.indexOf('<div class="nav__ctas">'))
   .split('<li class="nav__group')
   .slice(1)
   .map((chunk) => ({
@@ -31,8 +35,7 @@ describe("navSectionFor", () => {
     ["/vault/rmagent", "vaults"],
     ["/vault", "vaults"],
     ["/allocation", "vaults"],
-    ["/performance", "vaults"],
-    ["/smart-contract-risks", "vaults"],
+    ["/performance", "about"],
     ["/swarm/subjects/robotmoney-vault", "vaults"],
     ["/swarm", "swarm"],
     ["/swarm/", "swarm"],
@@ -45,7 +48,8 @@ describe("navSectionFor", () => {
     ["/regime-detection", "research"],
     ["/blog/peaq-partnership", "research"],
     ["/research/late-cycle-signals", "research"],
-    ["/media/articles", "research"],
+    ["/smart-contract-risks", "research"],
+    ["/media/articles", "about"],
     ["/tokenomics", "token"],
     ["/skills", "docs"],
     ["/docs/investment-swarm/api-reference", "docs"],
@@ -85,6 +89,7 @@ describe("the nav markup", () => {
     for (const g of groups) {
       for (const href of g.hrefs) {
         const path = href.split("#")[0];
+        if (!path.startsWith("/")) continue; // off the site (Telegram, X)
         if (/\.[a-z]+$/.test(path)) continue; // a file (llms.txt), not a page
         expect(`${href} -> ${navSectionFor(path)}`).toBe(`${href} -> ${g.key}`);
       }
@@ -95,6 +100,7 @@ describe("the nav markup", () => {
     const hrefs = [...nav.matchAll(/href="(\/[^"]*)"/g)].map((m) => m[1]);
     expect(hrefs.length).toBeGreaterThanOrEqual(20);
     for (const href of hrefs) {
+      if (PENDING.includes(href)) continue;
       const [path, hash] = href.split("#");
       if (/\.[a-z]+$/.test(path)) {
         expect(existsSync(join(pub, path)), href).toBe(true);
@@ -105,6 +111,14 @@ describe("the nav markup", () => {
       expect(existsSync(join(pub, view)), `${href} -> ${view}`).toBe(true);
       if (hash) expect(readFileSync(join(pub, view), "utf8"), href).toContain(`id="${hash}"`);
     }
+  });
+
+  test("the Robot Money Vault leads, and the four vaults in lib/vault-data.js hang from it", () => {
+    const vaults = groups.find((g) => g.key === "vaults")!.chunk;
+    const tree = vaults.slice(vaults.indexOf('href="/swarm/subjects/robotmoney-vault"'));
+    expect(tree.indexOf('<ul class="nav__tree">')).toBeGreaterThan(0);
+    const inTree = tree.slice(tree.indexOf('<ul class="nav__tree">'), tree.indexOf("</ul>"));
+    expect([...inTree.matchAll(/href="\/vault\/([a-z]+)"/g)].map((m) => m[1])).toEqual(VAULTS.map((v) => v.slug));
   });
 
   test("the vaults are the four in lib/vault-data.js, by name and token, in order", () => {
@@ -123,7 +137,15 @@ describe("the nav markup", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
-  test("the primary action is the skill", () => {
-    expect(nav).toMatch(/<a href="\/skills" class="btn-primary[^"]*nav__cta">Get the skill<\/a>/);
+  test("the primary action is to deposit, through the skill", () => {
+    expect(nav).toMatch(/<a href="\/skills" class="btn-primary[^"]*nav__cta">Deposit<\/a>/);
+  });
+
+  test("a link off the site opens in a new tab and says so", () => {
+    for (const [, attrs] of nav.matchAll(/<a ([^>]*href="https?:[^"]+"[^>]*)>/g)) {
+      expect(attrs).toContain('target="_blank"');
+      expect(attrs).toContain('rel="noopener noreferrer"');
+      expect(attrs).toContain("nav__item--out");
+    }
   });
 });
