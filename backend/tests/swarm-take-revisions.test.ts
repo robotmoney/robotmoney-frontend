@@ -32,7 +32,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 // A session reaches `judged` the way it does in production since issue #1026:
 // a seated judge participant submits a signed judgement (support/stub-judge.ts).
-import { judgeViaParticipant } from "./support/stub-judge.ts";
+import { judgeViaParticipant, enforceJudging } from "./support/stub-judge.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -293,6 +293,7 @@ test("the amendment gate is an ALLOWLIST: `judged` freezes takes exactly as `agg
   const { subj, session, date } = await openCollectingSession("judged-amend");
   const m = await activeMember();
   expect((await submit(m, date, subj, { body: "the take of record" })).status).toBe(201);
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   const { result: judged } = await judgeViaParticipant(session.id);

@@ -34,7 +34,7 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-import { requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY } from "./support/stub-judge.ts";
+import { requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, enforceJudging } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -64,6 +64,7 @@ async function judging(prefix: string) {
   for (const voter of [await member("voter_a"), await member("voter_b")]) {
     expect((await submit(voter, date, subjectId)).status).toBe(201);
   }
+  await enforceJudging();
   await ic.closeWindow(opened.id);
   await ic.aggregateSession(opened.id);
   await requestJudgingFor(opened.id);

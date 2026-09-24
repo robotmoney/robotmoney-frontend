@@ -52,7 +52,7 @@ import {
   checkRationaleLadder, listRationaleLadderDrift, recentJudgeableSessions, replaySessionJudge,
 } from "../src/swarm/judge-replay.ts";
 import {
-  requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
+  enforceJudging, requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
   type TestJudge,
 } from "./support/stub-judge.ts";
 
@@ -126,6 +126,7 @@ async function aggregatedSession(prefix: string, count = 3) {
     members.push(m);
     await submit(m, date, subj, { stance: stances[i % stances.length], confidence: 0.5 + i * 0.1, body: `take ${i} on ${subj}`, weights: W });
   }
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   return { subj, session, date, members };
@@ -164,6 +165,7 @@ async function rosteredAggregatedSession(prefix: string, count = 3) {
       body: `take ${i} on ${subj}`, weights: W,
     });
   }
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   return { subj, session, date, members };
@@ -458,6 +460,7 @@ test("a take body that tries to instruct the judge cannot make it author a numbe
   ].join("\n");
   await submit(attacker, date, subj, { body: injection, weights: W });
   await submit(other, date, subj, { stance: "bullish", body: "an ordinary take", weights: W });
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(session.id);
@@ -491,6 +494,7 @@ test("a member cannot put words in another member's mouth: `view` is the attribu
     weights: W,
   });
   await submit(victim, date, subj, { stance: "bullish", body: "MY ACTUAL POSITION: conviction is intact.", weights: W });
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(session.id);
@@ -583,6 +587,7 @@ test("one stance-only take degrades ONE position, recorded as a drop on the row,
   await submit(bodied, date, subj, { stance: "bullish", body: "Rotate into agent tokens now.", weights: W });
   await submit(alsoBodied, date, subj, { stance: "cautious", body: "Wait one cycle for the regime read.", weights: W });
   await submit(stanceOnly, date, subj, { stance: "bearish", body: "", weights: W });
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(session.id);
@@ -627,6 +632,7 @@ test("a session where EVERY take is stance-only is refused as nothing to judge",
   for (const stance of ["bullish", "cautious", "bearish"]) {
     await submit(await activeMember(), date, subj, { stance, body: "", weights: W });
   }
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(session.id);
@@ -668,6 +674,7 @@ test("a judge with a TAKE in the session is refused, and so is a member that is 
   await sql`UPDATE swarm_members SET role = 'member' WHERE id = ${judge.id}`;
   await submit(judge as unknown as Member, date, subj, { body: "the judge's own take", weights: W });
   await sql`UPDATE swarm_members SET role = 'judge' WHERE id = ${judge.id}`;
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(session.id);
@@ -759,6 +766,7 @@ test("a position_actions session emits NO hardcoded actions — and judging one 
   const b = await activeMember();
   await submit(a, date, subj, { stance: "bullish", body: "a real take" });
   await submit(b, date, subj, { stance: "bearish", body: "another real take" });
+  await enforceJudging();
   await ic.closeWindow(s.id);
   const rollup = await ic.aggregateSession(s.id);
   expect(rollup.type).toBe("position_actions");

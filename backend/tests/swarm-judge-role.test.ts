@@ -12,7 +12,7 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-import { requestJudgingFor, seatJudge, signedJudgement } from "./support/stub-judge.ts";
+import { requestJudgingFor, seatJudge, signedJudgement, enforceJudging } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -45,6 +45,7 @@ async function judging(prefix: string) {
   const s = await session(prefix);
   const voters = [await member("voter_a"), await member("voter_b")];
   for (const voter of voters) expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
+  await enforceJudging();
   await ic.closeWindow(s.session.id);
   await ic.aggregateSession(s.session.id);
   await requestJudgingFor(s.session.id);
@@ -135,6 +136,7 @@ test("a judge who already submitted a take in the session is refused before a ju
   // below happens strictly AFTER this take is on the session.
   expect((await submit(candidate, s.date, s.subjectId)).status).toBe(201);
   expect((await submit(voter, s.date, s.subjectId)).status).toBe(201);
+  await enforceJudging();
   await ic.closeWindow(s.session.id);
   await ic.aggregateSession(s.session.id);
   await requestJudgingFor(s.session.id);

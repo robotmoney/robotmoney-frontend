@@ -26,7 +26,7 @@ import {
   type JudgementSubmission,
   type SubmitJudgementResult,
 } from "../../src/swarm/domain.ts";
-import { getJudgeConfig } from "../../src/swarm/judge-config.ts";
+import { getJudgeConfig, setJudgeConfig } from "../../src/swarm/judge-config.ts";
 import { inputsDigest, JUDGE_PROMPT_HASH } from "../../src/swarm/judge.ts";
 import { generateKeyPair, signMessage } from "../../src/lib/signing.ts";
 
@@ -123,14 +123,27 @@ export async function submitSigned(
 }
 
 /**
+ * Switch the judge to `enforce` (with the stub model, which 0056 requires) so
+ * the NEXT close captures it. Call it BEFORE `closeWindow`: the close stores
+ * the judge mode in force on the session (system-scheduler-spec.md §4.4,
+ * "Judge mode and judging duration are captured at turnover"), and settlement
+ * reads only what the close captured. The shipped mode is `off`, and a session
+ * closed under `off` is refused by `requestJudging` as `judge_mode_off`.
+ * This goes through the real config writer, never a patched session row.
+ */
+export async function enforceJudging(): Promise<void> {
+  await setJudgeConfig({ mode: "enforce", model: STUB_JUDGE_MODEL });
+}
+
+/**
  * Put an AGGREGATED session into `judging`, as the scheduler's request-judging
  * step does (system-scheduler-spec.md §4.4).
  *
- * NO MODE IS WRITTEN HERE. A session built through the legacy fixtures
- * (`openSession` → `closeWindow` → `aggregateSession`) may carry a NULL judge
- * mode, and it goes through `requestJudging` and `submitJudgement` exactly as
- * it is: all three transitions refuse only `off`, and the tests exercise that
- * contract rather than a fixture-patched one.
+ * NO MODE IS WRITTEN HERE. The mode was captured when the session closed, and
+ * `requestJudging` refuses a session whose close captured `off`
+ * (`judge_mode_off`) or nothing (`judging_not_captured`). A test that judges
+ * therefore calls `enforceJudging()` before its `closeWindow`, and the tests
+ * exercise that contract rather than a fixture-patched one.
  */
 export async function requestJudgingFor(sessionId: string): Promise<void> {
   const requested = await requestJudging(sessionId);

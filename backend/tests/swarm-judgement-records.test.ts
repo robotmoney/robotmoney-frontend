@@ -30,7 +30,7 @@ import { seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, submitSigned, type TestJudge } from "./support/stub-judge.ts";
+import { requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, submitSigned, type TestJudge, enforceJudging } from "./support/stub-judge.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -66,6 +66,7 @@ async function judging(prefix: string) {
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
   for (const voter of [await member("voter_a"), await member("voter_b")]) await submit(voter, date, subjectId);
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   await requestJudgingFor(String(session.id));
@@ -260,6 +261,7 @@ test("a judgement on a weights session says its recommendation set weights: its 
     { bucket: "protocol_tokens", weight: 0 }, { bucket: "real_world_assets", weight: 0 },
   ];
   for (const voter of [await member("wv_a"), await member("wv_b")]) await submit(voter, date, subjectId, "a weighted take", weights);
+  await enforceJudging();
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
   expect((await recOf(String(session.id))).type).toBe("bucket_weights");
