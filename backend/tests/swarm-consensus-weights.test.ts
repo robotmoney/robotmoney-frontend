@@ -198,7 +198,18 @@ test("the judge modules never reach the derivation and never ASSIGN a weights fi
     // `weights:` in an object literal or `weights =` as an assignment. READING
     // one (`rec.weights ?? null`) is fine and necessary — the replay path
     // compares vectors; AUTHORING one is what is forbidden.
-    expect(/\bweights\s*[:=][^=]/.test(src), `${rel} must not author a weights field`).toBe(false);
+    //
+    // Two object keys are reads, not authorship, and are exempted BY EXACT TEXT
+    // so nothing else can hide behind them: since a42d6c5a the judge's input
+    // record carries each member's OWN proposed vector, copied straight off the
+    // take, so the inputs digest covers it. Neither computes a weight; renaming
+    // the key would change every stored inputs_digest and break replay.
+    const READ_THROUGH = [
+      "weights: t.weights ?? null",
+      "weights: Array.isArray(t.payload?.weights) ? t.payload.weights : null",
+    ];
+    const authored = READ_THROUGH.reduce((acc, read) => acc.split(read).join(""), src);
+    expect(/\bweights\s*[:=][^=]/.test(authored), `${rel} must not author a weights field`).toBe(false);
   }
 });
 
