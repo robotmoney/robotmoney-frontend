@@ -42,7 +42,13 @@ export function registerSiteNav(Alpine) {
         this.close();
         this.setSheet(false);
       });
+      // The router fires this once its fragment arrives, on the first load too.
+      // On a slow connection that is after a reader has opened a panel, so
+      // only a change of page closes it.
+      let path = location.pathname;
       window.addEventListener("rm:before-view-change", () => {
+        if (location.pathname === path) return;
+        path = location.pathname;
         this.close();
         this.setSheet(false);
       });
