@@ -1,91 +1,175 @@
-// `bun run migrate` — apply pending migrations to the database in $HOME/.env.
+// `bun run migrate` — the operator's migrate run (smoke-production-spec.md §8.5).
 //
-// This REPLACES scripts/ops/provision-db-role-taxonomy.sh. Where that script
-// applied 0053/0062 out-of-band through psql — and never recorded them in
-// `schema_migrations`, which is exactly how production's ledger drifted — this
-// runs the normal forward-only runner (backend/src/db/migrate.ts), so every
-// migration it applies (the role taxonomy included) is RECORDED. It migrates
-// and nothing else: seeding is a separate tool (`bun run src/db/seed.ts`).
+// "In production an upgrade is an operator intervention: `bun run migrate`,
+// prompting for `rm_owner`, planned per release, receipted. It is never part of
+// the boot." This file is that command's argv, `~/.env` and terminal handling.
+// The run itself, its gates and its receipt live in ./migrate-run.ts.
 //
-// It reads the connection from the ONE credential file, $HOME/.env — the
-// discrete-token convention every tool here uses (scripts/lib/env-role.ts):
-// host/port/database/sslmode plus one `<role> = <password>` line. The role is
-// the migration login. It must hold rm_owner membership (migrate.ts SET LOCAL
-// ROLE rm_owner for migrations >= 0054) and, for a first bootstrap that creates
-// the taxonomy, CREATEROLE. On a DigitalOcean cluster that is `doadmin`;
-// override with `--role <login>` or MIGRATE_ROLE.
-import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "../../scripts/lib/env-role.ts";
-import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
+// THE SEQUENCE, in this order and no other:
+//   1. Read the target from `$HOME/.env` (host, port, database, sslmode) and
+//      the policy from RM_ENV. Refuse a `~/.env` that holds `rm_owner` or
+//      `doadmin`: §3 keeps both out of that file, and a host that stores an
+//      owner password has no reason left to type one.
+//   2. `checkMigrateGates`, read through `rm_readonly` — BEFORE the owner
+//      password is requested, so a refused run never has a password typed
+//      into it.
+//   3. `promptOwnerPassword`: masked, verified by a real login, never written
+//      anywhere and never placed in the environment (§3).
+//   4. Connect AS `rm_owner`. Never `doadmin`: §3 makes `doadmin` cluster
+//      provisioning only, and the migration login is `rm_owner` (D47).
+//   5. `confirmRemoteTarget`: warn, then an explicit `y`.
+//   6. `runMigrate`: fence, apply, reconcile, publish (§8.3).
+//   7. `writeMigrateReceipt`: into the instance's state directory, or the
+//      path `--receipt` names.
+//
+// usage: bun run migrate [--instance <name>] [--receipt <path>]
+//
+// `--instance` defaults to the production instance under RM_ENV=prod. Any other
+// policy must name where the receipt goes, because a receipt written to a
+// guessed instance is a record in the wrong place.
+import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
+import { resolveRmEnv } from "../../scripts/lib/smoke-env-policy.ts";
+import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
 
 const NAME = "migrate";
 const err = (m: string) => console.error(`[${NAME}] ${m}`);
 const log = (m: string) => console.log(`[${NAME}] ${m}`);
 
-// The migration login: --role <login>, else MIGRATE_ROLE, else doadmin.
-const roleFlag = process.argv.indexOf("--role");
-const role = roleFlag >= 0 ? process.argv[roleFlag + 1] : (process.env.MIGRATE_ROLE ?? "doadmin");
-if (!role) {
-  err("--role needs a value");
-  process.exit(64);
-}
-
-const env = loadEnvFile(homeEnvFilePath());
-if (!env) {
-  err(`no readable $HOME/.env (${homeEnvFilePath()}).`);
+function refuse(message: string): never {
+  err(message);
   process.exit(1);
 }
 
-// The connection tokens (host/database) come from $HOME/.env; the migration
-// role's PASSWORD comes from its own line if present, otherwise a masked
-// terminal prompt — never required to sit in a file. This is the point of
-// dropping doadmin from .env: the password is typed for the one run, not stored.
-if (!env.host || !env.database) {
-  err(`$HOME/.env is missing the connection tokens (host, database) this needs.`);
-  process.exit(1);
+function flag(name: string): string | undefined {
+  const at = process.argv.indexOf(name);
+  if (at < 0) return undefined;
+  const value = process.argv[at + 1];
+  if (!value || value.startsWith("--")) refuse(`${name} needs a value`);
+  return value;
 }
-if (!env[role]) {
-  if (!process.stdin.isTTY) {
-    err(`no '${role}' password line in $HOME/.env, and stdin is not a terminal.`);
-    err(`Add a '${role} = <password>' line, or run this interactively so it can prompt.`);
-    process.exit(1);
+
+const receiptFlag = flag("--receipt");
+const instanceFlag = flag("--instance");
+
+const envPath = homeEnvFilePath();
+const env = loadEnvFile(envPath);
+if (!env) refuse(`no readable $HOME/.env (${envPath}).`);
+
+// §3: "It must not contain `rm_owner`, `doadmin`, a superuser token ...". The
+// old runner read the migration login's password from this file when it was
+// there; this one refuses the file instead, before it connects to anything.
+const forbidden = ["rm_owner", "doadmin"].filter((key) => env[key] !== undefined);
+if (forbidden.length > 0) {
+  refuse(
+    `$HOME/.env holds a ${forbidden.join(" and a ")} line. Spec §3 keeps both out of it: the rm_owner password is ` +
+      "typed at the terminal for the one run that needs it and never stored. Remove the line and rerun.",
+  );
+}
+
+// Args override env (§3), so the process's RM_ENV wins over the file's.
+const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env.RM_ENV });
+if (!policy.ok) refuse(policy.reason);
+const rmEnv = policy.source === "unset" ? null : policy.env;
+
+// The receipt's home is decided BEFORE anything connects: finding out after a
+// production migration that there is nowhere to record it is the wrong order.
+const startedAt = new Date();
+let receiptDir: string | null = null;
+if (receiptFlag === undefined) {
+  const instance = instanceFlag ?? (rmEnv === "prod" ? PRODUCTION_INSTANCE : undefined);
+  if (instance === undefined) {
+    refuse("name the instance whose state directory receives the receipt (--instance <name>), or pass --receipt <path>.");
   }
-  const pw = await hiddenPrompt(`${role} password (not echoed, not stored)`);
-  if (!pw) {
-    err("no password entered.");
-    process.exit(1);
-  }
-  env[role] = pw;
+  receiptDir = instancePaths(stateRoot(process.env), instance).dir;
 }
 
-const url = urlForRole(env, role);
-if (!url) {
-  err(`$HOME/.env cannot assemble a '${role}' connection (host/port/database/sslmode).`);
-  process.exit(1);
+// The gates read `deployment_identity` through the least-privileged role that
+// can: §3 puts `rm_readonly` in `~/.env` and 0063 grants it SELECT there.
+const readonlyUrl = urlForRole(env, "rm_readonly");
+if (!readonlyUrl) {
+  refuse(`$HOME/.env cannot assemble an rm_readonly connection (host, port, database, sslmode and an rm_readonly line).`);
 }
+const target = (() => {
+  const u = new URL(readonlyUrl);
+  return `${u.hostname}:${u.port || "5432"}${u.pathname}`;
+})();
 
-log(`${redactedTarget(url, role)} — migrations only, no seed`);
-process.env.MIGRATE_DATABASE_URL = url;
+// backend/src/config.ts validates at IMPORT, and the run's modules import it.
+// It requires DATABASE_URL: this process's is the rm_readonly target above, a
+// runtime credential that can do no DDL, and it is what the owner-login check
+// reads `pg_roles` through. Its RM_ENV list still carries the retired `smoke`
+// spelling where the spec says `stage` (scripts/lib/smoke-env-policy.ts
+// documents the gap), so a `stage` policy is presented to it as `smoke`. The
+// gates below read `rmEnv`, never config.env.
+process.env.DATABASE_URL = readonlyUrl;
+if (process.env.RM_ENV === "stage") process.env.RM_ENV = "smoke";
 
-// backend/src/config.ts is validated at IMPORT and requires a runtime
-// DATABASE_URL — and in prod forbids doadmin there. The migration connects via
-// MIGRATE_DATABASE_URL above; config never connects with DATABASE_URL, so hand
-// it the same target under a non-doadmin username purely to satisfy that
-// import-time check. This works even on a fresh cluster where rm_app does not
-// exist yet — the whole point of a tool that REPLACES the provisioning script.
-// (The imports below are dynamic so this runs before config loads.)
-const forConfig = new URL(url);
-forConfig.username = "rm_app";
-forConfig.password = "unused-config-only";
-process.env.DATABASE_URL = forConfig.toString();
+const postgres = (await import("postgres")).default;
+const { targetLockKey } = await import("../src/db/target-lock.ts");
+const {
+  checkMigrateGates,
+  confirmRemoteTarget,
+  migrateReceiptPath,
+  promptOwnerPassword,
+  runMigrate,
+  writeMigrateReceipt,
+} = await import("./migrate-run.ts");
+const receiptPath = receiptFlag ?? migrateReceiptPath(receiptDir ?? "", startedAt);
 
-const { migrate } = await import("../src/db/migrate.ts");
-const { closeDb } = await import("../src/db/client.ts");
+const reader = postgres(readonlyUrl, { max: 1, onnotice: () => {} });
+let owner: ReturnType<typeof postgres> | null = null;
 try {
-  await migrate();
-  log("done");
+  const [identity] = (await reader.unsafe(
+    "SELECT (SELECT system_identifier::text FROM pg_control_system()) AS system_identifier, current_database() AS database_name",
+  )) as unknown as { system_identifier: string; database_name: string }[];
+  const options = {
+    caller: "operator" as const,
+    env: rmEnv,
+    // `bun run migrate` never targets a Postgres smoke owns: that is
+    // `bun smoke --migrate`, which uses smoke's generated password (§8.5).
+    connection: "remote" as const,
+    lockKey: targetLockKey({
+      systemIdentifier: identity?.system_identifier ?? "",
+      databaseName: identity?.database_name ?? "",
+    }),
+    sessionLockHeld: false,
+    nonInteractive: !process.stdin.isTTY,
+  };
+
+  const refusals = await checkMigrateGates(reader, options);
+  if (refusals.length > 0) {
+    for (const refusal of refusals) err(refusal.message);
+    process.exitCode = 1;
+  } else {
+    log(`target ${target}, RM_ENV=${rmEnv ?? "(unset)"}`);
+    const password = await promptOwnerPassword(options);
+    const ownerUrl = new URL(readonlyUrl);
+    ownerUrl.username = "rm_owner";
+    ownerUrl.password = encodeURIComponent(password);
+    owner = postgres(ownerUrl.toString(), { max: 1, onnotice: () => {} });
+    await confirmRemoteTarget(options, target);
+
+    const result = await runMigrate(owner, options);
+    const written = await writeMigrateReceipt(receiptPath, result, {
+      caller: options.caller,
+      env: options.env,
+      target,
+      startedAt,
+    });
+    log(`applied ${result.applied.length} migration(s)${result.applied.length ? `: ${result.applied.join(", ")}` : ""}`);
+    if (result.resumedAndVerified.length > 0) {
+      log(`resumed and verified ${result.resumedAndVerified.length} committed migration(s)`);
+    }
+    log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
+    log(`manifest ${result.manifest.contentHash} published`);
+    log(`receipt ${written}`);
+  }
 } catch (e) {
   err(e instanceof Error ? e.message : String(e));
   process.exitCode = 1;
 } finally {
+  await reader.end({ timeout: 5 });
+  await owner?.end({ timeout: 5 });
+  const { closeDb } = await import("../src/db/client.ts");
   await closeDb();
 }

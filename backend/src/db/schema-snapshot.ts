@@ -351,6 +351,12 @@ export async function bootstrapBlankDatabase(db: SnapshotDb, snapshot: Snapshot)
   const baselined = await inTransaction(db, async (tx) => {
     await tx.unsafe(snapshot.declarationSql);
     await tx.unsafe(snapshot.bootstrapDataSql);
+    // Both parts are pg_dump output and open with
+    // `set_config('search_path', '', false)`, a SESSION setting. Every statement
+    // after them in this function names its tables unqualified, so the empty
+    // path would fail the first one ("no schema has been selected to create
+    // in") and would outlive the bootstrap on the caller's connection.
+    await tx.unsafe("RESET search_path");
     await tx.unsafe(snapshot.grantsSql);
 
     // AFTER the grants sweep, never before: the manifest is a trusted input to

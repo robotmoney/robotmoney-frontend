@@ -1,9 +1,8 @@
 // Compatibility (spec §8.2 and §8.4) — how an image built for snapshot N
 // decides whether it may boot against a database that has moved on to M > N.
 //
-// These tests are the specification for src/db/schema-compat.ts. Every function
-// there throws `NOT IMPLEMENTED` today, so every test here fails — #1026 W2
-// step 2's deliverable.
+// These tests are the specification for src/db/schema-compat.ts, which
+// preflight check 3b and the migrate run (scripts/migrate-run.ts) both call.
 //
 // WHY THE PARSER GETS SO MANY TESTS. The header parser is the only thing
 // standing between the word `additive` and a wrong boot. §8.2 requires the
@@ -19,9 +18,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import {
   COMPAT_COLUMNS,
+  COMPAT_HEADER_BASELINE,
   COMPAT_METADATA_VERSION,
   checkCompatibility,
   parseMigrationHeader,
+  parsePendingHeader,
+  requiresCompatHeader,
   readLedgerCompat,
   recordMigrationCompat,
 } from "../src/db/schema-compat.ts";
@@ -36,8 +38,10 @@ function header(lines: readonly string[]): string {
   return `${lines.map((l) => `-- ${l}`).join("\n")}\n\nALTER TABLE jobs ADD COLUMN note text;\n`;
 }
 
-/** Add §8.2's two ledger columns to this database's `schema_migrations`. They
- *  are W2.6's migration and do not exist in this checkout yet. */
+/** Add §8.2's two ledger columns to this database's `schema_migrations`.
+ *  Migration 0064 creates them, so the cloned template starts with them; the
+ *  afterEach below drops them so "the column does not exist" stays reachable,
+ *  and a test that needs them re-adds them here. */
 async function addCompatColumns(): Promise<void> {
   await sql.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS compat text`);
   await sql.unsafe(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS metadata_version integer`);
@@ -146,6 +150,67 @@ describe("parseMigrationHeader — the declaration §8.2 requires of every migra
     const parsed = parseMigrationHeader(file, text);
     expect(parsed.filename).toBe(file);
     expect(["additive", "breaking"]).toContain(parsed.compat);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The pre-compat baseline (D53 decision 3)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("the pre-compat baseline — 0001-0063 may be header-less, nothing after may", () => {
+  const dir = `${import.meta.dir}/../migrations`;
+  async function migrations(): Promise<{ file: string; text: string }[]> {
+    const { readdir } = await import("node:fs/promises");
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
+    return Promise.all(files.map(async (file) => ({ file, text: await Bun.file(`${dir}/${file}`).text() })));
+  }
+
+  test("the baseline is 0063", () => {
+    expect(COMPAT_HEADER_BASELINE).toBe(63);
+    expect(requiresCompatHeader("0063_deployment_identity.sql")).toBe(false);
+    expect(requiresCompatHeader("0064_schema_manifest.sql")).toBe(true);
+  });
+
+  test("EVERY migration above 0063 carries a parseable header", async () => {
+    const above = (await migrations()).filter(({ file }) => requiresCompatHeader(file));
+    // RED CONTROL: the loop below must have something to check.
+    expect(above.length).toBeGreaterThan(0);
+    for (const { file, text } of above) {
+      expect({ file, header: parsePendingHeader(file, text) !== null }).toEqual({ file, header: true });
+    }
+  });
+
+  test("the baseline is load-bearing: files at or below 0063 exist without a header, and are not backfilled", async () => {
+    const headerless = (await migrations()).filter(
+      ({ file, text }) => !requiresCompatHeader(file) && parsePendingHeader(file, text) === null,
+    );
+    expect(headerless.length).toBeGreaterThan(0);
+    expect(headerless.map((m) => m.file)).toContain("0001_backends.sql");
+  });
+
+  test("a header-less file at or below the baseline is pre-compat: null, not a default", () => {
+    expect(parsePendingHeader("0063_precompat.sql", "-- prose only\nSELECT 1;\n")).toBeNull();
+  });
+
+  test("a header-less file above the baseline refuses, naming itself", () => {
+    expect(() => parsePendingHeader("0073_undeclared.sql", "-- prose only\nSELECT 1;\n")).toThrow(
+      "0073_undeclared.sql",
+    );
+  });
+
+  test("a pre-compat file that DOES declare is parsed strictly — a bad declaration is still bad", () => {
+    expect(() => parsePendingHeader("0053_bad.sql", "-- compat: maybe\n-- metadata_version: 1\nSELECT 1;\n")).toThrow(
+      "maybe",
+    );
+    expect(parsePendingHeader("0053_good.sql", "-- compat: additive\n-- metadata_version: 1\nSELECT 1;\n")).toEqual({
+      filename: "0053_good.sql",
+      compat: "additive",
+      metadataVersion: 1,
+    });
+  });
+
+  test("a filename without a leading number refuses rather than guessing which side of the baseline it is on", () => {
+    expect(() => requiresCompatHeader("schema.sql")).toThrow("schema.sql");
   });
 });
 
@@ -269,6 +334,19 @@ describe("checkCompatibility — code at N against a database at M > N", () => {
     if (verdict.kind === "refused") {
       expect(verdict.reasons[0]).toContain(surplus);
       expect(verdict.reasons[0]).toContain(String(COMPAT_METADATA_VERSION + 1));
+    }
+  });
+
+  test("refuses a metadata_version below 1 — no release ever wrote version 0", async () => {
+    await addCompatColumns();
+    const names = await ledgerNames();
+    const surplus = names[names.length - 1] ?? "";
+    await sql`UPDATE schema_migrations SET compat = 'additive', metadata_version = 0 WHERE name = ${surplus}`;
+    const verdict = await checkCompatibility(sql, names.slice(0, -1), names);
+    expect(verdict.kind).toBe("refused");
+    if (verdict.kind === "refused") {
+      expect(verdict.reasons[0]).toContain(surplus);
+      expect(verdict.reasons[0]).toContain("metadata_version 0");
     }
   });
 
