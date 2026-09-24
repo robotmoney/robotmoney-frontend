@@ -2887,6 +2887,9 @@ export function registerStaticViews(Alpine) {
     // A judge's record: its public judgements, newest first. A judge files no
     // takes, so its page lists these where a member's lists takes.
     judgements: [],
+    // Whether the judgements are served at all (RM-130): a release without
+    // #1017 serves none, and then the record is left out, not called empty.
+    judgementsServed: false,
     // subject id → the subject record's name. A take row carries the name its
     // session was filed under, which can lag a rename; /swarm and the subject
     // page print the record's name, so this page does too.
@@ -2965,8 +2968,11 @@ export function registerStaticViews(Alpine) {
             setCanonicalUrl(canonicalUrlFor(`/swarm/members/${this.member.handle}`), routeAtEntry);
           }
         }
-        if (isJudge(this.member)) this.judgements = await loadMemberJudgements(memberId);
-        else this.rows = await this.loadRows(memberId);
+        if (isJudge(this.member)) {
+          const judgements = await loadMemberJudgements(memberId);
+          this.judgementsServed = judgements !== null;
+          this.judgements = judgements || [];
+        } else this.rows = await this.loadRows(memberId);
         try {
           const ids = [...new Set([...this.rows.map((r) => r.session.subjectId), ...this.judgements.map((j) => j.subjectId)].filter(Boolean))];
           const subs = await Promise.all(ids.map(async (id) => (await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject).catch(() => null)) || loadArchiveSubject(id).catch(() => null)));
@@ -3461,7 +3467,9 @@ export function registerStaticViews(Alpine) {
     async loadJudgements() {
       const s = this.session;
       if (this.source !== "api" || !s?.id || s.state !== "published" || !s.swarmRecommendation?.judge) return;
-      this.judgements = await loadSessionJudgements(s.id);
+      // Not served (RM-130) reads as none: the opinion the recommendation
+      // carries still shows, with no way to a judgement page.
+      this.judgements = (await loadSessionJudgements(s.id)) || [];
     },
     isFramework() { return this.subject?.source?.type === "framework"; },
     subjectHref() {
