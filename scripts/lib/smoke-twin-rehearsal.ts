@@ -43,11 +43,13 @@
 // overwriting that file on a staging host risks corrupting a real credential.
 // `--db smoke-twin` constructs its URL in-process and writes no file, so all of it is
 // gone, and smoke-twin.ts's assertSmokeTwinIsTarget() covers the risk it existed for.
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homeEnvFilePath } from "./env-role.ts";
 import { smokeTwinUrlFromContainer } from "./smoke-twin.ts";
+import { instancePaths, stateRoot } from "./smoke-state.ts";
 import { refuseCheckoutEnvFile } from "../smoke.ts";
 
 /**
@@ -239,6 +241,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
   // project from its environment, and this rehearsal learns it from the state
   // file the boot writes (the first one written after the boot started).
   let project: string | null = null;
+  let rehearsalInstance: string | null = null;
   let bootProc: Bun.Subprocess | null = null;
   const bootStartedAt = Date.now();
 
@@ -248,7 +251,12 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     // the non-superuser migration RM_TWIN_PRODUCTION_PRIVILEGES shapes below is
     // the thing this rehearsal exists to run. Without it the boot refuses a
     // stale schema rather than serving it (smoke-main.ts's preflight).
-    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate"];
+    // Its OWN deployment instance (spec §1.1), so its journal, receipt and stack
+    // record never mix with the host's standing instance, and teardown can name
+    // exactly this stack.
+    const instance = `rm_twin_rehearsal_${randomBytes(4).toString("hex")}`;
+    rehearsalInstance = instance;
+    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate", "--instance", instance];
     log(`booting: ${args.slice(2).join(" ")}  (this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 
@@ -278,12 +286,11 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       bootExit = c;
     });
 
-    // SUPERVISED, NOT AWAITED. With CI unset the boot never self-terminates BY
-    // DESIGN: it falls past smoke-main's CI-gated exits into the LIVE
-    // steady-state loop and cycles sessions forever. That is correct for a
-    // cutover, where the stack must stay up serving — so awaiting it here would
-    // hang the rehearsal permanently.
-    const stateFile = join(repoRoot, ".agents", "smoke-state.json");
+    // SUPERVISED, NOT AWAITED. `bun smoke` exits 0 at readiness (spec §1) and
+    // leaves the stack up under Docker; a non-zero exit before readiness is the
+    // failure. The record of what it brought up is the instance's
+    // stack-state.json, polled here together with GET /health.
+    const stateFile = instancePaths(stateRoot(process.env), instance).stackStateFile;
     log(`waiting for readiness (deadline ${Math.round(READY_DEADLINE_MS / 60000)}m): ${stateFile} + GET /health`);
     const startedAt = Date.now();
     let ready: SmokeState | null = null;
@@ -291,7 +298,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     while (Date.now() - startedAt < READY_DEADLINE_MS) {
       // Fail fast rather than burning the whole deadline: with CI unset a boot
       // that exits AT ALL has failed (a healthy one runs forever).
-      if (bootExit !== null) {
+      if (bootExit !== null && bootExit !== 0) {
         err(`boot exited ${bootExit} before becoming ready — this release's migrations did not apply cleanly against production-shaped data, or the stack did not come up`);
         return 1;
       }
@@ -309,10 +316,10 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
             lastNote = `api port ${state.apiPort} not healthy yet (${health?.status ?? "no response"})`;
           }
         } catch {
-          lastNote = "smoke-state.json present but not yet parseable";
+          lastNote = "stack-state.json present but not yet parseable";
         }
       } else {
-        lastNote = "smoke-state.json not written yet (still building/starting)";
+        lastNote = "stack-state.json not written yet (still building/starting)";
       }
       await Bun.sleep(READY_POLL_MS);
     }
@@ -328,7 +335,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     // that is exactly the misconfiguration this fixes, and it fails as a wall
     // of "MISSING" content assertions that reads like a broken frontend.
     if (!ready.webPort) {
-      err("smoke-state.json has no webPort — this boot predates issue #892's website-server split, or writeStateFile() stopped recording it");
+      err("stack-state.json has no webPort — the boot never recorded the website-server port it was assigned");
       return 1;
     }
     const backendUrl = `http://127.0.0.1:${ready.webPort}`;
@@ -402,7 +409,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
 
     if (opts.onReady) {
       // The smoke-twin's URL is recovered from the container, not from
-      // smoke-state.json, which redacts it — see smokeTwinUrlFromContainer().
+      // the stack record, which redacts it — see smokeTwinUrlFromContainer().
       const databaseUrl = ready.smokeTwinContainer ? smokeTwinUrlFromContainer(ready.smokeTwinContainer) : null;
       if (!databaseUrl) {
         // NEVER a pass. A release's checks not running is indistinguishable, in
@@ -434,6 +441,16 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       // 2026-08-22: two runs finished all their work and stayed resident. A
       // deadline added to enforce G1 ("it terminates on its own, always") must
       // not be the thing that breaks it.
+      // The boot itself exits at readiness now (spec §1), so "the boot died" is
+      // "this project's api container stopped running": polled, and cancelled
+      // with the deadline for the reason given below.
+      let goneTimer: ReturnType<typeof setInterval> | undefined;
+      const stackGone = new Promise<void>((resolve) => {
+        goneTimer = setInterval(() => {
+          const ps = Bun.spawnSync(["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${ready!.project}`, "--filter", "label=com.docker.compose.service=api"]);
+          if (ps.exitCode === 0 && new TextDecoder().decode(ps.stdout).trim() === "") resolve();
+        }, 10_000);
+      });
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<number>((resolve) => {
         deadlineTimer = setTimeout(() => resolve(TIMED_OUT as unknown as number), deadlineMs);
@@ -443,10 +460,11 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
         hookCode = await Promise.race([
           opts.onReady({ backendUrl, databaseUrl, log, err }),
           deadline,
-          bootProc.exited.then(() => BOOT_DIED as unknown as number),
+          stackGone.then(() => BOOT_DIED as unknown as number),
         ]);
       } finally {
         clearTimeout(deadlineTimer);
+        clearInterval(goneTimer);
       }
       if ((hookCode as unknown) === TIMED_OUT) {
         err(
@@ -456,7 +474,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
       }
       if ((hookCode as unknown) === BOOT_DIED) {
         err(
-          `the boot exited ${bootExit} DURING this release's checks, after ${Math.round((Date.now() - checksStartedAt) / 1000)}s — any check that had already passed graded a stack that is now gone. This is a failed rehearsal.`,
+          `the stack's api stopped DURING this release's checks, after ${Math.round((Date.now() - checksStartedAt) / 1000)}s — any check that had already passed graded a stack that is now gone. This is a failed rehearsal.`,
         );
         return 1;
       }
@@ -488,7 +506,9 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     // 2. smoke-down resolves the project from the state file the boot wrote
     //    (on success, or best-effort on a failed boot). It also removes the
     //    dump's CONTAINER, which is why nothing here does.
-    await spawn(["bun", "--no-env-file", "scripts/smoke-down.ts"], {}).catch(() => {});
+    if (rehearsalInstance) {
+      await spawn(["bun", "--no-env-file", "scripts/smoke-down.ts", "--instance", rehearsalInstance], {}).catch(() => {});
+    }
 
     // 3. smoke-down deliberately KEEPS volumes — including the smoke-twin's, whose
     //    contract is that it survives teardown. For a REHEARSAL they are pure

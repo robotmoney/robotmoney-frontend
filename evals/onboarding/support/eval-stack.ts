@@ -21,6 +21,7 @@ import {
   resolveStackEnvironment,
   type Stack,
 } from "../../../scripts/stack/index.ts";
+import { throwawayInstance } from "../../../scripts/lib/smoke-state.ts";
 
 // evals/onboarding/support/ -> repo root
 export const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -38,6 +39,10 @@ export function evalProject(claim: string): string {
 // A stack object used ONLY for its compose plumbing (build + teardown). No
 // service is started: the isolated claims have no server by design.
 export function imageOnlyStack(project: string): Stack {
+  // The compose file requires an instance state directory outside the checkout
+  // (RM_INSTANCE_STATE_DIR, no fallback). Nothing here mounts it; a throwaway
+  // one satisfies the interpolation.
+  const instance = throwawayInstance(project);
   return createStack(
     {
       repoRoot,
@@ -47,6 +52,7 @@ export function imageOnlyStack(project: string): Stack {
       database: DEFAULT_STACK_DATABASE,
       credentials: generateStackCredentials(),
       environment: resolveStackEnvironment({}),
+      instance: { name: instance.name, stateDir: instance.stateDir },
     },
     { hostEnv: dockerClientHostEnv(), io: { stdout: "pipe", stderr: "pipe" } },
   );

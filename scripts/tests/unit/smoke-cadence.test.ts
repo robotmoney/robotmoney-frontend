@@ -343,8 +343,13 @@ export function importsCadenceProfile(src: string, expected: string[]): string |
 }
 
 describe("cadence lives in ONE file — consumers carry no literal of their own", () => {
-  test("scripts/lib/smoke-main.ts imports the profile and the planner", () => {
-    expect(importsCadenceProfile(smokeMain, ["resolveSmokeCadence", "planSubjectSchedules", "renderCadenceLine"])).toBeNull();
+  test("scripts/lib/smoke-main.ts imports the profile it boots and renders", () => {
+    // Not the planner any more (issue #1026): planSubjectSchedules timed the
+    // standing in-process swarm loop, and `bun smoke` now exits at readiness
+    // (smoke spec §1) — sessions are the system-scheduler's. The profile still
+    // decides every interval the boot hands the stack, and the READY banner.
+    expect(importsCadenceProfile(smokeMain, ["resolveSmokeCadence", "renderCadenceLine"])).toBeNull();
+    expect(smokeMain).not.toContain("planSubjectSchedules(");
   });
 
   test("scripts/lib/smoke-main.ts contains no cadence literal", () => {
@@ -389,7 +394,9 @@ describe("cadence lives in ONE file — consumers carry no literal of their own"
 
 describe("red controls: the graders must REPORT a regression", () => {
   test("cadenceLiteralsIn reports an inlined admission interval", () => {
-    const broken = smokeMain.replace("cadence.onboardingIntervalMs", "300_000");
+    const profiled = "const delay = admissionDelayMs(admitted, cadence.onboardingFirstMs, cadence.onboardingIntervalMs);";
+    expect(cadenceLiteralsIn(profiled)).toEqual([]);
+    const broken = profiled.replace("cadence.onboardingIntervalMs", "300_000");
     expect(cadenceLiteralsIn(broken)).toContain("300_000");
   });
 

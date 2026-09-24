@@ -86,6 +86,42 @@ export function buildServicesFor(profile: StackProfile, opts: { externalPostgres
   return profile === "full" ? [...running, MEMBER_AGENT_SERVICE] : running;
 }
 
+/**
+ * The build context of every service this repository BUILDS, relative to the
+ * repository root, exactly as the compose files declare it (`postgres` is a
+ * pulled image and has none).
+ *
+ * This is the plan id's image input (smoke spec §1.2 as amended by D52): each
+ * image hashes as the Git tree of its build context, so a rebuild from
+ * unchanged sources keeps the plan id and a changed source moves it. A literal
+ * map rather than a parse of the compose file at boot, because the boot must
+ * compute the plan BEFORE its first mutation and without a Docker round-trip;
+ * scripts/tests/integration/smoke-compose-config.test.ts renders the real
+ * compose config and fails when this map and the files disagree.
+ */
+export const SERVICE_BUILD_CONTEXTS: Readonly<Record<string, string>> = Object.freeze({
+  api: ".",
+  "website-server": "website-server",
+  "worker-analytics": ".",
+  "worker-research": ".",
+  "system-scheduler": ".",
+  "analytics-producer": ".",
+  [MEMBER_AGENT_SERVICE]: ".",
+});
+
+/** The build context of each service {@link buildServicesFor} builds for `profile`. */
+export function buildContextsFor(
+  profile: StackProfile,
+  opts: { externalPostgres?: boolean } = {},
+): Record<string, string> {
+  const contexts: Record<string, string> = {};
+  for (const service of buildServicesFor(profile, opts)) {
+    const context = SERVICE_BUILD_CONTEXTS[service];
+    if (context !== undefined) contexts[service] = context;
+  }
+  return contexts;
+}
+
 // The compose file list every consumer of this module defaults to. The smoke
 // overrides it (it may append the stage overlay and/or a generated pg-data bind
 // overlay); the eval harness and the rails check, which today each spell their
@@ -249,6 +285,47 @@ export interface StackConfig {
    * artifacts an exported variable can change.
    */
   imagesOverride?: string;
+  /**
+   * The deployment instance this stack belongs to (smoke spec §1.1) and its
+   * state directory. buildComposeEnv() emits both as `RM_INSTANCE` and
+   * `RM_INSTANCE_STATE_DIR`, which docker-compose.yml interpolates for the
+   * system-scheduler's token mount and website-server's site mount.
+   *
+   * Optional in the TYPE, required by the COMPOSE FILE: docker-compose.yml
+   * spells both with `:?`, so a stack that omits it fails compose's own
+   * interpolation, loudly, instead of mounting a checkout path. That is the
+   * point — the fallback it replaces (`./.agents/state`) put a credential
+   * mount inside the checkout.
+   */
+  instance?: StackInstance;
+}
+
+/** A deployment instance as a compose stack needs it: its name and its absolute state directory. */
+export interface StackInstance {
+  readonly name: string;
+  /** Absolute: a relative path would resolve against the compose file, i.e. the checkout. */
+  readonly stateDir: string;
+}
+
+/** The compose interpolation variables that carry {@link StackConfig.instance}. */
+export const INSTANCE_COMPOSE_VAR = "RM_INSTANCE";
+export const INSTANCE_STATE_DIR_COMPOSE_VAR = "RM_INSTANCE_STATE_DIR";
+
+/**
+ * `RM_INSTANCE` and `RM_INSTANCE_STATE_DIR` for one instance. Also what
+ * `smoke:status` / `smoke:down` add when they rebuild a stopped stack's env,
+ * because compose refuses to parse the file without them.
+ *
+ * Refuses a relative state directory, for the reason on
+ * {@link StackInstance.stateDir}.
+ */
+export function instanceComposeEnv(instance: StackInstance): Record<string, string> {
+  if (!instance.stateDir.startsWith("/")) {
+    throw new Error(
+      `Refusing: instance ${instance.name}'s state directory ${instance.stateDir} is relative; compose would resolve it inside the checkout.`,
+    );
+  }
+  return { [INSTANCE_COMPOSE_VAR]: instance.name, [INSTANCE_STATE_DIR_COMPOSE_VAR]: instance.stateDir };
 }
 
 // ── Compose env (PURE) ──────────────────────────────────────────────────────
@@ -264,6 +341,11 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
         "Routing it through the extras map is how it became a property of the operator's shell instead of the " +
         "stack's configuration (D13).",
     );
+  }
+  for (const key of [INSTANCE_COMPOSE_VAR, INSTANCE_STATE_DIR_COMPOSE_VAR]) {
+    if (cfg.extraComposeEnv && key in cfg.extraComposeEnv) {
+      throw new Error(`${key} must not be passed through extraComposeEnv; it comes from StackConfig.instance.`);
+    }
   }
   if (cfg.profile === "full" && !cfg.credentials.analyticsTokenFile) {
     throw new Error(
@@ -297,6 +379,9 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,
     ...cfg.extraComposeEnv,
+    // LAST, and never from extraComposeEnv (refused above): which instance's
+    // state a container may mount is the stack's configuration, not a knob.
+    ...(cfg.instance ? instanceComposeEnv(cfg.instance) : {}),
   };
 }
 

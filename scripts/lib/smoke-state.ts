@@ -7,8 +7,10 @@
 // journal and its archive, the receipt, the deployment lock, and the
 // spoofed-key generation.
 //
-// STATUS. Implemented and unit-tested (scripts/tests/unit/smoke-state.test.ts).
-// `smoke:tui` reads it; wiring it into `bun smoke` itself is later #1026 work.
+// STATUS. Implemented, unit-tested (scripts/tests/unit/smoke-state.test.ts)
+// and wired: `bun smoke` resolves its instance here and keeps every state file
+// it writes under {@link instancePaths}; `smoke:status`, `smoke:down`,
+// `smoke:reap` and `smoke:tui` select by the same name.
 //
 // ── Why instance identity is a separate concern from naming.ts ──────────────
 //
@@ -73,14 +75,17 @@ import {
   constants as fsConstants,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import type { StackEnvironment } from "../stack/naming.ts";
+import { WEB_DIR_NAME } from "./smoke-site.ts";
 
 /** A legal compose project name, which is also the instance's directory name. */
 const INSTANCE_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -344,12 +349,11 @@ export interface InstancePaths {
    * rename inside the mounted directory, which a single-file bind mount does
    * not see.
    *
-   * COMPOSE IS NOT YET ON THIS LAYOUT. docker-compose.yml's system-scheduler
-   * still mounts the whole instance directory and reads
-   * `/run/rm-state/${RM_INSTANCE}-scheduler-token`, which would also expose
-   * role-passwords.json. Moving that mount to `tokenDirs["system-scheduler"]`
-   * with `SCHEDULER_TOKEN_FILE=/run/rm-token/token` is owned by the wave-4
-   * service-token package (#1026, criterion 113), which owns docker-compose.yml.
+   * docker-compose.yml mounts `${RM_INSTANCE_STATE_DIR}/tokens/system-scheduler`
+   * at `/run/rm-token` and points `SCHEDULER_TOKEN_FILE` at
+   * `/run/rm-token/${TOKEN_FILE_NAME}`: the scheduler sees its own token and
+   * never the instance directory, which holds role-passwords.json (criterion
+   * 113, asserted over the rendered compose config).
    */
   readonly tokenDirs: Readonly<Record<ServiceTokenHolder, string>>;
   /** Each holder's token file: `tokens/<holder>/token`, the only file in {@link tokenDirs}[holder]. */
@@ -367,6 +371,30 @@ export interface InstancePaths {
   readonly lockFile: string;
   /** The persisted spoofed-key generation (§6.4), instance-scoped by construction. */
   readonly spoofGenerationFile: string;
+  /**
+   * What `bun smoke` recorded about the compose stack it brought up for this
+   * instance: the compose project, the compose files, the data path and the
+   * ports Docker assigned. `smoke:status`, `smoke:down`, `smoke:reap` and a
+   * `--local volume` reattach read it. It used to be `.agents/smoke-state.json`
+   * in the checkout, one file for every boot from that checkout, so a second
+   * instance overwrote the first one's pointer (§1.1).
+   */
+  readonly stackStateFile: string;
+  /** The boot's append-only narration log, for post-mortem. */
+  readonly logFile: string;
+  /**
+   * Generated compose overlays (the data-path and reattach overlays). They
+   * encode one invocation's choice, so they live with the instance, never in
+   * the checkout.
+   */
+  readonly overlaysDir: string;
+  /**
+   * The website versions this instance serves (W7): one immutable directory per
+   * site id, `web/<siteId>/`, and a relative `current` symlink naming the one
+   * website-server serves. Mounted read-only at `/srv/web`
+   * (scripts/lib/smoke-site.ts).
+   */
+  readonly webDir: string;
 }
 
 /**
@@ -405,11 +433,17 @@ export function instancePaths(root: string, instance: string, options?: { readon
   const tokenFiles = Object.fromEntries(
     SERVICE_TOKEN_HOLDERS.map((holder) => [holder, join(tokenDirs[holder], TOKEN_FILE_NAME)]),
   ) as Record<ServiceTokenHolder, string>;
+  const overlaysDir = join(dir, "overlays");
+  const webDir = join(dir, WEB_DIR_NAME);
   if (options?.create === true) {
-    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir]) {
+    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir, overlaysDir]) {
       mkdirSync(inner, { recursive: true, mode: 0o700 });
       chmodSync(inner, 0o700);
     }
+    // World-traversable, not world-writable: website-server's nginx workers run
+    // as an unprivileged user and must read the site through the read-only
+    // mount. It holds only the public website, never a credential.
+    mkdirSync(webDir, { recursive: true, mode: 0o755 });
   }
   return {
     dir,
@@ -423,6 +457,10 @@ export function instancePaths(root: string, instance: string, options?: { readon
     receiptFile: join(dir, "receipt.json"),
     lockFile: join(dir, "deployment.lock"),
     spoofGenerationFile: join(dir, "spoof-generation"),
+    stackStateFile: join(dir, "stack-state.json"),
+    logFile: join(dir, "smoke.log"),
+    overlaysDir,
+    webDir,
   };
 }
 
@@ -682,4 +720,149 @@ export function listInstances(root: string): readonly {
     })
     .sort((a, b) => b.mtime - a.mtime)
     .map(({ mtime: _mtime, ...entry }) => entry);
+}
+
+/**
+ * What `bun smoke` records about the compose stack it brought up for an
+ * instance ({@link InstancePaths.stackStateFile}). One shape for the writer
+ * (smoke-main.ts) and every reader (`smoke:status`, `smoke:down`, `smoke:reap`,
+ * `verify-live`, the twin rehearsals), so none of them can drift into its own
+ * copy of the field list.
+ *
+ * Ports are HISTORY: what Docker assigned to the boot that wrote the file.
+ * Readers that need the live value ask `docker compose port`.
+ */
+export interface StackStateRecord {
+  readonly instance: string;
+  readonly project: string;
+  readonly apiPort: number;
+  /** The static/SPA origin (issue #892): website-server, not api. */
+  readonly webPort: number;
+  readonly pgPort: number | null;
+  /** Whether this boot applied docker-compose.stage.yml (`--static-port`). */
+  readonly stage: boolean;
+  readonly envClass: string;
+  readonly envHash: string;
+  /** Base compose files, `:`-joined, without the generated overlays. */
+  readonly composeFiles: string;
+  /** `ephemeral`, `external` or `smoke-twin`. */
+  readonly db: string;
+  readonly externalPg: boolean;
+  readonly smokeTwinContainer?: string;
+  readonly smokeTwinVolume?: string;
+  readonly smokeTwinBackupStamp?: string;
+  /** REDACTED for every non-ephemeral boot; the throwaway local credentials otherwise. */
+  readonly databaseUrl: string;
+  readonly dbUser: string;
+  readonly dbPassword: string;
+  readonly dbName: string;
+  /** Path only, never the value. */
+  readonly analyticsTokenFile?: string;
+  readonly logFile: string;
+  /** The named volume the data lives in, for a compose-owned Postgres. */
+  readonly pgVolume?: string;
+  readonly createdAt: string;
+}
+
+/**
+ * Read an instance's stack record, or `null` when this instance has never
+ * brought a stack up. A malformed record refuses rather than reading as
+ * absent: "no stack" sends `smoke:down` home with nothing done while the
+ * containers it could not identify keep running.
+ */
+export function readStackState(paths: InstancePaths): StackStateRecord | null {
+  if (!existsSync(paths.stackStateFile)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(paths.stackStateFile, "utf8"));
+  } catch {
+    throw new Error(`Refusing: ${paths.stackStateFile} is malformed and cannot be parsed.`);
+  }
+  const record = parsed as Partial<StackStateRecord> | null;
+  if (
+    record === null ||
+    typeof record !== "object" ||
+    typeof record.project !== "string" ||
+    typeof record.composeFiles !== "string"
+  ) {
+    throw new Error(`Refusing: ${paths.stackStateFile} carries no compose project, so it cannot say which stack is this instance's.`);
+  }
+  return record as StackStateRecord;
+}
+
+/** Write an instance's stack record, owner-only: it names the throwaway local database credentials. */
+export function writeStackState(paths: InstancePaths, record: StackStateRecord): void {
+  writeFileSync(paths.stackStateFile, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+}
+
+/**
+ * The instance a lifecycle command (`smoke:status`, `smoke:down`, `smoke:reap
+ * --instance`) acts on: the named one, or the only one with state here.
+ *
+ * Deliberately never mints or persists a name, unlike {@link resolveInstance}:
+ * a command that stops or reports on a deployment must not create one. Refuses
+ * an unknown name (listing the known ones), an empty host, and an omitted name
+ * when several instances have state — guessing is how an operator stops the
+ * wrong stack.
+ */
+export function selectExistingInstance(root: string, requested: string | undefined): InstancePaths {
+  if (requested !== undefined) assertInstanceName(requested);
+  const available = existsSync(root) ? listInstances(root) : [];
+  const names = available.map((entry) => entry.name);
+  if (requested !== undefined) {
+    const found = available.find((entry) => entry.name === requested);
+    if (found === undefined) {
+      throw new Error(
+        `Refusing: instance \`${requested}\` has no state under ${root}.${names.length > 0 ? ` Known: ${names.join(", ")}.` : ""}`,
+      );
+    }
+    return found.paths;
+  }
+  if (available.length === 0) {
+    throw new Error(`Refusing: no instance has state under ${root}, so nothing has been deployed from this host.`);
+  }
+  if (available.length > 1) {
+    throw new Error(`Refusing: several instances have state here; name one with \`--instance\`. Known: ${names.join(", ")}.`);
+  }
+  return available[0]!.paths;
+}
+
+/**
+ * A state directory for a compose stack that is NOT a deployment instance: an
+ * eval or a rails test brings up the same compose model, and the compose file
+ * requires `RM_INSTANCE_STATE_DIR` (no checkout fallback), so it needs one too.
+ *
+ * Under a private temporary root rather than {@link stateRoot}: it is thrown
+ * away with its stack, and it must not appear among the host's deployment
+ * instances (`smoke:tui` and `smoke:status` refuse to guess between several).
+ * `dispose()` removes it.
+ */
+export function throwawayInstance(name: string): {
+  readonly name: string;
+  readonly stateDir: string;
+  readonly paths: InstancePaths;
+  dispose(): void;
+} {
+  const root = mkdtempSync(join(tmpdir(), "rm-stack-state-"));
+  const paths = instancePaths(root, name, { create: true });
+  return {
+    name,
+    stateDir: paths.dir,
+    paths,
+    dispose: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/** The value of `--instance <name>` or `--instance=<name>` in `argv`, or `undefined`. */
+export function instanceFlag(argv: readonly string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token.startsWith("--instance=")) return token.slice("--instance=".length);
+    if (token === "--instance") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error("Refusing: `--instance` needs a name.");
+      return value;
+    }
+  }
+  return undefined;
 }

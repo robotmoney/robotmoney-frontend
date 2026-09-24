@@ -1,9 +1,10 @@
 // The plan, the plan id, the phase journal, resume and interruption semantics,
 // and the readiness receipt — spec §§1.2–1.4.
 //
-// STATUS. Implemented and unit-tested (scripts/tests/unit/smoke-journal.test.ts).
-// `smoke:tui` reads journals and receipts through it; `bun smoke` writing them
-// is later #1026 work.
+// STATUS. Implemented, unit-tested (scripts/tests/unit/smoke-journal.test.ts)
+// and wired: `bun smoke` prints the plan, journals every phase and writes the
+// receipt through it (scripts/lib/smoke-main.ts); `smoke:status` and
+// `smoke:tui` read them back.
 //
 // ── The problem this module exists to solve ─────────────────────────────────
 //
@@ -776,7 +777,7 @@ export type ResumeDecision =
  * `null` for a journal with no phase yet: it has recorded no expectation, so
  * there is nothing to hold the world to.
  */
-function projectExpectations(journal: Journal): StateExpectations | null {
+export function projectExpectations(journal: Journal): StateExpectations | null {
   const last = journal.phases.at(-1);
   if (last === undefined) return null;
   const base = last.expectations;
@@ -793,6 +794,30 @@ function projectExpectations(journal: Journal): StateExpectations | null {
     services: { ...base.services, ...done.servicesReplaced },
     spoofGeneration: done.spoofGenerationWritten ?? base.spoofGeneration,
   };
+}
+
+/**
+ * Compare observed state with what a journal expects, and name the first
+ * difference, or return `null` when they agree. {@link decideResume} runs the
+ * full check at open; this is for a run that could not observe the schema then
+ * (the database was not running yet) and must hold the world to the journal
+ * the moment it can, rather than never.
+ */
+export function expectationMismatch(
+  expected: StateExpectations,
+  observed: Pick<StateExpectations, "ledger" | "manifestHash">,
+): string | null {
+  const observedLedger = [...observed.ledger].sort();
+  const same =
+    observedLedger.length === expected.ledger.length &&
+    observedLedger.every((name, index) => name === expected.ledger[index]);
+  if (!same) {
+    return `the migration ledger holds ${describeLedger(observedLedger)}, but this journal expects ${describeLedger(expected.ledger)}`;
+  }
+  if (observed.manifestHash !== expected.manifestHash) {
+    return `the schema manifest hash is ${String(observed.manifestHash)}, but this journal expects ${String(expected.manifestHash)}`;
+  }
+  return null;
 }
 
 /** A ledger list, named by length and last file, for a refusal. */
@@ -1111,6 +1136,26 @@ export function openJournal(
       return Promise.resolve();
     },
   };
+}
+
+/**
+ * Close the instance's open journal on disk, recording why, without a plan in
+ * hand: the operator stopped the deployment it describes (`smoke:down`), or a
+ * CI job tore its own stack down. Its expectations (services running on known
+ * digests) are then false by the operator's own act, and a later run must
+ * start from current state rather than refuse over it: §1.3 rule 3 is for
+ * ANOTHER operation's changes, not for the stop the operator asked for.
+ *
+ * Output: `true` when an open journal was closed, `false` when there was none
+ * or it was already closed. Refuses a malformed journal, as
+ * {@link readJournal} does.
+ */
+export function closeOpenJournal(paths: InstancePaths, reason: string): boolean {
+  const journal = readJournal(paths);
+  if (journal === null || journal.closedAt !== null) return false;
+  const closed: Journal = { ...journal, closedAt: new Date().toISOString(), closeReport: reason };
+  writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: closed }, null, 2));
+  return true;
 }
 
 /**

@@ -1,102 +1,86 @@
-// Explicit teardown for the standing local smoke. Reads .agents/smoke-state.json,
-// rebuilds the exact docker compose env, and runs `docker compose down` — WITHOUT
-// `-v` (issue: smoke persistent volumes): containers + network are removed but the
-// postgres data volume is KEPT, so a later
-// `bun run smoke` resumes from where it left off.
+// `bun smoke:down [--instance <name>]` — stop one deployment instance's stack.
 //
-// This matches the running smoke's own Ctrl-C / SIGTERM behavior — both now keep
-// data (see scripts/lib/smoke-main.ts onSignal()/cleanup() and docs/architecture.md
-// §(c)). Deleting smoke data is a SEPARATE, explicit act: `bun run smoke:clean`
-// (scripts/smoke-clean.ts) removes the label-namespaced smoke volumes; it never
-// touches a volume a running smoke still uses.
+// Spec §1: `bun smoke` brings the stack up and EXITS; "`bun smoke:down` is the
+// only way to stop them". It acts on ONE named instance (§1.1): the one named
+// by `--instance`, or the only instance with state on this host (it refuses to
+// guess between several). It reads the instance's stack record from its state
+// directory (scripts/lib/smoke-state.ts), rebuilds the exact compose env, and
+// runs `docker compose down` — WITHOUT `-v`: containers + network are removed
+// but the postgres data volume is KEPT, so a later `bun smoke --local volume`
+// reattaches it. Deleting smoke data is a SEPARATE, explicit act: `bun run
+// smoke:clean`, which never touches a volume a running smoke still uses.
 //
-// State-file policy: the state file is KEPT on teardown (the data it points to
-// survives, so the pointer must too) — `smoke:status` reads it, and it stays until
-// the next boot overwrites it or `smoke:clean` removes the volume it names.
+// It also CLOSES the instance's open journal: the journal described a running
+// stack, and this command is the operator deliberately stopping it. A later
+// run then starts from current state instead of refusing over a stop the
+// operator asked for (§1.3 rule 3 is about ANOTHER operation's changes).
+//
+// A second instance on the same host is never touched: every compose call is
+// scoped to this instance's recorded project.
+//
+// The stack record is KEPT (the data it points to survives, so the pointer must
+// too); the next boot of the instance overwrites it.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
 import { removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
 import { buildSmokeLifecycleComposeEnv, dbModeFromState } from "./lib/smoke-lifecycle-env.ts";
+import { instanceFlag, readStackState, selectExistingInstance, stateRoot } from "./lib/smoke-state.ts";
+import { closeOpenJournal } from "./lib/smoke-journal.ts";
+import { instanceComposeEnv } from "./stack/config.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
-const stateFile = join(repoRoot, ".agents", "smoke-state.json");
 
-interface SmokeState {
-  project: string;
-  // A RECORD of what Docker assigned on the boot that wrote this file, not an
-  // input: `down` publishes nothing and compose no longer interpolates a host
-  // port anywhere. Reported below only so the operator recognises the stack.
-  apiPort: number;
-  // Optional: D21 retired the mcp container; newer state files omit it, but an
-  // older standing smoke's state file may still carry it.
-  mcpPort?: number;
-  pgPort?: number;
-  // Did this boot apply docker-compose.stage.yml (`bun smoke --static-port`),
-  // pinning the api to the cloudflared origin? Provenance only. Optional
-  // because a state file written before the pin existed has no such flag.
-  stage?: boolean;
-  // Environment class + hash (scripts/stack/naming.ts) so the labels compose
-  // interpolates here match the ones `up` stamped. Optional for the same
-  // backward-compatibility reason; labels are irrelevant to `down` (it creates
-  // nothing), so an older file just leaves them unknown rather than failing.
-  envClass?: string;
-  envHash?: string;
-  composeFiles: string;
-  // Which data path the boot ran against (`--db`). For every non-ephemeral mode
-  // there is no compose postgres container to stop, and the four fields below are
-  // redacted placeholders rather than usable credentials. BOTH are optional and
-  // dbModeFromState() reconciles them: `db` is authoritative, `externalPg` is the
-  // pre-refactor boolean a state file written before `--db` carries.
-  db?: string;
-  externalPg?: boolean;
-  // Twin only: the container this boot restored production into, the volume
-  // holding that copy, and the backup it came from. The container is removed
-  // here; the VOLUME is kept, exactly as pgdata is (smoke:clean reclaims it).
-  smokeTwinContainer?: string;
-  smokeTwinVolume?: string;
-  smokeTwinBackupStamp?: string;
-  databaseUrl: string;
-  dbUser: string;
-  dbPassword: string;
-  dbName: string;
-  /** External per-session Docker-secret path; contains no credential value. */
-  analyticsTokenFile?: string;
-  // The named volume that survives teardown (issue: smoke persistent volumes),
-  // and the one `--local volume` reattaches.
-  pgVolume?: string;
-  createdAt: string;
+let paths;
+try {
+  paths = selectExistingInstance(stateRoot(process.env), instanceFlag(process.argv.slice(2)));
+} catch (err) {
+  console.error(`[smoke:down] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
 }
+const instance = paths.dir.split("/").at(-1)!;
 
-if (!existsSync(stateFile)) {
-  console.log("[smoke:down] no smoke state found (nothing to tear down)");
+let s;
+try {
+  s = readStackState(paths);
+} catch (err) {
+  console.error(`[smoke:down] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+if (s === null) {
+  console.log(`[smoke:down] instance ${instance} has no stack record (${paths.stackStateFile}); nothing to tear down.`);
+  if (closeOpenJournal(paths, "stopped by bun smoke:down")) console.log(`[smoke:down] closed its open journal.`);
   process.exit(0);
 }
 
-const s: SmokeState = JSON.parse(readFileSync(stateFile, "utf8"));
+// A run still holding the deployment lock is told nothing by this command; say
+// so, because its journal will describe a stack that no longer exists.
+if (existsSync(paths.lockFile)) {
+  let holder = "unknown";
+  try { holder = String((JSON.parse(readFileSync(paths.lockFile, "utf8")) as { holderPid?: number }).holderPid ?? "unknown"); } catch { /* still a lock */ }
+  console.warn(`[smoke:down] WARNING: a \`bun smoke\` run (pid ${holder}) holds instance ${instance}'s deployment lock; stopping its stack anyway.`);
+}
 
-// Rebuild the same dockerEnv the smoke used, so we target the right project.
-//
-// NO WEB_PORT / POSTGRES_PORT. They used to be required here purely to satisfy
-// compose INTERPOLATION, because docker-compose.yml's port lines were
-// `${VAR:?…}`. Those lines are gone: both services publish container ports only
-// (`ports: ["8787"]` / `["5432"]`) and the daemon assigns the host side, so
-// `docker compose config` for a teardown-shaped invocation resolves with no
-// port input at all. One less thing a stale state file can get wrong.
-const dockerEnv = buildSmokeLifecycleComposeEnv(s, process.env);
+// Rebuild the same compose env the boot used, so we target the right project:
+// the stack record's values plus the instance's own state directory, which the
+// compose file requires (no checkout fallback).
+const dockerEnv = {
+  ...buildSmokeLifecycleComposeEnv(s, process.env),
+  ...instanceComposeEnv({ name: instance, stateDir: paths.dir }),
+};
 
 const mode = dbModeFromState(s);
 console.log(
   mode === "external"
-    ? `[smoke:down] tearing down project=${s.project} (created ${s.createdAt}) — its database is EXTERNAL and is not touched…`
-    : `[smoke:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`,
+    ? `[smoke:down] tearing down instance ${instance} (project=${s.project}, created ${s.createdAt}) — its database is EXTERNAL and is not touched…`
+    : `[smoke:down] tearing down instance ${instance} (project=${s.project}, created ${s.createdAt}) — keeping postgres data…`,
 );
 if (s.stage) {
   // Worth saying out loud: this is the smoke the tunnel points at, so tearing it
   // down takes stage.robotmoney-labs.dev offline until a `--static-port` boot returns.
-  console.log(`[smoke:down] this smoke was booted with --static-port (api pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
+  console.log(`[smoke:down] this smoke was booted with --static-port (web pinned to :${s.webPort}, the cloudflared origin) — the stage site goes down with it.`);
 }
 
 const run = makeDockerRunner(dockerEnv);
@@ -123,14 +107,14 @@ if (r.exitCode !== 0) {
 }
 
 if (s.analyticsTokenFile) {
-  if (!removeSmokeAnalyticsToken(s.analyticsTokenFile, s.project)) {
+  if (!removeSmokeAnalyticsToken(s.analyticsTokenFile, paths)) {
     console.warn(`[smoke:down] refused unsafe analytics-token cleanup path: ${s.analyticsTokenFile}`);
   }
 }
 
 if (s.smokeTwinContainer) {
   // AFTER `compose down`, never before: the stack must stop talking to the smoke-twin
-  // before it disappears, the same ordering smoke-main's cleanup() uses.
+  // before it disappears.
   const rm = Bun.spawnSync(["docker", "rm", "-f", s.smokeTwinContainer], { stdout: "ignore", stderr: "ignore" });
   console.log(
     rm.exitCode === 0
@@ -139,24 +123,23 @@ if (s.smokeTwinContainer) {
   );
 }
 
+if (closeOpenJournal(paths, "stopped by bun smoke:down")) {
+  console.log(`[smoke:down] closed instance ${instance}'s open journal (the next boot starts from current state).`);
+}
+
 if (mode === "smoke-twin") {
   console.log(`[smoke:down] containers + network removed for ${s.project}; the smoke-twin's restored copy of production is KEPT in volume ${s.smokeTwinVolume ?? "(unrecorded)"}`);
   console.log(`[smoke:down]   that copy holds real credential material — reclaim it with: bun run smoke:clean`);
-  console.log(`[smoke:down]   re-run (restores a FRESH copy from backup ${s.smokeTwinBackupStamp ?? "?"}):  bun smoke --local dump`);
+  console.log(`[smoke:down]   re-run (restores a FRESH copy from backup ${s.smokeTwinBackupStamp ?? "?"}):  bun smoke --local dump --instance ${instance}`);
 } else if (mode === "external") {
-  // No volume, no bind dir, nothing kept — because nothing here ever owned the
-  // data. Say which server the (now stopped) stack was writing to so the
-  // operator knows where its rows actually went.
+  // Nothing here ever owned the data. Say which server the (now stopped) stack
+  // was writing to so the operator knows where its rows actually went.
   console.log(`[smoke:down] containers + network removed for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
-  // Reproduce EVERY flag the stopped boot ran with. Both are CLI-only by design
-  // (nothing is inferred from the state file at boot), so a hint that dropped
-  // --static-port would bring the smoke back on a Docker-assigned port with the
-  // tunnel still routed at :48787.
-  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""}   (same server)`);
+  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --instance ${instance}   (same server)`);
 } else {
   const volume = s.pgVolume ?? `${s.project}_pgdata`;
   console.log(`[smoke:down] containers + network removed for ${s.project}; postgres data kept (volume ${volume})`);
-  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --local volume=${volume}`);
+  console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --local volume --instance ${instance}`);
   console.log(`[smoke:down]   reclaim smoke volumes when done: bun run smoke:clean`);
 }
-console.log(`[smoke:down] state file kept (points to the surviving data): ${stateFile}`);
+console.log(`[smoke:down] stack record kept (points to the surviving data): ${paths.stackStateFile}`);

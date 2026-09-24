@@ -14,11 +14,13 @@ import {
   DEFAULT_STACK_DATABASE,
   dockerClientHostEnv,
   generateStackCredentials,
+  instanceComposeEnv,
   internalDatabaseUrl,
   resolveStackEnvironment,
   stackProjectName,
 } from "./stack/index.ts";
 import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "./lib/smoke-secret.ts";
+import { instancePaths, throwawayInstance } from "./lib/smoke-state.ts";
 
 export interface SwarmEvalCaseOptions {
   repoRoot?: string;
@@ -41,6 +43,8 @@ export interface SwarmEvalCaseResult {
 
 interface KeptSwarmEvalState {
   project: string;
+  /** The stack's throwaway state directory (smoke-state.ts throwawayInstance). */
+  stateDir: string;
   analyticsTokenFile: string;
   composeFiles: string[];
   envClass: string;
@@ -84,6 +88,7 @@ export function cleanupKeptSwarmEval(
     POSTGRES_USER: db.user,
     POSTGRES_PASSWORD: db.password,
     POSTGRES_DB: db.name,
+    ...instanceComposeEnv({ name: project, stateDir: state.stateDir }),
   };
   if (existsSync(state.analyticsTokenFile)) env.ANALYTICS_TOKEN_FILE_HOST = state.analyticsTokenFile;
   const code = runDown(
@@ -91,9 +96,11 @@ export function cleanupKeptSwarmEval(
     env,
   );
   if (code !== 0) throw new Error(`swarm eval cleanup failed (docker compose exit ${code}); state retained at ${stateFile}`);
-  if (!removeSmokeAnalyticsToken(state.analyticsTokenFile, project)) {
+  const paths = instancePaths(dirname(state.stateDir), project);
+  if (!removeSmokeAnalyticsToken(state.analyticsTokenFile, paths)) {
     throw new Error(`refused unsafe swarm eval token cleanup path: ${state.analyticsTokenFile}`);
   }
+  rmSync(dirname(state.stateDir), { recursive: true, force: true });
   rmSync(stateFile, { force: true });
 }
 
@@ -109,7 +116,10 @@ export async function runSwarmAuthoringEvalCase(
   const project = options.project ?? stackProjectName("eval-swarm", stackEnvironment);
   const selectedModel = modelConfig.model;
   const credentials = generateStackCredentials();
-  credentials.analyticsTokenFile = provisionSmokeAnalyticsToken(project, credentials.analyticsToken);
+  // Not a deployment instance, but the compose model needs a state directory
+  // outside the checkout (RM_INSTANCE_STATE_DIR); thrown away with the stack.
+  const instance = throwawayInstance(project);
+  credentials.analyticsTokenFile = provisionSmokeAnalyticsToken(instance.paths, credentials.analyticsToken);
   const stack = createStack(
     {
       repoRoot,
@@ -119,6 +129,7 @@ export async function runSwarmAuthoringEvalCase(
       database: DEFAULT_STACK_DATABASE,
       credentials,
       environment: stackEnvironment,
+      instance: { name: instance.name, stateDir: instance.stateDir },
     },
     {
       hostEnv: env,
@@ -137,6 +148,7 @@ export async function runSwarmAuthoringEvalCase(
   if (keep) {
     keptStateFile = writeKeptSwarmEvalState(repoRoot, {
       project,
+      stateDir: instance.stateDir,
       analyticsTokenFile: credentials.analyticsTokenFile,
       composeFiles: [...DEFAULT_COMPOSE_FILES],
       envClass: stackEnvironment.class,
@@ -197,7 +209,8 @@ export async function runSwarmAuthoringEvalCase(
   } finally {
     if (!keep) {
       stack.down({ removeVolumes: true, removeOrphans: true });
-      removeSmokeAnalyticsToken(credentials.analyticsTokenFile!, project);
+      removeSmokeAnalyticsToken(credentials.analyticsTokenFile!, instance.paths);
+      instance.dispose();
     } else {
       console.log(`[swarm-eval] --keep state: ${keptStateFile}`);
       console.log(`[swarm-eval] cleanup: bun scripts/swarm-eval-local.ts --cleanup --project ${project}`);

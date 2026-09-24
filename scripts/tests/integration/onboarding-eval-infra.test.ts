@@ -69,6 +69,7 @@ import {
   type StackEnvironment,
 } from "../../stack/index.ts";
 import { makeDockerRunner, purgeSmokeEvalContainers } from "../../lib/smoke-volumes.ts";
+import { throwawayInstance } from "../../lib/smoke-state.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -95,6 +96,9 @@ const TEST_TIMEOUT_MS = 2 * 60_000;
 // in the beforeAll below.
 let stack: Stack | null = null;
 let stackCredentials: StackCredentials | null = null;
+// The compose file requires an instance state directory outside the checkout
+// (RM_INSTANCE_STATE_DIR; smoke spec §1.1); a rails check gets a throwaway one.
+let stackInstance: ReturnType<typeof throwawayInstance> | null = null;
 
 // This file's environment identity (scripts/stack/naming.ts) — `ci`/<job hash>
 // under Actions, `local`/<random> otherwise. Computed inside a FUNCTION, not at
@@ -139,6 +143,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // service — the swarm surface is the api's REST API.)
     const environment = infraEnvironment();
     stackCredentials = generateStackCredentials();
+    stackInstance = throwawayInstance(stackProjectName("infra", environment));
     stack = createStack(
       {
         repoRoot,
@@ -151,6 +156,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         database: DEFAULT_STACK_DATABASE,
         credentials: stackCredentials,
         environment,
+        instance: { name: stackInstance.name, stateDir: stackInstance.stateDir },
       },
       { hostEnv: process.env, io: { stdout: "pipe", stderr: "pipe" } },
     );
@@ -195,6 +201,8 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       console.error(
         `[onboarding-eval-infra] teardown for project ${stack.config.project} failed (exit ${r.exitCode}): ${r.stderr}`,
       );
+    } else {
+      stackInstance?.dispose();
     }
   }, SETUP_TIMEOUT_MS);
 

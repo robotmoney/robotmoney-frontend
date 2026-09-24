@@ -15,6 +15,15 @@ import { join, relative } from "node:path";
 import { shadowingStackEnvWarnings, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { refuseCheckoutEnvFile } from "../../smoke.ts";
+import {
+  buildComposeEnv,
+  DEFAULT_COMPOSE_FILES,
+  DEFAULT_STACK_DATABASE,
+  INSTANCE_COMPOSE_VAR,
+  INSTANCE_STATE_DIR_COMPOSE_VAR,
+  type StackConfig,
+} from "../../stack/config.ts";
+import { instancePaths, TOKEN_FILE_NAME } from "../../lib/smoke-state.ts";
 
 describe("smokePassthroughEnv", () => {
   test("forwards a documented operator knob", () => {
@@ -148,7 +157,9 @@ describe("every compose invocation passes --env-file /dev/null (criterion 122)",
 describe("the driver never spreads the host environment into compose (criterion 122)", () => {
   test("smoke-main.ts's direct-compose env is the stack's spawn env, not process.env", () => {
     const src = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
-    const block = src.slice(src.indexOf("const dockerEnv"), src.indexOf("};", src.indexOf("const dockerEnv")));
+    const start = src.indexOf("dockerEnv = {");
+    expect(start).toBeGreaterThan(-1);
+    const block = src.slice(start, src.indexOf("};", start));
     expect(block).toContain("buildSpawnEnv(smokeStackConfig, process.env)");
     expect(block).not.toContain("...process.env");
   });
@@ -296,4 +307,108 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
     expect(r.out).toContain("bun run smoke:twin:once");
     expect(r.out).not.toContain("booting:");
   }, 30_000);
+});
+
+// ── Criterion 113: the instance reaches compose, and only the scheduler's token dir is mounted ──
+//
+// buildComposeEnv emits RM_INSTANCE and RM_INSTANCE_STATE_DIR from
+// StackConfig.instance; docker-compose.yml interpolates both with `:?` (no
+// `./.agents/state` or `:-default` fallback), and system-scheduler mounts the
+// instance's `tokens/system-scheduler/` directory only — never the instance
+// directory, which holds role-passwords.json. The RENDERED mounts are asserted
+// in scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts
+// and smoke-compose-config.test.ts; these are the pure halves.
+describe("buildComposeEnv carries the deployment instance (criterion 113)", () => {
+  const base: StackConfig = {
+    repoRoot: "/repo",
+    project: "rm_smoke_stack_0123456789",
+    profile: "core",
+    composeFiles: DEFAULT_COMPOSE_FILES,
+    database: DEFAULT_STACK_DATABASE,
+    credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
+    environment: { class: "local", hash: "0123456789" },
+  };
+  const stateDir = "/home/op/.local/state/robotmoney-smoke/rm_local_abc";
+
+  test("emits RM_INSTANCE and RM_INSTANCE_STATE_DIR from StackConfig.instance", () => {
+    const env = buildComposeEnv({ ...base, instance: { name: "rm_local_abc", stateDir } });
+    expect(env[INSTANCE_COMPOSE_VAR]).toBe("rm_local_abc");
+    expect(env[INSTANCE_STATE_DIR_COMPOSE_VAR]).toBe(stateDir);
+    expect(INSTANCE_COMPOSE_VAR).toBe("RM_INSTANCE");
+    expect(INSTANCE_STATE_DIR_COMPOSE_VAR).toBe("RM_INSTANCE_STATE_DIR");
+  });
+
+  test("red control: without an instance neither is emitted, so compose's `:?` refuses loudly", () => {
+    const env = buildComposeEnv(base);
+    expect(env).not.toHaveProperty("RM_INSTANCE");
+    expect(env).not.toHaveProperty("RM_INSTANCE_STATE_DIR");
+  });
+
+  test("a relative state directory is refused: compose would resolve it inside the checkout", () => {
+    expect(() => buildComposeEnv({ ...base, instance: { name: "x", stateDir: ".agents/state" } })).toThrow(/relative/);
+  });
+
+  test("extraComposeEnv cannot steer which instance's state a container mounts", () => {
+    expect(() => buildComposeEnv({ ...base, extraComposeEnv: { RM_INSTANCE_STATE_DIR: "/tmp/other" } })).toThrow(/RM_INSTANCE_STATE_DIR/);
+    expect(() => buildComposeEnv({ ...base, extraComposeEnv: { RM_INSTANCE: "other" } })).toThrow(/RM_INSTANCE/);
+  });
+
+  test("the state directory a boot hands compose is the instance's, and its scheduler token file is TOKEN_FILE_NAME", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-compose-env-instance-"));
+    const paths = instancePaths(root, "rm_local_abc", { create: true });
+    const env = buildComposeEnv({ ...base, instance: { name: "rm_local_abc", stateDir: paths.dir } });
+    expect(env.RM_INSTANCE_STATE_DIR).toBe(paths.dir);
+    expect(paths.tokenFiles["system-scheduler"]).toBe(join(paths.dir, "tokens", "system-scheduler", TOKEN_FILE_NAME));
+  });
+});
+
+/** The system-scheduler service block of a compose file, as text. */
+function schedulerBlock(compose: string): string {
+  const start = compose.indexOf("\n  system-scheduler:\n");
+  const next = compose.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
+  return compose.slice(start, next === -1 ? undefined : start + 1 + next);
+}
+
+/** Why a scheduler block could reach more than its own token directory, or null. */
+function schedulerMountProblem(block: string): string | null {
+  const code = block.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  if (/\.\/\.agents\/state/.test(code)) return "falls back to ./.agents/state in the checkout";
+  if (/RM_INSTANCE(_STATE_DIR)?:-/.test(code)) return "has an interpolation default";
+  if (!/\$\{RM_INSTANCE_STATE_DIR:\?[^}]*\}\/tokens\/system-scheduler:\/run\/rm-token:ro/.test(code)) return "does not mount tokens/system-scheduler read-only";
+  if (!new RegExp(`SCHEDULER_TOKEN_FILE: /run/rm-token/${TOKEN_FILE_NAME}\\b`).test(code)) return "does not read /run/rm-token/<TOKEN_FILE_NAME>";
+  return null;
+}
+
+describe("docker-compose.yml: the scheduler mounts its own token directory, with no fallback (criteria 40, 113)", () => {
+  const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
+
+  test("the real compose file passes", () => {
+    expect(schedulerBlock(compose)).toContain("system-scheduler:");
+    expect(schedulerMountProblem(schedulerBlock(compose))).toBeNull();
+  });
+
+  test("no compose file anywhere keeps a ./.agents/state or :-default instance fallback", () => {
+    for (const file of ["docker-compose.yml", "docker-compose.smoke.yml", "docker-compose.stage.yml", "stacks/robotmoney-swarm/pods/workers/composefile.yml"]) {
+      const code = readFileSync(join(repoRoot, file), "utf8").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+      expect({ file, agentsState: /\.agents\/state/.test(code), defaulted: /RM_INSTANCE(_STATE_DIR)?:-/.test(code) }).toEqual({ file, agentsState: false, defaulted: false });
+    }
+  });
+
+  test("red control: the retired whole-instance-directory mount is caught", () => {
+    const retired =
+      "\n  system-scheduler:\n    environment:\n      SCHEDULER_TOKEN_FILE: /run/rm-state/${RM_INSTANCE:-default}-scheduler-token\n" +
+      "    volumes:\n      - ${RM_INSTANCE_STATE_DIR:-./.agents/state}:/run/rm-state:ro\n";
+    expect(schedulerMountProblem(schedulerBlock(retired))).toBe("falls back to ./.agents/state in the checkout");
+    const wholeDir = retired.replace("${RM_INSTANCE_STATE_DIR:-./.agents/state}", "${RM_INSTANCE_STATE_DIR:?x}").replace("${RM_INSTANCE:-default}", "x");
+    expect(schedulerMountProblem(schedulerBlock(wholeDir))).toBe("does not mount tokens/system-scheduler read-only");
+  });
+});
+
+describe("smoke:status / smoke:down add the instance to the rebuilt compose env", () => {
+  test("both spread instanceComposeEnv over the stack record's env, so compose can parse the file", () => {
+    for (const file of ["scripts/smoke-status.ts", "scripts/smoke-down.ts"]) {
+      const src = readFileSync(join(repoRoot, file), "utf8");
+      expect({ file, uses: /\.\.\.instanceComposeEnv\(\{ name: [a-z.]+, stateDir: paths\.dir \}\)/.test(src) }).toEqual({ file, uses: true });
+    }
+  });
 });

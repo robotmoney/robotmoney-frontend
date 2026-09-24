@@ -13,7 +13,8 @@
 // check format, and emits the same receipt JSON the rollout tooling reads.
 //
 // USAGE
-//   bun run scripts/verify-live.ts                       # resolve from smoke-state.json
+//   bun run scripts/verify-live.ts                       # resolve from the instance's stack record
+//   bun run scripts/verify-live.ts --instance <name>     # …of that instance (spec §1.1)
 //   bun run scripts/verify-live.ts --base http://host:port
 //   bun run scripts/verify-live.ts --tier full           # twin/CI only (see below)
 //   bun run scripts/verify-live.ts --emit-receipt=P8.verify-prod
@@ -29,13 +30,13 @@
 //   0 — every check passed
 //   1 — at least one check FAILED (the product is wrong)
 //   2 — could not run (the stack never came live; nothing was asserted)
-import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runVerification, type VerifyTier } from "./lib/verify/harness.ts";
 import { swarmPipelineLeg } from "./lib/verify/legs/swarm-pipeline.ts";
 import { twinRosterLeg } from "./lib/verify/legs/twin-roster.ts";
 import { judgeReceiptLeg } from "./lib/verify/legs/judge-receipt.ts";
+import { instanceFlag, readStackState, selectExistingInstance, stateRoot } from "./lib/smoke-state.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -67,18 +68,21 @@ function resolveBase(): { base: string; how: string } | { error: string } {
   const explicit = arg("--base") ?? process.env.VERIFY_BASE_URL ?? process.env.BACKEND_URL;
   if (explicit) return { base: explicit.replace(/\/$/, ""), how: "explicit" };
 
-  const stateFile = join(repoRoot, ".agents", "smoke-state.json");
-  if (!existsSync(stateFile)) {
-    return { error: `no --base given and no ${stateFile} to read one from. Pass --base http://host:port, or run this after a smoke boot on the same host.` };
-  }
+  // The instance's stack record (spec §1.1: state lives in the instance's
+  // directory, never the checkout), selected by `--instance` or as the only
+  // instance with state on this host.
   try {
-    const state = JSON.parse(readFileSync(stateFile, "utf8")) as { webPort?: number; apiPort?: number; project?: string };
-    if (!state.webPort) {
-      return { error: `${stateFile} has no webPort — this boot predates issue #892's website-server split, or writeStateFile() stopped recording it. Pass --base explicitly.` };
+    const paths = selectExistingInstance(stateRoot(process.env), instanceFlag(process.argv.slice(2)));
+    const state = readStackState(paths);
+    if (state === null) {
+      return { error: `no --base given and ${paths.stackStateFile} does not exist. Pass --base http://host:port, or run this after a smoke boot of that instance.` };
     }
-    return { base: `http://127.0.0.1:${state.webPort}`, how: `smoke-state.json (project=${state.project ?? "?"})` };
+    if (!state.webPort) {
+      return { error: `${paths.stackStateFile} has no webPort — the boot never reached its ports. Pass --base explicitly.` };
+    }
+    return { base: `http://127.0.0.1:${state.webPort}`, how: `instance ${state.instance ?? "?"} stack record (project=${state.project})` };
   } catch (e) {
-    return { error: `could not read ${stateFile}: ${e instanceof Error ? e.message : String(e)}` };
+    return { error: `no --base given, and no instance stack record to read one from: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 

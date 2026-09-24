@@ -233,6 +233,10 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   // AC-ID-05: a path to a compose overlay pinning every image to an artifact
   // built on pinza and shipped here. Its value is a path, so arity 1.
   Object.freeze({ flag: "--images-override", arity: 1 as const }),
+  // Spec §1.1: the deployment instance this run acts on (smoke-state.ts).
+  Object.freeze({ flag: "--instance", arity: 1 as const }),
+  // Spec §6.1: the credential file (the roster); overrides RM_CREDENTIALS.
+  Object.freeze({ flag: "--credentials", arity: 1 as const }),
 ]);
 
 /** Levenshtein, bounded; only ever asked about short flag values. */
