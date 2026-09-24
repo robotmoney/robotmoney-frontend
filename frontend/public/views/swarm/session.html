@@ -540,7 +540,7 @@
                     </span>
                   </template>
                   <template x-if="absentNames().length">
-                    <span class="rr-meta__i">Absent
+                    <span class="rr-meta__i rr-meta__i--list">Absent
                       <template x-for="id in absentIds()" :key="id">
                         <a class="rr-lnk" :href="memberHref(id)" x-text="memberById(id)?.name || id"></a>
                       </template>
