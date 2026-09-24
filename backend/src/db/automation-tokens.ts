@@ -74,7 +74,10 @@ export interface AutomationGrant {
  * NO ENTRY MODULE CALLS `provisionAutomationToken` YET. The preparation step
  * that will (§3, §5, §9.1) is W4's to wire, so until then this module names
  * itself as the caller. That is a placeholder the wiring must replace with its
- * own module id, not a claim that anything reaches the write today.
+ * own module id, not a claim that anything reaches the write today. The
+ * placeholder is admitted only because tests/db-registry.test.ts lists this
+ * site on its dated UNWIRED_SITES backlog; any other declaration naming its
+ * own non-runnable module as caller fails that test.
  */
 const provisionToken = registerQuery({
   role: "rm_owner",

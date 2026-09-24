@@ -130,6 +130,35 @@ describe("on — the registered form a call site issues its statement through", 
     const forged = { declaration: { ...prices.declaration, site: site("never_registered") }, run: prices.run };
     expect(() => on(db, samples, forged)).toThrow("unregistered site");
   });
+
+  // RED CONTROL for the hole the lint cannot see. The structural lint accepts
+  // any tag that is a call of `on`, so a hand-built object shaped like a
+  // RegisteredQuery would run a statement nothing declared. The version this
+  // replaced checked only the joined entries and let the primary through.
+  test("refuses a forged PRIMARY query, and never runs its statement", () => {
+    const { db, calls } = recordingDb();
+    let ran = false;
+    const forged = {
+      declaration: { site: "x" },
+      run: (d: RegistryDb, s: TemplateStringsArray, ...v: unknown[]) => {
+        ran = true;
+        return (d as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>)(s, ...v);
+      },
+    } as never;
+    expect(() => on(db, forged)`SELECT 1`).toThrow("unregistered site");
+    expect(ran).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  test("refuses a forgery that copies a REAL site id — identity, not the name, is what is checked", () => {
+    const real = registerQuery(declaration({ site: site("on_identity") }));
+    const { db, calls } = recordingDb();
+    const copied = { declaration: real.declaration, run: real.run } as never;
+    expect(() => on(db, copied)).toThrow("unregistered site");
+    const other = registerQuery(declaration({ site: site("on_identity_join") }));
+    expect(() => on(db, real, { declaration: other.declaration, run: other.run } as never)).toThrow("unregistered site");
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("callers — every declaration names the entry modules that may reach it", () => {
@@ -310,8 +339,12 @@ describe("structural enforcement — a raw sql call outside the interface is det
       .map((rel) => join(dir, rel));
   }
 
+  const BACKEND = join(import.meta.dir, "..");
+  const SCRIPTS = join(BACKEND, "scripts");
+
+  /** `src/...` or `scripts/...`, relative to backend/, no extension. */
   function moduleIdOf(file: string): string {
-    return `src/${file.slice(SRC.length + 1).replace(/\.ts$/, "")}`;
+    return file.slice(BACKEND.length + 1).replace(/\.ts$/, "");
   }
 
   interface RawStatement {
@@ -392,31 +425,31 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // the statements that decide whether the programs may run at all. So none
   // of them has a (role, object, privilege) to declare.
   //
-  // The three boot integrity guards are here for a sharper reason than "they
-  // are in db/". The append-only and ledger guards prove their triggers are
-  // armed by attempting a `DELETE ... WHERE false` that MUST be refused, and
-  // otherwise read only `pg_trigger`, `pg_class`, `pg_proc` and
+  // The two append-only boot guards are the only additions to the brief's set
+  // (pools, registry, migrate, target lock, preflight, schema-*), and each is
+  // here for a reason sharper than "it is in db/". They prove their triggers
+  // are armed by attempting a `DELETE ... WHERE false` that MUST be refused,
+  // and otherwise read only `pg_trigger`, `pg_class`, `pg_proc` and
   // `schema_migrations`. A declaration is a claim that a role needs a
   // privilege; declaring that probe would make check 2 demand exactly the
-  // DELETE on an append-only table that the denylist forbids (spec §7 check 2).
-  // The handle-namespace guard answers `[]` on a database with no
-  // `swarm_members` yet, on purpose (its header: refusing that "would take
-  // down an ordinary first boot"), and both other guards and preflight.ts
-  // import it for its guard client. A declaration there names `swarm_members`
-  // as required, which check 2 refuses on exactly the database the guard is
-  // built to tolerate, and it would ride into preflight's own module graph:
-  // tests/schema-snapshot.test.ts's snapshot-created database, whose schema
-  // has no `swarm_members`, then failed preflight on that declaration alone.
+  // DELETE on an append-only table the denylist forbids (spec §7 check 2).
+  //
+  // The handle-namespace guard is NOT here. It reads the application table
+  // `swarm_members`, so it declares that read (src/db/handle-namespace.ts).
+  // The connection factory the other two guards shared with it moved to
+  // src/db/guard-client.ts, which issues nothing, so importing the append-only
+  // guard (as preflight.ts does) no longer drags that declaration along.
   //
   // Every other module under src/db/ is a domain store and declares like
-  // anything else (automation-tokens, seed). This is a set of
+  // anything else (automation-tokens, handle-namespace, seed). This is a set of
   // named files, never a directory prefix, and it is not the allowlist: the
   // allowlist is a dated backlog, this is a statement of what the db layer is.
+  // It is PINNED below by equality, so a new exemption is a visible edit to
+  // two places and a failing test, never one quiet line.
   const INFRA: readonly string[] = [
     "src/db/analytics-ledger-guard",
     "src/db/append-only-guard",
     "src/db/client",
-    "src/db/handle-namespace",
     "src/db/migrate",
     "src/db/preflight",
     "src/db/registry",
@@ -506,14 +539,64 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/worker/scheduler",
   ];
 
-  /** Module id → its raw statements, for every module under `src/` outside
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE SCRIPTS BACKLOG — the same ratchet, for backend/scripts/.
+  //
+  // Recorded 2026-09-24 (#1026 W2) with 28 entries: every module under
+  // backend/scripts/ that issued a raw tagged template or `.unsafe(...)` on that
+  // date, read by the same parser as src/. Criterion 68 forbids raw `sql`
+  // outside the registry, and declarations already name `scripts/...` modules
+  // as callers (prod-bootstrap, db-preflight, seed-provenance-verify), so the
+  // operator CLIs are inside the rule, not beside it. Until this list was
+  // recorded nothing scanned them at all.
+  //
+  // Most entries are release upgrade tooling (scripts/upgrades/*) and the
+  // migration runner, which judge or rebuild the database itself; some of those
+  // may belong in an infrastructure set of their own rather than on the
+  // registry. That is a decision for the package that converts them, and it
+  // is recorded here as backlog, not decided by an exemption.
+  //
+  // NEVER ADD A LINE HERE. The only legal edit is a deletion.
+  const SCRIPTS_RAW_SQL_ALLOWLIST: readonly string[] = [
+    "scripts/db-preflight",
+    "scripts/lib/checks",
+    "scripts/lib/postflight-utils",
+    "scripts/lib/preflight-utils",
+    "scripts/lib/rollout-receipt",
+    "scripts/migrate-run",
+    "scripts/prod-bootstrap",
+    "scripts/scan-low-order-keys",
+    "scripts/schema-current",
+    "scripts/smoke-twin-capture",
+    "scripts/upgrades/0.2.1-to-0.2.2/postflight",
+    "scripts/upgrades/0.2.1-to-0.2.2/preflight",
+    "scripts/upgrades/0.2.1-to-0.2.2/restore-check",
+    "scripts/upgrades/0.2.2-to-0.3.0/postflight",
+    "scripts/upgrades/0.2.2-to-0.3.0/preflight",
+    "scripts/upgrades/0.2.2-to-0.3.0/repair-observation",
+    "scripts/upgrades/0.2.2-to-0.3.0/restore-check",
+    "scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal",
+    "scripts/upgrades/0.3.0-to-0.4.0/postflight",
+    "scripts/upgrades/0.3.0-to-0.4.0/preflight",
+    "scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation",
+    "scripts/upgrades/0.4.0-to-0.5.0/postflight",
+    "scripts/upgrades/0.4.0-to-0.5.0/preflight",
+    "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation",
+    "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal",
+    "scripts/upgrades/0.5.0-to-0.5.1/postflight",
+    "scripts/upgrades/0.5.0-to-0.5.1/preflight",
+    "scripts/v0-seed-bootstrap",
+  ];
+
+  /** Module id → its raw statements, for every module under `root` (src/ by
+   *  default, or scripts/) outside
    *  the infrastructure set that issues at least one. Purely static: it reads
    *  files, never the process-wide registry, so its answer cannot depend on
    *  which test files happened to import what before it ran. */
-  function rawStatementModules(): Map<string, RawStatement[]> {
+  function rawStatementModules(root: string = SRC): Map<string, RawStatement[]> {
     const infra = new Set(INFRA);
     const found = new Map<string, RawStatement[]>();
-    for (const file of tsFilesUnder(SRC)) {
+    for (const file of tsFilesUnder(root)) {
       const moduleId = moduleIdOf(file);
       if (infra.has(moduleId)) continue;
       const statements = rawStatements(file, readFileSync(file, "utf8"));
@@ -594,6 +677,53 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
     // The recorded size. A longer list is an addition, whatever it is called.
     expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(50);
+  });
+
+  test("every backend/scripts module issuing a raw statement is on the dated scripts backlog", () => {
+    const allowed = new Set(SCRIPTS_RAW_SQL_ALLOWLIST);
+    const found = rawStatementModules(SCRIPTS);
+    // Non-vacuous: the scan reads scripts/ and sees the statements it records.
+    expect(found.size).toBeGreaterThan(0);
+    const offenders = [...found]
+      .filter(([moduleId]) => !allowed.has(moduleId))
+      .map(([moduleId, statements]) => `${moduleId}: ${statements.map((st) => `${st.line} ${st.tag}`).join(", ")}`)
+      .sort();
+    expect(offenders).toEqual([]);
+  });
+
+  test("the scripts backlog only shrinks — a converted script must leave it", () => {
+    const stillRaw = rawStatementModules(SCRIPTS);
+    expect(SCRIPTS_RAW_SQL_ALLOWLIST.filter((m) => !stillRaw.has(m))).toEqual([]);
+    expect(new Set(SCRIPTS_RAW_SQL_ALLOWLIST).size).toBe(SCRIPTS_RAW_SQL_ALLOWLIST.length);
+    expect(SCRIPTS_RAW_SQL_ALLOWLIST.every((m) => m.startsWith("scripts/"))).toBe(true);
+    // The recorded size. A longer list is an addition, whatever it is called.
+    expect(SCRIPTS_RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(28);
+  });
+
+  test("the infrastructure set is exactly the named db layer — an addition fails here", () => {
+    // A second exemption list with no ceiling would be a way around the
+    // ratchet: any new db/ domain store could be exempted by one line. So the
+    // set is pinned by value. Growing it means editing this expectation too,
+    // with the reason written next to the entry above.
+    expect([...INFRA].sort()).toEqual([
+      // The brief's infrastructure: pools, registry, migrate, lock, preflight, schema-*.
+      "src/db/client",
+      "src/db/migrate",
+      "src/db/preflight",
+      "src/db/registry",
+      "src/db/schema-compat",
+      "src/db/schema-manifest",
+      "src/db/schema-snapshot",
+      "src/db/target-lock",
+      "src/db/worker-client",
+      // The append-only probes, which must not declare the DELETE they prove is refused.
+      "src/db/analytics-ledger-guard",
+      "src/db/append-only-guard",
+    ].sort());
+    // A schema-* entry must be a real schema module, not a name that merely matches.
+    for (const moduleId of INFRA) {
+      expect(/^src\/db\/(schema-[a-z-]+|client|worker-client|registry|migrate|target-lock|preflight|append-only-guard|analytics-ledger-guard)$/.test(moduleId), moduleId).toBe(true);
+    }
   });
 
   test("the infrastructure set names real files, and never the allowlist's", () => {
@@ -688,6 +818,7 @@ describe("declarations — what the converted modules declare, read without depe
     "src/chain/wallet-sleeves",
     "src/chain/wallet-valuation",
     "src/db/automation-tokens",
+    "src/db/handle-namespace",
     "src/db/seed",
     "src/projects/activity-log-projections",
     "src/swarm/handle",
@@ -736,16 +867,60 @@ describe("declarations — what the converted modules declare, read without depe
     expect(unknown).toEqual([]);
   });
 
+  /** Sites whose statement no entry module reaches yet. Each one names its own
+   *  module as the caller, which is a placeholder, not a claim that anything
+   *  reaches it. Recorded 2026-09-24 (#1026 W2) with one entry; it only
+   *  shrinks, and an entry leaves when the wiring names its real entry module. */
+  const UNWIRED_SITES: readonly string[] = [
+    // Token provisioning (spec §3, §9.1) is W4's to wire; only tests call it today.
+    "src/db/automation-tokens:provisionAutomationToken",
+  ];
+
+  /** A module is its own entry point when it is one by the registry's own
+   *  definition (QueryDeclaration.callers: "the route that receives the request,
+   *  or the job handler that claims the job"), or when it can be run directly
+   *  (an operator CLI, or src/db/seed's `bun run src/db/seed.ts`). */
+  function isEntryModule(moduleId: string): boolean {
+    if (/^src\/api\/routes\/|^src\/worker\/handlers\/|^scripts\//.test(moduleId)) return true;
+    const text = readFileSync(join(SRC, "..", `${moduleId}.ts`), "utf8");
+    return /import\.meta\.main\b|import\.meta\.url\s*===\s*`file:\/\/\$\{process\.argv\[1\]\}`/.test(text);
+  }
+
   test("every application declaration names a §3 role and at least one entry-module caller", () => {
     const bad: string[] = [];
+    const unwired = new Set(UNWIRED_SITES);
+    const selfNamed = new Set<string>();
     for (const moduleId of declaringModules().keys()) {
       for (const d of declarationsOf(moduleId)) {
         if (!TAXONOMY_ROLES.includes(d.role)) bad.push(`${d.site}: role ${d.role}`);
         for (const caller of d.callers) {
           if (!existsSync(join(SRC, "..", `${caller}.ts`))) bad.push(`${d.site}: caller ${caller} is not a module`);
+          // A declaring module that names ITSELF says nothing about who reaches
+          // the statement, unless the module really is an entry point (a route,
+          // a job handler, or run directly like src/db/seed) or the site is on
+          // the dated unwired list.
+          if (caller === moduleId) {
+            selfNamed.add(d.site);
+            if (!isEntryModule(moduleId) && !unwired.has(d.site)) {
+              bad.push(`${d.site}: names its own module as caller, which no entry module reaches`);
+            }
+          }
         }
       }
     }
     expect(bad).toEqual([]);
+    // The unwired list only shrinks: an entry whose site now names a real
+    // caller (or no longer exists) must leave it.
+    expect(UNWIRED_SITES.filter((site) => !selfNamed.has(site))).toEqual([]);
+    expect(UNWIRED_SITES.length).toBeLessThanOrEqual(1);
+  });
+
+  test("the self-caller rule is not vacuous: a library module naming itself is refused", () => {
+    // Red control: src/db/automation-tokens has no direct-run block, so without
+    // the unwired entry its provision site would be refused.
+    expect(isEntryModule("src/db/automation-tokens")).toBe(false);
+    expect(isEntryModule("src/chain/wallet-balances")).toBe(false);
+    expect(isEntryModule("src/db/seed")).toBe(true);
+    expect(isEntryModule("src/api/routes/comments")).toBe(true);
   });
 });

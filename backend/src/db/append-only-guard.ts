@@ -103,7 +103,7 @@
 //     external` / `--db smoke-twin`).
 import type postgresTypes from "postgres";
 import { sql } from "./client.ts";
-import { createNamespaceGuardClient } from "./handle-namespace.ts";
+import { createNamespaceGuardClient } from "./guard-client.ts";
 
 /** Same narrow handle the sibling guard takes: plain queries only, so a test
  *  can pass a throwaway-database connection or a transaction. */

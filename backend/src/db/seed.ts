@@ -25,18 +25,22 @@ import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 // declares SELECT too, because Postgres checks a WHERE clause's columns as a
 // read.
 //
-// THE ROLE IS `rm_owner`, because nothing else can run these statements on a
-// snapshot-built database: backend/schema/grants.sql hands `rm_app` SELECT,
-// INSERT and UPDATE on ordinary tables and no DELETE, so the retirement
-// DELETEs on `job_schedules` below are an owner's statements. Declared as
-// `rm_app` they made preflight check 2 refuse the real snapshot
-// (tests/schema-snapshot.test.ts), which is the check doing its job: the
-// seed is preparation (smoke-production-spec.md §5), not a runtime program.
-// The smoke today still runs it in the `api` container (scripts/lib/
-// smoke-main.ts, `bun run src/db/seed.ts --smoke-schedules`), on whatever
-// credential that container holds. If that is `rm_app` on a snapshot-built
-// database, grants.sql says the DELETE is refused (read from the grants, not
-// yet executed).
+// THE ROLE IS UNDECIDED, AND `rm_owner` BELOW IS A PLACEHOLDER, NOT A FINDING.
+// Which credential `--seed` runs on is the lifecycle package's decision (#1026
+// w3-lifecycle-db), and the spec does not pin it. What the code does today:
+//   - scripts/prod-bootstrap runs seed() on the credential that also migrates,
+//     i.e. `rm_owner`. For that caller the declarations are true.
+//   - the smoke runs `bun run src/db/seed.ts --smoke-schedules` inside the
+//     `api` container (scripts/lib/smoke-main.ts, initializeScenario), on that
+//     container's runtime credential. For that caller `rm_owner` is FALSE.
+// The gap this hides: backend/schema/grants.sql gives `rm_app` SELECT, INSERT
+// and UPDATE on ordinary tables and no DELETE, so on a snapshot-built database
+// the two `job_schedules` DELETEs below (deleteAnalyticsRunSchedule,
+// deleteHourlyRepairSchedule) are refused for `rm_app` (read from the grants,
+// not executed). Declaring `rm_app` makes preflight check 2 refuse the real
+// snapshot in tests/schema-snapshot.test.ts, which is that gap reported. The
+// fix is either the smoke running the seed as `rm_owner` or `rm_app` being
+// granted DELETE on `job_schedules`; whichever lands, these roles change with it.
 // ─────────────────────────────────────────────────────────────────────────────
 const SEED_CALLERS = ["src/db/seed", "scripts/prod-bootstrap"];
 const SMOKE_CALLERS = ["src/db/seed"];

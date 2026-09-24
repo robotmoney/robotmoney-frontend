@@ -59,8 +59,8 @@
 //      whether or not it carries a type argument, unless its tag is a call of
 //      `on(...)` imported from this module; every `.unsafe(...)` call counts
 //      too. A raw statement outside the db layer's named infrastructure files
-//      (pools, this module, migrate, target lock, preflight, schema-*, the three
-//      boot integrity guards) and outside the dated allowlist fails the build. The
+//      (pools, this module, migrate, target lock, preflight, schema-*, the two
+//      append-only boot guards) and outside the dated allowlist fails the build. The
 //      allowlist is a ratchet that only shrinks. This is what makes the
 //      registry complete rather than merely populated, and it is complete only
 //      once that allowlist is empty.
@@ -252,6 +252,13 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
  *
  *   on(sql, activityRows, activityAgents)<Row>`SELECT ... FROM agent_activity_log LEFT JOIN openclaw_agents ...`
  *
+ * ONE STATEMENT, SEVERAL ROLES, is the same shape. A declaration's `role` is
+ * the role of the program that issues the statement, so a statement reached
+ * from programs that connect as different roles (the api on `rm_app`, an
+ * operator CLI on `rm_owner`, a worker handler on `rm_worker`) declares once
+ * per role and names the others here. The runner does not know which role the
+ * handle holds; check 2 needs every role's requirement recorded.
+ *
  * WHY IT LIVES HERE. The structural lint (tests/db-registry.test.ts) treats
  * every tagged template outside the db layer as a raw statement unless its tag
  * is a call of THIS function, imported from this module. That is what lets the
@@ -261,16 +268,29 @@ export function registerQuery(declaration: QueryDeclaration): RegisteredQuery {
  * something other than `on(...)`.
  */
 export function on(db: RegistryDb, query: RegisteredQuery, ...joined: readonly RegisteredQuery[]) {
-  // The joined declarations were registered at module load, which is all check
-  // 2 needs from them. Refusing one here that has no declaration catches a
-  // call site handed something other than a registered site.
-  for (const other of joined) {
-    if (!bySite.has(other.declaration?.site)) {
-      throw new Error(`registry: on() was handed an unregistered site for ${query.declaration.site}.`);
-    }
-  }
+  // IDENTITY, NOT A SITE NAME. The structural lint accepts any tag that is a
+  // call of this function, so this function is the only thing standing between
+  // `on(...)` and an undeclared statement. A caller can hand it an object
+  // literal shaped like a RegisteredQuery — `{ declaration: { site: 'x' }, run }`
+  // — whose `run` issues whatever it likes. Checking that the site id is known
+  // would not stop that either: a forgery can copy a real site id and still
+  // carry its own `run` or a different object. So every query handed in, the
+  // primary one included, must be the exact runner `registerQuery` returned for
+  // that site, or nothing runs.
+  for (const candidate of [query, ...joined]) assertRegistered(candidate, query);
   return <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T[]> =>
     query.run<T>(db, strings, ...values);
+}
+
+/** Refuse anything but the runner `registerQuery` handed back for its site. */
+function assertRegistered(candidate: RegisteredQuery, primary: RegisteredQuery): void {
+  const site = (candidate as Partial<RegisteredQuery> | undefined)?.declaration?.site;
+  if (typeof site === "string" && bySite.get(site) === candidate) return;
+  const named = (primary as Partial<RegisteredQuery> | undefined)?.declaration?.site;
+  throw new Error(
+    `registry: on() was handed an unregistered site (${JSON.stringify(site)}) for ${JSON.stringify(named)} — ` +
+      "only the runner registerQuery returned may issue a statement (spec §7.1).",
+  );
 }
 
 /** An unqualified relation name exactly as `pg_class.relname` spells it: no

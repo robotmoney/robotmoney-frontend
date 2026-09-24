@@ -34,10 +34,40 @@
 //   - backend/scripts/prod-bootstrap.ts — its first step, before migrate().
 //   - backend/scripts/db-preflight.ts — a pre-populated smoke boot (`--db
 //     external` / `--db smoke-twin`).
-import postgres from "postgres";
 import type postgresTypes from "postgres";
-import { config } from "../config.ts";
 import { sql } from "./client.ts";
+import { createBoundedGuardClient } from "./guard-client.ts";
+import { on, registerQuery } from "./registry.ts";
+
+// THE DETECTION READ IS A REGISTERED QUERY (smoke-production-spec.md §7.1).
+// It reads the application table `swarm_members`, so it declares that read like
+// any other domain store rather than sitting in the db layer's infrastructure
+// set. Two declarations, because the same statement is reached from programs
+// that connect as different roles: the api boot and the smoke's
+// scripts/db-preflight.ts run in the `api` container on the runtime credential
+// (`rm_app`), and scripts/prod-bootstrap.ts runs it before migrate() on the
+// credential that migrates (`rm_owner`).
+//
+// The readiness probe (does `swarm_members.handle` exist yet?) reads only the
+// catalog. It runs through the same site because it is the first half of this
+// one read: it exists only to decide whether the pair scan below may run.
+const readConflictsAsRuntime = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/db/handle-namespace:handleNamespaceConflicts.runtime",
+  purpose: "Boot re-check for restored handle/id namespace violations: probe for the handle column, then scan member pairs.",
+  callers: ["src/api/index", "scripts/db-preflight"],
+});
+
+const readConflictsAsOwner = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/db/handle-namespace:handleNamespaceConflicts.owner",
+  purpose: "prod-bootstrap's first step: the same handle/id namespace re-check, run on the migrating credential.",
+  callers: ["scripts/prod-bootstrap"],
+});
 
 /** The subset of postgres.js's client these functions need. A TRANSACTION is
  *  accepted too, so a test can build a forbidden pair and roll it back without
@@ -64,6 +94,15 @@ export type NamespaceDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{
 export const HANDLE_NAMESPACE_CONFLICT_RELATION =
   "FROM swarm_members a JOIN swarm_members b ON b.id = a.handle AND b.id <> a.id";
 
+/** The pair scan as a one-string template, so it runs through `on(...)` with
+ *  no bound values — the statement text `.unsafe()` used to send, unchanged. */
+const CONFLICT_STATEMENT = ((text: string) =>
+  Object.assign([text], { raw: [text] }) as unknown as TemplateStringsArray)(
+  `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
+     ${HANDLE_NAMESPACE_CONFLICT_RELATION}
+     ORDER BY a.id`,
+);
+
 /**
  * Violations present in the data right now, one operator-readable sentence each.
  *
@@ -74,7 +113,7 @@ export const HANDLE_NAMESPACE_CONFLICT_RELATION =
  * violation. A guard that refused those would take down an ordinary first boot.
  */
 export async function handleNamespaceConflicts(db: NamespaceDb = sql): Promise<string[]> {
-  const [{ ready }] = (await db`
+  const [{ ready }] = (await on(db, readConflictsAsRuntime, readConflictsAsOwner)`
     SELECT (
       to_regclass('public.swarm_members') IS NOT NULL
       AND EXISTS (
@@ -84,13 +123,14 @@ export async function handleNamespaceConflicts(db: NamespaceDb = sql): Promise<s
     ) AS ready
   `) as unknown as { ready: boolean }[];
   if (!ready) return [];
-  // .unsafe() carries no interpolation: the only non-literal part is the
-  // module-level constant above, which is what makes the parity test possible.
-  const rows = (await db.unsafe(
-    `SELECT a.id AS holder, a.handle AS handle, b.id AS shadowed
-     ${HANDLE_NAMESPACE_CONFLICT_RELATION}
-     ORDER BY a.id`,
-  )) as unknown as { holder: string; handle: string; shadowed: string }[];
+  // The relation is spliced in as TEXT, not as a bound value: the only
+  // non-literal part is the module-level constant above, which is what makes
+  // the parity test possible. A template whose single string is the whole
+  // statement is exactly what `.unsafe()` sent, issued through the registered
+  // site instead.
+  const rows = await on(db, readConflictsAsRuntime, readConflictsAsOwner)<{
+    holder: string; handle: string; shadowed: string;
+  }>(CONFLICT_STATEMENT);
   return rows.map(
     (r) =>
       `member '${r.holder}' has handle '${r.handle}', which is member '${r.shadowed}'s id` +
@@ -280,16 +320,9 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
 export function createNamespaceGuardClient(
   budgetMs = NAMESPACE_GUARD_BUDGET_MS,
 ): postgresTypes.Sql<{}> {
-  const perQueryMs = Math.max(1_000, Math.floor(budgetMs / 2));
-  return postgres(config.databaseUrl, {
-    max: 1,
-    onnotice: () => {},
-    connect_timeout: Math.max(1, Math.round(perQueryMs / 1000)),
-    connection: {
-      statement_timeout: perQueryMs,
-      lock_timeout: perQueryMs,
-    },
-  });
+  // The factory lives in ./guard-client.ts so the other two boot guards can
+  // share it without importing this module's registered read (see there).
+  return createBoundedGuardClient(budgetMs);
 }
 
 /**
