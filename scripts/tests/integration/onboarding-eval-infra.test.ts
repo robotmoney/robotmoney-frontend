@@ -505,12 +505,14 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           });
           expect(enrollRun.transcript).not.toContain(claimed.token);
 
-          // Open a real collecting session. Core profile intentionally has no
-          // worker, so the existing admin dispatcher drives the same domain
-          // lifecycle synchronously instead of adding another service.
-          const admin = async (action: string, input: Record<string, unknown>) => {
+          // Open a real collecting session: the subject through the admin
+          // subject route and the epoch through epochs/open, the two calls the
+          // retired `subject`/`open`/`brief` dispatcher actions stood in for
+          // (issue #1026). No scheduler runs in the core profile, so the test
+          // opens the epoch itself.
+          const admin = async (route: string, input: Record<string, unknown>, expected = 200) => {
             const res = await fetch(
-              `${stack!.backendUrl}${routePath(ROUTES.swarm.admin.action, { action })}`,
+              `${stack!.backendUrl}${route}`,
               {
                 method: "POST",
                 headers: {
@@ -521,14 +523,16 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
               },
             );
             const responseBody = await res.json();
-            expect(res.status, `${action}: ${JSON.stringify(responseBody)}`).toBe(200);
+            expect(res.status, `${route}: ${JSON.stringify(responseBody)}`).toBe(expected);
             return responseBody;
           };
           const date = new Date().toISOString().slice(0, 10);
           const subjectId = `continuity-${crypto.randomUUID().slice(0, 8)}`;
-          await admin("subject", { id: subjectId, name: "Identity Continuity Fixture" });
-          const opened = await admin("open", { date, subjectId });
-          await admin("brief", { sessionId: String(opened.id), windowMinutes: 10 });
+          await admin(ROUTES.swarm.admin.subjects, {
+            id: subjectId, name: "Identity Continuity Fixture", recommendationType: "bucket_weights",
+          }, 201);
+          const epoch = await admin(ROUTES.swarm.admin.epochOpen, { subjectId }, 201);
+          const opened = { id: epoch.sessionId as string };
 
           // The only deterministic seam is external model prose. The
           // production participation client still fetches its own context,
@@ -551,8 +555,8 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
             "- Accept the take only under the originally admitted public key.",
             "",
             // THE ALLOCATION VECTOR, because this subject is a `bucket_weights`
-            // one. `admin("subject")` -> `ensureSubject()` INSERTs
-            // recommendation_type = 'bucket_weights' (domain.ts), so the brief
+            // one: the subject above is created with recommendationType
+            // = 'bucket_weights', so the brief
             // this member reads declares `takeSchema.weights.optional = false`,
             // `participate()` sets `requireWeights`, and `authorTake()` re-samples
             // and then throws on a take with no WEIGHTS line — which would exit
