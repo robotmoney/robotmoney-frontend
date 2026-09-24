@@ -725,19 +725,39 @@ test("BLOCKER 3: an unusable judge response never reaches a receipt — refused 
   expect(stored).toBeDefined();
 });
 
-test("a LATE FIRST take names its remedy instead of reading like a corrupted rollup", async () => {
-  // The deadline is the advertised `window_closes_at` TIMESTAMP, not the state
-  // (domain.ts submitRecommendation), so a member filing their FIRST take after
-  // aggregation gets a 201 — supported product behaviour, and the reason only
-  // AMENDMENTS are confined to TAKES_AMENDABLE_STATES. The rollup then
-  // describes one member fewer than the take set does.
+test("a LATE FIRST take is refused by the epoch window, and a pre-epoch late row still names its remedy", async () => {
+  // THE LIVE PATH REFUSES IT NOW. Before issue #1026 the deadline was the
+  // advertised `window_closes_at` alone (#570), so a member filing its FIRST
+  // take after aggregation got a 201 and the rollup described one member fewer
+  // than the take set. The epoch model accepts a take only "while a session is
+  // `collecting` and now is before its `window_closes_at`"
+  // (system-scheduler-spec.md §4.2), so that take is refused here.
   const { sessionId, date, subjectId } = await collectingSession("reclate", [
     [0.25, 0.25, 0.25, 0.25],
     [0.25, 0.25, 0.25, 0.25],
   ]);
   await advanceToPublished(sessionId);
   const latecomer = await member();
-  await submit(latecomer, date, subjectId, [0.25, 0.25, 0.25, 0.25]);
+  const sub = {
+    memberId: latecomer.id, date, subjectId, nonce: rid("n"), stance: "neutral", confidence: 0.5,
+    body: `${latecomer.id} take`,
+    weights: CANONICAL_FOUR.map((bucket) => ({ bucket, weight: 0.25 })),
+  };
+  const signature = await signMessage(canonicalizeSubmission(sub), latecomer.privateKey);
+  const live = await ic.submitRecommendation(latecomer.token, { ...sub, signature });
+  expect(live).toMatchObject({ ok: false, status: 409, error: "submission window closed" });
+
+  // THE ROWS THE OLD PATH WROTE STILL EXIST. A database upgraded from a
+  // pre-epoch release can hold exactly that late take, so the receipt must
+  // still refuse it by name. The row is the one the pre-epoch INSERT wrote —
+  // same columns, signed by the member's own active key — planted directly
+  // because no live path can write it any more.
+  await sql`
+    INSERT INTO swarm_recommendations
+      (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, revision, signing_key_id, received_at)
+    SELECT ${sessionId}, ${latecomer.id}, ${subjectId}, ${date}, ${sub.nonce}, ${sub.stance}, ${sub.confidence}, ${sub.body},
+           ${sql.json(sub as any)}, ${signature}, true, 1, k.id, clock_timestamp()
+      FROM swarm_member_keys k WHERE k.member_id = ${latecomer.id} AND k.active`;
 
   const refused = await admin.publishConsensusReceiptAdmin(sessionId);
   expect(refused.ok).toBe(false);

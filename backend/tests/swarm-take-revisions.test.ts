@@ -332,10 +332,14 @@ test("every session state is EXPLICITLY either amendable or frozen — a new sta
   expect([...ic.TAKES_AMENDABLE_STATES].sort()).toEqual(["collecting", "scheduled", "window_closed"]);
 });
 
-test("the aggregation gate is AMENDMENT-ONLY: a first take is still governed by the advertised deadline alone (#570)", async () => {
-  // The regression this guards: implementing the gate as "no submits once
-  // aggregated" would have silently re-created the dead zone #570 removed, for
-  // a member that had not yet spoken.
+test("the aggregation gate is AMENDMENT-ONLY: a first take after aggregation is refused by the WINDOW, never by the amendment freeze (#570, #1026)", async () => {
+  // The regression this guards (#570): implementing the gate as "no submits
+  // once aggregated" would answer a member that had not yet spoken with the
+  // AMENDMENT refusal, which tells it "the take on file stands" when there is
+  // none. The epoch model (system-scheduler-spec.md §4.2: takes land "while a
+  // session is `collecting` and now is before its `window_closes_at`") now
+  // refuses that first take too, because the epoch is closed. What this pins is
+  // WHICH refusal it gets: the window's "you are too late", not the freeze.
   const { subj, session, date } = await openCollectingSession("first-after-agg");
   const seated = await activeMember();
   expect((await submit(seated, date, subj, { body: "early bird" })).status).toBe(201);
@@ -344,8 +348,17 @@ test("the aggregation gate is AMENDMENT-ONLY: a first take is still governed by 
 
   const latecomer = await activeMember();
   const first = await submit(latecomer, date, subj, { body: "my first word on this" });
-  expect(first.status).toBe(201);
-  expect((first as { revision?: number }).revision).toBe(1);
+  expect(first.status).toBe(409);
+  expect((first as { error?: string }).error).toBe("submission window closed");
+  expect((first as { error?: string }).error).not.toContain("amendment");
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${session.id} AND member_id = ${latecomer.id}`).length).toBe(0);
+
+  // RED CONTROL for the error assertion: the same session answers an
+  // AMENDMENT from the member already on file with the freeze, so the two
+  // refusals are distinguishable and the one above is not the freeze.
+  const amend = await submit(seated, date, subj, { body: "second thoughts" });
+  expect(amend.status).toBe(409);
+  expect((amend as { error?: string }).error).toContain("amendment window closed");
 });
 
 // ── 3. The bound ────────────────────────────────────────────────────────────

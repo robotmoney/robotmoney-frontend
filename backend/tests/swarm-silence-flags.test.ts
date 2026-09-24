@@ -62,6 +62,25 @@ async function submit(m: { id: string; token: string; privateKey: CryptoKey }, d
   return r;
 }
 
+/**
+ * File one take in a session's open window: publish its brief (the session
+ * becomes `collecting`), submit, then close it. A take lands only in a
+ * collecting epoch (system-scheduler-spec.md §4.2), and a subject has at most
+ * one collecting session (§2.1), so the window is closed again before the next
+ * one opens. Silence counting reads seating and takes, never the state.
+ */
+async function submitInWindow(
+  m: { id: string; token: string; privateKey: CryptoKey },
+  sessionId: string,
+  date: string,
+  subjectId: string,
+) {
+  await ic.publishBrief(sessionId, 60);
+  const r = await submit(m, date, subjectId);
+  await ic.closeWindow(sessionId);
+  return r;
+}
+
 // Sequential UTC dates beginning tomorrow. They must remain after the real
 // clock because submitRecommendation deliberately checks the advertised
 // window against Date.now() and Postgres now(); hard-coding a once-future day
@@ -106,8 +125,9 @@ test("never_submitted: a single take anywhere clears the flag, even after N elig
   const subjectId = await activeSubject();
   const m = await activeMember("submits-once");
   const dates = datesFrom(1, N);
-  for (const date of dates) await createSession(subjectId, date);
-  await submit(m, dates[dates.length - 1]!, subjectId);
+  let last = "";
+  for (const date of dates) last = await createSession(subjectId, date);
+  await submitInWindow(m, last, dates[dates.length - 1]!, subjectId);
 
   expect((await admin.getMemberSilenceFlags())[m.id]).toBeUndefined();
 });
@@ -145,8 +165,7 @@ test("gone_quiet: an established member with N silent sessions since its own las
   const subjectId = await activeSubject();
   const wentQuiet = await activeMember("went-quiet");
   const firstDate = datesFrom(1, 1)[0]!;
-  await createSession(subjectId, firstDate);
-  await submit(wentQuiet, firstDate, subjectId);
+  await submitInWindow(wentQuiet, await createSession(subjectId, firstDate), firstDate, subjectId);
 
   const silentDates = datesFrom(2, N);
   for (const date of silentDates.slice(0, N - 1)) await createSession(subjectId, date);
@@ -161,13 +180,11 @@ test("gone_quiet: a fresh take on the most recent eligible session resets the si
   const subjectId = await activeSubject();
   const m = await activeMember("resumes-late");
   const dates = datesFrom(1, N + 1);
-  await createSession(subjectId, dates[0]!);
-  await submit(m, dates[0]!, subjectId);
+  await submitInWindow(m, await createSession(subjectId, dates[0]!), dates[0]!, subjectId);
   for (const date of dates.slice(1, dates.length - 1)) await createSession(subjectId, date);
   // One more session, and THIS TIME the member submits again — the reference
   // point for "since" moves to here, so it is no longer silent.
-  await createSession(subjectId, dates[dates.length - 1]!);
-  await submit(m, dates[dates.length - 1]!, subjectId);
+  await submitInWindow(m, await createSession(subjectId, dates[dates.length - 1]!), dates[dates.length - 1]!, subjectId);
 
   expect((await admin.getMemberSilenceFlags())[m.id]).toBeUndefined();
 });

@@ -67,6 +67,9 @@ test("a historical take still verifies after its author RE-REGISTERS (registerMe
   const subj = rid("s");
   await ensureProseSubject(subj, "Re-register Rotation Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -111,6 +114,9 @@ test("a historical take still verifies after an ADMIN key rotation (rotateMember
   const subj = rid("s");
   await ensureProseSubject(subj, "Admin Rotation Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -151,6 +157,9 @@ test("submitRecommendation records the exact key row that verified it (signing_k
   const subj = rid("s");
   await ensureProseSubject(subj, "Signing Key Id Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const keyA: Signer = await generateKeyPair();
@@ -178,6 +187,9 @@ test("a pre-#697 row (signing_key_id NULL) falls back to the currently-active-ke
   const subj = rid("s");
   await ensureProseSubject(subj, "Cutover Fallback Subject");
   const session = await ic.openSession(subj);
+  // Publish the brief so the session is `collecting`: a take lands only in a
+  // collecting epoch (system-scheduler-spec.md §4.2).
+  await ic.publishBrief(session.id, 60);
   const date = sessionDate(session);
 
   const key: Signer = await generateKeyPair();

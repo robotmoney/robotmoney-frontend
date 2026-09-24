@@ -18,6 +18,15 @@
 // exactly three places in the tree — domain.ts and two PUBLISHED docs pages —
 // and in no backend test at all, so the contract could be changed with nothing
 // going red. These are the tests that were missing.
+//
+// THE EPOCH MODEL (issue #1026, system-scheduler-spec.md §4.2-§4.3) removed the
+// gap itself rather than tolerating takes across it: turnover opens N+1
+// `collecting`, with its brief and its deadline, in the transaction that
+// closes N, and a take lands only "while a session is `collecting` and now is
+// before its `window_closes_at`". The two tests that drove the gap through the
+// retired `openSession` → `closeWindow` path now drive turnover instead, and
+// still prove what they were written for: no take is ever refused as `not
+// open`, and a take that arrives between two epochs is filed on the right one.
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -25,6 +34,7 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
+import { activeSubject, sessionRow } from "./support/epoch-fixtures.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -80,39 +90,50 @@ async function runLifecycle(sessionId: string) {
 }
 
 test("a take submitted BETWEEN sessions is accepted and routed to the session it belongs to", async () => {
-  const subj = rid("gap");
-  await ensureProseSubject(subj, "Gap Subject");
+  const subj = await activeSubject("gap", 600);
 
-  // Session A: convened, brief published, closed, aggregated, published.
-  const a = await ic.openSession(subj);
-  await ic.publishBrief(a.id, 60);
-  await runLifecycle(a.id);
+  // Epoch A opens and its advertised deadline passes. Turnover then runs, as
+  // the scheduler's boundary timer does.
+  const opened = await ic.openEpoch(subj);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const a = opened.sessionId;
+  await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${a}`;
+  const turned = await ic.turnOverEpoch(subj, a);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  const b = turned.openedSessionId;
+  expect(b).not.toBe(a);
 
-  // Session B convenes. Its brief has NOT been published yet, so it is
-  // `scheduled` and carries no deadline — the exact instant the old state gate
-  // refused with `submission window not open (state=scheduled)`.
-  const b = await ic.openSession(subj);
-  expect(b.id).not.toBe(a.id);
-  expect(b.state).toBe("scheduled");
-  const bRow = (await sql`SELECT window_closes_at FROM swarm_sessions WHERE id = ${b.id}`)[0];
-  expect(bRow.window_closes_at).toBeNull();
+  // THE GAP IS GONE. B was born `collecting` with a future deadline in the
+  // same transaction that closed A — there is no `scheduled`, deadline-less
+  // instant for the old state gate's `submission window not open` to fire in.
+  const bRow = await sessionRow(b);
+  expect(bRow.state).toBe("collecting");
+  const [{ future }] = await sql<{ future: boolean }[]>`
+    SELECT window_closes_at > clock_timestamp() AS future FROM swarm_sessions WHERE id = ${b}`;
+  expect(future).toBe(true);
+  expect((await sessionRow(a)).state).toBe("window_closed");
 
   const m = await activeMember();
-  const res = await submit(m, sessionDate(b), subj);
+  const res = await submit(m, sessionDate(bRow), subj);
   expect(res.status).toBe(201);
   if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
 
-  // ROUTED TO B, not to the session that has already published. This is the
-  // half that "accepted" alone would not prove: a take filed against a
-  // published session would corrupt a rollup that was already computed.
+  // ROUTED TO B, not to the epoch that already closed. This is the half that
+  // "accepted" alone would not prove: a take filed against a closed epoch
+  // would post-date its absences and its aggregation.
   const stored = (await sql`SELECT session_id FROM swarm_recommendations WHERE id = ${res.recommendationId}`)[0];
-  expect(String(stored.session_id)).toBe(String(b.id));
+  expect(String(stored.session_id)).toBe(String(b));
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${a}`).length).toBe(0);
 
-  // …and it survives into B's own published rollup once B runs its course.
-  await ic.publishBrief(b.id, 60);
-  await runLifecycle(b.id);
-  const detail = await ic.getSession(sessionDate(b), subj);
-  expect(detail!.takes.map((t) => t.memberId)).toContain(m.id);
+  // …and it survives into B's own frozen take set once B turns over and
+  // aggregates.
+  await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${b}`;
+  const turnedB = await ic.turnOverEpoch(subj, b);
+  expect(turnedB.ok).toBe(true);
+  const aggregated = await ic.aggregateEpoch(b);
+  expect(aggregated.ok, JSON.stringify(aggregated)).toBe(true);
+  const frozen = await ic.loadFrozenTakeSet(b);
+  expect(frozen!.takes.map((t) => String(t.member_id ?? t.memberId))).toContain(m.id);
 });
 
 test("the same take is still accepted once the brief IS published — the deadline never regressed", async () => {
@@ -140,24 +161,30 @@ test("an ELAPSED window still refuses, and that is now the only timing refusal",
   expect((late as { error: string }).error).not.toContain("not open");
 });
 
-test("closing the window EARLY no longer rejects takes — the advertised deadline is what binds", async () => {
-  // The behaviour change stated as a test, because it changes a published
-  // contract. `closeWindow` still flips the state unconditionally (deliberately
-  // — an epoch aggregates at the boundary over whatever arrived), so a caller
-  // that closes before the advertised instant produces a `window_closed`
-  // session whose deadline has not passed. The member was promised that
-  // deadline, so the take is accepted.
-  const subj = rid("early");
-  await ensureProseSubject(subj, "Early Subject");
-  const s = await ic.openSession(subj);
-  await ic.publishBrief(s.id, 60);
-  await ic.closeWindow(s.id);
-  const state = (await sql`SELECT state FROM swarm_sessions WHERE id = ${s.id}`)[0].state;
-  expect(state).toBe("window_closed");
+test("an EARLY turnover rejects no take — the next take lands in the successor, whose window is open", async () => {
+  // The behaviour #570 stated as a test, restated for the epoch model. An
+  // operator may turn an epoch over before its advertised instant (§4.3). The
+  // closed epoch refuses further takes — they would post-date its absences —
+  // but the successor opened in the same transaction is collecting, so a
+  // member arriving after the early close is never told `not open` and never
+  // loses its take.
+  const subj = await activeSubject("early", 600);
+  const opened = await ic.openEpoch(subj);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const a = opened.sessionId;
+  const turned = await ic.turnOverEpoch(subj, a);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  const [closed] = await sql<{ state: string; still_future: boolean }[]>`
+    SELECT state, window_closes_at > clock_timestamp() AS still_future FROM swarm_sessions WHERE id = ${a}`;
+  expect(closed).toEqual({ state: "window_closed", still_future: true });
 
   const m = await activeMember();
-  const res = await submit(m, sessionDate(s), subj);
+  const res = await submit(m, sessionDate(await sessionRow(turned.openedSessionId)), subj);
   expect(res.status).toBe(201);
+  if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
+  const stored = (await sql`SELECT session_id FROM swarm_recommendations WHERE id = ${res.recommendationId}`)[0];
+  expect(String(stored.session_id)).toBe(String(turned.openedSessionId));
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${a}`).length).toBe(0);
 });
 
 test("a fresh nonce from the same member is an AMENDMENT, not a duplicate — and the schema says so", async () => {
