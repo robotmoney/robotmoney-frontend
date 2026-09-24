@@ -87,7 +87,7 @@ import { existsSync, readFileSync, realpathSync, renameSync, rmSync, statSync, w
 import { basename, dirname, join, resolve } from "node:path";
 import { instancePaths } from "../smoke-state.ts";
 import type { PersonaIdentity } from "./persona-keys.ts";
-import type { RunningParticipant } from "./credential-file.ts";
+import type { CredentialEntry, RunningParticipant } from "./credential-file.ts";
 
 /**
  * One generated identity plus the member id it is bound to. The id is
@@ -434,6 +434,14 @@ export function readSpoofGeneration(stateRoot: string, instance: string): SpoofG
  * entries, in the same order, except that every entry named in the generation
  * carries the generation's keypair and bearer instead of the file's.
  *
+ * The override lands INSIDE the entry's `credential` (D52: one entry is one
+ * container's whole credential), so the container fed that entry signs with
+ * the generation's key and authenticates with the generation's bearer. A
+ * bearer carried beside the entry instead would leave `credential.bearer`
+ * holding the file's token, which the rebind has already superseded. The
+ * entry's `memberId` and `modelKey` stay the file's: the generation rebinds a
+ * key and a token, never a member or its model account.
+ *
  * With no generation the file is returned unchanged. The generation never ADDS
  * a member: the credential file stays the roster (spec §6.1), and the
  * generation only decides which key and bearer a listed member boots with.
@@ -441,10 +449,10 @@ export function readSpoofGeneration(stateRoot: string, instance: string): SpoofG
  *
  * Refusals: none; `readSpoofGeneration` already refused a malformed file.
  */
-export function effectiveRoster<E extends { name: string; identity: PersonaIdentity }>(
+export function effectiveRoster<E extends { name: string; credential: CredentialEntry }>(
   fileEntries: readonly E[],
   generation: SpoofGeneration | null,
-): (E & { bearer?: string })[] {
+): E[] {
   if (generation === null) return [...fileEntries];
   const fold = (name: string) => name.trim().toLowerCase();
   const spoofed = new Map<string, SpoofedMember>();
@@ -454,8 +462,12 @@ export function effectiveRoster<E extends { name: string; identity: PersonaIdent
     if (!member) return entry;
     return {
       ...entry,
-      identity: { ...entry.identity, publicKeyB64: member.identity.publicKeyB64, privateJwk: member.identity.privateJwk },
-      bearer: member.bearer,
+      credential: {
+        ...entry.credential,
+        publicKeyB64: member.identity.publicKeyB64,
+        privateJwk: member.identity.privateJwk,
+        bearer: member.bearer,
+      },
     };
   });
 }

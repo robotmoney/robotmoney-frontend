@@ -69,6 +69,19 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "rm-spoof-keys-"));
 }
 
+/**
+ * Every FILE under `dir`, recursively, as paths relative to `dir`. The
+ * instance state layout (`instancePaths(..., { create: true })`) makes empty
+ * owner-only token and journal directories; those are the layout, not
+ * something the spoof run wrote. A stray file at any depth still shows here.
+ */
+function filesUnder(dir: string): string[] {
+  return (readdirSync(dir, { recursive: true, withFileTypes: true }) as import("node:fs").Dirent[])
+    .filter((e) => e.isFile() || e.isSymbolicLink())
+    .map((e) => relative(dir, join(e.parentPath, e.name)))
+    .sort();
+}
+
 /** A context in which every guard passes — each test spoils exactly one field. */
 const allowed = (over: Partial<SpoofGuardContext> = {}): SpoofGuardContext => ({
   rmEnv: "stage",
@@ -407,7 +420,7 @@ describe("spoofKeys — the generation lands in instancePaths(stateRoot, instanc
       expect(JSON.parse(readFileSync(expected, "utf8")).generationId).toBe(outcome.generationId);
       // Nothing written anywhere else under the root.
       expect(readdirSync(root)).toEqual(["rm_twin"]);
-      expect(readdirSync(instancePaths(root, "rm_twin").dir)).toEqual(["spoof-generation"]);
+      expect(filesUnder(root)).toEqual([join("rm_twin", "spoof-generation")]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -531,7 +544,7 @@ describe("writeSpoofGeneration — fresh keypairs and bearers, persisted before 
     const dir = tempDir();
     try {
       writeSpoofGeneration([{ name: "athena", memberId: "m-athena" }], dir, "rm_twin");
-      expect(readdirSync(instancePaths(dir, "rm_twin").dir)).toEqual(["spoof-generation"]);
+      expect(filesUnder(instancePaths(dir, "rm_twin").dir)).toEqual(["spoof-generation"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -631,7 +644,13 @@ describe("effectiveRoster — while a generation exists, its members boot on its
   const fileEntry = (name: string, kind: "agent" | "judge" = "agent"): RosterEntry => ({
     name,
     kind,
-    identity: { publicKeyB64: `file-pub-${name}`, privateJwk: { kty: "OKP", d: `file-${name}` } },
+    credential: {
+      memberId: `m-${name.trim()}`,
+      publicKeyB64: `file-pub-${name}`,
+      privateJwk: { kty: "OKP", d: `file-${name}` },
+      bearer: `tok_file_${name}`,
+      modelKey: `model-key-${name}`,
+    },
   });
   const FILE = [fileEntry("athena"), fileEntry("noop-analyst"), fileEntry("themis", "judge")];
   const generation: SpoofGeneration = {
@@ -651,9 +670,12 @@ describe("effectiveRoster — while a generation exists, its members boot on its
   test("with a generation, a spoofed member takes the GENERATION's key and bearer, not RM_CREDENTIALS'", () => {
     const roster = effectiveRoster(FILE, generation);
     const athena = roster.find((e) => e.name === "athena");
-    expect(athena?.identity.publicKeyB64).toBe("spoof-pub-athena");
-    expect(athena?.identity.privateJwk).toEqual({ kty: "OKP", d: "spoof-athena" });
-    expect(athena?.bearer).toBe("tok_m-athena_spoofed");
+    expect(athena?.credential.publicKeyB64).toBe("spoof-pub-athena");
+    expect(athena?.credential.privateJwk).toEqual({ kty: "OKP", d: "spoof-athena" });
+    expect(athena?.credential.bearer).toBe("tok_m-athena_spoofed");
+    // The generation rebinds a key and a token, never the member or its model account.
+    expect(athena?.credential.memberId).toBe("m-athena");
+    expect(athena?.credential.modelKey).toBe("model-key-athena");
   });
 
   test("with a generation, a member it does NOT name keeps the file's entry untouched", () => {
@@ -684,7 +706,7 @@ describe("effectiveRoster — while a generation exists, its members boot on its
 
   test("names match the way reconcileRoster matches them — trimmed and case-folded", () => {
     const roster = effectiveRoster([fileEntry(" Athena ")], generation);
-    expect(roster[0]?.identity.publicKeyB64).toBe("spoof-pub-athena");
+    expect(roster[0]?.credential.publicKeyB64).toBe("spoof-pub-athena");
   });
 
   test("end to end: a spoof run's generation, read back by instance, overrides the file on the next plain boot", async () => {
@@ -704,9 +726,10 @@ describe("effectiveRoster — while a generation exists, its members boot on its
       expect(persisted?.generationId).toBe(outcome.generationId);
       const roster = effectiveRoster(FILE, persisted);
       const athena = roster.find((e) => e.name === "athena");
-      expect(athena?.identity.publicKeyB64).toBe(persisted?.members.athena?.identity.publicKeyB64 as string);
-      expect(athena?.bearer).toBe(persisted?.members.athena?.bearer as string);
-      expect(athena?.identity.publicKeyB64).not.toBe("file-pub-athena");
+      expect(athena?.credential.publicKeyB64).toBe(persisted?.members.athena?.identity.publicKeyB64 as string);
+      expect(athena?.credential.bearer).toBe(persisted?.members.athena?.bearer as string);
+      expect(athena?.credential.publicKeyB64).not.toBe("file-pub-athena");
+      expect(athena?.credential.bearer).not.toBe("tok_file_athena");
       // A different instance under the same root was never spoofed: its plain
       // boot keeps RM_CREDENTIALS.
       expect(effectiveRoster(FILE, readSpoofGeneration(root, "other-twin"))).toEqual(FILE);
