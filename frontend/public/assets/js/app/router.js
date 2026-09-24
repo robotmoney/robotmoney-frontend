@@ -8,6 +8,7 @@
 
 import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
+import { isCurrentLink, navSectionFor } from "./lib/site-nav.js";
 
 const viewEl = () => document.getElementById("view");
 
@@ -26,20 +27,25 @@ function outletHost(host) {
   return host.querySelector("[data-outlet]");
 }
 
-// Mark the nav link whose href matches the current path as active/current.
+// Mark where the reader is in the site nav (RM-124): the group that owns the
+// path by prefix keeps its underline, so /vault/rmagent lights Vaults, and the
+// link to the page itself is aria-current. A group's button carries
+// aria-current too, since its panel (and the current link in it) is closed.
+// Sections: lib/site-nav.js.
 function syncNav(pathname) {
-  const links = document.querySelectorAll(".nav__link, .nav__mlink");
-  links.forEach((a) => {
-    const href = a.getAttribute("href") || "";
-    let linkPath = href;
-    try {
-      linkPath = new URL(href, location.origin).pathname;
-    } catch (_) {
-      /* leave as-is for non-URL hrefs */
+  const section = navSectionFor(pathname);
+  document.querySelectorAll(".nav__group").forEach((g) => {
+    const top = g.querySelector(".nav__top");
+    if (!top) return;
+    const on = g.dataset.navSection === section;
+    top.classList.toggle("nav__top--active", on);
+    if (top.tagName === "BUTTON") {
+      if (on) top.setAttribute("aria-current", "true");
+      else top.removeAttribute("aria-current");
     }
-    const active = linkPath === pathname;
-    a.classList.toggle("nav__link--active", active);
-    if (active) a.setAttribute("aria-current", "page");
+  });
+  document.querySelectorAll(".nav a").forEach((a) => {
+    if (isCurrentLink(a.getAttribute("href") || "", pathname)) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
 }

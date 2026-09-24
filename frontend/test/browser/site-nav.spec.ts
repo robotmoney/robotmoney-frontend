@@ -1,0 +1,218 @@
+// The site nav (RM-124): the section a page sits in, the desktop panels by
+// pointer and by key, the phone sheet, and the links an agent reads without
+// JavaScript. The markup, the sections and the vault list are pinned in
+// scripts/tests/unit/site-nav.test.ts; this is what a reader does with them.
+import { expect, test, type Page } from "@playwright/test";
+import { navigate } from "./navigation.ts";
+
+const top = (page: Page, key: string) => page.locator(`.nav__group[data-nav-section="${key}"] > .nav__top`);
+const panel = (page: Page, key: string) => page.locator(`#nav-p-${key}`);
+
+function failOnPageErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.stack || error.message));
+  return errors;
+}
+
+test.describe("desktop", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("the section a page sits in keeps its underline, and its own link is current", async ({ page }) => {
+    const errors = failOnPageErrors(page);
+    await page.goto("/");
+    await expect(page.locator(".nav__top--active")).toHaveCount(0);
+
+    await navigate(page, "/vault/rmagent");
+    await expect(page.locator(".nav__top--active")).toHaveCount(1);
+    await expect(top(page, "vaults")).toHaveClass(/nav__top--active/);
+    await expect(page.locator('.nav a[aria-current="page"]')).toHaveCount(1);
+    await expect(page.locator('.nav a[href="/vault/rmagent"]')).toHaveAttribute("aria-current", "page");
+    const underline = top(page, "vaults").locator(".nav__underline");
+    await expect(underline).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
+    // Monochrome, like every link on the site: never the accent.
+    await expect(underline).toHaveCSS("background-color", "rgb(242, 244, 249)");
+
+    // The Robot Money Vault's address is under /swarm; it still lights Vaults.
+    await navigate(page, "/swarm/subjects/robotmoney-vault");
+    await expect(top(page, "vaults")).toHaveClass(/nav__top--active/);
+    await expect(top(page, "swarm")).not.toHaveClass(/nav__top--active/);
+
+    await navigate(page, "/regime/indicators");
+    await expect(top(page, "research")).toHaveClass(/nav__top--active/);
+    // The panel holding the current link is closed, so the group says so.
+    await expect(top(page, "research")).toHaveAttribute("aria-current", "true");
+    await expect(top(page, "vaults")).not.toHaveAttribute("aria-current", /.+/);
+    await expect(page.locator('.nav a[href="/regime"]')).not.toHaveAttribute("aria-current", "page");
+    expect(errors).toEqual([]);
+  });
+
+  test("a click pins a panel; a second click, Esc or a click outside closes it", async ({ page }) => {
+    await page.goto("/");
+    await expect(panel(page, "vaults")).toBeHidden();
+
+    await top(page, "vaults").click();
+    await expect(panel(page, "vaults")).toBeVisible();
+    await expect(top(page, "vaults")).toHaveAttribute("aria-expanded", "true");
+    // Pinned: the pointer leaving does not drop it.
+    await page.mouse.move(700, 700);
+    await page.waitForTimeout(400);
+    await expect(panel(page, "vaults")).toBeVisible();
+
+    await top(page, "vaults").click();
+    await expect(panel(page, "vaults")).toBeHidden();
+    await expect(top(page, "vaults")).toHaveAttribute("aria-expanded", "false");
+
+    await top(page, "docs").click();
+    await expect(panel(page, "docs")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel(page, "docs")).toBeHidden();
+    await expect(top(page, "docs")).toBeFocused();
+
+    await top(page, "swarm").click();
+    await page.mouse.click(700, 700);
+    await expect(panel(page, "swarm")).toBeHidden();
+  });
+
+  test("hover opens a panel, the pointer can reach it, and leaving closes it", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "research").hover();
+    await expect(panel(page, "research")).toBeVisible();
+
+    // Straight down from the label into the panel: it stays.
+    await panel(page, "research").locator("a").first().hover();
+    await page.waitForTimeout(400);
+    await expect(panel(page, "research")).toBeVisible();
+
+    // Along the bar: the next panel takes over.
+    await top(page, "docs").hover();
+    await expect(panel(page, "docs")).toBeVisible();
+    await expect(panel(page, "research")).toBeHidden();
+
+    await page.mouse.move(700, 700);
+    await expect(panel(page, "docs")).toBeHidden();
+
+    // A panel the pointer opened closes on Esc with focus out on the page.
+    await page.locator(".footer a").first().focus();
+    await top(page, "vaults").hover();
+    await expect(panel(page, "vaults")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel(page, "vaults")).toBeHidden();
+  });
+
+  test("keys: along the bar, down into a panel, through it, and back out", async ({ page }) => {
+    await page.goto("/");
+    await top(page, "vaults").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(top(page, "swarm")).toBeFocused();
+
+    await page.keyboard.press("ArrowDown");
+    await expect(panel(page, "swarm")).toBeVisible();
+    await expect(panel(page, "swarm").locator("a").first()).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(panel(page, "swarm").locator("a").nth(1)).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(panel(page, "swarm").locator("a").last()).toBeFocused();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowUp");
+    await expect(top(page, "swarm")).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(panel(page, "swarm")).toBeHidden();
+    await page.keyboard.press("End");
+    await expect(top(page, "docs")).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(top(page, "vaults")).toBeFocused();
+
+    // Focus leaving the nav closes an open panel.
+    await page.keyboard.press("Enter");
+    await expect(panel(page, "vaults")).toBeVisible();
+    await page.locator(".footer a").first().focus();
+    await expect(panel(page, "vaults")).toBeHidden();
+  });
+
+  test("following a link closes the panel, a link to a section of this page too", async ({ page }) => {
+    await page.goto("/");
+    await navigate(page, "/swarm");
+    await top(page, "swarm").click();
+    await panel(page, "swarm").locator('a[href="/swarm#history"]').click();
+    await expect(panel(page, "swarm")).toBeHidden();
+    await expect(page).toHaveURL(/\/swarm#history$/);
+
+    await top(page, "vaults").click();
+    await panel(page, "vaults").locator('a[href="/vault/rmusdc"]').click();
+    await expect(panel(page, "vaults")).toBeHidden();
+    await expect(page).toHaveURL(/\/vault\/rmusdc$/);
+  });
+});
+
+test.describe("phone", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("one sheet: every group open under its heading, the button pinned at the bottom", async ({ page }) => {
+    const errors = failOnPageErrors(page);
+    await page.goto("/");
+    await expect(page.locator(".nav__menu")).toBeHidden();
+
+    const toggle = page.locator(".nav__toggle");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(".nav__menu")).toBeVisible();
+    // Every group open under a heading; the desktop buttons, which would do
+    // nothing here, are not in the sheet at all.
+    for (const key of ["vaults", "swarm", "research", "docs"]) {
+      await expect(panel(page, key)).toBeVisible();
+      await expect(top(page, key)).toBeHidden();
+    }
+    await expect(page.locator(".nav__head")).toHaveText(["Vaults", "Swarm", "Research", "Docs"]);
+    await expect(page.locator(".nav").getByRole("heading", { level: 2 })).toHaveCount(4);
+    await expect(top(page, "token")).toBeVisible();
+    await expect(page.locator(".nav").getByRole("link", { name: "Token", exact: true })).toBeVisible();
+
+    // The sheet's links follow the button that opened it, and a link that
+    // takes focus is never left under the pinned button.
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".nav__menu a").first()).toBeFocused();
+    const ctaTop = (await page.locator(".nav__ctas").boundingBox())!.y;
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press("Tab");
+      const b = await page.evaluate(() => document.activeElement!.getBoundingClientRect().bottom);
+      if (await page.locator(".nav__cta").evaluate((el) => el === document.activeElement)) break;
+      expect(b).toBeLessThanOrEqual(ctaTop + 1);
+    }
+
+    const cta = page.locator(".nav__cta");
+    await expect(cta).toHaveText("Get the skill");
+    const box = await cta.boundingBox();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    // The page behind does not scroll, and nothing runs off the side.
+    await expect(page.locator("html")).toHaveCSS("overflow", "hidden");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".nav__menu")).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    // Tab past the last link: focus goes to the page, so the sheet closes.
+    await toggle.click();
+    await page.locator(".nav__cta").focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".nav__menu")).toBeHidden();
+
+    await toggle.click();
+    await page.locator('.nav__menu a[href="/regime/indicators"]').click();
+    await expect(page.locator(".nav__menu")).toBeHidden();
+    await expect(page.locator("html")).not.toHaveCSS("overflow", "hidden");
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("without JavaScript", () => {
+  test.use({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: false });
+
+  test("every link is in the served page, and a panel still opens on hover", async ({ page }) => {
+    await page.goto("/");
+    expect(await page.locator(".nav a[href]").count()).toBeGreaterThanOrEqual(20);
+    await top(page, "vaults").hover();
+    await expect(panel(page, "vaults")).toBeVisible();
+  });
+});

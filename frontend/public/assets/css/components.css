@@ -45,7 +45,13 @@
 .btn-arrow__icon { transition: transform 0.3s; }
 .btn-arrow:hover .btn-arrow__icon { transform: translateX(4px); }
 
-/* ════════ Navigation ════════ */
+/* ════════ Navigation ════════
+   One list, two layouts (RM-124, index.html). At 1024px and up: a bar of
+   groups, each a label over a full-width panel. Below it: a sheet with every
+   group open under a mono-caps heading, the button pinned at the bottom.
+   Square, solid, hairline borders; no shadow, no gradient. Links stay
+   monochrome: muted and bare at rest, text colour on hover, and the current
+   section keeps the underline the hover draws in. */
 .nav {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -60,28 +66,29 @@
 }
 .nav__inner { max-width: 80rem; margin-inline: auto; padding-inline: 1.5rem; }
 .nav__row { display: flex; align-items: center; justify-content: space-between; height: 4rem; }
-.nav__logo { display: flex; align-items: center; height: 4rem; padding-block: 0.5rem; }
+.nav__logo { display: flex; align-items: center; height: 4rem; padding-block: 0.5rem; flex: none; }
 .nav__logo img { height: 45px; width: auto; object-fit: contain; }
 
-.nav__links, .nav__ctas { display: none; }
-.nav__links { align-items: center; gap: 0.25rem; }
-.nav__ctas { align-items: center; gap: 0.75rem; }
+.nav__groups, .nav__list { list-style: none; margin: 0; padding: 0; }
 
-.nav__link {
+.nav__top {
   position: relative;
+  display: inline-flex;
+  align-items: center;
   padding: 0.5rem 1rem;
+  background: none;
+  border: 0;
+  border-radius: 0;
   font-family: var(--font-sans);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--color-text-muted);
   text-decoration: none;
+  cursor: pointer;
   transition: color 0.3s;
 }
-/* The nav treatment, monochrome like every link on the site: muted and bare at
-   rest, since a row of underlines is noise where every entry is a link, and on
-   hover the words go to full text colour as the rule draws in under them. */
-.nav__link:hover { color: var(--color-text); }
+.nav__top:hover, .nav__top[aria-expanded="true"], .nav__top--active { color: var(--color-text); }
 .nav__underline {
   position: absolute;
   bottom: 0; left: 1rem; right: 1rem;
@@ -91,34 +98,160 @@
   transform-origin: left;
   transition: transform 0.3s;
 }
-.nav__link:hover .nav__underline { transform: scaleX(1); }
+.nav__top:hover .nav__underline, .nav__top--active .nav__underline { transform: scaleX(1); }
+/* A square chevron, drawn from two hairlines: down when closed, up when open. */
+.nav__chev {
+  width: 5px; height: 5px;
+  margin: -3px 0 0 0.5rem;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.2s, margin 0.2s;
+}
+.nav__top[aria-expanded="true"] .nav__chev { transform: rotate(-135deg); margin-top: 3px; }
+
+.nav__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0;
+  text-decoration: none;
+}
+.nav__item-t {
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  color: var(--color-text-soft);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: color 0.2s;
+}
+.nav__item-f {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.nav__item:hover .nav__item-t, .nav__item:focus-visible .nav__item-t {
+  color: var(--color-text);
+  text-decoration-line: underline;
+  text-decoration-color: var(--color-link-line);
+}
+.nav__item[aria-current="page"] .nav__item-t { color: var(--color-text); }
+.nav__top:focus-visible, .nav__item:focus-visible, .nav__toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+}
 
 .nav__toggle {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 0.375rem;
-  width: 2.5rem; height: 2.5rem;
+  width: 2.75rem; height: 2.75rem;
   background: none; border: none; cursor: pointer;
 }
 .nav__bar { width: 1.25rem; height: 1px; background: var(--color-text); transition: all 0.3s; }
 .nav__bar--top-open { transform: rotate(45deg) translateY(3.5px); }
 .nav__bar--bot-open { transform: rotate(-45deg) translateY(-3.5px); }
 
-.nav__mobile { background: var(--color-deep); border-top: 1px solid var(--color-border); }
-.nav__mobile-inner { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.nav__mlink {
-  font-family: var(--font-sans); font-size: 0.875rem;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--color-text-muted); text-decoration: none; text-decoration-thickness: 1px;
-  text-underline-offset: 4px; transition: color 0.2s;
+/* ── Phone and tablet: the sheet ── */
+@media (max-width: 1023.98px) {
+  .nav__menu { display: none; }
+  /* The bar's backdrop-filter makes the nav the containing block of anything
+     fixed inside it, so the sheet hangs off the bar as an absolute box sized
+     to the rest of the viewport. */
+  .nav__menu--open {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    height: calc(100dvh - 4rem);
+    background: var(--color-deep);
+    border-top: 1px solid var(--color-border);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* Keeps a link that takes focus clear of the pinned button below. */
+    scroll-padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+  .nav__groups { padding: 0 1.5rem 1rem; }
+  .nav__group { padding: 1.25rem 0 0.75rem; border-bottom: 1px solid var(--color-border); }
+  /* Every group is open here, so its label is a heading, not a button that
+     would do nothing. */
+  button.nav__top { display: none; }
+  .nav__head, .nav__top {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--color-text-muted);
+  }
+  /* Token has no group under it, so its heading is the link: a full-width row
+     with an arrow, not a heading over nothing. The arrow is not part of its
+     name (the second declaration; engines without alt text keep the first). */
+  .nav__group--link { padding-block: 0.5rem; }
+  a.nav__top { display: flex; justify-content: space-between; min-height: 2.75rem; color: var(--color-text); }
+  a.nav__top::after { content: "\2192"; content: "\2192" / ""; font-size: 0.875rem; letter-spacing: 0; }
+  .nav__top .nav__underline { display: none; }
+  .nav__panel-inner { padding-top: 0.5rem; }
+  .nav__list + .nav__list { margin-top: 0.75rem; }
+  .nav__item { min-height: 2.75rem; justify-content: center; padding: 0.375rem 0; }
+  .nav__ctas {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    padding: 1rem 1.5rem calc(1rem + env(safe-area-inset-bottom));
+    background: var(--color-deep);
+    border-top: 1px solid var(--color-border);
+  }
+  .nav__cta { display: flex; justify-content: center; }
+  html.nav-sheet-open { overflow: hidden; }
 }
-.nav__mlink:hover { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-link); }
-.nav__mobile-cta { margin-top: 1rem; justify-content: center; }
 
+/* ── Desktop: the bar and its panels ── */
 @media (min-width: 1024px) {
   .nav__inner { padding-inline: 2rem; }
   .nav__row, .nav__logo { height: 5rem; }
-  .nav__links, .nav__ctas { display: flex; }
-  .nav__toggle, .nav__mobile { display: none; }
+  .nav__toggle, .nav__head { display: none; }
+  .nav__menu {
+    display: flex;
+    flex: 1;
+    align-self: stretch;
+    align-items: center;
+    justify-content: space-between;
+    margin-left: 2rem;
+  }
+  /* Each group fills the bar's height, so the pointer never leaves it on the
+     way from a label down to its panel. */
+  .nav__groups { display: flex; align-self: stretch; gap: 0.25rem; }
+  .nav__group { display: flex; align-items: center; }
+  .nav__ctas { display: flex; align-items: center; gap: 0.75rem; }
+
+  /* The panel hangs from the nav itself (the fixed bar is its containing
+     block), so it spans the viewport under the whole bar. */
+  .nav__panel {
+    display: none;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    background: var(--color-deep);
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .nav--js .nav__panel--open,
+  .nav:not(.nav--js) .nav__group:hover > .nav__panel,
+  .nav:not(.nav--js) .nav__group:focus-within > .nav__panel { display: block; }
+  .nav__panel-inner {
+    display: flex;
+    max-width: 80rem;
+    margin-inline: auto;
+    padding: 1.5rem 2rem 1.75rem;
+  }
+  .nav__list { min-width: 15rem; padding-right: 2.5rem; }
+  .nav__list + .nav__list { padding-left: 2.5rem; border-left: 1px solid var(--color-border); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav__underline, .nav__chev, .nav__top, .nav__item-t { transition: none; }
 }
 
 /* ════════ Hero ════════ */
