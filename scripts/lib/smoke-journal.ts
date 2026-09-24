@@ -1,9 +1,9 @@
 // The plan, the plan id, the phase journal, resume and interruption semantics,
 // and the readiness receipt — spec §§1.2–1.4.
 //
-// STUB (issue #1026, W1 step 1). Signatures and types are real; every body
-// throws. Nothing imports this module yet, and nothing may import it until the
-// implementation lands — it is additive and behaviour-neutral by construction.
+// STATUS. Implemented and unit-tested (scripts/tests/unit/smoke-journal.test.ts).
+// `smoke:tui` reads journals and receipts through it; `bun smoke` writing them
+// is later #1026 work.
 //
 // ── The problem this module exists to solve ─────────────────────────────────
 //
@@ -39,7 +39,7 @@
 //    committed work (a migration it applied, a manifest it wrote) never
 //    invalidates its resume."
 //
-//   "A different plan id (roster, digest, or target changed) closes the old
+//   "A different plan id (roster, image source, or target changed) closes the old
 //    journal, reports what it reached, and starts a fresh reconciliation from
 //    current state. Completed phases are never reused under a different plan."
 //
@@ -71,7 +71,8 @@
 //
 // ── Governing spec sections ─────────────────────────────────────────────────
 //
-//   §1.2  the redacted plan and the plan id (its content hash); the two locks.
+//   §1.2  the redacted plan and the plan id (its content hash, over exactly the
+//         fields D52 lists); the two locks.
 //   §1.3  the phase list, the three-part journal, the three resume rules.
 //   §1.4  interruption semantics and the receipt.
 //   §2    connection loss is "detected at every phase boundary; the tool
@@ -84,8 +85,10 @@
 // plan id succeeds; changed roster/image/target does not reuse completed
 // phases", "Receipt read by `smoke:status`".
 
+
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { InstancePaths } from "./smoke-state.ts";
 
@@ -93,8 +96,29 @@ import type { InstancePaths } from "./smoke-state.ts";
 const JOURNAL_FORMAT_VERSION = 1;
 /** On-disk format version of the receipt; an unknown one refuses. */
 const RECEIPT_FORMAT_VERSION = 1;
-/** An image identity: a digest, never a tag. */
+/** A built image identity: a digest, never a tag. */
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+/** An image source identity: a Git tree id (SHA-1 or SHA-256 repository). */
+const SOURCE_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** A roster key fingerprint, as {@link publicKeyFingerprint} makes one. */
+const FINGERPRINT_PATTERN = /^fp:[0-9a-f]{16}$/;
+/** A member name as the credential file keys it. */
+const MEMBER_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+/** A hostname or bracketed IPv6 literal — never userinfo, a path or a port. */
+const HOST_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}))*\.?|\[[0-9A-Fa-f:.]+\])$/;
+/** A Postgres database name as this repository uses them. */
+const DBNAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/;
+/** A Docker volume name. */
+const VOLUME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** A configuration key: an environment-variable name. */
+const CONFIG_KEY = /^[A-Z][A-Z0-9_]*$/;
+/**
+ * Configuration keys that name a secret. The plan carries "every non-secret
+ * configuration value" (§1.2), so a key of this shape is refused whatever its
+ * value — `RM_CREDENTIALS` included: the plan carries the roster the file
+ * holds, never the path to the keys.
+ */
+const SECRET_KEY_NAME = /PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|PRIVATE|BEARER|(?:^|_)(?:API_)?KEYS?(?:$|_)|DATABASE_URL|(?:^|_)DSN(?:$|_)/;
 
 /** Canonical serialization: object keys sorted, arrays in their given order. */
 function canonicalize(value: unknown): string {
@@ -104,52 +128,194 @@ function canonicalize(value: unknown): string {
   return `{${entries.map(([key, inner]) => `${JSON.stringify(key)}:${canonicalize(inner)}`).join(",")}}`;
 }
 
-/** The §1.2 redaction check, enforced at the one choke point every plan passes. */
-function assertRedacted(value: unknown, path: string): void {
-  if (typeof value === "string") {
-    if (/postgres(ql)?:\/\//i.test(value) || /PRIVATE KEY/.test(value)) {
-      throw new Error(`Refusing: plan field ${path} carries a credential; §1.2 requires a redacted plan.`);
+/**
+ * Why a free-form string reads as a credential, or `null`. Used on every value
+ * a typed field cannot constrain — configuration values above all.
+ *
+ * Shapes, not a list of known values: a Postgres URL; a PEM block; userinfo
+ * (`user:pass@host`, with or without a scheme); an automation token (`rmat_`);
+ * a hex run of 32 or more; and a RANDOM-looking base64 or base64url run. A run
+ * is random-looking when it holds 16 or more letters and digits from at least
+ * two of upper case, lower case and digits, and switches between those classes
+ * at 35% or more of adjacent pairs inside its alphanumeric segments. Random
+ * base64 switches at about 64%; words, camelCase and model ids
+ * (`Qwen2.5-Coder-32B-Instruct` switches at 23%) stay well below, as do cron
+ * strings, hostnames and paths. A run of 24 or more letters and digits in
+ * which at least 70% of the characters are distinct is random-looking too,
+ * which catches the random run whose cases happened to cluster.
+ *
+ * A human-chosen password has no shape. That is what the key-name rule
+ * ({@link SECRET_KEY_NAME}) and the caller's `secrets` list are for.
+ */
+export function credentialShape(value: string): string | null {
+  if (/postgres(?:ql)?:\/\//i.test(value)) return "a Postgres connection URL";
+  if (/-----BEGIN|PRIVATE KEY/.test(value)) return "a PEM key block";
+  if (/[^\s/@:]+:[^\s/@]+@/.test(value)) return "userinfo (user:password@host)";
+  if (/rmat_[A-Za-z0-9_-]{8,}/.test(value)) return "an automation token";
+  if (/[0-9a-fA-F]{32,}/.test(value)) return "a long hex string, the shape of a token or raw key";
+  for (const run of value.match(/[A-Za-z0-9+/=_-]{16,}/g) ?? []) {
+    if (looksRandom(run)) return "a random-looking string, the shape of a password, token or key";
+  }
+  return null;
+}
+
+/** See {@link credentialShape}: the class-switching test for one base64-alphabet run. */
+function looksRandom(run: string): boolean {
+  const alnum = run.replace(/[^A-Za-z0-9]/g, "");
+  const classes = [/[A-Z]/, /[a-z]/, /[0-9]/].filter((pattern) => pattern.test(alnum)).length;
+  if (alnum.length < 16 || classes < 2) return false;
+  const classOf = (c: string): number => (c >= "A" && c <= "Z" ? 0 : c >= "a" && c <= "z" ? 1 : 2);
+  let pairs = 0;
+  let switches = 0;
+  for (const segment of run.split(/[^A-Za-z0-9]+/)) {
+    for (let i = 1; i < segment.length; i += 1) {
+      pairs += 1;
+      if (classOf(segment[i] as string) !== classOf(segment[i - 1] as string)) switches += 1;
     }
+  }
+  if (pairs > 0 && switches / pairs >= 0.35) return true;
+  // A long run whose characters barely repeat is random even when chance
+  // clustered its cases: 24 random base64 characters repeat few symbols, while
+  // text reuses its letters.
+  return alnum.length >= 24 && new Set(alnum).size / alnum.length >= 0.7;
+}
+
+/** Refuse `record` unless its keys are exactly `allowed`, naming the stray field. */
+function assertExactKeys(record: object, allowed: readonly string[], path: string): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) {
+      throw new Error(
+        `Refusing: plan field ${path}.${key} is not one §1.2 lists; the plan carries exactly ${allowed.join(", ")} here.`,
+      );
+    }
+  }
+  for (const key of allowed) {
+    if (!(key in record)) throw new Error(`Refusing: plan field ${path}.${key} is missing.`);
+  }
+}
+
+function refuseField(path: string, why: string): never {
+  // The value is NEVER echoed: a refusal about a credential must not print it.
+  throw new Error(`Refusing: plan field ${path} ${why}; §1.2 requires a redacted plan.`);
+}
+
+/** Every string in `value`, with its path, for the caller-supplied secret check. */
+function* stringsIn(value: unknown, path: string): Generator<[string, string]> {
+  if (typeof value === "string") {
+    yield [path, value];
     return;
   }
   if (value === null || typeof value !== "object") return;
   if (Array.isArray(value)) {
-    value.forEach((inner, index) => assertRedacted(inner, `${path}[${index}]`));
+    for (const [index, inner] of value.entries()) yield* stringsIn(inner, `${path}[${index}]`);
     return;
   }
   for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
-    assertRedacted(inner, `${path}.${key}`);
+    yield [`${path}.<key>`, key];
+    yield* stringsIn(inner, `${path}.${key}`);
   }
 }
 
-/** Write and fsync: a record still in a page cache is a record that did not exist. */
-function writeDurably(file: string, text: string): void {
-  writeFileSync(file, text);
-  const fd = openSync(file, "r");
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
+/** Options every plan choke point accepts. */
+export interface RedactionOptions {
+  /**
+   * The actual secret values this run holds — the role passwords, a typed
+   * `rm_owner` password, the service tokens, the participants' keys and
+   * bearers. None may appear anywhere in the plan. This is the check that
+   * catches a secret with no recognisable shape.
+   */
+  readonly secrets?: readonly string[];
 }
 
-/** Read a versioned JSON state file, refusing on malformed or unknown-version content. */
-function readVersioned<T>(file: string, version: number, kind: string): T | null {
-  if (!existsSync(file)) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+/**
+ * The §1.2 redaction check: POSITIVE, by structure. Every field of the plan has
+ * a type that cannot hold a credential — a hostname cannot hold `user:pass@`, a
+ * fingerprint cannot hold a key, a source identity is a Git tree id — and the
+ * one free-form field, `configuration`, is refused on a secret-shaped key or
+ * value. A field the plan does not define is refused rather than carried,
+ * because an unknown field is the easiest way for a secret to ride along.
+ * Finally no string anywhere may contain one of the caller's `secrets`.
+ *
+ * Enforced at every choke point: {@link computePlanId}, {@link renderPlan},
+ * {@link openJournal} and {@link writeReceipt}.
+ */
+export function assertPlanRedacted(plan: DeploymentPlan, options: RedactionOptions = {}): void {
+  assertExactKeys(plan, ["instance", "target", "images", "roster", "configuration", "mutations"], "plan");
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(plan.instance)) refuseField("plan.instance", "is not a legal instance name");
+
+  const target = plan.target;
+  if (target.kind === "remote") {
+    assertExactKeys(target, ["kind", "rmEnv", "identity", "host", "port", "dbname"], "plan.target");
+    if (!HOST_PATTERN.test(target.host)) {
+      refuseField("plan.target.host", "is not a bare hostname (no scheme, userinfo, port or path)");
+    }
+    if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535) {
+      refuseField("plan.target.port", "is not a TCP port");
+    }
+    if (!DBNAME_PATTERN.test(target.dbname)) refuseField("plan.target.dbname", "is not a database name");
+  } else if (target.kind === "local") {
+    assertExactKeys(target, ["kind", "rmEnv", "identity", "mode", "volume"], "plan.target");
+    if (!["blank", "dump", "volume"].includes(target.mode)) refuseField("plan.target.mode", "is not a §5 local mode");
+    if (!VOLUME_PATTERN.test(target.volume)) refuseField("plan.target.volume", "is not a Docker volume name");
+    if (target.rmEnv !== "stage") refuseField("plan.target.rmEnv", "is not stage, and §4.3 refuses RM_ENV=prod locally");
+  } else {
+    refuseField("plan.target.kind", "is neither remote nor local");
   }
-  if (parsed === null || typeof parsed !== "object") {
-    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+  if (target.rmEnv !== "prod" && target.rmEnv !== "stage") refuseField("plan.target.rmEnv", "is not prod or stage");
+  if (target.identity !== "production" && target.identity !== "rehearsal") {
+    refuseField("plan.target.identity", "is not a deployment_identity kind");
   }
-  const record = parsed as { formatVersion?: unknown; payload?: unknown };
-  if (record.formatVersion !== version) {
-    throw new Error(`Refusing: the ${kind} at ${file} has an unknown format version: ${String(record.formatVersion)}.`);
+
+  for (const [service, image] of Object.entries(plan.images)) {
+    const path = `plan.images.${service}`;
+    assertExactKeys(image, ["source", "digest"], path);
+    if (!SOURCE_PATTERN.test(image.source)) {
+      refuseField(`${path}.source`, "is not a Git tree id (the source identity of the image's build context)");
+    }
+    if (image.digest !== null && !DIGEST_PATTERN.test(image.digest)) {
+      refuseField(`${path}.digest`, "is a tag or other name, not a sha256 digest");
+    }
   }
-  return record.payload as T;
+
+  assertExactKeys(plan.roster, ["agents", "judges"], "plan.roster");
+  for (const [namespace, role] of [
+    ["agents", "member"],
+    ["judges", "judge"],
+  ] as const) {
+    for (const [index, member] of plan.roster[namespace].entries()) {
+      const path = `plan.roster.${namespace}[${index}]`;
+      assertExactKeys(member, ["name", "role", "keyFingerprint"], path);
+      if (!MEMBER_NAME.test(member.name)) refuseField(`${path}.name`, "is not a member name");
+      // §6.1: "An `agents` entry must be a member with role `member` and a
+      // `judges` entry a member with role `judge`".
+      if (member.role !== role) refuseField(`${path}.role`, `is not ${role}, the role §6.1 requires of ${namespace}`);
+      if (!FINGERPRINT_PATTERN.test(member.keyFingerprint)) {
+        refuseField(`${path}.keyFingerprint`, "is not a key fingerprint (fp: and 16 hex); a key is never carried");
+      }
+    }
+  }
+
+  for (const [key, value] of Object.entries(plan.configuration)) {
+    const path = `plan.configuration.${key}`;
+    if (!CONFIG_KEY.test(key)) refuseField(path, "has a key that is not an environment-variable name");
+    if (SECRET_KEY_NAME.test(key)) refuseField(path, "is named like a secret, and the plan carries non-secret configuration only");
+    if (typeof value !== "string") refuseField(path, "is not a string");
+    const shape = credentialShape(value);
+    if (shape !== null) refuseField(path, `carries ${shape}`);
+  }
+
+  for (const mutation of plan.mutations) {
+    if (mutation !== "migrate" && mutation !== "seed" && mutation !== "spoof-keys") {
+      refuseField("plan.mutations", "names a mutation §1.2 does not list");
+    }
+  }
+
+  const secrets = (options.secrets ?? []).filter((secret) => secret.length >= 4);
+  if (secrets.length > 0) {
+    for (const [path, text] of stringsIn(plan, "plan")) {
+      if (secrets.some((secret) => text.includes(secret))) refuseField(path, "contains one of this run's secrets");
+    }
+  }
 }
 
 /**
@@ -181,35 +347,89 @@ export const DEPLOYMENT_PHASES: readonly DeploymentPhase[] = [
 ] as const;
 
 /**
- * The redacted plan of spec §1.2: "instance, resolved target (§4), image
- * digests, participant roster (§6), configuration, and every mutation it
- * intends (`--migrate`, `--seed`, `--spoof-keys`)."
+ * The resolved target of §4, as the plan names it: its IDENTITY, never a way
+ * to connect to it. A remote target is host, port and database name; a local
+ * one is the §5 mode and the volume smoke owns. Either carries the `RM_ENV`
+ * policy and the `deployment_identity` kind the plan was built against.
+ */
+export type PlanTarget =
+  | {
+      readonly kind: "remote";
+      readonly rmEnv: "prod" | "stage";
+      readonly identity: "production" | "rehearsal";
+      /** A bare hostname: no scheme, no userinfo, no port, no path. */
+      readonly host: string;
+      readonly port: number;
+      readonly dbname: string;
+    }
+  | {
+      readonly kind: "local";
+      /** §4.3: `prod` with `--local` refuses, and an unset `RM_ENV` runs as `stage`. */
+      readonly rmEnv: "stage";
+      readonly identity: "production" | "rehearsal";
+      readonly mode: "blank" | "dump" | "volume";
+      readonly volume: string;
+    };
+
+/** One image of the plan. */
+export interface PlanImage {
+  /**
+   * The source identity: the Git tree hash of the image's build context
+   * (scripts/stack/source-identity.ts). HASHED into the plan id.
+   */
+  readonly source: string;
+  /**
+   * The built digest, or `null` before a build. PRINTED, never hashed: "not its
+   * built digest, which changes on every rebuild and is recorded in the
+   * receipt instead" (§1.2).
+   */
+  readonly digest: string | null;
+}
+
+/** One roster member (§6.1): who, in which role, holding which public key. */
+export interface RosterMember {
+  readonly name: string;
+  /** `member` for an `agents` entry, `judge` for a `judges` entry (§6.1). */
+  readonly role: "member" | "judge";
+  /** {@link publicKeyFingerprint} of the member's public key — never the key. */
+  readonly keyFingerprint: string;
+}
+
+/**
+ * The redacted plan of spec §1.2: "instance, resolved target (§4), image source
+ * identities and digests, participant roster (§6), configuration, and every
+ * mutation it intends (`--migrate`, `--seed`, `--spoof-keys`)."
  *
  * REDACTED is a hard requirement, not a style note. The plan is printed to a
  * terminal, hashed into an id that is written to disk, and carried into the
  * receipt that incident work reads — three places a credential must not reach.
- * `target` therefore carries the database IDENTITY (the host/dbname pair that
- * names it), never a connection string; `roster` carries member names, never
- * their keys; `configuration` carries the values that change behaviour, never
+ * So every field is typed so that it cannot hold one (see
+ * {@link assertPlanRedacted}): the target is host/port/dbname, never a
+ * connection string; the roster carries names, roles and key fingerprints,
+ * never keys; `configuration` carries the values that change behaviour, never
  * the tokens.
  */
 export interface DeploymentPlan {
   readonly instance: string;
-  /** Resolved target per §4: the policy, the identity kind, and a redacted target name. */
-  readonly target: {
-    readonly rmEnv: "prod" | "stage";
-    readonly identity: "production" | "rehearsal";
-    /** A stable, non-secret name for the database, e.g. `host/dbname`. No credentials. */
-    readonly database: string;
-  };
-  /** Image digests per service. A digest, not a tag: a tag is not an identity. */
-  readonly images: Readonly<Record<string, string>>;
-  /** The participant roster (§6.1): agent and judge names from the credential file. */
-  readonly roster: { readonly agents: readonly string[]; readonly judges: readonly string[] };
-  /** Behaviour-affecting configuration, already redacted. */
+  readonly target: PlanTarget;
+  /** Per service: source identity (hashed) and built digest (printed). */
+  readonly images: Readonly<Record<string, PlanImage>>;
+  /** The participant roster (§6.1), from the credential file. */
+  readonly roster: { readonly agents: readonly RosterMember[]; readonly judges: readonly RosterMember[] };
+  /** Every non-secret, behaviour-affecting configuration value. */
   readonly configuration: Readonly<Record<string, string>>;
   /** Every mutation this run intends. An empty list is a valid, meaningful plan. */
   readonly mutations: readonly ("migrate" | "seed" | "spoof-keys")[];
+}
+
+/**
+ * The fingerprint a roster member is planned under: `fp:` and the first 16 hex
+ * characters of the SHA-256 of the public key's text as the credential file
+ * carries it. Enough to see that a key changed; far too little to be one.
+ */
+export function publicKeyFingerprint(publicKey: string): string {
+  if (publicKey.trim() === "") throw new Error("Refusing: an empty public key has no fingerprint.");
+  return `fp:${createHash("sha256").update(publicKey.trim()).digest("hex").slice(0, 16)}`;
 }
 
 /**
@@ -221,59 +441,116 @@ export interface DeploymentPlan {
 export type PlanId = string & { readonly __brand: "PlanId" };
 
 /**
- * Compute the plan id.
+ * EXACTLY what the plan id hashes, per §1.2 as amended by D52: "the instance
+ * name; the target's identity (host, port and database name, or the local mode
+ * and volume name) and its `deployment_identity` kind; each image's source
+ * identity …; the roster's names, roles and public-key fingerprints; every
+ * non-secret configuration value; and the requested mutations. It excludes
+ * secret values, timestamps, and any state a journaled phase itself changes,
+ * such as the schema version a completed migration moved."
  *
- * The hash must be over a CANONICAL serialization — keys sorted, arrays in a
- * defined order, no timestamps, no PIDs, no paths that vary per host. Two runs
- * of the same intent on the same host must produce the same id, or rule 1
- * ("resumes only when the plan id matches") never fires and every rerun starts
- * over. Conversely every field listed in §1.3's parenthesis — "roster, digest,
- * or target changed" — MUST be inside the hash, or a changed plan silently
- * reuses completed phases, which rule 2 forbids.
+ * Built field by field rather than by deleting from the plan, so a field added
+ * to {@link DeploymentPlan} later is excluded until someone decides to hash it.
+ * The built digest is left out on purpose. The roster and the mutations are
+ * sets, so they are sorted: reordering the credential file or the flags is not
+ * a different intent.
+ */
+export function planHashMaterial(plan: DeploymentPlan): unknown {
+  const target =
+    plan.target.kind === "remote"
+      ? {
+          kind: "remote",
+          host: plan.target.host.toLowerCase(),
+          port: plan.target.port,
+          dbname: plan.target.dbname,
+          identity: plan.target.identity,
+          rmEnv: plan.target.rmEnv,
+        }
+      : {
+          kind: "local",
+          mode: plan.target.mode,
+          volume: plan.target.volume,
+          identity: plan.target.identity,
+          rmEnv: plan.target.rmEnv,
+        };
+  const members = (list: readonly RosterMember[]) =>
+    [...list]
+      .map((member) => ({ name: member.name, role: member.role, keyFingerprint: member.keyFingerprint }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return {
+    instance: plan.instance,
+    target,
+    images: Object.fromEntries(Object.entries(plan.images).map(([service, image]) => [service, image.source])),
+    roster: { agents: members(plan.roster.agents), judges: members(plan.roster.judges) },
+    configuration: { ...plan.configuration },
+    mutations: [...new Set(plan.mutations)].sort(),
+  };
+}
+
+/**
+ * Compute the plan id: SHA-256 over the canonical serialization of
+ * {@link planHashMaterial}.
  *
- * Refusal cases:
- *  - a plan containing a value that looks like a credential (a `postgres://`
- *    URL, a private key, a token-shaped string) refuses. The redaction promise
- *    of §1.2 is enforced here because this is the choke point every plan passes
- *    through on its way to the terminal, the journal and the receipt.
- *  - a plan with an image entry that is a tag rather than a digest refuses: a
- *    tag that moved between two runs would produce the same plan id for two
- *    different deployments, and rule 1 would then resume a journal describing
- *    other bytes.
+ * Two runs of the same intent must produce the same id, or rule 1 ("resumes
+ * only when the plan id matches") never fires and every rerun starts over — so
+ * a rebuild from unchanged sources keeps the id. Conversely every field §1.3
+ * names — "roster, image source, or target changed" — is inside the hash, or a
+ * changed plan silently reuses completed phases, which rule 2 forbids.
+ *
+ * Refusal cases: any plan {@link assertPlanRedacted} refuses. This is the
+ * choke point every plan passes on its way to the terminal, the journal and
+ * the receipt.
  *
  * Serves spec §10 W1: "changed roster/image/target does not reuse completed
  * phases."
  */
-export function computePlanId(plan: DeploymentPlan): PlanId {
-  assertRedacted(plan, "plan");
-  for (const [service, image] of Object.entries(plan.images)) {
-    if (!DIGEST_PATTERN.test(image)) {
-      throw new Error(`Refusing: image for ${service} is a tag, not a digest: ${image}`);
-    }
-  }
-  return createHash("sha256").update(canonicalize(plan)).digest("hex") as PlanId;
+export function computePlanId(plan: DeploymentPlan, options: RedactionOptions = {}): PlanId {
+  assertPlanRedacted(plan, options);
+  return createHash("sha256").update(canonicalize(planHashMaterial(plan))).digest("hex") as PlanId;
+}
+
+function renderTarget(target: PlanTarget): string {
+  const policy = `RM_ENV=${target.rmEnv}, deployment_identity ${target.identity}`;
+  return target.kind === "remote"
+    ? `target: remote ${target.host}:${target.port}/${target.dbname} (${policy})`
+    : `target: local ${target.mode} on volume ${target.volume} (${policy})`;
+}
+
+function renderMembers(label: "agent" | "judge", members: readonly RosterMember[]): string[] {
+  if (members.length === 0) return [`${label}s: none`];
+  return [...members]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((member) => `${label}: ${member.name} role ${member.role} key ${member.keyFingerprint}`);
 }
 
 /**
  * Render the plan for the terminal, exactly as §1.2 requires it to be printed
- * "before any mutation".
+ * "before any mutation": every field of the plan, one fact per line.
  *
- * One fact per line, deterministic order, plan id last. This is the artifact an
- * operator reads to decide whether to let the run proceed, and the artifact
- * they compare against when a later run refuses — so the ordering is part of
- * the contract, not a formatting preference.
+ * Deterministic order, plan id last. This is the artifact an operator reads to
+ * decide whether to let the run proceed, and the artifact they compare against
+ * when a later run refuses — so the ordering is part of the contract, not a
+ * formatting preference. Each image line shows both the source identity (what
+ * the id hashes) and the built digest (what will run).
+ *
+ * Refusal cases: any plan {@link assertPlanRedacted} refuses, with the same
+ * `secrets`; and an `id` that is not this plan's.
  */
-export function renderPlan(plan: DeploymentPlan, id: PlanId): string {
-  assertRedacted(plan, "plan");
+export function renderPlan(plan: DeploymentPlan, id: PlanId, options: RedactionOptions = {}): string {
+  if (computePlanId(plan, options) !== id) {
+    throw new Error(`Refusing: plan id ${id} is not this plan's content hash.`);
+  }
   const lines = [
     `instance: ${plan.instance}`,
-    `target: ${plan.target.rmEnv} (${plan.target.identity})`,
-    `database: ${plan.target.database}`,
+    renderTarget(plan.target),
     ...Object.keys(plan.images)
       .sort()
-      .map((service) => `image: ${service} ${plan.images[service]}`),
-    `agents: ${plan.roster.agents.join(", ")}`,
-    `judges: ${plan.roster.judges.join(", ")}`,
+      .map((service) => {
+        const image = plan.images[service] as PlanImage;
+        return `image: ${service} source ${image.source} digest ${image.digest ?? "not built yet"}`;
+      }),
+    ...renderMembers("agent", plan.roster.agents),
+    ...renderMembers("judge", plan.roster.judges),
     ...Object.keys(plan.configuration)
       .sort()
       .map((key) => `config: ${key}=${plan.configuration[key]}`),
@@ -360,9 +637,51 @@ export interface Journal {
   readonly plan: DeploymentPlan;
   readonly instance: string;
   readonly openedAt: string;
-  /** Set when a different plan id closed this journal (rule 2), else `null`. */
+  /** Set when the journal was closed — by a superseding plan (rule 2) or explicitly — else `null`. */
   readonly closedAt: string | null;
+  /**
+   * Why it was closed: for a supersede, the report of "what it reached" that
+   * rule 2 requires, kept with the journal it describes. `null` while open.
+   */
+  readonly closeReport: string | null;
+  /** The plan id that superseded this journal, when that is how it closed. */
+  readonly supersededBy: PlanId | null;
   readonly phases: readonly PhaseRecord[];
+}
+
+/** Write and fsync: a record still in a page cache is a record that did not exist. */
+function writeDurably(file: string, text: string, flag: "w" | "wx" = "w"): void {
+  writeFileSync(file, text, { flag, mode: 0o600 });
+  const fd = openSync(file, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Read a versioned JSON state file, refusing on malformed or unknown-version content. */
+function readVersioned<T>(file: string, version: number, kind: string): T | null {
+  if (!existsSync(file)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    throw new Error(`Refusing: the ${kind} at ${file} is malformed and cannot be parsed.`);
+  }
+  const record = parsed as { formatVersion?: unknown; payload?: unknown };
+  if (record.formatVersion !== version) {
+    throw new Error(`Refusing: the ${kind} at ${file} has an unknown format version: ${String(record.formatVersion)}.`);
+  }
+  return record.payload as T;
+}
+
+/** A journal read from disk, with the close fields present even on one written before they existed. */
+function normalizeJournal(journal: Journal): Journal {
+  return { ...journal, closeReport: journal.closeReport ?? null, supersededBy: journal.supersededBy ?? null };
 }
 
 /**
@@ -377,7 +696,25 @@ export interface Journal {
  * redone from the top.
  */
 export function readJournal(paths: InstancePaths): Journal | null {
-  return readVersioned<Journal>(paths.journalFile, JOURNAL_FORMAT_VERSION, "journal");
+  const journal = readVersioned<Journal>(paths.journalFile, JOURNAL_FORMAT_VERSION, "journal");
+  return journal === null ? null : normalizeJournal(journal);
+}
+
+/**
+ * Every journal this instance closed, oldest first — the record rule 2 keeps
+ * of superseded plans and what each reached. Refuses on a malformed one, for
+ * the same reason {@link readJournal} does.
+ */
+export function readArchivedJournals(paths: InstancePaths): readonly Journal[] {
+  if (!existsSync(paths.journalArchiveDir)) return [];
+  return readdirSync(paths.journalArchiveDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) =>
+      normalizeJournal(
+        readVersioned<Journal>(join(paths.journalArchiveDir, name), JOURNAL_FORMAT_VERSION, "archived journal") as Journal,
+      ),
+    );
 }
 
 /** What a rerun should do with an existing journal. */
@@ -397,70 +734,36 @@ export type ResumeDecision =
   | { readonly kind: "refuse"; readonly reason: string };
 
 /**
- * Apply spec §1.3's three resume rules and decide what a rerun does.
+ * The world as this journal believes it left it: the expectations the LATEST
+ * phase recorded when it began, advanced by that phase's own outcome if it
+ * committed one.
  *
- * Rule 1 — "A rerun resumes a journal only when the plan id matches. The
- * journal's own committed work (a migration it applied, a manifest it wrote)
- * never invalidates its resume." So the expectation check compares current
- * state against the journal's expectations AS ADVANCED BY the journal's own
- * recorded outcomes. Implement it that way round; comparing against the
- * ORIGINAL expectations makes every successful preparation self-blocking.
+ * Each phase records its expectations as observed when it began, so the latest
+ * record already contains every earlier phase's committed work and anything
+ * the run itself accepted between phases. Projecting from the FIRST record
+ * instead would ignore everything recorded since. Rule 1's second sentence
+ * lives here: work the journal itself committed is part of the expectation, not
+ * a difference to refuse over.
  *
- * Rule 2 — "A different plan id (roster, digest, or target changed) closes the
- * old journal, reports what it reached, and starts a fresh reconciliation from
- * current state. Completed phases are never reused under a different plan." The
- * last sentence forbids the tempting optimization of carrying a completed
- * `prepare` across a plan change because "the migration is the same anyway".
- *
- * Rule 3 — "State changed by another operation fails the expectation check and
- * refuses." Refuse; do not reconcile. A difference this function cannot
- * attribute to the journal's own outcomes is, by definition, someone else's
- * work, and proceeding would interleave two deployments.
- *
- * Inputs: the existing journal (or `null`), the new run's plan id, and the
- * observed current state. Output: {@link ResumeDecision}.
- *
- * Refusal cases (the `refuse` arm): schema head moved and the journal's
- * outcomes do not account for the move; manifest hash differs unaccountably;
- * `deployment_identity` changed kind — the target was re-enrolled underneath
- * the journal, which invalidates every policy decision the plan was built on;
- * an unknown spoofed-key generation is in force; a service is on a digest
- * neither the plan nor the journal names.
- *
- * Serves spec §10 W1: "Resume after committed preparation under the same plan
- * id succeeds; changed roster/image/target does not reuse completed phases."
+ * `null` for a journal with no phase yet: it has recorded no expectation, so
+ * there is nothing to hold the world to.
  */
-/**
- * The journal's own expectations ADVANCED BY its own recorded outcomes — the
- * world as this journal believes it left it. Rule 1's second sentence lives
- * here: work the journal itself committed is part of the expectation, not a
- * difference to refuse over.
- */
-function projectExpectations(journal: Journal): StateExpectations {
-  const first = journal.phases[0]?.expectations ?? null;
-  let schemaHead = first?.schemaHead ?? null;
-  let manifestHash = first?.manifestHash ?? null;
-  let spoofGeneration = first?.spoofGeneration ?? null;
-  const participants = new Set<string>(first?.participants ?? []);
-  const services: Record<string, string> = { ...(first?.services ?? {}) };
-  for (const record of journal.phases) {
-    const done = record.outcome;
-    if (done === null) continue;
-    const lastMigration = done.migrationsApplied.at(-1);
-    if (lastMigration !== undefined) schemaHead = lastMigration;
-    if (done.manifestPublished !== null) manifestHash = done.manifestPublished;
-    if (done.spoofGenerationWritten !== null) spoofGeneration = done.spoofGenerationWritten;
-    for (const name of done.participantsStarted) participants.add(name);
-    for (const name of done.participantsStopped) participants.delete(name);
-    for (const [service, digest] of Object.entries(done.servicesReplaced)) services[service] = digest;
-  }
+function projectExpectations(journal: Journal): StateExpectations | null {
+  const last = journal.phases.at(-1);
+  if (last === undefined) return null;
+  const base = last.expectations;
+  const done = last.outcome;
+  if (done === null) return base;
+  const participants = new Set<string>(base.participants);
+  for (const name of done.participantsStarted) participants.add(name);
+  for (const name of done.participantsStopped) participants.delete(name);
   return {
-    schemaHead,
-    manifestHash,
-    identity: first?.identity ?? "rehearsal",
+    schemaHead: done.migrationsApplied.at(-1) ?? base.schemaHead,
+    manifestHash: done.manifestPublished ?? base.manifestHash,
+    identity: base.identity,
     participants: [...participants],
-    services,
-    spoofGeneration,
+    services: { ...base.services, ...done.servicesReplaced },
+    spoofGeneration: done.spoofGenerationWritten ?? base.spoofGeneration,
   };
 }
 
@@ -473,6 +776,41 @@ function nextPhaseAfter(journal: Journal): DeploymentPhase {
   return DEPLOYMENT_PHASES[Math.min(index + 1, DEPLOYMENT_PHASES.length - 1)] as DeploymentPhase;
 }
 
+/**
+ * Apply spec §1.3's three resume rules and decide what a rerun does.
+ *
+ * Rule 1 — "A rerun resumes a journal only when the plan id matches. The
+ * journal's own committed work (a migration it applied, a manifest it wrote)
+ * never invalidates its resume." So the expectation check compares current
+ * state against the journal's expectations AS ADVANCED BY the journal's own
+ * recorded outcomes. Implement it that way round; comparing against the
+ * ORIGINAL expectations makes every successful preparation self-blocking.
+ *
+ * Rule 2 — "A different plan id (roster, image source, or target changed)
+ * closes the old journal, reports what it reached, and starts a fresh
+ * reconciliation from current state. Completed phases are never reused under a
+ * different plan." The last sentence forbids the tempting optimization of
+ * carrying a completed `prepare` across a plan change because "the migration is
+ * the same anyway". {@link openJournal} performs the close.
+ *
+ * Rule 3 — "State changed by another operation fails the expectation check and
+ * refuses." Refuse; do not reconcile. A difference this function cannot
+ * attribute to the journal's own outcomes is, by definition, someone else's
+ * work, and proceeding would interleave two deployments.
+ *
+ * Inputs: the existing journal (or `null`), the new run's plan id, and the
+ * observed current state. Output: {@link ResumeDecision}.
+ *
+ * Refusal cases (the `refuse` arm), each reason naming the value the journal
+ * expected AND the value observed: identity changed kind (the target was
+ * re-enrolled underneath the journal); schema head moved; manifest hash moved;
+ * a spoofed-key generation nobody journaled; the running participants differ;
+ * an expected service is not running; a service is on a digest neither the
+ * journal nor the plan names.
+ *
+ * Serves spec §10 W1: "Resume after committed preparation under the same plan
+ * id succeeds; changed roster/image/target does not reuse completed phases."
+ */
 export function decideResume(
   journal: Journal | null,
   planId: PlanId,
@@ -485,54 +823,62 @@ export function decideResume(
 
   if (journal.planId !== planId) {
     const migrations = journal.phases.flatMap((record) => record.outcome?.migrationsApplied ?? []);
+    const last = journal.phases.at(-1);
     const report = [
       `The previous plan ${journal.planId} is superseded by ${planId}; its completed phases are not reused.`,
-      `It reached phase ${nextPhaseAfter(journal)} before stopping.`,
+      last === undefined
+        ? "It had begun no phase."
+        : `It reached phase ${last.phase}${last.step === null ? "" : ` (${last.step})`}, ${last.status}; a rerun under it would have continued at ${nextPhaseAfter(journal)}.`,
       migrations.length === 0 ? "It applied no migrations." : `It applied migrations: ${migrations.join(", ")}.`,
     ].join("\n");
     return { kind: "supersede", previous: journal, report };
   }
 
   const expected = projectExpectations(journal);
+  if (expected === null) return { kind: "resume", journal, nextPhase: nextPhaseAfter(journal) };
+
+  const refuse = (reason: string): ResumeDecision => ({ kind: "refuse", reason });
+  const unaccounted = "and no journaled outcome accounts for the difference.";
   if (observed.identity !== expected.identity) {
-    return {
-      kind: "refuse",
-      reason: `the deployment identity is now ${observed.identity}, not ${expected.identity}: the target was re-enrolled underneath this journal.`,
-    };
+    return refuse(
+      `the deployment identity is now ${observed.identity}, but this journal expects ${expected.identity}: the target was re-enrolled underneath it.`,
+    );
   }
   if (observed.schemaHead !== expected.schemaHead) {
-    return {
-      kind: "refuse",
-      reason: `the schema head is ${String(observed.schemaHead)}, not ${String(expected.schemaHead)}, and no journaled outcome accounts for the move.`,
-    };
+    return refuse(
+      `the schema head is ${String(observed.schemaHead)}, but this journal expects ${String(expected.schemaHead)}, ${unaccounted}`,
+    );
   }
   if (observed.manifestHash !== expected.manifestHash) {
-    return {
-      kind: "refuse",
-      reason: `the schema manifest hash is ${String(observed.manifestHash)}, not ${String(expected.manifestHash)}, and no journaled outcome accounts for the move.`,
-    };
+    return refuse(
+      `the schema manifest hash is ${String(observed.manifestHash)}, but this journal expects ${String(expected.manifestHash)}, ${unaccounted}`,
+    );
   }
   if (observed.spoofGeneration !== expected.spoofGeneration) {
-    return {
-      kind: "refuse",
-      reason: `the spoofed-key generation in force is ${String(observed.spoofGeneration)}, which no journaled outcome wrote.`,
-    };
+    return refuse(
+      `the spoofed-key generation in force is ${String(observed.spoofGeneration)}, but this journal expects ${String(expected.spoofGeneration)}, ${unaccounted}`,
+    );
   }
   const expectedParticipants = [...expected.participants].sort().join(",");
   const observedParticipants = [...observed.participants].sort().join(",");
   if (observedParticipants !== expectedParticipants) {
-    return {
-      kind: "refuse",
-      reason: `the running participants are [${observedParticipants}], not [${expectedParticipants}], and no journaled outcome accounts for the change.`,
-    };
+    return refuse(
+      `the running participants are [${observedParticipants}], but this journal expects [${expectedParticipants}], ${unaccounted}`,
+    );
+  }
+  for (const [service, digest] of Object.entries(expected.services)) {
+    if (observed.services[service] === undefined) {
+      return refuse(`service ${service} is not running, but this journal expects it on digest ${digest}, ${unaccounted}`);
+    }
   }
   for (const [service, digest] of Object.entries(observed.services)) {
     if (expected.services[service] === digest) continue;
-    if (journal.plan.images[service] === digest) continue;
-    return {
-      kind: "refuse",
-      reason: `service ${service} is on digest ${digest}, which neither the plan nor this journal names.`,
-    };
+    if (journal.plan.images[service]?.digest === digest) continue;
+    const want = expected.services[service] ?? "not running";
+    const planned = journal.plan.images[service]?.digest ?? "none";
+    return refuse(
+      `service ${service} is on digest ${digest}, but this journal expects ${want} and the plan built ${planned}, ${unaccounted}`,
+    );
   }
 
   return { kind: "resume", journal, nextPhase: nextPhaseAfter(journal) };
@@ -560,18 +906,45 @@ export interface JournalWriter {
    * non-zero".
    */
   endPhase(status: "interrupted" | "failed", reason: string): Promise<void>;
-  /** Close the journal after a superseding plan (rule 2). */
+  /**
+   * Close THIS journal, recording why (an operator abandoning the plan). A
+   * journal superseded by a new plan is closed by {@link openJournal} itself,
+   * which is the only place that holds both plans.
+   */
   close(reason: string): Promise<void>;
+}
+
+/** File the closed `journal` in the archive, never over an earlier one. */
+function archiveJournal(paths: InstancePaths, journal: Journal): void {
+  mkdirSync(paths.journalArchiveDir, { recursive: true, mode: 0o700 });
+  const stamp = (journal.closedAt ?? journal.openedAt).replace(/[:.]/g, "-");
+  const file = join(paths.journalArchiveDir, `${stamp}-${journal.planId.slice(0, 12)}.json`);
+  writeDurably(file, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: journal }, null, 2), "wx");
 }
 
 /**
  * Open a journal writer for this run, creating or continuing the instance's
  * journal per a {@link ResumeDecision} already taken.
  *
+ *  - `resume`: continues the journal on disk, which must be the one decided on
+ *    and must carry THIS plan's id.
+ *  - `supersede`: rule 2's "closes the old journal, reports what it reached".
+ *    The previous journal is written to the archive with `closedAt`, the
+ *    decision's report and the superseding plan id BEFORE the new journal
+ *    replaces it, so the record of what it reached survives on disk rather
+ *    than only in the decision. The new journal starts with zero phases:
+ *    "Completed phases are never reused under a different plan."
+ *  - `fresh-start`: starts a new journal. A closed journal still on disk is
+ *    archived first; an OPEN one refuses (the caller decided without it).
+ *
  * Refusal cases:
  *  - a decision of `refuse`: this function is not where that is re-litigated,
  *    and accepting one would let a caller bypass the check by ignoring the
  *    decision and opening anyway.
+ *  - a `resume` whose journal's plan id is not `computePlanId(plan)`, or a
+ *    decision about a journal that is no longer the one on disk: a decision
+ *    about another journal is not a decision about this one.
+ *  - a plan {@link assertPlanRedacted} refuses: the journal is on disk.
  *  - the journal file is not writable, or the state directory is missing. A run
  *    that cannot journal must not mutate: the whole of §1.3's recoverability
  *    rests on the record existing, so an unjournalable run is a refusal, never
@@ -587,17 +960,56 @@ export function openJournal(paths: InstancePaths, decision: ResumeDecision, plan
     );
   }
   const planId = computePlanId(plan);
-  let journal: Journal =
-    decision.kind === "resume"
-      ? decision.journal
-      : {
-          planId,
-          plan,
-          instance: plan.instance,
-          openedAt: new Date().toISOString(),
-          closedAt: null,
-          phases: [],
-        };
+  const onDisk = readJournal(paths);
+  const same = (a: Journal | null, b: Journal): boolean =>
+    a !== null && a.planId === b.planId && a.openedAt === b.openedAt && a.closedAt === null;
+  const fresh = (): Journal => ({
+    planId,
+    plan,
+    instance: plan.instance,
+    openedAt: new Date().toISOString(),
+    closedAt: null,
+    closeReport: null,
+    supersededBy: null,
+    phases: [],
+  });
+
+  let journal: Journal;
+  if (decision.kind === "resume") {
+    if (decision.journal.planId !== planId) {
+      throw new Error(
+        `Refusing to resume: the journal is for plan ${decision.journal.planId}, but this run's plan is ${planId}. ` +
+          "Only a matching plan id resumes (§1.3 rule 1).",
+      );
+    }
+    if (onDisk === null || !same(onDisk, decision.journal)) {
+      throw new Error("Refusing to resume: the journal on disk is no longer the one the resume decision was taken on.");
+    }
+    journal = onDisk;
+  } else if (decision.kind === "supersede") {
+    if (decision.previous.planId === planId) {
+      throw new Error(`Refusing: a supersede needs a different plan id, and this run's plan is the journal's own (${planId}).`);
+    }
+    if (onDisk === null || !same(onDisk, decision.previous)) {
+      throw new Error("Refusing to supersede: the journal on disk is no longer the one the decision was taken on.");
+    }
+    archiveJournal(paths, {
+      ...onDisk,
+      closedAt: new Date().toISOString(),
+      closeReport: decision.report,
+      supersededBy: planId,
+    });
+    journal = fresh();
+  } else {
+    if (onDisk !== null && onDisk.closedAt === null) {
+      throw new Error(
+        `Refusing a fresh start: an open journal for plan ${onDisk.planId} is on disk. Decide with it (decideResume) ` +
+          "rather than overwrite it.",
+      );
+    }
+    if (onDisk !== null) archiveJournal(paths, onDisk);
+    journal = fresh();
+  }
 
   function persist(): void {
     writeDurably(paths.journalFile, JSON.stringify({ formatVersion: JOURNAL_FORMAT_VERSION, payload: journal }, null, 2));
@@ -643,8 +1055,7 @@ export function openJournal(paths: InstancePaths, decision: ResumeDecision, plan
       return Promise.resolve();
     },
     close(reason) {
-      journal = { ...journal, closedAt: new Date().toISOString() };
-      void reason;
+      journal = { ...journal, closedAt: new Date().toISOString(), closeReport: reason };
       persist();
       return Promise.resolve();
     },
@@ -719,11 +1130,23 @@ export interface Receipt {
   readonly plan: DeploymentPlan;
   readonly instance: string;
   readonly writtenAt: string;
+  /**
+   * The built digest each service is running at readiness. The plan id hashes
+   * source identities (§1.2), so this is where the bytes that actually ran are
+   * recorded: "not its built digest, which changes on every rebuild and is
+   * recorded in the receipt instead".
+   */
+  readonly images: Readonly<Record<string, string>>;
   /** Schema identity at readiness: manifest hash + the ledger's filename list. */
   readonly schema: { readonly manifestHash: string; readonly migrations: readonly string[] };
   /** Preflight results, per check of §7. */
   readonly preflight: readonly { readonly check: string; readonly pass: boolean; readonly detail: string }[];
-  /** Readiness results, including the §6.3 enabled-schedule advance check. */
+  /**
+   * Readiness results, per §6.3: scheduler readiness (authenticated, stream
+   * synchronized, initial rebuild complete, every active subject holding a
+   * `collecting` session), `api` health, the pipeline worker's startup checks,
+   * and `analytics-producer`'s authentication and seed command.
+   */
   readonly readiness: readonly { readonly check: string; readonly pass: boolean; readonly detail: string }[];
 }
 
@@ -735,8 +1158,10 @@ export interface Receipt {
  *    that did not reach readiness. The journal is the record in that case, and
  *    writing a receipt anyway would make §1.4's "read the receipt when present"
  *    rule actively misleading.
- *  - the plan id does not match the open journal's — a receipt describing a
- *    different intent than the run that produced it.
+ *  - the plan id does not match the open journal's, or is not the receipt
+ *    plan's own content hash — a receipt describing a different intent than
+ *    the run that produced it.
+ *  - a recorded image is not a digest.
  *  - the write cannot be made durable.
  *
  * Serves spec §10 W1: "Receipt read by `smoke:status`."
@@ -748,11 +1173,19 @@ export async function writeReceipt(paths: InstancePaths, receipt: Receipt): Prom
       `Refusing: readiness did not pass (${failed.map((check) => check.check).join(", ")}), so there is no receipt to write.`,
     );
   }
+  if (computePlanId(receipt.plan) !== receipt.planId) {
+    throw new Error(`Refusing: the receipt's plan id ${receipt.planId} is not the content hash of the plan it carries.`);
+  }
   const journal = readJournal(paths);
   if (journal !== null && journal.planId !== receipt.planId) {
     throw new Error(
       `Refusing: the receipt's plan id ${receipt.planId} does not match the open journal's plan id ${journal.planId}.`,
     );
+  }
+  for (const [service, digest] of Object.entries(receipt.images)) {
+    if (!DIGEST_PATTERN.test(digest)) {
+      throw new Error(`Refusing: the receipt records ${service} as ${digest}, which is not a sha256 digest.`);
+    }
   }
   writeDurably(paths.receiptFile, JSON.stringify({ formatVersion: RECEIPT_FORMAT_VERSION, payload: receipt }, null, 2));
   await Promise.resolve();
@@ -788,6 +1221,9 @@ export function summarizeProgress(journal: Journal | null, receipt: Receipt | nu
     return [
       `instance ${receipt.instance} reached readiness under plan ${receipt.planId} at ${receipt.writtenAt}.`,
       `schema: manifest ${receipt.schema.manifestHash}, migrations ${receipt.schema.migrations.join(", ")}`,
+      ...Object.keys(receipt.images)
+        .sort()
+        .map((service) => `service ${service}: running ${receipt.images[service]}`),
       ...receipt.preflight.map((check) => `preflight ${check.check}: ${check.pass ? "pass" : "fail"} (${check.detail})`),
       ...receipt.readiness.map((check) => `readiness ${check.check}: ${check.pass ? "pass" : "fail"} (${check.detail})`),
     ].join("\n");
