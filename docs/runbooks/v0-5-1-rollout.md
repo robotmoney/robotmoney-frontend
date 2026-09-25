@@ -1,0 +1,228 @@
+# v0.5.1 production rollout — PROPOSED
+
+> **Status: proposal (2026-09-25), not yet adopted.** Steps marked **[TO BUILD]**
+> name tooling that does not exist yet; every other command exists on
+> `qa/v0.5.1-website-picks`. This runbook follows
+> `docs/technical/release-runbooks.md` (policy) and
+> `docs/runbooks/rollout-procedure.md` (mechanics), and corrects the places
+> where the v0.5.0 rollout was abstract or blind.
+
+## 0. Why this runbook is stricter than v0.5.0's
+
+The v0.5.0 rollout passed every gate and production still could not close a
+swarm session. Each gap below is a thing that happened, and each has a step in
+this runbook that closes it.
+
+| v0.5.0 gap | What it hid | Closed by |
+|---|---|---|
+| The twin rehearsal had no verdict. `smoke:twin` prints READY and only *logs* a failed session. | Sessions that never published. | R4.4 `twin:gate` |
+| Rehearsal swarm checks counted published sessions. | A restored production database already holds hundreds. | R4.4 grades only sessions convened after the boot started. |
+| Nothing read container logs. | Four refused api boots (2026-09-24 14:27), dead jobs, shared-memory exhaustion. | R4.4, R7.2, R8.1 log scans |
+| Nothing queried `jobs` for `dead` rows. | 288 dead `wallet.backfill_window`, 24 dead `analytics.parity_sweep`, dead `swarm.judge`. | R2.3, R4.4, R7.3, R8.1 |
+| The twin's driver sets its own judge model at boot. | Production's `swarm_judge_config.model` is **NULL**; every judging refuses `model_unconfigured`. | R2.2 reads production's config directly; R6.5 sets it. |
+| Twin workers connect as the twin's superuser. | Production's `rm_worker` lacks grants (`permission denied for table wallet_backfill_state`). | R2.4 checks production grants; R6.2 applies them. |
+| §6 "deploy in provider order" named no command. | The real deploy is `smoke:archive` in a root tmux session on `rm-frontend-prod-1`. | R6 names every command. |
+| `BOOT_STATUS=$?` after `smoke:archive`. | `smoke:archive` never exits on success (it is the session driver), so `$?` only ever reports a crash. | R6.4 uses readiness + R7 instead. |
+| Rollback used `bun smoke -- --external-pg`. | `--external-pg` is not a known flag in v0.5.0; the command fails immediately. | R9 uses `smoke:archive`. |
+| Post-deploy looked for ~minutes. | Production runs a **6 h interval and 6 h window** per subject; a new session cannot publish in under ~6 h. | R8 is an overnight soak with a verdict. |
+
+## 1. Release identity
+
+| Item | Value |
+|---|---|
+| From | `v0.5.0` (`ec261867`), running on `rm-frontend-prod-1` (146.190.218.4) |
+| To | `v0.5.1-rc.N` → `v0.5.1`, cut from `releases-0.5.x` |
+| Source branch | `qa/v0.5.1-website-picks` fast-forwarded into `releases-0.5.x` (it is based on `v0.5.0`, so the merge is a fast-forward) |
+| Migrations | **None.** `git diff --name-only v0.5.0 <RC_SHA> -- backend/migrations` must print nothing (R1.3). |
+| Production process | `bun run smoke:archive` (`--smoke --static-port --db external`), cwd `/root/robotmoney-frontend`, root tmux session `0`, compose project `rm_prod` |
+| Rehearsal host | `rm-frontend-stage-2` (142.93.246.99), ephemeral, served at `stage.robotmoney-labs.dev` |
+| Production database | DigitalOcean managed Postgres 18; 6.5 GB on 2026-09-25 (issue 1035); read replica for captures |
+
+### 1.1 What v0.5.1 changes
+
+1. **Website** — PRs 1010, 1015, 1032, 1016, 1031, 1037, 1036, 1038 (swarm pages, vault pages, site nav, deposit page, changelog, empty states).
+2. **Public judgement API** — PR 1017: `GET /api/swarm/sessions/:id/judgements`, `/api/swarm/judgements/:id`, `/api/swarm/members/:id/judgements`. Read-only; no schema change.
+3. **Boot guards** — a read-only database session (SQLSTATE 25006, a managed-Postgres failover) is "unavailable", not "disarmed"; the analytics-ledger-guard step is back in prod-bootstrap.
+4. **Deploy hygiene** — the analytics producer no longer receives `MIGRATE_DATABASE_URL`; `WORKER_DATABASE_URL` is forwarded only on `--db external` boots; the twin-roster verify check is real again.
+5. **Rehearsal tooling** — slim twin dumps (`--twin-slim`, own directory), 1 GB `/dev/shm` for the restored Postgres, `bun run twin:gate`.
+
+### 1.2 Decisions required before R1 (owner)
+
+Each is a production defect found on 2026-09-24/25. A "no" must be written
+here with the reason, because R8 will fail on it.
+
+| ID | Defect (evidence) | Proposed fix in this release | Decision |
+|---|---|---|---|
+| D1 | `swarm_judge_config` = `enforce` / `model NULL` → 3 dead `swarm.judge` (`model_unconfigured`) in 24 h; 1 session published in 48 h | R6.5: set the model through the admin judge-config route (a data write, not a migration) | ☐ |
+| D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks`, `chain_address_floors` → 288 dead `wallet.backfill_window` in 24 h | R6.2: manual grant through `scripts/ops/provision-db-role-taxonomy.sh` (the release line's rule: grants are provisioning, not migrations) **[TO BUILD: add the three grants to the script]** | ☐ |
+| D3 | Member agents return empty transcripts (`opencode/deepseek-v4-flash`); production sessions get 3 of 8 takes; the twin had 14 `no_takes` judge deaths in 3 h | Choose: change the member model, or accept partial attendance and lower `--min-attendance` with a recorded reason | ☐ |
+| D4 | `unsupported Unicode escape sequence` on parity-observation writes; 24 dead `analytics.parity_sweep` | Fix in code, or waive in R4.4/R7.2 with `--waive` and a recorded reason | ☐ |
+| D5 | Production runs `RM_ENV=smoke`, so `config.ts`'s production-only credential checks never fire | Out of scope for 0.5.1 unless the owner says otherwise; record it | ☐ |
+
+## 2. Roles and evidence
+
+- **Operator** runs every command; **owner** signs R5 (go) and any override.
+- Every step records: time (UTC), command, exit code, and the lines named in
+  its *Record* column, in the rollout report (R10). A step with no recorded
+  evidence did not happen.
+- `STOP` means: do not continue, do not improvise; go to R9 if production was
+  touched, otherwise fix and restart from R1.
+
+## R1. Code readiness (workstation)
+
+| Step | Command | Pass | Record |
+|---|---|---|---|
+| R1.1 | `git fetch origin --tags && git switch releases-0.5.x && git merge --ff-only origin/qa/v0.5.1-website-picks && git push origin releases-0.5.x` | fast-forward only | new tip |
+| R1.2 | `RC_SHA=$(git rev-parse HEAD); echo $RC_SHA; git tag --points-at HEAD -l 'v0.5.1-rc.*'` | tag list empty | `RC_SHA` |
+| R1.3 | `git diff --name-only v0.5.0 "$RC_SHA" -- backend/migrations` | **prints nothing** | output |
+| R1.4 | `git diff --stat v0.5.0 "$RC_SHA" -- docker-compose.yml` | only the analytics-producer `MIGRATE_DATABASE_URL` removal | diffstat |
+| R1.5 | `bun install --force && bun install --force --cwd backend` | exit 0 | — |
+| R1.6 | `bun run typecheck && (cd backend && bun run typecheck)` | 0 errors | — |
+| R1.7 | `bun run test:unit && bun run --cwd frontend test && bun run --cwd contract test` | 0 fail | pass counts |
+| R1.8 | `(cd backend && bun test --timeout=30000 --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts')` | 0 fail | pass count |
+| R1.9 | `bun run --cwd frontend assemble` | "prerendered 38 routes" | route count |
+| R1.10 | GitHub CI on `RC_SHA`: `gh api repos/robotmoney/robotmoney-frontend/commits/$RC_SHA/check-runs --jq '.check_runs[]\|"\(.conclusion) \(.name)"'` | every required job `success` (push to `releases-*` runs them) | list |
+
+## R2. Production baseline (read-only, on `rm-frontend-prod-1`)
+
+Run **before** anything changes, and keep the output: R8 compares against it.
+Queries run as `rm_readonly` against the replica unless noted.
+**[TO BUILD]** `backend/scripts/upgrades/0.5.0-to-0.5.1/preflight.ts --emit-receipt`
+runs R2.1–R2.5 as one receipt; until it exists, run the SQL by hand.
+
+| Step | Check | Pass / expected today | Record |
+|---|---|---|---|
+| R2.1 | `git -C /root/robotmoney-frontend describe --tags`; `docker compose ls`; `tmux ls` | `v0.5.0`; project `rm_prod`; tmux session `0` | all three |
+| R2.2 | `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | today: `enforce`, **NULL**, `false` (D1) | row |
+| R2.3 | `SELECT kind, status, count(*) FROM jobs WHERE created_at > now() - interval '24 hours' GROUP BY 1,2` | record; today: dead wallet.backfill_window ×288, analytics.parity_sweep ×24, swarm.judge ×3 | full table |
+| R2.4 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
+| R2.5 | `SELECT subject_id, state, convened_at, published_at FROM swarm_sessions WHERE convened_at > now() - interval '72 hours' ORDER BY convened_at` plus takes per session (`count(DISTINCT member_id) FROM swarm_memos`) | record; list every session not `published` | table |
+| R2.6 | `SELECT name FROM schema_migrations ORDER BY name` | 0001…0061 as recorded; save as `baseline-migrations.txt` | file hash |
+| R2.7 | `docker inspect rm_prod-api-1 --format '{{.RestartCount}} {{.State.StartedAt}}'`; `docker logs --since 24h rm_prod-api-1 2>&1 \| grep -cE 'REFUSING the boot\|— DEAD\|JudgeUnavailable'` | record | counts |
+| R2.8 | `SELECT pg_size_pretty(pg_database_size(current_database()))` | record (6.5 GB on 2026-09-25) | size |
+
+## R3. Backup
+
+Unchanged from v0.5.0 §4.2, and it is a **full** dump — never `--twin-slim`.
+
+| Step | Command | Pass | Record |
+|---|---|---|---|
+| R3.1 | `export RM_BACKUP_DIR=/root/rm-backup-v051-$(date -u +%Y%m%dT%H%M%SZ)` (outside the checkout) | — | path |
+| R3.2 | `bun run smoke:capture` | exit 0; expect ~20 min at 6.5 GB | stamp, dump size |
+| R3.3 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | "DUMP SAFE" | receipt |
+| R3.4 | Copy `$RM_BACKUP_DIR` (dump, globals, passphrase) off the host | two copies exist | locations |
+
+## R4. Twin rehearsal (stage-2)
+
+The rehearsal must prove, on production data, that **spoofed member agents
+file takes in accelerated sessions and that those sessions close** — for every
+subject, with nothing dead and nothing in the logs.
+
+| Step | Command (on `rm-frontend-stage-2`, `~/robotmoney-frontend`) | Pass | Record |
+|---|---|---|---|
+| R4.1 | Wipe: stop any `bun` process, `docker rm -f $(docker ps -aq)`, `docker volume rm $(docker volume ls -q)` (stage-2 is ephemeral) | 0 containers, 0 volumes | — |
+| R4.2 | `git fetch origin && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
+| R4.3 | In tmux: `bun smoke:twin -- --no-tui 2>&1 \| tee ~/twin-$RC_SHA.log` | "READY" printed; slim capture ~1 min | READY time = T0 |
+| R4.4 | `bun run twin:gate -- --wait 75 --min-sessions 1 --min-attendance <D3 value>` (+ `--waive` only per D4) | **exit 0**. Every subject publishes ≥1 session convened after T0, each with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart; no fatal log line | full gate output |
+| R4.5 | Run R4.4 again at T0 + 3 h without `--wait` | exit 0 (sessions keep closing; nothing died since) | output |
+| R4.6 | Browser pass on `https://stage.robotmoney-labs.dev`: home, `/vaults`, `/vault/rmusdc`, `/vault/rmagent`, `/vault/rmproto`, `/vault/rmrwa`, `/swarm`, a published session, its judgement link, a member page with judgements, `/deposit`, `/changelog` | every page renders data; no console error | screenshots |
+| R4.7 | `curl -s https://stage.robotmoney-labs.dev/api/swarm/sessions/<published-id>/judgements` for a session convened after T0 | 200 with ≥1 judgement | response |
+| R4.8 | Judge fidelity: on the twin, set `swarm_judge_config.model` to NULL (production's value), run one session, confirm `twin:gate` **fails** with `JudgeUnavailable`; restore the model | the gate catches production's defect | output |
+
+R4.8 exists because the v0.5.0 rehearsal could not fail on the defect that
+broke production. A rehearsal gate that has never been seen to fail is not
+evidence.
+
+## R5. Go / no-go and RC tag
+
+| Step | Action | Pass |
+|---|---|---|
+| R5.1 | Owner reviews R1–R4 evidence and the D1–D5 decisions | written "go" with name and time |
+| R5.2 | `git tag -a v0.5.1-rc.N "$RC_SHA" -m 'v0.5.1-rc.N' && git push origin v0.5.1-rc.N` | tag points at `RC_SHA` |
+
+## R6. Production cutover (`rm-frontend-prod-1`, root)
+
+No migrations run. The window is short, but production's scheduler is the
+host driver: while it is down, no session advances.
+
+| Step | Command | Pass | Record |
+|---|---|---|---|
+| R6.1 | Announce the window; confirm R3 backup and R5 tag | — | time |
+| R6.2 | (D2) Apply the `rm_worker` grants: `scripts/ops/provision-db-role-taxonomy.sh "$HOME/.env"` **[TO BUILD: grants]**; re-run R2.4 | all three `true` | output |
+| R6.3 | `tmux attach -t 0`; Ctrl-C the running `smoke:archive`; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
+| R6.4 | `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log` | READY printed; `GET /health` 200; production T0 = READY time | T0, first 200 log lines |
+| R6.5 | (D1) Set the judge model through the admin judge-config route (the same call the smoke driver makes, `session.ts` `setJudgeConfig`) **[TO BUILD: a one-line operator command]**; re-run R2.2 | `enforce`, model set, `third_party_enabled` false | row |
+| R6.6 | `bun run --cwd frontend assemble` only if the boot did not already publish the new SPA; `curl -s https://robotmoney.network/version.json` | commit = `RC_SHA` short | output |
+
+## R7. Immediate postflight (T0 → T0 + 30 min)
+
+**[TO BUILD]** `bun run prod:gate` — `twin:gate` pointed at production:
+the same session/jobs/containers/logs checks, reading through `rm_readonly`
+and `docker logs`, with `--since T0`. Until it exists, run the SQL below.
+
+| Step | Check | Pass |
+|---|---|---|
+| R7.1 | Every `rm_prod-*` container running, healthy, `RestartCount` 0 | all |
+| R7.2 | `docker logs --since "$T0"` on every `rm_prod-*` container: zero lines matching `REFUSING the boot`, `— DEAD`, `JudgeUnavailable`, `No space left on device`, `getaddrinfo`, `out of memory`, `unsupported Unicode escape sequence` (unless waived by D4) | zero |
+| R7.3 | `SELECT kind, count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0' GROUP BY kind` | no rows |
+| R7.4 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | identical |
+| R7.5 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/postflight.ts --emit-receipt=P8.postflight-prod` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | all checks ok |
+| R7.6 | `bun run verify:live --tier readonly --emit-receipt=P8.verify-prod` | exit 0; a WARN is not a pass |
+| R7.7 | Browser pass on `https://robotmoney.network`, same page list as R4.6 | renders |
+| R7.8 | `curl -s https://robotmoney.network/api/swarm/sessions/<latest-published-id>/judgements` | 200 (empty list is fine before the first new judgement) |
+
+## R8. Soak (T0 → T0 + 8 h) — the release is not done until this passes
+
+Production opens one session per subject every 6 h with a 6 h window, so the
+first session convened after T0 publishes at about T0 + 6 h. The soak is the
+only proof that production closes sessions on v0.5.1.
+
+| Step | When | Check | Pass |
+|---|---|---|---|
+| R8.1 | every 2 h | R7.1–R7.3 again | clean |
+| R8.2 | T0 + 8 h | every subject has ≥1 session with `convened_at >= T0` and `state = 'published'`, with takes ≥ the D3 threshold, an applied `model`/`enforce` judgement, and a consensus receipt | all four subjects |
+| R8.3 | T0 + 8 h | no session convened after T0 older than 7 h is still `scheduled`/`collecting`/`window_closed` | none |
+| R8.4 | T0 + 8 h | the stuck sessions recorded in R2.5 are resolved or explained | written |
+| R8.5 | T0 + 8 h | `SELECT count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0'` | 0 |
+
+## R9. Rollback
+
+Trigger: any `STOP` in R6–R8 that is not a pure frontend problem.
+
+```bash
+# on rm-frontend-prod-1, in tmux session 0
+# Ctrl-C the running smoke:archive, wait for teardown
+cd /root/robotmoney-frontend
+bun run smoke:status && docker compose ls         # rm_prod gone
+git checkout v0.5.0 && git rev-parse HEAD         # ec261867...
+bun install --force && bun install --force --cwd backend
+echo "CI=[$CI]"                                   # must be empty
+SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-archive-rollback.log
+```
+
+- No migration ran, so no database restore is needed for a code rollback.
+- R6.2's grants and R6.5's judge model are forward fixes for defects present on
+  v0.5.0 too; leave them in place unless they are the cause.
+- After rollback, run R7.1–R7.3 against the rollback boot.
+- Do not use `rollout-procedure.md`'s `bun smoke -- --external-pg` rollback:
+  `--external-pg` is not a known flag in v0.5.0.
+
+## R10. Completion
+
+1. Tag `v0.5.1` on the same commit as the passing `v0.5.1-rc.N`.
+2. Merge `releases-0.5.x` into `main` with a real merge commit (release-branch rule).
+3. Write the rollout report: every step's evidence, D1–D5 outcomes, R8 table.
+4. Close the release issue; file issues for every waiver and every [TO BUILD]
+   item not built.
+
+## Appendix A. [TO BUILD] list, in priority order
+
+1. `prod:gate` — `twin:gate`'s checks against production (R7, R8). Without it,
+   R7/R8 are hand-run SQL, which is how v0.5.0's gaps survived.
+2. `rm_worker` grants in `provision-db-role-taxonomy.sh` (D2).
+3. A judge-model operator command (D1).
+4. `backend/scripts/upgrades/0.5.0-to-0.5.1/` — `release.ts` (empty migration
+   list), `steps.ts`, `preflight.ts` (R2), `postflight.ts` (R7.4–R7.5),
+   `restore-check.ts`, and a step for R4.4 so `runbook.ts` can report status.
+5. Fix `rollout-procedure.md`'s rollback command (`--external-pg`) and its
+   `BOOT_STATUS=$?` guidance for a driver that never exits on success.
