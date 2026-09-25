@@ -68,6 +68,17 @@ describe("`bun smoke --migrate` on a remote database — refusals before any pro
     expect(out).not.toContain("phase:");
   }, 60_000);
 
+  test("`--seed` refuses on RM_ENV=prod the same way — before anything connects (§4.3: rehearsal-only preparation)", () => {
+    db.setIdentity("production");
+    const op = db.operator("prod_seed");
+    const argv = bootArgv(op, "prod_seed").map((a) => (a === "--migrate" ? "--seed" : a));
+    const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env, RM_ENV: "prod" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+    expect(r.exitCode).not.toBe(0);
+    expect(out).toContain("--seed is refused under RM_ENV=prod");
+    expect(out).not.toContain("phase:");
+  }, 60_000);
+
   test("a PRODUCTION enrollment refuses at the plan's read, before any prompt — stage never touches production data", () => {
     db.setIdentity("production");
     const { code, out } = runPlain("production", "stage");
