@@ -163,3 +163,29 @@ describe("adopted sessions count when this boot judged them", () => {
     expect(src).toContain("OR EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.created_at >= '${t0}'::timestamptz)");
   });
 });
+
+describe("--sessions N: sessions in total, not per subject", () => {
+  const row = (id: string, subject: string, takes: number): SessionRow => ({ id, subject, state: "published", ageMin: 5, takes, judged: true, receipt: true });
+  const subjects = ["a", "b", "c", "d"];
+
+  test("two published sessions of any subjects pass; one does not", () => {
+    const args = { minSessions: 1, minAttendance: 1, stuckAfterMin: 30, totalSessions: 2 };
+    expect(evaluateSessions([row("1", "a", 7), row("2", "b", 7)], subjects, 7, args).failures).toEqual([]);
+    expect(evaluateSessions([row("1", "a", 7)], subjects, 7, args).failures).toEqual(["1 session(s) published this boot; need 2"]);
+  });
+
+  test("with --min-attendance 1 every active analyst must file", () => {
+    const args = { minSessions: 1, minAttendance: 1, stuckAfterMin: 30, totalSessions: 2 };
+    expect(evaluateSessions([row("1", "a", 7), row("2", "b", 6)], subjects, 7, args).failures).toEqual(["session 2 (b) published with 6 take(s); need 7 of 7 active"]);
+  });
+
+  test("the driver log is graded the same way", () => {
+    const d = (subject: string, takes: number) => ({ subject, state: "published", takes, active: 7, judge: "enforce" });
+    expect(evaluateDriverSessions([d("a", 7), d("b", 7)], subjects, { minSessions: 1, minAttendance: 1, totalSessions: 2 })).toEqual([]);
+    expect(evaluateDriverSessions([d("a", 7), d("b", 6)], subjects, { minSessions: 1, minAttendance: 1, totalSessions: 2 })).toEqual(["driver log: 1 published+judged+attended session(s); need 2"]);
+  });
+
+  test("parses --sessions", () => {
+    expect((parseGateArgs(["--sessions", "2"]) as { totalSessions?: number }).totalSessions).toBe(2);
+  });
+});

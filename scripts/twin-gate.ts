@@ -81,6 +81,14 @@ export const WARN_LOG_PATTERNS: readonly string[] = ["DEGRADED", "429 Too Many R
 
 export interface GateArgs {
   minSessions: number;
+  /**
+   * --sessions N: N published sessions in TOTAL, whatever their subjects,
+   * instead of --min-sessions per subject. The twin's question is "do two
+   * sessions back to back complete with every analyst filing", and a
+   * one-at-a-time driver reaches its second subject in about two windows, not
+   * after a whole round of every subject.
+   */
+  totalSessions?: number;
   minAttendance: number;
   stuckAfterMin: number;
   waitMin: number;
@@ -104,6 +112,7 @@ export function parseGateArgs(argv: readonly string[]): GateArgs | { error: stri
     };
     switch (a) {
       case "--min-sessions":
+      case "--sessions":
       case "--stuck-after":
       case "--wait": {
         const e = need();
@@ -111,6 +120,7 @@ export function parseGateArgs(argv: readonly string[]): GateArgs | { error: stri
         const n = num(0, 10_000);
         if (n === null) return { error: `${a} takes a number, got "${v}".` };
         if (a === "--min-sessions") out.minSessions = Math.max(1, Math.floor(n));
+        else if (a === "--sessions") out.totalSessions = Math.max(1, Math.floor(n));
         else if (a === "--stuck-after") out.stuckAfterMin = n;
         else out.waitMin = n;
         i++;
@@ -204,7 +214,7 @@ export function evaluateSessions(
   rows: readonly SessionRow[],
   subjects: readonly string[],
   activeMembers: number,
-  args: Pick<GateArgs, "minSessions" | "minAttendance" | "stuckAfterMin">,
+  args: Pick<GateArgs, "minSessions" | "minAttendance" | "stuckAfterMin" | "totalSessions">,
 ): SessionVerdict {
   const failures: string[] = [];
   const publishedBySubject = new Map(subjects.map((s) => [s, 0]));
@@ -219,9 +229,14 @@ export function evaluateSessions(
       failures.push(`session ${r.id} (${r.subject}) stuck in '${r.state}' for ${Math.round(r.ageMin)} min`);
     }
   }
-  for (const s of subjects) {
-    const n = publishedBySubject.get(s) ?? 0;
-    if (n < args.minSessions) failures.push(`subject ${s}: ${n} session(s) convened and published this boot; need ${args.minSessions}`);
+  if (args.totalSessions !== undefined) {
+    const n = [...publishedBySubject.values()].reduce((a, b) => a + b, 0);
+    if (n < args.totalSessions) failures.push(`${n} session(s) published this boot; need ${args.totalSessions}`);
+  } else {
+    for (const s of subjects) {
+      const n = publishedBySubject.get(s) ?? 0;
+      if (n < args.minSessions) failures.push(`subject ${s}: ${n} session(s) convened and published this boot; need ${args.minSessions}`);
+    }
   }
   return { failures, publishedBySubject };
 }
@@ -250,14 +265,18 @@ export function parseDriverSessions(lines: readonly string[]): DriverSession[] {
 export function evaluateDriverSessions(
   sessions: readonly DriverSession[],
   subjects: readonly string[],
-  args: Pick<GateArgs, "minSessions" | "minAttendance">,
+  args: Pick<GateArgs, "minSessions" | "minAttendance" | "totalSessions">,
 ): string[] {
   const failures: string[] = [];
-  for (const s of subjects) {
-    const good = sessions.filter(
-      (d) => d.subject === s && d.state === "published" && d.judge === "enforce" && d.takes >= Math.max(1, Math.ceil(d.active * args.minAttendance)),
-    ).length;
-    if (good < args.minSessions) failures.push(`driver log: subject ${s} logged ${good} published+judged+attended session(s); need ${args.minSessions}`);
+  const good = (d: DriverSession) => d.state === "published" && d.judge === "enforce" && d.takes >= Math.max(1, Math.ceil(d.active * args.minAttendance));
+  if (args.totalSessions !== undefined) {
+    const n = sessions.filter(good).length;
+    if (n < args.totalSessions) failures.push(`driver log: ${n} published+judged+attended session(s); need ${args.totalSessions}`);
+  } else {
+    for (const s of subjects) {
+      const n = sessions.filter((d) => d.subject === s && good(d)).length;
+      if (n < args.minSessions) failures.push(`driver log: subject ${s} logged ${n} published+judged+attended session(s); need ${args.minSessions}`);
+    }
   }
   for (const d of sessions) {
     if (d.judge !== "enforce") failures.push(`driver log: a ${d.subject} session published with judge=${d.judge}, takes=${d.takes} of ${d.active}`);
@@ -401,7 +420,7 @@ export function renderReport(r: GateReport): string {
   out.push(`| | |`, `|---|---|`);
   out.push(`| Commit | \`${r.commit}\` |`, `| Host | ${r.host} |`, `| Compose project | \`${r.project}\` |`, `| Twin database | \`${r.twinDb}\` |`);
   out.push(`| T0 (api started) | ${r.t0} |`, `| Finished | ${r.finishedAt} |`);
-  out.push(`| Thresholds | min sessions/subject ${r.args.minSessions}, min attendance ${r.args.minAttendance}, stuck after ${r.args.stuckAfterMin} min, waited up to ${r.args.waitMin} min |`);
+  out.push(`| Thresholds | ${r.args.totalSessions !== undefined ? `sessions in total ${r.args.totalSessions}` : `min sessions/subject ${r.args.minSessions}`}, min attendance ${r.args.minAttendance}, stuck after ${r.args.stuckAfterMin} min, waited up to ${r.args.waitMin} min |`);
   out.push(`| Waivers | ${r.args.waive.length ? r.args.waive.map((w) => `\`${w}\``).join(", ") : "none"} |`, "");
   out.push(`## Checks`, "", `| # | Check | Result | Detail |`, `|---|---|---|---|`);
   r.checks.forEach((c, i) => out.push(`| ${i + 1} | ${c.title} | **${c.status}** | ${c.detail.join("<br>").replace(/\|/g, "\\|") || "—"} |`));
@@ -434,7 +453,7 @@ async function main(): Promise<number> {
   const parsed = parseGateArgs(process.argv.slice(2));
   if ("error" in parsed) {
     console.error(`[${NAME}] ${parsed.error}`);
-    console.error(`[${NAME}] usage: bun run twin:gate --driver-log FILE [--report FILE] [--wait MIN] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
+    console.error(`[${NAME}] usage: bun run twin:gate --driver-log FILE [--report FILE] [--wait MIN] [--min-sessions N | --sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
     return 2;
   }
   const stateFile = join(repoRoot, ".agents", "smoke-state.json");
