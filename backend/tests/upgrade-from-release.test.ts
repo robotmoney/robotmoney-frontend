@@ -430,7 +430,7 @@ for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
       expect(receipt.applied).toEqual(
         predatesIdentity ? [IDENTITY_MIGRATION, ...pending.filter((file) => file !== IDENTITY_MIGRATION)] : pending,
       );
-      expect(await db`SELECT kind FROM deployment_identity`).toEqual([{ kind: "production" }]);
+      expect(await rows(db`SELECT kind FROM deployment_identity`)).toEqual([{ kind: "production" }]);
       expect(receipt.preIdentity).toEqual(
         predatesIdentity ? { identity: "no table", release: tag, ledger: release.migrations.map((m) => m.file) } : null,
       );

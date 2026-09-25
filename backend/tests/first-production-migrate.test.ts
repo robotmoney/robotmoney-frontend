@@ -367,7 +367,7 @@ describe("§10 W2 — First production migrate", () => {
     expect(after.ledger).toEqual(HEAD_FILES);
     await withDb(DB.exact, async (db) => {
       // §9.1 step 4, D55 (9): `production`, written by rm_owner...
-      expect(await db`SELECT kind, written_by FROM deployment_identity`).toEqual([{ kind: "production", written_by: "rm_owner" }]);
+      expect([...(await db`SELECT kind, written_by FROM deployment_identity`)]).toEqual([{ kind: "production", written_by: "rm_owner" }]);
       // ...in the SAME transaction as 0063's ledger row: the two rows carry one
       // creating transaction id and one transaction timestamp. (The table's
       // own pg_class row is rewritten by every later grant, so its xmin says
