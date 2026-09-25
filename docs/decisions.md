@@ -4042,7 +4042,7 @@ route table and the response shapes.
 
 <a id="d55"></a>
 
-## D55 — Eight owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0072's label and the supported release (Lucas, 2026-09-25)
+## D55 — Thirteen owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0072's label, the supported baseline, the identity-first pass, the stream transport, the stream prune and object-less statements (Lucas, 2026-09-25)
 
 **Status.** Accepted 2026-09-25; not yet implemented. Recorded from issue
 #1026, where each point was a question the earlier decisions left open or a
@@ -4050,7 +4050,9 @@ place the specifications allowed something the owner does not want. Each call
 names the wave or package that implements it, so no wave has to guess.
 Amended the same day: decision 4 was corrected, because its first text listed
 deactivation among the scheduler's transitions, and decisions 5 to 8 were
-added.
+added. Amended again the same day: decision 8 was corrected to name
+production's observed 73-name ledger rather than v0.5.0 alone, and decisions 9
+to 13 were added.
 
 **Decision 1: the API stops reporting the site's identity (T26).** The API
 retires its `_static` mount and the `static` identity field it reports at
@@ -4170,14 +4172,102 @@ corrected label.
 *Why.* The label is a promise to older code. A wrong promise lets code at 0070
 boot and then schedule nothing, with no refusal to explain why.
 
-**Decision 8: v0.5.0 is the only supported upgrade source.**
-`SUPPORTED_RELEASES` lists v0.5.0 alone. It is the release production runs.
-An upgrade from any other release is neither tested nor supported. Decision
-5's ledger match reads this list, so the first-migrate exception accepts only a
-v0.5.0 ledger. Adding a release to the list takes a new decision.
-*Why.* Every supported release is a fixture, an upgrade test and a ledger the
+**Decision 8: production's observed ledger is the only supported upgrade
+source.** `SUPPORTED_RELEASES` holds one baseline: the 73 filenames
+production's `schema_migrations` recorded when it was read on 2026-09-25. They
+are the 72 files of v0.5.0 plus `0062_rm_readonly_sequence_select.sql`, which
+production applied out of band on 2026-09-22 with the SQL of commit c3a68812
+(tag `archive/releases-0.5.x-2026-09-24`). Upgrade tests replay those archived
+bytes. An upgrade from any other ledger, a pure v0.5.0 ledger included, is
+neither tested nor supported. Decision 5's ledger match reads this list, so the
+first-migrate exception accepts only the 73-name ledger. Adding a baseline to
+the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
+list, and `backend/tests/fixtures/releases/production-2026-09-25/` pins it.
+*Why.* Every supported baseline is a fixture, an upgrade test and a ledger the
 first-migrate exception must accept. No database will take a path from an
-older release, so each extra entry would be cost with no user.
+older release, so each extra entry would be cost with no user. The first text
+named v0.5.0 alone. No database holds that ledger: production and every dump
+taken from it carry the 0062 row, so a v0.5.0 list would refuse the one
+database the exception exists for. The owner ruled the observed ledger the
+ground truth.
+
+**Decision 9: the guarded first production pass applies 0063 first and writes
+the identity row before anything else.** The pass of decision 5 applies
+`0063_deployment_identity` before any other pending migration, out of filename
+order. The identity row, `production`, commits in the same transaction as 0063.
+The pass then applies the remaining pending migrations in filename order. So
+an interruption at any point after 0063 commits leaves the row in place, and a
+rerun takes the normal path: it requires the row and resumes from the first
+unapplied migration (smoke spec §8.3). An interruption before 0063 commits
+leaves the ledger on the baseline, and a rerun takes the guarded pass again.
+Out-of-order apply of 0063 happens only in this guarded pass. The runner
+refuses it anywhere else. This replaces decision 5's order, in which production
+initialization wrote the row after the whole migrate run. Criterion 18 gains a
+process test that kills the migrate between two commits and proves the rerun
+resumes, and a first-pass test that kills it after 0063 and before the rest
+and proves the same. A wave package implements this.
+*Why.* Under decision 5's order, a pass interrupted after its first commit left
+a ledger that matched no supported baseline and no identity row. The exception
+refused it, and the normal path refused it too, so that database had no legal
+way forward. With the row written first, every interruption after 0063 is an
+ordinary partial migrate, which the runner already resumes.
+
+**Decision 10: a `--local dump` of production takes the same identity-first
+path, writing `rehearsal`.** A dump restored by `--local dump` whose ledger
+equals the production baseline (decision 8) has no `deployment_identity`
+table, because production has none yet. Smoke's preparation applies 0063 to it
+first and writes `rehearsal` in the same transaction, before any other pending
+migration. The remaining migrations then take the normal path. This path needs
+no `RM_ENV=prod`, typed password or `y`, because smoke owns the local
+container and generated its owner password (smoke spec §5). A dump with any
+other pre-identity ledger refuses. A wave package implements this.
+*Why.* The spec already required every `--local dump` restore to write
+`rehearsal`, but a production dump has no table to write it to. Taking the same
+order production takes makes the twin a rehearsal of the first production
+upgrade, not of a different path.
+
+**Decision 11: the scheduler event stream moves from SSE to WebSocket.** The
+subscription that serves the §6.3 event stream of
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) is a
+WebSocket, not a `text/event-stream` response. The API sees the socket's
+buffered amount. When a subscriber stops reading, the API sends one `resync`
+frame and closes the socket. It never drops an event to make room. Cursors,
+gapless sequence numbers, keepalives carrying the head, and resync-and-close
+keep their meaning. A later package on issue #1026 implements the move.
+*Why.* An SSE response gives the server no reliable view of what the client has
+not read, so a slow subscriber shows up only as memory growing on the API. A
+WebSocket reports its outbound backlog, so the API can tell the subscriber to
+rebuild at a bounded cost. It also gives the transport-level ping and pong the
+spec already names for silent-failure detection.
+
+**Decision 12: the `rm_owner` stream prune is bounded by a time window only.**
+The prune of `swarm_stream_events`, which only `rm_owner` may run
+([D53](#d53) (2)), deletes events older than a retention window: 7 days by
+default, configurable. It keeps no per-subscriber cursor bookkeeping, and it
+does not wait for the oldest cursor still in use. A subscriber whose cursor is
+below the retained range gets resync-and-close (`log_truncated`), then a full
+read and a rebuild. This replaces D53 (2)'s "only rows older than the oldest
+cursor the API may still be asked to serve". A later package on issue #1026
+implements the prune.
+*Why.* The oldest cursor the API may still be asked to serve is not knowable:
+a scheduler that is down holds its cursor in memory, and the API cannot see it.
+A rule keyed on it either never prunes or guesses. A time window is a rule
+anyone can check. Resync-and-close already makes a truncated log safe, because
+a subscriber that missed events rebuilds rather than skipping them.
+
+**Decision 13: the query registry gains an object-less statement kind, and dead
+registered functions are deleted.** Some statements name no table, such as a
+connection check or an advisory lock. The registry (smoke spec §7.1) gets an
+explicit kind for them. Its allowed statements are a closed list of shapes, and
+a statement matches only when it equals one listed shape exactly. A statement
+that names a relation can never take this kind. Every registered function that
+has no production caller is deleted, with the tests that were its only callers.
+A later package on issue #1026 implements both.
+*Why.* An object-less statement today either sits on the raw-SQL allowlist or
+declares a table it does not touch, and both weaken the registry. A closed list
+pinned by equality keeps the kind from growing into a bypass. A registered
+function with no production caller still widens check 2's privilege set and
+the execution test's load, and it pins privileges nothing uses.
 
 **What stays.** D54's version contract, D52's third-party gate, D53's deleted
 backend judge, D47's rule that `rm_owner` is typed at the terminal and never
