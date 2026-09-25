@@ -1888,24 +1888,12 @@ export async function runSession(
   // waitUntilWindowCloses — and it throws rather than closing early if the two
   // cannot be reconciled.
   //
-  // A TWIN THAT ADOPTED PRODUCTION'S EPOCH IS THE ONE EXCEPTION, and it is not
-  // an exception to the promise — it is the absence of one. The deadline on an
-  // adopted session was advertised by PRODUCTION, to production's members,
-  // and arrived here inside a restored dump; this boot promised nobody
-  // anything, and the members it seats are all in this process. Honouring it
-  // means a twin cannot answer "does the judge run?" for another six hours —
-  // and worse, planWindowWait ABORTS rather than waits when the remaining
-  // window exceeds its ceiling ("refusing to wait (it would hang)"), so the
-  // session stalls instead of completing. That is exactly how the standing
-  // twin published no judgement and no receipt for weeks.
-  //
-  // So on a twin, an ADOPTED window is closed as soon as this boot's own seats
-  // have filed. A window this boot published is still waited out in full, on
-  // both twins and everything else: that one IS a promise.
-  const skipAdoptedWindow = Boolean(opts.twin) && adopted;
-  const closedWindow = skipAdoptedWindow
-    ? { waitedMs: 0, reason: "twin adopted production's epoch — its deadline was advertised by another deployment, to members this boot does not seat" }
-    : await waitUntilWindowCloses(date, subject.id, { maxWaitMs: windowWaitCeilingMs(cadence) });
+  // Every window is waited out, the same way on every boot. A twin that adopts
+  // a session production opened does not need an exception here: the twin's
+  // boot re-times its restored copy's open windows to the twin's cadence
+  // (retimeAdoptedWindows, restore-container.ts), so the deadline this wait
+  // meets is already the twin's own.
+  const closedWindow = await waitUntilWindowCloses(date, subject.id, { maxWaitMs: windowWaitCeilingMs(cadence) });
   console.log(
     `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
   );

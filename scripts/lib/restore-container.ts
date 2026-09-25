@@ -181,6 +181,42 @@ export function postTaxonomyOwnershipSql(owner = "rm_owner"): string {
  * pointing MIGRATE_DATABASE_URL at that role, is what makes the boot exercise
  * the path a production cutover actually takes.
  */
+/**
+ * PURE. The twin's schedule for the sessions it restored mid-window.
+ *
+ * A restored dump carries production's open sessions with production's
+ * deadlines, up to six hours out. The driver waits out every window it meets,
+ * in full and the same way on every boot, so the twin sets its OWN schedule on
+ * its OWN copy at boot, the way it already sets its judge config: any restored
+ * `collecting` session whose deadline lies beyond one twin window now closes
+ * one twin window from boot. It only moves a deadline EARLIER, never later, and
+ * it runs against the restored container, never a deployment's database.
+ * There is no twin branch in the driver: timing is configuration, and
+ * configuration is written at boot.
+ */
+export function retimeAdoptedWindowsSql(windowMs: number): string {
+  if (!Number.isInteger(windowMs) || windowMs <= 0) throw new Error(`retimeAdoptedWindowsSql needs a positive window, got ${windowMs}`);
+  return `UPDATE swarm_sessions SET window_closes_at = now() + interval '${windowMs} milliseconds'
+ WHERE state = 'collecting' AND window_closes_at > now() + interval '${windowMs} milliseconds'
+ RETURNING id, subject_id, window_closes_at`;
+}
+
+/** Apply retimeAdoptedWindowsSql inside the twin's restore container; logs each re-timed session. */
+export function retimeAdoptedWindows(container: string, windowMs: number, log: (m: string) => void): number {
+  const r = Bun.spawnSync(
+    ["docker", "exec", container, "psql", "-U", LOCAL_USER, "-d", LOCAL_DB, "-X", "-A", "-t", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", retimeAdoptedWindowsSql(windowMs)],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) throw new Error(`twin: re-timing restored open windows failed: ${r.stderr.toString().trim()}`);
+  const rows = r.stdout.toString().split("\n").filter((l) => /^[0-9a-f-]{36}\t/.test(l));
+  for (const row of rows) {
+    const [id, subject, closes] = row.split("\t");
+    log(`twin: restored session ${id} (${subject}) was mid-window; its window now closes ${closes} (the twin's ${windowMs / 60_000}-min cadence)`);
+  }
+  if (rows.length === 0) log("twin: no restored session was mid-window; nothing to re-time");
+  return rows.length;
+}
+
 export const TWIN_BOOTSTRAP_ROLE = "rm_twin_bootstrap";
 
 /** doadmin's exact production attribute set: rolsuper=false, the rest true. */

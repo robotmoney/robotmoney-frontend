@@ -9,7 +9,7 @@ import { bannerFor, dataPathOverlayYaml, DB_FLAG, keptDataDescription, ownsData,
 import { judgeCredentialEnv, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
 import { twinMigrationCredential } from "./restore-container.ts";
 import { assertSmokeTwinIsTarget, resolveSmokeTwinDataPath, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration } from "./smoke-twin.ts";
-import { teardownContainer } from "./restore-container.ts";
+import { retimeAdoptedWindows, teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsTokenAfterPreflight, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -1553,6 +1553,7 @@ async function main(): Promise<void> {
     log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   }
   if (twinRoster) await e2e.enableTwinJudge(resolveModelConfig(process.env).model, automationToken); // production ships the judge off; a twin must exercise it
+  if (twinRoster && smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, log); // the twin's schedule, set at boot on its own copy
   const dbRoster = await e2e.rosterMembers(undefined, automationToken);
   if (dbRoster === null) {
     if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");

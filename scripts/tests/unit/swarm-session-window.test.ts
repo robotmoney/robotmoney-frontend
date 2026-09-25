@@ -312,3 +312,23 @@ describe("red controls: the order grader must REPORT a regression", () => {
     expect(sessionSrc.length).toBeGreaterThan(1000); // the scan is over real text
   });
 });
+
+describe("a twin's adopted windows are configuration written at boot, not a driver branch", () => {
+  test("the driver waits out every window the same way; no twin exception remains", () => {
+    expect(sessionSrc).toContain("const closedWindow = await waitUntilWindowCloses(date, subject.id, { maxWaitMs: windowWaitCeilingMs(cadence) });");
+    expect(sessionSrc).not.toContain("skipAdoptedWindow");
+  });
+
+  test("the boot re-times only restored mid-window sessions, and only earlier", async () => {
+    const { retimeAdoptedWindowsSql } = await import("../../lib/restore-container.ts");
+    const sql = retimeAdoptedWindowsSql(360_000);
+    expect(sql).toContain("SET window_closes_at = now() + interval '360000 milliseconds'");
+    expect(sql).toContain("WHERE state = 'collecting' AND window_closes_at > now() + interval '360000 milliseconds'");
+    expect(() => retimeAdoptedWindowsSql(0)).toThrow("positive window");
+  });
+
+  test("smoke-main applies it on a twin boot, against the twin's own container", () => {
+    const mainSrc = readFileSync(join(repoRoot, "scripts", "lib", "smoke-main.ts"), "utf8");
+    expect(mainSrc).toContain("if (twinRoster && smokeTwinContainer) retimeAdoptedWindows(smokeTwinContainer, cadence.swarmWindowMs, log);");
+  });
+});
