@@ -70,7 +70,6 @@ import {
 } from "../../lib/smoke-journal.ts";
 import { generateRolePasswords, instancePaths, type InstancePaths } from "../../lib/smoke-state.ts";
 import { gitRunner, resolveSourceIdentities } from "../../stack/source-identity.ts";
-import { readFileSync } from "node:fs";
 
 const DIGEST_A = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const DIGEST_B = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
