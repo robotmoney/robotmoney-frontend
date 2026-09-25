@@ -56,16 +56,28 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'swarm')" @click="toggle('swarm')">Swarm</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'allocation')" @click="toggle('allocation')">Allocation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'vaults')" @click="toggle('vaults')">Vaults</button>
+        <button type="button" class="cl__tag" :aria-pressed="String(tag === 'research')" @click="toggle('research')">Research</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">34 releases</span>
+        <span class="cl__count" x-text="countLabel">35 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
         <!-- release:pending -->
         <!-- ── Next release ───────────────────────────────────────────────── -->
         <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release</h2>
+
+        <article class="cl__entry" id="next-the-regime-page" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-the-regime-page">The regime page</a></h3>
+          <p>The regime page is rebuilt on the vault pages' design. Its charts cover any range, from a few weeks to the whole history since 2018, show every value under the pointer and shade all three regimes, and each indicator, correlation and backtest says what it means. An agent that fetches the page reads the day's reading, the 26 indicators and the correlations in the page itself.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/regime">The regime page</a><a class="cl__lnk" href="/regime/indicators">The 26 indicators</a></div>
+          <figure class="cl__media">
+            <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/regime</div><img src="/assets/img/changelog/regime-history.jpg" width="1536" height="793" loading="lazy" decoding="async" alt="The regime history over three years: the composite, macro, on-chain and equity factor indices as lines from 0 to 1, over bands shading each day risk-on, neutral or hatched risk-off. Under the chart, the whole history since 2018 in miniature, with the three years on show between two handles, and a legend giving each line's latest value: composite 0.60, macro 0.66, on-chain 0.53, equity factor 0.60."></div></div>
+            <figcaption class="cl__cap">The regime history, with the range between two handles</figcaption>
+          </figure>
+        </article>
 
         <article class="cl__entry" id="next-site-navigation" data-tags="vaults documentation" data-release="pending" x-show="has($el)">
           <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
@@ -81,9 +93,7 @@
             <li>Depositing has its own page, and the skills page lists each Robot Money agent skill: the deposit skill and the swarm onboarding skill.</li>
             <li>A link to a section of another page lands on that section once the page has loaded. The swarm page's links had opened at the top.</li>
             <li>The regime page, the indicators, the blog and the research pages take the rest of the site's colours and type, and a regime reading is the same colour on the regime page as on a session's.</li>
-            <li>The regime page explains each of its four headline figures, shades neutral spans on its charts as well as risk-on and risk-off, and says how long ago it was updated.</li>
-            <li>The regime page reads like the vault pages. Its charts take a time range, from six months to the whole history, and show every value for the day under the pointer. The indicator panels and the three backtest markets sit one at a time behind a switch, and each predictive-power figure says what it means on hover.</li>
-            <li>An agent or crawler that fetches the regime page reads the day's reading, all 26 indicators and the correlation table in the page itself, with the date they are from.</li>
+            <li>A session's market context shows each reading beside its dot.</li>
             <li>Every heading on the research pages links to its own section, the research has an RSS feed, and search engines and agents read each research page as an article and the regime history as a dataset.</li>
           </ul>
           <h4 class="cl__also-k">Fixes</h4>
@@ -271,8 +281,8 @@
           <p>The swarm's history is append-only. Once a session or a take is written, it can't be edited or deleted, and the database itself enforces that.</p>
         </article>
 
-        <article class="cl__entry" id="2026-08-15-regime-data-that-heals-itself" data-tags="allocation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-08-15">15 Aug 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+        <article class="cl__entry" id="2026-08-15-regime-data-that-heals-itself" data-tags="research allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-08-15">15 Aug 2026</time><span class="cl__sep">/</span><span>Research · Allocation</span></div>
           <h3 class="cl__title"><a href="#2026-08-15-regime-data-that-heals-itself">Regime data that heals itself</a></h3>
           <p>Every series behind the regime classifier checks itself for gaps and refills them from the original source. Each one also follows its source's calendar, so a series that doesn't publish on weekends no longer gets weekend values.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime/indicators">The indicators</a></div>
@@ -321,8 +331,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/swarm/subjects/robotmoney-allocation">An example</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-07-30-research-restored" data-tags="documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Documentation</span></div>
+        <article class="cl__entry" id="2026-07-30-research-restored" data-tags="research documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-07-30">30 Jul 2026</time><span class="cl__sep">/</span><span>Research · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-07-30-research-restored">Research, restored</a></h3>
           <p>Six long-form research pages are back in full, and the five research posts have their interactive charts again.</p>
           <div class="cl__links"><a class="cl__lnk" href="/blog">The research</a></div>
@@ -396,8 +406,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/swarm">The swarm</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-05-20-regime-v3" data-tags="allocation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-05-20">20 May 2026</time><span class="cl__sep">/</span><span>Allocation</span></div>
+        <article class="cl__entry" id="2026-05-20-regime-v3" data-tags="research allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-20">20 May 2026</time><span class="cl__sep">/</span><span>Research · Allocation</span></div>
           <h3 class="cl__title"><a href="#2026-05-20-regime-v3">Regime v3</a></h3>
           <p>The classifier gained a third panel, for equity factors, and macro and on-chain now have to agree before the regime shifts instead of being averaged. Over the backtest the stricter rule ends at 2.37× against the averaged composite's 1.31×, with a higher Sharpe ratio and half the drawdown.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime">The regime</a><a class="cl__lnk" href="/blog/regime-conservative-aggressive">The comparison</a></div>
@@ -407,8 +417,8 @@
           </figure>
         </article>
 
-        <article class="cl__entry" id="2026-05-13-treasury-allocation-backtested" data-tags="allocation documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-05-13">13 May 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+        <article class="cl__entry" id="2026-05-13-treasury-allocation-backtested" data-tags="research allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-05-13">13 May 2026</time><span class="cl__sep">/</span><span>Research · Allocation · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-05-13-treasury-allocation-backtested">Treasury allocation, backtested</a></h3>
           <p>An eight-year backtest of how an on-chain business should hold its treasury, comparing regime-based allocation with holding, stablecoins and DeFi yield. Diversification does 74% of the work; the regime overlay does the other 26%.</p>
           <div class="cl__links"><a class="cl__lnk" href="/blog/treasury-allocation">The backtest</a></div>
@@ -432,8 +442,8 @@
         <!-- ── April 2026 ─────────────────────────────────────────────────── -->
         <h2 class="cl__month-h" x-show="!tag">April 2026</h2>
 
-        <article class="cl__entry" id="2026-04-24-regime-detection-surveyed" data-tags="allocation documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-04-24">24 Apr 2026</time><span class="cl__sep">/</span><span>Allocation · Documentation</span></div>
+        <article class="cl__entry" id="2026-04-24-regime-detection-surveyed" data-tags="research allocation documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-04-24">24 Apr 2026</time><span class="cl__sep">/</span><span>Research · Allocation · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-04-24-regime-detection-surveyed">Regime detection, surveyed</a></h3>
           <p>The prior art, before building: how regime detection is done across equities, fixed income, FX, commodities and crypto, from Goldman's financial conditions index to Bridgewater and AQR, with the methods and indicators we drew from.</p>
           <div class="cl__links"><a class="cl__lnk" href="/regime-detection">The survey</a></div>
@@ -463,8 +473,8 @@
           <div class="cl__links"><a class="cl__lnk" href="/media">Coverage</a></div>
         </article>
 
-        <article class="cl__entry" id="2026-03-22-smart-contract-risk-catalogued" data-tags="vaults documentation" x-show="has($el)">
-          <div class="cl__meta"><time datetime="2026-03-22">22 Mar 2026</time><span class="cl__sep">/</span><span>Vaults · Documentation</span></div>
+        <article class="cl__entry" id="2026-03-22-smart-contract-risk-catalogued" data-tags="research vaults documentation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-03-22">22 Mar 2026</time><span class="cl__sep">/</span><span>Research · Vaults · Documentation</span></div>
           <h3 class="cl__title"><a href="#2026-03-22-smart-contract-risk-catalogued">Smart contract risk, catalogued</a></h3>
           <p>A field guide to how DeFi vaults get exploited, case by case, from 2020 to 2026. The costliest pattern is a compromised key holding unchecked admin rights. The swarm cites it when it weighs the vault's lending markets.</p>
           <div class="cl__links"><a class="cl__lnk" href="/smart-contract-risks">The field guide</a></div>
