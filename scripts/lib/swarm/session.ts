@@ -1525,7 +1525,12 @@ export async function runSession(
   // counter's denominator and the absent list can no longer drift, and
   // absenceReport throws if they ever do.
   const attendance = absenceReport(pub, tag);
-  console.log(`${tag} published: state=${pub.session.state}, takes=${attendance.submitted} of ${attendance.active}`);
+  // judge= closes the line on purpose: `bun run twin:gate --driver-log` reads
+  // this one line per session as the log-side proof that a session published
+  // WITH a landed judgement, and a session without one says `judge=none`.
+  console.log(
+    `${tag} published: state=${pub.session.state}, takes=${attendance.submitted} of ${attendance.active}, judge=${judged ? judged.judgeMode : "none"}`,
+  );
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
   console.log(`${tag} absent: ${JSON.stringify(attendance.absent)}`);
 

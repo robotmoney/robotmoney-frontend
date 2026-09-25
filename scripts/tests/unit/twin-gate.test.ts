@@ -2,7 +2,7 @@
 // passed while production could not close a session; each case below is a way
 // that happened or could have.
 import { describe, expect, test } from "bun:test";
-import { classifyLog, evaluateSessions, parseGateArgs, type SessionRow } from "../../twin-gate.ts";
+import { classifyLog, evaluateDriverSessions, evaluateSessions, parseDriverSessions, parseGateArgs, type SessionRow } from "../../twin-gate.ts";
 
 const subjects = ["a", "b"];
 const args = { minSessions: 1, minAttendance: 0.5, stuckAfterMin: 30 };
@@ -59,6 +59,7 @@ describe("classifyLog", () => {
 describe("parseGateArgs", () => {
   test("defaults", () => {
     expect(parseGateArgs([])).toEqual({ minSessions: 1, minAttendance: 0.5, stuckAfterMin: 30, waitMin: 0, waive: [] });
+    expect(parseGateArgs(["--driver-log", "/tmp/t.log"])).toMatchObject({ driverLog: "/tmp/t.log" });
   });
 
   test("rejects an unknown flag and a bad fraction", () => {
@@ -69,5 +70,36 @@ describe("parseGateArgs", () => {
   test("collects repeated waivers", () => {
     const a = parseGateArgs(["--waive", "x", "--waive", "y", "--wait", "40"]);
     expect("error" in a ? a : { waive: a.waive, wait: a.waitMin }).toEqual({ waive: ["x", "y"], wait: 40 });
+  });
+});
+
+describe("the driver log (the service's own account of each session)", () => {
+  const lines = [
+    "[session 3: 2026-09-25/a] published: state=published, takes=8 of 8, judge=enforce",
+    "[session 4: 2026-09-25/b] published: state=published, takes=0 of 8, judge=none",
+    "[session 39: 2026-09-25/b] published: state=published, takes=0 of 8",
+    "noise",
+  ];
+
+  test("parses one entry per published line; an old-format line is 'unlogged'", () => {
+    expect(parseDriverSessions(lines).map((d) => [d.subject, d.takes, d.judge])).toEqual([
+      ["a", 8, "enforce"], ["b", 0, "none"], ["b", 0, "unlogged"],
+    ]);
+  });
+
+  test("a subject whose only sessions were unjudged or unattended fails, and each unjudged session is named", () => {
+    const f = evaluateDriverSessions(parseDriverSessions(lines), ["a", "b"], { minSessions: 1, minAttendance: 0.5 });
+    expect(f).toContain("driver log: subject b logged 0 published+judged+attended session(s); need 1");
+    expect(f.filter((x) => x.includes("published with judge="))).toHaveLength(2);
+  });
+
+  test("passes when every subject logged a judged, attended session", () => {
+    const ok = ["[session 1: 2026-09-25/a] published: state=published, takes=5 of 8, judge=enforce", "[session 2: 2026-09-25/b] published: state=published, takes=4 of 8, judge=enforce"];
+    expect(evaluateDriverSessions(parseDriverSessions(ok), ["a", "b"], { minSessions: 1, minAttendance: 0.5 })).toEqual([]);
+  });
+
+  test("an empty inference account is fatal", () => {
+    const v = classifyLog(["APIError: Upstream request failed: Insufficient account funds [server_error, HTTP 402]"], []);
+    expect(v.fatal.get("Insufficient account funds")).toBe(1);
   });
 });

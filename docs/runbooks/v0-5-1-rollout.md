@@ -56,7 +56,7 @@ here with the reason, because R8 will fail on it.
 |---|---|---|---|
 | D1 | `swarm_judge_config` = `enforce` / `model NULL` → 3 dead `swarm.judge` (`model_unconfigured`) in 24 h; 1 session published in 48 h | **Decided 2026-09-25:** the judge uses the CI model, `opencode/deepseek-v4-flash`. Migration `0063` sets it only where the model is missing and never changes `mode` | ✅ |
 | D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks` (and, before the archived 0062, `chain_address_floors`) → 288 dead `wallet.backfill_window` in 24 h | **Decided 2026-09-25:** migrate. Main's `0061_rm_worker_wallet_backfill_grant` carried verbatim (same name, so the later merge into main is a no-op for it) | ✅ |
-| D3 | Member agents return empty transcripts (`opencode/deepseek-v4-flash`); production sessions get 3 of 8 takes; the twin had 14 `no_takes` judge deaths in 3 h | Choose: change the member model, or accept partial attendance and lower `--min-attendance` with a recorded reason | ☐ |
+| D3 | Member agents returned empty transcripts. **Cause found 2026-09-25:** the twin's OpenCode Zen account was empty (`Insufficient account funds`, HTTP 402, 1,065 member calls overnight). Production's key is a different account | **Resolved 2026-09-25:** credit added. The gate now treats HTTP 402 as fatal, and R4.9 tears the twin down after grading so it cannot drain the account | ✅ |
 | D4 | `unsupported Unicode escape sequence` on parity-observation writes; 24 dead `analytics.parity_sweep` | Fix in code, or waive in R4.4/R7.2 with `--waive` and a recorded reason | ☐ |
 | D5 | Production runs `RM_ENV=smoke`, so `config.ts`'s production-only credential checks never fire | Out of scope for 0.5.1 unless the owner says otherwise; record it | ☐ |
 | D6 | Production's `schema_migrations` records `0062_rm_readonly_sequence_select.sql` (73 rows); v0.5.0 code had no `0062` file | **Decided 2026-09-25:** carry the archived file unchanged. Already recorded in production, so it does not run there; it makes code and database agree and gives a fresh environment the `rm_readonly` sequence grant | ✅ |
@@ -126,11 +126,12 @@ subject, with nothing dead and nothing in the logs.
 | R4.2 | `git fetch origin && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui 2>&1 \| tee ~/twin-$RC_SHA.log` | "READY" printed; slim capture ~1 min | READY time = T0 |
 | R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `0061_rm_worker_wallet_backfill_grant.sql` and `0063_swarm_judge_model_default.sql` applied to the restored production data; `0062` skipped | lines |
-| R4.4 | `bun run twin:gate -- --wait 75 --min-sessions 1 --min-attendance <D3 value>` (+ `--waive` only per D4) | **exit 0**. Every subject publishes ≥1 session convened after T0, each with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart; no fatal log line | full gate output |
-| R4.5 | Run R4.4 again at T0 + 3 h without `--wait` | exit 0 (sessions keep closing; nothing died since) | output |
+| R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --wait 75 --min-sessions 1 --min-attendance 0.5` (+ `--waive` only per D4) | **exit 0**. Database: every subject publishes ≥1 session convened after T0 with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart. Logs: every subject's driver line reads `published: state=published, takes=N of M, judge=enforce` with N ≥ half of M, no line reads `judge=none`, and no service or driver log holds a fatal pattern (boot refusal, dead job, `JudgeUnavailable`, expired judge wait, `swarm session failed`, `Insufficient account funds`/HTTP 402, DNS, out-of-memory) | full gate output |
+| R4.5 | Run R4.4 again at T0 + 2 h without `--wait` | exit 0: sessions keep closing with judges and nothing died since | output |
 | R4.6 | Browser pass on `https://stage.robotmoney-labs.dev`: home, `/vaults`, `/vault/rmusdc`, `/vault/rmagent`, `/vault/rmproto`, `/vault/rmrwa`, `/swarm`, a published session, its judgement link, a member page with judgements, `/deposit`, `/changelog` | every page renders data; no console error | screenshots |
 | R4.7 | `curl -s https://stage.robotmoney-labs.dev/api/swarm/sessions/<published-id>/judgements` for a session convened after T0 | 200 with ≥1 judgement | response |
 | R4.8 | Judge fidelity: on the twin, set `swarm_judge_config.model` to NULL (production's value), run one session, confirm `twin:gate` **fails** with `JudgeUnavailable`; restore the model | the gate catches production's defect | output |
+| R4.9 | Tear the twin down: stop the `smoke:twin` process, then R4.1's wipe | 0 containers. A twin left running spends inference credit on every session: on 2026-09-24 one ran overnight until the account returned HTTP 402 on 1,065 member calls | time |
 
 R4.8 exists because the v0.5.0 rehearsal could not fail on the defect that
 broke production. A rehearsal gate that has never been seen to fail is not
@@ -167,7 +168,7 @@ and `docker logs`, with `--since T0`. Until it exists, run the SQL below.
 | Step | Check | Pass |
 |---|---|---|
 | R7.1 | Every `rm_prod-*` container running, healthy, `RestartCount` 0 | all |
-| R7.2 | `docker logs --since "$T0"` on every `rm_prod-*` container: zero lines matching `REFUSING the boot`, `— DEAD`, `JudgeUnavailable`, `No space left on device`, `getaddrinfo`, `out of memory`, `unsupported Unicode escape sequence` (unless waived by D4) | zero |
+| R7.2 | `docker logs --since "$T0"` on every `rm_prod-*` container **and** `/root/smoke-archive-v0.5.1.log` (the driver): zero lines matching `REFUSING the boot`, `— DEAD`, `JudgeUnavailable`, `EXPIRED (mode=`, `swarm session failed`, `Insufficient account funds`, `HTTP 402`, `No space left on device`, `getaddrinfo`, `out of memory`, `unsupported Unicode escape sequence` (unless waived by D4) | zero |
 | R7.3 | `SELECT kind, count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0' GROUP BY kind` | no rows |
 | R7.4 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | exactly two added rows: `0061_rm_worker_wallet_backfill_grant.sql`, `0063_swarm_judge_model_default.sql` (75 total) | diff |
 | R7.5 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/postflight.ts --emit-receipt=P8.postflight-prod` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | all checks ok |
@@ -184,7 +185,7 @@ only proof that production closes sessions on v0.5.1.
 | Step | When | Check | Pass |
 |---|---|---|---|
 | R8.1 | every 2 h | R7.1–R7.3 again | clean |
-| R8.2 | T0 + 8 h | every subject has ≥1 session with `convened_at >= T0` and `state = 'published'`, with takes ≥ the D3 threshold, an applied `model`/`enforce` judgement, and a consensus receipt | all four subjects |
+| R8.2 | T0 + 8 h | Database: every subject has ≥1 session with `convened_at >= T0` and `state = 'published'`, with takes ≥ the D3 threshold, an applied `model`/`enforce` judgement, and a consensus receipt. Logs: `grep -E '\] published: ' /root/smoke-archive-v0.5.1.log` shows, for every subject, a line ending `judge=enforce` with takes ≥ half the roster, and no line ending `judge=none` | all four subjects, both sources |
 | R8.3 | T0 + 8 h | no session convened after T0 older than 7 h is still `scheduled`/`collecting`/`window_closed` | none |
 | R8.4 | T0 + 8 h | the stuck sessions recorded in R2.5 are resolved or explained | written |
 | R8.5 | T0 + 8 h | `SELECT count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0'` | 0 |

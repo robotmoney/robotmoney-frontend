@@ -22,6 +22,13 @@
 //                 jobs, judge refusals, DNS failures, out-of-memory). A known
 //                 defect can be waived only by naming it: --waive "<pattern>".
 //
+//   5. driver    With --driver-log (smoke:twin's output tee'd to a file): every
+//                 subject LOGGED at least --min-sessions sessions as
+//                 `published ... judge=enforce` with attendance met, and no
+//                 session logged `judge=none`. The driver log is also scanned
+//                 for the fatal patterns (an empty inference account, a failed
+//                 session, an expired judge wait).
+//
 // With --wait N it polls (1) until it passes or N minutes elapse, then grades
 // everything once. Exit 0 only when every check passes.
 //
@@ -50,6 +57,10 @@ export const FATAL_LOG_PATTERNS: readonly string[] = [
   "getaddrinfo", // a lane pointed at a host this stack does not have
   "out of memory",
   "unsupported Unicode escape sequence", // parity writes failing (seen in production 2026-09-23/24)
+  "Insufficient account funds", // the inference account is empty: no member can take, no judge can judge
+  "HTTP 402",
+  "swarm session failed", // smoke-main.ts: the driver gave up on a session and kept running
+  "EXPIRED (mode=", // session.ts: the judge wait expired and the session published unjudged
 ];
 
 /** Reported, never failing: outside providers the twin cannot make reliable. */
@@ -62,6 +73,8 @@ export interface GateArgs {
   waitMin: number;
   since?: string;
   waive: string[];
+  /** The driver's own output (smoke:twin tee'd to a file): per-session published/judge lines. */
+  driverLog?: string;
 }
 
 export function parseGateArgs(argv: readonly string[]): GateArgs | { error: string } {
@@ -102,6 +115,13 @@ export function parseGateArgs(argv: readonly string[]): GateArgs | { error: stri
         if (e) return { error: e };
         if (Number.isNaN(Date.parse(v!))) return { error: `--since takes an ISO timestamp, got "${v}".` };
         out.since = new Date(v!).toISOString();
+        i++;
+        break;
+      }
+      case "--driver-log": {
+        const e = need();
+        if (e) return { error: e };
+        out.driverLog = v!;
         i++;
         break;
       }
@@ -183,6 +203,45 @@ export function evaluateSessions(
   return { failures, publishedBySubject };
 }
 
+export interface DriverSession {
+  subject: string;
+  state: string;
+  takes: number;
+  active: number;
+  judge: string;
+}
+
+const PUBLISHED_LINE = /\[session \d+: [0-9-]+\/([A-Za-z0-9_-]+)\] published: state=(\w+), takes=(\d+) of (\d+)(?:, judge=(\w+))?/;
+
+/** PURE. The driver's per-session publish lines (scripts/lib/swarm/session.ts). */
+export function parseDriverSessions(lines: readonly string[]): DriverSession[] {
+  const out: DriverSession[] = [];
+  for (const line of lines) {
+    const m = PUBLISHED_LINE.exec(line);
+    if (m) out.push({ subject: m[1]!, state: m[2]!, takes: Number(m[3]), active: Number(m[4]), judge: m[5] ?? "unlogged" });
+  }
+  return out;
+}
+
+/** PURE. The log-side verdict: every subject logged a published, judged, attended session. */
+export function evaluateDriverSessions(
+  sessions: readonly DriverSession[],
+  subjects: readonly string[],
+  args: Pick<GateArgs, "minSessions" | "minAttendance">,
+): string[] {
+  const failures: string[] = [];
+  for (const s of subjects) {
+    const good = sessions.filter(
+      (d) => d.subject === s && d.state === "published" && d.judge === "enforce" && d.takes >= Math.max(1, Math.ceil(d.active * args.minAttendance)),
+    ).length;
+    if (good < args.minSessions) failures.push(`driver log: subject ${s} logged ${good} published+judged+attended session(s); need ${args.minSessions}`);
+  }
+  for (const d of sessions) {
+    if (d.judge !== "enforce") failures.push(`driver log: a ${d.subject} session published with judge=${d.judge}, takes=${d.takes} of ${d.active}`);
+  }
+  return failures;
+}
+
 // ── IO ────────────────────────────────────────────────────────────────────────
 
 function sh(cmd: string[]): { code: number; out: string } {
@@ -230,7 +289,7 @@ async function main(): Promise<number> {
   const parsed = parseGateArgs(process.argv.slice(2));
   if ("error" in parsed) {
     console.error(`[${NAME}] ${parsed.error}`);
-    console.error(`[${NAME}] usage: bun run twin:gate [--wait MIN] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
+    console.error(`[${NAME}] usage: bun run twin:gate [--driver-log FILE] [--wait MIN] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
     return 2;
   }
   const stateFile = join(repoRoot, ".agents", "smoke-state.json");
@@ -253,6 +312,18 @@ async function main(): Promise<number> {
   }
 
   const failures: string[] = [...verdict.failures];
+  const driverLines: string[] = [];
+  if (parsed.driverLog) {
+    if (!existsSync(parsed.driverLog)) failures.push(`driver log ${parsed.driverLog} not found`);
+    else {
+      driverLines.push(...readFileSync(parsed.driverLog, "utf8").split("\n"));
+      const ds = parseDriverSessions(driverLines);
+      log(`driver log: ${ds.length} published session line(s); judged=${ds.filter((d) => d.judge === "enforce").length}`);
+      failures.push(...evaluateDriverSessions(ds, subjects, parsed));
+    }
+  } else {
+    log("warn: no --driver-log — the log-side session/judge check did not run (the runbook requires it)");
+  }
   log(`sessions: ${[...verdict.publishedBySubject].map(([s, n]) => `${s}=${n} published`).join(", ")} (active roster ${active})`);
 
   for (const [kind, n] of psql(state.smokeTwinContainer, `SELECT kind, count(*) FROM jobs WHERE status = 'dead' AND created_at >= '${t0}'::timestamptz GROUP BY kind`)) {
@@ -270,6 +341,7 @@ async function main(): Promise<number> {
     logLines.push(...sh(["docker", "logs", "--since", t0, name]).out.split("\n"));
   }
   logLines.push(...sh(["docker", "logs", "--since", t0, state.smokeTwinContainer]).out.split("\n"));
+  logLines.push(...driverLines);
   const logs = classifyLog(logLines, parsed.waive);
   for (const [p, n] of logs.fatal) failures.push(`logs: ${n} line(s) matching "${p}"`);
   for (const [p, n] of logs.waived) log(`WAIVED: ${n} line(s) matching "${p}" (--waive)`);
