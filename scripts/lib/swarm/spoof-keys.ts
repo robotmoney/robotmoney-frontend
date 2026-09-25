@@ -600,7 +600,8 @@ export interface SpoofKeysOutcome {
  * Input: `SpoofKeysOptions`. Output: a `SpoofKeysOutcome` for the journal.
  *
  * Refusals: every `SpoofRefusalReason`, before anything is generated; a named
- * member this target does not hold, or one a third party operates.
+ * member this target does not hold, or one a third party operates; a persisted
+ * generation whose members differ from this run's targets.
  *
  * Gates (spec §10 W3): "`--spoof-keys` with `RM_CREDENTIALS` set writes
  * elsewhere; interrupted rebind then rerun; crash after rebind commit before
@@ -612,8 +613,12 @@ export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOut
   const targets = selectSpoofTargets(options.names, options.members);
 
   // (1) A persisted generation is REUSED, never replaced: minting a second one
-  // while the database may already hold the first strands the members.
+  // while the database may already hold the first strands the members. Reuse
+  // is only for a RETRY: a run that selected a different member set is a new
+  // request, and answering it with the old generation would report success
+  // while the members it named were never spoofed.
   const persisted = readSpoofGeneration(options.stateRoot, options.instance);
+  if (persisted) assertSameSpoofTargets(persisted, targets, generationPath);
   const generation = persisted
     ?? writeSpoofGeneration(
       targets.map((m) => ({ name: m.name, memberId: m.memberId })),
@@ -633,6 +638,35 @@ export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOut
     rebound: resumed ? [] : Object.keys(generation.members),
     resumed,
   };
+}
+
+/**
+ * Refuse a persisted generation whose members are not exactly this run's
+ * targets (by name AND member id).
+ *
+ * A rerun of the same `--spoof-keys` request selects the same members and
+ * reuses the generation (the §6.4 retry). A run that selects a different set —
+ * `--spoof-keys=athena` then `--spoof-keys=athena,robot-money`, or a member
+ * whose id changed — is not a retry. Minting a new generation over the old one
+ * would strand the members the database already holds on the old keys, and
+ * reusing the old one would silently skip the new names. So it refuses, naming
+ * both sets.
+ */
+function assertSameSpoofTargets(
+  persisted: SpoofGeneration,
+  targets: readonly { name: string; memberId: string }[],
+  generationPath: string,
+): void {
+  const describe = (pairs: readonly { name: string; memberId: string }[]) =>
+    pairs.map((m) => `${m.name}=${m.memberId}`).sort();
+  const recorded = describe(Object.values(persisted.members));
+  const selected = describe(targets);
+  if (recorded.length === selected.length && recorded.every((pair, i) => pair === selected[i])) return;
+  throw new Error(
+    `--spoof-keys selected [${selected.join(", ")}], but ${generationPath} holds generation ${persisted.generationId} ` +
+      `for [${recorded.join(", ")}]. A persisted generation is reused only by a rerun of the same request; ` +
+      `rerun --spoof-keys=${Object.keys(persisted.members).sort().join(",")} to finish it`,
+  );
 }
 
 /**

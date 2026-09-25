@@ -1013,6 +1013,65 @@ describe("spoofKeys — guards, then (1)(2)(3)(4), resumable by rerun", () => {
     }
   });
 
+  test("a rerun that selects a DIFFERENT member set refuses, naming both sets, and touches neither the file nor the database", async () => {
+    // `--spoof-keys=athena` completes; the operator then asks for
+    // `--spoof-keys=athena,robot-money`. Reusing the one-member generation
+    // would report "already installed" while robot-money was never spoofed.
+    const dir = tempDir();
+    try {
+      const first = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: ["athena"],
+        members: IN_HOUSE,
+        db: fakeDb(null).deps,
+      });
+      const before = readFileSync(genFile(dir), "utf8");
+      const db2 = fakeDb(first.generationId);
+      const err = await spoofKeys({
+        guards: allowed(),
+        instance: "rm_twin",
+        stateRoot: dir,
+        names: ["athena", "robot-money"],
+        members: IN_HOUSE,
+        db: db2.deps,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      expect(message).toContain("athena=m-athena, robot-money=m-robot-money");
+      expect(message).toContain(`${first.generationId} for [athena=m-athena]`);
+      expect(db2.calls).toEqual([]);
+      expect(readFileSync(genFile(dir), "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a member whose id changed since the generation was written refuses too — the pair is name AND id", async () => {
+    const dir = tempDir();
+    try {
+      writeSpoofGeneration([{ name: "athena", memberId: "m-athena-old" }], dir, "rm_twin");
+      const db = fakeDb(null);
+      await expect(
+        spoofKeys({
+          guards: allowed(),
+          instance: "rm_twin",
+          stateRoot: dir,
+          names: ["athena"],
+          members: IN_HOUSE,
+          db: db.deps,
+        }),
+      ).rejects.toThrow(/athena=m-athena-old/);
+      expect(db.rebinds).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("GATE 'interrupted rebind then rerun': a rerun before the commit rebinds under the SAME generation", async () => {
     const dir = tempDir();
     const out = genFile(dir);
