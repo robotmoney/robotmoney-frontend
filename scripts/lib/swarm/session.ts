@@ -470,18 +470,125 @@ export async function existingMemberNames(targetUrl: string = backendUrl(), auto
   return new Set(members.map((m) => m.name.trim().toLowerCase()).filter(Boolean));
 }
 
+// ── A job still QUEUED is not a slow job (concurrent sessions) ─────────────
+// Every lifecycle step is "enqueue a job, then wait up to 30 s for the state it
+// produces". The 30 s is a budget for the JOB. It used to be safe to spend it
+// from the moment of enqueue, because one session at a time on one swarm
+// worker meant the lane was free whenever this driver enqueued anything. With
+// sessions for several subjects in flight that stops being guaranteed: the
+// smoke runs a swarm worker per concurrent session (SmokeCadence.swarmWorkers),
+// but a notification job, or a judge that overran its wait and has publish
+// queued behind it, can still occupy every worker for a while — and a 30 s
+// clock running against a job nobody has CLAIMED yet reports a failed session
+// for work that has not even started.
+//
+// So when a state wait reaches its deadline it asks the job row one question:
+// has this job ever been claimed? A job that is `pending` with zero attempts is
+// queued behind other work, and the wait is extended — a full `timeoutMs` from
+// now, re-checked at each deadline — up to a hard stop. A job in backoff after
+// a failed attempt (`attempts > 0`) does NOT extend: that is the job's own
+// failure, and the ordinary deadline reports it exactly as before. The row is
+// read only once the deadline has passed, so a wait that succeeds in time — the
+// only kind a one-session-at-a-time driver (production) ever has, its lane
+// being free — makes no extra request and behaves exactly as it always did.
+
+/** The job a state wait is waiting on, so its deadline can see the queue. */
+export interface QueuedWait {
+  jobId: string | number | null | undefined;
+  automationToken?: string;
+  /** Test seam; defaults to the admin jobs route (readJudgeJob reads any job row). */
+  readJob?: (jobId: string | number) => Promise<JudgeJobStatus | null>;
+  /**
+   * How long past `timeoutMs` a still-queued job may keep the wait open.
+   * Default: judgeWaitCeilingMs() — the longest one swarm job (a judge with
+   * its retry) legitimately holds a worker.
+   */
+  ceilingMs?: number;
+}
+
+/** A job that has never been claimed: queued behind other work on its lane. */
+export function jobNeverClaimed(job: JudgeJobStatus | null): boolean {
+  return job !== null && job.status === "pending" && job.attempts === 0;
+}
+
+/**
+ * PURE. At a passed deadline, extend the wait or let it fail?
+ *
+ * Extends only while the job has never been claimed AND the hard stop
+ * (`startedMs + timeoutMs + ceilingMs`) is still ahead; the new deadline gives
+ * the job its full `timeoutMs` again from now, so a job claimed on the last
+ * extension still gets the budget it always had.
+ */
+export function planQueuedExtension(
+  job: JudgeJobStatus | null,
+  nowMs: number,
+  startedMs: number,
+  timeoutMs: number,
+  ceilingMs: number,
+): { extend: boolean; deadline: number } {
+  const hardStop = startedMs + timeoutMs + ceilingMs;
+  if (jobNeverClaimed(job) && nowMs < hardStop) return { extend: true, deadline: nowMs + timeoutMs };
+  return { extend: false, deadline: nowMs };
+}
+
+/** Build the QueuedWait for a job enqueueLifecycleJob just returned. */
+export function queuedWaitFor(enqueued: unknown, automationToken?: string): QueuedWait {
+  const jobId = (enqueued as { jobId?: unknown } | undefined)?.jobId;
+  return {
+    jobId: typeof jobId === "string" || typeof jobId === "number" ? jobId : null,
+    automationToken,
+  };
+}
+
+/**
+ * The deadline side of every state wait: null when the wait must now fail,
+ * otherwise the new deadline to keep polling against. Logs once per wait, so
+ * the driver log says the lane was busy rather than going quiet.
+ */
+async function extendWhileQueued(
+  queued: QueuedWait | undefined,
+  startedMs: number,
+  timeoutMs: number,
+  what: string,
+  noted: { logged: boolean },
+): Promise<number | null> {
+  if (queued?.jobId == null) return null;
+  const read = queued.readJob ?? ((id: string | number) => readJudgeJob(id, queued.automationToken));
+  const job = await read(queued.jobId);
+  const plan = planQueuedExtension(job, Date.now(), startedMs, timeoutMs, queued.ceilingMs ?? judgeWaitCeilingMs());
+  if (!plan.extend) return null;
+  if (!noted.logged) {
+    noted.logged = true;
+    console.log(`  job #${queued.jobId} for ${what} is still QUEUED (never claimed) — the swarm lane is busy; waiting for it rather than timing out`);
+  }
+  return plan.deadline;
+}
+
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
 // (issue #104) can drive the SAME proven job-queue session lifecycle this file's
 // own runSession() uses, instead of hand-rolling a second one.
-export async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
-    if (r.ok) {
-      const data = await responseJson(r);
-      if (data.session?.state === expectedState) return data;
+export async function waitForSessionState(
+  date: string,
+  subject: string,
+  expectedState: string,
+  timeoutMs = 30_000,
+  queued?: QueuedWait,
+) {
+  const started = Date.now();
+  let deadline = started + timeoutMs;
+  const noted = { logged: false };
+  for (;;) {
+    while (Date.now() < deadline) {
+      const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
+      if (r.ok) {
+        const data = await responseJson(r);
+        if (data.session?.state === expectedState) return data;
+      }
+      await sleep(500);
     }
-    await sleep(500);
+    const extended = await extendWhileQueued(queued, started, timeoutMs, `${date}/${subject} -> '${expectedState}'`, noted);
+    if (extended === null) break;
+    deadline = extended;
   }
   throw new Error(
     `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms ` +
@@ -503,6 +610,7 @@ export async function waitForSubjectSession(
   subject: string,
   expectedState: string | readonly string[],
   timeoutMs = 30_000,
+  queued?: QueuedWait,
 ) {
   // A SET of acceptable states, because openSession is idempotent per OPEN
   // session: it refuses to convene a second session while one is `scheduled` or
@@ -512,17 +620,24 @@ export async function waitForSubjectSession(
   // wedged that subject permanently, one 30-second timeout per slot, for as
   // long as the (six-hour) window ran. See runSession's adoption branch.
   const wanted = typeof expectedState === "string" ? [expectedState] : [...expectedState];
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const r = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`);
-    if (r.ok) {
-      const data = await responseJson(r);
-      // The list is newest-first, so the first row for this subject is the one
-      // just convened. Matching on subject alone (not date) is the whole point.
-      const s = (data.sessions ?? []).find((x: { subjectId?: string }) => x.subjectId === subject);
-      if (s?.state && wanted.includes(s.state)) return { session: s };
+  const started = Date.now();
+  let deadline = started + timeoutMs;
+  const noted = { logged: false };
+  for (;;) {
+    while (Date.now() < deadline) {
+      const r = await fetch(`${backendUrl()}${ROUTES.swarm.sessions}`);
+      if (r.ok) {
+        const data = await responseJson(r);
+        // The list is newest-first, so the first row for this subject is the one
+        // just convened. Matching on subject alone (not date) is the whole point.
+        const s = (data.sessions ?? []).find((x: { subjectId?: string }) => x.subjectId === subject);
+        if (s?.state && wanted.includes(s.state)) return { session: s };
+      }
+      await sleep(500);
     }
-    await sleep(500);
+    const extended = await extendWhileQueued(queued, started, timeoutMs, `subject '${subject}' opening`, noted);
+    if (extended === null) break;
+    deadline = extended;
   }
   throw new Error(
     `no session for subject '${subject}' reached ${wanted.map((w) => `'${w}'`).join(" or ")} within ${timeoutMs}ms ` +
@@ -757,6 +872,14 @@ export async function waitUntilWindowCloses(
  * is claimable and the ordinary deadline applies. The extension is bounded by
  * JUDGE_WAIT_MS so a genuinely wedged lane still fails loudly, naming the
  * judge job's live status rather than a vague state-wait timeout.
+ *
+ * ON SEVERAL SWARM WORKERS (the fast profile's SmokeCadence.swarmWorkers) the
+ * lane is not single-concurrency any more: publish can be claimed by another
+ * worker while the overrunning judge is still `running`, reach `published`
+ * inside the ordinary deadline, and the late judging is then refused by
+ * applyOpinion's state check — the same outcome runJudgeStep already documents
+ * for a judge that lands after its wait. The extension below simply never
+ * fires in that case. Production (one worker) is unchanged.
  */
 export async function waitForSessionStateAfterJob(
   date: string,
@@ -765,10 +888,16 @@ export async function waitForSessionStateAfterJob(
   judgeJobId: string | number | null,
   automationToken?: string,
   timeoutMs = 30_000,
-  deps: { readJob?: (jobId: string | number) => Promise<JudgeJobStatus | null>; laneCeilingMs?: number } = {},
+  deps: {
+    readJob?: (jobId: string | number) => Promise<JudgeJobStatus | null>;
+    laneCeilingMs?: number;
+    /** The job this wait is FOR (publish). Never-claimed time does not count — see QueuedWait. */
+    queued?: QueuedWait;
+  } = {},
 ) {
   const started = Date.now();
-  const deadline = started + timeoutMs;
+  let deadline = started + timeoutMs;
+  const noted = { logged: false };
   const laneCeiling = started + (deps.laneCeilingMs ?? timeoutMs + judgeWaitCeilingMs());
   let laneHeld = false;
   while (Date.now() < laneCeiling) {
@@ -788,6 +917,12 @@ export async function waitForSessionStateAfterJob(
       }
     }
     if (Date.now() >= deadline) {
+      const extended = await extendWhileQueued(deps.queued, started, timeoutMs, `${date}/${subject} -> '${expectedState}'`, noted);
+      if (extended !== null) {
+        deadline = extended;
+        await sleep(500);
+        continue;
+      }
       throw new Error(
         `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms` +
           (laneHeld ? " (the swarm lane was held by the judge job the whole time)" : ""),
@@ -797,7 +932,9 @@ export async function waitForSessionStateAfterJob(
   }
   throw new Error(
     `session ${date}/${subject} did not reach '${expectedState}' within ${Math.round((laneCeiling - started) / 1000)}s — ` +
-      "the judge job held the swarm lane past both ceilings; check the swarm lane for a wedged job",
+      (noted.logged
+        ? "its own job stayed QUEUED behind other work on the swarm lane past the ceiling; check the swarm workers"
+        : "the judge job held the swarm lane past both ceilings; check the swarm lane for a wedged job"),
   );
 }
 
@@ -1611,7 +1748,7 @@ export async function runSession(
   // what made a clean database fail its first two sessions with a foreign-key
   // violation while the boot still reported READY.
   await admin("subject", subject, rail.automationToken);
-  await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.automationToken);
+  const openJob = await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.automationToken);
   // RECONCILING openSession's "one open session per subject" WITH A WINDOW THAT
   // IS ONE FULL INTERVAL (issue #570). openSession refuses to convene a second
   // session while one is `scheduled` or `collecting`, and returns the existing
@@ -1624,7 +1761,7 @@ export async function runSession(
   // every slot. Demanding `scheduled` here made that fatal — 30-second timeout,
   // logged as "swarm session failed", repeated forever — so the driver now
   // ADOPTS the epoch already in progress instead of demanding a fresh one.
-  const opened = await waitForSubjectSession(subject.id, ["scheduled", "collecting"]);
+  const opened = await waitForSubjectSession(subject.id, ["scheduled", "collecting"], undefined, queuedWaitFor(openJob, rail.automationToken));
   const date: string = opened.session.date;
   const sessionId = opened.session.id;
   // An adopted session already carries an advertised deadline. Re-publishing a
@@ -1690,8 +1827,8 @@ export async function runSession(
     // never from an env var. It was a hardcoded 60 here: an honest hour at the
     // instant it was written, and a lie by the time this driver closed the
     // window three minutes later.
-    await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes, prevOutcome }, rail.automationToken);
-    await waitForSessionState(date, subject.id, "collecting");
+    const briefJob = await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes, prevOutcome }, rail.automationToken);
+    await waitForSessionState(date, subject.id, "collecting", undefined, queuedWaitFor(briefJob, rail.automationToken));
     console.log(`${tag} session ${sessionId}: brief published, window open for ${windowMinutes} min`);
   }
   emitSession("collecting", sessionId);
@@ -1772,12 +1909,12 @@ export async function runSession(
   console.log(
     `${tag} window elapsed after ${Math.round(closedWindow.waitedMs / 1000)}s — ${closedWindow.reason}`,
   );
-  await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);
-  await waitForSessionState(date, subject.id, "window_closed");
+  const closeJob = await enqueueLifecycleJob("close_window", { sessionId }, rail.automationToken);
+  await waitForSessionState(date, subject.id, "window_closed", undefined, queuedWaitFor(closeJob, rail.automationToken));
   emitSession("window_closed", sessionId);
 
-  await enqueueLifecycleJob("aggregate", { sessionId }, rail.automationToken);
-  await waitForSessionState(date, subject.id, "aggregated");
+  const aggregateJob = await enqueueLifecycleJob("aggregate", { sessionId }, rail.automationToken);
+  await waitForSessionState(date, subject.id, "aggregated", undefined, queuedWaitFor(aggregateJob, rail.automationToken));
   emitSession("aggregated", sessionId);
 
   // The judge sits HERE — between the rollup it reads and the publish it must
@@ -1798,14 +1935,20 @@ export async function runSession(
   const judged = judgedProgress(judgeOutcome);
   if (judged) emitSession("judged", sessionId, judged);
 
-  await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
+  const publishJob = await enqueueLifecycleJob("publish", { sessionId }, rail.automationToken);
   // LANE-AWARE (the crash this replaces): if the judge-wait backstop expired
   // with the judge job still `running`, the single-concurrency lane is still
   // held and the publish job just enqueued cannot be claimed — a plain 30s
   // state wait would expire against an occupied lane and kill the smoke.
   // waitForSessionStateAfterJob keeps waiting while the judge holds the lane,
   // and names it if the whole thing wedges.
-  await waitForSessionStateAfterJob(date, subject.id, "published", judgeOutcome.judgeJobId, rail.automationToken);
+  //
+  // And the publish job's OWN queue time does not count either (QueuedWait):
+  // with several subjects' sessions in flight, publish can sit unclaimed
+  // behind other subjects' work on a busy lane.
+  await waitForSessionStateAfterJob(date, subject.id, "published", judgeOutcome.judgeJobId, rail.automationToken, undefined, {
+    queued: queuedWaitFor(publishJob, rail.automationToken),
+  });
   emitSession("published", sessionId);
 
   const pub = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject: subject.id })}`).then(responseJson);

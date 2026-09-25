@@ -271,7 +271,9 @@ describe("runSession closes on the WINDOW, not on its own agents settling", () =
     // meets an open session on every slot. Demanding `scheduled` wedged the
     // subject; adopting it, without republishing a brief over its advertised
     // deadline, is the reconciliation.
-    expect(sessionSrc).toContain('waitForSubjectSession(subject.id, ["scheduled", "collecting"])');
+    // (The trailing arguments hand the wait its own open_session job, so time
+    // that job spends queued behind other subjects' work does not count.)
+    expect(sessionSrc).toContain('waitForSubjectSession(subject.id, ["scheduled", "collecting"], undefined, queuedWaitFor(openJob, rail.automationToken))');
     expect(sessionSrc).toContain('const adopted = opened.session.state === "collecting";');
   });
 
