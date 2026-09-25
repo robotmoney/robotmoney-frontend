@@ -30,7 +30,7 @@ import {
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
-  DEFAULT_STACK_DATABASE,
+  throwawayStackDatabase,
   resolveStackEnvironment,
   stackProjectName,
   STAGE_WEB_PORT,
@@ -138,7 +138,7 @@ const stack = createStack(
     project,
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
-    database: DEFAULT_STACK_DATABASE,
+    database: throwawayStackDatabase(instance.paths),
     environment: stackEnvironment,
     instance: { name: instance.name, stateDir: instance.stateDir },
   },

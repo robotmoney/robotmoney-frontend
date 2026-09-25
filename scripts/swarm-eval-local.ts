@@ -12,6 +12,7 @@ import {
   composeArgs,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
+  throwawayStackDatabase,
   dockerClientHostEnv,
   instanceComposeEnv,
   internalDatabaseUrl,
@@ -113,7 +114,7 @@ export async function runSwarmAuthoringEvalCase(
   // Not a deployment instance, but the compose model needs a state directory
   // outside the checkout (RM_INSTANCE_STATE_DIR); thrown away with the stack.
   // Its three service-token files land there when stack.up() provisions them
-  // on the stack's own database (scripts/stack/stack.ts provisionTokens).
+  // on the stack's own database (scripts/stack/throwaway-database.ts).
   const instance = throwawayInstance(project);
   const stack = createStack(
     {
@@ -121,7 +122,7 @@ export async function runSwarmAuthoringEvalCase(
       project,
       profile: "full",
       composeFiles: DEFAULT_COMPOSE_FILES,
-      database: DEFAULT_STACK_DATABASE,
+      database: throwawayStackDatabase(instance.paths),
       environment: stackEnvironment,
       instance: { name: instance.name, stateDir: instance.stateDir },
     },

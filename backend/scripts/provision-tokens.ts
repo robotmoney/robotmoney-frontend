@@ -64,18 +64,13 @@ export interface ProvisionRequest {
   /** How the host reaches the local Postgres. */
   readonly target: { readonly host: string; readonly port: number; readonly database: string; readonly sslmode: string };
   /**
-   * Whose credential writes the rows.
-   *   `instance` (the default): a Postgres `bun smoke` owns — rm_owner and
-   *     rm_readonly from the instance's generated role passwords (§5). The
-   *     boot's session target lock is required and proven held.
-   *   `stack-superuser`: a throwaway compose stack's own `postgres` superuser
-   *     (scripts/stack's DEFAULT_STACK_DATABASE, not a secret: that container
-   *     is reachable only on this host's loopback). What an eval or a rails
-   *     test stack uses; it is refused for any host but loopback, so it can
-   *     never reach a deployment's database.
+   * Whose credential writes the rows: `instance`, the only form — rm_owner and
+   * rm_readonly from the instance's generated role passwords (§5), on a
+   * Postgres `bun smoke` or a throwaway stack (scripts/stack/throwaway-database.ts)
+   * prepared. The caller's session target lock is required and proven held.
    */
-  readonly credentials?: { readonly source: "instance" } | { readonly source: "stack-superuser"; readonly user: string; readonly password: string };
-  /** The caller's session target lock, proven held before the write. Required for `instance`. */
+  readonly credentials?: { readonly source: "instance" };
+  /** The caller's session target lock, proven held before the write. Required. */
   readonly lock?: { readonly backendPid: number; readonly holder: LockHolder };
   readonly resultFile: string;
 }
@@ -157,10 +152,7 @@ function stageSecret(destination: string, secret: string): string {
   return temp;
 }
 
-/** Loopback only: the one kind of host a `stack-superuser` request may name. */
-const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-/** The owner and reader URLs a request names, from the instance's passwords or a throwaway stack's superuser. */
+/** The owner and reader URLs a request names, from the instance's generated role passwords. */
 function requestUrls(request: ProvisionRequest): { ownerUrl: string; readerUrl: string } {
   const connection = {
     host: request.target.host,
@@ -168,15 +160,8 @@ function requestUrls(request: ProvisionRequest): { ownerUrl: string; readerUrl: 
     database: request.target.database,
     sslmode: request.target.sslmode,
   };
-  const credentials = request.credentials ?? { source: "instance" as const };
-  if (credentials.source === "stack-superuser") {
-    if (!LOOPBACK.has(request.target.host)) {
-      throw new Error(`a stack-superuser request provisions only a throwaway stack on this host's loopback, not ${request.target.host}`);
-    }
-    const url = urlForRole({ ...connection, [credentials.user]: credentials.password }, credentials.user);
-    if (!url) throw new Error("the stack-superuser request names no usable connection");
-    return { ownerUrl: url, readerUrl: url };
-  }
+  const source = (request.credentials as { source?: string } | undefined)?.source ?? "instance";
+  if (source !== "instance") throw new Error(`unknown credentials source "${source}": a provisioning request uses the instance's role passwords`);
   const passwords = readRolePasswords(instancePaths(request.stateRoot, request.instance));
   const readerUrl = urlForRole({ ...connection, rm_readonly: passwords.rm_readonly }, "rm_readonly");
   const ownerUrl = urlForRole({ ...connection, rm_owner: passwords.rm_owner }, "rm_owner");
@@ -188,7 +173,7 @@ function requestUrls(request: ProvisionRequest): { ownerUrl: string; readerUrl: 
 async function main(request: ProvisionRequest): Promise<ProvisionResult> {
   const paths = instancePaths(request.stateRoot, request.instance);
   const { ownerUrl, readerUrl } = requestUrls(request);
-  if ((request.credentials?.source ?? "instance") === "instance" && !request.lock) {
+  if (!request.lock) {
     throw new Error("a boot's provisioning runs only under the boot's target lock, and this request names none");
   }
   // backend/src/config.ts validates at IMPORT. For an instance this is the

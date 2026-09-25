@@ -51,8 +51,9 @@ import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
 import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
 import { placeSite, WEB_DIR_NAME } from "../lib/smoke-site.ts";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { prepareThrowawayDatabase } from "./throwaway-database.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
 
@@ -176,8 +177,6 @@ export interface Stack {
   waitForPostgres(timeoutMs?: number): Promise<void>;
   waitForHttp(url: string, timeoutMs?: number): Promise<void>;
   migrate(extraEnv?: Record<string, string>, scriptArgs?: string[]): Promise<void>;
-  /** Provision the three service tokens for a throwaway stack's own compose postgres. */
-  provisionTokens(): Promise<void>;
   /** Ask the daemon which host port it published one container port on. */
   publishedPort(service: string, containerPort: number): number;
   /** Both stack ports, queried live and then cached for this handle. */
@@ -546,42 +545,41 @@ export function createStack(
   }
 
   /**
-   * Provision the three service tokens for a THROWAWAY stack — an eval or a
-   * rails test on the stack's own compose postgres — through the one entry
-   * module that writes them (backend/scripts/provision-tokens.ts, its
-   * `stack-superuser` form: that container's superuser, on this host's
-   * loopback). `bun smoke` never comes here: it provisions inside its own
-   * journaled, target-locked preparation. The request carries no secret (the
-   * stack superuser's password is the baked-in, non-secret default).
+   * A THROWAWAY stack's database — an eval's or a rails test's own compose
+   * postgres — prepared the way `bun smoke --local blank` prepares one: the
+   * four roles by the stack's superuser, then the snapshot bootstrap and the
+   * three service tokens as rm_owner under the target lock
+   * (scripts/stack/throwaway-database.ts). `bun smoke` never comes here: it
+   * prepares inside its own journaled plan (`prepareDatabase`).
+   *
+   * The containers must already be configured with the runtime roles' URLs
+   * (throwawayStackDatabase): the api and worker preflights refuse the
+   * superuser (spec §7.2), so a stack that would hand it to them is refused
+   * here, before anything is written.
    */
-  async function provisionTokens(): Promise<void> {
-    if (!cfg.instance) throw new Error("provisionTokens needs an instance: the token files live in its state directory");
-    if (externalPostgres) throw new Error("provisionTokens is for a stack's own compose postgres; a deployment provisions through bun smoke or prod-init");
-    const requestFile = join(cfg.instance.stateDir, `provision-request-${process.pid}.json`);
-    const resultFile = join(cfg.instance.stateDir, `provision-result-${process.pid}.json`);
-    const request = {
-      instance: cfg.instance.name,
-      stateRoot: dirname(cfg.instance.stateDir),
-      target: { host: "127.0.0.1", port: publishedPort("postgres", POSTGRES_CONTAINER_PORT), database: cfg.database.name, sslmode: "disable" },
-      credentials: { source: "stack-superuser", user: cfg.database.user, password: cfg.database.password },
-      resultFile,
-    };
-    writeFileSync(requestFile, JSON.stringify(request), { mode: 0o600 });
-    emit({ phase: "log", message: "provisioning the three service tokens…" });
-    try {
-      const code = await runtime.run(
-        ["bun", "--no-env-file", join(cfg.repoRoot, "backend", "scripts", "provision-tokens.ts"), "--request", requestFile],
-        defaultIo,
-        join(cfg.repoRoot, "backend"),
+  async function prepareOwnDatabase(): Promise<void> {
+    if (!cfg.instance) throw new Error("a throwaway stack's database needs an instance: the role passwords and token files live in its state directory");
+    if (!cfg.database.roleUrls) {
+      throw new Error(
+        "this stack's containers would log in as the postgres superuser, which the api and worker preflights refuse " +
+          "(smoke-production-spec.md §7.2): build its database config with throwawayStackDatabase(instance.paths)",
       );
-      const result = existsSync(resultFile) ? (JSON.parse(readFileSync(resultFile, "utf8")) as { ok: boolean; error?: string }) : null;
-      if (code !== 0 || result?.ok !== true) {
-        throw new Error(`service-token provisioning failed: ${result?.error ?? `exit ${code} with no result`}`);
-      }
-    } finally {
-      rmSync(requestFile, { force: true });
-      rmSync(resultFile, { force: true });
     }
+    emit({ phase: "migrate", status: "start", detail: "blank preparation: roles, snapshot bootstrap, service tokens" });
+    await prepareThrowawayDatabase({
+      repoRoot: cfg.repoRoot,
+      instance: cfg.instance,
+      database: cfg.database,
+      postgresContainer: () => {
+        const r = compose(["ps", "-q", "postgres"], { stdout: "pipe", stderr: "pipe" });
+        const id = r.stdout.split("\n")[0]?.trim();
+        if (r.exitCode !== 0 || !id) throw new Error(`the stack's postgres container could not be found: ${r.stderr.trim() || "no container"}`);
+        return id;
+      },
+      publishedPostgresPort: () => publishedPort("postgres", POSTGRES_CONTAINER_PORT),
+      log: (message) => emit({ phase: "log", message }),
+    });
+    emit({ phase: "migrate", status: "done", detail: "blank preparation" });
   }
 
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
@@ -650,7 +648,14 @@ export function createStack(
       await upOpts.preflight();
     }
 
-    if (upOpts.migrate ?? true) {
+    if ((upOpts.migrate ?? true) && cfg.instance && !externalPostgres && !upOpts.prepareDatabase) {
+      // A throwaway stack on its own compose postgres: the blank preparation,
+      // not the legacy superuser migrate — its services log in as the runtime
+      // roles and authenticate with store-issued tokens like every other
+      // stack's (spec §3, §7.2, §7.3).
+      await boundary("migrate");
+      await prepareOwnDatabase();
+    } else if (upOpts.migrate ?? true) {
       await boundary("migrate");
       try {
         await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
@@ -661,9 +666,6 @@ export function createStack(
         // for — this process keeps running long after migrate() returns.
         delete process.env.MIGRATE_DATABASE_URL;
       }
-      // The throwaway stack's own database is now the schema; its services
-      // authenticate with store-issued tokens like every other stack's.
-      if (cfg.instance && !externalPostgres && !upOpts.prepareDatabase) await provisionTokens();
     } else {
       emit({ phase: "migrate", status: "start", detail: "skipped — pass --migrate to run it" });
       emit({ phase: "migrate", status: "done", detail: "skipped" });
@@ -759,7 +761,6 @@ export function createStack(
     waitForPostgres,
     waitForHttp,
     migrate,
-    provisionTokens,
     publishedPort,
     hostPorts,
     up,

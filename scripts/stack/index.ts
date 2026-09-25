@@ -35,3 +35,4 @@ export * from "./ports.ts";
 // it, and it is deliberately NOT exported here (it is a CLI with a main).
 export * from "./images.ts";
 export * from "./stack.ts";
+export * from "./throwaway-database.ts";

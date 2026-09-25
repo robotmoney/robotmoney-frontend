@@ -61,6 +61,7 @@ import {
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
+  throwawayStackDatabase,
   resolveStackEnvironment,
   stackProjectName,
   type Stack,
@@ -151,7 +152,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         project: stackProjectName("infra", environment),
         profile: "core",
         composeFiles: DEFAULT_COMPOSE_FILES,
-        database: DEFAULT_STACK_DATABASE,
+        database: throwawayStackDatabase(stackInstance.paths),
         environment,
         instance: { name: stackInstance.name, stateDir: stackInstance.stateDir },
       },
@@ -163,7 +164,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     await stack.up();
     await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
     // up() provisioned the three service tokens on the stack's own database
-    // (scripts/stack/stack.ts provisionTokens); the admin calls below present
+    // (scripts/stack/throwaway-database.ts, under the target lock); the admin calls below present
     // the operator's, which carries the `admin` right (smoke spec §3).
     operatorToken = readServiceToken(stackInstance.paths, "operator");
 

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
-  DEFAULT_STACK_DATABASE,
+  throwawayStackDatabase,
   dockerClientHostEnv,
   resolveStackEnvironment,
   type Stack,
@@ -48,7 +48,7 @@ export function imageOnlyStack(project: string): Stack {
       project,
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
-      database: DEFAULT_STACK_DATABASE,
+      database: throwawayStackDatabase(instance.paths),
       environment: resolveStackEnvironment({}),
       instance: { name: instance.name, stateDir: instance.stateDir },
     },
