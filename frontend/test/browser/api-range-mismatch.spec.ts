@@ -134,12 +134,24 @@ test.describe("the page's API range check at load", () => {
     expect(session.consoleErrors).toEqual([]);
   });
 
-  test("red control: the notice is the check's doing — an in-range API on the same route never shows it, an out-of-range one always does", async ({ page }) => {
-    // Same page, same goldens, only /api/version differs; a notice that
-    // appeared for reasons other than the version would show in both.
-    const bumped = { ...(GOLDENS.routes["/api/version"] as object), api: "0.0.1" };
-    await open(page, "/", bumped);
-    await expect(page.locator(NOTICE)).toBeVisible({ timeout: 15_000 });
+  test("red control: the notice is the check's doing — an in-range API on the same route never shows it, an out-of-range one always does", async ({ page, context }) => {
+    // Same route, same goldens, only /api/version differs, in two pages of one
+    // context; a notice that appeared for reasons other than the version would
+    // show in both, and one the check never raised would show in neither.
+    const golden = GOLDENS.routes["/api/version"] as { api: string };
+    const bumped = { ...golden, api: "0.0.1" };
+
+    const inRange = await open(page, "/", golden);
+    await expect.poll(() => inRange.apiCalls.includes("/api/dashboards/allocation"), { timeout: 15_000 }).toBe(true);
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator(NOTICE)).toHaveCount(0);
+
+    const outPage = await context.newPage();
+    const outOfRange = await open(outPage, "/", bumped);
+    await expect(outPage.locator(NOTICE)).toBeVisible({ timeout: 15_000 });
+    await expect(outPage.locator(NOTICE)).toHaveAttribute("data-api", "0.0.1");
+    await outPage.waitForLoadState("networkidle");
+    expect(outOfRange.apiCalls).toEqual(["/api/version"]);
   });
 
   test("an unreachable /api/version is not a mismatch: the page carries on", async ({ page }) => {

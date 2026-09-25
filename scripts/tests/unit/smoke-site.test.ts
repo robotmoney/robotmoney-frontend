@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CURRENT_SITE_LINK, currentSite, placeSite, siteIdOf, WEB_DIR_NAME } from "../../lib/smoke-site.ts";
+import { CURRENT_SITE_LINK, currentSite, installSite, placeSite, PREVIOUS_SITE_LINK, previousSite, siteIdOf, switchSite, WEB_DIR_NAME } from "../../lib/smoke-site.ts";
 import { instancePaths } from "../../lib/smoke-state.ts";
 
 const roots: string[] = [];
@@ -118,6 +118,61 @@ describe("currentSite — only placeSite writes `current`", () => {
     rmSync(join(web, CURRENT_SITE_LINK), { recursive: true });
     symlinkSync("/srv/elsewhere", join(web, CURRENT_SITE_LINK));
     expect(() => currentSite(web)).toThrow(/not at a site directory/);
+  });
+});
+
+describe("installSite + switchSite — the two halves `bun smoke:web` runs with a range check between them", () => {
+  test("installSite puts the site in place WITHOUT making it current", () => {
+    const root = scratch();
+    const web = join(root, "web");
+    placeSite(web, assembled(root, "_a"));
+    const next = installSite(web, assembled(root, "_b", { version: "0.2.0", commit: "c0ffee12", digest: `sha256:${"b".repeat(64)}` }));
+    expect(next).toMatchObject({ siteId: "0.2.0-c0ffee12", copied: true });
+    expect(currentSite(web)).toBe("0.1.0-b10589b1");
+  });
+
+  test("move: the build directory is renamed into place, and removed when that exact site is already installed", () => {
+    const root = scratch();
+    const web = join(root, "web");
+    mkdirSync(web);
+    const build = assembled(web, ".build-1");
+    expect(installSite(web, build, { move: true })).toMatchObject({ siteId: "0.1.0-b10589b1", copied: true });
+    expect(existsSync(build)).toBe(false);
+    const again = assembled(web, ".build-2");
+    expect(installSite(web, again, { move: true })).toMatchObject({ siteId: "0.1.0-b10589b1", copied: false });
+    expect(existsSync(again)).toBe(false);
+  });
+
+  test("switchSite records the old `current` as `previous` before swapping, as a relative symlink", () => {
+    const root = scratch();
+    const web = join(root, "web");
+    placeSite(web, assembled(root, "_a"));
+    installSite(web, assembled(root, "_b", { version: "0.2.0", commit: "c0ffee12", digest: `sha256:${"b".repeat(64)}` }));
+    expect(switchSite(web, "0.2.0-c0ffee12")).toEqual({ swapped: true, previous: "0.1.0-b10589b1" });
+    expect(readlinkSync(join(web, PREVIOUS_SITE_LINK))).toBe("0.1.0-b10589b1");
+    expect(previousSite(web)).toBe("0.1.0-b10589b1");
+    expect(currentSite(web)).toBe("0.2.0-c0ffee12");
+    // Already current: nothing moves, `previous` included.
+    expect(switchSite(web, "0.2.0-c0ffee12")).toEqual({ swapped: false, previous: "0.2.0-c0ffee12" });
+    expect(previousSite(web)).toBe("0.1.0-b10589b1");
+  });
+
+  test("red control: switching to a site that is not installed, or to a reserved name, refuses and changes nothing", () => {
+    const root = scratch();
+    const web = join(root, "web");
+    placeSite(web, assembled(root, "_a"));
+    expect(() => switchSite(web, "9.9.9-missing")).toThrow(/not an installed site directory/);
+    expect(() => switchSite(web, PREVIOUS_SITE_LINK)).toThrow(/not a site id/);
+    expect(() => switchSite(web, "../elsewhere")).toThrow(/not a site id/);
+    expect(currentSite(web)).toBe("0.1.0-b10589b1");
+    expect(previousSite(web)).toBeNull();
+  });
+
+  test("red control: a `previous` that is not a symlink into the web dir refuses", () => {
+    const root = scratch();
+    const web = join(root, "web");
+    mkdirSync(join(web, PREVIOUS_SITE_LINK), { recursive: true });
+    expect(() => previousSite(web)).toThrow(/not a symlink/);
   });
 });
 
