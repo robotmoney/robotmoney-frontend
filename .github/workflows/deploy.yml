@@ -1,0 +1,244 @@
+# Wires this repo's CI to the `stack` orchestrator (issue #896, mirrored from
+# robotmoney/devops#27, canonical plan: robotmoney/devops's
+# docs/plans/scaffold-stack.md Phase 4).
+#
+# Two independent triggers, never the same job (scaffold-stack.md Phase 4's
+# table, "this is two independent deploy pipelines"):
+#
+#   push to `main`        -> `stack validate --strict`, then
+#                             `stack prepare --publish-images --image-registry ghcr.io`.
+#                             Publishing on every main build is what makes
+#                             rollback a pointer change later (Phase 4 /
+#                             docs/technical/stack-runbook-reconciliation.md §4.2).
+#   merge to `releases-*` -> `stack manage --dir <durable-dir> push-images`,
+#                             then `stack manage --dir <durable-dir> update`,
+#                             against THIS repo's own deployment directory in
+#                             robotmoney/devops.
+#
+# `stack ... deploy` never runs here — `deploy` mints a brand new deployment
+# identity (a new `cluster-id`, a new namespace/restic path); a CI pipeline
+# calling it on every release would stand up a second production beside the
+# first (stack-runbook-reconciliation.md §4.1). Only a human-authorized
+# environment-bootstrap runbook runs `deploy`.
+#
+# CI taxonomy: `ignore` throughout — this is release/deploy tooling, the same
+# class contract-publish.yml uses, not a product test suite subject to
+# draft/r4r gating. It is exempt from the nightly-mirrors "no new suite" rule
+# for the same reason contract-publish.yml is: the workflow's own body IS the
+# thing that must run again on a schedule (nightly-mirrors-merge-set.test.ts
+# only requires the trigger shape line up, not a particular CI_CLASS).
+name: deploy
+env:
+  CI_CLASS: ignore
+  # Pinned per this repo's SHA/version-pinning convention (see
+  # dorny/paths-filter below) rather than `/releases/latest/download/stack`,
+  # so a CI run today and in six months build against the identical tool
+  # verified in docs/technical/stack-orchestrator.md. Bump deliberately, in
+  # its own commit, when the field guide is re-verified against a newer stack.
+  STACK_CLI_VERSION: v2.0.0-47a4772-202609011958
+
+on:
+  push:
+    branches: [main, "releases-*"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
+  # runs on `push: branches: [main]` also runs on a nightly schedule, and
+  # nothing else does — scripts/tests/unit/nightly-mirrors-merge-set.test.ts
+  # enforces this mechanically. This mirror re-runs the same publish job a
+  # push to main would: `stack prepare --publish-images` is idempotent against
+  # an already-published commit-hash tag (stack-orchestrator.md §19), so a
+  # nightly re-publish of an unchanged `main` is a cheap no-op, not a new cost.
+  schedule:
+    - cron: "57 3 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # CI-testability (issue #896 AC 2): lets a human or `gh workflow run` prove
+  # the publish job's command path exits 0 without waiting for a real push to
+  # main, and without publishing images on every dry-run invocation.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run stack prepare without --publish-images (no image push)"
+        type: boolean
+        default: true
+
+jobs:
+  # ── structural guard: this file itself is valid YAML ──────────────────────
+  # Issue #896 AC 1 / Test plan: a required CI job runs a YAML-safe-load check
+  # against deploy.yml. Unconditional — no path filter, no `changes`
+  # dependency — because a workflow file that fails to parse can't be trusted
+  # to evaluate its own path-filter `if:` correctly in the first place.
+  yaml-parse-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: deploy.yml parses as valid YAML
+        run: |
+          pip install --quiet --user pyyaml
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml'))"
+
+  # ── change detection, for the publish job's pull_request path filter ──────
+  # Path-gated (issue #896 scope): a `pull_request` run whose changed files
+  # don't touch the stack definition or the images it builds skips the
+  # publish job body below — a REAL dorny/paths-filter skip (job-level `if:`,
+  # never workflow-level `on.paths`), so it reports a genuine `skipped`
+  # conclusion to the Checks API. `push` to main/releases-* is never
+  # path-filtered (see each job's `if:` below), matching every other
+  # path-gated workflow in this repo.
+  changes:
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      stack: ${{ steps.filter.outputs.stack }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            stack:
+              - 'stacks/robotmoney-swarm/**'
+              - 'backend/**'
+              - 'contract/**'
+              - 'website-server/**'
+              - '.github/workflows/deploy.yml'
+
+  # ── push to main / nightly mirror / workflow_dispatch / gated PR check ────
+  publish:
+    needs: [changes]
+    # Push to main, the nightly mirror, and workflow_dispatch always run in
+    # full. A pull_request run is gated on the path filter above; a push to a
+    # releases-* branch is this job's own concern only insofar as its images
+    # were already published by an earlier main build — that branch's actual
+    # work is the release-update job below, not this one.
+    #
+    # Deliberately NOT written as an explicit `github.event_name == 'schedule'`
+    # branch: scripts/tests/unit/nightly-mirrors-merge-set.test.ts's
+    # SCHEDULE_ONLY_GATE check refuses any `if:` that names the schedule event
+    # at all, on the theory that naming it is how "nightly does extra work
+    # merge doesn't" creeps back in. The condition below reaches the same
+    # behavior structurally instead: run unless this is a path-filtered-out
+    # pull_request, or a push to a releases-* branch (release-update's job,
+    # not this one) — schedule and workflow_dispatch both fall out of the
+    # first clause without ever being named.
+    if: >-
+      (github.event_name != 'pull_request' || needs.changes.outputs.stack == 'true') &&
+      !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/releases-'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stack CLI (bozemanpass/stack, pinned)
+        run: |
+          mkdir -p .stack-env/bin
+          curl -sL -o .stack-env/bin/stack \
+            "https://github.com/bozemanpass/stack/releases/download/${STACK_CLI_VERSION}/stack"
+          chmod +x .stack-env/bin/stack
+          echo "$PWD/.stack-env/bin" >> "$GITHUB_PATH"
+      - name: stack validate --strict
+        run: stack validate --stack ./stacks/robotmoney-swarm --strict
+      # A real push-to-main build always publishes. A workflow_dispatch run
+      # publishes only when the caller explicitly asks for it (dry_run:
+      # false); its default (true) and every pull_request/schedule run stay
+      # in no-push mode. `stack prepare` has no dedicated dry-run flag
+      # (verified against the installed CLI's --help); "no-push mode" is
+      # simply omitting --publish-images, which leaves prepare building/
+      # pulling locally without touching the registry.
+      - name: Determine whether this run publishes images
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            publish=false
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            publish=false
+          else
+            publish=true
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+      - name: Log in to ghcr.io
+        if: steps.mode.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: stack prepare (publish images)
+        if: steps.mode.outputs.publish == 'true'
+        run: stack prepare --stack ./stacks/robotmoney-swarm --publish-images --image-registry ghcr.io
+      - name: stack prepare (no-push / dry run)
+        if: steps.mode.outputs.publish == 'false'
+        run: stack prepare --stack ./stacks/robotmoney-swarm --image-registry ghcr.io
+
+  # ── merge to a releases-* branch: update the durable deployment ───────────
+  # Never `stack deploy` (see the file header). `push-images` promotes this
+  # release's images; `update` converges the durable deployment directory on
+  # them — content-only (image/env/secret values), and refuses outright if
+  # the deployment's shape changed (stack-orchestrator.md §20).
+  #
+  # KNOWN GAP, documented rather than silently worked around (issue #896
+  # scope: "Deciding and provisioning the cross-repo credential/checkout
+  # mechanism's underlying infrastructure... is an open question this issue
+  # surfaces but does not resolve"): this job checks out
+  # robotmoney/devops's durable deployment directory using
+  # secrets.DEVOPS_REPO_TOKEN, which is NOT YET PROVISIONED as of this PR —
+  # the mechanism (PAT vs. GitHub App) is still an open decision upstream.
+  # Until it exists, a real releases-* merge fails loudly at the devops
+  # checkout step rather than silently skipping or fabricating a directory.
+  # STACK_DEPLOYMENT_DIR likewise names the durable directory's path inside
+  # devops per scaffold-stack.md Phase 2.2's convention
+  # (deployments/<name>/) but the exact <name> for this repo's deployment has
+  # not been decided/created upstream either — override via repo variable
+  # once it is.
+  release-update:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/releases-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      STACK_DEPLOYMENT_DIR: ${{ vars.STACK_DEPLOYMENT_DIR || 'deployments/robotmoney-swarm' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: robotmoney-frontend
+      - name: Checkout robotmoney/devops durable deployment directory
+        uses: actions/checkout@v4
+        with:
+          repository: robotmoney/devops
+          token: ${{ secrets.DEVOPS_REPO_TOKEN }}
+          path: devops
+      - name: Install stack CLI (bozemanpass/stack, pinned)
+        working-directory: robotmoney-frontend
+        run: |
+          mkdir -p .stack-env/bin
+          curl -sL -o .stack-env/bin/stack \
+            "https://github.com/bozemanpass/stack/releases/download/${STACK_CLI_VERSION}/stack"
+          chmod +x .stack-env/bin/stack
+          echo "$PWD/.stack-env/bin" >> "$GITHUB_PATH"
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # --build-policy prebuilt-remote lives on `stack prepare` (the CLI has
+      # no such flag on `manage push-images`/`manage update` — verified
+      # against the installed binary's --help for both subcommands). Running
+      # it here ahead of push-images/update is what makes this step fail
+      # rather than silently building from source: a release branch's commit
+      # must already have a published image from an earlier main build, or
+      # this refuses instead of building one now.
+      - name: stack prepare --build-policy prebuilt-remote (refuse to build from source)
+        working-directory: robotmoney-frontend
+        run: stack prepare --stack ./stacks/robotmoney-swarm --build-policy prebuilt-remote --image-registry ghcr.io
+      - name: stack manage push-images
+        working-directory: robotmoney-frontend
+        run: stack manage --dir "$GITHUB_WORKSPACE/devops/$STACK_DEPLOYMENT_DIR" push-images
+      - name: stack manage update
+        working-directory: robotmoney-frontend
+        run: stack manage --dir "$GITHUB_WORKSPACE/devops/$STACK_DEPLOYMENT_DIR" update
