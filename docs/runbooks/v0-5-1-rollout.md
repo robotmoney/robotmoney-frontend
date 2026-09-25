@@ -46,7 +46,14 @@ this runbook that closes it.
 4. **Deploy hygiene** — the analytics producer no longer receives `MIGRATE_DATABASE_URL`; `WORKER_DATABASE_URL` is forwarded only on `--db external` boots; the twin-roster verify check is real again.
 5. **Rehearsal tooling** — slim twin dumps (`--twin-slim`, own directory), 1 GB `/dev/shm` for the restored Postgres, `bun run twin:gate`.
 6. **Migrations** — `0061_rm_worker_wallet_backfill_grant` (worker grants), `0062_rm_readonly_sequence_select` (already in production), `0063_swarm_judge_model_default` (judge model).
-7. **Found by running R4 on stage-2 (2026-09-25)** — the twin now restores all four taxonomy roles and gives `rm_owner` production's ownership (a pending migration died on `role "rm_owner" does not exist`); the driver never seats a judge-role member as an analyst (Themis was refused every take); the driver's judge wait outlives a full judge attempt and its retry (a fixed 120 s ceiling sat under the 180 s per-attempt timeout); a judging that landed without a state transition is logged as judged, not "EXPIRED"; the session index returns `takeCount` (PR 1007), which the new swarm pages and the e2e browser test read.
+7. **Found by running R4 on stage-2 (2026-09-25)** — each was a real defect the old rehearsal could not see:
+   - the twin restores all four taxonomy roles and gives `rm_owner` production's ownership (a pending migration died on `role "rm_owner" does not exist`);
+   - the driver never seats a judge-role member as an analyst (Themis was refused every take with 403);
+   - the driver's judge wait outlives a full judge attempt and its retry (a fixed 120 s ceiling sat under the 180 s per-attempt timeout), and a judging that landed without a state transition is logged as judged;
+   - the driver may read its own judge job by exact id with the automation token (it was a 403 on any host with a claimed admin credential, so every session waited out the whole ceiling);
+   - the judge prompt states that a member holds one position per disagreement (the model repeated Zyfai and the parser, by design, refused the whole answer five times);
+   - from the archived 0.5.x work (`ebbfc0bb`): closing a window no longer rolls back on an absence-telemetry failure (a stuck-`collecting` cause), a reschedule re-arms its lifecycle jobs, the API pool has statement and idle-in-transaction timeouts, member takes carry their proposed weights, and a demo boot runs `verify:live --tier readonly` (twin-only legs stay on the twin);
+   - the session index returns `takeCount` (PR 1007), which the new swarm pages and the e2e browser test read.
 
 ### 1.2 Decisions required before R1 (owner)
 
@@ -137,6 +144,9 @@ subject, with nothing dead and nothing in the logs.
 R4.8 exists because the v0.5.0 rehearsal could not fail on the defect that
 broke production. A rehearsal gate that has never been seen to fail is not
 evidence.
+
+**Rehearsal record, 2026-09-25, commit 5fba6cac:** `twin:gate --driver-log … --wait 75` PASS — every subject published a judged session convened after T0, 8 of 8 driver lines `judge=enforce`, no dead job, no restart, no fatal log line. R4.7: `/api/swarm/sessions/<id>/judgements` returned a model judgement by Themis. The twin's accelerated 2-minute window made up to three analysts late on some sessions (`HTTP 409: submission window closed`); production's window is 6 h, so `--min-attendance 0.5` is the right threshold for the twin and not a production concession.
+R4.8 on the same twin: with `swarm_judge_config.model` set to NULL (production's pre-0.5.1 value) the next session failed the gate on nine independent signals — a dead `swarm.judge`, `JudgeUnavailable (model_unconfigured)`, `NO judgement row was recorded`, `judge=none` in the driver log, no judgement, no receipt, and `swarm session failed`. The gate can fail on the defect that broke production.
 
 ## R5. Go / no-go and RC tag
 
