@@ -91,14 +91,11 @@ describe("after the full migration set, every reader role can read everything", 
        ORDER BY c.relname
     `) as unknown as { relname: string; ins: boolean; upd: boolean; del: boolean }[];
     expect(rows.map((r) => r.relname)).toEqual(["asset_price_floors", "asset_prices", "chain_address_floors"]);
-    // DELETE stays denied on the two SAMPLER tables — least privilege, and
-    // nothing deletes from them. `chain_address_floors` is the exception, and
-    // deliberately so: it is also one of the wallet-backfill driver's own
-    // tables, and migration 0061_rm_worker_wallet_backfill_grant grants
-    // INSERT/UPDATE/DELETE on all three of those. Enumerated per table rather
-    // than asserted uniformly, so a DELETE appearing on a table that has no
-    // business with one still fails here.
-    const deletable = new Set(["chain_address_floors"]);
+    // DELETE is denied on all three. `chain_address_floors` was the exception
+    // until migration 0089: 0061_rm_worker_wallet_backfill_grant granted
+    // INSERT/UPDATE/DELETE on the wallet-backfill driver's tables, and D55 (6)
+    // took DELETE and TRUNCATE from every runtime role on every table.
+    const deletable = new Set<string>();
     for (const r of rows) {
       expect({ t: r.relname, ins: r.ins, upd: r.upd, del: r.del })
         .toEqual({ t: r.relname, ins: true, upd: true, del: deletable.has(r.relname) });

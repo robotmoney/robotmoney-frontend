@@ -33,8 +33,42 @@ SET row_security = off;
 --
 -- The 32 empty WebAuthn challenge slots (migration 0088, D55 (6)). The runtime
 -- holds no INSERT on the table, so these are the only rows it will ever have.
+-- One statement per row, as pg_dump writes them: the --seed gate counts
+-- bootstrap rows by their INSERT statements (src/db/schema-snapshot.ts
+-- bootstrapRowCounts).
 
-INSERT INTO public.admin_webauthn_challenge (slot) SELECT s FROM generate_series(0, 31) AS s;
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 0, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 1, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 2, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 3, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 4, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 5, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 6, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 7, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 8, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 9, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 10, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 11, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 12, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 13, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 14, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 15, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 16, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 17, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 18, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 19, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 20, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 21, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 22, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 23, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 24, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 25, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 26, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 27, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 28, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 29, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 30, NULL);
+INSERT INTO public.admin_webauthn_challenge (flow, challenge, expires_at, consumed_at, slot, issued_at) VALUES (NULL, NULL, NULL, NULL, 31, NULL);
 
 
 --
