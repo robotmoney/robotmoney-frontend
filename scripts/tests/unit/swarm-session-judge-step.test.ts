@@ -27,7 +27,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionEvent } from "../../lib/swarm/session.ts";
-import { countJudgements, enqueueLifecycleJob, judgedProgress, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
+import { countJudgements, enqueueLifecycleJob, judgedProgress, judgeWaitCeilingMs, runJudgeStep, sessionEmitter } from "../../lib/swarm/session.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const sessionSrc = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
@@ -654,5 +654,19 @@ describe("red controls: the judged-event graders must REPORT a regression", () =
     const broken = sessionSrc.replace(JUDGED_EMIT, 'emitSession("judged", sessionId);');
     expect(broken).toContain('emitSession("judged", sessionId);');
     expect(judgedEventOrder(broken).judged).toBe(-1);
+  });
+});
+
+describe("judgeWaitCeilingMs — the wait outlives one full judge attempt and its retry", () => {
+  test("covers two 180 s attempts plus slack on a smoke/twin boot", () => {
+    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "180000" })).toBe(420_000);
+  });
+
+  test("defaults to the smoke/twin judge timeout when the env is silent", () => {
+    expect(judgeWaitCeilingMs({})).toBe(420_000);
+  });
+
+  test("never drops below the original 120 s floor", () => {
+    expect(judgeWaitCeilingMs({ SWARM_JUDGE_TIMEOUT_MS: "10000" })).toBe(120_000);
   });
 });

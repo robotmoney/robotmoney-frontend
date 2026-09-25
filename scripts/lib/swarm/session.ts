@@ -768,7 +768,7 @@ export async function waitForSessionStateAfterJob(
 ) {
   const started = Date.now();
   const deadline = started + timeoutMs;
-  const laneCeiling = started + (deps.laneCeilingMs ?? timeoutMs + JUDGE_WAIT_MS);
+  const laneCeiling = started + (deps.laneCeilingMs ?? timeoutMs + judgeWaitCeilingMs());
   let laneHeld = false;
   while (Date.now() < laneCeiling) {
     const r = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject })}`);
@@ -835,6 +835,30 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
 // is deliberately generous. It is a CEILING, not a budget: with the mode `off`
 // — the shipped default — nothing waits at all.
 const JUDGE_WAIT_MS = 120_000;
+
+/**
+ * The judge wait's backstop ceiling, derived from the judge's OWN per-attempt
+ * timeout rather than fixed below it.
+ *
+ * WHY. The worker bounds one model call at SWARM_JUDGE_TIMEOUT_MS — 180 s on a
+ * smoke/twin boot (smoke-compose-env.ts judgeCredentialEnv) — and a timed-out
+ * attempt is retried after a short backoff. A fixed 120 s ceiling gave up while
+ * a single attempt could still be running, and never let the retry land: the
+ * 2026-09-25 v0.5.1 rehearsal published a session unjudged after one provider
+ * timeout, and the next two lifecycle waits failed behind it on the lane. Two
+ * full attempts plus a minute of claim/backoff slack, never less than before.
+ */
+/** The judge job succeeded and its judgement is recorded; the session just did not transition (#817). */
+class JudgedByRecord extends Error {
+  constructor(readonly recorded: number) {
+    super(`judged by record (${recorded})`);
+  }
+}
+
+export function judgeWaitCeilingMs(env: Record<string, string | undefined> = process.env): number {
+  const perAttempt = Number(env.SWARM_JUDGE_TIMEOUT_MS?.trim()) || 180_000;
+  return Math.max(JUDGE_WAIT_MS, 2 * perAttempt + 60_000);
+}
 
 /**
  * The judge's runtime mode, read from the switch itself
@@ -1131,7 +1155,7 @@ export async function runJudgeStep(
   // last_error, instead of burning the ceiling.
   const waitForJudged = deps.waitForJudged
     ?? (async () => {
-      const ceilingMs = deps.judgeWaitCeilingMs ?? JUDGE_WAIT_MS;
+      const ceilingMs = deps.judgeWaitCeilingMs ?? judgeWaitCeilingMs();
       const terminal = await waitForJudgeJobTerminal(
         String(queuedJobId),
         automationToken,
@@ -1142,7 +1166,20 @@ export async function runJudgeStep(
         // The judging LANDED. The session's `aggregated -> judged` transition
         // is in the same transaction as the judgement row, so it is already
         // committed; a short grace for the read path, not a second budget.
-        await waitForSessionState(date, subjectId, "judged", 15_000);
+        try {
+          await waitForSessionState(date, subjectId, "judged", 15_000);
+        } catch (stateErr) {
+          // The job SUCCEEDED; a session that did not transition is the #817
+          // shape, and the RECORD decides. A landed judgement is a judged
+          // session — say so plainly instead of reporting an "EXPIRED" wait
+          // that the rehearsal gate would rightly treat as a failure.
+          const n = await judgementCount();
+          if (n != null && n > 0) {
+            log(`  judged (mode=${mode}) — job #${queuedJobId} succeeded and ${n} judgement row(s) are recorded; the session state did not transition (#817)`);
+            throw new JudgedByRecord(n);
+          }
+          throw stateErr;
+        }
         return;
       }
       const job = terminal.job;
@@ -1162,6 +1199,9 @@ export async function runJudgeStep(
     log(`  judged (mode=${mode})`);
     return { mode, waitedForJudged: true, judged: true, recorded: null, judgeJobId: queuedJobId ?? null };
   } catch (err) {
+    if (err instanceof JudgedByRecord) {
+      return { mode, waitedForJudged: true, judged: false, recorded: err.recorded, judgeJobId: queuedJobId ?? null };
+    }
     // SAY WHICH FAILURE THIS IS (issue #806). The wait no longer expires on a
     // mere slow judge — it ends on the job's terminal state or the backstop —
     // so an expiry here names a DEAD job (its last_error) or a wedged lane

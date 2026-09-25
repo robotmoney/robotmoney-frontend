@@ -60,7 +60,7 @@ export const FATAL_LOG_PATTERNS: readonly string[] = [
   "Insufficient account funds", // the inference account is empty: no member can take, no judge can judge
   "HTTP 402",
   "swarm session failed", // smoke-main.ts: the driver gave up on a session and kept running
-  "EXPIRED (mode=", // session.ts: the judge wait expired and the session published unjudged
+  "NO judgement row was recorded", // session.ts: the judging never landed and the session published unjudged
 ];
 
 /** Reported, never failing: outside providers the twin cannot make reliable. */
