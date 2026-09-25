@@ -13,7 +13,7 @@ import type {
 import { path as routePath, ROUTES } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 import { isV0ArchiveNonce } from "./v0-archive.ts";
-import { normalizedTakeWeights } from "./domain.ts";
+import { normalizedTakeWeights, takeRevision } from "./domain.ts";
 
 type Row = Record<string, any>;
 
@@ -196,8 +196,10 @@ export function toTake(row: Row): SwarmTake {
     // #573). Defaults to 1 rather than being omitted when the column is not
     // selected, because "revision 1" is exactly what every row was before
     // migration 0028 and what every archival row still is — an absent field
-    // here would make a caller guess.
-    revision: row.revision == null ? 1 : Number(row.revision),
+    // here would make a caller guess. The default is domain.ts's
+    // TAKE_REVISION_DEFAULT, shared with the judge input and the receipt, so
+    // one take set yields one inputs_digest (criterion 128).
+    revision: takeRevision(row.revision),
     receivedAt: instant(row.received_at) ?? "",
   };
 }

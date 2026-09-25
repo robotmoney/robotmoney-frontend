@@ -1,7 +1,7 @@
 // Swarm ADMIN domain layer (issue #152): topic/member CRUD with optimistic
-// concurrency, member lifecycle + one-time credential issuance, session
-// scheduling with a frozen roster snapshot, roster add/excuse/restore, guarded
-// session lifecycle transitions, and audit-log filtering.
+// concurrency, member lifecycle + one-time credential issuance, roster
+// add/excuse/restore, guarded session lifecycle transitions, and audit-log
+// filtering. Sessions are opened only by the epoch lifecycle (domain.ts).
 //
 // Kept as a SEPARATE module from swarm/domain.ts (the member/public-facing
 // surface) so the existing apply/activate/submit/open/publish/aggregate paths —
@@ -22,6 +22,7 @@ import {
   appendStreamEvent,
   closeEpochForDeactivation,
   listJudgements,
+  seatInCollectingEpochsTx,
   sessionJudgeFingerprint,
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
@@ -610,6 +611,9 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
         UPDATE swarm_members SET handle = ${handle} WHERE id = ${memberId} RETURNING *`;
       await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash)
                VALUES (${memberId}, ${input.publicKey}, true, ${hashKey(token)})`;
+      // Seated in any epoch still collecting, like every other admission
+      // (domain.ts seatInCollectingEpochsTx).
+      await seatInCollectingEpochsTx(tx, memberId);
       await audit(actor, "member_manual_add", { memberId, handle }, tx);
       return { ok: true, status: 201, member: toMemberAdmin(derived[0]), token };
     });
@@ -682,13 +686,18 @@ export async function setMemberRoleAdmin(
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
-    // Scheduled rosters are still mutable, so the standing no-take rule is
-    // reflected immediately. Later rosters are historical snapshots.
+    // Rosters of epochs still collecting are live, so the standing no-take
+    // rule is reflected immediately: a new judge is excused from them (it will
+    // file no take and must not be recorded absent), and a judge returned to
+    // the member role is seated in them. Rosters of closed epochs are
+    // historical snapshots and are never rewritten.
     if (role === "judge") {
       await tx`
         UPDATE swarm_session_members sm SET status = 'excused', excused_at = now(), reason = 'member holds judge role'
         FROM swarm_sessions s
-        WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state = 'scheduled' AND sm.status = 'expected'`;
+        WHERE sm.session_id = s.id AND sm.member_id = ${memberId} AND s.state IN ('scheduled', 'collecting') AND sm.status = 'expected'`;
+    } else {
+      await seatInCollectingEpochsTx(tx, memberId);
     }
     await audit(actor, role === "judge" ? "member_grant_judge" : "member_revoke_judge", { memberId, role }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
@@ -892,6 +901,7 @@ export async function reactivateMemberAdmin(
     await tx`UPDATE swarm_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
     await tx`INSERT INTO swarm_member_keys (member_id, public_key, active, token_hash) VALUES (${memberId}, ${lastKey.public_key}, true, ${hashKey(token)})`;
+    await seatInCollectingEpochsTx(tx, memberId);
     await audit(actor, "member_reactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]), token };
   });
@@ -1012,151 +1022,15 @@ export async function uploadMemberAvatarAdmin(
   });
 }
 
-// ── Sessions: creation with a frozen roster snapshot ────────────────────────
-// Field/validation shape matches docs/architecture.md §6.3
-// SessionCreateRequest: three explicit ISO instants, ordering
-// briefOpensAt < windowClosesAt < publishAt, and `date` must equal the UTC
-// date of briefOpensAt.
-export interface SessionCreateInput {
-  date: string; // YYYY-MM-DD, UTC calendar date
-  subjectId: string;
-  briefOpensAt: string; // ISO instant
-  windowClosesAt: string; // ISO instant
-  publishAt: string; // ISO instant
-}
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isValidUtcDate(date: string): boolean {
-  if (!DATE_RE.test(date)) return false;
-  const d = new Date(`${date}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
-}
-
-
-// The narrowest gap a session may declare between two of its own instants
-// (issue #806). Validation used to be strict `<` on millisecond timestamps,
-// which admits a ONE-MILLISECOND window — and the lifecycle needs three
-// distinct instants between `windowClosesAt` and `publishAt` to order
-// aggregate, judge and publish at all. Stating the requirement in validation is
-// cheaper than making every consumer defend against a degenerate session that
-// was accepted.
-//
-// THE CLAMP IT GUARDED IS GONE (issue #1026 W4): the five scheduled jobs whose
-// `run_after` values it kept monotonic were removed with the rest of the
-// scheduled lifecycle. The BOUND is kept, because the instants an admin
-// declares are still stored on the session and a one-millisecond window is
-// still not a window. It is now an input sanity rule and nothing more.
-export const MIN_SESSION_STEP_MS = 3_000;
-
-
-// NO ROUTE REACHES THIS (issue #1026). `POST /api/swarm/admin/sessions` and the
-// sessions/:id/{cancel,close,reopen,aggregate,publish} verbs answer 410 in
-// routes/swarm-admin.ts: each moved a session outside the epoch transitions
-// (system-scheduler-spec.md §4.3). The functions stay only because unowned
-// legacy-fixture suites still build sessions with them — consensus-receipt-
-// publish, swarm-admin-surface, swarm-absence-consistency, swarm-silence-flags,
-// swarm-judge. Delete them once those suites move onto openEpoch/turnOverEpoch.
-export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
-  if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
-  const briefOpensAt = new Date(input.briefOpensAt);
-  const windowClosesAt = new Date(input.windowClosesAt);
-  const publishAt = new Date(input.publishAt);
-  if ([briefOpensAt, windowClosesAt, publishAt].some((d) => Number.isNaN(d.getTime())))
-    return err(400, "briefOpensAt, windowClosesAt, and publishAt must be valid ISO timestamps");
-  if (briefOpensAt.toISOString().slice(0, 10) !== input.date)
-    return err(400, "briefOpensAt date does not match date (date mismatch)");
-  if (!(briefOpensAt.getTime() < windowClosesAt.getTime() && windowClosesAt.getTime() < publishAt.getTime()))
-    return err(400, "invalid timestamp ordering: briefOpensAt < windowClosesAt < publishAt required");
-  // A MINIMUM, not merely an ordering (issue #806) — see MIN_SESSION_STEP_MS.
-  if (windowClosesAt.getTime() - briefOpensAt.getTime() < MIN_SESSION_STEP_MS)
-    return err(400, `collection window is ${windowClosesAt.getTime() - briefOpensAt.getTime()}ms; at least ${MIN_SESSION_STEP_MS}ms is required between briefOpensAt and windowClosesAt`);
-  if (publishAt.getTime() - windowClosesAt.getTime() < MIN_SESSION_STEP_MS)
-    return err(400, `only ${publishAt.getTime() - windowClosesAt.getTime()}ms between windowClosesAt and publishAt; at least ${MIN_SESSION_STEP_MS}ms is required to order aggregate, judge and publish`);
-
-  const subject = (await sql`SELECT id, status, name FROM swarm_subjects WHERE id = ${input.subjectId}`)[0] as
-    | { id: string; status: string; name: string }
-    | undefined;
-  if (!subject) return err(404, "subject not found");
-  if (subject.status !== "active") return err(409, "topic is not active");
-
-  // Newest first: a subject may now have several sessions on one date
-  // (migration 0022 dropped UNIQUE(date, subject_id)), and it is the most recent
-  // one that decides whether this create is a re-schedule or a conflict.
-  const existing = (await sql`SELECT id, state FROM swarm_sessions
-                              WHERE date = ${input.date} AND subject_id = ${input.subjectId}
-                              ORDER BY convened_at DESC LIMIT 1`)[0] as
-    | { id: string; state: string }
-    | undefined;
-  if (existing && existing.state !== "scheduled") return err(409, "a session already exists for this date/topic");
-
-  return sql.begin(async (tx) => {
-    const rows = existing
-      ? await tx`
-          UPDATE swarm_sessions SET
-            brief_opens_at = ${briefOpensAt}, window_closes_at = ${windowClosesAt}, publish_at = ${publishAt}, version = version + 1
-          WHERE id = ${existing.id}
-          RETURNING id, date, subject_id, subject_name, state, version`
-      : await tx`
-          -- No date column here: since migration 0022 it is generated from
-          -- convened_at. An admin-scheduled session convenes at briefOpensAt, so
-          -- that instant IS its convened_at, and the derived date necessarily
-          -- equals the input.date already validated to agree with it above.
-          -- The admin still chooses WHEN a session sits; nobody chooses a date
-          -- that disagrees with when it sat.
-          INSERT INTO swarm_sessions (convened_at, subject_id, subject_name, state, brief_opens_at, window_closes_at, publish_at)
-          VALUES (${briefOpensAt}, ${input.subjectId}, ${subject.name}, 'scheduled', ${briefOpensAt}, ${windowClosesAt}, ${publishAt})
-          RETURNING id, date, subject_id, subject_name, state, version`;
-    const session = rows[0];
-    const sessionId = session.id as string;
-
-    // Frozen roster: snapshot every currently-active member (name/lens
-    // denormalized at snapshot time) into the CANONICAL swarm_session_members
-    // table (docs §5.3 / issue #150's migration). Later member activation/
-    // deactivation NEVER rewrites this list — roster add/excuse are the only
-    // sanctioned edits, and only before collecting begins.
-    const activeMembers = await tx<{ id: string; name: string; lens: string | null }[]>`
-      SELECT id, name, lens FROM swarm_members WHERE status = 'active' AND role = 'member'`;
-    for (const m of activeMembers) {
-      await tx`
-        INSERT INTO swarm_session_members (session_id, member_id, member_name, member_lens, status)
-        VALUES (${sessionId}, ${m.id}, ${m.name}, ${m.lens}, 'expected')
-        ON CONFLICT (session_id, member_id) DO NOTHING`;
-    }
-
-    // NO JOBS ARE ENQUEUED HERE (issue #1026 W4). Creating a session enqueues
-    // nothing at all: the five deduplicated, session-scoped lifecycle rows this
-    // used to write — each with its own `run_after` derived from the admin's
-    // three instants, plus a clamp that kept them in order when the declared
-    // gaps were too narrow — are gone with the queue kinds they named.
-    //
-    // WHY. Scheduler spec §4 gives the lifecycle a different shape
-    // entirely. A session is `collecting` from its first instant with no
-    // deferred brief (§4.1); it closes when the scheduler fires the boundary it
-    // holds, bound to a named epoch (§4.3); and settlement is "not scheduled —
-    // a chain the scheduler drives through the API, each step as soon as the
-    // previous one returns" (§4.4). Every one of the five rows was a scheduled
-    // step, which is precisely what the spec removes. Leaving them would have
-    // meant two mechanisms driving one session: the epoch path below opening
-    // and closing windows while five queue rows fired at their own instants
-    // against the states they expected to find.
-    //
-    // WHAT REPLACES IT. `openEpoch` and `turnOverEpoch` (domain.ts) for the
-    // window, and `aggregateEpoch` / `requestJudging` / `finalizeEpoch` for
-    // settlement, all driven by `system-scheduler` through the epoch routes.
-    //
-    // WHAT IS UNTOUCHED. The job queue itself and every non-session kind — the
-    // analytics, research, vault, wallet, buyback and project work — all still
-    // enqueue exactly as they did. This removed five rows, not a queue.
-    await audit(actor, "session_create", { sessionId, date: input.date, subjectId: input.subjectId }, tx);
-    return {
-      ok: true,
-      status: existing ? 200 : 201,
-      session: { id: sessionId, date: session.date, subjectId: session.subject_id, subjectName: session.subject_name, state: session.state, version: Number(session.version) },
-      rosterSize: activeMembers.length,
-    };
-  });
-}
+// ── Sessions: no admin creation (issue #1026, D55 decision 4) ───────────────
+// There is no admin session create. `createSessionAdmin` convened a session in
+// `scheduled` with three admin-chosen instants and snapshotted the roster; D55
+// makes `system-scheduler` the only caller of the epoch lifecycle, and the
+// scheduler spec has no `scheduled` state (§4.1: a session is `collecting` from
+// its first instant). Its route already answered 410. The roster snapshot it
+// took is now taken by the epoch itself (domain.ts insertEpoch), in the
+// transaction that opens it, and a member activated mid-epoch is seated by its
+// activation (domain.ts seatInCollectingEpochsTx).
 
 // ── Roster add/excuse/restore (only before collecting begins) ──────────────
 // Backed by the CANONICAL swarm_session_members table (issue #150). Status
@@ -1287,11 +1161,11 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
 // said "hold" can go back for more takes rather than being stuck one step from
 // terminal.
 //
-// EVERY STATE ADDED HERE IS ALSO A DECISION ABOUT THE AMENDMENT WINDOW. The
-// take-amendment gate in domain.ts is an ALLOWLIST (`TAKES_AMENDABLE_STATES`)
-// precisely so that adding a row to this table cannot silently reopen it — a
-// new state is frozen until someone says otherwise there. `swarm-take-
-// revisions.test.ts` walks SESSION_STATES below and asserts the two agree.
+// NO STATE ADDED HERE CAN REOPEN THE SUBMISSION WINDOW. A take — first or
+// amendment — lands only while its session is `collecting` and before its
+// `window_closes_at` (D51; the INSERT in domain.ts submitRecommendation), so
+// every other state is frozen by construction. `swarm-take-revisions.test.ts`
+// walks SESSION_STATES below and asserts it.
 const TERMINAL = new Set(["published", "cancelled"]);
 const TRANSITIONS: Record<string, readonly string[]> = {
   scheduled: ["collecting", "cancelled"],
@@ -1385,7 +1259,10 @@ async function transitionWithin(
   return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
 }
 
-// No route reaches the five verbs below either — see createSessionAdmin.
+// No route reaches the five verbs below: routes/swarm-admin.ts answers 410 to
+// each (D55 decision 4), and no src module calls them. They remain only because
+// legacy-fixture suites (swarm-judge, consensus-receipt-publish and others)
+// still drive sessions with them; delete them with those fixtures.
 export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
   return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
 }

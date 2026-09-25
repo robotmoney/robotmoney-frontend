@@ -333,9 +333,15 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   // and that reads collapse to the latest live in
   // backend/tests/swarm-take-revisions.test.ts.
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(201);
-  // Reusing a nonce is still a replay and is still refused — the constraint
-  // that did NOT move.
-  expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);
+  // Resending the SAME signed bytes is a retry (D52, smoke spec §6.2): 200 with
+  // the existing record, no second row. Reusing the nonce under DIFFERENT bytes
+  // is still a replay and still refused — the constraint that did NOT move.
+  const resent = await ic.submitRecommendation(m.token, await signed("n2"));
+  expect(resent.status).toBe(200);
+  expect((resent as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  const reusedNonce = { memberId: m.id, date, subjectId: subj, nonce: "n2", stance: "bearish", confidence: 0.5, body: "other bytes" };
+  const reusedSig = await signMessage(canonicalizeSubmission(reusedNonce), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...reusedNonce, signature: reusedSig })).status).toBe(409);
 
   // tampered signature → 400 (fresh member to avoid the per-member dup guard)
   const m2 = await activeMember();
@@ -621,7 +627,7 @@ test("aggregation omits invented prose and weights when no eligible body or vali
   expect(detail?.session.synthesis).toBeNull();
 });
 
-test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take is 409 with exactly one recommendation row", async () => {
+test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take returns the existing record with exactly one recommendation row", async () => {
   const subj = rid("restart");
   await ensureProseSubject(subj, "Restart Subject");
 
@@ -657,9 +663,14 @@ test("restart-safety (issue #208): re-opening the same session is idempotent (on
   // retry, and asserting 409 on it would pin the feature shut. Replay
   // protection on `(member_id, nonce)` is untouched and is what actually makes
   // a retry idempotent.
+  //
+  // A retry now answers with the EXISTING record (D52, smoke spec §6.2): 200,
+  // `alreadySubmitted`, the same id — so a restarted participant treats it as
+  // the success it is instead of a refusal it cannot act on.
   const replay = await ic.submitRecommendation(m.token, await sign(nonce));
-  expect(replay.status).toBe(409);
-  expect((replay as { error: string }).error).toContain("nonce already used");
+  expect(replay.status).toBe(200);
+  expect((replay as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  expect((replay as { recommendationId?: string }).recommendationId).toBe((ok as { recommendationId?: string }).recommendationId);
   const recRows = await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${first.id} AND member_id = ${m.id}`;
   expect(recRows.length).toBe(1);
 });
