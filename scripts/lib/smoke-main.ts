@@ -287,6 +287,11 @@ for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate
 if (staticPortMode) await stagePreflight();
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
+// …and this process's own, so every host-side reader of RM_ENV (the inference
+// preflight below, the drivers this boot starts) judges the boot by the policy
+// the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a
+// `~/.env` RM_ENV counts as set — never by the raw shell value (D13).
+process.env.RM_ENV = stackRmEnv;
 
 // --- Which deployment instance this run acts on (spec §1.1) -----------------
 // `--instance <name>`; then the CI job's identity; then the name a previous
