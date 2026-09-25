@@ -95,19 +95,18 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   expect(shillerFetches).toBe(2); // primary + fallback/backfill leg
 
   const [fred] = await sql`
-    SELECT f.provider_release_id, f.response_checksum, p.payload_bytes
+    SELECT f.provider_release_id, f.response_checksum
     FROM source_fetches f JOIN source_acquisitions a ON a.id=f.acquisition_id
-    JOIN source_payloads p ON p.checksum=f.response_checksum
     WHERE a.provider='fred' LIMIT 1`;
   const exact = new TextEncoder().encode("DATE,VALUE\n2024-01-01,1.25\n");
   expect(fred.provider_release_id).toBe("fred-release-1");
+  // The body's fingerprint, not the body (issue #1035, decision D56).
   expect(fred.response_checksum).toBe(payloadChecksum(exact));
-  expect(Buffer.from(fred.payload_bytes)).toEqual(Buffer.from(exact));
   const [{ values }] = await sql`SELECT count(*)::int AS values FROM source_value_versions WHERE acquisition_id IS NOT NULL`;
   expect(values).toBeGreaterThan(INDICATORS.length);
 });
 
-test("cache hits remain independent immutable fetch evidence with checksum-addressed exact bytes", async () => {
+test("cache hits remain independent immutable fetch evidence, each fingerprinting the exact bytes it returned", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rm-source-ledger-"));
   process.env.HTTP_FETCH_CACHE_TTL_MS = "60000";
   process.env.FETCH_CACHE_DIR = dir;
@@ -119,12 +118,12 @@ test("cache hits remain independent immutable fetch evidence with checksum-addre
     }
     expect(calls).toBe(1);
     const rows = await sql`
-      SELECT f.cache_status, p.payload_bytes FROM source_fetches f
+      SELECT f.cache_status, f.response_checksum FROM source_fetches f
       JOIN source_acquisitions a ON a.id=f.acquisition_id
-      JOIN source_payloads p ON p.checksum=f.response_checksum
       WHERE a.cache_identity='cache-test' ORDER BY a.knowledge_time, f.sequence`;
     expect(rows.map((r) => r.cache_status)).toEqual(["miss", "hit"]);
-    expect(rows.every((r) => Buffer.from(r.payload_bytes).toString() === "DATE,VALUE\n2024-01-01,9\n")).toBe(true);
+    const exact = payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,9\n"));
+    expect(rows.every((r) => r.response_checksum === exact)).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -232,6 +231,35 @@ test("issue #1035: a relabel within tolerance is one 'unchanged' version carryin
     ["initial", base, "seed"],
     ["unchanged", base, "live"],
   ]);
+});
+
+// ── Issue #1035: the ledger keeps no raw response bodies ────────────────────
+test("issue #1035: an acquisition whose fetches carry response bodies stores no body, and each fetch keeps its response_checksum", async () => {
+  // source_payloads no longer exists (migration 0080): there is nowhere a body
+  // could be written, and this proves the migration really removed it here.
+  const [{ table }] = await sql`SELECT to_regclass('public.source_payloads')::text AS table`;
+  expect(table).toBeNull();
+
+  const bodies = ["DATE,VALUE\n2024-01-01,1\n", "DATE,VALUE\n2024-01-01,2\n"];
+  globalThis.fetch = (() => Promise.resolve(new Response(bodies.shift()!))) as unknown as typeof fetch;
+  await captureSourceAcquisition({ provider: "fred", sourceKey: "series:bodies", parserVersion: "fred:1", cacheIdentity: "bodies-a" }, sink,
+    () => fetchFred("BODIES_A"));
+  await captureSourceAcquisition({ provider: "fred", sourceKey: "series:bodies", parserVersion: "fred:1", cacheIdentity: "bodies-b" }, sink,
+    () => fetchFred("BODIES_B"));
+  const rows = await sql`
+    SELECT a.cache_identity, f.response_checksum FROM source_fetches f
+    JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity IN ('bodies-a', 'bodies-b') ORDER BY a.cache_identity`;
+  expect(rows.map((r) => [r.cache_identity, r.response_checksum])).toEqual([
+    ["bodies-a", payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,1\n"))],
+    ["bodies-b", payloadChecksum(new TextEncoder().encode("DATE,VALUE\n2024-01-01,2\n"))],
+  ]);
+  // No column anywhere in the source ledger holds a body.
+  const [{ bytea }] = await sql`
+    SELECT count(*)::int AS bytea FROM information_schema.columns
+    WHERE table_schema = 'public' AND data_type = 'bytea'
+      AND table_name IN ('source_acquisitions', 'source_acquisition_events', 'source_fetches', 'source_value_versions')`;
+  expect(bytea).toBe(0);
 });
 
 test("concurrent revisions serialize into a single chain without a duplicate successor or lost acquisition", async () => {
@@ -419,7 +447,6 @@ test("a sweep-sized acquisition persists in a handful of statements, not two per
       cacheStatus: "miss" as const,
       responseStatus: 200,
       responseChecksum: payloadChecksum(body),
-      payloadBase64: Buffer.from(body).toString("base64"),
       providerReleaseId: null,
       errorDetail: null,
     };
@@ -438,17 +465,16 @@ test("a sweep-sized acquisition persists in a handful of statements, not two per
   });
   const elapsed = Date.now() - startedAt;
 
-  const [{ fetchRows, payloadRows }] = await sql`
-    SELECT (SELECT count(*)::int FROM source_fetches f
-              JOIN source_acquisitions a ON a.id = f.acquisition_id
-             WHERE a.cache_identity = 'sweep') AS "fetchRows",
-           (SELECT count(*)::int FROM source_payloads
-             WHERE checksum = ANY(${payloads.map((p) => payloadChecksum(new TextEncoder().encode(p)))}::text[])) AS "payloadRows"`;
+  const [{ fetchRows, checksums }] = await sql`
+    SELECT count(*)::int AS "fetchRows", count(DISTINCT f.response_checksum)::int AS checksums
+    FROM source_fetches f
+    JOIN source_acquisitions a ON a.id = f.acquisition_id
+    WHERE a.cache_identity = 'sweep'`;
   // Every attempt still gets its own row — batching changes how the write is
   // issued, never what is recorded.
   expect(fetchRows).toBe(300);
-  // Content-addressed: 300 fetches over 8 distinct bodies store 8 payloads.
-  expect(payloadRows).toBe(8);
+  // 300 fetches over 8 distinct bodies: 8 distinct fingerprints.
+  expect(checksums).toBe(8);
   // Far below the 10s the api would be cut off at. Generous on purpose: this
   // is a floor against the per-row regression, not a benchmark.
   expect(elapsed).toBeLessThan(5_000);

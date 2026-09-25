@@ -134,8 +134,11 @@ test("source acquisition ingestion is provider-only, validates before mutation, 
            (SELECT count(*) FROM source_value_versions WHERE acquisition_id IS NOT NULL)::int AS values`;
   expect({ acquisitions, fetches, values }).toEqual({ acquisitions: 1, fetches: 1, values: 1 });
 
+  // A body from a producer built before issue #1035 is ignored, never stored:
+  // the checksum is the only record of the response, so a malformed one is
+  // refused before anything is written.
   const invalidBody = sourceAcquisitionBody();
-  invalidBody.acquisition.fetches[0]!.responseChecksum = "0".repeat(64);
+  invalidBody.acquisition.fetches[0]!.responseChecksum = "not-a-sha256";
   expect((await call(req("POST", A.sourceAcquisitions, invalidBody, TOKEN)))?.status).toBe(400);
   const [{ bad }] = await sql`SELECT count(*)::int AS bad FROM source_acquisitions WHERE id=${invalidBody.acquisition.id}`;
   expect(bad).toBe(0);

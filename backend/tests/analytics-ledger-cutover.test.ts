@@ -626,7 +626,7 @@ describe("issue #1035 AC4: parity stays matched after a sub-tolerance refetch", 
 // table's content (not merely COUNT(*)) so a rollback that somehow rewrote
 // rows without changing the count would still be caught.
 const LEDGER_TABLES = [
-  "source_acquisitions", "source_acquisition_events", "source_payloads", "source_fetches", "source_value_versions",
+  "source_acquisitions", "source_acquisition_events", "source_fetches", "source_value_versions",
   "analytics_ledger_methodology_versions", "analytics_ledger_runs", "analytics_ledger_run_events",
   "analytics_data_vintages", "analytics_vintage_members",
   "analytics_output_snapshots", "analytics_report_snapshots", "swarm_brief_revisions",

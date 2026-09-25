@@ -330,19 +330,29 @@ export async function loadFrozenVintage(vintageId: string, db: DbHandle = sql): 
     FROM analytics_data_vintages WHERE id = ${vintageId}::bigint`;
   if (!vintage) return null;
   // Each member row is a run [first, last] of consecutive ids (memberRanges
-  // above); a pre-#1035 row is the one-id run [first, first]. The source_key
-  // match is a guard, not a filter: a run can only be written over one key, so
-  // a row it drops would be a corrupted run — and the count check below then
-  // refuses to hand back a membership that no longer reproduces its digest.
-  const members = (await db`
+  // above); a pre-#1035 row is the one-id run [first, first]. Runs are expanded
+  // with generate_series and joined on the id ALONE: a source_key term (or a
+  // `BETWEEN` range) in the join lets the planner scan every version of the
+  // run's key per member instead of probing the primary key, and the LIMIT 1
+  // LATERAL keeps the probe from being flattened into a per-member hash join
+  // (see migration 0080's fingerprint for the same shape). The source_key
+  // match is checked on the result as a guard: a run can only be written over
+  // one key, so a row it drops would be a corrupted run — and the count check
+  // below then refuses to hand back a membership that no longer reproduces its
+  // digest.
+  const resolved = (await db`
     SELECT svv.id, svv.source_key, svv.market_date::text AS market_date,
-           svv.market_instant::text AS market_instant, svv.value
+           svv.market_instant::text AS market_instant, svv.value, vm.source_key AS run_key
     FROM analytics_vintage_members vm
-    JOIN source_value_versions svv
-      ON svv.id BETWEEN vm.source_value_version_id
-                    AND COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)
-     AND svv.source_key = vm.source_key
-    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as SourceValueRow[];
+    CROSS JOIN LATERAL generate_series(
+      vm.source_value_version_id,
+      COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+    CROSS JOIN LATERAL (
+      SELECT v.id, v.source_key, v.market_date, v.market_instant, v.value
+      FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+    ) svv
+    WHERE vm.vintage_id = ${vintageId}::bigint`) as unknown as (SourceValueRow & { run_key: string })[];
+  const members = resolved.filter((r) => r.source_key === r.run_key);
   if (members.length !== Number(vintage.member_count)) {
     throw new Error(
       `vintage ${vintageId} resolves to ${members.length} members but was frozen with ${vintage.member_count} — ` +

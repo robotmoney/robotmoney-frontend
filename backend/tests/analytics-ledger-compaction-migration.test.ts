@@ -22,6 +22,7 @@ import { loadFrozenVintage, loadHistoricalSourceValues } from "../src/analytics/
 import { ledgerCurrentRawIndicatorHistory } from "../src/analytics/cutover/ledger-current.ts";
 import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
+import { reclaimAfterMigrations } from "../src/db/migrate.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0080_analytics_ledger_compaction.sql";
@@ -110,7 +111,7 @@ const YAHOO_KEY = "raw_indicator_history:VIX"; // D56: relative 1e-6
 const FRED_KEY = "raw_indicator_history:T10Y2Y"; // D56: exact
 const RESEARCH_KEY = "research:SPY"; // D56: relative 1e-6
 const IRREGULAR_KEY = "research:QQQ";
-const DATES = Array.from({ length: 30 }, (_, i) => new Date(Date.UTC(2024, 0, i + 1)).toISOString().slice(0, 10));
+const DATES = Array.from({ length: 200 }, (_, i) => new Date(Date.UTC(2024, 0, i + 1)).toISOString().slice(0, 10));
 const base = (key: string, i: number) => (key === FRED_KEY ? 1.25 + i / 100 : 4523.68017578125 + i * 3.5);
 const noisy = (v: number) => v * (1 + 1e-7);
 const revised = (v: number) => v * (1 + 1e-3);
@@ -123,6 +124,19 @@ interface Snapshot {
   allHeads: unknown;
 }
 let before: Snapshot;
+let fetchesBefore: { id: string; response_checksum: string | null }[] = [];
+const RECLAIMED = ["source_value_versions", "analytics_vintage_members", "analytics_overwrite_events"] as const;
+let sizesBefore: Record<string, number> = {};
+
+// Heap, indexes and TOAST: what the table actually occupies on disk.
+async function relationSizes(): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const table of RECLAIMED) {
+    const [{ bytes }] = (await db`SELECT pg_total_relation_size(${`public.${table}`}::regclass)::bigint AS bytes`) as unknown as { bytes: string }[];
+    out[table] = Number(bytes);
+  }
+  return out;
+}
 
 async function snapshot(resolveMembers: (vintageId: string) => Promise<string[]>): Promise<Snapshot> {
   const [counts] = (await db`
@@ -222,17 +236,43 @@ beforeAll(async () => {
   // rewrites (removable) and three material ones (kept).
   await db`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES
     ('2024-02-01', 'VIX', 18.719999313354492, 'live'), ('2024-02-01', 'T10Y2Y', 1.25, 'live')`;
-  await db`UPDATE raw_indicator_history SET value = ${noisy(18.719999313354492)} WHERE indicator = 'VIX'`;
-  await db`UPDATE raw_indicator_history SET value = 18.719999313354492 WHERE indicator = 'VIX'`;
+  // The orchestrator's whole-floor rewrite, many times over: jitter out and
+  // back, each one an event (400 removable).
+  for (let i = 0; i < 200; i++) {
+    await db`UPDATE raw_indicator_history SET value = ${noisy(18.719999313354492)} WHERE indicator = 'VIX'`;
+    await db`UPDATE raw_indicator_history SET value = 18.719999313354492 WHERE indicator = 'VIX'`;
+  }
   await db`UPDATE raw_indicator_history SET value = ${revised(18.719999313354492)} WHERE indicator = 'VIX'`;
   await db`UPDATE raw_indicator_history SET source = 'seed' WHERE indicator = 'VIX'`;
   await db`UPDATE raw_indicator_history SET value = ${noisy(1.25)} WHERE indicator = 'T10Y2Y'`; // exact key: material
 
+  // Raw response bodies as the pre-#1035 writer stored them: one
+  // source_payloads blob per distinct body, each fetch pointing at it.
+  const bodyAcquisition = randomUUID();
+  await db`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${bodyAcquisition}::uuid, 'fixture', 'fixture:1', 'bodies')`;
+  for (let i = 0; i < 3; i++) {
+    const body = Buffer.from(`DATE,VALUE\n2024-01-0${i + 1},${i}\n`, "utf8");
+    const checksum = new Bun.CryptoHasher("sha256").update(body).digest("hex");
+    await db`INSERT INTO source_payloads (checksum, payload_bytes) VALUES (${checksum}, ${body})`;
+    await db`
+      INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
+      VALUES (${randomUUID()}::uuid, ${bodyAcquisition}::uuid, ${i + 1}, '{"method":"GET","url":"https://example.invalid","headers":{}}',
+              'disabled', 200, ${checksum})`;
+  }
+  fetchesBefore = (await db`
+    SELECT id::text AS id, response_checksum FROM source_fetches ORDER BY id`) as unknown as { id: string; response_checksum: string | null }[];
+  const [{ n: payloadsBefore }] = (await db`SELECT count(*)::int AS n FROM source_payloads`) as unknown as { n: number }[];
+  expect(payloadsBefore).toBe(3);
+
   before = await snapshot(async (id) =>
     ((await db`SELECT source_value_version_id::text AS id FROM analytics_vintage_members WHERE vintage_id = ${id}::bigint`) as unknown as { id: string }[]).map((r) => r.id));
-  expect(before.counts.events).toBe(5);
+  expect(before.counts.events).toBe(403);
+  sizesBefore = await relationSizes();
 
   await applyMigration(MIGRATION);
+  // The runner's own post-commit step (src/db/migrate.ts): VACUUM FULL of the
+  // compacted tables, run because 0080 was applied in this run.
+  await reclaimAfterMigrations(db, [MIGRATION]);
   for (const file of (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql") && f > MIGRATION).sort()) await applyMigration(file);
 }, 180_000);
 
@@ -250,6 +290,14 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     // Each vintage's membership is now a handful of runs, not one row a member.
     expect(after.counts.members).toBeLessThan(before.counts.members / 10);
     expect(after.counts.events).toBe(3);
+  });
+
+  test("the upgrade returns disk space: every compacted table is smaller on disk after 0080 and the runner's VACUUM FULL", async () => {
+    const sizesAfter = await relationSizes();
+    for (const table of RECLAIMED) {
+      expect({ table, smaller: sizesAfter[table]! < sizesBefore[table]! }, JSON.stringify({ before: sizesBefore, after: sizesAfter }))
+        .toEqual({ table, smaller: true });
+    }
   });
 
   test("every seeded vintage resolves to the same members and replays to its stored manifest_digest", async () => {
@@ -294,6 +342,117 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     }
     // The irregular coordinate is untouched.
     expect(await chainOf(IRREGULAR_KEY, "2024-01-01")).toHaveLength(3);
+  });
+});
+
+describe("issue #1035: the ledger keeps no raw response bodies", () => {
+  test("source_payloads no longer exists, and every source_fetches row keeps its response_checksum", async () => {
+    const [{ table }] = (await db`SELECT to_regclass('public.source_payloads')::text AS table`) as unknown as { table: string | null }[];
+    expect(table).toBeNull();
+    const fetchesAfter = await db`SELECT id::text AS id, response_checksum FROM source_fetches ORDER BY id`;
+    expect(fetchesBefore.filter((f) => f.response_checksum !== null)).toHaveLength(3);
+    expect([...fetchesAfter]).toEqual(fetchesBefore);
+    // The checksum is a plain fingerprint now: no foreign key points it at
+    // stored bytes.
+    const [{ n }] = (await db`
+      SELECT count(*)::int AS n FROM pg_constraint
+      WHERE conrelid = 'public.source_fetches'::regclass AND contype = 'f'
+        AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.source_fetches'::regclass AND attname = 'response_checksum')]`) as unknown as { n: number }[];
+    expect(n).toBe(0);
+  });
+});
+
+// Review finding on this pr (review-data-integrity, 2026-09-25): resolving a
+// member run with `svv.id BETWEEN first AND last` gave the planner no join key
+// but source_key (~43 values), so it hash-joined on that and range-filtered
+// every member against every version of its key — quadratic, about a day on
+// the production ledger. Both resolutions now expand each run with
+// generate_series and join on the primary key. These plan-shape checks keep it
+// that way: EXPLAIN only, so they cost nothing at any scale.
+interface PlanNode { "Node Type": string; "Relation Name"?: string; "Index Name"?: string; "Index Cond"?: string;
+  "Hash Cond"?: string; "Merge Cond"?: string; "Join Filter"?: string; Plans?: PlanNode[] }
+
+function nodes(plan: PlanNode): PlanNode[] {
+  return [plan, ...(plan.Plans ?? []).flatMap(nodes)];
+}
+
+async function planOf(query: string, params: unknown[] = [], forceIndex = false): Promise<PlanNode> {
+  return await db.begin(async (tx) => {
+    if (forceIndex) {
+      // Take the alternatives away too: even then the id must be probed by
+      // equality, never by a range.
+      await tx.unsafe("SET LOCAL enable_hashjoin = off");
+      await tx.unsafe("SET LOCAL enable_mergejoin = off");
+      await tx.unsafe("SET LOCAL enable_seqscan = off");
+    }
+    const [row] = (await tx.unsafe(`EXPLAIN (FORMAT JSON) ${query}`, params as never[])) as unknown as { "QUERY PLAN": { Plan: PlanNode }[] }[];
+    return row!["QUERY PLAN"][0]!.Plan;
+  }) as PlanNode;
+}
+
+function assertMemberResolutionPlan(plan: PlanNode): void {
+  const all = nodes(plan);
+  // The quadratic signature: the version id compared in a join FILTER, i.e.
+  // checked row by row against every candidate instead of used as a key. A
+  // residual `source_key` equality on the one row an id probe returns is fine.
+  expect(all.map((n) => n["Join Filter"]).filter((f) => f !== undefined && /\bsvv\.id\b/.test(f))).toEqual([]);
+  const versions = all.filter((n) => n["Relation Name"] === "source_value_versions");
+  expect(versions.length).toBeGreaterThan(0);
+  let probes = 0;
+  for (const n of versions) {
+    if (n["Node Type"] === "Index Scan" || n["Node Type"] === "Index Only Scan") {
+      expect(n["Index Name"]).toBe("source_value_versions_pkey");
+      // Equality on the expanded id, never a range.
+      expect(n["Index Cond"]).toMatch(/^\(id = g\.id\)$/);
+      probes++;
+    } else {
+      throw new Error(`source_value_versions reached by ${n["Node Type"]}, not a primary-key probe`);
+    }
+  }
+  expect(probes).toBe(versions.length);
+}
+
+describe("issue #1035 review: member runs resolve by primary-key equality, never a range join", () => {
+  test("0080's membership fingerprint query", async () => {
+    await db.unsafe("ANALYZE");
+    const sql = await readFile(join(migrationsDir, MIGRATION), "utf8");
+    const match = /SELECT COALESCE\(jsonb_object_agg\(vintage_id, jsonb_build_array\(n, s\)\), '\{\}'::jsonb\) INTO members_after\n([\s\S]*?\) m);/.exec(sql);
+    expect(match).not.toBeNull();
+    const query = `SELECT COALESCE(jsonb_object_agg(vintage_id, jsonb_build_array(n, s)), '{}'::jsonb)\n${match![1]}`;
+    assertMemberResolutionPlan(await planOf(query));
+    assertMemberResolutionPlan(await planOf(query, [], true));
+  });
+
+  test("loadFrozenVintage's member query, captured from the production loader", async () => {
+    await db.unsafe("ANALYZE");
+    const captured: { query: string; params: unknown[] }[] = [];
+    const url = new URL(DB_URL!);
+    url.pathname = `/${dbName}`;
+    const spy = postgres(url.toString(), {
+      max: 1, onnotice: () => {},
+      debug: (_connection, query, params) => { captured.push({ query, params: params as unknown[] }); },
+    });
+    try {
+      expect(await loadFrozenVintage(vintageIds[1]!, spy)).not.toBeNull();
+    } finally {
+      await spy.end({ timeout: 5 });
+    }
+    const member = captured.find((c) => c.query.includes("analytics_vintage_members vm"));
+    expect(member, "loadFrozenVintage must resolve members from analytics_vintage_members").toBeDefined();
+    assertMemberResolutionPlan(await planOf(member!.query, member!.params));
+    assertMemberResolutionPlan(await planOf(member!.query, member!.params, true));
+  });
+
+  test("control: the old BETWEEN resolution fails the same assertion", async () => {
+    const old = `
+      SELECT svv.id FROM analytics_vintage_members vm
+      JOIN source_value_versions svv
+        ON svv.id BETWEEN vm.source_value_version_id
+                      AND COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)
+       AND svv.source_key = vm.source_key
+      WHERE vm.vintage_id = $1::bigint`;
+    const plan = await planOf(old, [vintageIds[1]!], true);
+    expect(() => assertMemberResolutionPlan(plan)).toThrow();
   });
 });
 

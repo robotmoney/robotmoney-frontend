@@ -4,6 +4,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type postgresTypes from "postgres";
 import { sql, closeDb, setDatabase } from "./client.ts";
 import { seed, seedSmokeJobSchedules } from "./seed.ts";
 
@@ -48,6 +49,7 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
     (await sql<{ name: string }[]>`SELECT name FROM schema_migrations`).map((r) => r.name),
   );
 
+  const appliedNow: string[] = [];
   for (const file of files) {
     if (applied.has(file)) continue;
     const ddl = await readFile(join(migrationsDir, file), "utf8");
@@ -60,14 +62,52 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
       await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
     });
     console.log(`migrated: ${file}`);
+    appliedNow.push(file);
   }
   console.log(`migrations up to date (${files.length} total)`);
+  await reclaimAfterMigrations(sql, appliedNow);
 
   // Seed required rows (job_schedules etc.) after schema is current. Idempotent,
   // so safe on every boot — gives the worker recurring work without a manual
   // admin trigger. See seed.ts.
   await seed();
   if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
+}
+
+// Tables a migration rewrote heavily enough that its DELETEs left most of the
+// table as dead tuples. A DELETE frees nothing on disk: the space is only
+// reused by later inserts, so a compaction migration alone leaves the database
+// exactly as large as before. VACUUM FULL rewrites each table and its indexes
+// compactly and returns the space to the operating system.
+//
+// It cannot run inside the migration (VACUUM refuses a transaction block, and
+// every migration is one), so the runner does it, right after the migration
+// commits — once, ONLY in the run that applied that migration, never on an
+// ordinary boot. It runs as rm_owner on the migration connection, because only
+// a table's owner may VACUUM FULL it; no grant changes.
+//
+// Each table is held under ACCESS EXCLUSIVE for the length of its own rewrite,
+// which is proportional to its LIVE rows — small once 0080 has removed the
+// duplication (issue #1035).
+export const RECLAIM_AFTER_MIGRATION: Readonly<Record<string, readonly string[]>> = {
+  "0080_analytics_ledger_compaction.sql": ["source_value_versions", "analytics_vintage_members", "analytics_overwrite_events"],
+};
+
+export async function reclaimAfterMigrations(db: postgresTypes.Sql<{}>, appliedNow: readonly string[]): Promise<void> {
+  const tables = appliedNow.flatMap((file) => RECLAIM_AFTER_MIGRATION[file] ?? []);
+  if (tables.length === 0) return;
+  const conn = await db.reserve();
+  try {
+    await conn.unsafe("SET ROLE rm_owner");
+    for (const table of tables) {
+      const started = Date.now();
+      await conn.unsafe(`VACUUM (FULL, ANALYZE) public.${table}`);
+      console.log(`reclaimed: ${table} (VACUUM FULL, ${Date.now() - started}ms)`);
+    }
+  } finally {
+    await conn.unsafe("RESET ROLE").catch(() => {});
+    conn.release();
+  }
 }
 
 // Run directly: `bun run src/db/migrate.ts`

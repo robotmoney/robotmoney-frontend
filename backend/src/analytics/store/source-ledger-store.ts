@@ -10,8 +10,8 @@ import { withinTolerance } from "../source-tolerance.ts";
 // when the value matched exactly, 'revision' when it differed by float32 noise.
 // That was two thirds of the production ledger within four days of cutover, and
 // none of it was information — the acquisition itself (source_acquisitions,
-// source_fetches, the exact payload bytes) already proves the fetch happened and
-// what it returned. So a value within its source's tolerance (source-tolerance.ts,
+// source_fetches with each response's checksum) already proves the fetch
+// happened and fingerprints what it returned. So a value within its source's tolerance (source-tolerance.ts,
 // decision D56) of the head, carrying the same provenance label, leaves the head
 // as it is.
 //
@@ -20,7 +20,7 @@ import { withinTolerance } from "../source-tolerance.ts";
 // only its `source` in that case (store/raw-history-store.ts applies the same
 // rule), and the two must move together or cutover/parity.ts reports a
 // mismatch. The value of record changes only when a change exceeds tolerance;
-// the bytes actually fetched are kept in source_payloads either way.
+// the fetch itself stays on the record in source_fetches either way.
 type RevisionKind = "initial" | "unchanged" | "revision";
 
 function classify(
@@ -66,40 +66,8 @@ export async function saveSourceAcquisition(
         INSERT INTO source_acquisition_events ${tx(events, "acquisition_id", "sequence", "event_type", "detail")}`;
     }
 
-    // Deduped by checksum first: content addressing means one sweep can fetch
-    // the same bytes twice (a cache hit beside its miss), and ON CONFLICT does
-    // not settle two identical rows within a single statement.
-    const payloads = new Map<string, Buffer>();
-    for (const fetch of evidence.fetches) {
-      if (fetch.payloadBase64 === null || fetch.responseChecksum === null) continue;
-      if (!payloads.has(fetch.responseChecksum)) {
-        payloads.set(fetch.responseChecksum, Buffer.from(fetch.payloadBase64, "base64"));
-      }
-    }
-    // Chunked by BYTES as well as by count: response bodies are unbounded, and
-    // a statement carrying every payload of a large sweep at once would be the
-    // memory spike this batching exists to avoid.
-    const PAYLOAD_BATCH_BYTES = 8 * 1024 * 1024;
-    const PAYLOAD_BATCH_ROWS = 500;
-    let batch: { checksum: string; payload_bytes: Buffer }[] = [];
-    let batchBytes = 0;
-    const flushPayloads = async () => {
-      if (batch.length === 0) return;
-      await tx`
-        INSERT INTO source_payloads ${tx(batch, "checksum", "payload_bytes")}
-        ON CONFLICT (checksum) DO NOTHING`;
-      batch = [];
-      batchBytes = 0;
-    };
-    for (const [checksum, payload_bytes] of payloads) {
-      if (batch.length >= PAYLOAD_BATCH_ROWS || (batchBytes > 0 && batchBytes + payload_bytes.length > PAYLOAD_BATCH_BYTES)) {
-        await flushPayloads();
-      }
-      batch.push({ checksum, payload_bytes });
-      batchBytes += payload_bytes.length;
-    }
-    await flushPayloads();
-
+    // No response bodies are stored (issue #1035, decision D56): each
+    // fetch keeps its response_checksum as a fingerprint of what came back.
     if (evidence.fetches.length > 0) {
       const fetches = evidence.fetches.map((fetch) => ({
         id: fetch.id,

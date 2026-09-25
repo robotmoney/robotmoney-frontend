@@ -10,24 +10,40 @@
 --   * analytics_vintage_members — ~172k member rows copied per vintage.
 --   * analytics_overwrite_events — ~350k/day raw_indicator_history rewrites
 --     that differed only by that same noise.
+--   * source_payloads — every fetch's whole response body, ~200 MB/day.
 -- The writers stop doing this in the same release (store/source-ledger-store.ts,
 -- store/raw-history-store.ts, store/run-ledger-store.ts; tolerances in
 -- analytics/source-tolerance.ts, decision D56). This migration removes what they
 -- already wrote, under the SAME rule, without changing anything a reader can
 -- observe:
 --
---   1. every existing vintage resolves to the identical set of
+--   1. every EXISTING vintage resolves to the identical set of
 --      source_value_versions ids, so its manifest_digest replays bit for bit;
 --   2. every series head (the version no later version supersedes) is kept, with
 --      its value, provenance and knowledge_time;
 --   3. every ledger immutability guard is re-armed before this transaction ends.
 --
 -- The whole file runs in the migration runner's single transaction
--- (src/db/migrate.ts). ALTER TABLE ... DISABLE TRIGGER takes an ACCESS
--- EXCLUSIVE lock, so no other session can write to these tables — or observe a
--- disarmed guard — while it is off; if anything below raises, the guards were
--- never off at all. Role grants are untouched: the new column is covered by the
--- table-level grants 0058 and 0062 already made.
+-- (src/db/migrate.ts). ALTER TABLE ... ADD COLUMN takes an ACCESS EXCLUSIVE
+-- lock on analytics_vintage_members, and DISABLE TRIGGER a SHARE ROW EXCLUSIVE
+-- lock on the other two tables, so no other session can write to any of them
+-- while a guard is off; if anything below raises, the guards were never off at
+-- all.
+--
+-- One reader-visible effect is deliberate: a NEW vintage frozen later with a
+-- knowledge-time cutoff from before this migration selects the kept version
+-- instead of a dropped re-observation — a different id and knowledge_time,
+-- the same value within tolerance. Vintages that already exist are unchanged.
+-- A version re-linked to an earlier prior keeps its original revision_kind.
+--
+-- Space: this file only DELETEs, which leaves dead tuples and returns no disk.
+-- The migration runner reclaims it right after this transaction commits with
+-- VACUUM FULL of the three compacted tables (reclaimAfterMigrations in
+-- src/db/migrate.ts), which cannot run inside a transaction.
+--
+-- No GRANT or REVOKE is issued: the new column is covered by the table-level
+-- grants 0058 and 0062 already made, and the grants on source_payloads go with
+-- the table when step 6 drops it.
 --
 -- NUMBERED 0080, not 0063: 0063 is taken on the v0.5.1 release branch
 -- (0063_swarm_judge_model_default) and 0063-0079 on the deployment-refactor
@@ -120,13 +136,30 @@ BEGIN
   -- Fingerprints of what must NOT change, taken before anything moves: each
   -- vintage's resolved member-id count and sum (the same resolution
   -- loadFrozenVintage performs), and the full set of series heads.
+  --
+  -- Runs are expanded with generate_series and joined on the id ALONE. Any
+  -- source_key term in the join lets the planner reach source_value_versions
+  -- through its source_key index instead — every version of a member's key,
+  -- once per member (~43 keys) — which a scale rehearsal measured as
+  -- quadratic, about a day on the production ledger. `svv.id BETWEEN first
+  -- AND last` has the same effect. So the key check is an aggregate FILTER,
+  -- never a join condition: a row it rejects changes the count, and the
+  -- comparison below refuses to commit. The version is fetched by a LATERAL
+  -- subquery with LIMIT 1, which the planner cannot flatten into a join: it
+  -- stays one primary-key probe per member id. (A plain `JOIN ... ON svv.id =
+  -- g.id` is free to become a hash join rebuilt per member row once the hash
+  -- no longer fits in work_mem — quadratic again at production size.)
   SELECT COALESCE(jsonb_object_agg(vintage_id, jsonb_build_array(n, s)), '{}'::jsonb) INTO members_before
-  FROM (SELECT vm.vintage_id, count(*) AS n, sum(svv.id) AS s
+  FROM (SELECT vm.vintage_id,
+               count(*) FILTER (WHERE svv.source_key = vm.source_key) AS n,
+               sum(svv.id) FILTER (WHERE svv.source_key = vm.source_key) AS s
         FROM analytics_vintage_members vm
-        JOIN source_value_versions svv
-          ON svv.id BETWEEN vm.source_value_version_id
-                        AND COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)
-         AND svv.source_key = vm.source_key
+        CROSS JOIN LATERAL generate_series(
+          vm.source_value_version_id,
+          COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+        CROSS JOIN LATERAL (
+          SELECT v.id, v.source_key FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+        ) svv
         GROUP BY vm.vintage_id) m;
   SELECT jsonb_build_array(count(*), COALESCE(sum(s.id), 0),
                            COALESCE(sum(hashtextextended(s.source_key || '|' || COALESCE(s.market_date::text, '') || '|' ||
@@ -289,12 +322,16 @@ BEGIN
 
   -- ── Proof, inside the transaction: refuse to commit a changed reading ─────
   SELECT COALESCE(jsonb_object_agg(vintage_id, jsonb_build_array(n, s)), '{}'::jsonb) INTO members_after
-  FROM (SELECT vm.vintage_id, count(*) AS n, sum(svv.id) AS s
+  FROM (SELECT vm.vintage_id,
+               count(*) FILTER (WHERE svv.source_key = vm.source_key) AS n,
+               sum(svv.id) FILTER (WHERE svv.source_key = vm.source_key) AS s
         FROM analytics_vintage_members vm
-        JOIN source_value_versions svv
-          ON svv.id BETWEEN vm.source_value_version_id
-                        AND COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)
-         AND svv.source_key = vm.source_key
+        CROSS JOIN LATERAL generate_series(
+          vm.source_value_version_id,
+          COALESCE(vm.last_source_value_version_id, vm.source_value_version_id)) AS g(id)
+        CROSS JOIN LATERAL (
+          SELECT v.id, v.source_key FROM source_value_versions v WHERE v.id = g.id LIMIT 1
+        ) svv
         GROUP BY vm.vintage_id) m;
   IF members_after IS DISTINCT FROM members_before THEN
     RAISE EXCEPTION 'issue #1035 compaction would change vintage membership (before %, after %)',
@@ -314,7 +351,24 @@ BEGIN
 END;
 $compact$;
 
--- ── 6. Re-arm every guard disarmed above, as ENABLE ALWAYS ──────────────────
+-- ── 6. Stop keeping raw response bodies: drop source_payloads ───────────────
+-- Every fetch returns a series' WHOLE history, so every new day or jittered
+-- point stored the full history again as a new content-addressed blob — about
+-- 200 MB a day, never deleted, and read by nothing. The ledger's job is to
+-- catch and tag revised source data, which source_value_versions does; the
+-- bodies duplicated it (decision D56). source_fetches.response_checksum stays
+-- as a plain fingerprint of what each response contained; only its foreign
+-- key into the dropped table goes. DROP TABLE removes the table's own
+-- immutability triggers with it; the guard inventories
+-- (src/db/analytics-ledger-guard.ts, src/db/append-only-guard.ts) no longer
+-- list it, so both still report armed.
+ALTER TABLE source_fetches DROP CONSTRAINT source_fetches_response_checksum_fkey;
+DROP TABLE source_payloads;
+
+COMMENT ON COLUMN source_fetches.response_checksum IS
+  'SHA-256 of the response body, a fingerprint only. The body itself is not stored (issue #1035, decision D56; source_payloads dropped by migration 0080).';
+
+-- ── 7. Re-arm every guard disarmed above, as ENABLE ALWAYS ──────────────────
 ALTER TABLE analytics_vintage_members ENABLE ALWAYS TRIGGER analytics_vintage_members_immutable;
 ALTER TABLE analytics_vintage_members ENABLE ALWAYS TRIGGER analytics_vintage_members_immutable_row;
 ALTER TABLE source_value_versions ENABLE ALWAYS TRIGGER source_value_versions_immutable;

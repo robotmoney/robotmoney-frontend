@@ -3584,7 +3584,7 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
 
-## D56 — The analytics ledger records information, not fetches: a per-source tolerance, no row for a re-observation, and run-encoded vintage membership (issue #1035)
+## D56 — The analytics ledger records information, not fetches: a per-source tolerance, no row for a re-observation, run-encoded vintage membership, and no raw response bodies (issue #1035)
 
 **Decision.** A re-acquired point adds a `source_value_versions` row only when it
 is new information. `saveSourceAcquisition` compares each point with the ledger
@@ -3612,7 +3612,7 @@ member. A run only ever joins strictly consecutive integers, so it resolves to
 the identical id set, and every manifest digest replays unchanged.
 
 Migration `0080_analytics_ledger_compaction.sql` removes what the old writers
-wrote, under the same rule, inside its own transaction, and re-arms every guard
+wrote, under the same rule, drops `source_payloads` (see below), inside its own transaction, and re-arms every guard
 it disarms before that transaction ends. It keeps every version any vintage
 references, every series head, and every coordinate whose chain does not follow
 its own time order. It verifies both invariants in the transaction and raises
@@ -3691,9 +3691,34 @@ changes on a value within tolerance, both writers keep the stored value and
 move only the label. If one writer stored the freshly fetched value and the
 other kept the old one, the two would differ by the noise itself, and
 `cutover/parity.ts` (which rounds at an absolute 1e-9) would record a
-permanent `matched:false`. The bytes actually fetched are never lost: every
-acquisition keeps its request, response status and exact payload in
-`source_fetches` and `source_payloads`.
+permanent `matched:false`. The fetch itself stays on the record: every
+acquisition keeps its request, response status and the SHA-256 of the response
+body in `source_fetches`.
+
+**The ledger keeps no raw response bodies (owner decision, 2026-09-25).** "We
+should not duplicate any data. Our goal is to catch and tag revised source
+data, not store all payloads." Every fetch returns a series' whole history. So
+each new day, and each jittered point, stored that full history again as a new
+content-addressed blob in `source_payloads`. That was about 200 MB a day, never
+deleted, and no code read it back. What the ledger exists to keep is already in
+`source_value_versions`: each normalized value, and each revision of it, with
+its knowledge time. So:
+
+- `saveSourceAcquisition` writes no body anywhere, and the acquisition write
+  request carries no body. A `payloadBase64` field from an older producer is
+  ignored.
+- `source_fetches.response_checksum` stays, as a plain fingerprint of what each
+  response contained. Its foreign key into `source_payloads` is dropped.
+- Migration 0080 drops `source_payloads` outright rather than emptying it. An
+  empty append-only table would keep a write path, a grant set and two guard
+  triggers alive for data the ledger has decided not to hold. Dropping it
+  removes all of them. The table also leaves both guard inventories
+  (`src/db/analytics-ledger-guard.ts`, `src/db/append-only-guard.ts`), which
+  still report armed.
+
+The cost is that a response can no longer be re-parsed from the ledger alone. A
+parser fix is replayed by fetching the source again. The checksum still shows
+whether the provider returned the same bytes as before.
 
 **Why runs, not a delta against the previous vintage.** Before this decision
 every fetch re-versioned every point, so two consecutive vintages share almost
@@ -3701,11 +3726,31 @@ no version ids. A delta between them would be about twice a full copy. Runs of
 consecutive ids compress both the old vintages and the new ones, because one
 acquisition writes a series in one statement.
 
+**The upgrade returns the disk space.** A DELETE frees nothing on disk. The
+space is only reused by later inserts, so 0080 alone would leave the database
+as large as before. VACUUM FULL cannot run inside a transaction, and every
+migration is one. So the migration runner (`reclaimAfterMigrations` in
+`backend/src/db/migrate.ts`) runs `VACUUM (FULL, ANALYZE)` on
+`source_value_versions`, `analytics_vintage_members` and
+`analytics_overwrite_events` right after 0080 commits. It runs once, only in
+the run that applied 0080, never on an ordinary boot. It runs on the migration
+connection as `rm_owner`, because only a table's owner may VACUUM FULL it. No
+grant changes. Each table is under ACCESS EXCLUSIVE while its own rewrite
+runs, and the rewrite cost follows its live rows. If that run is interrupted
+after 0080 commits, the dead space stays until the owner runs the same VACUUM
+FULL. The data is correct either way.
+
+**Point-in-time reads after compaction.** Every vintage that exists when 0080
+runs resolves to the same ids. A NEW vintage frozen later with a knowledge-time
+cutoff from before the migration selects the kept version instead of a dropped
+re-observation: a different id and knowledge_time, the same value within
+tolerance.
+
 **Known limit.** The compaction keeps every version a vintage references.
 Production froze a vintage after almost every acquisition, so most of the
 `source_value_versions` rows written before this decision are referenced and
-stay. The migration removes the rest, the member copies and the noise-only
-overwrite evidence. From this release on, growth tracks real changes rather
+stay. The migration removes the rest, the member copies, the noise-only
+overwrite evidence and every stored response body. From this release on, growth tracks real changes rather
 than fetch frequency.
 
 **Alternatives rejected.**
