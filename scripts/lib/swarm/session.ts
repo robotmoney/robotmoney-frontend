@@ -37,18 +37,12 @@ export function backendUrl(): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// The 5c/5d cross-role log lines below used to be annotated by an env-mirror
-// helper (regimeWriteInsecure) that required this HARNESS process to hold the
-// producer credential just to describe the stack's posture. Retired (issue
-// #361 Phase 4): the annotations now derive from the server's OBSERVED
-// response status — strictly more truthful, and the analytics credential never
-// reaches this driver at all (it belongs to the producer and its verifier).
-// Keep the pure mirror exported for the hermetic polarity guard: callers must
-// inject an environment explicitly, so production session code cannot use it
-// as a reason to inspect or inherit the producer's credential.
-export function regimeWriteInsecure(env: Record<string, string | undefined>): boolean {
-  return env.RM_ALLOW_INSECURE === "1" && !env.ANALYTICS_TOKEN;
-}
+// The 5c/5d cross-role log lines below derive their annotation from the
+// server's OBSERVED response status (issue #361 Phase 4), never from a mirror
+// of the api's configuration: the analytics credential never reaches this
+// driver (it belongs to the producer), and since D52 there is no env credential
+// or insecure fallback left for a mirror to describe — every service bearer is
+// validated against the api's token store.
 
 // Run `fn` over `items` with at most `limit` invocations in flight, returning
 // results in INPUT order as PromiseSettledResult — like Promise.allSettled but

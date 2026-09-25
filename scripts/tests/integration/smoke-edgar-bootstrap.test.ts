@@ -79,13 +79,19 @@ function startStubApi(expectedToken: string) {
 // MUST be async Bun.spawn (not spawnSync) per smoke-frontend-check.test.ts's
 // precedent — irrelevant here since the child never calls back into this
 // process, but kept consistent for readability.
-async function runBootstrapCli(apiUrl: string, token: string | undefined, seedEnv: { gzPath: string; manifestPath: string }) {
+// The bearer reaches the CLI the way it reaches the producer: as the FILE
+// ANALYTICS_TOKEN_FILE names (smoke spec §3, D52 — no service token is an env
+// value). No token at all is an absent file variable.
+async function runBootstrapCli(apiUrl: string, token: string | undefined, seedEnv: { dir: string; gzPath: string; manifestPath: string }) {
+  const tokenFile = join(seedEnv.dir, "analytics-token");
+  if (token !== undefined) writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+  const { ANALYTICS_TOKEN: _retired, ANALYTICS_TOKEN_FILE: _ambient, ...inherited } = process.env;
   const proc = Bun.spawn(["bun", "run", "scripts/edgar-seed-bootstrap.ts"], {
     cwd: backendDir,
     env: {
-      ...process.env,
+      ...inherited,
       ANALYTICS_API_URL: apiUrl,
-      ANALYTICS_TOKEN: token ?? "",
+      ...(token !== undefined ? { ANALYTICS_TOKEN_FILE: tokenFile } : {}),
       EDGAR_SEED_PATH: seedEnv.gzPath,
       EDGAR_SEED_MANIFEST_PATH: seedEnv.manifestPath,
     },
@@ -169,8 +175,13 @@ test("scripts/lib/smoke-main.ts runs the isolated producer seed command AFTER AP
   // What remains here is the one thing this file can honestly check about
   // smoke-main: that the seed is HANDED to the shared lifecycle rather than run
   // beside it. That is a wiring fact, and wiring is what source text records.
-  // Handed to the lifecycle (conditionally, since --seed makes it opt-in for
-  // an external boot) rather than run beside it — the wiring fact, unchanged.
-  expect(src).toContain("initialize: seeds ? initializeScenario : undefined");
+  // Handed to the lifecycle rather than run beside it — the wiring fact. It
+  // is handed on EVERY boot now, not only under --seed: readiness requires
+  // "`analytics-producer` to have authenticated with its token and completed
+  // its seed command" (smoke spec §6.3, D52), and the command is idempotent.
+  expect(src).toContain("initialize: producerSeed");
+  expect(src).not.toContain("initialize: seeds ?");
   expect(src).toContain('deferredServices: ["analytics-producer"]');
+  // Its outcome is a named readiness result, never a thrown-past side effect.
+  expect(src).toContain("seed: () => seedOutcome,");
 });

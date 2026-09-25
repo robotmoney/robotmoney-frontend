@@ -41,7 +41,6 @@ function composeConfig(): ComposeConfig {
   // though this test only inspects the resolved service environments.
   env.WEB_PORT = "18788";
   env.POSTGRES_PORT = "15433";
-  env.ANALYTICS_TOKEN_FILE_HOST = "/dev/null"; // compose-config only; no producer launch
   // docker-compose.yml requires the instance and its state directory (`${RM_INSTANCE_STATE_DIR:?…}`, no
   // checkout fallback; smoke spec §1.1). Nothing is mounted by `config`, so any absolute path renders.
   env.RM_INSTANCE = "rm_local_lanetopo";
