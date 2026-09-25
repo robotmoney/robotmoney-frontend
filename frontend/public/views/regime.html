@@ -89,16 +89,44 @@
               <p class="rr-stat__v rv__today-v"><i class="rv__regime-dot" :style="`background:${regimeColor(latest.regime)}`" aria-hidden="true"></i><span x-text="regimeLabel(latest.regime)"></span></p>
               <p class="rr-stat__sub">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b> · <span x-text="ordinalPct(latest.compositePercentile)"></span> percentile over 3 years</p>
             </div>
-            <ul class="rv__idx" aria-label="Panel indices">
-              <li class="rv__idx-head" aria-hidden="true"><span></span><span></span><span class="rv__idx-ends"><span>risk-off</span><span>risk-on</span></span></li>
-              <template x-for="p in panelsList()" :key="p">
-                <li class="rv__idx-row" :id="`index-${p}`">
-                  <span class="rv__idx-l"><span x-text="panelLabel(p) + ' index'"></span><span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" :aria-label="`About the ${panelLabel(p).toLowerCase()} index`">i</button><span class="rm-tip__bub" role="tooltip" x-text="panelTip(p)"></span></span></span>
-                  <b class="rv__idx-v" x-text="panelIndex(p) == null ? '—' : panelIndex(p).toFixed(2)"></b>
-                  <span class="rv__idx-track" aria-hidden="true"><i :style="`left:${posPct(panelIndex(p))}%`"></i></span>
-                </li>
-              </template>
-            </ul>
+            <!-- The session page's Market context component: each reading on
+                 its own three-year percentile track, the cuts where the reading
+                 carries them, the dot in its regime's colour, and a tip with its
+                 value. -->
+            <div class="rr-context rv__context">
+              <div class="rr-context__head">
+                <h3 class="rr-subhead__h">Market context</h3>
+              </div>
+              <div class="sig" role="group"
+                   :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
+                <div class="sig__scale" aria-hidden="true">
+                  <span></span>
+                  <span class="sig__ticks">
+                    <template x-for="z in signalZones()" :key="z.key">
+                      <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
+                    </template>
+                    <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
+                  </span>
+                  <span></span>
+                </div>
+                <template x-for="r in signalRows()" :key="r.key">
+                  <div class="sig__row" :class="`is-${r.kind}`" :id="`index-${r.key}`">
+                    <a class="sig__l rr-lnk" :href="r.href" x-text="r.label"></a>
+                    <span class="sig__track">
+                      <b class="sig__mid"></b>
+                      <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
+                      <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                      <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
+                        <b x-text="signalTip(r)"></b>
+                        <span x-text="r.about"></span>
+                      </span>
+                    </span>
+                    <span class="sig__v" x-text="ordinal(r.pct)"></span>
+                  </div>
+                </template>
+              </div>
+              <p class="rr-note">Each reading is a percentile of its own last three years, so the 50th is its median.</p>
+            </div>
           </div>
         </section>
 
@@ -121,8 +149,10 @@
           <template x-if="!historyEmpty()">
             <figure class="rr-area rv__fig" :data-days="historyDays()">
               <figcaption class="rr-area__head">
-                <h3 class="rr-subhead__h rr-subhead__h--minor">Composite and panel indices, 0 to 1</h3>
-                <span class="rr-sec__aside rv__chart-meta" x-text="historyWeekly() ? 'One reading a week' : 'Daily'"></span>
+                <div class="rv__fig-t">
+                  <h3 class="rr-subhead__h rr-subhead__h--minor">Composite and panel indices, 0 to 1</h3>
+                  <span class="rr-sec__aside rv__chart-meta" x-text="historyWeekly() ? 'One reading a week' : 'Daily'"></span>
+                </div>
               </figcaption>
               <div class="rr-area__frame">
                 <div class="rr-area__y" aria-hidden="true">
@@ -277,15 +307,13 @@
                 </tbody>
               </table>
             </div>
-            <div class="rr-disc rv__disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-              <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="corr-notes" @click="open = !open">How to read this</button>
-              <div class="rr-disc__anim" id="corr-notes" role="region" aria-label="How to read this" :inert="!open">
-                <div class="rr-disc__clip"><div class="rr-disc__body rr-prose rv__notes">
-                  <p><strong>Forward:</strong> ρ = rank correlation between today's index level and the asset's log return over the next {30, 90, 180} calendar days, evaluated daily over the trailing window. The predictive measure.</p>
-                  <p><strong>Alignment:</strong> ρ between today's index and today's log-price. It checks whether the panel tracks the asset right now and predicts nothing. Price-derived indicators (the S&amp;P 500 trend and IWM/SPY breadth in the equity factor panel; the BTC/ETH ratio and the ETH trend in on-chain) inflate it by construction.</p>
-                  <p>Green is ρ of +0.15 or more, red is ρ of −0.15 or less, and muted is |ρ| under 0.15, which is treated as noise. Hover any cell for its n. Effective independent observations are roughly n divided by the horizon, so short-horizon figures are more reliable than the 180-day ones.</p>
-                </div></div>
-              </div>
+            <!-- How to read the table, open: definitions and caveats, every one
+                 of the notes it has always carried. -->
+            <div class="rv__howto" id="corr-notes">
+              <h3 class="rr-subhead__h rr-subhead__h--minor">How to read this</h3>
+              <p><strong>Forward:</strong> ρ = rank correlation between today's index level and the asset's log return over the next {30, 90, 180} calendar days, evaluated daily over the trailing window. The predictive measure.</p>
+              <p><strong>Alignment:</strong> ρ between today's index and today's log-price. It checks whether the panel tracks the asset right now and predicts nothing. Price-derived indicators (the S&amp;P 500 trend and IWM/SPY breadth in the equity factor panel; the BTC/ETH ratio and the ETH trend in on-chain) inflate it by construction.</p>
+              <p>Green is ρ of +0.15 or more, red is ρ of −0.15 or less, and muted is |ρ| under 0.15, which is treated as noise. Hover any cell for its n. Effective independent observations are roughly n divided by the horizon, so short-horizon figures are more reliable than the 180-day ones.</p>
             </div>
           </section>
         </template>
@@ -313,7 +341,15 @@
             <div class="rv__market" :id="`market-${bt.key}`" x-show="btMarket === bt.key && hasBacktest(bt.key)">
               <div class="rr-subhead">
                 <h3 class="rr-subhead__h" :id="slug(bt.title)"><span x-text="bt.title"></span></h3>
-                <span class="rr-sec__aside">10bps per rebalance · in-sample 2018–Jan 2024 · out-of-sample Feb 2024–</span>
+              </div>
+              <!-- The backtest's terms: its cost, and the two windows the table
+                   splits CAGR into. In-sample is the stretch the indicators and
+                   their parameters were chosen on; out-of-sample is everything
+                   since, which the method never saw while it was being built. -->
+              <div class="rr-meta rv__bt-facts">
+                <span class="rr-meta__i">Cost <b>10 bps per rebalance</b></span>
+                <span class="rr-meta__i">In-sample<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What in-sample means">i</button><span class="rm-tip__bub" role="tooltip">The years the indicators and their parameters were chosen on. A strategy should look good here; it was fitted to it.</span></span> <b x-text="`${btWindow(bt.key).start} to ${btWindow(bt.key).inEnd}`"></b></span>
+                <span class="rr-meta__i">Out-of-sample<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="What out-of-sample means">i</button><span class="rm-tip__bub" role="tooltip">Everything since, which the method never saw while it was being built. The test of whether it holds up.</span></span> <b x-text="`${btWindow(bt.key).outStart} to ${btWindow(bt.key).end}`"></b></span>
               </div>
               <div class="rv__bt-weights">
                 <template x-for="state in ['risk_off', 'neutral', 'risk_on']" :key="state">
@@ -347,8 +383,15 @@
               <template x-if="!btEmptyTitle(bt.key)">
                 <figure class="rr-area rv__fig" :data-bt="bt.key">
                   <figcaption class="rr-area__head">
-                    <h4 class="rr-subhead__h rr-subhead__h--minor">Growth of $1, log scale</h4>
-                    <span class="rr-sec__aside">One reading a week</span>
+                    <div class="rv__fig-t">
+                      <h4 class="rr-subhead__h rr-subhead__h--minor">Growth of $1, log scale</h4>
+                      <span class="rr-sec__aside" x-text="btMeta(bt.key)"></span>
+                    </div>
+                    <div class="rm-chips" role="group" aria-label="Backtest range">
+                      <template x-for="r in ranges" :key="r.id">
+                        <button type="button" class="rm-chip" :aria-pressed="btRange === r.id ? 'true' : 'false'" @click="setBtRange(r.id)" x-text="r.label"></button>
+                      </template>
+                    </div>
                   </figcaption>
                   <div class="rr-area__frame">
                     <div class="rr-area__y" aria-hidden="true">
@@ -399,14 +442,10 @@
                   </ul>
                 </figure>
               </template>
-              <div class="rr-disc rv__disc" x-data="{ open: false }" :class="open ? 'is-open' : ''">
-                <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" :aria-controls="`bt-notes-${bt.key}`" @click="open = !open">How to read this</button>
-                <div class="rr-disc__anim" :id="`bt-notes-${bt.key}`" role="region" aria-label="How to read this" :inert="!open">
-                  <div class="rr-disc__clip"><div class="rr-disc__body rr-prose rv__notes">
-                    <p>The out-of-sample window starts Feb 1, 2024. Risky legs earn each asset's spot return; the cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps, charged only when the bucket changes. The chart background is shaded by the composite regime: a light wash for risk-on, a faint one for neutral, hatching for risk-off.</p>
-                    <p><strong>Reading this honestly:</strong> a strategy that beats the HODL baseline on Sharpe or max drawdown but loses on CAGR is managing risk, not finding alpha. One that beats it on CAGR is either catching real signal or overfit, and the in-sample and out-of-sample split tells them apart: a big gap means overfit, a consistent result means plausible signal. None of this controls for path dependence across the single 8-year window.</p>
-                  </div></div>
-                </div>
+              <div class="rv__howto">
+                <h4 class="rr-subhead__h rr-subhead__h--minor">How to read this</h4>
+                <p>The out-of-sample window starts Feb 1, 2024. Risky legs earn each asset's spot return; the cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps, charged only when the bucket changes. The chart background is shaded by the composite regime: a light wash for risk-on, a faint one for neutral, hatching for risk-off.</p>
+                <p><strong>Reading this honestly:</strong> a strategy that beats the HODL baseline on Sharpe or max drawdown but loses on CAGR is managing risk, not finding alpha. One that beats it on CAGR is either catching real signal or overfit, and the in-sample and out-of-sample split tells them apart: a big gap means overfit, a consistent result means plausible signal. None of this controls for path dependence across the single 8-year window.</p>
               </div>
             </div>
           </template>
@@ -414,27 +453,42 @@
       </div>
     </template>
 
-    <!-- METHODOLOGY: prose, the page's own reference. -->
+    <!-- METHODOLOGY: the panels as a table, the method as the vault pages'
+         key and value rows (.rr-dl), then where to read more. Every fact the
+         old prose carried is in one of the three. -->
     <section class="rr-sec" id="methodology-sec" aria-labelledby="methodology">
       <div class="rr-sec__head"><h2 class="rr-sec__h" id="methodology">Methodology</h2></div>
-      <div class="rr-prose rv__method">
-        <!-- The bucket thresholds come from the snapshot (bucketPct). -->
-        <p x-show="latest">Composite = 0.5 × macro + 0.5 × on-chain. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite percentile below <span x-text="bucketPct('risk_off')"></span> reads risk-off and above <span x-text="bucketPct('risk_on')"></span> reads risk-on.</p>
-        <h3 class="rr-subhead__h" id="how-it-works">How it works</h3>
-        <ul>
-          <li><strong>Macro panel (8):</strong> 10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold. Sources: FRED and Yahoo.</li>
-          <li><strong>On-chain panel (10):</strong> DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h. Sources: DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal.</li>
-          <li><strong>Equity factor panel (8):</strong> high-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE. Sources: Yahoo Finance and a mirror of the Shiller spreadsheet. Sign-stable signals of equity risk appetite, style and valuation, tracked for context and not part of the composite.</li>
-          <li><strong>Normalization:</strong> rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</li>
-          <li><strong>Within-panel weighting:</strong> point-in-time inverse-correlation. Each day's weights use only the trailing 3-year window, so there is no look-ahead. Redundant inputs are discounted automatically, without manual sub-grouping. 25% per-indicator cap.</li>
-          <li><strong>Composite:</strong> the arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), ranked as a 3-year rolling percentile and bucketed at 0.33 / 0.67.</li>
-          <li><strong>Smoothing:</strong> the published regime label requires <strong>5 consecutive trading days</strong> in the new bucket before switching, OR a single-day move in composite percentile exceeding <strong>2σ</strong> of its trailing 1y daily-change distribution (with direction consistent with the new bucket). Filters out boundary-noise flips while still responding quickly to legitimate fast regime shifts.</li>
-          <li><strong>Storage:</strong> the history is kept daily in long format; the current snapshot is served from the analytics store.</li>
-        </ul>
-        <h3 class="rr-subhead__h" id="two-panels-plus-a-third-for-context">Two panels, plus a third for context</h3>
-        <p>The macro panel reads upstream causes: monetary policy, credit conditions and the labor market. The on-chain panel reads crypto-native flows and network health. These two independent viewpoints are averaged into the composite. The equity factor panel reads the behavior of price-setters who have already digested the upstream inputs and are committing capital; it is tracked beside the composite and not blended into it. Walk through the comparison and per-panel attribution in the <a href="/blog/regime-eq-vs-base">research write-up</a>.</p>
-        <p>The original two-panel classifier, macro and on-chain only, is kept as a <a href="/regime_2panel">reference</a>. <a href="/regime/indicators">The indicators page</a> explains all 26 indicators in plain language: what each one is, how it is derived and how to read it. For the full prior-art survey and design-space mapping, see the <a href="/regime-detection">Regime Detection research brief</a>.</p>
+      <!-- The bucket thresholds come from the snapshot (bucketPct). -->
+      <p class="rv__method-lead" x-show="latest">Composite = 0.5 × macro + 0.5 × on-chain. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite percentile below <span x-text="bucketPct('risk_off')"></span> reads risk-off and above <span x-text="bucketPct('risk_on')"></span> reads risk-on.</p>
+
+      <h3 class="rr-subhead__h" id="panels">Panels</h3>
+      <div class="rr-tablewrap">
+        <table class="rr-table rv__mtable">
+          <thead><tr><th scope="col">Panel</th><th scope="col">Reads</th><th scope="col">Indicators</th><th scope="col">Sources</th><th scope="col">In the composite</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Macro <small>8 indicators</small></th><td>Upstream causes: monetary policy, credit conditions and the labor market.</td><td>10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold</td><td>FRED and Yahoo</td><td>Yes, half</td></tr>
+            <tr><th scope="row">On-chain <small>10 indicators</small></th><td>Crypto-native flows and network health.</td><td>DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h</td><td>DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal</td><td>Yes, half</td></tr>
+            <tr><th scope="row">Equity factor <small>8 indicators</small></th><td>Price-setters who have already digested the upstream inputs and are committing capital. Sign-stable signals of equity risk appetite, style and valuation.</td><td>High-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE</td><td>Yahoo Finance and a mirror of the Shiller spreadsheet</td><td>No, tracked beside it for context</td></tr>
+          </tbody>
+        </table>
       </div>
+      <p class="rv__method-note">Macro and on-chain are two independent viewpoints, averaged into the composite. The <a class="rr-lnk" href="/blog/regime-eq-vs-base">research write-up</a> compares the composite with and without the equity factor panel, panel by panel.</p>
+
+      <h3 class="rr-subhead__h" id="how-it-works">How it works</h3>
+      <dl class="rr-dl rv__mdl">
+        <div><dt>Normalization</dt><dd>A rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</dd></div>
+        <div><dt>Weighting</dt><dd>Point-in-time inverse correlation within each panel. Each day's weights use only the trailing 3-year window, so there is no look-ahead. Redundant inputs are discounted automatically, without manual sub-grouping. No indicator carries more than 25%.</dd></div>
+        <div><dt>Composite</dt><dd>The arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), ranked as a 3-year rolling percentile and bucketed at 0.33 / 0.67.</dd></div>
+        <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket, or on a single-day move in the composite percentile beyond <strong>2σ</strong> of its trailing 1-year daily changes, in the new bucket's direction. It filters out flips at a boundary and still follows a fast, real shift.</dd></div>
+        <div><dt>Storage</dt><dd>The history is kept daily in long format; the current snapshot is served from the analytics store.</dd></div>
+      </dl>
+
+      <h3 class="rr-subhead__h" id="read-more">Read more</h3>
+      <ul class="rv__more">
+        <li><a class="rr-lnk" href="/regime/indicators">The 26 indicators</a>, in plain language: what each one is, how it is derived and how to read it.</li>
+        <li><a class="rr-lnk" href="/regime-detection">Regime Detection research brief</a>: the prior-art survey and design-space mapping.</li>
+        <li><a class="rr-lnk" href="/regime_2panel">The original two-panel classifier</a>, macro and on-chain only, kept as a reference.</li>
+      </ul>
     </section>
   </div>
 </section>

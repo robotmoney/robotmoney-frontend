@@ -174,25 +174,15 @@
    vault, allocation and subject pages draw them. Only what those do not
    already carry lives here. */
 .rv__body.rr .rv__dash { display: block; }
+/* As .sv__body does: a hidden tip laid out past the edge must not widen the page. */
+.rv__body.rr { overflow-x: clip; }
 /* Today: the reading as the figure, the panel indices on a track beside it. */
 .rv__today-k { display: flex; align-items: center; margin: 0 0 0.75rem; font-family: var(--font-mono); font-size: 0.625rem;
   text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rv__today-v { display: flex; align-items: center; gap: 0.75rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; }
 .rv__today-v .rv__regime-dot { width: 0.625rem; height: 0.625rem; }
 .rv__today .rr-stat__sub b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text); }
-.rv__idx { list-style: none; margin: 0; padding: 0; }
-.rv__idx-head, .rv__idx-row { display: grid; grid-template-columns: minmax(0, 1fr) 3.5rem minmax(6rem, 12rem); align-items: center; column-gap: 1rem; }
-.rv__idx-head { padding-bottom: 0.5rem; border-bottom: 1px solid var(--color-border); }
-.rv__idx-ends { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-muted); }
-.rv__idx-row { padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
-.rv__idx-l { display: inline-flex; align-items: center; color: var(--color-text); white-space: nowrap; }
-.rv__idx-v { font-family: var(--font-mono); font-weight: 400; text-align: right; font-variant-numeric: tabular-nums; }
-.rv__idx-track { position: relative; height: 1px; background: var(--color-border-light); }
-.rv__idx-track i { position: absolute; top: -5px; width: 2px; height: 11px; margin-left: -1px; background: var(--color-text); }
-@media (max-width: 640px) {
-  .rv__idx-head, .rv__idx-row { grid-template-columns: minmax(0, 1fr) 2.75rem 5.5rem; column-gap: 0.75rem; }
-  .rv__lg-bands { margin-left: 0; flex-wrap: wrap; }
-}
+.rv__context .rr-context__head { margin-bottom: 0.5rem; }
 
 /* The chart's bands: HTML strips under the lines, so the hatch tile keeps its
    angle however the plot stretches. */
@@ -227,8 +217,30 @@
 .rv__bt-baseline th, .rv__bt-baseline td { color: var(--color-text-muted); }
 .rv__market .rv__bt-weights { margin: 0 0 1.25rem; }
 .rv__market .rr-area, .rv__market .rr-empty { margin-top: 2.25rem; }
-.rv__disc { margin-top: 1.5rem; }
-.rv__notes { font-size: 0.8125rem; }
+/* "How to read this": open, under its table or chart, in the note type. */
+.rv__howto { margin-top: 1.75rem; }
+.rv__howto .rr-subhead__h { margin-bottom: 0.625rem; }
+.rv__howto p { margin: 0 0 0.625rem; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
+.rv__howto p:last-child { margin-bottom: 0; }
+.rv__howto strong { color: var(--color-text-soft); font-weight: 500; }
+.rv__fig-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1rem; }
+.rv__bt-facts { margin: 0 0 1.25rem; }
+
+/* Methodology: the panels table in prose type, the method as key and value
+   rows, then the reading list. */
+.rv__method-lead { margin: 0 0 2rem; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
+#methodology-sec .rr-subhead__h { margin: 2.25rem 0 1rem; }
+.rv__mtable { min-width: 52rem; }
+.rv__mtable td { font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.55; vertical-align: top; }
+.rv__mtable tbody th { vertical-align: top; white-space: nowrap; }
+.rv__mtable td:last-child { white-space: nowrap; }
+.rv__method-note { margin: 1rem 0 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
+.rv__mdl > div { grid-template-columns: 9rem minmax(0, 1fr); }
+.rv__mdl dd { color: var(--color-text-soft); line-height: 1.6; }
+.rv__mdl dd strong { color: var(--color-text); font-weight: 500; }
+.rv__more { margin: 0; padding: 0; list-style: none; }
+.rv__more li { padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; color: var(--color-text-soft); }
+@media (max-width: 640px) { .rv__mdl > div { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
 
 /* Predictive power: one table, a column group per asset. Each cell is its
    figure over a signed bar from the centre line, green right and red left,
@@ -240,9 +252,10 @@
 .rv__corr-table .rv__corr-idx { position: sticky; left: 0; background: var(--color-void); z-index: 1; }
 .rv__corr-table thead .rv__corr-idx { background: var(--color-surface); }
 .rv__rho .rm-tip { display: block; margin: 0; }
-.rv__rho-btn { display: block; width: 100%; text-align: right; text-decoration: none !important; cursor: default; }
+.rv__corr-table td.rv__rho, .rv__corr-table thead tr:last-child th { text-align: center; }
+.rv__rho-btn { display: block; width: 100%; text-align: center; text-decoration: none !important; cursor: default; }
 .rv__rho-fig { display: block; font-family: var(--font-mono); }
-.rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.35rem 0 0 auto; background: var(--color-border); }
+.rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.35rem auto 0; background: var(--color-border); }
 .rv__rho-bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: var(--color-text-muted); }
 .rv__rho-bar i { position: absolute; top: 0; height: 100%; display: block; }
 .rv__rho-btn:hover .rv__rho-fig, .rv__rho-btn[aria-expanded="true"] .rv__rho-fig { text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -311,7 +324,6 @@ a.rv__ind-name:hover .rv__ind-info { color: var(--color-text); }
 .rv__method-list { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 0; padding-left: 1.25rem; }
 .rv__method-list li { margin-bottom: 0.25rem; }
 .rv__method-card p { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 0; }
-.rv__method-note { color: var(--color-text-soft); font-size: 0.85rem; line-height: 1.6; margin: 1rem 0 0; }
 .rv__link { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
   text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .rv__link:hover { text-decoration-color: var(--color-link); }

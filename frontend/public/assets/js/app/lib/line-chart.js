@@ -149,5 +149,17 @@ export function logTicks(min, max) {
   }
   const within = (/** @type {number[]} */ a) => a.filter((v) => v >= min && v <= max);
   const c = within(coarse);
-  return c.length >= 3 ? c : within(fine);
+  if (c.length >= 3) return c;
+  const f = within(fine);
+  if (f.length >= 3) return f;
+  // A short range (a year, six months) spans less than one step of those:
+  // four ticks evenly spaced on the log axis, at two significant figures.
+  const a = Math.log(min), b = Math.log(max);
+  const out = [];
+  for (let k = 0; k < 4; k++) {
+    const v = Math.exp(a + ((b - a) * (k + 0.5)) / 4);
+    const r = Number(v.toPrecision(2));
+    if (!out.includes(r)) out.push(r);
+  }
+  return out;
 }

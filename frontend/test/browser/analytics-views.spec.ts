@@ -137,7 +137,8 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   // per panel (3 for the eq snapshot).
   await expect(page.locator("#composite .rv__today-v")).toBeVisible();
   await expect(page.locator("#composite")).toContainText(latest.composite!.toFixed(2));
-  await expect(page.locator("#composite .rv__idx-row")).toHaveCount(3);
+  // The session page's Market context: the composite, then one row per panel.
+  await expect(page.locator("#composite .sig__row")).toHaveCount(4);
 
   // All three panel tables render (headers carry just the panel title now, matching
   // the source PanelTable), including the equity factor panel (eq snapshot only).
@@ -238,9 +239,9 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
   // THREE panel index summary cards (macro + on-chain + equity factor) — plus the
   // top-line regime card = 4 total, exactly the happy-path count despite null panels.
   await expect(page.locator("#composite .rv__today-v")).toBeVisible();
-  const indexCards = page.locator("#composite .rv__idx-row");
+  const indexCards = page.locator("#composite .sig__row:not(#index-composite)");
   await expect(indexCards).toHaveCount(3);
-  await expect(page.locator(".rv__idx-l", { hasText: "Equity factor index" })).toBeVisible();
+  await expect(page.locator("#index-factor")).toBeVisible();
 
   // And all three per-panel tables render, including the equity factor panel.
   await expect(page.locator(".rv__panel")).toHaveCount(3);
@@ -375,10 +376,8 @@ test("each predictive-power figure carries its reading in words", async ({ page 
   const texts = await tips.allTextContents();
   for (const t of texts) expect(t).toMatch(/: (no reading|[−+]?\d\.\d\d)\./);
   expect(texts.some((t) => t.includes("no relation beyond noise"))).toBe(true);
-  // The notes are folded, and every one of them is still there.
-  const disc = page.locator("#predictive-power .rr-disc__btn");
-  await expect(disc).toHaveAttribute("aria-expanded", "false");
-  await disc.click();
+  // The notes read open under the table, every one of them.
+  await expect(page.locator("#corr-notes")).toBeVisible();
   await expect(page.locator("#corr-notes")).toContainText("Effective independent observations");
 });
 
