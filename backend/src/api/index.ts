@@ -96,11 +96,23 @@ await assertAppendOnlyGuardArmed();
 // checked independently — see backend/src/db/analytics-ledger-guard.ts.
 await assertAnalyticsLedgerGuardArmed();
 
+/** Seconds the parity-sweep request may run before Bun closes it (Bun's cap is 255). */
+export const PARITY_SWEEP_REQUEST_TIMEOUT_S = 240;
+
 const server = Bun.serve({
   port: config.apiPort,
   async fetch(req, server) {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // The parity sweep re-derives every domain's row counts and checksums
+    // inside this one request, and on a production-sized ledger that runs
+    // past Bun's ~10 s default idle timeout: the connection was cut mid-sweep
+    // ("The socket connection was closed unexpectedly"), the worker's
+    // analytics.parity_sweep retried to DEAD, and production recorded 24 dead
+    // sweeps in 24 h (2026-09-25). Lift the timeout for this request only;
+    // every other route keeps the default.
+    if (pathname === ROUTES.analytics.paritySweep && req.method === "POST") server.timeout(req, PARITY_SWEEP_REQUEST_TIMEOUT_S);
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
