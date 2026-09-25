@@ -188,6 +188,14 @@
     "match": "parity_sweep\\) failed.*socket connection was closed|\\[Bun\\.serve\\]: request timed out",
     "class": "known-issue",
     "issue": "v0.5.1-sweep-timeout",
-    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it for that request."
+    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it for that request. (Log-line form.)"
+  },
+  {
+    "id": "known-parity-sweep-timeout-job",
+    "match": "socket connection was closed unexpectedly",
+    "source": "^jobs:analytics\\.parity_sweep$",
+    "class": "known-issue",
+    "issue": "v0.5.1-sweep-timeout",
+    "reason": "The same sweep timeout, as the dead job's own last_error (prod:gate grades dead jobs by their stored error)."
   }
 ]

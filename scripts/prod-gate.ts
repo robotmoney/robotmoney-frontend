@@ -55,15 +55,18 @@ export interface ProdGateArgs {
    *  upgrade the gate runs from a scratch checkout of the release candidate, so
    *  it points here at the deployed checkout's file. */
   stateFile?: string;
+  /** post-release only: grade sessions later (R7 runs before the first session can publish). */
+  deferSessions: boolean;
   minSessions: number;
   minAttendance: number;
   stuckAfterMin: number;
 }
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
-  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780 };
+  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
+    if (a === "--defer-sessions") { out.deferSessions = true; continue; }
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) return { error: `${a} requires a value.` };
     const num = Number(v);
@@ -155,7 +158,7 @@ async function main(): Promise<number> {
   const args = parseProdGateArgs(process.argv.slice(2));
   if ("error" in args) {
     console.error(`[${NAME}] ${args.error}`);
-    console.error(`[${NAME}] usage: bun run prod:gate --mode baseline|post-release --db-capacity-gb N [--state-file PATH] [--since ISO] [--window-hours H] [--driver-log FILE] [--report FILE.md] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN]`);
+    console.error(`[${NAME}] usage: bun run prod:gate --mode baseline|post-release --db-capacity-gb N [--state-file PATH] [--since ISO] [--defer-sessions] [--window-hours H] [--driver-log FILE] [--report FILE.md] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN]`);
     return 2;
   }
   const stateFile = args.stateFile ?? join(repoRoot, ".agents", "smoke-state.json");
@@ -228,7 +231,10 @@ async function main(): Promise<number> {
     .map((r) => ({ id: r.id, subject: r.subject, state: r.state, ageMin: Number(r.age), takes: Number(r.takes), judged: r.judged, receipt: r.receipt }));
   const [{ n: activeRaw } = { n: "0" }] = dbQuery<{ n: string }>(api, "SELECT count(*)::text AS n FROM swarm_members WHERE status = 'active' AND role = 'member'");
   const active = Number(activeRaw);
-  if (args.mode === "post-release") {
+  if (args.mode === "post-release" && args.deferSessions) {
+    add("sessions", "Every subject published a judged, attended session convened after the release", "WARN",
+      ["DEFERRED (--defer-sessions): production's first session convened after the release publishes about 6 h later; the R8 soak run grades this", `${rows.length} session(s) in or open during the window`]);
+  } else if (args.mode === "post-release") {
     const inWindow = rows.filter((r) => Date.parse(now) - r.ageMin * 60_000 >= Date.parse(since) - 1000);
     const v = evaluateSessions(inWindow, SMOKE_SUBJECTS.map((s) => s.id), active, args);
     add("sessions", "Every subject published a judged, attended session convened after the release", v.failures.length ? "FAIL" : "PASS",
@@ -243,7 +249,7 @@ async function main(): Promise<number> {
   const driverLines: RawLine[] = args.driverLog && existsSync(args.driverLog)
     ? readFileSync(args.driverLog, "utf8").split("\n").filter(Boolean).map((text) => ({ ts: null, text }))
     : [];
-  if (args.mode === "post-release") {
+  if (args.mode === "post-release" && !args.deferSessions) {
     if (!args.driverLog) add("driver", "The host driver logged each subject's session as published with judge=enforce", "FAIL", ["no --driver-log given"]);
     else {
       const ds = parseDriverSessions(driverLines.map((l) => l.text));

@@ -50,6 +50,10 @@ describe("parseProdGateArgs", () => {
     expect(parseProdGateArgs(["--report", "/tmp/x.txt"])).toHaveProperty("error");
   });
 
+  test("--defer-sessions is a flag (R7 runs before the first session can publish)", () => {
+    expect(parseProdGateArgs(["--mode", "post-release", "--defer-sessions", "--db-capacity-gb", "25"])).toMatchObject({ mode: "post-release", deferSessions: true, capacityGb: 25 });
+  });
+
   test("takes a state file for a run from a scratch checkout", () => {
     expect(parseProdGateArgs(["--state-file", "/root/robotmoney-frontend/.agents/smoke-state.json"])).toMatchObject({ stateFile: "/root/robotmoney-frontend/.agents/smoke-state.json" });
   });

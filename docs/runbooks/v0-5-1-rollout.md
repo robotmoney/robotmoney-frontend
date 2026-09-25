@@ -25,6 +25,8 @@ this runbook that closes it.
 | `BOOT_STATUS=$?` after `smoke:archive`. | `smoke:archive` never exits on success (it is the session driver), so `$?` only ever reports a crash. | R6.4 uses readiness + R7 instead. |
 | Rollback used `bun smoke -- --external-pg`. | `--external-pg` is not a known flag in v0.5.0; the command fails immediately. | R9 uses `smoke:archive`. |
 | Post-deploy looked for ~minutes. | Production runs a **6 h interval and 6 h window** per subject; a new session cannot publish in under ~6 h. | R8 is an overnight soak with a verdict. |
+| The gates failed only on a fixed list of known-bad log patterns. | A day of read-only transactions, a full disk, dead parity sweeps: none was on the list, so nothing failed until the owner asked for an inventory by hand (2026-09-25). | Default-deny inventory: every distinct error of every log must match a committed classification with a written reason, or the gate fails (`scripts/lib/gate/`). |
+| No step read a production log, before or after. | Production was failing for a day before the upgrade was even planned. | `prod:gate` baseline (R2.4) before anything changes, and post-release (R7, R8) after. Every run writes a report. |
 
 ## 1. Release identity
 
@@ -95,21 +97,29 @@ here with the reason, because R8 will fail on it.
 
 ## R2. Production baseline (read-only, on `rm-frontend-prod-1`)
 
-Run **before** anything changes, and keep the output: R8 compares against it.
-Queries run as `rm_readonly` against the replica unless noted.
-**[TO BUILD]** `backend/scripts/upgrades/0.5.0-to-0.5.1/preflight.ts --emit-receipt`
-runs R2.1–R2.5 as one receipt; until it exists, run the SQL by hand.
+Run **before** anything changes. The point is to know what is broken now, so
+that every problem is either fixed by this release, accepted in writing, or
+blocks the cutover. Production's checkout is still v0.5.0, which has no
+`prod:gate`, so the gate runs from a scratch clone of the release candidate
+that reads the live stack's state file. It never writes: every query runs on
+a session forced read-only.
 
-| Step | Check | Pass / expected today | Record |
+| Step | Command (root, `rm-frontend-prod-1`) | Pass | Record |
 |---|---|---|---|
 | R2.1 | `git -C /root/robotmoney-frontend describe --tags`; `docker compose ls`; `tmux ls` | `v0.5.0`; project `rm_prod`; tmux session `0` | all three |
-| R2.2 | `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | today: `enforce`, **NULL**, `false` (D1) | row |
-| R2.3 | `SELECT kind, status, count(*) FROM jobs WHERE created_at > now() - interval '24 hours' GROUP BY 1,2` | record; today: dead wallet.backfill_window ×288, analytics.parity_sweep ×24, swarm.judge ×3 | full table |
-| R2.4 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
-| R2.5 | `SELECT subject_id, state, convened_at, published_at FROM swarm_sessions WHERE convened_at > now() - interval '72 hours' ORDER BY convened_at` plus takes per session (`count(DISTINCT member_id) FROM swarm_memos`) | record; list every session not `published` | table |
+| R2.2 | `D=/root/rm-gate-$RC_SHA; git clone -q --depth 50 --branch releases-0.5.x "$(git -C /root/robotmoney-frontend remote get-url origin)" $D && git -C $D checkout -q "$RC_SHA" && bun install --frozen-lockfile --cwd $D` | HEAD = `RC_SHA` | path |
+| R2.3 | Read the database cluster's **disk size** in the DigitalOcean console (Databases → cluster → Storage); `export CAP_GB=<size>` | a number | `CAP_GB` |
+| R2.4 | `bun run --cwd $D prod:gate -- --mode baseline --db-capacity-gb $CAP_GB --state-file /root/robotmoney-frontend/.agents/smoke-state.json --report /root/prod-gate-reports/R2-baseline-$RC_SHA.md` | **zero unclassified errors** (the inventory check lists none), and every FAIL or WARN is triaged in R2.5 | **the report** (`.md` + `.json`): containers, read-only state, database size against `CAP_GB` with growth since the previous report, judge config, dead jobs with classified causes, stuck sessions, and the full inventory of every distinct error and warning of every container |
+| R2.5 | **Triage.** For every FAIL check, every known-issue group and every unclassified warning in the report, write one row in the rollout report: *fixed by this release* (name the commit or migration; its classification rule must be a `known-issue`, so the post-release gate fails if it is still there), *accepted* (a written reason and a name), or *blocks the cutover*. An **unclassified error** is added to `scripts/lib/gate/log-classifications.json` in a reviewed commit with its class and reason, or it blocks. A capacity FAIL blocks until storage is raised or growth is stopped | no row empty; no blocker open | the triage table |
 | R2.6 | `SELECT name FROM schema_migrations ORDER BY name` | 73 rows ending `0062_rm_readonly_sequence_select.sql` (applied out of band from the abandoned 0.5.x work; see D6); save as `baseline-migrations.txt` | file hash |
-| R2.7 | `docker inspect rm_prod-api-1 --format '{{.RestartCount}} {{.State.StartedAt}}'`; `docker logs --since 24h rm_prod-api-1 2>&1 \| grep -cE 'REFUSING the boot\|— DEAD\|JudgeUnavailable'` | record | counts |
-| R2.8 | `SELECT pg_size_pretty(pg_database_size(current_database()))` | record (6.5 GB on 2026-09-25) | size |
+| R2.7 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
+
+**Baseline record, 2026-09-25, commit d61cb535** (first run, without
+`--db-capacity-gb`): FAIL on 4 checks — capacity not stated (7.98 GB), judge
+`enforce` with no model, a treasury session stuck in `scheduled` for 26 h, and
+24 dead parity sweeps whose stored error no rule classified (a rule was added).
+The container check warned on restarts; the log inventory held 195 distinct
+messages across 6 sources, none unclassified.
 
 ## R3. Backup
 
@@ -134,7 +144,7 @@ subject, with nothing dead and nothing in the logs.
 | R4.2 | `git fetch origin && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui 2>&1 \| tee ~/twin-$RC_SHA.log` | "READY" printed; slim capture ~1 min | READY time = T0 |
 | R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `0061_rm_worker_wallet_backfill_grant.sql` and `0063_swarm_judge_model_default.sql` applied to the restored production data; `0062` skipped | lines |
-| R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --report ~/twin-gate-reports/R4.4-$RC_SHA.md --wait 75 --min-sessions 1 --min-attendance 0.5` (+ `--waive` only per D4) | **exit 0**. Database: every subject publishes ≥1 session convened after T0 with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart. Logs: every subject's driver line reads `published: state=published, takes=N of M, judge=enforce` with N ≥ half of M, no line reads `judge=none`, and no service or driver log holds a fatal pattern | **the report** (`.md` + `.json`): every check with its result, every session, every job, every container's state, and for EVERY log source — each container, the restored database, the driver log — the lines read and the counts of each fatal pattern, warn pattern, and error-like and warning-like line, with the most frequent error lines |
+| R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --report ~/twin-gate-reports/R4.4-$RC_SHA.md --wait 75 --min-sessions 1 --min-attendance 0.5` (+ `--waive` only per D4) | **exit 0**. Database: every subject publishes ≥1 session convened after T0 with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart. Logs: every subject's driver line reads `published: state=published, takes=N of M, judge=enforce` with N ≥ half of M, no line reads `judge=none`, no service or driver log holds a fatal pattern, **every distinct error in every log matches a committed classification (default deny), and no known issue this release fixes is still present** | **the report** (`.md` + `.json`): every check with its result, every session, every job, every container's state, and for EVERY log source — each container, the restored database, the driver log — the lines read and the counts of each fatal pattern, warn pattern, and error-like and warning-like line, with the most frequent error lines |
 | R4.5 | Run R4.4 again at T0 + 2 h without `--wait`, with `--report ~/twin-gate-reports/R4.5-$RC_SHA.md` | exit 0: sessions keep closing with judges and nothing died since | the second report |
 | R4.6 | Browser pass on `https://stage.robotmoney-labs.dev`: home, `/vaults`, `/vault/rmusdc`, `/vault/rmagent`, `/vault/rmproto`, `/vault/rmrwa`, `/swarm`, a published session, its judgement link, a member page with judgements, `/deposit`, `/changelog` | every page renders data; no console error | screenshots |
 | R4.7 | `curl -s https://stage.robotmoney-labs.dev/api/swarm/sessions/<published-id>/judgements` for a session convened after T0 | 200 with ≥1 judgement | response |
@@ -167,25 +177,20 @@ driver: while it is down, no session advances.
 | R6.2 | Confirm the migration credential without printing it: `grep -c '^MIGRATE_DATABASE_URL=.' /root/robotmoney-frontend/.env` | `1` (the R6.4 boot migrates with it) | count |
 | R6.3 | `tmux attach -t 0`; Ctrl-C the running `smoke:archive`; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
 | R6.4 | `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log` | READY printed; `GET /health` 200; production T0 = READY time | T0, first 200 log lines |
-| R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.2 and R2.4 again | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; R2.2 = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.4 = all `true` | lines, rows |
+| R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.7 again, and `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; judge = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.7 = all `true` | lines, rows |
 | R6.6 | `bun run --cwd frontend assemble` only if the boot did not already publish the new SPA; `curl -s https://robotmoney.network/version.json` | commit = `RC_SHA` short | output |
 
 ## R7. Immediate postflight (T0 → T0 + 30 min)
 
-**[TO BUILD]** `bun run prod:gate` — `twin:gate` pointed at production:
-the same session/jobs/containers/logs checks, reading through `rm_readonly`
-and `docker logs`, with `--since T0`. Until it exists, run the SQL below.
+From the deployed checkout, now `v0.5.1-rc.N`, which carries `prod:gate`.
 
 | Step | Check | Pass |
 |---|---|---|
-| R7.1 | Every `rm_prod-*` container running, healthy, `RestartCount` 0 | all |
-| R7.2 | `docker logs --since "$T0"` on every `rm_prod-*` container **and** `/root/smoke-archive-v0.5.1.log` (the driver): zero lines matching `REFUSING the boot`, `— DEAD`, `JudgeUnavailable`, `NO judgement row was recorded`, `swarm session failed`, `Insufficient account funds`, `HTTP 402`, `No space left on device`, `getaddrinfo`, `out of memory`, `unsupported Unicode escape sequence` (unless waived by D4) | zero |
-| R7.3 | `SELECT kind, count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0' GROUP BY kind` | no rows |
-| R7.4 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | exactly two added rows: `0061_rm_worker_wallet_backfill_grant.sql`, `0063_swarm_judge_model_default.sql` (75 total) | diff |
-| R7.5 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/postflight.ts --emit-receipt=P8.postflight-prod` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | all checks ok |
-| R7.6 | `bun run verify:live --tier readonly --emit-receipt=P8.verify-prod` | exit 0; a WARN is not a pass |
-| R7.7 | Browser pass on `https://robotmoney.network`, same page list as R4.6 | renders |
-| R7.8 | `curl -s https://robotmoney.network/api/swarm/sessions/<latest-published-id>/judgements` | 200 (empty list is fine before the first new judgement) |
+| R7.1 | `cd /root/robotmoney-frontend && bun run prod:gate -- --mode post-release --since "$T0" --defer-sessions --db-capacity-gb $CAP_GB --driver-log /root/smoke-archive-v0.5.1.log --report /root/prod-gate-reports/R7-post-$RC_SHA.md` | **exit 0**: containers up and never restarted, the database writable, capacity and growth in bounds, the judge configured, no dead job since T0, and every distinct error since T0 classified with **no known issue this release fixes still present** (read-only, disk-full, wallet grant, judge model, parity NUL, sweep timeout). Sessions are DEFERRED to R8.2 and say so in the report |
+| R7.2 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | exactly two added rows: `0061_rm_worker_wallet_backfill_grant.sql`, `0063_swarm_judge_model_default.sql` (75 total) |
+| R7.3 | `bun run verify:live --tier readonly --emit-receipt=P8.verify-prod` | exit 0; a WARN is not a pass |
+| R7.4 | Browser pass on `https://robotmoney.network`, same page list as R4.6 | renders |
+| R7.5 | `curl -s https://robotmoney.network/api/swarm/sessions/<latest-published-id>/judgements` | 200 (an empty list is fine before the first new judgement) |
 
 ## R8. Soak (T0 → T0 + 8 h) — the release is not done until this passes
 
@@ -195,11 +200,10 @@ only proof that production closes sessions on v0.5.1.
 
 | Step | When | Check | Pass |
 |---|---|---|---|
-| R8.1 | every 2 h | R7.1–R7.3 again | clean |
-| R8.2 | T0 + 8 h | Database: every subject has ≥1 session with `convened_at >= T0` and `state = 'published'`, with takes ≥ the D3 threshold, an applied `model`/`enforce` judgement, and a consensus receipt. Logs: `grep -E '\] published: ' /root/smoke-archive-v0.5.1.log` shows, for every subject, a line ending `judge=enforce` with takes ≥ half the roster, and no line ending `judge=none` | all four subjects, both sources |
-| R8.3 | T0 + 8 h | no session convened after T0 older than 7 h is still `scheduled`/`collecting`/`window_closed` | none |
-| R8.4 | T0 + 8 h | the stuck sessions recorded in R2.5 are resolved or explained | written |
-| R8.5 | T0 + 8 h | `SELECT count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0'` | 0 |
+| R8.1 | every 2 h | R7.1 again, `--report /root/prod-gate-reports/R8-<hh>-$RC_SHA.md` | exit 0 each time |
+| R8.2 | T0 + 8 h | R7.1 **without `--defer-sessions`**, `--report /root/prod-gate-reports/R8-final-$RC_SHA.md` | **exit 0**, now including: every subject published ≥1 session convened after T0 with takes ≥ half the analysts, an applied model/enforce judgement and a receipt; the driver log shows `published: … judge=enforce` for every subject and no `judge=none` |
+| R8.3 | T0 + 8 h | every R2.5 triage row marked *fixed by this release* is absent from the R8.2 report's inventory (the gate enforces this for `known-issue` rules; confirm by reading) | all confirmed |
+| R8.4 | T0 + 8 h | the stuck sessions in the R2.4 report are resolved or explained | written |
 
 ## R9. Rollback
 
@@ -229,15 +233,14 @@ SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-a
 
 1. Tag `v0.5.1` on the same commit as the passing `v0.5.1-rc.N`.
 2. Merge `releases-0.5.x` into `main` with a real merge commit (release-branch rule).
-3. Write the rollout report: every step's evidence, D1–D5 outcomes, R8 table, and the gate reports from R4.4, R4.5 (and R7/R8 once `prod:gate` exists) attached verbatim. A step whose check is not in a report did not happen.
+3. Write the rollout report: every step's evidence, D1–D6 outcomes, the R2.5 triage table, and every gate report attached verbatim — R2.4 (baseline), R4.4 and R4.5 (twin), R7.1, each R8.1 and R8.2 (production). A step whose check is not in a report did not happen.
 4. Close the release issue; file issues for every waiver and every [TO BUILD]
    item not built.
 
 ## Appendix A. [TO BUILD] list, in priority order
 
-1. `prod:gate` — `twin:gate`'s checks against production (R7, R8), writing the
-   same report document (every check, every container's log scanned). Without
-   it, R7/R8 are hand-run SQL, which is how v0.5.0's gaps survived.
+1. ~~`prod:gate`~~ — built (`scripts/prod-gate.ts`), with the default-deny
+   log inventory shared with `twin:gate` (`scripts/lib/gate/`).
 2. `backend/scripts/upgrades/0.5.0-to-0.5.1/` — `release.ts` (this release's
    three migrations; the prior list is v0.5.0's plus the out-of-band `0062`), `steps.ts`, `preflight.ts` (R2), `postflight.ts` (R7.4–R7.5),
    `restore-check.ts`, and a step for R4.4 so `runbook.ts` can report status.
