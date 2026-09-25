@@ -341,8 +341,8 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
 // §4.3's one exception, from the side that is NOT it (§9.1, D55 (5))
 // ───────────────────────────────────────────────────────────────────────────
 //
-// The exception itself — a ledger exactly equal to v0.5.0's — needs a v0.5.0
-// database and runs as a process in first-production-migrate.test.ts. What is
+// The exception itself — a ledger exactly equal to production's observed
+// baseline (v0.5.0 plus one out-of-band file) — needs such a database and runs as a process in first-production-migrate.test.ts. What is
 // pinned here is that every database this file has, whose ledger is the whole
 // branch's, gets NO exception: the missing row refuses exactly as before, and
 // the refusal names the guard it failed.
@@ -355,7 +355,7 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals.map((r) => r.reason)).toEqual(["identity_missing"]);
     expect(refusals[0]?.message).toContain("first production migrate");
     expect(refusals[0]?.message).toContain("matches none");
-    expect(refusals[0]?.message).toContain("against v0.5.0:");
+    expect(refusals[0]?.message).toContain(`against ${SUPPORTED_RELEASES[0]!.name}:`);
   });
 
   test("operator, RM_ENV=stage, no row: identity_missing, naming RM_ENV=prod as the guard it failed", async () => {
@@ -377,7 +377,7 @@ describe("the first production migrate's exception does not reach a ledger that 
   test("a run handed a pre-identity confirmation on a database that does not qualify refuses before applying anything", async () => {
     await setIdentity("production");
     const ledgerBefore = await ledgerNames();
-    const confirmed = { identity: "no table" as const, release: "v0.5.0", ledger: SUPPORTED_RELEASES[0]!.migrations };
+    const confirmed = { identity: "no table" as const, release: SUPPORTED_RELEASES[0]!.name, ledger: SUPPORTED_RELEASES[0]!.migrations };
     await expect(
       withTargetLock(urlFor(fileDb), (lock) =>
         runMigrate(owner, { ...options({ caller: "operator", env: "prod", connection: "remote" }), lock, confirmedPreIdentity: confirmed }),

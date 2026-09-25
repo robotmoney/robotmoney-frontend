@@ -14,6 +14,10 @@
 // file drifts from its recorded hash without a verbatim copy. No git is
 // needed: CI's checkout is shallow and carries no tags.
 //
+// A BASELINE (`loadBaseline`) is a release plus files its target applied out
+// of band — production's observed ledger (backend/src/db/supported-releases.ts).
+// Its directory holds baseline.json and the out-of-band files' archived bytes.
+//
 // HOW IT IS BUILT. The way the release built itself: v0.5.0's runner
 // (backend/src/db/migrate.ts at the tag) applies each file in its own
 // transaction and switches to `SET LOCAL ROLE rm_owner` from 0054 on.
@@ -44,6 +48,9 @@ export interface ReleaseFixture {
     readonly jobKinds: readonly string[];
   };
   readonly migrations: readonly { readonly file: string; readonly sha256: string }[];
+  /** Where a file's verbatim bytes are looked for, in order, before the
+   *  branch's own. Absent: the tag's own `<tag>/migrations/`. */
+  readonly verbatimDirs?: readonly string[];
 }
 
 export function loadRelease(tag: string): ReleaseFixture {
@@ -53,8 +60,62 @@ export function loadRelease(tag: string): ReleaseFixture {
 /** The release's own bytes for one file: the verbatim copy when the branch
  *  edited it after the tag, otherwise the branch's file. */
 export function releaseBytes(tag: string, file: string): Buffer {
-  const pinned = join(RELEASES_DIR, tag, "migrations", file);
-  return readFileSync(existsSync(pinned) ? pinned : join(MIGRATIONS_DIR, file));
+  return fixtureBytes({ verbatimDirs: [join(RELEASES_DIR, tag, "migrations")] }, file);
+}
+
+/** A fixture's own bytes for one file: the first verbatim copy found, else the branch's file. */
+export function fixtureBytes(fixture: Pick<ReleaseFixture, "verbatimDirs">, file: string): Buffer {
+  for (const dir of fixture.verbatimDirs ?? []) {
+    const pinned = join(dir, file);
+    if (existsSync(pinned)) return readFileSync(pinned);
+  }
+  return readFileSync(join(MIGRATIONS_DIR, file));
+}
+
+/**
+ * A SUPPORTED_RELEASES baseline as the target's ledger records it: a release
+ * tag, plus files applied to that target out of band (spec §9.1, D55 (5)).
+ * Its fixture directory holds baseline.json — the observed ledger, and each
+ * out-of-band file's sha256 and provenance — and each out-of-band file's
+ * verbatim bytes under migrations/.
+ */
+export interface BaselineFixture extends ReleaseFixture {
+  /** The release tag the baseline starts from. */
+  readonly release: string;
+  readonly outOfBand: readonly {
+    readonly file: string;
+    readonly sha256: string;
+    readonly source: string;
+    readonly appliedAt: string;
+  }[];
+  /** The ledger as it was read from the target, in filename order. */
+  readonly ledger: readonly { readonly file: string; readonly appliedAt: string }[];
+}
+
+/** The fixture of the baseline named `name` (a SUPPORTED_RELEASES `name`). As
+ *  a ReleaseFixture its `tag` is that name, its `migrations` the release's
+ *  plus the out-of-band files, and its swarm record the release's own. */
+export function loadBaseline(name: string): BaselineFixture {
+  for (const entry of readdirSync(RELEASES_DIR, { withFileTypes: true })) {
+    const path = join(RELEASES_DIR, entry.name, "baseline.json");
+    if (!entry.isDirectory() || !existsSync(path)) continue;
+    const baseline = JSON.parse(readFileSync(path, "utf8")) as Omit<BaselineFixture, "tag" | "commit" | "swarm" | "migrations"> & {
+      readonly name: string;
+    };
+    if (baseline.name !== name) continue;
+    const release = loadRelease(baseline.release);
+    return {
+      ...baseline,
+      tag: name,
+      commit: release.commit,
+      swarm: release.swarm,
+      migrations: [...release.migrations, ...baseline.outOfBand.map(({ file, sha256 }) => ({ file, sha256 }))].sort(
+        (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0),
+      ),
+      verbatimDirs: [join(RELEASES_DIR, entry.name, "migrations"), join(RELEASES_DIR, release.tag, "migrations")],
+    };
+  }
+  throw new Error(`no fixture under ${RELEASES_DIR} has a baseline.json named ${JSON.stringify(name)}`);
 }
 
 /** One file as the release runner applies it: `file` is the name the ledger
@@ -66,7 +127,10 @@ export interface RunnerStep {
 
 /** The release's steps, its own bytes under its own names. */
 export function releaseSteps(release: ReleaseFixture): RunnerStep[] {
-  return release.migrations.map(({ file }) => ({ file, ddl: releaseBytes(release.tag, file).toString("utf8") }));
+  return release.migrations.map(({ file }) => ({
+    file,
+    ddl: (release.verbatimDirs ? fixtureBytes(release, file) : releaseBytes(release.tag, file)).toString("utf8"),
+  }));
 }
 
 /** v0.5.0's runner loop (backend/src/db/migrate.ts at the tag): one

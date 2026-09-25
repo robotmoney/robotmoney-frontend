@@ -360,6 +360,28 @@ test("a pending migration halts the run before ANY write, naming it and `bun run
   expect(n).toBe(0);
 });
 
+// A ledger that cannot be READ is not a ledger with pending files. The step
+// used to swallow every error on schema_migrations as "the table does not
+// exist" and report every migration as pending, sending the operator to
+// migrate a database that may already be current. A query error (here a
+// renamed column, standing in for a permission or connection failure) now
+// fails the step with that error's own message.
+test("a ledger query that errors fails schema-current with the real error, never as pending migrations", async () => {
+  delete process.env.ANALYTICS_TOKEN_FILE;
+  await sql`ALTER TABLE schema_migrations RENAME COLUMN name TO name_unreadable_probe`;
+  try {
+    const reports = await runProdBootstrap();
+    expect(reports.map((r) => r.name)).toEqual(["handle-namespace", "schema-current"]);
+    const current = reportFor(reports, "schema-current");
+    expect(current.status).toBe("failed");
+    expect(current.failing).toBe(true);
+    expect(current.summary).toContain('column "name" does not exist');
+    expect(current.summary).not.toContain("pending");
+  } finally {
+    await sql`ALTER TABLE schema_migrations RENAME COLUMN name_unreadable_probe TO name`;
+  }
+});
+
 test("prod-bootstrap imports no migration runner", () => {
   const source = readFileSync(join(import.meta.dir, "..", "scripts", "prod-bootstrap.ts"), "utf8");
   expect(source).not.toMatch(/from\s+["'][^"']*db\/migrate(\.ts)?["']/);

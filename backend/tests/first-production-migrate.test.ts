@@ -20,14 +20,22 @@
 // the terminal showed, the journal the command left beside its receipt, and a
 // database compared before and after — never by a module call.
 //
-// THE DATABASES. v0.5.0 predates 0063, so its database has no
+// WHICH LEDGER IS "v0.5.0's". The gate's text predates the read of
+// production's ledger (2026-09-25): production holds v0.5.0's 72 files plus
+// 0062_rm_readonly_sequence_select.sql, applied out of band, and the owner
+// ruled that observed set the one supported baseline
+// (backend/src/db/supported-releases.ts). So "exact" below is that set, and
+// v0.5.0's pure list is the "one file less" case, which refuses.
+//
+// THE DATABASES. The baseline predates 0063, so its database has no
 // `deployment_identity` table at all, which is the case production is in. It
-// is built from v0.5.0's own migration bytes by v0.5.0's runner loop, once,
-// without its last file; the ledger variants are copies of that one:
-//   exact    — plus the last file: the ledger IS v0.5.0's list;
-//   less     — as built: one file missing;
+// is built from the baseline's own bytes (v0.5.0's tag, then the archived
+// out-of-band file) by v0.5.0's runner loop, once, without its last file; the
+// ledger variants are copies of that one:
+//   exact    — plus the last file: the ledger IS production's observed list;
+//   less     — as built: one file missing, which is v0.5.0's pure list;
 //   renamed  — plus the last file's DDL recorded under another name;
-//   more     — exact plus the first branch file v0.5.0 lacks, applied.
+//   more     — exact plus the first branch file the baseline lacks, applied.
 // §9.1 step 1 (`rm_owner LOGIN PASSWORD …` through the provisioning login) is
 // performed on the cluster first, as it must be before any migrate run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -43,6 +51,7 @@ import {
   HEAD_FILES,
   MIGRATIONS_DIR,
   applyAsReleaseRunner,
+  loadBaseline,
   loadRelease,
   migrateAtTerminal,
   releaseSteps,
@@ -56,11 +65,11 @@ import {
 } from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
-const TAG = "v0.5.0";
-const release = loadRelease(TAG);
+const TAG = SUPPORTED_RELEASES[0]!.name;
+const release = loadBaseline(TAG);
 const RELEASE_FILES = release.migrations.map((m) => m.file);
 const LAST = RELEASE_FILES.at(-1)!;
-/** The first branch file v0.5.0 lacks, in apply order — the "one file more". */
+/** The first branch file the baseline lacks, in apply order — the "one file more". */
 const FIRST_UNSHIPPED = HEAD_FILES.find((file) => !RELEASE_FILES.includes(file))!;
 const RENAMED = LAST.replace(/\.sql$/, "_renamed.sql");
 
@@ -192,17 +201,19 @@ afterAll(async () => {
 });
 
 describe("the fixtures are the §10 gate's cases", () => {
-  test("SUPPORTED_RELEASES is v0.5.0 alone (D55 (8)), and `exact` records exactly its list with no identity table", async () => {
-    expect(SUPPORTED_RELEASES.map((r) => r.tag)).toEqual([TAG]);
+  test("SUPPORTED_RELEASES is production's observed ledger alone, and `exact` records exactly its list with no identity table", async () => {
+    expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([TAG]);
+    expect(LAST).toBe("0062_rm_readonly_sequence_select.sql");
     const exact = await fingerprint(DB.exact);
     expect(exact.ledger).toEqual([...SUPPORTED_RELEASES[0]!.migrations]);
     expect(exact.relations).not.toContain("deployment_identity");
     expect(exact.relations).not.toContain("schema_manifest");
   });
 
-  test("each variant differs from v0.5.0's list by exactly one file", async () => {
+  test("each variant differs from the baseline's list by exactly one file, and `less` is v0.5.0's pure list", async () => {
     const list = SUPPORTED_RELEASES[0]!.migrations;
     expect((await fingerprint(DB.less)).ledger).toEqual(list.filter((file) => file !== LAST));
+    expect((await fingerprint(DB.less)).ledger).toEqual(loadRelease("v0.5.0").migrations.map((m) => m.file));
     expect((await fingerprint(DB.more)).ledger).toEqual([...list, FIRST_UNSHIPPED].sort());
     expect((await fingerprint(DB.renamed)).ledger).toEqual([...list.filter((file) => file !== LAST), RENAMED].sort());
   });
@@ -226,7 +237,7 @@ describe("§10 W2 — First production migrate", () => {
     await expectRefusedAndUnchanged(DB.more, run, before, "gates");
   });
 
-  test("a ledger with one file LESS refuses at the gates, naming the missing file, and changes nothing", async () => {
+  test("a ledger with one file LESS — v0.5.0's pure list — refuses at the gates, naming the missing file, and changes nothing", async () => {
     const before = await fingerprint(DB.less);
     const run = await operator(DB.less, "prod", typed("y"));
     expect(run.screen).toContain(`1 missing (${LAST})`);
@@ -282,7 +293,7 @@ describe("§10 W2 — First production migrate", () => {
     expect(await fingerprint(DB.exact)).toEqual(before);
   });
 
-  test("no row, v0.5.0's exact ledger, RM_ENV=prod, a typed rm_owner and y: migrates once and receipts the pre-identity state", async () => {
+  test("no row, production's exact observed ledger, RM_ENV=prod, a typed rm_owner and y: migrates once and receipts the pre-identity state", async () => {
     const run = await operator(DB.exact, "prod", typed("y"));
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain(OWNER_PASSWORD);
@@ -310,7 +321,7 @@ describe("§10 W2 — First production migrate", () => {
     });
   }, 180_000);
 
-  test("a second run with no row still refuses: its ledger no longer equals v0.5.0's", async () => {
+  test("a second run with no row still refuses: its ledger no longer equals the baseline's", async () => {
     const before = await fingerprint(DB.exact);
     const run = await operator(DB.exact, "prod", typed("y"));
     expect(run.screen).toContain("no deployment_identity row");

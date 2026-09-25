@@ -156,19 +156,33 @@ async function runHandleNamespaceStep(): Promise<StepResult> {
 // release, receipted", and §2 puts every migration under the target lock and
 // its fence. So this step only reads the ledger and names what is missing.
 
-async function getAppliedMigrations(): Promise<Set<string>> {
-  try {
-    const rows = await sql<{ name: string }[]>`SELECT name FROM schema_migrations`;
-    return new Set(rows.map((r) => r.name));
-  } catch {
-    // schema_migrations doesn't exist yet on a brand-new database.
-    return new Set();
-  }
+// An ABSENT ledger is read from `to_regclass`, never inferred from an error:
+// a connection or permission error on schema_migrations used to be swallowed
+// as "the table does not exist" and reported as every migration pending,
+// sending the operator to migrate a database that may already be current. A
+// query error now throws, and this step fails with that error's own message.
+// (The same comparison is scripts/schema-current.ts `checkSchemaCurrent`;
+// calling it from here moves prod-bootstrap off the scripts raw-SQL backlog,
+// which is backend/tests/db-registry.test.ts's to shrink.)
+async function getAppliedMigrations(): Promise<Set<string> | null> {
+  const [{ regclass }] = await sql<{ regclass: string | null }[]>`
+    SELECT to_regclass('public.schema_migrations')::text AS regclass`;
+  if (regclass === null) return null;
+  const rows = await sql<{ name: string }[]>`SELECT name FROM schema_migrations`;
+  return new Set(rows.map((r) => r.name));
 }
 
 async function runSchemaCurrentStep(migrationsDir: string): Promise<StepResult> {
   const onDisk = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
   const applied = await getAppliedMigrations();
+  if (applied === null) {
+    console.error(
+      "[prod-bootstrap] schema_migrations does not exist: this database has never been migrated. A blank database " +
+        "is created from the snapshot by its bootstrap (spec §8.1), never by this orchestrator. Nothing has been " +
+        "written; the remaining steps are not attempted.",
+    );
+    return { status: "failed", summary: "no schema_migrations ledger — the database was never bootstrapped", failing: true };
+  }
   const pending = onDisk.filter((file) => !applied.has(file));
   if (pending.length > 0) {
     console.error(

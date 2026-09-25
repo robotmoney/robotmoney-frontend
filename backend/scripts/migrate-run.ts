@@ -92,11 +92,11 @@
 // THE ONE RUN WITHOUT AN IDENTITY ROW
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// §4.3's one exception, D55 (5): production runs v0.5.0, which predates the
-// `deployment_identity` table (0063), so the first `bun run migrate` there
+// §4.3's one exception, D55 (5): production runs v0.5.0 plus one out-of-band
+// file (its observed ledger, ../src/db/supported-releases.ts), which predates
+// the `deployment_identity` table (0063), so the first `bun run migrate` there
 // meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
-// ledger's filename list equals one SUPPORTED_RELEASES entry's list exactly
-// (../src/db/supported-releases.ts), `rm_owner` is typed at the terminal, and
+// ledger's filename list equals one SUPPORTED_RELEASES baseline's list exactly, `rm_owner` is typed at the terminal, and
 // the operator answers an explicit `y`. `readPreIdentityState` decides the
 // first two; the typed password and the `y` are the remote path of
 // `migrateCommand`, and the state the operator said `y` to is handed to
@@ -215,10 +215,10 @@ export interface MigrateRunOptions extends MigrateGateOptions {
  * matched, and that ledger's filename list").
  */
 export interface PreIdentityState {
-  /** Which absence: v0.5.0 has no table at all; a database past 0063 may have
-   *  the table and no row. */
+  /** Which absence: production's baseline has no table at all; a database
+   *  past 0063 may have the table and no row. */
   readonly identity: "no table" | "no row";
-  /** The SUPPORTED_RELEASES tag whose filename list the ledger equals. */
+  /** The name of the SUPPORTED_RELEASES baseline whose filename list the ledger equals. */
   readonly release: string;
   /** The ledger's filename list, in filename order. */
   readonly ledger: readonly string[];
@@ -459,11 +459,11 @@ function describePreIdentity(state: PreIdentityState): string {
  *   - the ledger records a file the snapshot does not embody — the database ran
  *     a migration this snapshot cannot describe;
  *   - the snapshot embodies a file the ledger does not record while a LATER
- *     file is recorded. Production's ledger never recorded 0053 and 0062
- *     because scripts/ops/provision-db-role-taxonomy.sh applied them through
- *     psql: the runner would "apply" 0053 again, as a pending file, onto a
- *     schema that already has it. That is repaired by the §9.1 operator steps
- *     first, never by this run;
+ *     file is recorded — for instance a file applied through psql
+ *     (scripts/ops/provision-db-role-taxonomy.sh does that) without its
+ *     ledger row: the runner would "apply" it again, as a pending file, onto
+ *     a schema that already has it. That is repaired by the §9.1 operator
+ *     steps first, never by this run;
  *   - the pending files would not bring the ledger to the snapshot's list: a
  *     pending file the snapshot does not embody, or an embodied file that is
  *     neither recorded nor pending. The list the comparison would run at is
@@ -477,13 +477,14 @@ function describePreIdentity(state: PreIdentityState): string {
  * re-compares once a migration repairs the difference (§9.1 step 2).
  * prod-baseline.test.ts pins that outcome.
  *
- * ONE LEDGER IS NOT A PREFIX AND STILL NOT A GAP: the one a supported release
- * wrote (`preIdentity`, D55 (5)). v0.5.0's list lacks five files that sort
- * between files it has (0056_swarm_judge_requires_model.sql and four more up to
- * 0061_rm_worker_wallet_backfill_grant.sql): the branch numbered them after
- * the tag was cut. A ledger EQUAL to a release's list is not one psql wrote
- * out of band — it is that release, whole — so every embodied file it does not
- * record is a file the release never shipped, and it is pending like any other.
+ * ONE LEDGER IS NOT A PREFIX AND STILL NOT A GAP: the one a supported baseline
+ * names (`preIdentity`, D55 (5)). Production's observed list (v0.5.0 plus
+ * 0062_rm_readonly_sequence_select.sql) lacks six files that sort between
+ * files it has (0056_swarm_judge_requires_model.sql and five more up to
+ * 0062_rm_worker_analytics_ledger_read_grant.sql): the branch numbered them
+ * after the tag was cut. A ledger EQUAL to a baseline's list is that
+ * baseline, whole, so every embodied file it does not record is a file it
+ * never ran, and it is pending like any other.
  */
 async function assertBaselineGap(
   db: ReadDb,
@@ -957,7 +958,7 @@ export async function readPreIdentityState(db: ReadDb, options: MigrateGateOptio
   const ledger = await ledgerOf(db);
   const release = matchSupportedRelease(ledger);
   if (release === null) return null;
-  return { identity: identity.value === null ? "no row" : "no table", release: release.tag, ledger };
+  return { identity: identity.value === null ? "no row" : "no table", release: release.name, ledger };
 }
 
 /** For an operator run refused for a missing row: which guard of the one
@@ -967,7 +968,7 @@ async function describeWhyNoPreIdentityException(db: ReadDb, options: MigrateGat
   if (options.env !== "prod") return `${lead} RM_ENV=prod, and this run is RM_ENV=${options.env ?? "(unset)"}.`;
   if (options.connection !== "remote") return `${lead} a remote production target.`;
   return (
-    `${lead} a ledger exactly equal to one supported release's filename list, and this one matches none — ` +
+    `${lead} a ledger exactly equal to one supported baseline's filename list, and this one matches none — ` +
     `${describeUnmatchedLedger(await ledgerOf(db))}. A partly migrated or hand-edited ledger is repaired first.`
   );
 }

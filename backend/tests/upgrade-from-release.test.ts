@@ -6,13 +6,16 @@
 // WHICH RELEASES, AND WHERE THEIR SCHEMA COMES FROM
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is v0.5.0 alone
-// (D55 (8)): it is the release production runs (`releases-0.5.x` carries the
-// same 72 migration files; v0.5.1's 0062 was never tagged), and an upgrade path
-// from anything older is one no database will take. That module pins each
-// release's filename list; the first test below fails when it disagrees with
-// the fixture's release.json. Adding a release is a new decision, one fixture
-// directory and one entry there ONLY for a release built by v0.5.0's runner
+// SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is one baseline:
+// production's observed ledger, read 2026-09-25 — the 72 files of v0.5.0 plus
+// 0062_rm_readonly_sequence_select.sql, applied out of band from the archived
+// 0.5.x line on 2026-09-22 (owner-ruled ground truth; it supersedes D55 (8)'s
+// "v0.5.0 alone"). An upgrade path from anything else is one no database will
+// take. That module pins the baseline's filename list; the tests below fail
+// when it disagrees with the observed ledger in
+// fixtures/releases/production-2026-09-25/baseline.json or with v0.5.0's
+// release.json plus the out-of-band file. Adding a baseline is a new decision,
+// one fixture directory and one entry there ONLY for a target built by v0.5.0's runner
 // loop (`applyAsReleaseRunner`), which records no compat declaration. A release
 // whose own runner recorded compat (anything shipped with 0064's runMigrate)
 // also needs that runner modelled here, or its ledger rows above the baseline
@@ -40,12 +43,12 @@
 // THE UPGRADE IS THE OPERATOR'S: THE FIRST PRODUCTION MIGRATE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// v0.5.0 predates 0063, so its database has no `deployment_identity` table and
-// no row to enroll it. The upgrade runs exactly as production's will (spec
+// The baseline predates 0063, so its database has no `deployment_identity`
+// table and no row to enroll it. The upgrade runs exactly as production's will (spec
 // §9.1, D55 (5)): `bun run migrate` as a PROCESS under a terminal, RM_ENV=prod,
 // the rm_owner password typed at the masked prompt, an explicit `y` — the one
-// run §4.3 allows without the row, because the ledger equals v0.5.0's filename
-// list exactly. It applies EVERY pending file, including the pre-compat ones at
+// run §4.3 allows without the row, because the ledger equals the baseline's
+// filename list exactly. It applies EVERY pending file, including the pre-compat ones at
 // or below 0063 (their compat stays NULL, D53 decision 3), reconciles grants,
 // compares the live schema with the snapshot (§9.1 step 2) and publishes the
 // first manifest. Nothing is applied around the command. The refusals that
@@ -73,9 +76,10 @@ import {
   HEAD_FILES,
   MIGRATIONS_DIR,
   applyAsReleaseRunner,
+  fixtureBytes,
+  loadBaseline,
   loadRelease,
   migrateAtTerminal,
-  releaseBytes,
   releaseSteps,
   restoreLogins,
   restoreRoles,
@@ -221,33 +225,64 @@ INSERT INTO swarm_waitlist (email, email_norm, notified_at) VALUES ('Wait@Exampl
 // Fixture integrity — needs no database
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("the release fixtures are the releases' own bytes", () => {
-  test("SUPPORTED_RELEASES is v0.5.0 alone (D55 (8)), and each entry has a fixture", () => {
-    expect(SUPPORTED_RELEASES.map((r) => r.tag)).toEqual(["v0.5.0"]);
+describe("the baseline fixtures are the targets' own ledgers and bytes", () => {
+  test("SUPPORTED_RELEASES is production's observed ledger alone (2026-09-25), and it has a fixture", () => {
+    expect(SUPPORTED_RELEASES.map((r) => r.name)).toEqual([
+      "v0.5.0+0062_rm_readonly_sequence_select (production ledger 2026-09-25)",
+    ]);
   });
 
-  for (const { tag, migrations } of SUPPORTED_RELEASES) {
-    test(`${tag}: SUPPORTED_RELEASES pins exactly the filename list the tag recorded`, () => {
+  for (const { name: tag, release: releaseTag, outOfBand, migrations } of SUPPORTED_RELEASES) {
+    test(`${tag}: SUPPORTED_RELEASES pins exactly the ledger read from the target`, () => {
       // The first production migrate matches a ledger against this list (§9.1,
-      // D55 (5)); a list that drifted from the release's own record would let
-      // a ledger the release never wrote through, or refuse the one it did.
-      expect([...migrations]).toEqual(loadRelease(tag).migrations.map((m) => m.file));
+      // D55 (5)); a list that drifted from what production recorded would
+      // refuse production, or admit a ledger production never wrote.
+      const baseline = loadBaseline(tag);
+      expect([...migrations]).toEqual(baseline.ledger.map((row) => row.file));
+      expect(baseline.ledger.length).toBe(73);
+      expect(baseline.release).toBe(releaseTag);
     });
 
-    test(`${tag}: every file hashes to what the tag recorded`, () => {
-      const release = loadRelease(tag);
-      expect(release.tag).toBe(tag);
-      expect(release.migrations.length).toBeGreaterThan(0);
-      const drifted = release.migrations
-        .filter(({ file, sha256: recorded }) => sha256(releaseBytes(tag, file)) !== recorded)
+    test(`${tag}: it is its release's filename list plus exactly its out-of-band files`, () => {
+      const released = loadRelease(releaseTag).migrations.map((m) => m.file);
+      expect(outOfBand.filter((file) => released.includes(file))).toEqual([]);
+      expect([...migrations].sort()).toEqual([...released, ...outOfBand].sort());
+      expect(loadBaseline(tag).outOfBand.map((o) => o.file)).toEqual([...outOfBand]);
+    });
+
+    test(`${tag}: every file hashes to what the tag or the archive recorded`, () => {
+      const baseline = loadBaseline(tag);
+      expect(baseline.migrations.length).toBe(migrations.length);
+      const drifted = baseline.migrations
+        .filter(({ file, sha256: recorded }) => sha256(fixtureBytes(baseline, file)) !== recorded)
         .map(({ file }) => file);
       // A file edited on the branch after the tag needs its release bytes kept
-      // under fixtures/releases/<tag>/migrations/ — never a re-recorded hash.
+      // under fixtures/releases/<tag>/migrations/ — never a re-recorded hash;
+      // an out-of-band file keeps its archived bytes beside baseline.json.
       expect(drifted).toEqual([]);
     });
 
+    test(`${tag}: the branch's copy of each out-of-band file runs the same SQL as the archived one`, () => {
+      // The reference database applies the branch's copy; the upgraded one
+      // recorded the archived copy. They must differ in comments alone, or the
+      // catalog comparison below compares two different post-states.
+      const statements = (text: string): string =>
+        text
+          .split("\n")
+          .filter((line) => !/^\s*--/.test(line))
+          .map((line) => line.replace(/\s+--.*$/, "").trimEnd())
+          .filter((line) => line.trim() !== "")
+          .join("\n");
+      const baseline = loadBaseline(tag);
+      for (const file of outOfBand) {
+        expect(statements(readFileSync(join(MIGRATIONS_DIR, file), "utf8"))).toBe(
+          statements(fixtureBytes(baseline, file).toString("utf8")),
+        );
+      }
+    });
+
     test(`${tag}: it records the swarm schedule and job kinds it seeded, and 0072 deletes every one of them`, () => {
-      const { scheduleKinds, jobKinds } = loadRelease(tag).swarm;
+      const { scheduleKinds, jobKinds } = loadBaseline(tag).swarm;
       expect(scheduleKinds.length).toBeGreaterThan(0);
       // Every schedule kind is also a job kind: a seeded row only enqueues
       // kinds a handler was registered for.
@@ -257,7 +292,7 @@ describe("the release fixtures are the releases' own bytes", () => {
     });
 
     test(`${tag}: its migrations are a subset of the branch's — an upgrade never meets a file the branch lacks`, () => {
-      const release = loadRelease(tag);
+      const release = loadBaseline(tag);
       const onBranch = new Set(HEAD_FILES);
       expect(release.migrations.map((m) => m.file).filter((file) => !onBranch.has(file))).toEqual([]);
     });
@@ -302,9 +337,9 @@ afterAll(async () => {
   }
 });
 
-for (const { tag } of SUPPORTED_RELEASES) {
+for (const [index, { name: tag }] of SUPPORTED_RELEASES.entries()) {
   describe(`upgrade from ${tag}, populated`, () => {
-    const name = `rm_upgrade_${tag.replace(/\W/g, "_")}_${suffix}`;
+    const name = `rm_upgrade_${index}_${suffix}`;
     let db: postgres.Sql<{}>;
     let release: ReleaseFixture;
     let appliedByRun: readonly string[] = [];
@@ -313,7 +348,7 @@ for (const { tag } of SUPPORTED_RELEASES) {
     let predatesIdentity = false;
 
     beforeAll(async () => {
-      release = loadRelease(tag);
+      release = loadBaseline(tag);
       await admin.unsafe(`CREATE DATABASE ${name}`);
       created.push(name);
       db = connect(name);
