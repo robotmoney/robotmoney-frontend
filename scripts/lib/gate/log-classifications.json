@@ -97,9 +97,15 @@
   },
   {
     "id": "external-market-data-timeout",
-    "match": "\\[extract\\] fetch \\S+ \\((yahoo|blockchain_com|fred|defillama\\w*)\\) FAILED: The operation timed out",
+    "match": "\\[extract\\] fetch \\S+ \\((yahoo|blockchain_com|fred|defillama\\w*|geckoterminal\\w*|coinmetrics)\\) FAILED: The operation timed out",
     "class": "external",
     "reason": "A market-data provider timing out; the extractor falls back to the persisted real floor."
+  },
+  {
+    "id": "external-regime-run-deadline",
+    "match": "\\[analytics-producer\\] regime failed: The operation timed out",
+    "class": "external",
+    "reason": "The producer's regime run hit its shared fetch deadline while every provider fetch was still outstanding (production 2026-09-25 18:35:17: every source timed out in the same millisecond); no vintage is written for that slot, nothing synthetic, and the next scheduled run retries."
   },
   {
     "id": "external-base-rpc",
