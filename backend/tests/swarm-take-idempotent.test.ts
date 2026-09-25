@@ -26,7 +26,14 @@
 //   129 — the window, not the storage state, freezes a take.
 //   126 — two containers holding DIFFERENT tokens for one member, overlapping
 //         across a key rebind, leave one final take; an identical retry adds
-//         no row.
+//         no row. THE MECHANISM IS AUTH, NOT THE TAKE PATH'S LOCK: a member
+//         holds exactly one valid bearer at a time (a rebind deactivates every
+//         prior key in its transaction, and memberIdForToken requires
+//         `k.active`), so the old container is refused with 401 and two
+//         different tokens can never both be accepted. The take path's own
+//         race guarantee — one final take under genuinely concurrent accepted
+//         submissions — is proven separately with ONE token ("two amendments
+//         racing through the route").
 //   148 — a rebind keeps old takes verifying; a new take signed with the
 //         superseded key is refused with 403 and writes nothing.
 //
@@ -43,6 +50,17 @@ import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { activeSubject, rid, sessionDate, sessionRow } from "./support/epoch-fixtures.ts";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createTakeWorkspace,
+  findPersistedSubmissions,
+  sendSignedSubmission,
+  submitTake as runnerSubmitTake,
+} from "../../scripts/agent/participant/take-runner.ts";
+import type { ParticipantConfig } from "../../scripts/agent/participant/main.ts";
 
 // Per TEST: members are global and capped (SWARM_ROSTER_CAP), and several
 // tests below count every row a member owns.
@@ -166,6 +184,70 @@ test("a retry still returns the existing record after the window closed and the 
   if (turned.ok) expect(await takeRows(turned.openedSessionId, m.memberId)).toHaveLength(0);
 });
 
+test("130 over HTTP: the participant's own take-runner persists the signed bytes, and resending them after a crash-restart settles as already_submitted against the real route", async () => {
+  // The participant half of 130, run with the participant's OWN code against
+  // the real submit route behind a live HTTP server — not a fake API, and not
+  // hand-built requests. submitTake fetches the canonical bytes from the
+  // signing-payload route, signs, writes the request into the workspace, then
+  // sends; the "restarted" container finds those bytes on disk and resends
+  // them with sendSignedSubmission.
+  const kp = generateKeyPairSync("ed25519");
+  const privateJwk = kp.privateKey.export({ format: "jwk" }) as Record<string, unknown>;
+  const publicKeyB64 = Buffer.from((kp.publicKey.export({ format: "jwk" }) as { x: string }).x, "base64url").toString("base64");
+  const memberId = rid("m");
+  const reg = await ic.registerMember({ memberId, name: memberId, publicKey: publicKeyB64 });
+  if (!("token" in reg) || !reg.token) throw new Error(`registerMember failed: ${JSON.stringify(reg)}`);
+  const { subjectId, sessionId, date } = await openEpoch("runner_http");
+
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const res = await handleSwarm(req, new URL(req.url));
+      if (!res) return new Response("not found", { status: 404 });
+      if (res instanceof Response) return res;
+      return Response.json(res.body, { status: res.status });
+    },
+  });
+  const root = mkdtempSync(join(tmpdir(), "rm-take-runner-http-"));
+  try {
+    const config = {
+      apiUrl: `http://127.0.0.1:${server.port}`,
+      name: memberId,
+      kind: "agent",
+      memberId,
+      token: reg.token,
+      identity: { publicKeyB64, privateJwk },
+      modelKey: "",
+      takeCommand: [],
+      pollIntervalMs: 5_000,
+      takeTimeoutMs: 60_000,
+      workspaceRoot: root,
+    } as unknown as ParticipantConfig;
+    const work = { sessionId, subjectId, date };
+    const draft = { memberId, date, subjectId, stance: "neutral", confidence: 0.5, body: "authored by the runner" };
+
+    const first = await runnerSubmitTake(config, work, draft, createTakeWorkspace(root, sessionId, memberId));
+    expect(first.status).toBe("submitted");
+    expect(first.verified).toBe(true);
+    expect(typeof first.takeId).toBe("string");
+
+    // Crash-restart: the new process knows only what the workspace holds.
+    const persisted = findPersistedSubmissions(root, memberId, sessionId);
+    expect(persisted).toHaveLength(1);
+    const resent = await sendSignedSubmission(config, persisted[0]!.record.bytes);
+    expect(resent).toMatchObject({ status: "already_submitted", takeId: first.takeId, verified: true });
+
+    const rows = await takeRows(sessionId, memberId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(first.takeId!);
+    expect(rows[0]!.nonce).toBe(persisted[0]!.record.nonce);
+    expect(rows[0]!.final).toBe(true);
+  } finally {
+    server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a recorded nonce under DIFFERENT signed bytes is a replay: 409, no row, and no signature work", async () => {
   const m = await member();
   const { subjectId, sessionId, date } = await openEpoch("replay");
@@ -260,6 +342,9 @@ test("every read that means 'the session's takes' selects on the FINAL flag, not
   // the accepting trigger marks the newest final — which is exactly why only a
   // disagreement can tell which one a read uses.
   const m = await member();
+  // A second member, created before the epoch opens so it is seated; used by
+  // the take_count red control at the end.
+  const other = await member();
   const { subjectId, sessionId, date } = await openEpoch("flag_reads");
   await send(m.token, await sign(m, date, subjectId, "revision one"));
   await send(m.token, await sign(m, date, subjectId, "revision two"));
@@ -280,6 +365,22 @@ test("every read that means 'the session's takes' selects on the FINAL flag, not
 
   const listed = await ic.listSessions({ subject: subjectId });
   expect((listed.sessions[0] as { takeCount?: number }).takeCount).toBe(1);
+
+  // RED CONTROL FOR take_count. Moving the flag between one member's rows
+  // cannot tell `count(*) WHERE final` from the old `count(DISTINCT
+  // member_id)`: both say 1. A second member whose every row has been cleared
+  // (as the owner) has takes but no final take, so the two counts now differ —
+  // 2 by member, 1 by flag — and take_count must follow the flag. The frozen
+  // take set, which settlement digests, must leave that member out too.
+  expect((await send(other.token, await sign(other, date, subjectId, "other member"))).status).toBe(201);
+  expect((await ic.listSessions({ subject: subjectId })).sessions[0]).toMatchObject({ takeCount: 2 });
+  await sql`UPDATE swarm_recommendations SET final = false WHERE session_id = ${sessionId} AND member_id = ${other.memberId}`;
+  const [{ byMember }] = await sql<{ byMember: number }[]>`
+    SELECT count(DISTINCT member_id)::int AS "byMember" FROM swarm_recommendations WHERE session_id = ${sessionId}`;
+  expect(byMember).toBe(2);
+  expect((await ic.listSessions({ subject: subjectId })).sessions[0]).toMatchObject({ takeCount: 1 });
+  expect((await ic.loadFrozenTakeSet(sessionId))!.takes.map((t) => t.body)).toEqual(["revision one"]);
+  expect((await ic.getSessionById(sessionId))!.takes.map((t) => t.body)).toEqual(["revision one"]);
 
   // The permalink's forward pointer names the final take, whichever revision
   // it is: revision two now points at revision one, and revision one at none.
@@ -360,7 +461,7 @@ test("two copies of ONE signed submission racing add one row, and both are answe
   expect(await takeRows(sessionId, m.memberId)).toHaveLength(1);
 });
 
-test("an old and a new container holding DIFFERENT tokens for one member, overlapping across a key rebind, leave ONE final take; an identical retry adds no row", async () => {
+test("an old and a new container holding DIFFERENT tokens for one member, overlapping across a key rebind, leave ONE final take — because only one token is ever valid, the old one is refused by auth; an identical retry adds no row", async () => {
   const m = await member();
   const { subjectId, sessionId, date } = await openEpoch("overlap");
   const oldContainer: Container = { memberId: m.memberId, token: m.token, privateKey: m.privateKey };
@@ -376,6 +477,18 @@ test("an old and a new container holding DIFFERENT tokens for one member, overla
   expect(rotated.ok).toBe(true);
   const newContainer: Container = { memberId: m.memberId, token: (rotated as unknown as { token: string }).token, privateKey: m.privateKey };
   expect(newContainer.token).not.toBe(oldContainer.token);
+
+  // THE MECHANISM, stated as an assertion rather than left to the 401s below:
+  // the rebind left exactly ONE active credential for the member, the new one.
+  // Two different tokens are never valid at once, so overlapping containers
+  // cannot both be accepted — the one-final-take outcome here is decided by
+  // auth. (The take path's own race guarantee is the single-token race test.)
+  const [{ activeKeys }] = await sql<{ activeKeys: number }[]>`
+    SELECT count(*)::int AS "activeKeys" FROM swarm_member_keys
+     WHERE member_id = ${m.memberId} AND active AND token_hash IS NOT NULL`;
+  expect(activeKeys).toBe(1);
+  expect(await ic.memberIdForToken(oldContainer.token)).toBeNull();
+  expect(await ic.memberIdForToken(newContainer.token)).toBe(m.memberId);
 
   // OVERLAP: the old container resends a pending take and authors another,
   // while the new container authors its own — all at once.

@@ -16,12 +16,19 @@
 //   * IN THE SOURCE, every SQL statement under backend/src that writes
 //     `swarm_sessions` with the literal `'scheduled'` is found by parsing, and
 //     the set of writers is pinned. The retired admin session create
-//     (`createSessionAdmin`) was one; it is deleted (D55 decision 4). The one
-//     writer left is `domain.openSession`, the legacy fixture helper ~20 older
-//     test files still build sessions with — and the last test proves no
-//     route, worker handler, scheduler or script reaches it. When those
-//     fixtures move to openEpoch and it is deleted, the pinned set becomes
-//     empty; it may only shrink.
+//     (`createSessionAdmin`) was one; it is deleted (D55 decision 4).
+//
+// THIS FILE DOES NOT CLOSE THE CRITERION 82 RESIDUAL. One writer is left:
+// `domain.openSession`, the legacy fixture helper about 24 test files still
+// build sessions with, beside the retired admin verbs cancel/close/reopen/
+// aggregate/publishSessionAdmin that several of them still drive. The residual
+// is closed only when those fixtures move to openEpoch/turnOverEpoch and
+// openSession and the five verbs are deleted — at which point the pinned set
+// below must become `[]`. Until then the pin is a SHRINK-ONLY RATCHET that
+// stops a new writer appearing, and the last test shows no route, worker,
+// scheduler or script reaches the one that remains. Neither is proof that no
+// lifecycle path writes `scheduled`: openSession IS a lifecycle path, reached
+// only from tests.
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -152,9 +159,12 @@ test("the retired admin session create is gone: no module exports it, and no rou
   }
 });
 
-test("in the source: the only statement under backend/src that writes `scheduled` into swarm_sessions is the legacy openSession fixture helper", () => {
-  // RED CONTROL: the parser finds the writer that does exist, so an empty
-  // answer elsewhere would be a real absence, not a blind scan.
+test("RESIDUAL RATCHET (criterion 82 stays open): the one statement under backend/src still writing `scheduled` is the legacy openSession fixture helper, and no new writer may appear", () => {
+  // NOT A PROOF OF CRITERION 82. The residual closes when this is `[]`, which
+  // needs openSession (and the retired admin session verbs) deleted once the
+  // test fixtures that call them move to openEpoch/turnOverEpoch. The pin may
+  // only shrink. The non-empty answer also shows the parser finds a writer
+  // that exists, so `[]` later will be a real absence, not a blind scan.
   expect(scheduledWriters()).toEqual(["src/swarm/domain.ts:openSession"]);
 });
 
