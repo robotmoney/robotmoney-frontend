@@ -308,14 +308,30 @@ export function buildArgs(services: string[] = []): string[] {
   return ["build", ...services];
 }
 
+// `scale` is the replica count per service (`--scale worker-swarm=4`). It is
+// emitted ONLY for a service this call actually starts: compose applies
+// `--scale` to the project model, and naming a service here that the call
+// does not target would at best be noise and at worst (a future compose)
+// start it outside the phase that owns it. The smoke's swarm lane is the one
+// consumer today — its replica count is a cadence value (SmokeCadence.
+// swarmWorkers), so concurrent sessions for several subjects never queue a
+// lifecycle job behind another subject's minutes-long judge.
 export function upArgs(
   services: string[],
-  opts: { wait?: boolean; waitTimeoutSeconds?: number } = {},
+  opts: { wait?: boolean; waitTimeoutSeconds?: number; scale?: Readonly<Record<string, number>> } = {},
 ): string[] {
   const wait = opts.wait
     ? ["--wait", "--wait-timeout", String(opts.waitTimeoutSeconds ?? 600)]
     : [];
-  return ["up", "-d", ...wait, ...services];
+  const scale = Object.entries(opts.scale ?? {})
+    .filter(([service]) => services.includes(service))
+    .flatMap(([service, replicas]) => {
+      if (!Number.isInteger(replicas) || replicas < 1) {
+        throw new Error(`--scale ${service}=${replicas}: a replica count must be a whole number of at least 1`);
+      }
+      return ["--scale", `${service}=${replicas}`];
+    });
+  return ["up", "-d", ...wait, ...scale, ...services];
 }
 
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready

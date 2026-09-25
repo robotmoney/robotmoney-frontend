@@ -1146,6 +1146,10 @@ async function main(): Promise<void> {
     migrateScriptArgs: [...scenario.migrateScriptArgs],
     preflight: composePostgres ? undefined : classifyDatabase,
     initialize: initializeScenario, deferredServices: ["analytics-producer"],
+    // The swarm lane's replica count is a CADENCE value (SmokeCadence.
+    // swarmWorkers): one in production, one per concurrent session otherwise,
+    // so no subject's lifecycle job queues behind another subject's judge.
+    scale: { "worker-swarm": cadence.swarmWorkers },
   }));
 
   if (process.env.CI && smokeMode) {
