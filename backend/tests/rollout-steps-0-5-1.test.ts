@@ -199,6 +199,15 @@ describe("v0.5.1 carries exactly one migration, and it is the gate repair", () =
     "0081_stream_event_counter.sql",
     "0082_judge_config_two_modes.sql",
     "0083_clear_forged_member_operator.sql",
+    //   0084 — admin session and passkey `revoked_at` tombstones (D55 (6)).
+    //   0085 — admin WebAuthn challenge `consumed_at` tombstone (D55 (6)).
+    //   0086 — wallet samples' `superseded_at` and live-row keys (D55 (6)).
+    //   0087 — `swarm_member_keys.spoof_generation_id` (smoke spec §6.4).
+    //          All four `additive`: the code that writes them lands in wave 5.
+    "0084_admin_revocation_tombstones.sql",
+    "0085_webauthn_challenge_consumed_at.sql",
+    "0086_wallet_sample_superseded_at.sql",
+    "0087_member_key_spoof_generation.sql",
   ];
 
   test("the job ledger 0070 created is dropped by a later file, never by deleting 0070 (criterion 105)", () => {
