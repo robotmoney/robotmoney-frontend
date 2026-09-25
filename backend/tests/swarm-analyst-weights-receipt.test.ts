@@ -72,9 +72,8 @@ async function member() {
   return { id, token: r.token, privateKey };
 }
 
-/** Submit one signed take, the vector (if any) INSIDE the signed canonical bytes. */
-async function submit(date: string, subjectId: string, weights: Vector) {
-  const m = await member();
+/** Submit one signed take by `m`, the vector (if any) INSIDE the signed canonical bytes. */
+async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subjectId: string, weights: Vector) {
   const sub = {
     memberId: m.id, date, subjectId, nonce: rid("n"),
     stance: "neutral", confidence: 0.5, body: `${m.id} take`,
@@ -119,11 +118,16 @@ async function judgingEpoch(
   await sql`UPDATE swarm_judge_config SET min_takes = ${vectors.length} WHERE id = 1`;
   const subjectId = await activeSubject(prefix, 3600);
   await sql`UPDATE swarm_subjects SET recommendation_type = ${type} WHERE id = ${subjectId}`;
+  // One member per take, active BEFORE the epoch opens: an epoch seats every
+  // active member at open and its roster is fixed after that, so a member
+  // activated mid-epoch joins the next one (admin-surface.md US-C3).
+  const members = [];
+  for (let i = 0; i < vectors.length; i++) members.push(await member());
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
   const date = sessionDate(await sessionRow(opened.sessionId));
   if (opts.retypeForTakes) await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subjectId}`;
-  for (const v of vectors) await submit(date, subjectId, v);
+  for (const [i, v] of vectors.entries()) await submit(members[i]!, date, subjectId, v);
   if (opts.retypeForTakes) await sql`UPDATE swarm_subjects SET recommendation_type = ${type} WHERE id = ${subjectId}`;
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);

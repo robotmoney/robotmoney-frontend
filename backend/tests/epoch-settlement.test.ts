@@ -465,12 +465,14 @@ test("no_consensus and not_judged are OUTCOMES, never lifecycle states: the data
 test("a take is accepted into N+1 while N is judging", async () => {
   // §4.4: "Settlement of session N and the open window of N+1 are
   // independent: nothing about N blocks submissions to N+1."
+  // Active before the turnover that opens N+1: an epoch seats every active
+  // member at open and its roster is fixed after that (admin-surface.md US-C3).
+  const m = await activeMember();
   const { subjectId, sessionId, successorId } = await closedEpoch("st_n_plus_one", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("judging");
 
-  const m = await activeMember();
   const date = sessionDate(await sessionRow(successorId));
   const r = await submitTake(m, date, subjectId);
   expect(r.ok).toBe(true);
