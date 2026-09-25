@@ -88,8 +88,20 @@
 
 
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { InstancePaths } from "./smoke-state.ts";
 
@@ -691,15 +703,41 @@ export interface Journal {
   readonly phases: readonly PhaseRecord[];
 }
 
-/** Write and fsync: a record still in a page cache is a record that did not exist. */
-function writeDurably(file: string, text: string, flag: "w" | "wx" = "w"): void {
-  writeFileSync(file, text, { flag, mode: 0o600 });
-  const fd = openSync(file, "r");
+/** fsync one path, a file or a directory. */
+function fsyncPath(path: string): void {
+  const fd = openSync(path, "r");
   try {
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Write and fsync, atomically: a record still in a page cache is a record that
+ * did not exist, and a record half written is one a reader refuses.
+ *
+ * The text goes to a staging file beside the target and is fsynced there. Only
+ * then does it take the target's name: `w` renames it over the live file, and
+ * `wx` links it in place, which fails with `EEXIST` when the target exists, as
+ * the exclusive create did. A concurrent reader (`bun smoke:status`, a resume)
+ * sees the old file or the new one, never an empty or partial one. Writing the
+ * target in place truncated it first, and a reader between the truncate and the
+ * write read a malformed journal. backend/scripts/migrate-journal.ts `persist`
+ * stages and renames the same way. The directory is fsynced last, so the new
+ * name survives a crash too.
+ */
+function writeDurably(file: string, text: string, flag: "w" | "wx" = "w"): void {
+  const staging = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(staging, text, { flag: "w", mode: 0o600 });
+    fsyncPath(staging);
+    if (flag === "wx") linkSync(staging, file);
+    else renameSync(staging, file);
+  } finally {
+    rmSync(staging, { force: true });
+  }
+  fsyncPath(dirname(file));
 }
 
 /** Read a versioned JSON state file, refusing on malformed or unknown-version content. */

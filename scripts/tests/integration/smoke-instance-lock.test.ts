@@ -11,7 +11,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Journal } from "../../lib/smoke-journal.ts";
 import { readStackState } from "../../lib/smoke-state.ts";
 import type { MigrateJournalFile } from "../../../backend/scripts/migrate-journal.ts";
 import {
@@ -32,31 +31,6 @@ import {
 
 let h: BootHarness | undefined;
 let holder: RunningBoot | undefined;
-
-/**
- * The journal of a boot that is STILL WRITING it.
- *
- * THIS SPIN WORKS AROUND A PRODUCT DEFECT; IT DOES NOT FIX ONE. Smoke rewrites
- * its live journal in place (scripts/lib/smoke-journal.ts `writeDurably`:
- * `writeFileSync` with flag `w`, which truncates and then writes), so any
- * concurrent reader can land between the truncate and the write and read an
- * empty or partial file. For `bun smoke:status` or a resume that is a
- * "Refusing: the journal ... is malformed" (`readVersioned`); here
- * `journalNow` answers `null`. This file once failed in the full integration
- * run on exactly that. The fix belongs in smoke-journal.ts: stage the file and
- * rename it over the live one, as backend/scripts/migrate-journal.ts `persist`
- * already does. Once that write is atomic, delete this function and read with
- * `journalNow(...)!` again, so a torn read fails this test instead of being
- * retried away.
- */
-function settledJournal(harness: BootHarness): Journal {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const journal = journalNow(harness);
-    if (journal !== null) return journal;
-    if (Date.now() > deadline) throw new Error(`the journal of ${harness.instance} never parsed within 10s`);
-  }
-}
 
 /**
  * The records a refused process must have left alone, compared the only way a
@@ -92,10 +66,10 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
       const j = journalNow(h!);
       return existsSync(h!.paths.lockFile) && j !== null && j.phases.some((r) => r.phase === "prepare");
     }, 120_000, "the first boot to take its lock and begin preparing", holder);
-    const planId = settledJournal(h).planId;
+    const planId = journalNow(h)!.planId;
     const lock = JSON.parse(readFileSync(h.paths.lockFile, "utf8")) as { holderPid: number; planId: string };
     expect(lock.holderPid).toBe(holder.proc.pid);
-    const phasesBefore = phaseList(settledJournal(h));
+    const phasesBefore = phaseList(journalNow(h)!);
 
     const second = spawnBoot(h);
     const code = await second.exited;
@@ -105,7 +79,7 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
     expect(out).toContain(`running plan ${planId}`);
     // It refused BEFORE anything: the holder's journal gained nothing from it,
     // and the lock still names the holder.
-    const journalAfter = settledJournal(h);
+    const journalAfter = journalNow(h)!;
     expect(journalAfter.planId).toBe(planId);
     expect(recordsLeftAlone(phasesBefore, phaseList(journalAfter))).toEqual([]);
     expect((JSON.parse(readFileSync(h.paths.lockFile, "utf8")) as { holderPid: number }).holderPid).toBe(holder.proc.pid);
@@ -118,7 +92,7 @@ describe("the deployment lock, across two `bun smoke` processes (criterion 15)",
     expect(down.code).not.toBe(0);
     expect(down.out).toContain(`Refusing: a \`bun smoke\` run (pid ${holder.proc.pid}, plan ${planId})`);
     expect(down.out).not.toContain("tearing down");
-    expect(settledJournal(h).closedAt).toBeNull();
+    expect(journalNow(h)!.closedAt).toBeNull();
     expect((JSON.parse(readFileSync(h.paths.lockFile, "utf8")) as { holderPid: number }).holderPid).toBe(holder.proc.pid);
     // The stack record is written in the prepare step, before any compose
     // call, so status and down can find this boot's project from here on.
@@ -239,7 +213,7 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
       const steps = (journalNow(x!)?.phases ?? []).filter((r) => r.phase === "prepare").map((r) => [r.step, r.status]);
       return steps.some(([step, status]) => step === "lock" && status === "committed") && steps.some(([step]) => step === "assemble");
     }, BOOT_TIMEOUT_MS, "the boot to hold the target lock and begin assembling", smokeRun);
-    const planId = settledJournal(x).planId;
+    const planId = journalNow(x)!.planId;
 
     // 1. Contention, two hostnames for one database: the boot used 127.0.0.1.
     //    The migrate receipts and journals into the instance's own state

@@ -24,9 +24,20 @@
 //   - "Receipt read by `smoke:status`."
 import { afterAll, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   assertPlanRedacted,
   closeOpenJournal,
@@ -915,6 +926,30 @@ describe("readJournal / openJournal — §1.3, an unparseable record is never an
     expect(journal?.phases[0]?.step).toBe("migrate");
     expect(journal?.phases[0]?.status).toBe("started");
     expect(journal?.phases[0]?.outcome).toBeNull();
+  });
+
+  test("each write replaces the journal whole, so a reader holding the old file never sees it truncated", async () => {
+    const paths = freshPaths();
+    const writer = openJournal(paths, { kind: "fresh-start", reason: "none" }, plan());
+    await writer.beginPhase("plan", null, expectations());
+    const before = readFileSync(paths.journalFile, "utf8");
+    const inodeBefore = statSync(paths.journalFile).ino;
+    // A concurrent reader (`smoke:status`, a resume) that opened the file
+    // before the next write. A write in place would truncate the bytes under it.
+    const reader = openSync(paths.journalFile, "r");
+    try {
+      await writer.commitPhase(outcome());
+      const held = Buffer.alloc(before.length);
+      expect(readSync(reader, held, 0, held.length, 0)).toBe(before.length);
+      expect(held.toString("utf8")).toBe(before);
+    } finally {
+      closeSync(reader);
+    }
+    // The live name now points at a new file holding the new record, and no
+    // staging file is left beside it.
+    expect(statSync(paths.journalFile).ino).not.toBe(inodeBefore);
+    expect(readJournal(paths)?.phases.map((r) => r.status)).toEqual(["committed"]);
+    expect(readdirSync(dirname(paths.journalFile)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   test("each committed preparation is recorded separately, not as one grouped `prepare`", async () => {
