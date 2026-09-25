@@ -416,4 +416,4 @@ Before its first API call the page reads its own range from `/version.json` and 
 
 ### 13.5 Open question
 
-**T26, not decided here.** The API still reads the assembled site directory (`_static`) to report the served site's identity at `/version` and `/health`. Once the site switches on its own, that report describes whichever directory the API can see, which may not be the one `website-server` serves. The question is tracked on issue #1026. Until it is decided, the report stays as it is.
+**T26, not decided here.** The API still reads the assembled site directory (`_static`) to report the served site's identity at `/version` and `/health`. Once the site switches on its own, that report describes whichever directory the API can see, which may not be the one `website-server` serves. The question is tracked on issue #1026. Until it is decided, the report stays as it is. **Decided by [D55](../decisions.md#d55) on 2026-09-25:** the API retires the `_static` mount and the `static` identity field; the site reports itself through `/version.json` and the API through `/api/version`. The work lands in wave 6.

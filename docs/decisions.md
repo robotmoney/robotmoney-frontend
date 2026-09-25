@@ -3997,6 +3997,10 @@ the one `website-server` serves. Whether the API keeps that report, drops it,
 or reads it from `website-server` is tracked on issue #1026. Until it is
 decided, the report stays as it is.
 
+> **Decided by [D55](#d55) on 2026-09-25.** The API retires the `_static` mount
+> and the `static` identity field. The site reports itself through
+> `/version.json`, the API through `/api/version`. The work lands in wave 6.
+
 **Why.** A site deploy that restarts the API turns every copy fix into an API
 outage. An API deploy that ignores the site can leave readers on a page that
 misreads the new API's data. A version on each side, and a check on each
@@ -4012,3 +4016,63 @@ route table and the response shapes.
   see and stays still for contract changes it can see.
 - **Check only in the browser.** A notice after a bad deploy is damage control.
   The deploy tools refuse the mismatch before any reader sees it.
+
+
+<a id="d55"></a>
+
+## D55 — Four owner calls: version reports, forged operators, judge levers, and who drives epochs (Lucas, 2026-09-25)
+
+**Status.** Accepted 2026-09-25; not yet implemented. Recorded from issue
+#1026, where each point was a question the earlier decisions left open or a
+place the specifications allowed something the owner does not want. Each call
+names the wave or package that implements it, so no wave has to guess.
+
+**Decision 1: the API stops reporting the site's identity (T26).** The API
+retires its `_static` mount and the `static` identity field it reports at
+`/version` and `/health`, with `matches_image`. The site reports itself through
+its own `/version.json`. The API reports itself through `/api/version`.
+Implementation lands in wave 6.
+*Why.* Under [D54](#d54) the site switches on its own, so the directory the API
+can see is not the one `website-server` serves. A report about a directory
+nobody serves is worse than no report, because an operator would trust it.
+D54 already gave each side its own version endpoint, so nothing is lost.
+
+**Decision 2: a forward migration clears forged `operator` values.** A
+self-healing forward migration clears `operator` on every member row where the
+member set it through the self-write path that issue #925 closed. It runs on
+every deploy and changes nothing once no forged row remains. Implementation
+lands in wave 3.
+*Why.* The judge's third-party gate is keyed on `operator`, so a value a member
+wrote for itself is a standing forgery, not old data. Closing the hole stopped
+new forgeries and left the old ones in place. A migration fixes every database
+the release reaches, where a hand edit would fix only the one it was run on.
+
+**Decision 3: the judge fault-injection lever goes, and judge spend is wired.**
+The test-only judge fault-injection switch (R13) is retired with its route, its
+table, its env flags and its compose lines. Judge spend (R19) is filled from the
+usage the participant judge reports with its judgement. A later package on
+issue #1026 implements both.
+*Why.* The lever faulted the backend `judge()`, which [D53](#d53) deleted.
+Nothing in the API forms an opinion any more, so the switch has nothing to
+break and only adds a way to arm a test path in production. The spend fields
+were filled by the deleted model transport. The participant now makes the model
+call, so it is the only process that knows what the call cost.
+
+**Decision 4: only the system scheduler drives the epoch lifecycle.** The
+system scheduler is the only caller of the swarm lifecycle transitions: open,
+turnover, settlement and deactivation. No operator or admin early turnover
+exists. The operator admin token holds only the `admin` right, and every epoch
+lifecycle route refuses it.
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13 records
+the edits to the spec. Today the epoch routes still admit the privileged admin
+credential. The refusal lands with the operator admin token's move into the
+token store.
+*Why.* One clock is simpler to prove than a clock plus a manual override. An
+early turnover gave the operator a way to shorten a window members were
+promised, and it made the scheduler's timer depend on an event it did not
+cause. The guarantees that path was tested for still matter for a turnover
+this scheduler did not make, such as one a second scheduler made or one whose
+response was lost. The spec's gates now test those cases instead.
+
+**What stays.** D54's version contract, D52's third-party gate, D53's deleted
+backend judge and the state guard on every transition are unchanged.
