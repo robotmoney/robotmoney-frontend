@@ -9,41 +9,44 @@
 // existing row — that lets the scheduler own slot bookkeeping and lets an
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
-import { on, registerQuery } from "./registry.ts";
+import { on, registerQuery, type RegistryDb } from "./registry.ts";
+import { requireRehearsalTarget } from "../deploy-policy.ts";
+import { populatedTables, readIdentityKind, loadSnapshot } from "./schema-snapshot.ts";
+import { withMutationFence } from "./target-lock.ts";
 import { seedLiveRoster, pruneToLiveRoster, backfillMemberHandles } from "../swarm/roster-seed.ts";
 import { seedSmokeProjects } from "../projects/smoke-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EVERY STATEMENT BELOW IS A REGISTERED QUERY (smoke-production-spec.md §7.1).
+// EVERY STATEMENT BELOW IS A REGISTERED QUERY (smoke-production-spec.md §7.1),
+// AND ITS ROLE IS `rm_owner` — DECIDED, NOT A PLACEHOLDER (#1026 w3-lifecycle-db).
 //
-// Two entry modules run the seed: this file run directly (`bun run
-// src/db/seed.ts`) and prod-bootstrap's seed step, which also migrates and so
-// holds the `rm_owner` credential. The smoke-only schedule changes are reached
-// only through the direct run's `--smoke-schedules`. An UPDATE or DELETE
-// declares SELECT too, because Postgres checks a WHERE clause's columns as a
-// read.
+// Three entry modules run the seed, and every one of them holds `rm_owner`:
+//   - `bun smoke --seed` (scripts/lib/smoke-main.ts) runs it from the HOST as
+//     authorized preparation, through backend/scripts/smoke-prepare.ts, logged
+//     in as `rm_owner` (the password smoke generated for a local instance, the
+//     typed one on a remote rehearsal) and INSIDE the §2 mutation fence
+//     (`withMutationFence`): "Every mutation (migration, grant reconciliation,
+//     seed, …) runs in a transaction that first takes `pg_advisory_xact_lock`".
+//     It no longer runs inside the `api` container on that container's `rm_app`
+//     credential: backend/schema/grants.sql gives `rm_app` no DELETE on
+//     ordinary tables, so the two `job_schedules` retirement DELETEs below were
+//     refused there on a snapshot-built database.
+//   - `bun run src/db/seed.ts [--smoke-schedules]`, run directly with an
+//     `rm_owner` DATABASE_URL, also fenced (the block at the bottom).
+//   - scripts/prod-bootstrap's seed step, on the credential that also migrates.
+// An UPDATE or DELETE declares SELECT too, because Postgres checks a WHERE
+// clause's columns as a read.
 //
-// THE ROLE IS UNDECIDED, AND `rm_owner` BELOW IS A PLACEHOLDER, NOT A FINDING.
-// Which credential `--seed` runs on is the lifecycle package's decision (#1026
-// w3-lifecycle-db), and the spec does not pin it. What the code does today:
-//   - scripts/prod-bootstrap runs seed() on the credential that also migrates,
-//     i.e. `rm_owner`. For that caller the declarations are true.
-//   - the smoke runs `bun run src/db/seed.ts --smoke-schedules` inside the
-//     `api` container (scripts/lib/smoke-main.ts, initializeScenario), on that
-//     container's runtime credential. For that caller `rm_owner` is FALSE.
-// The gap this hides: backend/schema/grants.sql gives `rm_app` SELECT, INSERT
-// and UPDATE on ordinary tables and no DELETE, so on a snapshot-built database
-// the two `job_schedules` DELETEs below (deleteAnalyticsRunSchedule,
-// deleteHourlyRepairSchedule) are refused for `rm_app` (read from the grants,
-// not executed). Declaring `rm_app` makes preflight check 2 refuse the real
-// snapshot in tests/schema-snapshot.test.ts, which is that gap reported. The
-// fix is either the smoke running the seed as `rm_owner` or `rm_app` being
-// granted DELETE on `job_schedules`; whichever lands, these roles change with it.
+// THE GATE. `--seed` "creates demo data on a blank database. It is explicit,
+// refuses a populated database, requires `rehearsal`, and is never implied by
+// any mode" (spec §5). `assertSeedable` below is that gate, and the smoke runs it
+// in the same fenced transaction as the seed, so nothing can populate the
+// database between the check and the write.
 // ─────────────────────────────────────────────────────────────────────────────
-const SEED_CALLERS = ["src/db/seed", "scripts/prod-bootstrap"];
-const SMOKE_CALLERS = ["src/db/seed"];
+const SEED_CALLERS = ["src/db/seed", "scripts/prod-bootstrap", "scripts/smoke-prepare"];
+const SMOKE_CALLERS = ["src/db/seed", "scripts/smoke-prepare"];
 
 const insertSchedule = registerQuery({
   role: "rm_owner",
@@ -293,15 +296,15 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // baseline for later test files sharing the same ephemeral Postgres, instead
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
-export async function seedJobSchedules(): Promise<void> {
+export async function seedJobSchedules(db: RegistryDb = sql): Promise<void> {
   const schedules = SCHEDULES;
   for (const s of schedules) {
     // ON CONFLICT DO NOTHING keeps this purely additive/idempotent: the row is
     // inserted once and never overwritten, so the scheduler-managed columns
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
-    await on(sql, insertSchedule)`
+    await on(db, insertSchedule)`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, catchup_policy)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled}, ${s.catchupPolicy ?? "all"})
+      VALUES (${s.kind}, ${s.cron}, ${db.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled}, ${s.catchupPolicy ?? "all"})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }
@@ -309,11 +312,11 @@ export async function seedJobSchedules(): Promise<void> {
 
   // Phase 4: regime/research production moved to the independent producer.
   // Disable any legacy consumer-DB schedules left by an older deployment.
-  await on(sql, disableProducerSchedules)`
+  await on(db, disableProducerSchedules)`
     UPDATE job_schedules SET enabled = false
      WHERE kind IN ('regime.classify', 'research.refresh') AND enabled
   `;
-  await on(sql, deadLetterProducerJobs)`
+  await on(db, deadLetterProducerJobs)`
     UPDATE jobs
        SET status = 'dead', locked_at = NULL, locked_by = NULL,
            last_error = 'retired consumer job: independent analytics-producer owns this execution',
@@ -325,8 +328,8 @@ export async function seedJobSchedules(): Promise<void> {
   // otherwise purely additive, so an existing deployment would keep enqueuing a
   // kind that no longer has a handler or lane. Drop its schedule rows and
   // dead-letter any not-yet-terminal jobs (job_runs history is preserved).
-  await on(sql, deleteAnalyticsRunSchedule)`DELETE FROM job_schedules WHERE kind = 'analytics.run'`;
-  await on(sql, deadLetterAnalyticsRunJobs)`
+  await on(db, deleteAnalyticsRunSchedule)`DELETE FROM job_schedules WHERE kind = 'analytics.run'`;
+  await on(db, deadLetterAnalyticsRunJobs)`
     UPDATE jobs
        SET status = 'dead',
            locked_at = NULL, locked_by = NULL,
@@ -343,42 +346,61 @@ export async function seedJobSchedules(): Promise<void> {
   // requires exactly ONE row for the kind (the procedure release.ts documents
   // at NEW_SCHEDULE_CRON). Jobs are untouched — the kind survives, only its
   // cadence moved.
-  await on(sql, deleteHourlyRepairSchedule)`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
+  await on(db, deleteHourlyRepairSchedule)`DELETE FROM job_schedules WHERE kind = 'ops.repair_gaps' AND cron = '25 * * * *'`;
 }
 
 /** Apply the smoke's quota-safe schedule changes explicitly and idempotently. */
-export async function seedSmokeJobSchedules(): Promise<void> {
+export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void> {
   for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
-    await on(sql, insertSmokeSchedule)`
+    await on(db, insertSmokeSchedule)`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
+      VALUES (${s.kind}, ${s.cron}, ${db.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }
 
-  await on(sql, disableSmokeSchedule)`
+  await on(db, disableSmokeSchedule)`
     UPDATE job_schedules SET enabled = false
      WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
   `;
   console.log("smoke schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
 
   for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
-    await on(sql, disableSmokeSchedule)`
+    await on(db, disableSmokeSchedule)`
       UPDATE job_schedules SET enabled = false
        WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
     `;
   }
   console.log("smoke schedules: confirmed retired consumer analytics schedules disabled");
 
-  await on(sql, disableSmokeSchedule)`
+  await on(db, disableSmokeSchedule)`
     UPDATE job_schedules SET enabled = false
      WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
   `;
   console.log("smoke schedules: disabled projects.recompute_coverage (curated scores are preserved)");
 }
 
-export async function seed(): Promise<void> {
-  await seedJobSchedules();
+/**
+ * The canonical seed, on `db` (the process pool by default).
+ *
+ * Handed a caller's TRANSACTION — the smoke's fenced `--seed`
+ * (backend/scripts/smoke-prepare.ts) — every statement below runs in it. The
+ * three helpers that live in other modules and write through the process pool
+ * cannot: seedSmokeProjects, backfillMemberHandles and the roster seed. Their
+ * writes would land outside the caller's transaction, which is unfenced work
+ * (§2). So on a caller's handle the handle backfill is skipped — the fenced seed
+ * only ever runs past `assertSeedable`, on a database with no member rows for
+ * it to derive — and the two opt-in flags refuse rather than run unfenced.
+ */
+export async function seed(db: RegistryDb = sql): Promise<void> {
+  const onCallerHandle = db !== sql;
+  if (onCallerHandle && (process.env.SMOKE_SEED_PROJECTS === "1" || process.env.SWARM_SEED_ROSTER === "1")) {
+    throw new Error(
+      "seed: SMOKE_SEED_PROJECTS / SWARM_SEED_ROSTER write through the process pool, outside the fenced " +
+        "transaction this seed was handed, and unfenced work is refused (spec §2). Run them without --seed.",
+    );
+  }
+  await seedJobSchedules(db);
 
   // Cold start (issue #118): enqueue ONE immediate wallet.sample_balances job so
   // the endpoint has a fresh scheduled sample within seconds of boot instead of
@@ -389,24 +411,24 @@ export async function seed(): Promise<void> {
   // guarantees the sampler issues at least one real aggregate3 eth_call within
   // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
   // scheduler's partial unique index on dedupe_key.
-  await on(sql, enqueueColdStart)`
+  await on(db, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_balances', ${sql.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
+    VALUES ('wallet.sample_balances', ${db.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await on(sql, enqueueColdStart)`
+  await on(db, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('wallet.sample_sleeves', ${sql.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
+    VALUES ('wallet.sample_sleeves', ${db.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await on(sql, enqueueColdStart)`
+  await on(db, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_adapters', ${sql.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
+    VALUES ('vault.sample_adapters', ${db.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  await on(sql, enqueueColdStart)`
+  await on(db, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('vault.sample_share_price', ${sql.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
+    VALUES ('vault.sample_share_price', ${db.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
   // Cold start for the gap repair, same mechanism and same reason — but the wait
@@ -421,9 +443,9 @@ export async function seed(): Promise<void> {
   // than double work: the dispatcher declines while a window job is in flight
   // (worker/handlers/repair.ts), and a CONSTANT dedupe_key fires this at most
   // once per database.
-  await on(sql, enqueueColdStart)`
+  await on(db, enqueueColdStart)`
     INSERT INTO jobs (kind, payload, dedupe_key)
-    VALUES ('ops.repair_gaps', ${sql.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
+    VALUES ('ops.repair_gaps', ${db.json(jsonValue({}))}, 'ops.repair_gaps:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
   console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
@@ -433,7 +455,7 @@ export async function seed(): Promise<void> {
   // /api/dashboards/wallet-balances returns a continuous /performance history in
   // every env (including CI/e2e). Idempotent (ON CONFLICT DO NOTHING on
   // (sample_date, symbol)), so a later live daily sample is never clobbered.
-  const backfilled = await backfillWalletHistory();
+  const backfilled = await backfillWalletHistory(db);
   console.log(`seeded wallet_balance_samples backfill (${backfilled} row candidate(s), idempotent)`);
 
   // Allocation framework (live-data contract §4): seed the single admin/swarm
@@ -441,10 +463,10 @@ export async function seed(): Promise<void> {
   // copied into ALLOCATION_FRAMEWORK_SEED). ON CONFLICT DO NOTHING so a later
   // admin rewrite is NEVER clobbered by a re-boot ("projects overviews
   // admin-managed" policy) — this seed only fills an empty table.
-  await on(sql, insertAllocationFramework)`
+  await on(db, insertAllocationFramework)`
     INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
     VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-            ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
+            ${db.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
     ON CONFLICT (id) DO NOTHING
   `;
   console.log("seeded allocation_framework (id=1, idempotent — admin edits preserved)");
@@ -484,7 +506,7 @@ export async function seed(): Promise<void> {
   // other derivation sites fire on acceptance/registration events that a
   // long-admitted member has already passed. Idempotent, so a boot with nothing
   // to do stays silent.
-  const derivedHandles = await backfillMemberHandles();
+  const derivedHandles = onCallerHandle ? 0 : await backfillMemberHandles();
   if (derivedHandles > 0) {
     console.log(`derived ${derivedHandles} swarm member handle(s) that were still at migration 0030's default`);
   }
@@ -503,14 +525,69 @@ export async function seed(): Promise<void> {
   }
 }
 
-// Run directly: `bun run src/db/seed.ts [--smoke-schedules]`. Seeding is its own
-// tool now (migrate() no longer seeds); `--smoke-schedules` additionally installs
-// the fast smoke job_schedules a simulation boot wants.
+/**
+ * The `--seed` gate (spec §5, §4.3). `--seed` "creates demo data on a blank
+ * database. It is explicit, refuses a populated database, requires
+ * `rehearsal`, and is never implied by any mode."
+ *
+ * Refusals, in order, each naming what it saw:
+ *   - the rehearsal-only gate (`requireRehearsalTarget`, the one shared with
+ *     `--migrate` and `--spoof-keys`): `RM_ENV=prod`, a value that is not a
+ *     policy, a seed nobody asked for, and a `production`, missing or
+ *     unreadable enrollment;
+ *   - a POPULATED database: any table holding rows a blank bootstrap did not
+ *     write, counted exactly (`populatedTables`, ./schema-snapshot.ts). Rows,
+ *     not tables: a snapshot bootstrap has every table and is still blank.
+ *
+ * Run in the SAME fenced transaction as the seed it guards, so nothing can
+ * populate or re-enroll the database between the check and the write.
+ */
+export async function assertSeedable(
+  db: RegistryDb,
+  request: { readonly rmEnv: string | undefined; readonly explicitlyRequested: boolean },
+): Promise<void> {
+  const identity = await readIdentityKind(db);
+  const gate = requireRehearsalTarget({
+    preparation: "seed",
+    rmEnv: request.rmEnv,
+    identity,
+    explicitlyRequested: request.explicitlyRequested,
+  });
+  if (!gate.allow) throw new Error(`Refusing --seed: ${gate.reason} Nothing was written.`);
+  const populated = await populatedTables(db, await loadSnapshot());
+  if (populated.length > 0) {
+    const named = populated
+      .map((t) => `${t.table} (${t.rows} row(s)${t.bootstrapRows > 0 ? `, ${t.bootstrapRows} from bootstrap data` : ""})`)
+      .join(", ");
+    throw new Error(
+      `Refusing --seed: the database is populated — ${named}. --seed creates demo data on a blank database and ` +
+        "refuses a populated one (spec §5): its demo rows are written over whatever is there. Nothing was written.",
+    );
+  }
+}
+
+/**
+ * `bun smoke --seed`: the gate, the canonical seed and the smoke's quota-safe
+ * schedule changes, on the caller's fenced transaction (see the header).
+ */
+export async function seedDemo(
+  tx: RegistryDb,
+  request: { readonly rmEnv: string | undefined },
+): Promise<void> {
+  await assertSeedable(tx, { rmEnv: request.rmEnv, explicitlyRequested: true });
+  await seed(tx);
+  await seedSmokeJobSchedules(tx);
+}
+
+// Run directly: `bun run src/db/seed.ts [--smoke-schedules]`, with an rm_owner
+// DATABASE_URL. The canonical seed is idempotent and not demo data, so it is
+// not gated; it IS a mutation, so it runs inside the §2 fence like every other
+// one, on a connection of its own from the same URL.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  (async () => {
-    await seed();
-    if (process.argv.includes("--smoke-schedules")) await seedSmokeJobSchedules();
-  })()
+  withMutationFence({ databaseUrl: process.env.DATABASE_URL ?? "", label: "seed" }, async (tx) => {
+    await seed(tx);
+    if (process.argv.includes("--smoke-schedules")) await seedSmokeJobSchedules(tx);
+  })
     .then(closeDb)
     .catch((err) => {
       console.error(err);
@@ -530,10 +607,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 // queue-scoped pool (db/worker-client.ts), and a seed that queried through that
 // second pool would leave `bun run migrate` with open sockets it never closes
 // (the smoke's migrate one-shot would hang forever).
-export async function backfillWalletHistory(): Promise<number> {
+export async function backfillWalletHistory(db: RegistryDb = sql): Promise<number> {
   const rows = walletHistorySeedRows();
   for (const r of rows) {
-    await on(sql, insertWalletHistorySeed)`
+    await on(db, insertWalletHistorySeed)`
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance)
       VALUES

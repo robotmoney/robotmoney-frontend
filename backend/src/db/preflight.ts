@@ -77,6 +77,7 @@ import type { RmRole, TablePrivilege } from "./registry.ts";
 import { MANIFEST_TABLE, compareCatalog, detectManifestState, parseDeclaration, readManifest } from "./schema-manifest.ts";
 import type { SchemaManifest } from "./schema-manifest.ts";
 import { checkCompatibility } from "./schema-compat.ts";
+import { resolveDeploymentPolicy } from "../deploy-policy.ts";
 
 export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
@@ -1280,25 +1281,24 @@ function dangerousKeyReason(key: string): string | null {
  * Inputs: a handle (to read the one-row `deployment_identity` table) and the
  * context. Output: findings.
  *
- * The matrix is W1.1's function; this check is preflight RE-ASSERTING it after
- * preparation, which is not redundant. Spec §2 requires revalidation "After
- * acquiring, the tool re-reads `deployment_identity`, the ledger, and the schema
- * manifest and re-runs the plan against them. A mismatch refuses." The row can
- * change between the matrix call and here — a restore ran, a different database
- * answered, an operator wrote it by hand.
+ * THE MATRIX IS NOT RESTATED HERE. It has one implementation,
+ * backend/src/deploy-policy.ts `resolveDeploymentPolicy`, which `bun smoke`
+ * calls before any service starts and `bun run migrate` calls before an owner
+ * password is requested. This check reads the row and asks that function, so
+ * preflight re-asserting the matrix after preparation can never disagree with
+ * the boot that asserted it before. That re-assertion is not redundant: the row
+ * can change between the boot's matrix call and here — a restore ran, a
+ * different database answered, an operator wrote it by hand.
  *
- * Refusals, straight from the §4.3 table:
- *   - `prod` + remote + identity ≠ `production`.
- *   - `prod` + any `--local` mode.
- *   - `stage` + remote + identity ≠ `rehearsal`; stage policy, `--allow-insecure`
- *     included, "never touches production data".
- *   - `stage` + `--local volume` + identity ≠ `rehearsal` — "a reattached
- *     volume gets no weaker policy than a remote".
- *   - unset + remote.
- *   - Any other `RM_ENV` value.
- *   - No `deployment_identity` row, or more than one.
- * Unset + `--local` is a WARNING, not a refusal: "warn `RM_ENV not set, running
- * as stage`, proceed".
+ * A `--local` target reaches the matrix as `local-volume`: preflight runs after
+ * preparation, so a `blank` or `dump` target's row has been written by then and
+ * must read `rehearsal` exactly as a reattached volume's must ("a reattached
+ * volume gets no weaker policy than a remote").
+ *
+ * Refusals: every refusing row of §4.3, with the matrix's own reason; a table
+ * absent or unreadable (never evidence of either kind); no row; more than one
+ * row. Unset + `--local` is a WARNING, not a refusal: "warn `RM_ENV not set,
+ * running as stage`, proceed".
  *
  * Serves spec §10 W2 "`RM_ENV=stage` + typed owner password against
  * `deployment_identity = production` refuses; plain stage boot incl.
@@ -1308,25 +1308,55 @@ export async function checkEnvIdentity(
   db: PreflightDb,
   context: PreflightContext,
 ): Promise<PreflightCheckResult> {
-  const findings: PreflightFinding[] = [];
-  const refuse = (message: string): PreflightCheckResult => {
-    findings.push({ check: "env_identity", severity: "refuse", message });
-    return { check: "env_identity", findings };
+  const identity = await readIdentityForMatrix(db);
+  if (identity.kind === "ambiguous") {
+    return {
+      check: "env_identity",
+      findings: [
+        {
+          check: "env_identity",
+          severity: "refuse",
+          message:
+            `deployment_identity holds ${identity.count} rows: it is a one-row table (§4.2) and no choice between them is defensible`,
+        },
+      ],
+    };
+  }
+  const verdict = resolveDeploymentPolicy({
+    rmEnv: context.env ?? undefined,
+    connection: context.connection === "remote" ? "remote" : "local-volume",
+    identity: identity.value,
+  });
+  if (!verdict.allow) {
+    return { check: "env_identity", findings: [{ check: "env_identity", severity: "refuse", message: verdict.reason }] };
+  }
+  return {
+    check: "env_identity",
+    findings: verdict.warnings.map((message) => ({ check: "env_identity", severity: "warn" as const, message })),
   };
+}
 
-  // The row first: every matrix cell reads it, and "absence of evidence is not
-  // evidence of rehearsal".
+/**
+ * The row as the matrix consumes it: the kind, `null` for a table with no row,
+ * `"unreadable"` for an absent table, a table with no enrollment column, or a
+ * value that is neither kind — none of which is evidence of rehearsal.
+ *
+ * The enrollment column is `kind` (§4.2, migration 0063), resolved from the
+ * catalog rather than assumed, because this check also runs against databases
+ * restored or hand-built before that migration (`identity`), and a column error
+ * there would read as "the check is broken" rather than "this target is not
+ * enrolled".
+ */
+async function readIdentityForMatrix(
+  db: PreflightDb,
+): Promise<
+  | { readonly kind: "read"; readonly value: "production" | "rehearsal" | null | "unreadable" }
+  | { readonly kind: "ambiguous"; readonly count: number }
+> {
   const [present] = (await db`SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`) as unknown as {
     present: boolean;
   }[];
-  if (!present?.present) {
-    return refuse("no deployment_identity table: this target is not enrolled (§4.2), and an unenrolled target is not a rehearsal one");
-  }
-  // The enrollment column is `kind` (§4.2, migration 0063_deployment_identity).
-  // Resolved from the catalog rather than assumed, because this check also runs
-  // against databases restored or hand-built before that migration, and a
-  // column error there would read as "the check is broken" rather than "this
-  // target is not enrolled".
+  if (!present?.present) return { kind: "read", value: "unreadable" };
   const [column] = (await db`
     SELECT column_name AS name
     FROM information_schema.columns
@@ -1334,58 +1364,19 @@ export async function checkEnvIdentity(
       AND column_name IN ('kind', 'identity')
     ORDER BY CASE column_name WHEN 'kind' THEN 0 ELSE 1 END
     LIMIT 1`) as unknown as { name: string }[];
-  if (!column?.name) {
-    return refuse(
-      "deployment_identity carries no enrollment column (§4.2 expects `kind`): this target is not enrolled",
-    );
+  if (!column?.name) return { kind: "read", value: "unreadable" };
+  let rows: { identity: string }[];
+  try {
+    rows = (await db.unsafe(`SELECT ${column.name} AS identity FROM deployment_identity`)) as unknown as {
+      identity: string;
+    }[];
+  } catch {
+    return { kind: "read", value: "unreadable" };
   }
-  const rows = (await db.unsafe(
-    `SELECT ${column.name} AS identity FROM deployment_identity`,
-  )) as unknown as { identity: string }[];
-  if (rows.length === 0) {
-    return refuse("no deployment_identity row: absence of evidence is not evidence of rehearsal (§4.2)");
-  }
-  if (rows.length > 1) {
-    return refuse(
-      `deployment_identity holds ${rows.length} rows: it is a one-row table (§4.2) and no choice between them is defensible`,
-    );
-  }
-  const identity = rows[0]?.identity ?? "";
-
-  // §4.3's matrix, row by row, ONE finding each: an operator fixing a boot
-  // needs the cell they are in, not every cell they are not in.
-  if (context.env === null) {
-    if (context.connection === "remote") {
-      return refuse("RM_ENV is not set and the target is a remote connection: §4.3 refuses rather than guessing a policy");
-    }
-    findings.push({
-      check: "env_identity",
-      severity: "warn",
-      message: "RM_ENV not set, running as stage",
-    });
-    return { check: "env_identity", findings };
-  }
-
-  if (context.env === "prod") {
-    if (context.connection === "local") {
-      return refuse("RM_ENV=prod with a --local mode: §4.3 refuses every prod + --local combination");
-    }
-    if (identity !== "production") {
-      return refuse(
-        `RM_ENV=prod against deployment_identity = ${identity}: production guards may only arm on a target enrolled as production`,
-      );
-    }
-    return { check: "env_identity", findings };
-  }
-
-  // stage — remote and local alike. "A reattached volume gets no weaker policy
-  // than a remote", and stage policy never touches production data.
-  if (identity !== "rehearsal") {
-    return refuse(
-      `RM_ENV=stage against deployment_identity = ${identity}: stage policy, --allow-insecure included, never touches production data`,
-    );
-  }
-  return { check: "env_identity", findings };
+  if (rows.length > 1) return { kind: "ambiguous", count: rows.length };
+  const value = rows[0]?.identity;
+  if (value === undefined) return { kind: "read", value: null };
+  return { kind: "read", value: value === "production" || value === "rehearsal" ? value : "unreadable" };
 }
 
 /**

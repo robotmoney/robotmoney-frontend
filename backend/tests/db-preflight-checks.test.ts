@@ -60,6 +60,7 @@ import {
 } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { runMigrate } from "../scripts/migrate-run.ts";
+import { withTargetLock } from "./support/target-lock.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // PER TEST, not per file. Several cases here are deliberately destructive to
@@ -1153,24 +1154,26 @@ describe("check 3a — every §8.1 object class, against a real snapshot bootstr
 // manifest §9.1 step 2 publishes refuses on every boot. These cases run the
 // real publisher and then the real check, and nothing in between.
 
-/** The real migrate run against `database`, on a second handle acting as
- *  rm_owner — the effective role it requires. One connection, so the SET ROLE
- *  holds for the whole run. */
+/** The real migrate run against `database`, on a handle that IS rm_owner for
+ *  the whole run (one connection, `SET ROLE` for the session: the run requires
+ *  `current_user = rm_owner`), under the §2 target lock a tool would hold. */
 async function migrateAsOwner(database: string): Promise<void> {
   const owner = postgres(databaseUrl(database), { max: 1, onnotice: () => {} });
   try {
     await owner.unsafe("SET ROLE rm_owner");
-    await runMigrate(owner, {
-      caller: "smoke_flag",
-      env: "stage",
-      connection: "local",
-      lockKey: 10260054n,
-      sessionLockHeld: false,
-      nonInteractive: true,
-    });
+    await withTargetLock(databaseUrl(database), (lock) =>
+      runMigrate(owner, { caller: "smoke_flag", env: "stage", connection: "local", nonInteractive: true, lock }),
+    );
   } finally {
     await owner.end({ timeout: 5 });
   }
+}
+
+/** The harness login's 0016 default privileges — production's bootstrap login
+ *  is doadmin, a listed provider role, whose leftovers the snapshot excludes. */
+async function revokeLoginDefaults(db: PreflightDb, login: string): Promise<void> {
+  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
+  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
 }
 
 async function currentDatabaseOf(db: PreflightDb): Promise<string> {
@@ -1179,42 +1182,36 @@ async function currentDatabaseOf(db: PreflightDb): Promise<string> {
 }
 
 describe("check 3a against the manifest the real migrate run publishes", () => {
-  test("a MIGRATION-built database passes 3a after runMigrate publishes the shipped snapshot's manifest", async () => {
+  test("a MIGRATION-built database gets no first manifest while it differs; production-shaped, it publishes and passes 3a", async () => {
     // This clone was built by replaying every migration (tests/preload.ts), the
-    // way production's database was. The run publishes loadSnapshot()'s
-    // declaration — the fingerprint of a snapshot bootstrap — onto it.
+    // way production's database was. The run's FIRST publication is gated by
+    // the §9.1 step 2 baseline (prod-baseline.test.ts): the one difference
+    // left after reconciliation is the BOOTSTRAP LOGIN's own default
+    // privileges — 0016 ran `ALTER DEFAULT PRIVILEGES` with no FOR ROLE, so
+    // they belong to whichever login applied it. In production that login is
+    // doadmin, which the snapshot's exclusion list names; in this harness it
+    // is the container superuser, which it does not. The run names exactly
+    // that and publishes nothing, so no manifest claims a schema nobody compared.
     await enrollRehearsal();
-    await migrateAsOwner(await currentDatabaseOf(sql));
-    expect((await detectManifestState(sql)).kind).toBe("published");
-
-    // THE ONE DIFFERENCE LEFT is the BOOTSTRAP LOGIN's own default privileges:
-    // 0016 ran `ALTER DEFAULT PRIVILEGES IN SCHEMA public ...` with no FOR
-    // ROLE, so they belong to whichever login applied it. In production that
-    // login is doadmin, which the snapshot's exclusion list names; in this
-    // harness it is the container superuser, which it does not. Pinned exactly,
-    // so any rm_owner-side disagreement between the snapshot and the migrations
-    // (schema owner, rm_owner's default ACLs, a column, a grant) fails here.
     const login = new URL(config.databaseUrl).username;
-    expect(await integrity(sql)).toEqual([
+    await expect(migrateAsOwner(await currentDatabaseOf(sql))).rejects.toThrow(
       `default privileges for ${login} in schema public on sequences is in the live catalog but not declared by ` +
         `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
-      `default privileges for ${login} in schema public on tables is in the live catalog but not declared by ` +
-        `the installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
-    ]);
+    );
+    expect((await detectManifestState(sql)).kind).toBe("absent");
 
     // With the bootstrap login's leftovers gone — production's state, where
-    // that login is a listed provider role — nothing refuses.
-    await sql.unsafe(
-      `ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`,
-    );
-    await sql.unsafe(
-      `ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`,
-    );
+    // that login is a listed provider role — the run publishes, and check 3a
+    // against what it published finds nothing.
+    await revokeLoginDefaults(sql, login);
+    await migrateAsOwner(await currentDatabaseOf(sql));
+    expect((await detectManifestState(sql)).kind).toBe("published");
     expect(await integrity(sql)).toEqual([]);
   });
 
   test("RED CONTROL: after the real publisher, genuine drift on the migrated database still refuses by name", async () => {
     await enrollRehearsal();
+    await revokeLoginDefaults(sql, new URL(config.databaseUrl).username);
     await migrateAsOwner(await currentDatabaseOf(sql));
     await sql.unsafe("ALTER TABLE job_schedules DROP COLUMN last_enqueued_at");
     await sql.unsafe("ALTER SCHEMA public OWNER TO pg_database_owner");

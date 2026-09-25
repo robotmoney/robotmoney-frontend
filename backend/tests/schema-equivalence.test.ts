@@ -52,8 +52,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
 import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-only-guard.ts";
+import { writeManifest } from "../src/db/schema-manifest.ts";
 import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
-import { runMigrate, type MigrateRunOptions } from "../scripts/migrate-run.ts";
+import { runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
+import { withTargetLock } from "./support/target-lock.ts";
 import {
   describeCatalogDiff,
   diffCatalogs,
@@ -73,13 +75,11 @@ function connect(database: string): postgres.Sql<{}> {
 }
 
 /** The smoke `--migrate` caller against a rehearsal database this file owns.
- *  The lock key is a literal: the fence is not what is under test. */
-const MIGRATE_OPTIONS: MigrateRunOptions = {
+ *  It runs under the §2 target lock a tool would hold (tests/support/target-lock.ts). */
+const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
   caller: "smoke_flag",
   env: "stage",
   connection: "local",
-  lockKey: 7726322199513611n,
-  sessionLockHeld: false,
   nonInteractive: true,
 };
 
@@ -110,7 +110,18 @@ beforeAll(async () => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
     await tx.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal')");
   });
-  const run = await runMigrate(migrated, MIGRATE_OPTIONS);
+  // The run requires `current_user = rm_owner` for its whole session, and a
+  // database with no manifest gets its first one only after the §9.1 step 2
+  // baseline — which this harness's replaying login fails by exactly cause E's
+  // entries (drift this file records). So the snapshot's own manifest is put
+  // in place first (the template's ledger IS the snapshot's list) and the run
+  // republishes over it: reconciliation still runs, and nothing else about the
+  // migrated side changes.
+  await migrated.unsafe("SET ROLE rm_owner");
+  const snapshotForManifest = await loadSnapshot();
+  await migrated.begin((tx) => writeManifest(tx, snapshotForManifest.manifest));
+  const run = await withTargetLock(urlFor(MIGRATED_DB), (lock) => runMigrate(migrated, { ...MIGRATE_OPTIONS, lock }));
+  await migrated.unsafe("RESET ROLE");
   // The template already holds every migration: this run only reconciles and
   // publishes. If it applied something, the template is not "all migrations".
   expect(run.applied).toEqual([]);

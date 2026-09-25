@@ -13,29 +13,17 @@
 // is how rm-frontend-stage-1 came to be running `RM_ENV=smoke` on 2026-09-13
 // with every AC-MODEL-01 refusal disabled in the api, the worker and the judge.
 //
-// It is now a StackConfig field (`rmEnv`), resolved HERE from the kind of boot
-// and emitted into every service by buildComposeEnv(). The rule itself lives in
-// backend/src/acceptance-path.ts with the shared acceptance predicate; this
-// wrapper only adds the FATAL/exit(1) convention smoke-main.ts's other
-// preflights use. All of it lives outside smoke-main.ts because that file is
-// under a line budget (scripts/tests/unit/smoke-main-split.test.ts) and because
-// nothing here needs anything from the boot beyond its arguments.
+// It is now a StackConfig field (`rmEnv`), derived HERE from the §4.3 policy the
+// boot resolved (backend/src/deploy-policy.ts, which is what refuses `smoke`,
+// `ephemeral` and any typo in the operator's shell) and the kind of boot, and
+// emitted into every service by buildComposeEnv(). The rule itself lives in
+// backend/src/acceptance-path.ts with the shared acceptance predicate.
 import { resolveStackRmEnv, type RmEnv } from "../../backend/src/acceptance-path.ts";
 import { DEMO_COMPOSE_PASSTHROUGH as LEAF_COMPOSE_PASSTHROUGH } from "./smoke-compose-passthrough.ts";
 
-/**
- * Refuses, rather than overrides, a `--static-port` boot whose shell claims a
- * development `RM_ENV`: that boot IS the staging deployment a tunnel points at,
- * and an operator who believes otherwise must be told rather than corrected
- * behind their back.
- */
-export function resolveStackRmEnvOrExit(standingStack: boolean, env: NodeJS.ProcessEnv = process.env): RmEnv {
-  try {
-    return resolveStackRmEnv({ standingStack, declared: env.RM_ENV });
-  } catch (err) {
-    console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+/** The containers' `RM_ENV` for a boot under `policy`; `--static-port` runs `prod` by rule. */
+export function stackRmEnvFor(standingStack: boolean, policy: "prod" | "stage"): RmEnv {
+  return resolveStackRmEnv({ standingStack, policy });
 }
 
 // ── What else the operator's shell may still contribute ─────────────────────

@@ -33,8 +33,17 @@
 // imported by the api or worker image. `scripts/` runs on the host and can
 // import this file by relative path. One direction works; the other does not.
 
-/** The backend's runtime modes (backend/src/config.ts's VALID_ENVS). */
-export const RM_ENV_VALUES = ["ephemeral", "smoke", "prod"] as const;
+/**
+ * The backend's runtime modes (backend/src/config.ts's VALID_ENVS).
+ *
+ * `stage` is smoke-production-spec.md §4.1's policy value for stage, test and
+ * CI, which "are isomorphic and share `stage`"; a `bun smoke` boot hands its
+ * containers the policy it resolved (#1026, criterion 13), so the backend must
+ * start on it. For inference it reads as `smoke` does: an operator's own boot,
+ * unless it is the standing stack. `smoke` and `ephemeral` remain the backend's
+ * development and test modes; neither is a deployment policy (§4.3 refuses both).
+ */
+export const RM_ENV_VALUES = ["ephemeral", "smoke", "stage", "prod"] as const;
 export type RmEnv = (typeof RM_ENV_VALUES)[number];
 
 /** The environment classes an inference/judge policy distinguishes. */
@@ -56,7 +65,7 @@ export interface InferencePathOptions {
   standingStack?: boolean;
 }
 
-/** `ephemeral | smoke | prod`, or null for anything else (including unset). */
+/** `ephemeral | smoke | stage | prod`, or null for anything else (including unset). */
 export function parseRmEnv(raw: string | undefined | null): RmEnv | null {
   const v = (raw ?? "").trim();
   return (RM_ENV_VALUES as readonly string[]).includes(v) ? (v as RmEnv) : null;
@@ -67,8 +76,8 @@ export function parseRmEnv(raw: string | undefined | null): RmEnv | null {
  *
  * THE ONE RULE, and every caller gets this one:
  *   1. an explicit `path` wins;
- *   2. `RM_ENV=smoke` / `RM_ENV=ephemeral` is `development` — an operator's own
- *      boot, unless (3) says otherwise;
+ *   2. `RM_ENV=stage` / `RM_ENV=smoke` / `RM_ENV=ephemeral` is `development` —
+ *      an operator's own boot, unless (3) says otherwise;
  *   3. the standing stack is `staging` whatever else is true;
  *   4. everything else — `RM_ENV=prod`, an unset value, a blank value, or a
  *      value that is not one of the three — is `production`.
@@ -83,7 +92,7 @@ export function resolveInferencePath(
 ): InferencePath {
   if (opts.path) return opts.path;
   const rm = parseRmEnv(env.RM_ENV);
-  if (rm === "smoke" || rm === "ephemeral") {
+  if (rm === "stage" || rm === "smoke" || rm === "ephemeral") {
     return opts.standingStack === true ? "staging" : "development";
   }
   if (rm === null && opts.standingStack === true) return "staging";
@@ -109,43 +118,27 @@ export function isAcceptanceJudgeEnv(
 }
 
 /**
- * WHICH `RM_ENV` THE STACK ITSELF DECLARES — the value buildComposeEnv() emits.
+ * WHICH `RM_ENV` THE STACK ITSELF DECLARES — the value buildComposeEnv() emits
+ * into every container.
  *
- * `declared` is what the operator's shell carried. It is not authoritative and
- * cannot loosen the answer:
+ * The input is the POLICY the boot already resolved through the §4.3 matrix
+ * (backend/src/deploy-policy.ts), never the raw shell value: the matrix is what
+ * refuses `smoke`, `ephemeral` and a typo, so by the time a stack is built the
+ * policy is `prod` or `stage`.
  *
- *   * a `--static-port` boot IS the staging deployment, so it is `prod`, and a
- *     `declared` value that says otherwise is REFUSED rather than silently
- *     overridden — the operator believes something false and must be told;
- *   * any other boot of the smoke stack is that operator's own development
- *     stack, so it declares `smoke` unless they asked for something else. This
- *     is NOT the "unset means development" rule coming back: the value is
- *     derived from the KIND OF BOOT the orchestrator knows it is performing,
- *     and it is written into the containers' environment explicitly, which is
- *     precisely what stops any reader from having to guess.
+ *   * `prod` policy: the containers run `prod`.
+ *   * a `--static-port` boot IS the staging deployment a tunnel points at, so
+ *     its containers run `prod` by rule (docs/technical/stack-orchestrator.md
+ *     §16) under the stage policy too: AC-MODEL-01's refusals stay armed on the
+ *     host whose sessions are evidence — the opposite of the state
+ *     rm-frontend-stage-1 was found in on 2026-09-13 (`RM_ENV=smoke`).
+ *   * any other stage boot is the operator's own stack and declares `stage`.
+ *
+ * Derived from the KIND OF BOOT the orchestrator knows it is performing and
+ * written into the containers' environment explicitly, which is precisely what
+ * stops any reader from having to guess.
  */
-export function resolveStackRmEnv(opts: { standingStack: boolean; declared?: string | undefined }): RmEnv {
-  const raw = (opts.declared ?? "").trim();
-  const parsed = parseRmEnv(raw);
-  if (raw !== "" && parsed === null) {
-    throw new Error(
-      `invalid RM_ENV "${raw}" — expected one of ${RM_ENV_VALUES.join(" | ")}. ` +
-        "The stack emits RM_ENV into every container; a value the backend would refuse to start on " +
-        "is refused here instead, before anything is created.",
-    );
-  }
-  if (opts.standingStack) {
-    if (parsed !== null && parsed !== "prod") {
-      throw new Error(
-        `--static-port is the STANDING stack — the deployment a tunnel points at — and it runs RM_ENV=prod ` +
-          `by rule (docs/technical/stack-orchestrator.md §16). This boot carries RM_ENV=${parsed}, which is a ` +
-          "development path: AC-MODEL-01's refusals would be disabled for the analyst containers, the swarm " +
-          "worker and the judge, and every session it produced would be unusable as evidence — the exact state " +
-          "rm-frontend-stage-1 was found in on 2026-09-13. Unset RM_ENV (the stack emits prod itself) or set " +
-          "RM_ENV=prod. Drop --static-port to boot a development stack on a Docker-assigned port.",
-      );
-    }
-    return "prod";
-  }
-  return parsed ?? "smoke";
+export function resolveStackRmEnv(opts: { standingStack: boolean; policy: "prod" | "stage" }): RmEnv {
+  if (opts.policy === "prod" || opts.standingStack) return "prod";
+  return "stage";
 }

@@ -4,9 +4,12 @@
 // rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
 //
 // Implemented for issue #1026, W1 step 2. The table itself is created by
-// backend/migrations/0063_deployment_identity.sql. Nothing imports this module
-// yet, so it remains additive and behaviour-neutral until the tools of §2 wire
-// it in.
+// backend/migrations/0063_deployment_identity.sql. Its runtime caller is `bun
+// smoke --local dump` (backend/scripts/smoke-prepare.ts `enroll`), which writes
+// the restored copy's row as `rehearsal` through rm_owner inside the §2
+// mutation fence, using {@link transactionIdentityStore}. A `--local blank`
+// bootstrap writes the same row inside its own snapshot transaction
+// (backend/src/db/schema-snapshot.ts bootstrapBlankDatabase).
 //
 // ── Why a row in the database, and not a file or a flag ─────────────────────
 //
@@ -66,21 +69,22 @@
 //
 // ── Layering note ───────────────────────────────────────────────────────────
 //
-// `scripts/**` does not import `backend/**` and does not depend on `postgres`
-// anywhere today, and this stub does not change that: the database access is
-// behind {@link DeploymentIdentityStore}, which the backend side implements.
-// Keeping the seam here is not ceremony — it is what lets the matrix and the
-// rehearsal gate be unit-tested with no database at all, which the W1 gates
-// need if they are to run in CI without provisioning a cluster.
+// This module does not depend on `postgres`: the database access is behind
+// {@link DeploymentIdentityStore}, opened here over Bun.SQL
+// ({@link openDeploymentIdentityStore}) or over a transaction the caller
+// already holds ({@link transactionIdentityStore}). The policy it consumes
+// comes from backend/src/deploy-policy.ts, which has no dependency either.
 
-/**
- * The two enrolled kinds of spec §4.2. There is no third value and no `unknown`
- * member: a database with no row is represented by `null` at the read boundary
- * (see {@link DeploymentIdentityRead}), never by a widened union, so that a
- * `switch` over this type stays exhaustive and an un-enrolled database can
- * never be accidentally handled by a `default` branch meant for a future kind.
- */
-export type DeploymentIdentityKind = "production" | "rehearsal";
+// The enrolled kinds, the rehearsal-only gate and the §4.3 matrix are the ONE
+// implementation in backend/src/deploy-policy.ts (criterion 13); this module
+// keeps the store and the enrollment writes, and re-exports the rest so every
+// existing import site reads the same function.
+import type { DeploymentIdentityKind } from "../../backend/src/deploy-policy.ts";
+export {
+  requireRehearsalTarget,
+  type DeploymentIdentityKind,
+  type RehearsalOnlyPreparation,
+} from "../../backend/src/deploy-policy.ts";
 
 /**
  * The row itself.
@@ -378,83 +382,53 @@ export async function enrollAsProduction(
 }
 
 /**
- * Which rehearsal-only preparation is being requested. Spec §4.3:
- * "Rehearsal-only preparation: `--migrate`, `--seed`, `--spoof-keys` require
- * `rehearsal` in addition to their own guards."
- *
- * "In addition to" is the load-bearing phrase: this gate does not replace
- * `--seed`'s refusal of a populated database (§5), `--migrate`'s prompt-and-
- * `y/n` on a remote connection (§8.5), or `--spoof-keys`'s four guards (§6.4).
- * It is the floor under all three.
+ * A tagged-template SQL handle, the only thing {@link transactionIdentityStore}
+ * needs from a transaction. postgres.js's transaction satisfies it; so does a
+ * test double.
  */
-export type RehearsalOnlyPreparation = "migrate" | "seed" | "spoof-keys";
+export type TemplateSql = (strings: TemplateStringsArray, ...values: never[]) => PromiseLike<unknown>;
 
 /**
- * The shared gate. One function for all three flags, so a fourth preparation
- * added later cannot ship with two of the three checks.
+ * A store over a transaction the CALLER already holds — the §2 mutation fence.
  *
- * Inputs: which preparation, the resolved `RM_ENV`, and the identity read.
- * Output: allow, or refuse with a reason naming the preparation, the policy and
- * the observed identity.
+ * Spec §2 fences "the identity write": it must run in a transaction whose first
+ * statement is `pg_advisory_xact_lock`, on the connection performing it. A store
+ * that opened its own connection (as {@link openDeploymentIdentityStore} does)
+ * would write outside that transaction. So `bun smoke --local dump` opens the
+ * fence as rm_owner (backend/src/db/target-lock.ts withMutationFence) and hands
+ * its transaction here; {@link enrollAsRehearsal} then writes through it.
  *
- * Refusal cases, every one of which must be its own branch with its own text:
- *  - `RM_ENV=prod`, whatever the identity says. A production-policy run never
- *    prepares; production upgrades are an operator intervention (§8.5).
- *  - identity `production`.
- *  - identity absent — an un-enrolled database is not a rehearsal database.
- *  - identity `"unreadable"` — no evidence, no preparation.
- *  - the flag was not passed explicitly. §5: `--seed` "is explicit … and is
- *    never implied by any mode"; §6.4: `--spoof-keys` refuses when the "flag
- *    [is] not explicit". A preparation that a mode can imply is a preparation
- *    that happens by surprise.
- *
- * Serves spec §10 W1 (the rehearsal half of the lifecycle gates), §10 W2
- * ("Unattended CI boot `--local blank --migrate --seed`" must still pass, so
- * the gate has to allow a correctly-enrolled local database without a prompt)
- * and §10 W3 (`--spoof-keys` guards).
+ * The write restriction is the database's: the grant lets only rm_owner write
+ * the table (§4.2), and this store adds no second, weaker check. `close` is a
+ * no-op — the transaction belongs to the fence, which commits or aborts it.
  */
-export function requireRehearsalTarget(request: {
-  readonly preparation: RehearsalOnlyPreparation;
-  readonly rmEnv: string | undefined;
-  readonly identity: DeploymentIdentityKind | null | "unreadable";
-  readonly explicitlyRequested: boolean;
-}): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
-  const what = `--${request.preparation}`;
-  if (request.rmEnv === "prod") {
-    return {
-      allow: false,
-      reason: `${what} is refused under RM_ENV=prod: a production-policy run never prepares a database (§4.3, §8.5).`,
-    };
-  }
-  if (request.rmEnv !== undefined && request.rmEnv !== "stage") {
-    return {
-      allow: false,
-      reason: `${what} is refused: RM_ENV="${request.rmEnv}" is not a policy value (§4.1 allows prod or stage only).`,
-    };
-  }
-  if (!request.explicitlyRequested) {
-    return {
-      allow: false,
-      reason: `${what} is refused because it was not explicitly requested: no mode may imply a preparation (§5, §6.4).`,
-    };
-  }
-  if (request.identity === "production") {
-    return {
-      allow: false,
-      reason: `${what} is refused: this target is enrolled as production, and rehearsal-only preparation requires rehearsal (§4.3).`,
-    };
-  }
-  if (request.identity === null) {
-    return {
-      allow: false,
-      reason: `${what} is refused: this target is not enrolled at all, and an un-enrolled database is not a rehearsal database (§4.3). Enroll it as rehearsal first.`,
-    };
-  }
-  if (request.identity === "unreadable") {
-    return {
-      allow: false,
-      reason: `${what} is refused: deployment_identity is unreadable, so there is no evidence this target is a rehearsal database (§4.3). Check that the credential can read the table.`,
-    };
-  }
-  return { allow: true };
+export function transactionIdentityStore(tx: TemplateSql): DeploymentIdentityStore {
+  const run = tx as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
+  return {
+    async read(): Promise<DeploymentIdentityRead> {
+      try {
+        const rows = (await run`SELECT kind, written_at, written_by, note FROM deployment_identity`) as IdentityRowShape[];
+        const row = rows[0];
+        return row === undefined ? { state: "absent" } : { state: "enrolled", row: toRow(row) };
+      } catch (error) {
+        return { state: "unreadable", reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async write(kind: DeploymentIdentityKind, note: string | null): Promise<DeploymentIdentityRow> {
+      const rows = (await run`
+        INSERT INTO deployment_identity (id, kind, written_at, written_by, note)
+        VALUES (true, ${kind}, now(), current_user, ${note})
+        ON CONFLICT (id) DO UPDATE
+          SET kind = EXCLUDED.kind,
+              written_at = EXCLUDED.written_at,
+              written_by = EXCLUDED.written_by,
+              note = EXCLUDED.note
+        RETURNING kind, written_at, written_by, note
+      `) as IdentityRowShape[];
+      const row = rows[0];
+      if (row === undefined) throw new Error("deployment_identity: the write returned no row.");
+      return toRow(row);
+    },
+    async close(): Promise<void> {},
+  };
 }
