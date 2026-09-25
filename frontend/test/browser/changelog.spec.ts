@@ -84,7 +84,7 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(34);
+  await expect(frame.locator(".cl__entry")).toHaveCount(35);
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
@@ -152,7 +152,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   // In the page, not the nav: the nav has a Swarm button of its own (RM-124).
   const swarm = frame.locator("#view").getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("34 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("35 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -169,7 +169,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("34 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("35 releases");
 });
 
 // Merged work that is not in production yet sits in one block on top of the
@@ -283,7 +283,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
     expect(seen.headings).toBe(0);
     await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
     await button.click();
-    await expect(frame.locator(".cl__count")).toHaveText("34 releases");
+    await expect(frame.locator(".cl__count")).toHaveText("35 releases");
   }
 });
 
@@ -312,7 +312,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
 
   const imgs = frame.locator(".cl__win img");
   const n = await imgs.count();
-  expect(n).toBe(10);
+  expect(n).toBe(11);
   for (let i = 0; i < n; i++) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await expect.poll(async () =>
