@@ -47,6 +47,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
+import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type RawLine } from "./lib/gate/log-inventory.ts";
+import { containerLogs } from "./lib/gate/io.ts";
+
+/** The committed error classifications both gates grade against. */
+export const CLASSIFICATIONS_PATH = join(dirname(fileURLToPath(import.meta.url)), "lib", "gate", "log-classifications.json");
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NAME = "twin:gate";
@@ -376,6 +381,8 @@ export interface GateReport {
   jobs: { kind: string; status: string; count: number }[];
   containers: (ContainerState & { oneShot: boolean })[];
   logScans: LogScan[];
+  /** Every distinct error/warning message of every source, classified. */
+  inventory: ClassifiedGroup[];
 }
 
 /** PURE. The report as markdown. */
@@ -409,6 +416,7 @@ export function renderReport(r: GateReport): string {
     for (const t of l.topErrors) out.push(`- ×${t.count} \`${t.line.replace(/`/g, "'")}\``);
   }
   out.push("", `Fatal patterns: ${FATAL_LOG_PATTERNS.map((p) => `\`${p}\``).join(", ")}.`, `Warn patterns: ${WARN_LOG_PATTERNS.map((p) => `\`${p}\``).join(", ")}.`, "");
+  out.push("", "## Full inventory — every distinct error and warning, classified", "", ...renderInventory(r.inventory ?? []), "");
   return out.join("\n");
 }
 
@@ -479,10 +487,22 @@ async function main(): Promise<number> {
   add("containers", "Every service container is running, healthy and never restarted", cFail,
     [`${services.length} service container(s), ${containers.length - services.length} one-shot container(s) still present`]);
 
-  const logScans: LogScan[] = [];
-  for (const c of containers) logScans.push(scanLog(c.name, sh(["docker", "logs", "--since", t0, c.name]).out.split("\n"), parsed.waive));
-  logScans.push(scanLog(state.smokeTwinContainer, sh(["docker", "logs", "--since", t0, state.smokeTwinContainer]).out.split("\n"), parsed.waive));
-  if (parsed.driverLog && driverLines.length) logScans.push(scanLog(`driver: ${parsed.driverLog}`, driverLines, parsed.waive));
+  // Every source, read ONCE: each container of the boot, the restored
+  // database, and the driver's own log.
+  const sources: { source: string; lines: RawLine[] }[] = [
+    ...containers.map((c) => ({ source: c.name, lines: containerLogs(c.name, t0) })),
+    { source: state.smokeTwinContainer, lines: containerLogs(state.smokeTwinContainer, t0) },
+    ...(parsed.driverLog && driverLines.length ? [{ source: `driver: ${parsed.driverLog}`, lines: driverLines.map((text) => ({ ts: null, text })) }] : []),
+  ];
+  const logScans: LogScan[] = sources.map(({ source, lines }) => scanLog(source, lines.map((l) => l.text), parsed.waive));
+  const rules = validateRules(JSON.parse(readFileSync(CLASSIFICATIONS_PATH, "utf8")));
+  const classified = classify(sources.flatMap(({ source, lines }) => inventory(source, lines)), rules);
+  const inv = inventoryVerdict(classified, "post-release");
+  add("inventory", "Every distinct error in every log is classified (default deny), and no known issue this release fixes is still present",
+    inv.failures,
+    [`${classified.length} distinct message(s) across ${sources.length} source(s); ${inv.unclassifiedErrors} unclassified error(s)`,
+      ...inv.warnings.map((w) => `warn: ${w}`)],
+    inv.warnings.length > 0);
   for (const l of logScans) {
     const fatal = Object.entries(l.fatal).map(([p, n]) => `${n} line(s) matching "${p}"`);
     add(`logs:${l.source}`, `Log scan — ${l.source}`, fatal,
@@ -508,6 +528,7 @@ async function main(): Promise<number> {
     jobs,
     containers,
     logScans,
+    inventory: classified,
   };
   const stamp = report.finishedAt.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const reportPath = parsed.report ?? join(process.env.HOME ?? "/tmp", "twin-gate-reports", `twin-gate-${report.commit.slice(0, 8)}-${stamp}.md`);

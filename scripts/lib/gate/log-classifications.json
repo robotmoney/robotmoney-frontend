@@ -1,0 +1,193 @@
+[
+  {
+    "id": "fragment-stack-frame",
+    "match": "^<n> \\|",
+    "class": "fragment",
+    "reason": "A source-code line bun prints under an error; the error's headline line is classified on its own."
+  },
+  {
+    "id": "fragment-postgres-field",
+    "match": "^\\s*(severity|severity_local|code|detail|hint|where|file|line|routine|position|schema_name|table_name|column_name|constraint_name|errno)\\s*:",
+    "class": "fragment",
+    "reason": "A field of a printed PostgresError object; the PostgresError line itself is classified on its own."
+  },
+  {
+    "id": "fragment-worker-loop-headline",
+    "match": "^\\[(analytics|research|swarm)-<n>\\] (loop|scheduler|reaper) error: <n> \\|",
+    "class": "fragment",
+    "reason": "The worker loop's headline for a caught error; the cause (PostgresError, connection error) follows on its own line and is classified there."
+  },
+  {
+    "id": "fragment-api-error-headline",
+    "match": "^api error: <n> \\|",
+    "class": "fragment",
+    "reason": "The api's headline for a caught error; the PostgresError line that follows is classified on its own."
+  },
+  {
+    "id": "expected-guard-probe-immutable",
+    "match": "is immutable: (DELETE|UPDATE) is not permitted on",
+    "class": "expected",
+    "reason": "The boot's ledger guard probes each immutable table and REQUIRES this refusal; a missing refusal is what fails the boot."
+  },
+  {
+    "id": "expected-guard-probe-append-only",
+    "match": "is append-only: row deletion is not permitted|refused by trigger \\w+_append_only",
+    "class": "expected",
+    "reason": "The boot's append-only guard probes each protected table and REQUIRES this refusal from rm_append_only_guard()."
+  },
+  {
+    "id": "expected-guard-probe-context",
+    "match": "CONTEXT: PL/pgSQL function public\\.rm_\\w+\\(\\) line|STATEMENT: DELETE FROM public\\.\\w+ WHERE false",
+    "class": "expected",
+    "reason": "Postgres context lines for the guard probes' own DELETE ... WHERE false statements."
+  },
+  {
+    "id": "expected-boot-ok-lines",
+    "match": "\\bOK\\b.*(guard armed|delete refused on every protected table|no calendar-invalid)|\\b0 failed\\b",
+    "class": "expected",
+    "reason": "Success lines of the boot's own checks that happen to contain 'refused' or 'failed'."
+  },
+  {
+    "id": "expected-member-agent-dockerfile",
+    "match": "robotmoney\\.invalid",
+    "class": "expected",
+    "reason": "The member-agent image build echoes its git config line, which uses the reserved .invalid mail domain."
+  },
+  {
+    "id": "expected-seed-drift",
+    "match": "v<n>-seed:bootstrap .* drift",
+    "class": "expected",
+    "reason": "On an adopted (restored) database the seed reports drift as a warning and existing rows win, by design."
+  },
+  {
+    "id": "expected-fetch-floor-fallback",
+    "match": "fetch returned <n> rows — using persisted <n> rows",
+    "class": "expected",
+    "reason": "A live source returned nothing and the code used the real persisted floor, never synthetic data; the failed fetch itself is classified separately."
+  },
+  {
+    "id": "expected-edgar-status",
+    "match": "EDGAR MNA refresh: status=updated|\\[edgar\\] MNA refresh .*status=updated",
+    "class": "expected",
+    "reason": "A successful EDGAR refresh summary; it contains the counter name 'rejected='."
+  },
+  {
+    "id": "expected-reaper-recovery",
+    "match": "reaper requeued/killed <n> stuck job\\(s\\)",
+    "class": "expected",
+    "reason": "The worker reaper recovering jobs whose lease lapsed; the failure that caused the lapse is logged and classified on its own."
+  },
+  {
+    "id": "expected-nginx-buffered",
+    "match": "an upstream response is buffered to a temporary file",
+    "class": "expected",
+    "reason": "nginx spilling a large response to disk; informational."
+  },
+  {
+    "id": "expected-skill-probe-404",
+    "match": "this-path-cannot-exist",
+    "class": "expected",
+    "reason": "The live onboarding-skill test's own negative probe for a path that must 404."
+  },
+  {
+    "id": "external-geckoterminal",
+    "match": "geckoterminal.*(throttled|retry budget exhausted|HTTP <n> — retrying|HTTP 429)",
+    "class": "external",
+    "reason": "GeckoTerminal rate limiting; the code retries, then degrades to last-persisted data."
+  },
+  {
+    "id": "external-market-data-timeout",
+    "match": "\\[extract\\] fetch \\S+ \\((yahoo|blockchain_com|fred|defillama\\w*)\\) FAILED: The operation timed out",
+    "class": "external",
+    "reason": "A market-data provider timing out; the extractor falls back to the persisted real floor."
+  },
+  {
+    "id": "external-base-rpc",
+    "match": "Base RPC HTTP|buyback-logs: live index failed",
+    "class": "external",
+    "reason": "The Base chain RPC endpoint failing; buyback indexing keeps its persisted rows."
+  },
+  {
+    "id": "external-token-metrics",
+    "match": "token-metrics: price read failed, degrading",
+    "class": "external",
+    "reason": "A token price read failing; the metric degrades to null, never a fabricated price."
+  },
+  {
+    "id": "known-db-read-only",
+    "match": "cannot execute (UPDATE|INSERT|DELETE|SELECT FOR UPDATE) in a read-only transaction|a DELETE was refused, but NOT by the guard .* read-only transaction",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The managed cluster switches to read-only as its disk fills with analytics-ledger rows (8.2 GB on 2026-09-25)."
+  },
+  {
+    "id": "known-db-disk-full",
+    "match": "No space left on device|could not (extend|write to) file",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The managed cluster's disk is full (analytics-ledger growth)."
+  },
+  {
+    "id": "known-db-connection-dropped",
+    "match": "CONNECTION_CLOSED|CONNECT_TIMEOUT|terminating connection due to administrator command|database unavailable",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "Connections dropped while the managed cluster protected itself from a full disk."
+  },
+  {
+    "id": "known-db-boot-refusal",
+    "match": "REFUSING the boot: the append-only guard is NOT armed",
+    "class": "known-issue",
+    "issue": "v0.5.1-D4-guard",
+    "reason": "The guard misread a read-only session as a disarmed guard and refused boots; fixed in v0.5.1 (25006 is inconclusive)."
+  },
+  {
+    "id": "known-db-write-500",
+    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP <n>",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The api's analytics writes fail while the cluster is read-only or full; the api's own PostgresError is classified separately."
+  },
+  {
+    "id": "known-upstream-closed",
+    "match": "upstream prematurely closed connection|connect\\(\\) failed \\(<n>: Connection refused\\) while connecting to upstream",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "nginx losing the api during database stalls and refused boots; follows from the database state."
+  },
+  {
+    "id": "known-repair-gaps-dead",
+    "match": "ops\\.repair_gaps\\) failed",
+    "class": "known-issue",
+    "issue": "1035",
+    "reason": "The gap-repair job fails on dropped database connections."
+  },
+  {
+    "id": "known-judge-model-unconfigured",
+    "match": "model_unconfigured",
+    "class": "known-issue",
+    "issue": "v0.5.1-D1",
+    "reason": "The judge had no model; migration 0063 sets the CI model in v0.5.1."
+  },
+  {
+    "id": "known-wallet-backfill-grant",
+    "match": "permission denied for table (wallet_backfill_state|chain_day_blocks|chain_address_floors)",
+    "class": "known-issue",
+    "issue": "v0.5.1-D2",
+    "reason": "rm_worker lacked the wallet-backfill grants; migration 0061 grants them in v0.5.1."
+  },
+  {
+    "id": "known-parity-nul",
+    "match": "\\\\u<n> cannot be converted to text|unsupported Unicode escape sequence",
+    "class": "known-issue",
+    "issue": "v0.5.1-D4",
+    "reason": "Parity evidence carried a NUL into jsonb; fixed in v0.5.1 (61ee2a0d)."
+  },
+  {
+    "id": "known-parity-sweep-timeout",
+    "match": "parity_sweep\\) failed.*socket connection was closed|\\[Bun\\.serve\\]: request timed out",
+    "class": "known-issue",
+    "issue": "v0.5.1-sweep-timeout",
+    "reason": "The parity sweep outlived the api's ~10 s idle timeout; v0.5.1 lifts it for that request."
+  }
+]

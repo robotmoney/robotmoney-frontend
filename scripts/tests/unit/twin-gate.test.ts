@@ -138,6 +138,7 @@ describe("the report — the document the runbook files", () => {
       jobs: [{ kind: "swarm.judge", status: "succeeded", count: 4 }],
       containers: [{ name: "rm_x-api-1", running: true, health: "healthy", restarts: 0, oneShot: false }],
       logScans: [scanLog("rm_x-api-1", ["fine"], []), scanLog("driver: /tmp/t.log", ["[session 1: 2026-09-25/woon] published"], [])],
+      inventory: [{ source: "rm_x-api-1", level: "ERROR", key: "brand new failure", count: 2, first: null, last: null, sample: "brand new failure", rule: null }],
     };
     const md = renderReport(report);
     expect(md).toContain("# Twin rehearsal gate report — PASS");
@@ -145,6 +146,8 @@ describe("the report — the document the runbook files", () => {
     expect(md).toContain("`rm_x-api-1` | service | yes | healthy | 0 |");
     expect(md).toContain("2 source(s) scanned");
     expect(md).toContain("`driver: /tmp/t.log`");
+    expect(md).toContain("## Full inventory");
+    expect(md).toContain("**UNCLASSIFIED**");
   });
 
   test("--report must be a .md path", () => {
