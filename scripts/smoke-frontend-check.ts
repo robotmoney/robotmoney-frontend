@@ -84,7 +84,7 @@ async function main() {
     "x-data=\"regimeView()\"",
     "latest.composite",
     "regimeLabel(latest.regime)",  // styled top-line regime label (pixel-parity rewrite)
-    "rv__panels",                  // per-panel indicator tables section
+    "id=\"indicator-panels\"",     // the Indicators section: one panel table per tab
   ]);
   // channel-divergence stays data-driven: the long-form restoration (#331/#333)
   // kept the live researchView payload (gauges + the three transmission-
