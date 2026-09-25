@@ -47,8 +47,6 @@
 //   - A v0.5.0 dump, the only dump production can produce today (D55 (8)),
 //     does not boot. It is recorded below as a KNOWN FAILURE (test.failing)
 //     against the spec outcome, never as a pass.
-//   - The reattach of a restored copy on a rerun of the same plan fails
-//     (test.failing below; the defect is in smoke-main.ts, not owned here).
 //   - smoke:capture itself cannot capture v0.5.0 (#699): the fixture dumps it
 //     as the superuser, and a case below keeps the rm_readonly refusal visible.
 //
@@ -60,8 +58,7 @@
 //                        A rerun of the same plan must then REATTACH the
 //                        restored copy (scripts/lib/smoke-main.ts, the committed
 //                        prepare:restore branch) with the row still `rehearsal`.
-//                        It refuses today (see the known-failure test), so the
-//                        reattach half of criterion 76 is NOT proven.
+//                        The reattach test below asserts exactly that.
 //   v0.5.0               the release production runs (D55 (8)). It predates
 //                        0063, so it has no deployment_identity table and smoke
 //                        has nothing to write `rehearsal` into. Today the boot
@@ -212,17 +209,12 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     expect(psql(copy.superuserUrl, "SELECT kind FROM deployment_identity").out).toBe("rehearsal");
   }, BOOT_TIMEOUT_MS);
 
-  // KNOWN FAILURE — the reattach half of criterion 76 (spec §1.3, §5). A rerun
-  // of the SAME plan whose restore committed must reattach the copy it
-  // recorded, restore nothing, and leave the row `rehearsal`. It does not
-  // today: scripts/lib/smoke-main.ts calls writeStateFile() at the start of
-  // prepare:instance, before the reattach branch reads the recorded
-  // container, and dataPath.container is still the "" placeholder there. The
-  // record is overwritten with an empty container, so the rerun refuses with
-  // "this plan's restore already committed, and its container  is gone".
-  // smoke-main.ts is not this package's file; the fix is reported. This test
-  // asserts the SPEC outcome, so it turns red the moment the fix lands.
-  test.failing("KNOWN GAP: a rerun of the same plan reattaches the restored copy, restores nothing, and the row still reads rehearsal", async () => {
+  // The reattach half of criterion 76 (spec §1.3, §5). A rerun of the SAME
+  // plan whose restore committed must reattach the copy it recorded, restore
+  // nothing, and leave the row `rehearsal`. smoke-main.ts reads the recorded
+  // twin (recordedTwin) before prepare:instance rewrites the state file, so the
+  // record still names the restored container when the reattach branch runs.
+  test("a rerun of the same plan reattaches the restored copy, restores nothing, and the row still reads rehearsal", async () => {
     if (!prod?.h) throw new Error("the production-identity boot above did not run");
     const h = prod.h;
     const copy = restoredCopy(h);
