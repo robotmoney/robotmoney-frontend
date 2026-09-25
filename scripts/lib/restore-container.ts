@@ -258,8 +258,9 @@ export async function restoreBackupIntoContainer(
      * labels so `smoke:clean` reclaims it by the same label scoping it uses for
      * every other volume a boot creates.
      *
-     * Omitted (restore-check.ts) the data lives in the container's writable
-     * layer and dies with it, which is right for a check that tears down in a
+     * Omitted (restore-check.ts) the data lives in the image's ANONYMOUS
+     * volume and dies with the container only because teardownContainer()
+     * removes it with `-v`, which is right for a check that tears down in a
      * `finally`. A `--db smoke-twin` boot passes one because its contract is the
      * ephemeral-pgdata contract: teardown keeps the data, smoke:clean reclaims it.
      *
@@ -392,10 +393,7 @@ export async function restoreBackupIntoContainer(
     ["gpg", "--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc],
     { stdout: "pipe", stderr: "inherit" },
   );
-  const pgRestore = Bun.spawn(
-    ["pg_restore", ...connArgs, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error"],
-    { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit", env },
-  );
+  const pgRestore = Bun.spawn(restoreDumpArgv(container), { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit" });
   const restoreExit = await pgRestore.exited;
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
@@ -410,9 +408,44 @@ export async function restoreBackupIntoContainer(
   };
 }
 
+/**
+ * The pg_restore that reads the decrypted archive: the RESTORE CONTAINER'S own
+ * client, over its local socket, never the host's.
+ *
+ * A custom-format archive can be read only by a pg_restore at least as new as
+ * the pg_dump that wrote it, and `bun smoke:capture` refuses a pg_dump older
+ * than the server it dumps (its GUARD 3) — so a real backup is written in the
+ * archive format of production's major, and a host whose pg_restore is older
+ * refuses it outright ("unsupported version (1.16) in file header": a host
+ * pg_restore 16 against an 18 archive, the failure
+ * scripts/tests/integration/smoke-dump-lifecycle.test.ts met first). The
+ * restore container runs POSTGRES_IMAGE, the pinned production major, so its
+ * client reads any archive production can produce. Its local socket trusts the
+ * container's own superuser, so no password travels here either.
+ */
+export function restoreDumpArgv(container: string): string[] {
+  return [
+    "docker", "exec", "-i", container,
+    "pg_restore", `--username=${LOCAL_USER}`, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error",
+  ];
+}
+
+/**
+ * Remove the restore container AND its anonymous volume. The postgres image
+ * declares its data directory a VOLUME, so a container started without a named
+ * one (restore-check.ts, stage-rehearsal.ts) keeps its cluster — a complete
+ * copy of production — in an anonymous volume that `docker rm -f` alone leaves
+ * behind, unlabelled and invisible to smoke:clean. `-v` never removes a NAMED
+ * volume, so a `--local dump` boot's labelled volume is still kept for
+ * smoke:clean, as its contract says.
+ */
+export function teardownArgv(container: string): string[] {
+  return ["docker", "rm", "-f", "-v", container];
+}
+
 export function teardownContainer(container: string, log: (m: string) => void): void {
-  log(`cleaning up: docker rm -f ${container}`);
-  Bun.spawnSync(["docker", "rm", "-f", container]);
+  log(`cleaning up: docker rm -f -v ${container}`);
+  Bun.spawnSync(teardownArgv(container));
 }
 
 /**
