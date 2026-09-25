@@ -32,6 +32,16 @@ import { join } from "node:path";
 /** The env var the opencode CLI reads for the OpenCode Zen provider. */
 export const ZEN_KEY_ENV = "OPENCODE_API_KEY";
 
+/**
+ * The OpenCode Zen REST endpoint, from the same provider definition quoted at
+ * the top of this file. A standing participant calls it directly — an agent's
+ * take one-shot and a judge's judgement — with the model id the endpoint
+ * spells (no `opencode/` prefix) and ITS OWN model key from its
+ * `credential.json` entry (D52), never a host-wide one: the credential file is
+ * where a participant's model key lives (smoke spec §3, §6.1).
+ */
+export const ZEN_API_BASE_URL = "https://opencode.ai/zen/v1";
+
 /** The configured OpenCode Zen key, or null when none is set. */
 export function zenApiKey(env: Record<string, string | undefined> = process.env): string | null {
   return env[ZEN_KEY_ENV]?.trim() || null;
@@ -53,6 +63,16 @@ export function zenApiKey(env: Record<string, string | undefined> = process.env)
 // So: process environment, then `.env`, then `.env.readonly` — and when none of
 // the three has it, a refusal that NAMES ALL THREE. A boot that cannot reach a
 // funded model must not start and quietly produce evidence-shaped nothing.
+//
+// NO STACK CONTAINER RECEIVES THIS KEY ANY MORE (issue #1026, D52). The judge
+// that once ran inside the stack is a participant now, and every participant —
+// agent or judge — takes its OWN model key from its `credential.json` entry as
+// `RM_INFERENCE_KEY` (scripts/lib/participant-compose.ts). No compose file
+// interpolates `OPENCODE_API_KEY`, so the value this resolves reaches no
+// service's environment, which scripts/tests/integration/
+// no-model-key-outside-participants.test.ts proves over the rendered stack.
+// What still reads it is the standing boot's inference PREFLIGHT, which proves
+// a funded model is reachable before anything starts.
 export const ENV_FILE = ".env";
 export const READONLY_ENV_FILE = ".env.readonly";
 

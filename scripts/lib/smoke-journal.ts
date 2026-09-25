@@ -1341,6 +1341,18 @@ export interface Receipt {
    * and `analytics-producer`'s authentication and seed command.
    */
   readonly readiness: readonly { readonly check: string; readonly pass: boolean; readonly detail: string }[];
+  /**
+   * The participants the `participants` phase reconciled (§6.1, §6.2): each
+   * running container by kind and name, the spoof generation it holds (§6.4)
+   * or null for the credential file's own key, and what this run did to it.
+   * Absent from a receipt written before participants were reconciled.
+   */
+  readonly participants?: readonly {
+    readonly kind: string;
+    readonly name: string;
+    readonly generation: string | null;
+    readonly action: "started" | "kept";
+  }[];
 }
 
 /**

@@ -207,7 +207,8 @@ function reconcile(names: readonly string[], live: readonly RunningParticipant[]
     plan,
     plan.start.map((e) => participantServiceName(e.kind, e.name)),
     {
-      composePrefix: ["-p", "rm_twin"],
+      project: "rm_twin",
+      composeFiles: ["docker-compose.yml"],
       run: (args) => {
         if (args[0] === "rm") for (const c of args.slice(2)) calls.push(`stop:${live.find((p) => p.containerName === c)?.name}`);
         if (args[0] === "compose") for (const svc of args.slice(args.indexOf("--build") + 1)) calls.push(`start:${generationOf.get(svc)}`);

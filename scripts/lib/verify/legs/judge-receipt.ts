@@ -92,7 +92,7 @@ export function receiptVerdict(body: ReceiptResponse | Receipt): { ok: boolean; 
     return {
       ok: false,
       why: `judge.source='${source}', not 'model' — this certificate attests TEMPLATE PROSE, not inference. ` +
-        "Check that the credential file's `judges` entry carries a model key and that its participant container is running.",
+        "Check swarm_judge_config.model and that OPENCODE_API_KEY reaches the judge participant's container.",
     };
   }
   if (mode && mode !== "enforce") {

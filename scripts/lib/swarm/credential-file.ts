@@ -56,7 +56,7 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { effectiveRoster, type SpoofGeneration } from "./spoof-keys.ts";
+import { effectiveRoster, readSpoofGeneration, type SpoofGeneration } from "./spoof-keys.ts";
 
 /**
  * A participant's signing identity: the Ed25519 public key the API holds and
@@ -732,13 +732,16 @@ export interface PlanParticipantsOptions {
    */
   currentGeneration?: string;
   /**
-   * The instance's persisted spoof generation (spoof-keys.ts
-   * `readSpoofGeneration`), or `null` when none exists. Roster precedence (spec
-   * §6.4, D52): while it exists, the members it names boot from ITS key and
-   * bearer rather than the file's, and a container of theirs running on any
-   * other generation is replaced. It never adds a member the file does not
-   * list.
+   * The instance whose spoof generation takes precedence: planParticipants
+   * reads `readSpoofGeneration(stateRoot, instance)` itself, so a boot cannot
+   * reconcile without it. Roster precedence (spec §6.4, D52): while a
+   * generation exists, the members it names boot from ITS key and bearer
+   * rather than the file's, and a container of theirs running on any other
+   * generation is replaced. It never adds a member the file does not list. A
+   * malformed generation file refuses (spoof-keys.ts).
    */
+  spoofState?: { stateRoot: string; instance: string };
+  /** The generation itself, for a caller that already holds it (the gates). Wins over `spoofState`. */
   generation?: SpoofGeneration | null;
   /**
    * The database's role for a member id, `undefined` for no such member (spec
@@ -798,7 +801,12 @@ export function planParticipants(
   }
   // Roster precedence (spec §6.4): the generation's key and bearer for the
   // members it names, and only for members the file already lists.
-  const entries = effectiveRoster(rosterEntries(file), options.generation ?? null);
+  const generation = options.generation !== undefined
+    ? options.generation
+    : options.spoofState
+      ? readSpoofGeneration(options.spoofState.stateRoot, options.spoofState.instance)
+      : null;
+  const entries = effectiveRoster(rosterEntries(file), generation);
   if (options.memberRole) assertRosterRoles(entries, options.memberRole, resolution.path);
   return reconcileRoster(entries, running, options.currentGeneration);
 }

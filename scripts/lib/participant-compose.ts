@@ -42,8 +42,11 @@
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { ROUTES } from "@robotmoney/contract";
 import type { ParticipantKind, RosterEntry, RunningParticipant } from "./swarm/credential-file.ts";
 import { isDbCredentialKey, looksLikeConnectionString } from "./db-credential-keys.ts";
+import { JUDGE_CLIENT_ENV } from "../agent/participant/judge-client.ts";
+import { INFERENCE_KEY_ENV, INFERENCE_URL_ENV, INFERENCE_WIRE_ID_ENV, TAKE_COMMAND_ENV } from "../agent/participant/take-runner.ts";
 
 /** Label every participant container carries, so a boot can find them again. */
 export const PARTICIPANT_LABEL = "robotmoney.participant";
@@ -125,16 +128,16 @@ export function participantEnv(entry: RosterEntry, options: ParticipantRenderOpt
     RM_MEMBER_TOKEN: entry.credential.bearer,
     RM_MEMBER_IDENTITY: identity,
     // D52: this participant's OWN model key, from its own entry.
-    RM_INFERENCE_KEY: entry.credential.modelKey,
+    [INFERENCE_KEY_ENV]: entry.credential.modelKey,
   };
   if (entry.kind === "agent") {
-    env.RM_TAKE_COMMAND = JSON.stringify(PARTICIPANT_TAKE_COMMAND);
-    env.RM_INFERENCE_URL = options.inference.baseUrl;
-    env.RM_INFERENCE_WIRE_ID = options.inference.wireId;
+    env[TAKE_COMMAND_ENV] = JSON.stringify(PARTICIPANT_TAKE_COMMAND);
+    env[INFERENCE_URL_ENV] = options.inference.baseUrl;
+    env[INFERENCE_WIRE_ID_ENV] = options.inference.wireId;
   } else {
-    // The judge client's own names (judge-client.ts JUDGE_CLIENT_ENV).
-    env["RM_JUDGE_" + "MODEL"] = options.inference.wireId;
-    env.RM_JUDGE_BASE_URL = options.inference.baseUrl;
+    // The judge client's own names, read from it rather than spelled twice.
+    env[JUDGE_CLIENT_ENV.model] = options.inference.wireId;
+    env[JUDGE_CLIENT_ENV.endpoint] = options.inference.baseUrl;
   }
   if (entry.generation !== undefined) env.RM_SPOOF_GENERATION_ID = entry.generation;
   return env;
@@ -284,10 +287,40 @@ export function listRunningParticipants(project: string, run: DockerRun): Runnin
   return out.sort((a, b) => `${a.kind}:${a.name}`.localeCompare(`${b.kind}:${b.name}`));
 }
 
+/**
+ * The database's role for every member, as the running API reports it on the
+ * admin members route (`swarm_members.role`), for credential-file.ts's role
+ * check (spec §6.1, D52). Read with the operator's service token (§3), over
+ * HTTP: this process holds no database credential of its own at this phase.
+ *
+ * Refusals: the route does not answer 200 with a `members` list. The roles
+ * decide whether the boot may start anyone, so an unknown answer is never
+ * read as "no members".
+ */
+export async function fetchMemberRoles(
+  apiUrl: string,
+  operatorToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ReadonlyMap<string, { role: string }>> {
+  const res = await fetchImpl(`${apiUrl.replace(/\/+$/, "")}${ROUTES.swarm.admin.members}`, {
+    headers: { "X-Automation-Token": operatorToken },
+  });
+  if (!res.ok) throw new Error(`${ROUTES.swarm.admin.members} answered HTTP ${res.status}; the roster's roles cannot be checked, so no participant is started`);
+  const body = (await res.json()) as { members?: { id?: unknown; role?: unknown }[] };
+  if (!Array.isArray(body.members)) throw new Error(`${ROUTES.swarm.admin.members} answered without a members list`);
+  const roles = new Map<string, { role: string }>();
+  for (const m of body.members) {
+    if (typeof m?.id === "string" && typeof m.role === "string") roles.set(m.id, { role: m.role });
+  }
+  return roles;
+}
+
 /** What `applyParticipantPlan` needs to run compose for the participants overlay. */
 export interface ApplyParticipantsOptions {
-  /** `docker compose` global args for the project with the participants overlay last (`-p … -f …`). */
-  readonly composePrefix: readonly string[];
+  /** The instance's compose project. */
+  readonly project: string;
+  /** The stack's compose files, with the participants overlay LAST. */
+  readonly composeFiles: readonly string[];
   readonly run: DockerRun;
 }
 
@@ -317,6 +350,11 @@ export function applyParticipantPlan(
     if (stopped.exitCode !== 0) throw new Error(`stopping participants ${names.join(", ")} failed: ${stopped.stderr.trim()}`);
   }
   if (desired.length === 0) return;
-  const up = options.run(["compose", ...options.composePrefix, "up", "-d", "--no-deps", "--build", ...desired]);
+  // `--env-file /dev/null` as on every compose call: compose would otherwise
+  // read the checkout's `.env` for interpolation (scripts/stack/config.ts).
+  const up = options.run([
+    "compose", "--env-file", "/dev/null", "-p", options.project, ...options.composeFiles.flatMap((f) => ["-f", f]),
+    "up", "-d", "--no-deps", "--build", ...desired,
+  ]);
   if (up.exitCode !== 0) throw new Error(`starting participants ${desired.join(", ")} failed: ${up.stderr.trim().slice(-2000)}`);
 }

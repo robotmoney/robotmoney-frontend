@@ -36,7 +36,7 @@ import {
 import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import { decideImagesOverride } from "./smoke-images-override.ts";
 import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
-import { adoptRestoredRoster, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
+import { adoptRestoredRoster, credentialHandlesOf, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
 import {
   assertStageWebPortFree,
   buildContextsFor,
@@ -100,7 +100,11 @@ import {
   type RosterMember,
   type StateExpectations,
 } from "./smoke-journal.ts";
-import { CredentialFileRefusal, loadCredentialFile, resolveCredentialPath, type CredentialEntry } from "./swarm/credential-file.ts";
+import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCredentialPath, type CredentialEntry, type CredentialPathResolution } from "./swarm/credential-file.ts";
+import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
+import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, renderParticipantServices, writeParticipantFiles, type DockerRun } from "./participant-compose.ts";
+import { ZEN_API_BASE_URL } from "./opencode-key.ts";
+import { ZEN_PREFIX } from "./model-registry.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -287,7 +291,9 @@ const policy = earlyVerdict.env;
 // §4.3, §8.5: `--migrate` and `--seed` are rehearsal-only and refuse on
 // RM_ENV=prod, whatever the database says — so that refusal needs no database
 // and comes before anything connects, and long before any owner prompt.
-for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate"], [shouldSeed(process.argv), "seed"]] as const) {
+// `--spoof-keys` (§6.4) joins them: explicit on argv or not requested at all.
+const spoofRequest = spoofKeysRequest(process.argv);
+for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate"], [shouldSeed(process.argv), "seed"], [spoofRequest.explicit, "spoof-keys"]] as const) {
   const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, rmEnv: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
   if (gate && !gate.allow) fatal(gate.reason);
 }
@@ -560,21 +566,52 @@ function log(msg: string): void {
 // `--credentials <path>` overrides RM_CREDENTIALS in ~/.env. The PLAN carries
 // each member's name, role and public-key fingerprint; the keys, bearers and
 // model keys go only into this run's secret list, which every plan choke point
-// checks by value (below). No path configured is an empty roster: this run
-// starts no participant, so it stops none either (§6.1's refusal about running
-// participants arrives with the participant runtime, #1026 W3).
+// checks by value (below).
+//
+// A MISSING FILE IS NEVER AN INSTRUCTION (§6.1). Before anything else happens,
+// the desired state is planned against the participants running now, through
+// the one composition a boot may use (credential-file.ts planParticipants): a
+// configured path that is missing, unreadable or malformed refuses, and an
+// unconfigured one refuses while participants run, naming them. Either way
+// nothing has been started or stopped. The `participants` phase plans again,
+// with the database's roles, before it touches a container.
 //
 // Fingerprints come from THIS file, never from a spoofed-key generation. A
 // spoof generation is state a journaled phase writes (§6.4 step 1); hashing it
 // into the plan would give the rerun after a `--spoof-keys` phase a different
 // plan id, and the run would supersede its own journal (§1.2: the plan id
 // "excludes ... any state a journaled phase itself changes").
+/** How this process reaches Docker for the participant containers, in `env`. */
+const dockerRunIn = (env: Record<string, string | undefined>): DockerRun => (args) => {
+  const r = Bun.spawnSync(["docker", ...args], { env, stdout: "pipe", stderr: "pipe" });
+  return { exitCode: r.exitCode ?? -1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+};
+/**
+ * This project's participant containers now, or `null` when Docker cannot be
+ * asked. Null is not "none": it only postpones the running-set half of the
+ * check to the `participants` phase, which lists them again before it touches
+ * one — and a boot that cannot reach Docker never gets that far.
+ */
+function participantsNow(): ReturnType<typeof listRunningParticipants> | null {
+  try {
+    return listRunningParticipants(project, dockerRunIn(process.env));
+  } catch {
+    return null;
+  }
+}
+let credentialResolution: CredentialPathResolution;
+try {
+  credentialResolution = resolveCredentialPath({ RM_CREDENTIALS: loadEnvFile(homeEnvFilePath())?.RM_CREDENTIALS }, flagValue("--credentials"));
+  planParticipants(credentialResolution, participantsNow() ?? [], loadCredentialFile, {
+    spoofState: { stateRoot: statesRoot, instance: instance.name },
+  });
+} catch (err) {
+  fatal(err instanceof CredentialFileRefusal ? `credential file: ${err.message}` : err);
+}
 const roster = (() => {
   try {
-    const resolution = resolveCredentialPath({ RM_CREDENTIALS: loadEnvFile(homeEnvFilePath())?.RM_CREDENTIALS }, flagValue("--credentials"));
+    const resolution = credentialResolution;
     if (!resolution.configured) return { members: { agents: [] as RosterMember[], judges: [] as RosterMember[] }, secrets: [] as string[] };
-    // Read, never reconciled: this boot starts no participant, so it has no
-    // desired-state plan to make (planParticipants is the participant runtime's).
     const file = loadCredentialFile(resolution.path);
     const member = (namespace: Record<string, CredentialEntry>, role: "member" | "judge"): RosterMember[] =>
       Object.entries(namespace).map(([name, entry]) => ({ name, role, keyFingerprint: publicKeyFingerprint(entry.publicKeyB64) }));
@@ -677,10 +714,13 @@ const plan: DeploymentPlan = (() => {
         SHIPPED_IMAGES: String(Boolean(imagesOverride)),
         ANALYTICS_SOURCE: smokeEnv.analyticsSource,
         ANALYTICS_FLOOR_SEED: smokeEnv.analyticsFloorSeed,
+        // Which members `--spoof-keys` names; every in-house one when bare.
+        ...(spoofRequest.explicit ? { SPOOF_KEYS: spoofRequest.names.join(",") || "operator=robotmoney" } : {}),
       },
       mutations: [
         ...(requestsMigrate(process.argv) ? (["migrate"] as const) : []),
         ...(shouldSeed(process.argv) ? (["seed"] as const) : []),
+        ...(spoofRequest.explicit ? (["spoof-keys"] as const) : []),
       ],
     };
   } catch (err) {
@@ -1008,6 +1048,13 @@ function runningServices(): Record<string, string> {
   return services;
 }
 
+/** This project's participant containers, as the journal names them (`kind:name`). */
+function runningParticipantNames(): string[] {
+  // As runningServices(): what Docker cannot report is recorded as nothing
+  // running, and the boot fails on Docker itself at its first compose call.
+  return (participantsNow() ?? []).map((p) => `${p.kind}:${p.name}`);
+}
+
 /** One running container of this project for `service`, or undefined. */
 function serviceContainer(service: string): string | undefined {
   return Bun.spawnSync(
@@ -1086,6 +1133,61 @@ let lock: DeploymentLock | undefined;
 /** The §2 target lock, held from the `lock` preparation to the end of the run. */
 let targetLock: TargetLock | undefined;
 
+/** What the `participants` phase did, for the journal and the receipt (§1.3, §1.4). */
+interface ParticipantsReconciled {
+  started: string[];
+  stopped: string[];
+  receipt: { kind: string; name: string; generation: string | null; action: "started" | "kept" }[];
+}
+let participantsReconciled: ParticipantsReconciled | undefined;
+
+/**
+ * The `participants` phase (§6.1, §6.2, §6.4 steps 3 and 4). Plans through
+ * planParticipants — the one composition a boot may use — with the database's
+ * roles (read over the running API with the operator's token) and the
+ * instance's spoof generation, then renders one `restart: unless-stopped`
+ * service per roster entry, each reading only its own env file, and applies
+ * the plan stop-then-start. A refusal (a role that disagrees with the
+ * database, a file gone since the plan) starts and stops nothing.
+ */
+async function reconcileParticipants(): Promise<ParticipantsReconciled> {
+  const running = listRunningParticipants(project, dockerRunIn(process.env));
+  const roles = credentialResolution.configured ? await fetchMemberRoles(hostBackendUrl(apiPort), operatorToken()) : new Map<string, { role: string }>();
+  const planned = planParticipants(credentialResolution, running, loadCredentialFile, {
+    spoofState: { stateRoot: statesRoot, instance: instance.name },
+    memberRole: (memberId) => roles.get(memberId),
+  });
+  const desired = [...planned.start, ...planned.keep];
+  // The one model every participant calls, from the single selection signal.
+  const model = desired.length > 0 ? resolveModelConfig(process.env, { standingStack: staticPortMode }).model : "";
+  const envDir = join(paths.dir, "participants");
+  const overlay = join(paths.overlaysDir, "participants.json");
+  const rendered = renderParticipantServices(desired, {
+    instance: instance.name,
+    envDir,
+    apiUrl: "http://api:8787",
+    rmEnv: stackRmEnv,
+    inference: { wireId: model.startsWith(ZEN_PREFIX) ? model.slice(ZEN_PREFIX.length) : model, baseUrl: ZEN_API_BASE_URL },
+    build: { context: repoRoot, dockerfile: "backend/Dockerfile" },
+  });
+  writeParticipantFiles(rendered, envDir, overlay);
+  applyParticipantPlan(planned, rendered.services.map((s) => s.service), {
+    project,
+    composeFiles: [...composeFilesRun.split(":"), overlay],
+    run: dockerRunIn(dockerEnv!),
+  });
+  const tag = (p: { kind: string; name: string }) => `${p.kind}:${p.name}`;
+  log(`participants: started ${planned.start.map(tag).join(", ") || "none"}; kept ${planned.keep.map(tag).join(", ") || "none"}; stopped ${planned.stop.map(tag).join(", ") || "none"}`);
+  return {
+    started: planned.start.map(tag),
+    stopped: planned.stop.map(tag),
+    receipt: [
+      ...planned.start.map((e) => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action: "started" as const })),
+      ...planned.keep.map((e) => ({ kind: e.kind, name: e.name, generation: e.generation ?? null, action: "kept" as const })),
+    ],
+  };
+}
+
 /** Release the target lock explicitly (§2: "It is released explicitly on exit"); bounded, never throws. */
 async function releaseTargetLock(): Promise<void> {
   const held = targetLock;
@@ -1117,7 +1219,7 @@ async function main(): Promise<void> {
       ledger: schema?.ledger ?? lastExpectations?.ledger ?? [],
       manifestHash: schema ? schema.manifestHash : (lastExpectations?.manifestHash ?? null),
       identity: plan.target.identity,
-      participants: [],
+      participants: runningParticipantNames(),
       services: runningServices(),
       spoofGeneration: null,
     };
@@ -1138,7 +1240,7 @@ async function main(): Promise<void> {
     ledger: journalExpects?.ledger ?? [],
     manifestHash: journalExpects?.manifestHash ?? null,
     identity: plan.target.identity,
-    participants: [],
+    participants: runningParticipantNames(),
     services: runningServices(),
     spoofGeneration: null,
   };
@@ -1200,6 +1302,11 @@ async function main(): Promise<void> {
   // boot owns (§5) and the compose overlays. The service tokens are the
   // `prepare (tokens)` step's, once the database is enrolled.
   await begin("prepare", "instance");
+  // The restored dump copy a previous run of THIS plan recorded, read BEFORE
+  // the record below is rewritten: this run's `dataPath.container` is still
+  // the "" placeholder, so rewriting first erased the one pointer the reattach
+  // branch needs, and a same-plan rerun refused with "its container  is gone".
+  const recordedTwin = requestedDataPath.kind === "smoke-twin" && committedSteps.has("prepare:restore") ? readStackState(paths) : null;
   // The stack record FIRST, before any compose call or container: the compose
   // project is fixed by the instance, and `smoke:status` / `smoke:down` find a
   // stack only through this record.
@@ -1220,7 +1327,7 @@ async function main(): Promise<void> {
     // §7: database create/restore after the plan and the deployment lock. A
     // rerun of the SAME plan whose restore already committed reattaches the
     // restored copy it recorded and never restores into it again.
-    const recorded = committedSteps.has("prepare:restore") ? readStackState(paths)?.smokeTwinContainer : undefined;
+    const recorded = recordedTwin?.smokeTwinContainer || undefined;
     const reattachUrl = recorded ? smokeTwinUrlFromContainer(recorded) : null;
     if (committedSteps.has("prepare:restore") && (!recorded || !reattachUrl)) {
       throw new Error(
@@ -1231,10 +1338,13 @@ async function main(): Promise<void> {
     }
     if (reattachUrl && recorded) {
       const url = new URL(reattachUrl);
-      dataPath = { ...(dataPath as Extract<ResolvedDataPath, { kind: "smoke-twin" }>), url: reattachUrl, redactedUrl: redactPostgresUrl(reattachUrl), container: recorded, volume: readStackState(paths)?.smokeTwinVolume ?? "" };
+      dataPath = { ...(dataPath as Extract<ResolvedDataPath, { kind: "smoke-twin" }>), url: reattachUrl, redactedUrl: redactPostgresUrl(reattachUrl), container: recorded, volume: recordedTwin?.smokeTwinVolume ?? "" };
       smokeTwinContainer = recorded;
       runSecrets.push(...urlPassword(url.toString()));
       if (dataPathOverlay) writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
+      // The record names the reattached copy again, so a later rerun of this
+      // plan finds it however this one ends.
+      writeStateFile();
       log(`--local dump: reattached the restored copy ${recorded} this plan committed; nothing is restored again`);
     } else {
       await begin("prepare", "restore");
@@ -1400,6 +1510,30 @@ async function main(): Promise<void> {
       const refusal = tokenReuseRefusal(paths, remote ? "remote" : "volume");
       if (refusal) throw new Error(refusal);
     }
+    // --SPOOF-KEYS (§6.4) steps (1) and (2): the generation persisted in the
+    // instance's state directory, then every named member rebound in ONE
+    // fenced rm_owner transaction, keyed by member id. Steps (3) and (4) are
+    // the `participants` phase below. A rerun finds the generation on disk and
+    // the database at it, and performs only those (§6.4 recovery).
+    if (spoofRequest.explicit && !committedSteps.has("prepare:spoof-keys")) {
+      await begin("prepare", "spoof-keys");
+      if (remote) {
+        throw new SpoofKeysRefusal("no_owner_credential", "--spoof-keys refuses: a remote target's rm_owner is typed at the terminal, and this boot holds none for a rebind");
+      }
+      const rebound = await runSpoofRebind(repoRoot, {
+        instance: instance.name,
+        stateRoot: statesRoot,
+        target: hostTarget!,
+        lock: { backendPid: targetLock!.backendPid, holder: { ...targetLock!.holder } },
+        names: spoofRequest.names,
+        flagExplicit: spoofRequest.explicit,
+        rmEnv: policy,
+        credentialPath: credentialResolution.configured ? credentialResolution.path : null,
+      }, prepareChildEnv(process.env));
+      if (!rebound.ok) throw new Error(`spoof-keys${rebound.reason ? ` (${rebound.reason})` : ""}: ${rebound.error}`);
+      log(`spoof-keys: generation ${rebound.generationId} ${rebound.resumed ? "already installed; nothing rebound" : `rebound ${rebound.rebound.join(", ")}`}`);
+      await commit();
+    }
   }
 
   // The analytics-producer's own seed command, a client of the running api
@@ -1479,13 +1613,13 @@ async function main(): Promise<void> {
       // Every service `compose up` just brought to its planned image, recreated
       // or kept, and the digest each now runs.
       await commit({ servicesReplaced: runningServices() });
-      // Participants (§6.2) are standing containers started by the participant
-      // runtime (#1026 W3). This boot plans the roster and starts none of them.
+      // THE PARTICIPANTS (§6.1, §6.2; §6.4 steps 3 and 4): the running
+      // participant containers made equal to the credential file, after the
+      // database's roles are checked against it and with the instance's spoof
+      // generation taking precedence for the members it names.
       await begin("participants", null);
-      if (plan.roster.agents.length + plan.roster.judges.length > 0) {
-        log(`participants: roster of ${plan.roster.agents.length} agent(s) and ${plan.roster.judges.length} judge(s) planned; the participant runtime that starts them is not wired yet`);
-      }
-      await commit();
+      participantsReconciled = await reconcileParticipants();
+      await commit({ participantsStarted: participantsReconciled.started, participantsStopped: participantsReconciled.stopped });
       await begin("readiness", null);
     }
   };
@@ -1555,6 +1689,7 @@ async function main(): Promise<void> {
     schema: { manifestHash: schema?.manifestHash ?? "none", migrations: schema?.ledger ?? [] },
     preflight: preflightResults,
     readiness,
+    participants: participantsReconciled?.receipt ?? [],
   }, redaction);
   log(`receipt written: ${paths.receiptFile}`);
 
@@ -1636,7 +1771,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
     const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
     const roster = await session.rosterMembers(undefined, operatorToken());
     if (roster === null) throw new Error("dump restored no readable IC roster");
-    const members = adoptRestoredRoster(scenario, roster, undefined, { twin: true, seatAllActive: seatAllRestored });
+    const members = adoptRestoredRoster(scenario, roster, undefined, { twin: true, seatAllActive: seatAllRestored, credentialHandles: credentialHandlesOf(plan.roster.agents) });
     const rail = {
       repoRoot,
       composeProject: project,
