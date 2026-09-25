@@ -13,6 +13,7 @@
 // so the API routes can wrap a whole ingestion batch in ONE transaction.
 import { sql, type DbHandle } from "../../db/client.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";
+import { rawIndicatorSourceKey, withinTolerance } from "../source-tolerance.ts";
 
 // Back-compat aliases: the row shapes now live in the pure types module
 // (analytics/types.ts) so updater/API-client code can import them without
@@ -45,16 +46,44 @@ export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIn
 // gap-fill writer). ON CONFLICT overwrites `source` along with `value` so a
 // genuine live fetch upgrades a previously-seeded row's provenance, matching
 // the existing "fetched wins on overlap" honesty semantics.
+//
+// A SUB-TOLERANCE REWRITE IS SKIPPED (issue #1035). The orchestrator writes its
+// whole merged floor back every run, so every point is re-submitted many times a
+// day; migration 0056's trigger records an analytics_overwrite_events row for any
+// UPDATE that changes the row at all, and Yahoo's float32 jitter changed
+// hundreds of thousands a day by a relative 1e-9..1e-6. A point whose value is
+// within its source's tolerance of the stored one (source-tolerance.ts, decision
+// D56) AND whose label is unchanged is left alone: no UPDATE, so no overwrite
+// event. A point within tolerance but under a DIFFERENT label rewrites only the
+// label and keeps the stored value. This is the same rule
+// store/source-ledger-store.ts applies to the ledger head, from the same
+// function, so the two stay in parity: a value of record changes only when the
+// change exceeds tolerance, and the label always follows the latest write.
 export async function saveRawIndicatorHistory(
   byIndicator: RawIndicatorHistory,
   db: DbHandle = sql,
   source: string = "live",
 ): Promise<void> {
+  const indicators = Object.keys(byIndicator);
+  if (indicators.length === 0) return;
+  const stored = new Map<string, { value: number; source: string | null }>();
+  const current = await db<{ indicator: string; date: string; value: number; source: string | null }[]>`
+    SELECT indicator, date::text AS date, value, source
+    FROM raw_indicator_history
+    WHERE indicator = ANY(${indicators}::text[])`;
+  for (const r of current) stored.set(`${r.indicator}|${r.date}`, { value: Number(r.value), source: r.source ?? null });
+
   const rows: { date: string; indicator: string; value: number; source: string }[] = [];
   for (const [indicator, points] of Object.entries(byIndicator)) {
+    const sourceKey = rawIndicatorSourceKey(indicator);
     for (const p of points) {
       if (!Number.isFinite(p.value)) continue;
-      rows.push({ date: p.date, indicator, value: p.value, source });
+      const prior = stored.get(`${indicator}|${p.date}`);
+      const same = prior !== undefined && withinTolerance(sourceKey, prior.value, p.value);
+      if (same && prior.source === source) continue;
+      // Within tolerance but relabelled: the label moves, the value of record
+      // does not — the ledger writer keeps its head value in the same case.
+      rows.push({ date: p.date, indicator, value: same ? prior.value : p.value, source });
     }
   }
   if (rows.length === 0) return;
