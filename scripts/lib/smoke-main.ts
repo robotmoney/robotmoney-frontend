@@ -1158,6 +1158,9 @@ async function reconcileParticipants(): Promise<ParticipantsReconciled> {
     memberRole: (memberId) => roles.get(memberId),
   });
   const desired = [...planned.start, ...planned.keep];
+  // Participants run the image `api` runs (backend/Dockerfile carries them).
+  const apiImage = runningServices().api ?? "";
+  if (desired.length > 0 && apiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
   // The one model every participant calls, from the single selection signal.
   const model = desired.length > 0 ? resolveModelConfig(process.env, { standingStack: staticPortMode }).model : "";
   const envDir = join(paths.dir, "participants");
@@ -1168,7 +1171,7 @@ async function reconcileParticipants(): Promise<ParticipantsReconciled> {
     apiUrl: "http://api:8787",
     rmEnv: stackRmEnv,
     inference: { wireId: model.startsWith(ZEN_PREFIX) ? model.slice(ZEN_PREFIX.length) : model, baseUrl: ZEN_API_BASE_URL },
-    build: { context: repoRoot, dockerfile: "backend/Dockerfile" },
+    image: apiImage,
   });
   writeParticipantFiles(rendered, envDir, overlay);
   applyParticipantPlan(planned, rendered.services.map((s) => s.service), {

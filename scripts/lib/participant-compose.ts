@@ -81,13 +81,20 @@ export interface ParticipantRenderOptions {
    * single selection signal (model-registry.ts `resolveAgentModel`).
    */
   readonly inference: { readonly wireId: string; readonly baseUrl: string };
-  /** The image build every participant service uses. */
-  readonly build: { readonly context: string; readonly dockerfile: string };
+  /**
+   * The image every participant runs: the one the running `api` container
+   * runs, by id (the backend image carries the participant entrypoint and the
+   * take one-shot, backend/Dockerfile). Pinned by id rather than rebuilt,
+   * because a rebuild mints a new image id every time and would recreate a
+   * healthy participant on every boot; a new `api` image recreates them, which
+   * is the deploy it should be.
+   */
+  readonly image: string;
 }
 
 /** One rendered compose service (the fields the overlay carries). */
 export interface ParticipantService {
-  build: { context: string; dockerfile: string };
+  image: string;
   command: string[];
   env_file: string[];
   labels: Record<string, string>;
@@ -207,7 +214,7 @@ export function renderParticipantServices(
     const envFile = join(options.envDir, `${options.instance}.${service}.env`);
     envFiles[envFile] = envFileText(env);
     services[service] = {
-      build: { context: options.build.context, dockerfile: options.build.dockerfile },
+      image: options.image,
       command: [...PARTICIPANT_COMMAND],
       env_file: [envFile],
       labels: {
@@ -354,7 +361,7 @@ export function applyParticipantPlan(
   // read the checkout's `.env` for interpolation (scripts/stack/config.ts).
   const up = options.run([
     "compose", "--env-file", "/dev/null", "-p", options.project, ...options.composeFiles.flatMap((f) => ["-f", f]),
-    "up", "-d", "--no-deps", "--build", ...desired,
+    "up", "-d", "--no-deps", ...desired,
   ]);
   if (up.exitCode !== 0) throw new Error(`starting participants ${desired.join(", ")} failed: ${up.stderr.trim().slice(-2000)}`);
 }

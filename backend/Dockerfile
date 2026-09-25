@@ -57,12 +57,13 @@ COPY scripts/lib/system-scheduler/ /app/scripts/lib/system-scheduler/
 # `scripts/lib` imports are `import type`, which Bun erases.
 #
 # The judge client reads the server's own prompt and digest from
-# `backend/src/swarm/judge.ts` by its repository path (`../../../backend/...`),
-# so the one symlink below gives that path its meaning here: /backend is this
-# image's /app, the same sources, never a second copy that could drift.
+# `backend/src/swarm/judge.ts` by its repository path: from
+# /app/scripts/agent/participant, `../../../backend/...` is /app/backend/...,
+# so the one symlink below gives that path its meaning here — /app/backend is
+# this image's /app, the same sources, never a second copy that could drift.
 COPY scripts/agent/participant/ /app/scripts/agent/participant/
 COPY scripts/lib/db-credential-keys.ts /app/scripts/lib/db-credential-keys.ts
-RUN ln -s /app /backend
+RUN ln -s . /app/backend
 
 # Overridden by compose command (api vs worker vs system-scheduler vs participant).
 CMD ["bun", "run", "src/api/index.ts"]
