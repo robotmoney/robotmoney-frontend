@@ -2,7 +2,7 @@
 // passed while production could not close a session; each case below is a way
 // that happened or could have.
 import { describe, expect, test } from "bun:test";
-import { classifyLog, evaluateDriverSessions, evaluateSessions, parseDriverSessions, parseGateArgs, type SessionRow } from "../../twin-gate.ts";
+import { classifyLog, evaluateDriverSessions, evaluateSessions, normalizeLogLine, parseDriverSessions, parseGateArgs, renderReport, scanLog, type GateReport, type SessionRow } from "../../twin-gate.ts";
 
 const subjects = ["a", "b"];
 const args = { minSessions: 1, minAttendance: 0.5, stuckAfterMin: 30 };
@@ -101,5 +101,54 @@ describe("the driver log (the service's own account of each session)", () => {
   test("an empty inference account is fatal", () => {
     const v = classifyLog(["APIError: Upstream request failed: Insufficient account funds [server_error, HTTP 402]"], []);
     expect(v.fatal.get("Insufficient account funds")).toBe(1);
+  });
+});
+
+describe("the report — the document the runbook files", () => {
+  test("scanLog counts fatal, warn, error-like and warning-like lines per source, and groups repeats", () => {
+    const scan = scanLog("rm_x-api-1", [
+      "job 12 (swarm.judge) failed — DEAD: boom",
+      "job 13 (swarm.judge) failed — DEAD: boom",
+      "job 9 DEGRADED — kept last-persisted",
+      "WARNING: something mild",
+      "all good",
+      "",
+    ], []);
+    expect(scan.lines).toBe(5);
+    expect(scan.fatal).toEqual({ "— DEAD": 2 });
+    expect(scan.warn).toEqual({ DEGRADED: 1 });
+    expect(scan.errorLike).toBe(2);
+    expect(scan.warningLike).toBe(1);
+    expect(scan.topErrors).toEqual([{ line: "job <n> (swarm.judge) failed — DEAD: boom", count: 2 }]);
+  });
+
+  test("normalizeLogLine collapses ids, numbers and timestamps", () => {
+    expect(normalizeLogLine("2026-09-25T14:05:34.855Z session 3bd2d2ae-43d7-4bb4-9f6a-c4477e135775 took 81 s"))
+      .toBe("<ts> session <uuid> took <n> s");
+  });
+
+  test("renderReport lists every check, every container and every scanned log source", () => {
+    const report: GateReport = {
+      commit: "abc123", host: "stage-2", project: "rm_x", twinDb: "rm-restore-1", t0: "2026-09-25T00:00:00.000Z",
+      finishedAt: "2026-09-25T01:00:00.000Z", args: { minSessions: 1, minAttendance: 0.5, stuckAfterMin: 30, waitMin: 75, waive: [] },
+      verdict: "PASS",
+      checks: [{ id: "jobs", title: "No job created after T0 is dead", status: "PASS", detail: ["12 job(s)"] }],
+      sessions: [{ id: "s1", subject: "woon", state: "published", ageMin: 5, takes: 7, judged: true, receipt: true }],
+      driverSessions: [{ subject: "woon", state: "published", takes: 7, active: 8, judge: "enforce" }],
+      jobs: [{ kind: "swarm.judge", status: "succeeded", count: 4 }],
+      containers: [{ name: "rm_x-api-1", running: true, health: "healthy", restarts: 0, oneShot: false }],
+      logScans: [scanLog("rm_x-api-1", ["fine"], []), scanLog("driver: /tmp/t.log", ["[session 1: 2026-09-25/woon] published"], [])],
+    };
+    const md = renderReport(report);
+    expect(md).toContain("# Twin rehearsal gate report — PASS");
+    expect(md).toContain("| 1 | No job created after T0 is dead | **PASS** | 12 job(s) |");
+    expect(md).toContain("`rm_x-api-1` | service | yes | healthy | 0 |");
+    expect(md).toContain("2 source(s) scanned");
+    expect(md).toContain("`driver: /tmp/t.log`");
+  });
+
+  test("--report must be a .md path", () => {
+    expect(parseGateArgs(["--report", "/tmp/r.txt"])).toHaveProperty("error");
+    expect(parseGateArgs(["--report", "/tmp/r.md"])).toMatchObject({ report: "/tmp/r.md" });
   });
 });

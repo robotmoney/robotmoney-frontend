@@ -32,10 +32,18 @@
 // With --wait N it polls (1) until it passes or N minutes elapse, then grades
 // everything once. Exit 0 only when every check passes.
 //
+// EVERY RUN WRITES A REPORT (--report, default ~/twin-gate-reports/): a markdown
+// document, with a .json sibling, listing each check performed and its result,
+// the sessions, the jobs, every container's state, and — for EVERY log source
+// (each container of the boot, the restored database, the driver log) — the
+// lines read and the counts of each fatal pattern, warn pattern, and generic
+// error-like and warning-like line, with the most frequent error lines. It is
+// the runbook's evidence that the logs of every service were actually read.
+//
 // It reads the twin through `docker exec` into the restore container and
 // `docker logs`, using .agents/smoke-state.json — run it on the twin's host.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
@@ -75,6 +83,8 @@ export interface GateArgs {
   waive: string[];
   /** The driver's own output (smoke:twin tee'd to a file): per-session published/judge lines. */
   driverLog?: string;
+  /** Where to write the report (markdown; a .json sibling is written beside it). */
+  report?: string;
 }
 
 export function parseGateArgs(argv: readonly string[]): GateArgs | { error: string } {
@@ -115,6 +125,14 @@ export function parseGateArgs(argv: readonly string[]): GateArgs | { error: stri
         if (e) return { error: e };
         if (Number.isNaN(Date.parse(v!))) return { error: `--since takes an ISO timestamp, got "${v}".` };
         out.since = new Date(v!).toISOString();
+        i++;
+        break;
+      }
+      case "--report": {
+        const e = need();
+        if (e) return { error: e };
+        if (!v!.endsWith(".md")) return { error: "--report takes a .md path (a .json sibling is written beside it)." };
+        out.report = v!;
         i++;
         break;
       }
@@ -270,17 +288,128 @@ function sessionRows(container: string, t0: string): SessionRow[] {
   }));
 }
 
-function projectContainers(project: string): string[] {
+/** Every container of the boot's compose project, one-shots included when Docker still has them. */
+function projectContainers(project: string): { name: string; oneShot: boolean }[] {
   const r = sh(["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}}"]);
-  // One-shot `run` containers (migrations, member agents) exit by design.
-  return r.out.split("\n").filter((n) => n && !/-run-|member-agent/.test(n));
+  // One-shot `run` containers (migrations, member agents) exit by design, so
+  // they are scanned for log lines but not graded running/healthy.
+  return r.out.split("\n").filter(Boolean).map((name) => ({ name, oneShot: /-run-|member-agent/.test(name) }));
 }
 
-interface ContainerState { name: string; running: boolean; health: string; restarts: number }
+export interface ContainerState { name: string; running: boolean; health: string; restarts: number }
 function containerState(name: string): ContainerState {
   const r = sh(["docker", "inspect", name, "--format", "{{.State.Running}}\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}\t{{.RestartCount}}"]);
   const [running, health, restarts] = r.out.trim().split("\t");
   return { name, running: running === "true", health: health ?? "?", restarts: Number(restarts ?? 0) };
+}
+
+// ── The report ──────────────────────────────────────────────────────────────
+// The document the runbook files as evidence: every check this run performed,
+// what it looked at, and what it found — so "did anyone read the logs of every
+// service?" has a written answer, not an assumption.
+
+export type CheckStatus = "PASS" | "FAIL" | "WARN";
+export interface CheckRecord { id: string; title: string; status: CheckStatus; detail: string[] }
+
+/** One log source, scanned: every fatal and warn pattern, plus generic error/warning lines. */
+export interface LogScan {
+  source: string;
+  lines: number;
+  fatal: Record<string, number>;
+  waived: Record<string, number>;
+  warn: Record<string, number>;
+  errorLike: number;
+  warningLike: number;
+  topErrors: { line: string; count: number }[];
+}
+
+const ERROR_LIKE = /\b(error|exception|fatal|panic|fail(ed|ure|s)?|dead|refus(ed|ing)|denied|timeout|timed out)\b/i;
+const WARNING_LIKE = /\bwarn(ing)?\b/i;
+
+/** Collapse ids, numbers and timestamps so repeats of one message count as one. */
+export function normalizeLogLine(line: string): string {
+  return line
+    .replace(/\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?/g, "<ts>")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    .replace(/\b\d+\b/g, "<n>")
+    .trim()
+    .slice(0, 200);
+}
+
+/** PURE. Scan one source's lines. */
+export function scanLog(source: string, lines: readonly string[], waive: readonly string[]): LogScan {
+  const v = classifyLog(lines, waive);
+  const top = new Map<string, number>();
+  let errorLike = 0;
+  let warningLike = 0;
+  for (const line of lines) {
+    if (ERROR_LIKE.test(line)) {
+      errorLike++;
+      const k = normalizeLogLine(line);
+      top.set(k, (top.get(k) ?? 0) + 1);
+    } else if (WARNING_LIKE.test(line)) warningLike++;
+  }
+  return {
+    source,
+    lines: lines.filter((l) => l.length > 0).length,
+    fatal: Object.fromEntries(v.fatal),
+    waived: Object.fromEntries(v.waived),
+    warn: Object.fromEntries(v.warn),
+    errorLike,
+    warningLike,
+    topErrors: [...top].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([line, count]) => ({ line, count })),
+  };
+}
+
+export interface GateReport {
+  commit: string;
+  host: string;
+  project: string;
+  twinDb: string;
+  t0: string;
+  finishedAt: string;
+  args: GateArgs;
+  verdict: "PASS" | "FAIL";
+  checks: CheckRecord[];
+  sessions: SessionRow[];
+  driverSessions: DriverSession[];
+  jobs: { kind: string; status: string; count: number }[];
+  containers: (ContainerState & { oneShot: boolean })[];
+  logScans: LogScan[];
+}
+
+/** PURE. The report as markdown. */
+export function renderReport(r: GateReport): string {
+  const out: string[] = [];
+  const counts = (m: Record<string, number>) => Object.entries(m).map(([p, n]) => `\`${p}\` ×${n}`).join(", ") || "none";
+  out.push(`# Twin rehearsal gate report — ${r.verdict}`, "");
+  out.push(`| | |`, `|---|---|`);
+  out.push(`| Commit | \`${r.commit}\` |`, `| Host | ${r.host} |`, `| Compose project | \`${r.project}\` |`, `| Twin database | \`${r.twinDb}\` |`);
+  out.push(`| T0 (api started) | ${r.t0} |`, `| Finished | ${r.finishedAt} |`);
+  out.push(`| Thresholds | min sessions/subject ${r.args.minSessions}, min attendance ${r.args.minAttendance}, stuck after ${r.args.stuckAfterMin} min, waited up to ${r.args.waitMin} min |`);
+  out.push(`| Waivers | ${r.args.waive.length ? r.args.waive.map((w) => `\`${w}\``).join(", ") : "none"} |`, "");
+  out.push(`## Checks`, "", `| # | Check | Result | Detail |`, `|---|---|---|---|`);
+  r.checks.forEach((c, i) => out.push(`| ${i + 1} | ${c.title} | **${c.status}** | ${c.detail.join("<br>").replace(/\|/g, "\\|") || "—"} |`));
+  out.push("", `## Sessions convened after T0 (database)`, "", `| Session | Subject | State | Takes | Judged (model/enforce) | Receipt |`, `|---|---|---|---|---|---|`);
+  for (const s of r.sessions) out.push(`| \`${s.id}\` | ${s.subject} | ${s.state} | ${s.takes} | ${s.judged ? "yes" : "no"} | ${s.receipt ? "yes" : "no"} |`);
+  if (r.sessions.length === 0) out.push(`| — | — | — | — | — | — |`);
+  out.push("", `## Sessions the driver logged as published`, "", `| Subject | State | Takes | Judge |`, `|---|---|---|---|`);
+  for (const d of r.driverSessions) out.push(`| ${d.subject} | ${d.state} | ${d.takes} of ${d.active} | ${d.judge} |`);
+  if (r.driverSessions.length === 0) out.push(`| — | — | — | — |`);
+  out.push("", `## Jobs created after T0`, "", `| Kind | Status | Count |`, `|---|---|---|`);
+  for (const j of r.jobs) out.push(`| ${j.kind} | ${j.status} | ${j.count} |`);
+  out.push("", `## Containers`, "", `| Container | Kind | Running | Health | Restarts |`, `|---|---|---|---|---|`);
+  for (const c of r.containers) out.push(`| \`${c.name}\` | ${c.oneShot ? "one-shot" : "service"} | ${c.oneShot ? "n/a" : c.running ? "yes" : "NO"} | ${c.health} | ${c.restarts} |`);
+  out.push("", `## Log scan — every source read since T0`, "");
+  out.push(`${r.logScans.length} source(s) scanned. Fatal patterns fail the gate; warn patterns and generic error/warning lines are reported. One-shot member-agent containers are removed on exit, so their output is covered by the driver log.`, "");
+  out.push(`| Source | Lines | Fatal | Waived | Warn patterns | Error-like lines | Warning-like lines |`, `|---|---|---|---|---|---|---|`);
+  for (const l of r.logScans) out.push(`| \`${l.source}\` | ${l.lines} | ${counts(l.fatal)} | ${counts(l.waived)} | ${counts(l.warn)} | ${l.errorLike} | ${l.warningLike} |`);
+  for (const l of r.logScans.filter((x) => x.topErrors.length > 0)) {
+    out.push("", `### Most frequent error-like lines — \`${l.source}\``, "");
+    for (const t of l.topErrors) out.push(`- ×${t.count} \`${t.line.replace(/`/g, "'")}\``);
+  }
+  out.push("", `Fatal patterns: ${FATAL_LOG_PATTERNS.map((p) => `\`${p}\``).join(", ")}.`, `Warn patterns: ${WARN_LOG_PATTERNS.map((p) => `\`${p}\``).join(", ")}.`, "");
+  return out.join("\n");
 }
 
 function log(m: string) { console.log(`[${NAME}] ${m}`); }
@@ -289,7 +418,7 @@ async function main(): Promise<number> {
   const parsed = parseGateArgs(process.argv.slice(2));
   if ("error" in parsed) {
     console.error(`[${NAME}] ${parsed.error}`);
-    console.error(`[${NAME}] usage: bun run twin:gate [--driver-log FILE] [--wait MIN] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
+    console.error(`[${NAME}] usage: bun run twin:gate --driver-log FILE [--report FILE] [--wait MIN] [--min-sessions N] [--min-attendance 0..1] [--stuck-after MIN] [--since ISO] [--waive PATTERN]...`);
     return 2;
   }
   const stateFile = join(repoRoot, ".agents", "smoke-state.json");
@@ -303,53 +432,93 @@ async function main(): Promise<number> {
 
   const subjects = SMOKE_SUBJECTS.map((s) => s.id);
   const active = Number(psql(state.smokeTwinContainer, "SELECT count(*) FROM swarm_members WHERE status = 'active' AND role = 'member'")[0]?.[0] ?? 0);
-  let verdict = evaluateSessions(sessionRows(state.smokeTwinContainer, t0), subjects, active, parsed);
+  let rows = sessionRows(state.smokeTwinContainer, t0);
+  let verdict = evaluateSessions(rows, subjects, active, parsed);
   const deadline = Date.now() + parsed.waitMin * 60_000;
   while (verdict.failures.length > 0 && Date.now() < deadline) {
     log(`waiting: ${verdict.failures.length} session condition(s) unmet — ${[...verdict.publishedBySubject].map(([s, n]) => `${s}=${n}`).join(" ")}`);
     await Bun.sleep(30_000);
-    verdict = evaluateSessions(sessionRows(state.smokeTwinContainer, t0), subjects, active, parsed);
+    rows = sessionRows(state.smokeTwinContainer, t0);
+    verdict = evaluateSessions(rows, subjects, active, parsed);
   }
 
-  const failures: string[] = [...verdict.failures];
+  const checks: CheckRecord[] = [];
+  const add = (id: string, title: string, failures: string[], detail: string[], warn = false) =>
+    checks.push({ id, title, status: failures.length ? "FAIL" : warn ? "WARN" : "PASS", detail: [...failures, ...detail] });
+
+  add("sessions", "Every subject published a judged, attended session convened after T0 (database)", verdict.failures,
+    [`${[...verdict.publishedBySubject].map(([s, n]) => `${s}: ${n} published`).join("; ")}`, `active analysts ${active} (judges file no takes)`]);
+
   const driverLines: string[] = [];
-  if (parsed.driverLog) {
-    if (!existsSync(parsed.driverLog)) failures.push(`driver log ${parsed.driverLog} not found`);
-    else {
-      driverLines.push(...readFileSync(parsed.driverLog, "utf8").split("\n"));
-      const ds = parseDriverSessions(driverLines);
-      log(`driver log: ${ds.length} published session line(s); judged=${ds.filter((d) => d.judge === "enforce").length}`);
-      failures.push(...evaluateDriverSessions(ds, subjects, parsed));
-    }
+  let driverSessions: DriverSession[] = [];
+  if (!parsed.driverLog) {
+    add("driver", "The driver logged every subject's session as published with judge=enforce", ["no --driver-log given: the service's own account of each session was not read"], []);
+  } else if (!existsSync(parsed.driverLog)) {
+    add("driver", "The driver logged every subject's session as published with judge=enforce", [`driver log ${parsed.driverLog} not found`], []);
   } else {
-    log("warn: no --driver-log — the log-side session/judge check did not run (the runbook requires it)");
-  }
-  log(`sessions: ${[...verdict.publishedBySubject].map(([s, n]) => `${s}=${n} published`).join(", ")} (active analysts ${active}; judges file no takes)`);
-
-  for (const [kind, n] of psql(state.smokeTwinContainer, `SELECT kind, count(*) FROM jobs WHERE status = 'dead' AND created_at >= '${t0}'::timestamptz GROUP BY kind`)) {
-    failures.push(`jobs: ${n} dead '${kind}' job(s) since T0`);
+    driverLines.push(...readFileSync(parsed.driverLog, "utf8").split("\n"));
+    driverSessions = parseDriverSessions(driverLines);
+    add("driver", "The driver logged every subject's session as published with judge=enforce", evaluateDriverSessions(driverSessions, subjects, parsed),
+      [`${driverSessions.length} published line(s), ${driverSessions.filter((d) => d.judge === "enforce").length} judged`, `source: ${parsed.driverLog}`]);
   }
 
-  const names = projectContainers(state.project);
-  if (names.length === 0) failures.push(`containers: none found for project ${state.project}`);
-  const logLines: string[] = [];
-  for (const name of names) {
-    const c = containerState(name);
-    if (!c.running) failures.push(`container ${name}: not running`);
-    if (c.health !== "none" && c.health !== "healthy") failures.push(`container ${name}: health '${c.health}'`);
-    if (c.restarts > 0) failures.push(`container ${name}: restarted ${c.restarts} time(s)`);
-    logLines.push(...sh(["docker", "logs", "--since", t0, name]).out.split("\n"));
-  }
-  logLines.push(...sh(["docker", "logs", "--since", t0, state.smokeTwinContainer]).out.split("\n"));
-  logLines.push(...driverLines);
-  const logs = classifyLog(logLines, parsed.waive);
-  for (const [p, n] of logs.fatal) failures.push(`logs: ${n} line(s) matching "${p}"`);
-  for (const [p, n] of logs.waived) log(`WAIVED: ${n} line(s) matching "${p}" (--waive)`);
-  for (const [p, n] of logs.warn) log(`warn: ${n} line(s) matching "${p}"`);
+  const jobs = psql(state.smokeTwinContainer, `SELECT kind, status, count(*) FROM jobs WHERE created_at >= '${t0}'::timestamptz GROUP BY 1, 2 ORDER BY 1, 2`)
+    .map(([kind, status, n]) => ({ kind: kind!, status: status!, count: Number(n) }));
+  add("jobs", "No job created after T0 is dead", jobs.filter((j) => j.status === "dead").map((j) => `${j.count} dead '${j.kind}'`),
+    [`${jobs.reduce((a, j) => a + j.count, 0)} job(s) across ${new Set(jobs.map((j) => j.kind)).size} kind(s)`]);
 
-  if (failures.length > 0) {
-    for (const f of failures) console.error(`[${NAME}] FAIL ${f}`);
-    console.error(`[${NAME}] FAIL — ${failures.length} problem(s). This rehearsal does NOT support the release.`);
+  const found = projectContainers(state.project);
+  const containers = found.map((c) => ({ ...containerState(c.name), oneShot: c.oneShot }));
+  const services = containers.filter((c) => !c.oneShot);
+  const cFail: string[] = services.length ? [] : [`no service containers found for project ${state.project}`];
+  for (const c of services) {
+    if (!c.running) cFail.push(`${c.name}: not running`);
+    if (c.health !== "none" && c.health !== "healthy") cFail.push(`${c.name}: health '${c.health}'`);
+    if (c.restarts > 0) cFail.push(`${c.name}: restarted ${c.restarts} time(s)`);
+  }
+  add("containers", "Every service container is running, healthy and never restarted", cFail,
+    [`${services.length} service container(s), ${containers.length - services.length} one-shot container(s) still present`]);
+
+  const logScans: LogScan[] = [];
+  for (const c of containers) logScans.push(scanLog(c.name, sh(["docker", "logs", "--since", t0, c.name]).out.split("\n"), parsed.waive));
+  logScans.push(scanLog(state.smokeTwinContainer, sh(["docker", "logs", "--since", t0, state.smokeTwinContainer]).out.split("\n"), parsed.waive));
+  if (parsed.driverLog && driverLines.length) logScans.push(scanLog(`driver: ${parsed.driverLog}`, driverLines, parsed.waive));
+  for (const l of logScans) {
+    const fatal = Object.entries(l.fatal).map(([p, n]) => `${n} line(s) matching "${p}"`);
+    add(`logs:${l.source}`, `Log scan — ${l.source}`, fatal,
+      [`${l.lines} line(s) read; ${l.errorLike} error-like, ${l.warningLike} warning-like`,
+        ...Object.entries(l.waived).map(([p, n]) => `waived: ${n} × "${p}"`),
+        ...Object.entries(l.warn).map(([p, n]) => `warn pattern: ${n} × "${p}"`)],
+      Object.keys(l.warn).length > 0 || Object.keys(l.waived).length > 0);
+  }
+
+  const failed = checks.filter((c) => c.status === "FAIL");
+  const report: GateReport = {
+    commit: sh(["git", "-C", repoRoot, "rev-parse", "HEAD"]).out.trim(),
+    host: sh(["hostname"]).out.trim(),
+    project: state.project,
+    twinDb: state.smokeTwinContainer,
+    t0,
+    finishedAt: new Date().toISOString(),
+    args: parsed,
+    verdict: failed.length ? "FAIL" : "PASS",
+    checks,
+    sessions: rows,
+    driverSessions,
+    jobs,
+    containers,
+    logScans,
+  };
+  const stamp = report.finishedAt.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const reportPath = parsed.report ?? join(process.env.HOME ?? "/tmp", "twin-gate-reports", `twin-gate-${report.commit.slice(0, 8)}-${stamp}.md`);
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, renderReport(report));
+  writeFileSync(reportPath.replace(/\.md$/, "") + ".json", `${JSON.stringify(report, null, 2)}\n`);
+
+  for (const c of checks) (c.status === "FAIL" ? console.error : console.log)(`[${NAME}] ${c.status} ${c.title}${c.status === "FAIL" ? ` — ${c.detail.join("; ")}` : ""}`);
+  log(`report: ${reportPath} (+ .json) — ${checks.length} check(s), ${logScans.length} log source(s) scanned`);
+  if (failed.length) {
+    console.error(`[${NAME}] FAIL — ${failed.length} check(s) failed. This rehearsal does NOT support the release.`);
     return 1;
   }
   log("PASS — every subject closed a session this boot, no job died, no container restarted, no fatal log line.");

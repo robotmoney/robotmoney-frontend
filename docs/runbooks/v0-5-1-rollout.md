@@ -134,8 +134,8 @@ subject, with nothing dead and nothing in the logs.
 | R4.2 | `git fetch origin && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui 2>&1 \| tee ~/twin-$RC_SHA.log` | "READY" printed; slim capture ~1 min | READY time = T0 |
 | R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `0061_rm_worker_wallet_backfill_grant.sql` and `0063_swarm_judge_model_default.sql` applied to the restored production data; `0062` skipped | lines |
-| R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --wait 75 --min-sessions 1 --min-attendance 0.5` (+ `--waive` only per D4) | **exit 0**. Database: every subject publishes ≥1 session convened after T0 with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart. Logs: every subject's driver line reads `published: state=published, takes=N of M, judge=enforce` with N ≥ half of M, no line reads `judge=none`, and no service or driver log holds a fatal pattern (boot refusal, dead job, `JudgeUnavailable`, a judging that never landed (`NO judgement row was recorded`), `swarm session failed`, `Insufficient account funds`/HTTP 402, DNS, out-of-memory) | full gate output |
-| R4.5 | Run R4.4 again at T0 + 2 h without `--wait` | exit 0: sessions keep closing with judges and nothing died since | output |
+| R4.4 | `bun run twin:gate -- --driver-log ~/twin-$RC_SHA.log --report ~/twin-gate-reports/R4.4-$RC_SHA.md --wait 75 --min-sessions 1 --min-attendance 0.5` (+ `--waive` only per D4) | **exit 0**. Database: every subject publishes ≥1 session convened after T0 with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart. Logs: every subject's driver line reads `published: state=published, takes=N of M, judge=enforce` with N ≥ half of M, no line reads `judge=none`, and no service or driver log holds a fatal pattern | **the report** (`.md` + `.json`): every check with its result, every session, every job, every container's state, and for EVERY log source — each container, the restored database, the driver log — the lines read and the counts of each fatal pattern, warn pattern, and error-like and warning-like line, with the most frequent error lines |
+| R4.5 | Run R4.4 again at T0 + 2 h without `--wait`, with `--report ~/twin-gate-reports/R4.5-$RC_SHA.md` | exit 0: sessions keep closing with judges and nothing died since | the second report |
 | R4.6 | Browser pass on `https://stage.robotmoney-labs.dev`: home, `/vaults`, `/vault/rmusdc`, `/vault/rmagent`, `/vault/rmproto`, `/vault/rmrwa`, `/swarm`, a published session, its judgement link, a member page with judgements, `/deposit`, `/changelog` | every page renders data; no console error | screenshots |
 | R4.7 | `curl -s https://stage.robotmoney-labs.dev/api/swarm/sessions/<published-id>/judgements` for a session convened after T0 | 200 with ≥1 judgement | response |
 | R4.8 | Judge fidelity: on the twin, set `swarm_judge_config.model` to NULL (production's value), run one session, confirm `twin:gate` **fails** with `JudgeUnavailable`; restore the model | the gate catches production's defect | output |
@@ -229,14 +229,15 @@ SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-a
 
 1. Tag `v0.5.1` on the same commit as the passing `v0.5.1-rc.N`.
 2. Merge `releases-0.5.x` into `main` with a real merge commit (release-branch rule).
-3. Write the rollout report: every step's evidence, D1–D5 outcomes, R8 table.
+3. Write the rollout report: every step's evidence, D1–D5 outcomes, R8 table, and the gate reports from R4.4, R4.5 (and R7/R8 once `prod:gate` exists) attached verbatim. A step whose check is not in a report did not happen.
 4. Close the release issue; file issues for every waiver and every [TO BUILD]
    item not built.
 
 ## Appendix A. [TO BUILD] list, in priority order
 
-1. `prod:gate` — `twin:gate`'s checks against production (R7, R8). Without it,
-   R7/R8 are hand-run SQL, which is how v0.5.0's gaps survived.
+1. `prod:gate` — `twin:gate`'s checks against production (R7, R8), writing the
+   same report document (every check, every container's log scanned). Without
+   it, R7/R8 are hand-run SQL, which is how v0.5.0's gaps survived.
 2. `backend/scripts/upgrades/0.5.0-to-0.5.1/` — `release.ts` (this release's
    three migrations; the prior list is v0.5.0's plus the out-of-band `0062`), `steps.ts`, `preflight.ts` (R2), `postflight.ts` (R7.4–R7.5),
    `restore-check.ts`, and a step for R4.4 so `runbook.ts` can report status.
