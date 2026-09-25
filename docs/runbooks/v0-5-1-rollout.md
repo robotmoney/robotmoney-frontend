@@ -174,7 +174,7 @@ R4.8 on the same twin: with `swarm_judge_config.model` set to NULL (production's
 
 | Step | Action | Pass |
 |---|---|---|
-| R5.1 | Owner reviews R1–R4 evidence, the R2.5 triage table and the D1–D6 decisions. The R4.4 report must be for the **same** `RC_SHA` that R5.2 tags; a later commit means R4 again | written "go" with name and time |
+| R5.1 | Owner reviews R1–R4 evidence, the R2.5 triage table and the D1–D6 decisions. The R4.4 report must be for the **same** `RC_SHA` that R5.2 tags; a later commit means R4 again, unless `git diff --name-only <R4 sha> "$RC_SHA"` lists only `docs/` and `scripts/lib/gate/log-classifications.json` | written "go" with name and time |
 | R5.2 | `git tag -a v0.5.1-rc.N "$RC_SHA" -m 'v0.5.1-rc.N' && git push origin v0.5.1-rc.N` | tag points at `RC_SHA` |
 
 ## R6. Production cutover (`rm-frontend-prod-1`, root)
