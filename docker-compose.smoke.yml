@@ -98,6 +98,9 @@ services:
       # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
       # projects.* pipelines (unset = offline fixture directory; smoke-legal).
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+      # Paid CoinGecko key for projects.refresh_coins (issue #1047). Worker
+      # lanes only; blank keeps the keyless public tier.
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}

@@ -60,6 +60,8 @@ function baseEnv(): Record<string, string> {
       "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
       // Build identity is asserted set and unset below; never inherit it.
       "AUM_PRODUCER_REVISION", "RM_BUILD_COMMIT", "RM_BUILD_TAG",
+      // The paid CoinGecko key (issue #1047) is asserted set and unset below.
+      "COINGECKO_API_KEY",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -199,6 +201,8 @@ const PREWARM: readonly RenderArgs[] = [
     // "TRUST_PROXY reaches the api container" — a host shell trying to
     // override the hardcoded literal back off.
     { knobs: { TRUST_PROXY: "0" }, files },
+    // "the paid CoinGecko key reaches the worker lanes only" (issue #1047).
+    { knobs: { COINGECKO_API_KEY: "cg-compose-test-key" }, files },
   ]),
   // "production capability TTLs" — explicit TTLs, base composition only.
   {
@@ -806,6 +810,45 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
         .toBe(`${key}:false`);
     }
   });
+});
+
+// The paid CoinGecko key (issue #1047). projects.refresh_coins runs in the
+// worker lanes and sends the key to the Pro host; the api has no CoinGecko
+// caller, so the key must never be delivered there. Only a rendered config
+// proves this, because each service's `environment:` block is an allowlist.
+describe("the paid CoinGecko key reaches the worker lanes only (issue #1047)", () => {
+  const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
+    ["base", BASE_COMPOSE_FILES],
+    ["smoke", DEMO_COMPOSE_FILES],
+    ["stage", STAGE_COMPOSE_FILES],
+  ];
+  const WORKER_LANES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
+
+  for (const [label, files] of COMPOSITIONS) {
+    test(`the ${label} composition puts an exported key on every worker lane and on nothing else`, () => {
+      const cfg = composeConfig({ COINGECKO_API_KEY: "cg-compose-test-key" }, files);
+      for (const lane of WORKER_LANES) {
+        expect(`${label}:${lane}:${serviceEnv(cfg, lane).COINGECKO_API_KEY ?? "missing"}`)
+          .toBe(`${label}:${lane}:cg-compose-test-key`);
+      }
+      for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+        if ((WORKER_LANES as readonly string[]).includes(name)) continue;
+        expect(`${label}:${name}:${"COINGECKO_API_KEY" in (svc.environment ?? {})}`)
+          .toBe(`${label}:${name}:false`);
+      }
+      expect(`${label}:api:${"COINGECKO_API_KEY" in serviceEnv(cfg, "api")}`).toBe(`${label}:api:false`);
+    });
+
+    test(`the ${label} composition resolves the key EMPTY on every worker lane when unset`, () => {
+      const cfg = composeConfig({}, files);
+      for (const lane of WORKER_LANES) {
+        const env = serviceEnv(cfg, lane);
+        expect(`${label}:${lane}:${"COINGECKO_API_KEY" in env}`).toBe(`${label}:${lane}:true`);
+        expect(`${label}:${lane}:${env.COINGECKO_API_KEY ?? ""}`).toBe(`${label}:${lane}:`);
+      }
+      expect(`${label}:api:${"COINGECKO_API_KEY" in serviceEnv(cfg, "api")}`).toBe(`${label}:api:false`);
+    });
+  }
 });
 
 // TRUST_PROXY must reach the api container in every composition (issue #892

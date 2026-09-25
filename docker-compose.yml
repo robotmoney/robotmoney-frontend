@@ -136,6 +136,10 @@ x-worker-env: &worker-env
   # stack refuses a keyless or unpinned model instead of accepting one.
   RM_ENV: ${RM_ENV:-prod}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+  # The paid CoinGecko plan's key (issue #1047). projects.refresh_coins sends
+  # it to the Pro host as x-cg-pro-api-key; blank keeps the keyless public
+  # tier. Worker lanes only: the api has no CoinGecko caller.
+  COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
   # Capability-specific cache controls. Blank/unset is intentionally passed
   # through: backend parsing treats it as absent, preserving the production
   # defaults (HTTP cache off; token-price cache 30s).
