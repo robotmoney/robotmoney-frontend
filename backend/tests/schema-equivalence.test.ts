@@ -28,16 +28,18 @@
 //
 // THE COMPARISON is tests/support/catalog-normalize.ts: every declared object
 // by name, OID-free, sorted, every class read on both sides — COMMENT ON
-// included. backend/schema/snapshot.sql carries no comments while the
-// migrations declare them; that is recorded below as cause F, comment by
-// comment, not hidden by skipping the class.
+// included. backend/schema/snapshot.sql is dumped with comments (wave 4 of
+// #1026 closed cause F, which recorded the 56 comments it used to lack), so a
+// migration's COMMENT ON that the snapshot forgets fails here like any other
+// object.
 //
 // RECORDED DRIFT, NOT HIDDEN DRIFT. When this file was written the two sides
 // differed in privileges, ownership and comments only — every table, column,
-// constraint, index, function body, trigger, policy and sequence matched. The
-// differences are real defects in backend/schema/grants.sql and
-// backend/schema/snapshot.sql, which this package does not own. They are listed
-// below as CAUSES, each naming the fix. Every cause is an EXACT record — the
+// constraint, index, function body, trigger, policy and sequence matched. Since
+// wave 4 of #1026 comments match too, and what is left is rm_app's DELETE
+// (cause B) and the provisioning login's default privileges (cause E), both
+// waiting on D55 (6)'s wave-5 change. They are listed below as CAUSES, each
+// naming the fix. Every cause is an EXACT record — the
 // objects it covers, by name, and for a privilege cause the exact items on the
 // migrated side — never a pattern: a pattern ("strip every rm_worker item")
 // would also explain the next wrong grant of the same shape. The test holds the
@@ -171,8 +173,6 @@ interface DriftItem {
  *               must be equal, so any other difference on the object — an added
  *               privilege, a changed one, a new grantee — still fails.
  *   * `exact` — one object, both definitions spelled out.
- *   * `onlyInMigrations` — an object the migrations declare and the snapshot
- *               does not, by key.
  */
 type DriftCause =
   | {
@@ -190,12 +190,6 @@ type DriftCause =
       readonly fix: string;
       readonly kind: "exact";
       readonly items: readonly DriftItem[];
-    }
-  | {
-      readonly id: string;
-      readonly fix: string;
-      readonly kind: "onlyInMigrations";
-      readonly keys: readonly string[];
     };
 
 const aclItems = (acl: string): string[] => (acl === "<default>" ? [] : acl.split(", "));
@@ -234,65 +228,6 @@ const RM_APP_DELETE_ONLY_IN_MIGRATIONS: readonly string[] = [
   "wallet_sleeve_sample_evidence", "wallet_sleeve_samples",
 ];
 
-/** Cause F: every COMMENT ON the migrations declare, by the object it is on.
- *  The snapshot declares none of them. */
-const COMMENTS_ONLY_IN_MIGRATIONS: readonly string[] = [
-  "pg_class public.analytics_data_vintages",
-  "pg_class public.analytics_ledger_runs",
-  "pg_class public.analytics_overwrite_events",
-  "pg_class public.analytics_parity_observations",
-  "pg_class public.analytics_read_mode",
-  "pg_class public.analytics_report_snapshots",
-  "pg_class public.automation_tokens",
-  "pg_class public.automation_tokens.holder",
-  "pg_class public.automation_tokens.instance",
-  "pg_class public.automation_tokens.rights",
-  "pg_class public.deployment_identity",
-  "pg_class public.schema_manifest",
-  "pg_class public.schema_migrations.compat",
-  "pg_class public.schema_migrations.metadata_version",
-  "pg_class public.source_value_versions",
-  "pg_class public.source_value_versions.provenance",
-  "pg_class public.swarm_brief_revisions",
-  "pg_class public.swarm_briefs.report_snapshot_id",
-  "pg_class public.swarm_consensus_receipts",
-  "pg_class public.swarm_judge_config.third_party_enabled",
-  "pg_class public.swarm_judge_fault_injection",
-  "pg_class public.swarm_member_keys",
-  "pg_class public.swarm_members.role",
-  "pg_class public.swarm_recommendations.final",
-  "pg_class public.swarm_recommendations.report_snapshot_id",
-  "pg_class public.swarm_recommendations.signing_key_id",
-  "pg_class public.swarm_session_judgements",
-  "pg_class public.swarm_session_judgements.applied",
-  "pg_class public.swarm_session_judgements.applied_skipped_reason",
-  "pg_class public.swarm_session_judgements.digest_scheme",
-  "pg_class public.swarm_session_judgements.dropped_disagreements",
-  "pg_class public.swarm_session_judgements.dropped_positions",
-  "pg_class public.swarm_session_judgements.judged_by",
-  "pg_class public.swarm_session_judgements.usage_cost_usd",
-  "pg_class public.swarm_sessions.consensus_recorded_at",
-  "pg_class public.swarm_sessions.judge_mode",
-  "pg_class public.swarm_sessions.judging_deadline_at",
-  "pg_class public.swarm_sessions.judging_duration_seconds",
-  "pg_class public.swarm_sessions.judging_outcome",
-  "pg_class public.swarm_sessions.successor_session_id",
-  "pg_class public.swarm_stream_events",
-  "pg_class public.swarm_stream_events.seq",
-  "pg_class public.swarm_subjects.epoch_anchor",
-  "pg_class public.swarm_subjects.epoch_duration_seconds",
-  "pg_class public.swarm_subjects.judging_duration_seconds",
-  "pg_class public.wallet_aum_snapshot_runs",
-  "pg_class public.wallet_aum_snapshot_runs.producer_revision",
-  "pg_class public.wallet_balance_sample_evidence",
-  "pg_class public.wallet_balance_samples.snapshot_run_id",
-  "pg_class public.wallet_balance_samples.strategy_nav_idle_only",
-  "pg_class public.wallet_sleeve_sample_evidence",
-  "pg_class public.wallet_sleeve_samples.snapshot_run_id",
-  "pg_constraint public.swarm_judge_config.swarm_judge_config_mode_requires_model_check",
-  "pg_proc public.rm_append_only_guard()",
-];
-
 const DATABASE_LOGIN = new URL(config.databaseUrl).username;
 
 const CAUSES: readonly DriftCause[] = [
@@ -301,8 +236,12 @@ const CAUSES: readonly DriftCause[] = [
     fix:
       "backend/migrations/0053_database_role_taxonomy.sql:146 grants rm_app DELETE on all tables; " +
       "backend/schema/grants.sql's ordinary sweep grants SELECT, INSERT, UPDATE and neither grants nor revokes " +
-      "DELETE. A migrated database therefore keeps DELETE and a blank one never has it. Decide which is " +
-      "intended and make grants.sql assert it both ways.",
+      "DELETE. A migrated database therefore keeps DELETE and a blank one never has it. DECIDED by D55 (6): " +
+      "no runtime role holds DELETE or TRUNCATE on any table, so the snapshot side is the intended one. The " +
+      "forward migration that revokes it lands in wave 5 (w5-owner-only-deletes) together with the runtime " +
+      "delete redesign (tests/no-runtime-delete.test.ts's backlog), because revoking first would break the " +
+      "admin and wallet-backfill deletes that still run as rm_app / rm_worker; grants.sql then revokes DELETE " +
+      "and TRUNCATE in every branch and each entry here is deleted.",
     kind: "acl",
     grantee: "rm_app",
     relations: new Map(RM_APP_DELETE_ONLY_IN_MIGRATIONS.map((table) => [table, ["rm_app:DELETE by rm_owner"]])),
@@ -310,9 +249,17 @@ const CAUSES: readonly DriftCause[] = [
   {
     id: "E: default privileges differ between the migrations and grants.sql",
     fix:
-      "0016:37-38 set default privileges for the provisioning login (rm_worker DML on its future tables and " +
-      "sequences), and neither grants.sql nor snapshot.sql declares any for that login. (rm_owner's own " +
-      "defaults now match: snapshot.sql declares the 0053/0062 rm_worker and sequence defaults.)",
+      "0016:37-38 set default privileges FOR THE LOGIN THAT RAN 0016 (the cluster's provisioning login: " +
+      "doadmin in production, the test container's superuser here): rm_worker DML, DELETE included, on the " +
+      "tables and sequences that login creates. rm_owner's own defaults match (snapshot.sql declares the " +
+      "0053/0062 ones; grants.sql re-asserts rm_app and rm_readonly). Neither snapshot.sql nor grants.sql can " +
+      "declare these: both run as rm_owner, and ALTER DEFAULT PRIVILEGES FOR ROLE needs membership in the " +
+      "target role, which rm_owner does not hold (§3). They also grant nothing today: every table since 0053 " +
+      "is created by rm_owner, and rm_worker's live DELETE on the wallet samples comes from grants.sql's " +
+      "worker_dml GRANT (grantor rm_owner), not from this default. D55 (6) forbids a DELETE default for a " +
+      "runtime role, so the fix is a provisioning step run AS the login (§9.1, wave 5, w5-owner-only-deletes): " +
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker, and the same ON " +
+      "SEQUENCES. Both entries are then deleted.",
     kind: "exact",
     items: [
       {
@@ -327,15 +274,6 @@ const CAUSES: readonly DriftCause[] = [
       },
     ],
   },
-  {
-    id: "F: backend/schema/snapshot.sql carries no COMMENT ON",
-    fix:
-      "backend/schema/snapshot.sql's header says it is a schema-only pg_dump of the migrated database, yet it " +
-      "carries no COMMENT ON while the migrations declare these. Re-dump snapshot.sql with comments, or append the " +
-      "COMMENT ON statements, then delete each entry the snapshot now carries.",
-    kind: "onlyInMigrations",
-    keys: COMMENTS_ONLY_IN_MIGRATIONS.map((object) => `comment on ${object}`),
-  },
 ];
 
 /** Every entry a cause records, named — the unit rule 2 is enforced on. */
@@ -345,8 +283,6 @@ function entriesOf(cause: DriftCause): string[] {
       return [...cause.relations.keys()].map((relation) => `acl relation public.${relation}`);
     case "exact":
       return cause.items.map((item) => item.key);
-    case "onlyInMigrations":
-      return [...cause.keys];
   }
 }
 
@@ -368,9 +304,8 @@ function explain(diff: CatalogDiff): { unexplained: DriftItem[]; used: Set<strin
   for (const item of items) {
     const exact = CAUSES.find(
       (cause) =>
-        (cause.kind === "exact" &&
-          cause.items.some((i) => i.key === item.key && i.migrated === item.migrated && i.snapshot === item.snapshot)) ||
-        (cause.kind === "onlyInMigrations" && item.snapshot === null && item.migrated !== null && cause.keys.includes(item.key)),
+        cause.kind === "exact" &&
+        cause.items.some((i) => i.key === item.key && i.migrated === item.migrated && i.snapshot === item.snapshot),
     );
     if (exact) {
       used.add(entryId(exact, item.key));
@@ -449,14 +384,16 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     expect(unexplained).toEqual([]);
   });
 
-  test("the only differences are privileges and ownership — the snapshot's tables, columns, constraints, indexes, functions, triggers, policies and sequences all match", () => {
+  test("the only differences are relation privileges and the login's default privileges — every table, column, constraint, index, function, trigger, policy, sequence and comment matches", () => {
     const diff = diffCatalogs(migratedCatalog, snapshotCatalog);
     const keys = [
       ...diff.onlyLeft.map((e) => e.key),
       ...diff.onlyRight.map((e) => e.key),
       ...diff.differing.map((d) => d.key),
     ];
-    expect(keys.filter((key) => !/^(acl |default privileges |schema public$|comment on )/.test(key))).toEqual([]);
+    // Causes B and E are the only records left, and they are exactly these two
+    // classes. Comments left this allowance with cause F (wave 4 of #1026).
+    expect(keys.filter((key) => !/^(acl relation public\.|default privileges for )/.test(key))).toEqual([]);
   });
 
   test("every recorded entry still occurs — a fixed entry is deleted, never left to excuse the next regression", () => {
@@ -473,8 +410,10 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     expect(RM_APP_DELETE_ONLY_IN_MIGRATIONS.filter((table) => DELETE_REVOKED.has(table))).toEqual([]);
   });
 
-  test("comments were really read on the migrated side — cause F is not passing on a skipped class", () => {
-    expect(migratedCatalog.filter((e) => e.key.startsWith("comment on ")).length).toBeGreaterThan(20);
+  test("comments were really read on both sides, and both sides declare the same ones — the comparison is not passing on a skipped class", () => {
+    const comments = (catalog: readonly CatalogEntry[]) => catalog.filter((e) => e.key.startsWith("comment on "));
+    expect(comments(migratedCatalog).length).toBeGreaterThan(50);
+    expect(comments(snapshotCatalog)).toEqual(comments(migratedCatalog));
   });
 
   test("RED CONTROL: a planted difference fails, and the failure names each planted object", async () => {
@@ -492,7 +431,7 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     //     hold SELECT only (grants.sql re-asserts rm_worker's grants) — a
     //     pattern ("strip every rm_worker item") would explain it;
     //   * rm_worker ALL on a relation no cause records anything for;
-    //   * a comment on an object cause F does not record;
+    //   * a comment on an object neither side comments;
     //   * a new index.
     let planted: DriftItem[] = [];
     await migrated
@@ -530,6 +469,45 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     expect(message).toContain("rm_app:DELETE");
     expect(message).toContain("rm_worker:UPDATE by rm_owner");
     expect(message).toContain("only in migrations: comment on pg_class public.jobs.dedupe_key — planted");
+  });
+
+  test("RED CONTROL: an operator, a cast, a publication and an event trigger are read — none is an unread class", async () => {
+    // The four database-level classes tests/support/catalog-normalize.ts reads
+    // since wave 4 of #1026. The snapshot declares none of them, so each plant
+    // must surface as a named object only the migrated side has. The event
+    // trigger needs a function returning event_trigger, which is itself a
+    // planted function (and its ACL).
+    let planted: DriftItem[] = [];
+    await migrated
+      .begin(async (tx) => {
+        await tx.unsafe("CREATE OPERATOR public.=== (LEFTARG = integer, RIGHTARG = integer, FUNCTION = int4eq)");
+        await tx.unsafe("CREATE CAST (public.jobs AS text) WITH INOUT");
+        await tx.unsafe("CREATE PUBLICATION rm_equiv_planted_pub FOR TABLE public.jobs");
+        await tx.unsafe(
+          "CREATE FUNCTION public.rm_equiv_planted_evt() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$",
+        );
+        await tx.unsafe(
+          "CREATE EVENT TRIGGER rm_equiv_planted_evt ON ddl_command_end EXECUTE FUNCTION public.rm_equiv_planted_evt()",
+        );
+        planted = explain(diffCatalogs(await normalizedCatalog(tx), snapshotCatalog)).unexplained;
+        throw new RollbackPlant();
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof RollbackPlant)) throw error;
+      });
+
+    const message = describeItems(planted);
+    expect(planted.map((item) => item.key).sort()).toEqual([
+      "acl function public.rm_equiv_planted_evt()",
+      "cast (jobs AS text)",
+      "event trigger rm_equiv_planted_evt",
+      "function public.rm_equiv_planted_evt()",
+      "operator public.===(integer, integer)",
+      "publication rm_equiv_planted_pub",
+    ]);
+    expect(message).toContain("tables=public.jobs");
+    expect(message).toContain("on ddl_command_end");
+    expect(message).toContain("method=i");
   });
 });
 

@@ -24,7 +24,8 @@
 // constraints, indexes, functions, triggers, policies, ownership, default
 // privileges — plus the ones those imply (columns and their defaults, sequences,
 // views, types, comments, ACLs on relations, columns, functions and the schema
-// itself). Row DATA is not in it, with one exception: a sequence's parameters
+// itself), and the database-level classes a migration could add that none of
+// those reach: operators, casts, publications and event triggers. Row DATA is not in it, with one exception: a sequence's parameters
 // are declaration, its current value is not.
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +309,55 @@ const CLASSES: readonly { readonly name: string; readonly sql: string }[] = [
       FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
       WHERE ${SYSTEM_SCHEMA_FILTER} AND t.typtype IN ('e', 'd', 'r')
         AND ${notExtensionMember("pg_type", "t.oid")}`,
+  },
+  {
+    // Operators and casts in application schemas. The snapshot declares none
+    // today; reading them means a migration that adds one (or a hand-made one
+    // on a live database) is a named difference rather than an unread class.
+    // A cast has no schema, so "ours" is: created after initdb (OID at or
+    // above FirstNormalObjectId, 16384) and not an extension's.
+    name: "operators and casts",
+    sql: `
+      SELECT 'operator ' || n.nspname || '.' || o.oprname || '(' || coalesce(format_type(o.oprleft, NULL), 'NONE')
+               || ', ' || coalesce(format_type(o.oprright, NULL), 'NONE') || ')' AS key,
+             concat_ws(' ', 'owner=' || pg_get_userbyid(o.oprowner), 'returns', format_type(o.oprresult, NULL),
+               'function', o.oprcode::regprocedure::text) AS definition
+      FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace
+      WHERE ${SYSTEM_SCHEMA_FILTER} AND ${notExtensionMember("pg_operator", "o.oid")}
+      UNION ALL
+      SELECT 'cast (' || format_type(c.castsource, NULL) || ' AS ' || format_type(c.casttarget, NULL) || ')',
+             concat_ws(' ', 'context=' || c.castcontext::text, 'method=' || c.castmethod::text,
+               CASE WHEN c.castfunc <> 0 THEN 'function ' || c.castfunc::regprocedure::text END)
+      FROM pg_cast c
+      WHERE c.oid >= 16384 AND ${notExtensionMember("pg_cast", "c.oid")}`,
+  },
+  {
+    // Publications (with their tables and schemas) and event triggers — the two
+    // database-level objects a migration could create that no other class
+    // here reads. A publication decides which rows leave the database; an
+    // event trigger runs on every DDL statement. The snapshot declares
+    // neither, so either one appearing is drift.
+    name: "publications and event triggers",
+    sql: `
+      SELECT 'publication ' || p.pubname AS key,
+             concat_ws(' ', 'owner=' || pg_get_userbyid(p.pubowner), 'all_tables=' || p.puballtables,
+               'insert=' || p.pubinsert, 'update=' || p.pubupdate, 'delete=' || p.pubdelete,
+               'truncate=' || p.pubtruncate, 'via_root=' || p.pubviaroot,
+               'tables=' || coalesce((SELECT string_agg(pn.nspname || '.' || pc.relname, ',' ORDER BY pn.nspname, pc.relname)
+                                      FROM pg_publication_rel pr JOIN pg_class pc ON pc.oid = pr.prrelid
+                                      JOIN pg_namespace pn ON pn.oid = pc.relnamespace
+                                      WHERE pr.prpubid = p.oid), ''),
+               'schemas=' || coalesce((SELECT string_agg(pn.nspname, ',' ORDER BY pn.nspname)
+                                       FROM pg_publication_namespace pns JOIN pg_namespace pn ON pn.oid = pns.pnnspid
+                                       WHERE pns.pnpubid = p.oid), '')) AS definition
+      FROM pg_publication p
+      UNION ALL
+      SELECT 'event trigger ' || e.evtname,
+             concat_ws(' ', 'owner=' || pg_get_userbyid(e.evtowner), 'on', e.evtevent,
+               'function', e.evtfoid::regprocedure::text, 'enabled=' || e.evtenabled::text,
+               'tags=' || coalesce(array_to_string(e.evttags, ','), ''))
+      FROM pg_event_trigger e
+      WHERE ${notExtensionMember("pg_event_trigger", "e.oid")}`,
   },
   {
     // `ALTER DEFAULT PRIVILEGES` — what a role's FUTURE objects will be granted.

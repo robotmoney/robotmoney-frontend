@@ -272,6 +272,8 @@ Code built for snapshot N boots against a database at M > N only if every ledger
 
 **CI proves:** blank + all migrations = snapshot; snapshot N + migrations = snapshot N+1; a snapshot-created database boots and passes preflight without `--seed`; an upgrade from a populated database of each supported release (`SUPPORTED_RELEASES`: v0.5.0 alone, [D55](../decisions.md#d55) (8)) passes its data assertions; code at N boots against N+additive.
 
+**Snapshot N.** No release tag carries `backend/schema/`, so snapshot N is a pinned fixture: `backend/tests/fixtures/snapshots/<last filename>/` holds the four snapshot files byte for byte from the commit named in its `fixture.json`, each with a sha256 pin. The proof bootstraps that fixture, runs the real migrate run with this checkout's migrations and snapshot, and compares the result with a blank bootstrap of the current snapshot by the normalized catalog and by check 3a. The fixture advances when a release ships: its snapshot files, taken from the release's tag, replace the fixture under that release's last filename, and the old fixture is deleted. A fixture never advances in the same change as a migration, so every migration is proved against the snapshot before it. Differences recorded against a fixture's own defects only shrink. They are emptied when the fixture advances past them.
+
 ### 8.5 `--migrate` and production upgrades
 
 In production an upgrade is an operator intervention: `bun run migrate`, prompting for `rm_owner`, planned per release, receipted. It is never part of the boot.
