@@ -1,0 +1,307 @@
+{
+  "name": "v0.5.0+0062_rm_readonly_sequence_select (production ledger 2026-09-25)",
+  "release": "v0.5.0",
+  "source": "production schema_migrations, read 2026-09-25 as rm_readonly on the read-only replica (owner-verified ground truth)",
+  "outOfBand": [
+    {
+      "file": "0062_rm_readonly_sequence_select.sql",
+      "sha256": "fa483194653f60974223796e4440c3658aaef87890af7b3e50d40bbe0b2c9ee8",
+      "source": "archive/releases-0.5.x-2026-09-24 at c3a68812 (file added by 61fab107, whose SQL lacks the rm_readonly_test drop and the rm_worker INSERT/UPDATE grants). Production ran the c3a68812 SQL, verified 2026-09-25 as rm_readonly on the prod replica: rm_readonly_test does not exist, and rm_worker holds INSERT and UPDATE on asset_prices, asset_price_floors and chain_address_floors, which v0.5.0 never grants. The branch copy (550f3288) differs from these bytes in comments only.",
+      "appliedAt": "2026-09-22T03:35Z"
+    }
+  ],
+  "ledger": [
+    {
+      "file": "0001_backends.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0002_dashboards.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0003_task_queue.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0004_committee.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0005_job_schedules_seed.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0006_committee_reconcile.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0007_committee_rls_stub.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0008_committee_memos.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0009_analytics_v2.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0010_backtest_correlations.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0011_regime_dashboard_extras.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0012_vault_share_price_history.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0013_projects.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0014_projects_pipelines.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0014_wallet_balance_samples.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0015_buyback_swaps.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0016_worker_role.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0017_admin_surface.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0018_research_telemetry.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0019_committee_self_serve_claim.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0020_committee_agent_health.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0021_chain_indexer_samples.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0021_committee_waitlist.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0022_committee_application_received_notification.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0022_committee_session_convened_at.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0023_agent_activity_log.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0023_analytics_submissions.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0023_list2_leaderboard.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0024_analytics_provenance_source.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0025_swarm_rename.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0026_swarm_sessions_legacy_takes.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0027_drop_swarm_sessions_legacy_takes.sql",
+      "appliedAt": "2026-08-06 02:05"
+    },
+    {
+      "file": "0028_admin_credential.sql",
+      "appliedAt": "2026-08-10 12:37"
+    },
+    {
+      "file": "0028_swarm_briefs_session_key.sql",
+      "appliedAt": "2026-08-10 12:37"
+    },
+    {
+      "file": "0028_swarm_take_revisions.sql",
+      "appliedAt": "2026-08-10 12:37"
+    },
+    {
+      "file": "0029_admin_auth_recovery.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0029_admin_passkey.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0030_swarm_member_handle.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0031_swarm_member_handle_namespace.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0032_append_only_history.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0032_wallet_balance_samples_strategy_nav_idle_only.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0033_swarm_member_uuid_ids.sql",
+      "appliedAt": "2026-08-20 04:59"
+    },
+    {
+      "file": "0033_wallet_backfill.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0034_job_schedules_catchup_policy.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0035_swarm_member_avatar_bytes.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0036_quarantine_backfilled_samples.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0037_aum_repairable_quarantine.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0038_wallet_aum_snapshot_foundation.sql",
+      "appliedAt": "2026-08-25 21:22"
+    },
+    {
+      "file": "0039_swarm_judge.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0040_swarm_judgements_append_only.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0041_swarm_judgement_soak_record.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0042_swarm_consensus_receipts.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0043_swarm_member_judges.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0044_wallet_backfill_leg_terminal.sql",
+      "appliedAt": "2026-09-04 21:37"
+    },
+    {
+      "file": "0045_chain_address_floors.sql",
+      "appliedAt": "2026-09-08 14:43"
+    },
+    {
+      "file": "0046_asset_prices.sql",
+      "appliedAt": "2026-09-08 14:43"
+    },
+    {
+      "file": "0047_swarm_session_subject_name_backfill.sql",
+      "appliedAt": "2026-09-08 14:43"
+    },
+    {
+      "file": "0048_swarm_judge_third_party_flag.sql",
+      "appliedAt": "2026-09-08 14:43"
+    },
+    {
+      "file": "0049_swarm_recommendations_signing_key.sql",
+      "appliedAt": "2026-09-21 01:54"
+    },
+    {
+      "file": "0050_swarm_member_keys_append_only.sql",
+      "appliedAt": "2026-09-21 01:54"
+    },
+    {
+      "file": "0051_swarm_vault_recommendation_type_repair.sql",
+      "appliedAt": "2026-09-21 01:54"
+    },
+    {
+      "file": "0052_swarm_judgement_digest_scheme.sql",
+      "appliedAt": "2026-09-21 01:54"
+    },
+    {
+      "file": "0053_database_role_taxonomy.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0054_rm_worker_allowlist.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0055_swarm_recommendations_member_received_idx.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0056_analytics_overwrite_events.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0057_source_acquisition_ledger.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0058_analytics_run_ledger.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0059_analytics_output_and_report_snapshots.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0059_swarm_framework_subject_snapshot_cleanup.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0060_analytics_ledger_cutover.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0061_source_value_provenance.sql",
+      "appliedAt": "2026-09-21 01:55"
+    },
+    {
+      "file": "0062_rm_readonly_sequence_select.sql",
+      "appliedAt": "2026-09-22 03:35"
+    }
+  ]
+}

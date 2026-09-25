@@ -29,10 +29,25 @@
 // `--instance` defaults to the production instance under RM_ENV=prod. Any other
 // policy must name where the receipt goes, because a receipt written to a
 // guessed instance is a record in the wrong place.
+//
+// THE JOURNAL (§2: a losing tool "journals the phase and exits non-zero").
+// Beside the receipt, this command keeps a `migrate-journal-<start>.json` for
+// every run (./migrate-journal.ts), opened as soon as the receipt's directory
+// is known and closed on every exit with the phase it stopped in: `config`,
+// `plan`, `lock`, `gates`, `owner`, `confirm`, each `migrate: …` boundary of
+// the run, `receipt`. A run that lost its lock connection mid-run says which
+// phase could not start; a run killed by a signal says it was interrupted.
+//
+// THE FIRST PRODUCTION MIGRATE (§9.1, D55 (5)) is this command, unchanged: under
+// RM_ENV=prod, against a database with no identity row whose ledger equals a
+// supported release's, the gates let it through, the confirmation names that
+// state, and the receipt records it.
 import { hostname } from "node:os";
+import { dirname, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
 import { resolveRmEnv } from "../src/deploy-policy.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
+import { MigrateJournal, migrateJournalPath } from "./migrate-journal.ts";
 
 const NAME = "migrate";
 const err = (m: string) => console.error(`[${NAME}] ${m}`);
@@ -41,7 +56,11 @@ const log = (m: string) => console.log(`[${NAME}] ${m}`);
 /** How long the command waits behind another holder of the target lock by default. */
 const DEFAULT_LOCK_TIMEOUT_SECONDS = 60;
 
+/** Open once the receipt's directory is known; every refusal after that is journaled. */
+let journal: MigrateJournal | undefined;
+
 function refuse(message: string): never {
+  journal?.close("refused", message);
   err(message);
   process.exit(1);
 }
@@ -61,6 +80,37 @@ if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lo
 
 const envPath = homeEnvFilePath();
 const env = loadEnvFile(envPath);
+
+// Args override env (§3), so the process's RM_ENV wins over the file's. The
+// value is judged by the §4.3 matrix itself (the gates, below); here it is only
+// parsed, so a typo refuses before anything connects.
+const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env?.RM_ENV });
+if (!policy.ok) refuse(policy.reason);
+const rmEnv = policy.source === "unset" ? null : policy.env;
+
+// The receipt's home is decided BEFORE anything connects: finding out after a
+// production migration that there is nowhere to record it is the wrong order.
+const startedAt = new Date();
+let receiptDir: string;
+if (receiptFlag === undefined) {
+  const instance = instanceFlag ?? (rmEnv === "prod" ? PRODUCTION_INSTANCE : undefined);
+  if (instance === undefined) {
+    refuse("name the instance whose state directory receives the receipt (--instance <name>), or pass --receipt <path>.");
+  }
+  receiptDir = instancePaths(stateRoot(process.env), instance).dir;
+} else {
+  receiptDir = dirname(resolve(receiptFlag));
+}
+
+// THE JOURNAL (§2), beside the receipt, from here to exit. Every exit below —
+// a refusal, a lost lock, a crash, SIGINT/SIGTERM through the lock's release
+// handler, Ctrl-C at the password prompt — closes it naming the phase it
+// stopped in; the `exit` handler catches the ones that leave without closing.
+// Nothing before this point connected to anything or had a place to journal.
+journal = MigrateJournal.open(migrateJournalPath(receiptDir, startedAt), { caller: "operator", env: rmEnv, startedAt });
+process.on("exit", (code) => journal?.closeOnExit(code));
+journal.begin("config");
+
 if (!env) refuse(`no readable $HOME/.env (${envPath}).`);
 
 // §3: "It must not contain `rm_owner`, `doadmin`, a superuser token ...".
@@ -70,25 +120,6 @@ if (forbidden.length > 0) {
     `$HOME/.env holds a ${forbidden.join(" and a ")} line. Spec §3 keeps both out of it: the rm_owner password is ` +
       "typed at the terminal for the one run that needs it and never stored. Remove the line and rerun.",
   );
-}
-
-// Args override env (§3), so the process's RM_ENV wins over the file's. The
-// value is judged by the §4.3 matrix itself (the gates, below); here it is only
-// parsed, so a typo refuses before anything connects.
-const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env.RM_ENV });
-if (!policy.ok) refuse(policy.reason);
-const rmEnv = policy.source === "unset" ? null : policy.env;
-
-// The receipt's home is decided BEFORE anything connects: finding out after a
-// production migration that there is nowhere to record it is the wrong order.
-const startedAt = new Date();
-let receiptDir: string | null = null;
-if (receiptFlag === undefined) {
-  const instance = instanceFlag ?? (rmEnv === "prod" ? PRODUCTION_INSTANCE : undefined);
-  if (instance === undefined) {
-    refuse("name the instance whose state directory receives the receipt (--instance <name>), or pass --receipt <path>.");
-  }
-  receiptDir = instancePaths(stateRoot(process.env), instance).dir;
 }
 
 // The lock, the plan and the gates go through the least-privileged role that
@@ -109,7 +140,7 @@ process.env.DATABASE_URL = readonlyUrl;
 // The run's modules are imported only now: nothing above may depend on them,
 // and a refusal above must not have paid for loading them.
 const { MigrateRefused, migrateCommand, migrateReceiptPath } = await import("./migrate-run.ts");
-const receiptPath = receiptFlag ?? migrateReceiptPath(receiptDir ?? "", startedAt);
+const receiptPath = receiptFlag === undefined ? migrateReceiptPath(receiptDir, startedAt) : resolve(receiptFlag);
 
 try {
   const { result, receipt } = await migrateCommand({
@@ -127,6 +158,7 @@ try {
       },
     },
     receiptPath,
+    journal,
     log,
   });
   log(`applied ${result.applied.length} migration(s)${result.applied.length ? `: ${result.applied.join(", ")}` : ""}`);
@@ -135,10 +167,15 @@ try {
   }
   log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
   if (result.baselined) log("first manifest: the live schema matched the snapshot (spec §9.1 step 2)");
+  if (result.preIdentity) {
+    log(`first production migrate from ${result.preIdentity.release}: write deployment_identity = production next (spec §9.1 step 4)`);
+  }
   log(`manifest ${result.manifest.contentHash} published`);
   log(`receipt ${receipt}`);
   process.exit(0);
 } catch (e) {
+  // migrateCommand has already journaled the phase it stopped in.
   err(e instanceof MigrateRefused ? e.message : `failed: ${e instanceof Error ? e.message : String(e)}`);
+  log(`journal ${journal.path}`);
   process.exit(1);
 }

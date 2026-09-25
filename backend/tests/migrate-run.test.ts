@@ -57,11 +57,14 @@ import {
   migrateCommand,
   migrateReceiptPath,
   promptOwnerPassword,
+  readPreIdentityState,
   runMigrate,
   writeMigrateReceipt,
   type MigrateGateOptions,
   type MigrateRunSeams,
 } from "../scripts/migrate-run.ts";
+import { MigrateJournal, migrateJournalPath, type MigrateJournalFile } from "../scripts/migrate-journal.ts";
+import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { holdTargetLock, withTargetLock } from "./support/target-lock.ts";
 
@@ -335,6 +338,57 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// §4.3's one exception, from the side that is NOT it (§9.1, D55 (5))
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The exception itself — a ledger exactly equal to production's observed
+// baseline (v0.5.0 plus one out-of-band file) — needs such a database and runs as a process in first-production-migrate.test.ts. What is
+// pinned here is that every database this file has, whose ledger is the whole
+// branch's, gets NO exception: the missing row refuses exactly as before, and
+// the refusal names the guard it failed.
+describe("the first production migrate's exception does not reach a ledger that equals no supported release", () => {
+  test("operator, RM_ENV=prod, remote, no row, a branch ledger: identity_missing, naming the ledger mismatch", async () => {
+    await setIdentity(null);
+    const gate = options({ caller: "operator", env: "prod", connection: "remote" });
+    expect(await readPreIdentityState(sql, gate)).toBeNull();
+    const refusals = await checkMigrateGates(sql, gate);
+    expect(refusals.map((r) => r.reason)).toEqual(["identity_missing"]);
+    expect(refusals[0]?.message).toContain("first production migrate");
+    expect(refusals[0]?.message).toContain("matches none");
+    expect(refusals[0]?.message).toContain(`against ${SUPPORTED_RELEASES[0]!.name}:`);
+  });
+
+  test("operator, RM_ENV=stage, no row: identity_missing, naming RM_ENV=prod as the guard it failed", async () => {
+    await setIdentity(null);
+    const gate = options({ caller: "operator", env: "stage", connection: "remote" });
+    expect(await readPreIdentityState(sql, gate)).toBeNull();
+    const refusals = await checkMigrateGates(sql, gate);
+    expect(refusals.map((r) => r.reason)).toEqual(["identity_missing"]);
+    expect(refusals[0]?.message).toContain("needs RM_ENV=prod, and this run is RM_ENV=stage");
+  });
+
+  test("`--migrate` never has the exception, and its refusal does not mention it", async () => {
+    await setIdentity(null);
+    const refusals = await checkMigrateGates(sql, options({ caller: "smoke_flag", env: "stage" }));
+    expect(refusals.map((r) => r.reason)).toContain("identity_missing");
+    expect(refusals.map((r) => r.message).join(" ")).not.toContain("first production migrate");
+  });
+
+  test("a run handed a pre-identity confirmation on a database that does not qualify refuses before applying anything", async () => {
+    await setIdentity("production");
+    const ledgerBefore = await ledgerNames();
+    const confirmed = { identity: "no table" as const, release: SUPPORTED_RELEASES[0]!.name, ledger: SUPPORTED_RELEASES[0]!.migrations };
+    await expect(
+      withTargetLock(urlFor(fileDb), (lock) =>
+        runMigrate(owner, { ...options({ caller: "operator", env: "prod", connection: "remote" }), lock, confirmedPreIdentity: confirmed }),
+      ),
+    ).rejects.toThrow("does not qualify for it now");
+    expect(await ledgerNames()).toEqual(ledgerBefore);
+    expect(await readManifest(sql)).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // The credential and the remote confirmation
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -486,6 +540,8 @@ describe("rm_owner — LOGIN, the migration login, the only session the run acce
     expect(receipt.kind).toBe("migrate-receipt");
     expect(receipt.applied).toEqual(result.applied);
     expect(receipt.grantsRepaired).toEqual(result.grantsRepaired);
+    // Only the first production migrate has a pre-identity state to record.
+    expect(receipt.preIdentity).toBeNull();
     expect(receipt.manifest).toEqual({
       formatVersion: result.manifest.formatVersion,
       contentHash: result.manifest.contentHash,
@@ -680,6 +736,139 @@ describe("migrateCommand — plan, lock, gates, owner, run, receipt, release", (
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// The journal: the phase a run stopped in, on every exit (§2, criterion 18)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// §2: "Connection loss. Detected at every phase boundary; the tool journals the
+// phase and exits non-zero." The process half — `bun run migrate` losing its
+// lock connection while it waits at the operator's `y` — runs against a real
+// boot in scripts/tests/integration/smoke-instance-lock.test.ts. Here the same
+// command sequence is driven in-process, where the kill can land BETWEEN TWO
+// COMMITS of a real run.
+describe("the migrate journal — written before each phase, closed on every exit", () => {
+  const log = (): void => {};
+
+  function journalIn(dir: string): MigrateJournal {
+    return MigrateJournal.open(migrateJournalPath(dir, new Date()), { caller: "smoke_flag", env: "stage", startedAt: new Date() });
+  }
+  const readJournal = (path: string): MigrateJournalFile => JSON.parse(readFileSync(path, "utf8")) as MigrateJournalFile;
+  const steps = (file: MigrateJournalFile): [string, string][] => file.phases.map((r) => [r.phase, r.status]);
+
+  function command(database: string, dir: string, journal: MigrateJournal, seams?: MigrateRunSeams) {
+    return migrateCommand({
+      caller: "smoke_flag",
+      env: "stage",
+      connection: "local",
+      readerUrl: urlFor(database),
+      nonInteractive: true,
+      localOwnerPassword: OWNER_PASSWORD,
+      lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 5_000 } },
+      receiptPath: migrateReceiptPath(dir, new Date()),
+      journal,
+      ...(seams ? { seams } : {}),
+      log,
+    });
+  }
+
+  test("a run that succeeds commits every phase in order and closes `succeeded`, naming its receipt", async () => {
+    await setIdentity("rehearsal");
+    const dir = mkdtempSync(join(tmpdir(), "rm-migrate-journal-"));
+    plantedDirs.push(dir);
+    const journal = journalIn(dir);
+    const { receipt } = await command(fileDb, dir, journal);
+    const file = readJournal(journal.path);
+    expect(steps(file)).toEqual([
+      ["plan", "committed"],
+      ["lock", "committed"],
+      ["gates", "committed"],
+      ["owner", "committed"],
+      ["confirm", "committed"],
+      ["migrate: start", "committed"],
+      ["migrate: reconcile and publish", "committed"],
+      ["receipt", "committed"],
+    ]);
+    expect({ outcome: file.outcome, receipt: file.receipt, closed: file.closedAt !== null }).toEqual({
+      outcome: "succeeded",
+      receipt,
+      closed: true,
+    });
+    expect(readFileSync(journal.path, "utf8")).not.toContain(OWNER_PASSWORD);
+    expect(statSync(journal.path).mode & 0o777).toBe(0o600);
+  });
+
+  test("a refusal at the gates closes `refused` IN the gates phase, and no receipt is written", async () => {
+    await setIdentity("production");
+    const dir = mkdtempSync(join(tmpdir(), "rm-migrate-journal-"));
+    plantedDirs.push(dir);
+    const journal = journalIn(dir);
+    await expect(command(fileDb, dir, journal)).rejects.toBeInstanceOf(MigrateRefused);
+    const file = readJournal(journal.path);
+    expect(file.outcome).toBe("refused");
+    expect(file.phases.at(-1)).toMatchObject({ phase: "gates", status: "refused" });
+    expect(file.phases.at(-1)?.reason).toContain("deployment_identity");
+    expect(readdirSync(dir).filter((name) => name.startsWith("migrate-receipt-"))).toEqual([]);
+    expect(await readManifest(sql)).toBeNull();
+  });
+
+  test("the lock connection killed between two commits: the next phase does not start, the journal names it, and a rerun recovers", async () => {
+    await withClone(async ({ admin, name }) => {
+      await setIdentity("rehearsal", admin);
+      const dir = mkdtempSync(join(tmpdir(), "rm-migrate-journal-"));
+      plantedDirs.push(dir);
+      // A published manifest first, so the planted pair below is an ordinary
+      // pending run rather than a first-manifest baseline.
+      await command(name, dir, journalIn(dir));
+      const manifestBefore = await readManifest(admin);
+
+      const planted = migrationsWith({
+        "0098_kill_probe_a.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_a (id integer);\n`,
+        "0099_kill_probe_b.sql": `${ADDITIVE}CREATE TABLE rm_kill_probe_b (id integer);\n`,
+      });
+      let killed = 0;
+      const journal = journalIn(dir);
+      const run = command(name, dir, journal, {
+        migrationsDir: planted,
+        afterCommit: async (file) => {
+          if (file !== "0098_kill_probe_a.sql") return;
+          // The command's OWN lock connection, found by the identity it
+          // publishes, and only on this database.
+          const rows = await admin<{ killed: boolean }[]>`
+            SELECT pg_terminate_backend(pid) AS killed FROM pg_stat_activity
+             WHERE application_name LIKE 'rm-tl:migrate|%' AND datname = ${name}`;
+          killed = rows.filter((row) => row.killed).length;
+        },
+      });
+      await expect(run).rejects.toThrow("cannot be proven held");
+      expect(killed).toBe(1);
+
+      const file = readJournal(journal.path);
+      expect(file.outcome).toBe("failed");
+      // 0098 committed; the loss is found at the next boundary, whose phase
+      // never starts — 0099 was not applied.
+      expect(steps(file).slice(-2)).toEqual([
+        ["migrate: apply 0098_kill_probe_a.sql", "committed"],
+        ["migrate: apply 0099_kill_probe_b.sql", "failed"],
+      ]);
+      expect(file.phases.at(-1)?.reason).toContain("The lock is not re-acquired");
+      expect(await ledgerNames(admin)).toContain("0098_kill_probe_a.sql");
+      expect(await ledgerNames(admin)).not.toContain("0099_kill_probe_b.sql");
+      // §8.3's in-progress state: the ledger is ahead of the manifest, which
+      // did not move.
+      expect(await readManifest(admin)).toEqual(manifestBefore);
+      expect((await detectManifestState(admin)).kind).toBe("in_progress");
+
+      // The next run recovers: it verifies 0098, applies 0099 and publishes.
+      const rerun = journalIn(dir);
+      const { result } = await command(name, dir, rerun, { migrationsDir: planted });
+      expect(result.resumedAndVerified).toContain("0098_kill_probe_a.sql");
+      expect(result.applied).toEqual(["0099_kill_probe_b.sql"]);
+      expect(readJournal(rerun.path).outcome).toBe("succeeded");
+      expect((await detectManifestState(admin)).kind).toBe("published");
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // `bun run migrate` — the real command, as a process
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -761,6 +950,16 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     expect(out).toContain("deployment_identity is production");
     expect(out).not.toContain("password (not echoed");
     expect(() => statSync(receipt)).toThrow();
+    // The refusal is journaled beside where the receipt would have gone (§2),
+    // in the phase it happened in.
+    const journals = readdirSync(receiptDir).filter((name) => name.startsWith("migrate-journal-"));
+    expect(journals.length).toBe(1);
+    const journal = JSON.parse(readFileSync(join(receiptDir, journals[0]!), "utf8")) as MigrateJournalFile;
+    expect({ outcome: journal.outcome, last: journal.phases.at(-1)?.phase, status: journal.phases.at(-1)?.status }).toEqual({
+      outcome: "refused",
+      last: "gates",
+      status: "refused",
+    });
   });
 
   test("with the gates passed and no terminal, it refuses rather than read an owner password from anywhere", async () => {
@@ -771,7 +970,32 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     expect(out).toMatch(/non-interactive|stdin is not a terminal/);
     expect(await readManifest(sql)).toBeNull();
     expect(await ledgerNames()).toEqual(before);
-    expect(() => statSync(join(home, ".local", "state", "robotmoney-smoke", "rm_prod"))).toThrow();
+    // The production instance's state directory now holds exactly one record
+    // of this run: its journal, closed `refused` in the `owner` phase (§2). No
+    // receipt — nothing ran — and no password, since none was ever read.
+    const stateDir = join(home, ".local", "state", "robotmoney-smoke", "rm_prod");
+    const files = readdirSync(stateDir);
+    expect(files.map((name) => name.replace(/\d.*$/, ""))).toEqual(["migrate-journal-"]);
+    const journal = JSON.parse(readFileSync(join(stateDir, files[0]!), "utf8")) as MigrateJournalFile;
+    expect(journal.outcome).toBe("refused");
+    expect(journal.phases.at(-1)).toMatchObject({ phase: "owner", status: "refused" });
+    expect(journal.receipt).toBeNull();
+  });
+
+  test("a refusal of its own ~/.env is journaled too, once the receipt's directory is known", async () => {
+    const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-r-"));
+    plantedDirs.push(receiptDir);
+    const { code } = await runCommand(await envFileFor("doadmin = provisioning-password"), {
+      rmEnv: "prod",
+      args: ["--receipt", join(receiptDir, "receipt.json")],
+    });
+    expect(code).not.toBe(0);
+    const [name] = readdirSync(receiptDir);
+    const text = readFileSync(join(receiptDir, name!), "utf8");
+    const journal = JSON.parse(text) as MigrateJournalFile;
+    expect(journal.phases.map((r) => [r.phase, r.status])).toEqual([["config", "refused"]]);
+    expect(journal.target).toBeNull();
+    expect(text).not.toContain("provisioning-password");
   });
 
   test("criteria 36 + 39: behind a holder reached under ANOTHER hostname it waits --lock-timeout, then exits non-zero naming the holder and its plan id", async () => {
@@ -901,6 +1125,12 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
       const path = join(home, file);
       if (statSync(path).isFile()) expect(readFileSync(path, "utf8")).not.toContain(OWNER_PASSWORD);
     }
+
+    // Beside the receipt, the run's journal: every phase committed.
+    const [journalName] = readdirSync(join(home, "receipts")).filter((name) => name.startsWith("migrate-journal-"));
+    const journal = JSON.parse(readFileSync(join(home, "receipts", journalName!), "utf8")) as MigrateJournalFile;
+    expect({ outcome: journal.outcome, receipt: journal.receipt }).toEqual({ outcome: "succeeded", receipt });
+    expect(journal.phases.every((r) => r.status === "committed")).toBe(true);
 
     const published = await readManifest(sql);
     expect(published?.contentHash).toBe(written.manifest.contentHash);
