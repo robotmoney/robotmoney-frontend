@@ -23,6 +23,52 @@
 // (date, symbol) that tick. See the comment on sampleWalletSleeves for why
 // that reliance was a false invariant.
 import { sql } from "../../db/worker-client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), on the worker's own
+// pool. This handler module is the entry: the job loop dispatches the two
+// wallet sampler kinds to it.
+const WALLET_HANDLER = "src/worker/handlers/wallet";
+
+const upsertBalanceSample = registerQuery({
+  role: "rm_worker",
+  object: "wallet_balance_samples",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/worker/handlers/wallet:sampleWalletBalances",
+  purpose: "Upsert the day's balance sample per tracked asset on (sample_date, symbol).",
+  callers: [WALLET_HANDLER],
+  probe: {
+    statement: `INSERT INTO wallet_balance_samples
+        (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
+      VALUES ($1::date, $2, $3::numeric, $4::numeric, $5, $6::boolean, now())
+      ON CONFLICT (sample_date, symbol) DO UPDATE SET
+        amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
+        strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only, sampled_at = EXCLUDED.sampled_at`,
+    params: ["2026-01-01", "PROBE", "1", "1", "live", false],
+  },
+});
+
+const upsertSleeveSample = registerQuery({
+  role: "rm_worker",
+  object: "wallet_sleeve_samples",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/worker/handlers/wallet:sampleWalletSleeves",
+  purpose: "Upsert the day's sample per sleeve wallet and asset on (sample_date, wallet_address, symbol).",
+  callers: [WALLET_HANDLER],
+  probe: {
+    statement: `INSERT INTO wallet_sleeve_samples
+        (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
+      VALUES ($1::date, $2, $3, $4::numeric, $5::numeric, $6, now())
+      ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
+        amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
+        sampled_at = EXCLUDED.sampled_at`,
+    params: ["2026-01-01", "0x0000000000000000000000000000000000000001", "PROBE", "1", "1", "live"],
+  },
+});
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
 import {
   isPlaceholderAddress,
@@ -140,7 +186,7 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
       // every read site to the join; leaving this column NULL on a live-sampled row
       // is deliberate, not an oversight, and value_usd still carries the fused
       // amount*price product a caller may need before the join lands its row.
-      await tx`
+      await on(tx, upsertBalanceSample)`
         INSERT INTO wallet_balance_samples
           (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
         VALUES
@@ -265,7 +311,7 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
       // repairResolvedDay's already-shipped (#851) sleeve write. asset_prices
       // is the sole write target for price data; value_usd still carries the
       // fused amount*price product.
-      await tx`
+      await on(tx, upsertSleeveSample)`
         INSERT INTO wallet_sleeve_samples
           (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
         VALUES

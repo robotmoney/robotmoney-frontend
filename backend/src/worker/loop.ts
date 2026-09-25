@@ -1,7 +1,101 @@
 import { jsonValue, sql } from "../db/worker-client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { config } from "../config.ts";
 import { getHandler } from "./handlers/index.ts";
 import { LANES, type Lane } from "./lanes.ts";
+
+// Registered queries (smoke-production-spec.md §7.1). The queue lifecycle
+// runs on the worker's own pool (db/worker-client.ts, WORKER_DATABASE_URL), so
+// every site declares `rm_worker`; the worker process entry drives the loop.
+const WORKER_ENTRY = "src/worker/index";
+
+const claimJob = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  // UPDATE for the claim itself and for FOR UPDATE SKIP LOCKED; SELECT for
+  // the candidate scan, the WHERE and RETURNING.
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/worker/loop:processOneJob.claim",
+  purpose: "Claim the lane's highest-priority due pending job, skipping rows another worker holds.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `WITH claimed AS (
+        SELECT id FROM jobs
+        WHERE status = 'pending' AND run_after <= now()
+          AND kind LIKE ANY($1::text[]) AND kind NOT LIKE ALL($2::text[])
+        ORDER BY priority DESC, run_after, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE jobs j SET status = 'running', attempts = attempts + 1, locked_at = now(), locked_by = $3, updated_at = now()
+      FROM claimed WHERE j.id = claimed.id
+      RETURNING j.id, j.kind, j.payload, j.attempts, j.max_attempts`,
+    params: ["{%}", "{}", "probe-worker"],
+  },
+});
+
+const renewLease = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  // SELECT because the WHERE and RETURNING read the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:processOneJob.renew",
+  purpose: "Renew the claimed job's lease while its handler runs, noticing if the reaper took it.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs SET locked_at = now(), updated_at = now()
+      WHERE id = $1 AND locked_by = $2 AND status = 'running' RETURNING id`,
+    params: [0, "probe-worker"],
+  },
+});
+
+const settleJob = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  // SELECT because the WHERE and RETURNING read the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:processOneJob.settle",
+  purpose: "Settle a claimed job (succeeded, retried with backoff, failed or dead), only while this worker still holds it.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs
+      SET status = 'pending', run_after = now() + ($1 || ' seconds')::interval,
+          locked_at = NULL, locked_by = NULL, last_error = $2, updated_at = now()
+      WHERE id = $3 AND locked_by = $4 AND status = 'running' RETURNING id`,
+    params: [2, "probe", 0, "probe-worker"],
+  },
+});
+
+const recordRun = registerQuery({
+  role: "rm_worker",
+  object: "job_runs",
+  privileges: ["INSERT"],
+  site: "src/worker/loop:processOneJob.recordRun",
+  purpose: "Record one run of a settled job, in the same transaction as the settle.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    // From a query yielding no row: job_id is a foreign key to a real job.
+    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
+      SELECT $1::bigint, $2, $3::timestamptz, now(), $4, $5, $6::jsonb WHERE false`,
+    params: [0, "noop", "2026-01-01T00:00:00Z", "succeeded", null, "{}"],
+  },
+});
+
+const releaseJobs = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  // SELECT because the WHERE and RETURNING read the rows.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/loop:releaseOwnedJobs",
+  purpose: "Hand this worker's running jobs back to pending on a clean shutdown.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `UPDATE jobs SET status = 'pending', locked_at = NULL, locked_by = NULL,
+          last_error = COALESCE(last_error, '') || ' [released: worker shutdown]', updated_at = now()
+      WHERE status = 'running' AND locked_by = $1 RETURNING id`,
+    params: ["probe-worker"],
+  },
+});
 
 const MAX_BACKOFF_SECONDS = 3600;
 
@@ -85,7 +179,7 @@ export interface ClaimOptions {
 export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
   const lane = opts.lane ?? LANES.generic;
   const workerId = opts.workerId ?? config.workerId;
-  const claimed = await sql<JobRow[]>`
+  const claimed = await on(sql, claimJob)<JobRow>`
     WITH claimed AS (
       SELECT id FROM jobs
       WHERE status = 'pending' AND run_after <= now()
@@ -126,7 +220,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
   const renewTimer = setInterval(() => {
     void (async () => {
       try {
-        const kept = await sql`
+        const kept = await on(sql, renewLease)`
           UPDATE jobs SET locked_at = now(), updated_at = now()
            WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
         if (kept.length === 0) {
@@ -177,13 +271,13 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
       const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
       const recorded = await sql.begin(async (tx) => {
         const upd = canRetry
-          ? await tx`UPDATE jobs
+          ? await on(tx, settleJob)`UPDATE jobs
                         SET status = 'pending',
                             run_after = now() + (${backoff} || ' seconds')::interval,
                             locked_at = NULL, locked_by = NULL,
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-          : await tx`UPDATE jobs
+          : await on(tx, settleJob)`UPDATE jobs
                         SET status = 'failed', locked_at = NULL, locked_by = NULL,
                             last_error = ${errText}, updated_at = now()
                       WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
@@ -191,7 +285,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
         // The RUN keeps the 'degraded' status that distinguishes "kept the
         // last-persisted rows" from a thrown failure — except for a terminal
         // refusal, which is not a degradation of anything and is recorded red.
-        await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
+        await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
                  VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${terminal ? "failed" : "degraded"}, ${errText}, ${tx.json(jsonValue(output ?? null))})`;
         return true;
       });
@@ -202,10 +296,10 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     }
 
     const ok = await sql.begin(async (tx) => {
-      const upd = await tx`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
+      const upd = await on(tx, settleJob)`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
                            WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
       if (upd.length === 0) return false;
-      await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
+      await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(jsonValue(output ?? null))})`;
       return true;
     });
@@ -217,18 +311,18 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
     await sql.begin(async (tx) => {
       const upd = canRetry
-        ? await tx`UPDATE jobs
+        ? await on(tx, settleJob)`UPDATE jobs
                       SET status = 'pending',
                           run_after = now() + (${backoff} || ' seconds')::interval,
                           locked_at = NULL, locked_by = NULL,
                           last_error = ${message}, updated_at = now()
                     WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-        : await tx`UPDATE jobs
+        : await on(tx, settleJob)`UPDATE jobs
                       SET status = 'dead', locked_at = NULL, locked_by = NULL,
                           last_error = ${message}, updated_at = now()
                     WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
       if (upd.length === 0) return; // lost the lock — don't record a duplicate run
-      await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
+      await on(tx, recordRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${canRetry ? "failed" : "dead"}, ${message})`;
     });
     console.error(`job ${job.id} (${job.kind}) failed${canRetry ? `, retry in ${backoff}s` : " — DEAD"}: ${message.split("\n")[0]}`);
@@ -244,7 +338,7 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
 // by a stopped worker. The ownership guards above then discard the abandoned
 // handler's eventual terminal write, so no duplicate job_runs row is possible.
 export async function releaseOwnedJobs(workerId: string): Promise<number> {
-  const released = await sql`
+  const released = await on(sql, releaseJobs)`
     UPDATE jobs
        SET status = 'pending',
            locked_at = NULL, locked_by = NULL,

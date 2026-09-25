@@ -335,12 +335,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/swarm/judge-fault-injection",
     "src/swarm/roster-seed",
     "src/worker/handlers/projects",
-    "src/worker/handlers/repair",
-    "src/worker/handlers/vault",
-    "src/worker/handlers/wallet",
-    "src/worker/loop",
-    "src/worker/reaper",
-    "src/worker/scheduler",
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
