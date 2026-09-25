@@ -38,6 +38,7 @@ import {
   stageCadenceApplies,
   swarmStaggerMsFor,
   swarmWindowMinutes,
+  TWIN_WINDOW_MS,
 } from "../../lib/smoke-schedule.ts";
 import { DEMO_SUBJECTS, SMOKE_SUBJECTS } from "../../lib/smoke-mode.ts";
 
@@ -544,7 +545,7 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
     // The bare resolver would boot a stack whose constants nobody proved. A
     // separate assert line next to it is a line that can be deleted or omitted
     // from a new entry point; this cannot be.
-    expect(smokeMain).toContain("resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), env: process.env })");
+    expect(smokeMain).toContain("resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), twin: twinBoot, env: process.env })");
     expect(smokeMain).not.toMatch(/=\s*resolveSmokeCadence\(/);
     // The stage argument is DERIVED, not the raw flag: a twin wears the same
     // `--static-port` pin and must still run FAST (stageCadenceApplies).
@@ -577,5 +578,21 @@ describe("stageCadenceApplies — a twin is a test instrument, not the public sm
   test("an unpinned boot is fast either way", () => {
     expect(stageCadenceApplies(false, false)).toBe(false);
     expect(stageCadenceApplies(false, true)).toBe(false);
+  });
+});
+
+describe("a twin's submission window (2026-09-25: a slow brief step ate the 2-minute window)", () => {
+  test("a twin gets a 6-minute window (and interval, so window === interval still holds)", () => {
+    const fast = resolveSmokeCadenceForBoot({ stage: false, env: {} });
+    const twin = resolveSmokeCadenceForBoot({ stage: false, twin: true, env: {} });
+    expect(twin.profile).toBe(fast.profile);
+    expect(twin.swarmWindowMs).toBe(TWIN_WINDOW_MS);
+    expect(twin.swarmIntervalMs).toBe(TWIN_WINDOW_MS); // the dead-zone rule: window === interval
+    expect(swarmWindowMinutes(twin)).toBe(6);
+  });
+
+  test("CI's fast profile and the realistic profile are unchanged", () => {
+    expect(resolveSmokeCadenceForBoot({ stage: false, env: {} }).swarmWindowMs).toBe(120_000);
+    expect(resolveSmokeCadenceForBoot({ stage: true, twin: true, env: { SWARM_SCHEDULES_ENABLED: "0" } }).swarmWindowMs).toBe(6 * 3_600_000);
   });
 });

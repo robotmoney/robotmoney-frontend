@@ -297,7 +297,7 @@ export const PRODUCTION_CADENCE_INTENT: Readonly<ProductionCadenceIntent> = Obje
 export function productionConstantMismatches(
   cadence: SmokeCadence,
   env: Record<string, string | undefined>,
-  opts: { production: boolean },
+  opts: { production: boolean; twin?: boolean },
 ): string[] {
   const problems: string[] = [];
   const schedules = env.SWARM_SCHEDULES_ENABLED;
@@ -345,8 +345,9 @@ export function productionConstantMismatches(
     if (cadence.profile !== "fast") {
       problems.push(`a non-production boot resolved the '${cadence.profile}' profile; only 'fast' is allowed`);
     }
-    if (cadence.swarmWindowMs !== FAST_INTERVAL_MS) {
-      problems.push(`a non-production boot has swarmWindowMs=${cadence.swarmWindowMs}, expected ${FAST_INTERVAL_MS}`);
+    const expectedWindow = opts.twin ? TWIN_WINDOW_MS : FAST_INTERVAL_MS;
+    if (cadence.swarmWindowMs !== expectedWindow) {
+      problems.push(`a non-production ${opts.twin ? "twin " : ""}boot has swarmWindowMs=${cadence.swarmWindowMs}, expected ${expectedWindow}`);
     }
   }
   // Holds in BOTH branches: the dead-zone fix is this equality and nothing else.
@@ -363,7 +364,7 @@ export function productionConstantMismatches(
 export function assertProductionConstants(
   cadence: SmokeCadence,
   env: Record<string, string | undefined>,
-  opts: { production: boolean },
+  opts: { production: boolean; twin?: boolean },
 ): void {
   const problems = productionConstantMismatches(cadence, env, opts);
   if (problems.length === 0) return;
@@ -390,11 +391,27 @@ export function assertProductionConstants(
  * Throws — the boot dies here rather than serving a swarm whose cadence, window
  * or scheduler ownership is not what the invocation claims.
  */
+/**
+ * A twin's submission window: the fast profile's spacing, but a window wide
+ * enough to survive the brief step. The driver publishes each session's brief
+ * INSIDE its window, and that step fetches live market data; on 2026-09-25 a
+ * rate-limited source (geckoterminal HTTP 429, five retries) consumed the whole
+ * 2-minute window before any member started, every member got `409 submission
+ * window closed`, and the session published with no takes. The driver closes a
+ * window early once every seated member has submitted, so a wider window costs
+ * nothing when members are quick. CI's fast profile is untouched.
+ */
+export const TWIN_WINDOW_MS = 6 * 60_000;
+
 export function resolveSmokeCadenceForBoot(
-  opts: { stage: boolean; env: Record<string, string | undefined> },
+  opts: { stage: boolean; twin?: boolean; env: Record<string, string | undefined> },
 ): SmokeCadence {
-  const cadence = resolveSmokeCadence({ stage: opts.stage });
-  assertProductionConstants(cadence, opts.env, { production: opts.stage });
+  const base = resolveSmokeCadence({ stage: opts.stage });
+  // Interval moves WITH the window: the dead-zone rule below (window ===
+  // interval) holds for every profile, the twin's included.
+  const twin = Boolean(opts.twin) && !opts.stage;
+  const cadence = twin ? { ...base, swarmIntervalMs: TWIN_WINDOW_MS, swarmWindowMs: TWIN_WINDOW_MS } : base;
+  assertProductionConstants(cadence, opts.env, { production: opts.stage, twin });
   return cadence;
 }
 

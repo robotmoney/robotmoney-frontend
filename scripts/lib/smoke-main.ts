@@ -160,7 +160,7 @@ const staticPortMode = process.argv.includes(STATIC_PORT_FLAG);
 // …EXCEPT on a twin, which is a test instrument and runs FAST however the port
 // is pinned — see stageCadenceApplies() in smoke-schedule.ts for why.
 const twinBoot = requestsTwin(process.argv);
-const cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), env: process.env });
+const cadence = resolveSmokeCadenceForBoot({ stage: stageCadenceApplies(staticPortMode, twinBoot), twin: twinBoot, env: process.env });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
