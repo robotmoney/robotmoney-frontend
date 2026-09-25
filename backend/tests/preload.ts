@@ -97,6 +97,11 @@ const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 const baseUrl = `postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`;
 // Must be set BEFORE any module reads config.databaseUrl / creates the pool.
 process.env.DATABASE_URL = baseUrl;
+// db/worker-client.ts requires WORKER_DATABASE_URL in every env and no longer
+// falls back to DATABASE_URL (#1026 criterion 120). The in-process suite's
+// worker pool is the same harness login as the api pool, stated here, and
+// tests/support/clean-db.ts moves the two together.
+process.env.WORKER_DATABASE_URL = baseUrl;
 // The template a test file clones to get a clean database of its own; see
 // tests/support/clean-db.ts. Published through the environment because preload
 // and the helper are separate modules with no import edge between them.
