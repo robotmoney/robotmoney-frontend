@@ -173,10 +173,12 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     expect(r.out).toContain("target lock held");
     expect(r.code).toBe(130);
     // Criterion 34 on the REMOTE path, from the journal the boot wrote: the
-    // plan, the instance's own files, then the target lock (acquire,
-    // revalidate, matrix) — and only then anything that acts on the target.
+    // plan, the instance's own files, the site assembly and its web-compat
+    // decision (spec §13.3: before the first mutation; neither reads nor
+    // writes the target), then the target lock (acquire, revalidate, matrix)
+    // — and only then anything that acts on the target.
     const steps = readJournal(instancePaths(op.root, "rm_it_matrix_stage"))!.phases.map((p) => `${p.phase}:${p.step ?? ""}`);
-    expect(steps.slice(0, 3)).toEqual(["plan:", "prepare:instance", "prepare:lock"]);
+    expect(steps.slice(0, 5)).toEqual(["plan:", "prepare:instance", "prepare:assemble", "prepare:web-compat", "prepare:lock"]);
   }, 300_000);
 
   for (const kind of ["production", null] as const) {

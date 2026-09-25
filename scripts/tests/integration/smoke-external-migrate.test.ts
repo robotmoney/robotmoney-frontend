@@ -155,13 +155,15 @@ describe("`bun smoke --migrate` on a remote REHEARSAL, on a terminal: prompt, wa
       await boot.type(`${db.passwords.rm_owner}\r`);
       await boot.waitFor("type y to continue");
       await boot.type("y\r");
-      await boot.waitFor("[smoke:migrate]", 180_000);
-      // Ctrl-C AT THE TERMINAL, while the migrate run is going: the kernel
-      // signals the whole foreground process group. The preparation child
-      // ignores it and finishes (backend/scripts/smoke-prepare.ts); the boot
-      // stops at the next boundary. (The site is assembled BEFORE the lock and
-      // the prompt — smoke spec §13.3 — so the migrate run is the step in
-      // flight here.)
+      // The migrate run has committed once the boot moves on to placing the
+      // site. (The site is ASSEMBLED before the lock and the prompt — smoke
+      // spec §13.3 — and placed after the database half.) Waiting for that is
+      // also what keeps the Ctrl-C below from reaching the terminal before
+      // the `y` was read: the tty discards unread input on an interrupt.
+      await boot.waitFor("phase: prepare (site)", 180_000);
+      // Ctrl-C AT THE TERMINAL: the kernel signals the whole foreground
+      // process group. The boot honours it at its next boundary, after the
+      // step in flight commits.
       await boot.type("\x03");
       const code = await boot.exited();
       expect(code).toBe(130);
@@ -172,11 +174,13 @@ describe("`bun smoke --migrate` on a remote REHEARSAL, on a terminal: prompt, wa
     const paths = instancePaths(op.root, instanceOf("yes_y"));
     const journal = readJournal(paths)!;
     const records = journal.phases.map((r) => [r.phase, r.step, r.status]);
-    // The step running when Ctrl-C arrived was not killed by it: it committed,
-    // and the stop was journaled at the boundary after it.
     expect(records).toContainEqual(["prepare", "migrate", "committed"]);
     expect(records).toContainEqual(["prepare", "assemble", "committed"]);
+    // The step running when Ctrl-C arrived was not killed by it: every record
+    // before the stop committed, and the stop was journaled at the boundary
+    // after them.
     expect(journal.phases.at(-1)?.status).toBe("interrupted");
+    expect(records.slice(0, -1).filter(([, , status]) => status !== "committed")).toEqual([]);
 
     // The run's migrate receipt is in the instance's state, and names the lock.
     const receipts = readdirSync(paths.dir).filter((f) => f.startsWith("migrate-receipt-"));

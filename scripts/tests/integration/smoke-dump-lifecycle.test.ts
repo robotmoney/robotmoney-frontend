@@ -18,10 +18,13 @@
 //        → prepare:restore  (gpg → pg_restore into the smoke-twin container, then
 //                            dumpOwnershipSql by the restore superuser: the four
 //                            roles, every object to rm_owner)
+//        → prepare:assemble, prepare:web-compat (the site is assembled and
+//                            its API range decided BEFORE the first mutation of
+//                            the target, spec §13.3; writes only `_static`)
 //        → prepare:lock     (acquire as rm_readonly, re-read, the §4.3 matrix)
 //        → prepare:enroll   (rm_owner overwrites the enrollment with `rehearsal`)
 //        → prepare:migrate  (`--migrate`, as rm_owner, under the lock)
-//        → assemble, site, images, preflight, services
+//        → site, images, preflight, services
 //
 // WHERE EACH BOOT IS STOPPED. At the boundary after `prepare:migrate`. Past it
 // the boot builds images and runs preflight, and preflight refuses a restored
@@ -156,10 +159,12 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     expect(out).not.toContain("startup failed");
 
     // The order, from the journal the boot wrote.
-    expect(steps(h).slice(0, 6)).toEqual([
+    expect(steps(h).slice(0, 8)).toEqual([
       "plan::committed",
       "prepare:instance:committed",
       "prepare:restore:committed",
+      "prepare:assemble:committed",
+      "prepare:web-compat:committed",
       "prepare:lock:committed",
       "prepare:enroll:committed",
       "prepare:migrate:committed",
@@ -284,8 +289,11 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
       };
 
       // Restored and locked like any dump; the matrix does not consult a local dump's row.
-      expect({ steps: s.slice(0, 4), why: s.includes("prepare:lock:committed") ? "" : bootFailureReport(b) }).toEqual({
-        steps: ["plan::committed", "prepare:instance:committed", "prepare:restore:committed", "prepare:lock:committed"],
+      expect({ steps: s.slice(0, 6), why: s.includes("prepare:lock:committed") ? "" : bootFailureReport(b) }).toEqual({
+        steps: [
+          "plan::committed", "prepare:instance:committed", "prepare:restore:committed",
+          "prepare:assemble:committed", "prepare:web-compat:committed", "prepare:lock:committed",
+        ],
         why: "",
       });
       expect(release.out).toContain("target lock held");
@@ -295,17 +303,20 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
       }
       expect(psql(copy.superuserUrl, `SELECT count(*) FROM comments WHERE page = '${MARKER_PAGE}'`).out).toBe("1");
 
-      // THE INVARIANT (§4.2, §7): no migrate, no image, no service begins
-      // unless the enrollment committed first. It holds today (the boot stops
-      // at enroll) and must hold once a bridge exists.
+      // THE INVARIANT (§4.2, §7): no migrate, no site, no image, no service
+      // begins unless the enrollment committed first. It holds today (the boot
+      // stops at enroll) and must hold once a bridge exists. (Assembly and the
+      // web-compat decision precede the lock by design, §13.3, and write only
+      // the checkout's `_static`.)
       const enrolled = s.indexOf("prepare:enroll:committed");
-      const later = s.findIndex((x) => /^prepare:(migrate|assemble|site|build)|^(preflight|replace|participants|readiness):/.test(x));
+      const later = s.findIndex((x) => /^prepare:(migrate|site|images|build)|^(preflight|replace|participants|readiness):/.test(x));
       if (later !== -1) expect(enrolled).toBeGreaterThan(-1);
       if (later !== -1) expect(enrolled).toBeLessThan(later);
       if (enrolled === -1) {
         expect(code).not.toBe(0);
-        expect(release.out).not.toContain("phase: prepare (migrate)");
-        expect(release.out).not.toContain("phase: prepare (assemble)");
+        for (const after of ["phase: prepare (migrate)", "phase: prepare (site)", "phase: prepare (images)", "phase: preflight", "phase: replace"]) {
+          expect(release.out).not.toContain(after);
+        }
       }
     } finally {
       teardown(h, boot);
