@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { shadowingStackEnvWarnings, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
+import { shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { refuseCheckoutEnvFile } from "../../smoke.ts";
 import {
@@ -73,6 +73,27 @@ describe("smokePassthroughEnv", () => {
     const legacy = buildComposeEnv({ ...cfg, database: DEFAULT_STACK_DATABASE });
     expect(legacy.WORKER_DATABASE_URL).toBe(legacy.DATABASE_URL);
     expect(legacy.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
+  });
+
+  test("§4.4: a boot under RM_ENV=prod hands api NO allow-insecure; a stage boot keeps it (criterion 46's weakening-flag half)", () => {
+    const cfg: StackConfig = {
+      repoRoot: "/repo",
+      project: "rm_smoke_stack_insecure",
+      profile: "core",
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: DEFAULT_STACK_DATABASE,
+      credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
+      environment: { class: "local", hash: "0123456789" },
+      rmEnv: "prod",
+    };
+    expect(stackAllowInsecureFor("prod")).toBe(false);
+    expect(stackAllowInsecureFor("stage")).toBe(true);
+    expect(buildComposeEnv({ ...cfg, allowInsecure: stackAllowInsecureFor("prod") }).RM_ALLOW_INSECURE).toBe("");
+    expect(buildComposeEnv({ ...cfg, rmEnv: "stage", allowInsecure: stackAllowInsecureFor("stage") }).RM_ALLOW_INSECURE).toBe("1");
+    // Red control: a consumer that decides nothing keeps the overlay's old pin.
+    expect(buildComposeEnv(cfg).RM_ALLOW_INSECURE).toBe("1");
+    // And no one smuggles it back in through the extras map.
+    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/StackConfig field/);
   });
 
   test("ignores a name that is not on the allowlist", () => {

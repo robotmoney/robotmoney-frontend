@@ -71,6 +71,8 @@ function baseEnv(): Record<string, string> {
       // Boot-guard operator controls (issue #602): the cases below assert both
       // the set and the unset resolution, so neither may be inherited.
       "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION", "PG_NAMESPACE_GUARD_TIMEOUT_MS",
+      // The api's allow-insecure is asserted set and unset below (§4.4).
+      "RM_ALLOW_INSECURE",
       // Build identity is asserted set and unset below; never inherit it.
       "AUM_PRODUCER_REVISION", "RM_BUILD_COMMIT", "RM_BUILD_TAG",
     ].includes(k)) continue;
@@ -251,6 +253,9 @@ const PREWARM: readonly RenderArgs[] = [
   { knobs: {}, files: DEMO_COMPOSE_FILES, profiles: ["member-agent"] },
   // "the controls are scoped to the api".
   { knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }, files: DEMO_COMPOSE_FILES },
+  // §4.4 allow-insecure: what buildComposeEnv emits for a stage boot and a prod one.
+  { knobs: { RM_ALLOW_INSECURE: "1" }, files: DEMO_COMPOSE_FILES },
+  { knobs: { RM_ALLOW_INSECURE: "" }, files: DEMO_COMPOSE_FILES },
 ];
 
 // The whole file's Docker cost, paid once, outside any case's budget.
@@ -949,6 +954,17 @@ describe("boot-guard operator controls reach the api container (issue #602)", ()
 // DELIVERED, since the api service's `environment:` block is an allowlist and
 // a key missing from it is never sent to the container regardless of what the
 // host shell exports.
+describe("api allow-insecure is the boot's decision, never the overlay's pin (§4.4, criterion 46)", () => {
+  test("a prod boot's empty RM_ALLOW_INSECURE reaches api empty; a stage boot's 1 reaches it as 1", () => {
+    expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "" }), "api").RM_ALLOW_INSECURE).toBe("");
+    expect(serviceEnv(composeConfig({ RM_ALLOW_INSECURE: "1" }), "api").RM_ALLOW_INSECURE).toBe("1");
+  });
+
+  test("with nothing emitted the overlay resolves empty — it pins no insecure default any more", () => {
+    expect(serviceEnv(composeConfig({}), "api").RM_ALLOW_INSECURE ?? "").toBe("");
+  });
+});
+
 describe("TRUST_PROXY reaches the api container in every composition (issue #892 finding)", () => {
   const COMPOSITIONS: Array<readonly [string, readonly string[]]> = [
     ["base", BASE_COMPOSE_FILES],

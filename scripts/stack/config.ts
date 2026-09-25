@@ -287,6 +287,15 @@ export interface StackConfig {
    * resolves it with resolveStackRmEnv(), which knows the KIND of boot.
    */
   rmEnv?: RmEnv;
+  /**
+   * Whether `api` runs allow-insecure (RM_ALLOW_INSECURE=1: a privileged route
+   * with no token configured opens instead of refusing). Emitted by
+   * buildComposeEnv() and never accepted from extraComposeEnv. Absent keeps the
+   * value docker-compose.smoke.yml used to pin for every consumer (`1`); the
+   * smoke boot decides it from its policy (scripts/lib/smoke-compose-env.ts
+   * stackAllowInsecureFor), so a boot under `RM_ENV=prod` runs without it.
+   */
+  allowInsecure?: boolean;
   // Extra compose interpolation values a specific consumer needs (the smoke
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
@@ -360,6 +369,9 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
         "stack's configuration (D13).",
     );
   }
+  if (cfg.extraComposeEnv && "RM_ALLOW_INSECURE" in cfg.extraComposeEnv) {
+    throw new Error("RM_ALLOW_INSECURE must not be passed through extraComposeEnv — it is a StackConfig field (`allowInsecure`).");
+  }
   for (const key of [INSTANCE_COMPOSE_VAR, INSTANCE_STATE_DIR_COMPOSE_VAR]) {
     if (cfg.extraComposeEnv && key in cfg.extraComposeEnv) {
       throw new Error(`${key} must not be passed through extraComposeEnv; it comes from StackConfig.instance.`);
@@ -396,6 +408,8 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // D13: explicit, always, and NOT overridable from extraComposeEnv (asserted
     // above) — the whole point is that one place decides.
     RM_ENV: cfg.rmEnv ?? "prod",
+    // An empty value is "not insecure" (backend config.ts reads exactly "1").
+    RM_ALLOW_INSECURE: cfg.allowInsecure === false ? "" : "1",
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,
