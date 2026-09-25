@@ -75,7 +75,6 @@ test("a populated Phase A lineage survives a real pg_dump/pg_restore round-trip 
   const payloadChecksum = sha256Hex(payloadBytes);
   await sql`INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity) VALUES (${acquisition}, 'fixture', '1', 'restore-test')`;
   await sql`INSERT INTO source_acquisition_events (acquisition_id, sequence, event_type) VALUES (${acquisition}, 1, 'succeeded')`;
-  await sql`INSERT INTO source_payloads (checksum, payload_bytes) VALUES (${payloadChecksum}, ${payloadBytes})`;
   await sql`INSERT INTO source_fetches (id, acquisition_id, sequence, request_identity, cache_status, response_status, response_checksum)
             VALUES (${fetchId}, ${acquisition}, 1, '{"method":"GET","url":"https://example.invalid","headers":{}}', 'disabled', 200, ${payloadChecksum})`;
   const [svv] = (await sql`
@@ -165,10 +164,11 @@ test("a populated Phase A lineage survives a real pg_dump/pg_restore round-trip 
   expect(unvalidated, JSON.stringify(unvalidated)).toEqual([]);
 
   // ── stored payload/artifact checksums recompute from retrieved bytes ─────
-  const [payloadRow] = (await restoreDb`SELECT payload_bytes, checksum FROM source_payloads WHERE checksum = ${payloadChecksum}`) as unknown as
-    { payload_bytes: Buffer; checksum: string }[];
-  expect(payloadRow, "source_payloads row must survive the restore").toBeDefined();
-  expect(sha256Hex(payloadRow!.payload_bytes)).toBe(payloadRow!.checksum);
+  // The ledger keeps a response's fingerprint, never its body (issue #1035).
+  const [fetchRow] = (await restoreDb`SELECT response_checksum FROM source_fetches WHERE id = ${fetchId}`) as unknown as
+    { response_checksum: string }[];
+  expect(fetchRow, "source_fetches row must survive the restore").toBeDefined();
+  expect(fetchRow!.response_checksum).toBe(payloadChecksum);
 
   const outputRows = (await restoreDb`SELECT payload_bytes, checksum FROM analytics_output_snapshots WHERE run_id = ${run!.id}::bigint`) as unknown as
     { payload_bytes: Buffer; checksum: string }[];

@@ -204,9 +204,9 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     const before = await checkRawIndicatorHistoryParity();
     expect(before.matched).toBe(true);
 
-    // A second, independent acquisition recording the SAME value is an
-    // "unchanged" revision_kind (source-ledger-store.ts), and re-POSTing the
-    // same rawHistory point is the writer's own idempotent upsert.
+    // A second, independent acquisition recording the SAME value adds no
+    // version at all (source-ledger-store.ts, issue #1035), and re-POSTing the
+    // same rawHistory point rewrites nothing either.
     await submitRawHistoryPoint("DUALWRITE_REPLAY", "2024-02-01", 2.5);
 
     const after = await checkRawIndicatorHistoryParity();
@@ -327,13 +327,15 @@ describe("dual-write parity: raw-history `source` (issue #979 AC3)", () => {
     expect(raw.matched, "a permanently unlabelled historical row must not block cutover").toBe(true);
 
     // ...and the exemption expires the moment anything writes to that key
-    // again. Re-submitting the SAME value through the same two production
+    // again. Submitting a REVISED value through the same two production
     // routes, with no label on the acquisition, appends a post-0061 current
     // version whose provenance is NULL against a legacy 'live' — in scope, and
     // caught, rather than inheriting history's exemption. This is the
     // "a writer stopped stamping provenance" regression, and the scope does
-    // not hide it.
-    await submitRawHistoryPoint("DUALWRITE_PRE_0061", "2024-06-01", 3.5, { provenance: null, source: "live" });
+    // not hide it. (A revised value, not the same one: since issue #1035 an
+    // identical re-observation under the same label writes no version at all,
+    // so it would leave the exempt head exactly where it was.)
+    await submitRawHistoryPoint("DUALWRITE_PRE_0061", "2024-06-01", 3.75, { provenance: null, source: "live" });
     const reopened = await checkRawIndicatorHistoryParity();
     expect(
       reopened.mismatches.some((m) => m.naturalKey.includes("DUALWRITE_PRE_0061")),

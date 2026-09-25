@@ -94,6 +94,57 @@ test("a raw-history upsert changes the current row and records the complete old/
   expect(captured[0]!.recorded_at).toBeTruthy();
 });
 
+// Issue #1035: the orchestrator writes its whole merged floor back every run,
+// and Yahoo's float32 jitter used to turn each of those writes into an UPDATE —
+// and so into an overwrite event — for hundreds of thousands of points a day.
+// SPHB_SPLV is a Yahoo ratio, which decision D56 gives a relative 1e-6.
+test("issue #1035 AC3: sub-tolerance changes update no raw_indicator_history row and write zero overwrite events", async () => {
+  const indicator = "SPHB_SPLV";
+  const history = Array.from({ length: 25 }, (_, i) => ({
+    date: new Date(Date.UTC(2042, 0, i + 1)).toISOString().slice(0, 10),
+    value: 0.8123456789 + i / 1000,
+  }));
+  await saveRawIndicatorHistory({ [indicator]: history }, undefined, "live");
+  const rowsBefore = await sql`
+    SELECT date::text AS date, value, source, xmin::text AS xmin FROM raw_indicator_history
+    WHERE indicator = ${indicator} AND date >= '2042-01-01' ORDER BY date`;
+  const [{ n: eventsBefore }] = await sql`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
+
+  // Every point re-submitted a relative 1e-7 off — inside tolerance, and each
+  // one a DIFFERENT double, so an exact comparison would rewrite all 25.
+  const jittered = history.map((p, i) => ({ date: p.date, value: p.value * (1 + (i % 2 === 0 ? 1e-7 : -1e-7)) }));
+  expect(jittered.every((p, i) => p.value !== history[i]!.value)).toBe(true);
+  await saveRawIndicatorHistory({ [indicator]: jittered }, undefined, "live");
+
+  const rowsAfter = await sql`
+    SELECT date::text AS date, value, source, xmin::text AS xmin FROM raw_indicator_history
+    WHERE indicator = ${indicator} AND date >= '2042-01-01' ORDER BY date`;
+  // xmin unchanged: not one row was rewritten, not merely rewritten back.
+  expect(rowsAfter).toEqual(rowsBefore);
+  const [{ n: eventsAfter }] = await sql`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
+  expect(eventsAfter - eventsBefore).toBe(0);
+
+  // Control: a change beyond tolerance on one point is still one material
+  // overwrite, so the check above is not passing because nothing can write.
+  const target = history[3]!;
+  await saveRawIndicatorHistory({ [indicator]: [{ date: target.date, value: target.value * (1 + 1e-4) }] }, undefined, "live");
+  const captured = await events("raw_indicator_history", { date: target.date, indicator });
+  expect(captured).toHaveLength(1);
+  expect(Number(captured[0]!.replacement_row!.value)).toBe(target.value * (1 + 1e-4));
+});
+
+test("issue #1035: a relabel within tolerance rewrites only the label, keeping the stored value", async () => {
+  const indicator = "SPHB_SPLV";
+  const date = "2042-03-01";
+  await saveRawIndicatorHistory({ [indicator]: [{ date, value: 0.9 }] }, undefined, "seed");
+  await saveRawIndicatorHistory({ [indicator]: [{ date, value: 0.9 * (1 + 1e-7) }] }, undefined, "live");
+  const row = await rowJson("raw_indicator_history", `date = '${date}' AND indicator = '${indicator}'`);
+  expect(row).toEqual({ date, indicator, value: 0.9, source: "live" });
+  const captured = await events("raw_indicator_history", { date, indicator });
+  expect(captured).toHaveLength(1);
+  expect(captured[0]!.previous_row).toEqual({ date, indicator, value: 0.9, source: "seed" });
+});
+
 test("regime and research persistence paths each record exactly one material overwrite", async () => {
   const regimeDate = "2041-01-03";
   await saveRegimeSnapshots([regime(regimeDate, 0.2, "seed")]);

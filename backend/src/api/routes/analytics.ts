@@ -31,7 +31,6 @@ import { loadRecentResearchSignalDates } from "../../analytics/store/research-st
 import { saveTelemetryRun } from "../../analytics/store/telemetry-store.ts";
 import { saveSourceAcquisition } from "../../analytics/store/source-ledger-store.ts";
 import type { SourceAcquisitionEvidence } from "../../analytics/source-ledger.ts";
-import { payloadChecksum } from "../../analytics/source-ledger.ts";
 import {
   beginRun,
   appendRunEvent,
@@ -274,7 +273,6 @@ function parseSourceAcquisition(body: unknown): SourceAcquisitionEvidence | Inva
   if (events[0]?.type !== "started" || !["succeeded", "failed"].includes(events.at(-1)!.type)) return invalid("acquisition event lifecycle is invalid");
   if (!Array.isArray(a.fetches) || a.fetches.length > 1000) return invalid("acquisition.fetches is invalid");
   const fetches: SourceAcquisitionEvidence["fetches"] = [];
-  let payloadBytes = 0;
   for (let i = 0; i < a.fetches.length; i++) {
     const f = a.fetches[i];
     if (!isPlainObject(f) || typeof f.id !== "string" || !UUID.test(f.id) || !isPlainObject(f.requestIdentity)) return invalid(`fetches[${i}] is invalid`);
@@ -290,15 +288,25 @@ function parseSourceAcquisition(body: unknown): SourceAcquisitionEvidence | Inva
     if (!Number.isInteger(f.sequence) || f.sequence !== i + 1) return invalid(`fetches[${i}].sequence is invalid`);
     if (!["disabled", "hit", "miss"].includes(String(f.cacheStatus))) return invalid(`fetches[${i}].cacheStatus is invalid`);
     if (f.responseStatus !== null && (!Number.isInteger(f.responseStatus) || Number(f.responseStatus) < 100 || Number(f.responseStatus) > 599)) return invalid(`fetches[${i}].responseStatus is invalid`);
-    if ((f.responseChecksum === null) !== (f.payloadBase64 === null)) return invalid(`fetches[${i}] payload/checksum must both be null or supplied`);
-    if (f.payloadBase64 !== null) {
-      if (typeof f.payloadBase64 !== "string" || typeof f.responseChecksum !== "string" || !/^[0-9a-f]{64}$/.test(f.responseChecksum)) return invalid(`fetches[${i}] payload is invalid`);
-      payloadBytes += Buffer.byteLength(f.payloadBase64, "base64");
-      if (payloadBytes > 50_000_000) return invalid("acquisition payload bytes exceed 50000000");
-      const decoded = new Uint8Array(Buffer.from(f.payloadBase64, "base64"));
-      if (payloadChecksum(decoded) !== f.responseChecksum) return invalid(`fetches[${i}] payload checksum mismatch`);
-    }
-    fetches.push(f as unknown as SourceAcquisitionEvidence["fetches"][number]);
+    // Issue #1035 (decision D56): the ledger keeps no raw response bodies, so
+    // a fetch carries only its body's SHA-256 checksum. A `payloadBase64` field
+    // from a producer built before this change is ignored, never stored.
+    const responseChecksum = f.responseChecksum ?? null;
+    const providerReleaseId = f.providerReleaseId ?? null;
+    const errorDetail = f.errorDetail ?? null;
+    if (responseChecksum !== null && (typeof responseChecksum !== "string" || !/^[0-9a-f]{64}$/.test(responseChecksum))) return invalid(`fetches[${i}].responseChecksum is invalid`);
+    if (providerReleaseId !== null && typeof providerReleaseId !== "string") return invalid(`fetches[${i}].providerReleaseId is invalid`);
+    if (errorDetail !== null && typeof errorDetail !== "string") return invalid(`fetches[${i}].errorDetail is invalid`);
+    fetches.push({
+      id: f.id,
+      sequence: f.sequence as number,
+      requestIdentity: ri as SourceAcquisitionEvidence["fetches"][number]["requestIdentity"],
+      cacheStatus: f.cacheStatus as SourceAcquisitionEvidence["fetches"][number]["cacheStatus"],
+      responseStatus: f.responseStatus as number | null,
+      responseChecksum,
+      providerReleaseId,
+      errorDetail,
+    });
   }
   if (!Array.isArray(a.values) || a.values.length > MAX_RAW_POINTS) return invalid("acquisition.values is invalid");
   const values: SourceAcquisitionEvidence["values"] = [];

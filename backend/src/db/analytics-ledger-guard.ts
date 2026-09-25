@@ -34,11 +34,12 @@ export const LEDGER_FAMILIES: readonly LedgerFamily[] = [
     label: "source ledger",
     functionName: "rm_source_ledger_immutable",
     migration: "0057_source_acquisition_ledger.sql",
-    tables: ["source_acquisitions", "source_acquisition_events", "source_payloads", "source_fetches", "source_value_versions"],
+    // source_payloads is gone: migration 0080 dropped it (issue #1035,
+    // decision D56 — the ledger keeps no raw response bodies).
+    tables: ["source_acquisitions", "source_acquisition_events", "source_fetches", "source_value_versions"],
     noopColumn: {
       source_acquisitions: "cache_identity",
       source_acquisition_events: "detail",
-      source_payloads: "knowledge_time",
       source_fetches: "error_detail",
       source_value_versions: "revision_kind",
     },

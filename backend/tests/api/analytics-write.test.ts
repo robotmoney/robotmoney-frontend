@@ -134,14 +134,23 @@ test("source acquisition ingestion is provider-only, validates before mutation, 
            (SELECT count(*) FROM source_value_versions WHERE acquisition_id IS NOT NULL)::int AS values`;
   expect({ acquisitions, fetches, values }).toEqual({ acquisitions: 1, fetches: 1, values: 1 });
 
+  // A body from a producer built before issue #1035 is ignored, never stored:
+  // the checksum is the only record of the response, so a malformed one is
+  // refused before anything is written.
   const invalidBody = sourceAcquisitionBody();
-  invalidBody.acquisition.fetches[0]!.responseChecksum = "0".repeat(64);
+  invalidBody.acquisition.fetches[0]!.responseChecksum = "not-a-sha256";
   expect((await call(req("POST", A.sourceAcquisitions, invalidBody, TOKEN)))?.status).toBe(400);
   const [{ bad }] = await sql`SELECT count(*)::int AS bad FROM source_acquisitions WHERE id=${invalidBody.acquisition.id}`;
   expect(bad).toBe(0);
 
+  // Two NEW values for one coordinate in one acquisition: both are versions,
+  // and the second collides with the first on (acquisition, key, coordinate) —
+  // a failure part-way through the value insert. Both must differ from the
+  // head (1): since issue #1035 a value equal to the head writes no row, so it
+  // could not collide with anything.
   const rollbackBody = sourceAcquisitionBody();
-  rollbackBody.acquisition.values.push({ sourceKey: "api:test", marketDate: "2024-01-01", marketInstant: null, value: 2 });
+  rollbackBody.acquisition.values[0]!.value = 5;
+  rollbackBody.acquisition.values.push({ sourceKey: "api:test", marketDate: "2024-01-01", marketInstant: null, value: 6 });
   await expect(call(req("POST", A.sourceAcquisitions, rollbackBody, TOKEN))).rejects.toThrow();
   const [{ rolledBack }] = await sql`SELECT count(*)::int AS "rolledBack" FROM source_acquisitions WHERE id=${rollbackBody.acquisition.id}`;
   expect(rolledBack).toBe(0);

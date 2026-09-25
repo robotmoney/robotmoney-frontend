@@ -3583,3 +3583,184 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
   exists to remove.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
+
+## D56 — The analytics ledger records information, not fetches: a per-source tolerance, no row for a re-observation, run-encoded vintage membership, and no raw response bodies (issue #1035)
+
+**Decision.** A re-acquired point adds a `source_value_versions` row only when it
+is new information. `saveSourceAcquisition` compares each point with the ledger
+head for its coordinate:
+
+- no head → `initial`;
+- a value outside the source's tolerance → `revision`;
+- a value within tolerance **and** the same provenance label → **no row at all**;
+- a value within tolerance under a different label → `unchanged`, carrying the
+  head's value and the new label.
+
+`saveRawIndicatorHistory` applies the same rule to `raw_indicator_history`: a
+point within tolerance under the same label is not rewritten (so migration
+0056's trigger writes no overwrite event), and one within tolerance under a new
+label rewrites only the label. Both writers call one function,
+`withinTolerance()` in `backend/src/analytics/source-tolerance.ts`, so the
+compatibility table and the ledger cannot drift apart by the noise the rule
+absorbs. The rule is `|next − prior| ≤ relative × max(|next|, |prior|)`; a
+relative of 0 is exact equality.
+
+A frozen vintage's membership is stored as runs of consecutive
+`source_value_versions` ids under one source_key
+(`analytics_vintage_members.last_source_value_version_id`), not one row per
+member. A run only ever joins strictly consecutive integers, so it resolves to
+the identical id set, and every manifest digest replays unchanged.
+
+Migration `0080_analytics_ledger_compaction.sql` removes what the old writers
+wrote, under the same rule, drops `source_payloads` (see below), inside its own transaction, and re-arms every guard
+it disarms before that transaction ends. It keeps every version any vintage
+references, every series head, and every coordinate whose chain does not follow
+its own time order. It verifies both invariants in the transaction and raises
+(rolling back, guards never observed off) if either would change.
+
+**Per-source tolerances.** Every source_key the extractors write:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `raw_indicator_history:T10Y2Y` | fred | exact |
+| `raw_indicator_history:DFII10` | fred | exact |
+| `raw_indicator_history:T5YIE` | fred | exact |
+| `raw_indicator_history:HY_OAS` | fred | exact |
+| `raw_indicator_history:DXY` | fred | exact |
+| `raw_indicator_history:ICSA` | fred | exact |
+| `raw_indicator_history:VIX` | yahoo | relative 1e-6 |
+| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SPX_TREND` | yahoo | relative 1e-6 |
+| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:DEFI_TVL` | defillama_tvl | exact |
+| `raw_indicator_history:STABLES` | defillama_stables | exact |
+| `raw_indicator_history:BTC_ACTIVE` | blockchain_com | exact |
+| `raw_indicator_history:ETH_ACTIVE` | coinmetrics | exact |
+| `raw_indicator_history:BTC_MVRV` | coinmetrics | exact |
+| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:ETH_TREND` | yahoo | relative 1e-6 |
+| `raw_indicator_history:NEW_TOKENS` | geckoterminal_newpools | exact |
+| `raw_indicator_history:DEFI_GROWTH` | defillama_tvl | exact |
+| `raw_indicator_history:STABLES_GROWTH` | defillama_stables | exact |
+| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
+| `raw_indicator_history:MNA` | edgar | exact |
+| `research:BTC-USD` | yahoo | relative 1e-6 |
+| `research:QQQ` | yahoo | relative 1e-6 |
+| `research:SPY` | yahoo | relative 1e-6 |
+| `research:RSP` | yahoo | relative 1e-6 |
+| `research:NVDA` | yahoo | relative 1e-6 |
+| `research:MSFT` | yahoo | relative 1e-6 |
+| `research:AAPL` | yahoo | relative 1e-6 |
+| `research:GOOGL` | yahoo | relative 1e-6 |
+| `research:AMZN` | yahoo | relative 1e-6 |
+| `research:META` | yahoo | relative 1e-6 |
+| `research:AVGO` | yahoo | relative 1e-6 |
+| `research:MARGIN` | fred | exact |
+| `research:CONF` | fred | exact |
+| `backtest:^GSPC` | yahoo | relative 1e-6 |
+| `backtest:ETH-USD` | yahoo | relative 1e-6 |
+| `backtest:DTB3` | fred | exact |
+
+`backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
+capture call site under `src/analytics/extract` and `src/analytics/access`, and
+fails if one has no entry here or in `SOURCE_TOLERANCES`.
+
+**Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
+is Yahoo's. Its chart API serves float32-derived numbers
+(`18.719999313354492`), and the production ledger on 2026-09-24 showed the
+resulting `revision` rows a relative 1e-9 to 1e-6 off their prior. 1e-6 is the
+top of that measured band, and still well below a real Yahoo change: a one-cent
+correction on a $500 close is 2e-5, and a dividend or split re-adjustment is
+1e-4 and up. For every other provider there is no evidence of jitter — FRED,
+EDGAR and the Shiller file publish decimal text, and the on-chain and DeFi
+sources had no measured noise — so they stay exact. That is the conservative
+choice: an exact source still records every change it makes, exactly as before
+this decision, and at worst leaves some unmeasured noise in the ledger. A
+wider tolerance on no evidence could silently swallow a real revision, which
+the ledger exists to keep. A tolerance is widened only on measured evidence,
+recorded as an amendment here. An unlisted key is compared exactly for the
+same reason.
+
+**Why the value of record does not move within tolerance.** When a label
+changes on a value within tolerance, both writers keep the stored value and
+move only the label. If one writer stored the freshly fetched value and the
+other kept the old one, the two would differ by the noise itself, and
+`cutover/parity.ts` (which rounds at an absolute 1e-9) would record a
+permanent `matched:false`. The fetch itself stays on the record: every
+acquisition keeps its request, response status and the SHA-256 of the response
+body in `source_fetches`.
+
+**The ledger keeps no raw response bodies (owner decision, 2026-09-25).** "We
+should not duplicate any data. Our goal is to catch and tag revised source
+data, not store all payloads." Every fetch returns a series' whole history. So
+each new day, and each jittered point, stored that full history again as a new
+content-addressed blob in `source_payloads`. That was about 200 MB a day, never
+deleted, and no code read it back. What the ledger exists to keep is already in
+`source_value_versions`: each normalized value, and each revision of it, with
+its knowledge time. So:
+
+- `saveSourceAcquisition` writes no body anywhere, and the acquisition write
+  request carries no body. A `payloadBase64` field from an older producer is
+  ignored.
+- `source_fetches.response_checksum` stays, as a plain fingerprint of what each
+  response contained. Its foreign key into `source_payloads` is dropped.
+- Migration 0080 drops `source_payloads` outright rather than emptying it. An
+  empty append-only table would keep a write path, a grant set and two guard
+  triggers alive for data the ledger has decided not to hold. Dropping it
+  removes all of them. The table also leaves both guard inventories
+  (`src/db/analytics-ledger-guard.ts`, `src/db/append-only-guard.ts`), which
+  still report armed.
+
+The cost is that a response can no longer be re-parsed from the ledger alone. A
+parser fix is replayed by fetching the source again. The checksum still shows
+whether the provider returned the same bytes as before.
+
+**Why runs, not a delta against the previous vintage.** Before this decision
+every fetch re-versioned every point, so two consecutive vintages share almost
+no version ids. A delta between them would be about twice a full copy. Runs of
+consecutive ids compress both the old vintages and the new ones, because one
+acquisition writes a series in one statement.
+
+**The upgrade returns the disk space.** A DELETE frees nothing on disk. The
+space is only reused by later inserts, so 0080 alone would leave the database
+as large as before. VACUUM FULL cannot run inside a transaction, and every
+migration is one. So the migration runner (`reclaimAfterMigrations` in
+`backend/src/db/migrate.ts`) runs `VACUUM (FULL, ANALYZE)` on
+`source_value_versions`, `analytics_vintage_members` and
+`analytics_overwrite_events` right after 0080 commits. It runs once, only in
+the run that applied 0080, never on an ordinary boot. It runs on the migration
+connection as `rm_owner`, because only a table's owner may VACUUM FULL it. No
+grant changes. Each table is under ACCESS EXCLUSIVE while its own rewrite
+runs, and the rewrite cost follows its live rows. If that run is interrupted
+after 0080 commits, the dead space stays until the owner runs the same VACUUM
+FULL. The data is correct either way.
+
+**Point-in-time reads after compaction.** Every vintage that exists when 0080
+runs resolves to the same ids. A NEW vintage frozen later with a knowledge-time
+cutoff from before the migration selects the kept version instead of a dropped
+re-observation: a different id and knowledge_time, the same value within
+tolerance.
+
+**Known limit.** The compaction keeps every version a vintage references.
+Production froze a vintage after almost every acquisition, so most of the
+`source_value_versions` rows written before this decision are referenced and
+stay. The migration removes the rest, the member copies, the noise-only
+overwrite evidence and every stored response body. From this release on, growth tracks real changes rather
+than fetch frequency.
+
+**Alternatives rejected.**
+- **A single global tolerance** — it would either miss Yahoo's noise or blur a
+  real revision on an exact source.
+- **Selecting a vintage's membership again by its cutoffs instead of storing
+  it** — the knowledge-time cutoff comes from the producer's clock, and an
+  insert still in flight at freeze time can commit later with an earlier
+  `knowledge_time`. Re-running the selection is not guaranteed to return the
+  frozen set.
+- **Deleting vintage-referenced versions and storing an alias** — this breaks
+  the foreign key into the frozen set. It also moves the rows rather than
+  removing them, for a new table and a new guard family.

@@ -22,7 +22,9 @@ import {
   loadHistoricalSourceValues,
   loadFrozenVintage,
   findVintageByRunAndTool,
+  memberRanges,
 } from "../src/analytics/store/run-ledger-store.ts";
+import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { buildVintageManifest, sortedMembers, type FrozenSourceValue } from "../src/analytics/run-ledger.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
@@ -187,9 +189,9 @@ describe("AC2 + AC3: cutoff-boundary vintage freezing, and current vs. historica
     expect(memberCount).toBe(2);
     expect(manifest.memberCount).toBe(2);
 
-    const memberIds = (await sql`
-      SELECT source_value_version_id::text AS id FROM analytics_vintage_members WHERE vintage_id = ${vintageId}::bigint ORDER BY id
-    `).map((r) => r.id);
+    // Resolved through the production loader: member rows are runs of
+    // consecutive ids (issue #1035), so the raw rows are not the member list.
+    const memberIds = (await loadFrozenVintage(vintageId))!.members.map((m) => m.versionId);
     expect(new Set(memberIds)).toEqual(new Set([revB, marketBefore]));
     // Neither the superseded-at-cutoff revision (A), the after-cutoff revision
     // (C), nor the after-market-cutoff observation are members.
@@ -349,5 +351,80 @@ describe("AC5: success, degraded, and failure outcomes append ordered events; no
     const events = await sql`SELECT event_type, detail FROM analytics_ledger_run_events WHERE run_id = ${runId}::bigint ORDER BY sequence`;
     expect(events.map((e) => e.event_type)).toEqual(["started", "failed"]);
     expect(events[1]!.detail).toContain("forced research failure");
+  });
+});
+
+describe("issue #1035 AC5: vintage membership is not copied per freeze, and every vintage still replays its digest", () => {
+  test("memberRanges merges only strictly consecutive ids under one source_key", () => {
+    const m = (versionId: string, sourceKey: string): FrozenSourceValue =>
+      ({ versionId, sourceKey, marketDate: "2024-01-01", marketInstant: null, value: 1 });
+    expect(memberRanges([m("12", "a"), m("10", "a"), m("11", "a"), m("14", "a"), m("15", "b"), m("16", "b"), m("99999999999999999", "b")])).toEqual([
+      { firstVersionId: "10", lastVersionId: "12", sourceKey: "a" },
+      // 13 is not a member (a gap in the id sequence can be an insert still in
+      // flight), so 14 starts a new run rather than extending 10..12.
+      { firstVersionId: "14", lastVersionId: null, sourceKey: "a" },
+      // 15 is consecutive with 14 but under another key: a run never spans keys.
+      { firstVersionId: "15", lastVersionId: "16", sourceKey: "b" },
+      { firstVersionId: "99999999999999999", lastVersionId: null, sourceKey: "b" },
+    ]);
+  });
+
+  test("a second vintage over an unchanged ledger adds fewer member rows than the first vintage's member_count, and loadFrozenVintage recomputes every stored manifest_digest", async () => {
+    // A realistic ledger: whole series written by one acquisition each, the
+    // way extract/sources.ts captures them.
+    for (const key of ["ac5:alpha", "ac5:beta", "ac5:gamma"]) {
+      await saveSourceAcquisition({
+        id: randomUUID(), provider: "fixture", parserVersion: "fixture:1", cacheIdentity: key,
+        requestedByRunId: null, events: [], fetches: [],
+        values: Array.from({ length: 300 }, (_, i) => ({
+          sourceKey: key,
+          marketDate: new Date(Date.UTC(2020, 0, i + 1)).toISOString().slice(0, 10),
+          marketInstant: null,
+          value: i + key.length / 10,
+          provenance: "live",
+        })),
+      });
+    }
+    const knowledgeTimeCutoff = new Date().toISOString();
+    const freeze = async (label: string) => {
+      const { runId, methodologyVersionId } = await beginRun({
+        runKey: randomUUID(), asof: ASOF, toolId: "test-ac5", sourceLabel: "fixture",
+        methodology: { toolId: "test-ac5", versionLabel: "v-test", config: { test: "ac5" } },
+        buildIdentity: `test-build-${label}`,
+      });
+      const [{ n: rowsBefore }] = await sql`SELECT count(*)::int AS n FROM analytics_vintage_members`;
+      const frozen = await freezeVintage({
+        runId, toolId: "test-ac5", knowledgeTimeCutoff, marketTimeCutoff: "2026-01-01",
+        methodologyVersionId, buildIdentity: `test-build-${label}`,
+      });
+      const [{ n: rowsAfter }] = await sql`SELECT count(*)::int AS n FROM analytics_vintage_members`;
+      return { ...frozen, rowsAdded: rowsAfter - rowsBefore };
+    };
+
+    const first = await freeze("first");
+    const second = await freeze("second");
+    expect(first.memberCount).toBeGreaterThanOrEqual(900);
+    expect(second.memberCount).toBe(first.memberCount);
+    // The copy this issue removes: ~one row per member per freeze.
+    expect(second.rowsAdded).toBeGreaterThan(0);
+    expect(second.rowsAdded).toBeLessThan(first.memberCount);
+    expect(second.rowsAdded).toBeLessThan(first.memberCount / 10);
+
+    // Every vintage this file has frozen — run-encoded ones AND any written one
+    // row per member — resolves to members whose recomputed manifest matches the
+    // digest stored when it was frozen.
+    const vintages = (await sql`
+      SELECT id::text AS id, manifest_digest FROM analytics_data_vintages ORDER BY id`) as unknown as { id: string; manifest_digest: string }[];
+    expect(vintages.length).toBeGreaterThanOrEqual(2);
+    for (const v of vintages) {
+      const loaded = await loadFrozenVintage(v.id);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.members).toHaveLength(loaded!.memberCount);
+      const { manifest } = buildVintageManifest(
+        loaded!.members, loaded!.methodologyVersionId, loaded!.buildIdentity,
+        loaded!.knowledgeTimeCutoff, loaded!.marketTimeCutoff,
+      );
+      expect({ id: v.id, digest: manifest.manifestDigest }).toEqual({ id: v.id, digest: v.manifest_digest });
+    }
   });
 });
