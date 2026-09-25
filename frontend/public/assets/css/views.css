@@ -210,14 +210,16 @@
 @media (prefers-reduced-motion: reduce) { .rv-fade { transition: none; } }
 
 /* A reading's lean, as the Market context marks it: a round dot. */
+.rv__ind-head { display: inline-flex; align-items: center; flex-wrap: wrap; }
+.rv__ind-head .rv__ind-name { font-size: 0.875rem; }
 .rv__lean { display: inline-flex; align-items: center; justify-content: flex-end; gap: 0.45rem; }
 .rv__lean i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .rv__sign { font-family: var(--font-mono); }
 .rv__sign.is-on { color: var(--color-green); }
 .rv__sign.is-off { color: var(--color-warn); }
-/* A figure that carries a tip: the figure, dotted-underlined on hover only. */
+/* A figure that carries a tip: the figure itself, undecorated; hovering or
+   tapping it opens the tip. Header tips are the (i) icon. */
 .rv__cellbtn { text-decoration: none !important; font-family: var(--font-mono); cursor: default; }
-.rv__cellbtn:hover, .rv__cellbtn[aria-expanded="true"] { text-decoration: underline dotted !important; text-underline-offset: 3px; }
 
 /* The chart's bands: HTML strips under the lines, so the hatch tile keeps its
    angle however the plot stretches. */
@@ -254,8 +256,9 @@
 .rv__ptable .rv__spark { width: 5rem; }
 .rv__bt-table tbody th small { max-width: 24rem; }
 .rv__bt-baseline th, .rv__bt-baseline td { color: var(--color-text-muted); }
-.rv__market .rv__bt-weights { margin: 0 0 1.25rem; }
-.rv__market .rr-area, .rv__market .rr-empty { margin-top: 2.25rem; }
+.rv__market .rv__bt-weights { margin: 0 0 2rem; }
+.rv__market .rv__bt-k { margin-top: 2rem; }
+.rv__market .rr-area, .rv__market .rr-empty { margin-top: 1.5rem; }
 /* "How to read this": open, under its table or chart, in the note type. */
 .rv__howto { margin-top: 1.75rem; }
 .rv__howto .rr-subhead__h { margin-bottom: 0.625rem; }
@@ -300,7 +303,6 @@
 .rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.35rem auto 0; background: var(--color-border); }
 .rv__rho-bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: var(--color-text-muted); }
 .rv__rho-bar i { position: absolute; top: 0; height: 100%; display: block; }
-.rv__rho-btn:hover .rv__rho-fig, .rv__rho-btn[aria-expanded="true"] .rv__rho-fig { text-decoration: underline dotted; text-underline-offset: 3px; }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }

@@ -249,18 +249,16 @@
                     <!-- The Risk-on and Weight headers carry the .rm-tip explainer
                          for what a one-word header cannot hold. The sparkline
                          plots the SAME series as the Risk-on column. -->
-                    <tr><th scope="col">Indicator</th><th scope="col"><span class="rm-tip rm-tip--label"><button class="rm-tip__btn rm-tip__btn--text" type="button">2 years</button><span class="rm-tip__bub" role="tooltip">The percentile month by month for two years, flipped where needed so up is always toward risk-on. Green as it climbs, orange as it falls. The dashed line is the 50th.</span></span></th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Percentile</button><span class="rm-tip__bub" role="tooltip">Where today's reading sits in its own last 3 years. Ranks are flipped where needed, so a higher percentile leans risk-on in every row, and the dot is green from the 50th up. An indicator has no regime of its own: only the composite reads risk-on, neutral or risk-off. The 2 years line plots the same percentile, monthly.</span></span></th><th scope="col" class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text" type="button">Weight</button><span class="rm-tip__bub" role="tooltip">The indicator's share of its panel index; each panel sums to 100%. The macro and on-chain indices are half of the composite each, so half this weight is its share of the composite. The more a reading echoes the rest of the panel, the less it counts.</span></span></th></tr>
+                    <tr><th scope="col">Indicator</th><th scope="col">2 years<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About 2 years">i</button><span class="rm-tip__bub" role="tooltip">The percentile month by month for two years, flipped where needed so up is always toward risk-on. Green as it climbs, orange as it falls. The dashed line is the 50th.</span></span></th><th scope="col" class="rv__num">Last</th><th scope="col" class="rv__num">Percentile<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Percentile">i</button><span class="rm-tip__bub" role="tooltip">Where today's reading sits in its own last 3 years. Ranks are flipped where needed, so a higher percentile leans risk-on in every row, and the dot is green from the 50th up. An indicator has no regime of its own: only the composite reads risk-on, neutral or risk-off. The 2 years line plots the same percentile, monthly.</span></span></th><th scope="col" class="rv__num">Weight<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Weight">i</button><span class="rm-tip__bub" role="tooltip">The indicator's share of its panel index; each panel sums to 100%. The macro and on-chain indices are half of the composite each, so half this weight is its share of the composite. The more a reading echoes the rest of the panel, the less it counts.</span></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="ind in indicatorsIn(p)" :key="ind.id">
                       <tr>
                         <th scope="row" class="rv__ind-cell">
-                          <span class="rv__ind-tipwrap">
-                            <!-- ONE anchor over the name AND the icon: the glossary
-                                 link lands on the indicator's own section. -->
-                            <a class="rv__ind-name" :href="`/regime/indicators#${ind.id}`"><span class="rv__ind-label" x-text="nameHead(ind.name)"></span><span class="rv__ind-tail"><span class="rv__ind-label" x-text="nameTail(ind.name)"></span><span class="rv__ind-info" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5v3.5M8 5.5v.01" stroke-linecap="round"/></svg></span></span></a>
-                            <span class="rv__tip" role="tooltip" x-text="indicatorTooltip(ind)"></span>
-                          </span>
+                          <!-- The name is the link to its section on the indicators
+                               page; the (i) beside it is the tip, as every table's
+                               headers carry theirs. -->
+                          <span class="rv__ind-head"><a class="rv__ind-name rr-lnk" :href="`/regime/indicators#${ind.id}`" x-text="ind.name"></a><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${ind.name}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="indicatorTooltip(ind)"></span></span></span>
                           <small class="rv__ind-src">
                             <template x-if="ind.source_url"><a :href="ind.source_url" target="_blank" rel="noopener" x-text="sourceLabel(ind.source)"></a></template>
                             <template x-if="!ind.source_url"><span x-text="sourceLabel(ind.source)"></span></template>
@@ -368,42 +366,6 @@
                 <span class="rr-meta__i">In-sample<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What in-sample means">i</button><span class="rm-tip__bub" role="tooltip">The years the indicators and their parameters were chosen on. A strategy should look good here; it was fitted to it.</span></span> <b x-text="`${btWindow(bt.key).start} to ${btWindow(bt.key).inEnd}`"></b></span>
                 <span class="rr-meta__i">Out-of-sample<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="What out-of-sample means">i</button><span class="rm-tip__bub" role="tooltip">Everything since, which the method never saw while it was being built. The test of whether it holds up.</span></span> <b x-text="`${btWindow(bt.key).outStart} to ${btWindow(bt.key).end}`"></b></span>
               </div>
-              <!-- The rule every regime-driven strategy in the table follows: what
-                   it holds in each regime. Which reading it follows is its own
-                   (the composite, one panel, or a combination); the two
-                   baselines hold one mix throughout. -->
-              <p class="rv__bt-k">What a strategy holds in each regime</p>
-              <div class="rv__bt-weights">
-                <template x-for="state in ['risk_off', 'neutral', 'risk_on']" :key="state">
-                  <span class="rv__bt-weight"><span class="rv__pie-wrap" x-html="statePie(bt.weights[state])"></span> <span x-text="regimeLabel(state) + ' · ' + describeWeights(bt.weights[state])"></span></span>
-                </template>
-              </div>
-              <div class="rr-tablewrap">
-                <table class="rr-table rv__bt-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Strategy</th>
-                      <template x-for="c in btColumns()" :key="c.key">
-                        <th scope="col" class="rv__num"><span class="rm-tip rm-tip--label" :class="{ 'rm-tip--end': c.end }"><button class="rm-tip__btn rm-tip__btn--text" type="button" x-text="c.label"></button><span class="rm-tip__bub" role="tooltip" x-text="c.tip"></span></span></th>
-                      </template>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="row in backtestRows(bt)" :key="row.key">
-                      <tr :class="{ 'rv__bt-baseline': row.baseline }">
-                        <th scope="row"><span x-text="row.label"></span><small x-text="row.desc"></small></th>
-                        <td class="rv__num" x-text="money(row.s.final_value)"></td>
-                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr)}`" x-text="fmtPctSigned(row.s.cagr)"></td>
-                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_in_sample)}`" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
-                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_out_sample)}`" x-text="fmtPctSigned(row.s.cagr_out_sample)"></td>
-                        <td class="rv__num" x-text="fmtNum2(row.s.sharpe)"></td>
-                        <td class="rv__num" :style="`color:${ddColor(row.s.max_drawdown)}`" x-text="fmtPctUnsigned(row.s.max_drawdown)"></td>
-                        <td class="rv__num rv__muted" x-text="tradesText(row)"></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
               <template x-if="btEmptyTitle(bt.key)">
                 <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="btEmptyTitle(bt.key)"></p><p class="rm-nodata__d" x-show="btEmptyDetail(bt.key)" x-text="btEmptyDetail(bt.key)"></p></div>
               </template>
@@ -476,8 +438,8 @@
                         </button>
                       </li>
                     </template>
-                    <li class="rv__lg-bands">
-                      <span class="rv__lg-k">Composite regime</span>
+                    <li class="rv__lg-bands" :class="{ 'is-off': !visible.btBands }">
+                      <button type="button" class="rv__tgl" :aria-pressed="visible.btBands ? 'true' : 'false'" @click="toggle('btBands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                       <span class="rv__lg-key">
                         <template x-for="r in bgLegend()" :key="r.label">
                           <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
@@ -487,6 +449,42 @@
                   </ul>
                 </figure>
               </template>
+              <!-- The rule every regime-driven strategy in the table follows: what
+                   it holds in each regime. Which reading it follows is its own
+                   (the composite, one panel, or a combination); the two
+                   baselines hold one mix throughout. -->
+              <p class="rv__bt-k">What a strategy holds in each regime</p>
+              <div class="rv__bt-weights">
+                <template x-for="state in ['risk_off', 'neutral', 'risk_on']" :key="state">
+                  <span class="rv__bt-weight"><span class="rv__pie-wrap" x-html="statePie(bt.weights[state])"></span> <span x-text="regimeLabel(state) + ' · ' + describeWeights(bt.weights[state])"></span></span>
+                </template>
+              </div>
+              <div class="rr-tablewrap rr-tablewrap--tips">
+                <table class="rr-table rv__bt-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Strategy</th>
+                      <template x-for="c in btColumns()" :key="c.key">
+                        <th scope="col" class="rv__num"><span x-text="c.label"></span><span class="rm-tip" :class="{ 'rm-tip--end': c.end }"><button class="rm-tip__btn" type="button" :aria-label="`About ${c.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="c.tip"></span></span></th>
+                      </template>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="row in backtestRows(bt)" :key="row.key">
+                      <tr :class="{ 'rv__bt-baseline': row.baseline }">
+                        <th scope="row"><span x-text="row.label"></span><small x-text="row.desc"></small></th>
+                        <td class="rv__num" x-text="money(row.s.final_value)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr)}`" x-text="fmtPctSigned(row.s.cagr)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_in_sample)}`" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
+                        <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_out_sample)}`" x-text="fmtPctSigned(row.s.cagr_out_sample)"></td>
+                        <td class="rv__num" x-text="fmtNum2(row.s.sharpe)"></td>
+                        <td class="rv__num" :style="`color:${ddColor(row.s.max_drawdown)}`" x-text="fmtPctUnsigned(row.s.max_drawdown)"></td>
+                        <td class="rv__num rv__muted" x-text="tradesText(row)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
               <div class="rv__howto">
                 <h4 class="rr-subhead__h rr-subhead__h--minor">How to read this</h4>
                 <p>The out-of-sample window starts Feb 1, 2024. Risky legs earn each asset's spot return; the cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps, charged only when the bucket changes. The chart background is shaded by the composite regime: a light wash for risk-on, a faint one for neutral, hatching for risk-off.</p>
