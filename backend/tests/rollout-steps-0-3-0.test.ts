@@ -187,12 +187,16 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // deliberate act somebody had to write down here as well as in release.ts —
   // NOT a lever for shrinking scope. 0042 joined via #754, 0043 via #835, 0044
   // via #761, 0045 via #760, 0046 via #849, 0047 via #779, 0048 via #796,
-  // 0049/0050 via #697, 0051 via #780, and 0052 via #829: in each case the
-  // drift guard below named the landed file as undeclared, and the fix was to
-  // DECLARE it (never to raise the numeric floor).
+  // 0049/0050 via #697, 0051 via #780, 0052 via #829, and 0061 via checklist
+  // B05 (rm_worker grant on chain_day_blocks/wallet_backfill_state/
+  // chain_address_floors, all created by 0033 above — a v0.4.0-to-0.5.0
+  // migration declared here too because this test's baseline partition
+  // otherwise replays it before 0033): in each case the drift guard below
+  // named the landed file as undeclared, and the fix was to DECLARE it
+  // (never to raise the numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(21);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0052_swarm_judgement_digest_scheme.sql");
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(22);
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0061_rm_worker_wallet_backfill_grant.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");

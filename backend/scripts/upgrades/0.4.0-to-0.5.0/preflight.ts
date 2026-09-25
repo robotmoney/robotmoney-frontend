@@ -198,7 +198,15 @@ export async function roleReadinessCheck(db: Db, { record }: Checker): Promise<v
 export async function runChecks(
   db: Db,
   checker: Checker,
-  opts: { roleReadiness?: boolean } = {},
+  opts: {
+    roleReadiness?: boolean;
+    /**
+     * The candidate checkout's migration files. Defaults to reading
+     * backend/migrations. Tests on a LATER checkout pass the v0.5.0 set, since
+     * v0.5.1's files are rightly "unexpected pending" to a v0.5.0 preflight.
+     */
+    migrationFiles?: readonly string[];
+  } = {},
 ): Promise<void> {
   const { record } = checker;
   // The role/credential gate is a LIVE-TARGET property (runbook §4.4): the
@@ -224,7 +232,9 @@ export async function runChecks(
     "Do not deploy v0.5.0 until the target is identified and its v0.4.0 rollout is reconciled.",
   );
 
-  const onDisk = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
+  const onDisk = opts.migrationFiles
+    ? [...opts.migrationFiles].sort()
+    : (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
   const expectedPending = new Set<string>(RELEASE_MIGRATIONS);
   const pending = onDisk.filter((name) => !applied.has(name));
   const unexpectedPending = pending.filter((name) => !expectedPending.has(name));

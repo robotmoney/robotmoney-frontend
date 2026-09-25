@@ -1,6 +1,6 @@
 # v0.5.1 production rollout — PROPOSED
 
-> **Status: proposal (2026-09-25), not yet adopted.** Steps marked **[TO BUILD]**
+> **Status: proposal (2026-09-25), not yet adopted. D1, D2, D6 decided 2026-09-25.** Steps marked **[TO BUILD]**
 > name tooling that does not exist yet; every other command exists on
 > `qa/v0.5.1-website-picks`. This runbook follows
 > `docs/technical/release-runbooks.md` (policy) and
@@ -19,8 +19,8 @@ this runbook that closes it.
 | Rehearsal swarm checks counted published sessions. | A restored production database already holds hundreds. | R4.4 grades only sessions convened after the boot started. |
 | Nothing read container logs. | Four refused api boots (2026-09-24 14:27), dead jobs, shared-memory exhaustion. | R4.4, R7.2, R8.1 log scans |
 | Nothing queried `jobs` for `dead` rows. | 288 dead `wallet.backfill_window`, 24 dead `analytics.parity_sweep`, dead `swarm.judge`. | R2.3, R4.4, R7.3, R8.1 |
-| The twin's driver sets its own judge model at boot. | Production's `swarm_judge_config.model` is **NULL**; every judging refuses `model_unconfigured`. | R2.2 reads production's config directly; R6.5 sets it. |
-| Twin workers connect as the twin's superuser. | Production's `rm_worker` lacks grants (`permission denied for table wallet_backfill_state`). | R2.4 checks production grants; R6.2 applies them. |
+| The twin's driver sets its own judge model at boot. | Production's `swarm_judge_config.model` is **NULL**; every judging refuses `model_unconfigured`. | R2.2 reads production's config directly; migration `0063` sets it; R6.5 verifies. |
+| Twin workers connect as the twin's superuser. | Production's `rm_worker` lacks grants (`permission denied for table wallet_backfill_state`). | R2.4 checks production grants; migration `0061` grants them; R6.5 verifies. |
 | §6 "deploy in provider order" named no command. | The real deploy is `smoke:archive` in a root tmux session on `rm-frontend-prod-1`. | R6 names every command. |
 | `BOOT_STATUS=$?` after `smoke:archive`. | `smoke:archive` never exits on success (it is the session driver), so `$?` only ever reports a crash. | R6.4 uses readiness + R7 instead. |
 | Rollback used `bun smoke -- --external-pg`. | `--external-pg` is not a known flag in v0.5.0; the command fails immediately. | R9 uses `smoke:archive`. |
@@ -33,7 +33,7 @@ this runbook that closes it.
 | From | `v0.5.0` (`ec261867`), running on `rm-frontend-prod-1` (146.190.218.4) |
 | To | `v0.5.1-rc.N` → `v0.5.1`, cut from `releases-0.5.x` |
 | Source branch | `qa/v0.5.1-website-picks` fast-forwarded into `releases-0.5.x` (it is based on `v0.5.0`, so the merge is a fast-forward) |
-| Migrations | **None.** `git diff --name-only v0.5.0 <RC_SHA> -- backend/migrations` must print nothing (R1.3). |
+| Migrations | **Three files, two of which run in production** (R1.3): `0061_rm_worker_wallet_backfill_grant` (D2, main's file verbatim), `0062_rm_readonly_sequence_select` (D6, already recorded in production, so it does **not** run there), `0063_swarm_judge_model_default` (D1). They run during the R6.4 boot, in the one-shot migrate container, as `MIGRATE_DATABASE_URL` (production: the `doadmin` line in `/root/robotmoney-frontend/.env`) under `SET LOCAL ROLE rm_owner`. No down path; R3's backup is mandatory. |
 | Production process | `bun run smoke:archive` (`--smoke --static-port --db external`), cwd `/root/robotmoney-frontend`, root tmux session `0`, compose project `rm_prod` |
 | Rehearsal host | `rm-frontend-stage-2` (142.93.246.99), ephemeral, served at `stage.robotmoney-labs.dev` |
 | Production database | DigitalOcean managed Postgres 18; 6.5 GB on 2026-09-25 (issue 1035); read replica for captures |
@@ -45,6 +45,7 @@ this runbook that closes it.
 3. **Boot guards** — a read-only database session (SQLSTATE 25006, a managed-Postgres failover) is "unavailable", not "disarmed"; the analytics-ledger-guard step is back in prod-bootstrap.
 4. **Deploy hygiene** — the analytics producer no longer receives `MIGRATE_DATABASE_URL`; `WORKER_DATABASE_URL` is forwarded only on `--db external` boots; the twin-roster verify check is real again.
 5. **Rehearsal tooling** — slim twin dumps (`--twin-slim`, own directory), 1 GB `/dev/shm` for the restored Postgres, `bun run twin:gate`.
+6. **Migrations** — `0061_rm_worker_wallet_backfill_grant` (worker grants), `0062_rm_readonly_sequence_select` (already in production), `0063_swarm_judge_model_default` (judge model).
 
 ### 1.2 Decisions required before R1 (owner)
 
@@ -53,12 +54,12 @@ here with the reason, because R8 will fail on it.
 
 | ID | Defect (evidence) | Proposed fix in this release | Decision |
 |---|---|---|---|
-| D1 | `swarm_judge_config` = `enforce` / `model NULL` → 3 dead `swarm.judge` (`model_unconfigured`) in 24 h; 1 session published in 48 h | R6.5: set the model through the admin judge-config route (a data write, not a migration) | ☐ |
-| D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks` (and, before the archived 0062, `chain_address_floors`) → 288 dead `wallet.backfill_window` in 24 h. Main fixed it as migration `0061_rm_worker_wallet_backfill_grant`; the archive did not | R6.2: manual grant through `scripts/ops/provision-db-role-taxonomy.sh` (the release line's rule: grants are provisioning, not migrations) **[TO BUILD: add the three grants to the script]** | ☐ |
+| D1 | `swarm_judge_config` = `enforce` / `model NULL` → 3 dead `swarm.judge` (`model_unconfigured`) in 24 h; 1 session published in 48 h | **Decided 2026-09-25:** the judge uses the CI model, `opencode/deepseek-v4-flash`. Migration `0063` sets it only where the model is missing and never changes `mode` | ✅ |
+| D2 | `rm_worker` lacks INSERT/UPDATE/DELETE on `wallet_backfill_state`, `chain_day_blocks` (and, before the archived 0062, `chain_address_floors`) → 288 dead `wallet.backfill_window` in 24 h | **Decided 2026-09-25:** migrate. Main's `0061_rm_worker_wallet_backfill_grant` carried verbatim (same name, so the later merge into main is a no-op for it) | ✅ |
 | D3 | Member agents return empty transcripts (`opencode/deepseek-v4-flash`); production sessions get 3 of 8 takes; the twin had 14 `no_takes` judge deaths in 3 h | Choose: change the member model, or accept partial attendance and lower `--min-attendance` with a recorded reason | ☐ |
 | D4 | `unsupported Unicode escape sequence` on parity-observation writes; 24 dead `analytics.parity_sweep` | Fix in code, or waive in R4.4/R7.2 with `--waive` and a recorded reason | ☐ |
 | D5 | Production runs `RM_ENV=smoke`, so `config.ts`'s production-only credential checks never fire | Out of scope for 0.5.1 unless the owner says otherwise; record it | ☐ |
-| D6 | Production's `schema_migrations` records `0062_rm_readonly_sequence_select.sql` (73 rows); v0.5.0/v0.5.1 code has no `0062` file. `migrate()` ignores the extra row, so nothing breaks, but code and database disagree and a fresh environment never gets the `rm_readonly` sequence grant | Carry the archived `0062` file unchanged: already recorded in production, so **it does not run there**; it only makes code match the database | ☐ |
+| D6 | Production's `schema_migrations` records `0062_rm_readonly_sequence_select.sql` (73 rows); v0.5.0 code had no `0062` file | **Decided 2026-09-25:** carry the archived file unchanged. Already recorded in production, so it does not run there; it makes code and database agree and gives a fresh environment the `rm_readonly` sequence grant | ✅ |
 
 ## 2. Roles and evidence
 
@@ -75,7 +76,7 @@ here with the reason, because R8 will fail on it.
 |---|---|---|---|
 | R1.1 | `git fetch origin --tags && git switch releases-0.5.x && git merge --ff-only origin/qa/v0.5.1-website-picks && git push origin releases-0.5.x` | fast-forward only | new tip |
 | R1.2 | `RC_SHA=$(git rev-parse HEAD); echo $RC_SHA; git tag --points-at HEAD -l 'v0.5.1-rc.*'` | tag list empty | `RC_SHA` |
-| R1.3 | `git diff --name-only v0.5.0 "$RC_SHA" -- backend/migrations` | **prints nothing** | output |
+| R1.3 | `git diff --name-only v0.5.0 "$RC_SHA" -- backend/migrations` | **exactly** `0061_rm_worker_wallet_backfill_grant.sql`, `0062_rm_readonly_sequence_select.sql`, `0063_swarm_judge_model_default.sql` | output |
 | R1.4 | `git diff --stat v0.5.0 "$RC_SHA" -- docker-compose.yml` | only the analytics-producer `MIGRATE_DATABASE_URL` removal | diffstat |
 | R1.5 | `bun install --force && bun install --force --cwd backend` | exit 0 | — |
 | R1.6 | `bun run typecheck && (cd backend && bun run typecheck)` | 0 errors | — |
@@ -124,6 +125,7 @@ subject, with nothing dead and nothing in the logs.
 | R4.1 | Wipe: stop any `bun` process, `docker rm -f $(docker ps -aq)`, `docker volume rm $(docker volume ls -q)` (stage-2 is ephemeral) | 0 containers, 0 volumes | — |
 | R4.2 | `git fetch origin && git checkout --detach "$RC_SHA" && bun install --force && bun install --force --cwd backend` | HEAD = `RC_SHA` | HEAD |
 | R4.3 | In tmux: `bun smoke:twin -- --no-tui 2>&1 \| tee ~/twin-$RC_SHA.log` | "READY" printed; slim capture ~1 min | READY time = T0 |
+| R4.3a | `grep -E 'migrated: 00' ~/twin-$RC_SHA.log` | `0061_rm_worker_wallet_backfill_grant.sql` and `0063_swarm_judge_model_default.sql` applied to the restored production data; `0062` skipped | lines |
 | R4.4 | `bun run twin:gate -- --wait 75 --min-sessions 1 --min-attendance <D3 value>` (+ `--waive` only per D4) | **exit 0**. Every subject publishes ≥1 session convened after T0, each with takes, an applied model/enforce judgement and a receipt; no dead job; no container restart; no fatal log line | full gate output |
 | R4.5 | Run R4.4 again at T0 + 3 h without `--wait` | exit 0 (sessions keep closing; nothing died since) | output |
 | R4.6 | Browser pass on `https://stage.robotmoney-labs.dev`: home, `/vaults`, `/vault/rmusdc`, `/vault/rmagent`, `/vault/rmproto`, `/vault/rmrwa`, `/swarm`, a published session, its judgement link, a member page with judgements, `/deposit`, `/changelog` | every page renders data; no console error | screenshots |
@@ -143,16 +145,17 @@ evidence.
 
 ## R6. Production cutover (`rm-frontend-prod-1`, root)
 
-No migrations run. The window is short, but production's scheduler is the
-host driver: while it is down, no session advances.
+Two migrations run during R6.4's boot (`0061`, `0063`); `0062` is already recorded
+and is skipped. The window is short, but production's scheduler is the host
+driver: while it is down, no session advances.
 
 | Step | Command | Pass | Record |
 |---|---|---|---|
-| R6.1 | Announce the window; confirm R3 backup and R5 tag | — | time |
-| R6.2 | (D2) Apply the `rm_worker` grants: `scripts/ops/provision-db-role-taxonomy.sh "$HOME/.env"` **[TO BUILD: grants]**; re-run R2.4 | all three `true` | output |
+| R6.1 | Announce the window; confirm R3 backup (it is the only way back from a migration) and R5 tag | — | time |
+| R6.2 | Confirm the migration credential without printing it: `grep -c '^MIGRATE_DATABASE_URL=.' /root/robotmoney-frontend/.env` | `1` (the R6.4 boot migrates with it) | count |
 | R6.3 | `tmux attach -t 0`; Ctrl-C the running `smoke:archive`; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
 | R6.4 | `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log` | READY printed; `GET /health` 200; production T0 = READY time | T0, first 200 log lines |
-| R6.5 | (D1) Set the judge model through the admin judge-config route (the same call the smoke driver makes, `session.ts` `setJudgeConfig`) **[TO BUILD: a one-line operator command]**; re-run R2.2 | `enforce`, model set, `third_party_enabled` false | row |
+| R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.2 and R2.4 again | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; R2.2 = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.4 = all `true` | lines, rows |
 | R6.6 | `bun run --cwd frontend assemble` only if the boot did not already publish the new SPA; `curl -s https://robotmoney.network/version.json` | commit = `RC_SHA` short | output |
 
 ## R7. Immediate postflight (T0 → T0 + 30 min)
@@ -166,7 +169,7 @@ and `docker logs`, with `--since T0`. Until it exists, run the SQL below.
 | R7.1 | Every `rm_prod-*` container running, healthy, `RestartCount` 0 | all |
 | R7.2 | `docker logs --since "$T0"` on every `rm_prod-*` container: zero lines matching `REFUSING the boot`, `— DEAD`, `JudgeUnavailable`, `No space left on device`, `getaddrinfo`, `out of memory`, `unsupported Unicode escape sequence` (unless waived by D4) | zero |
 | R7.3 | `SELECT kind, count(*) FROM jobs WHERE status='dead' AND created_at >= '$T0' GROUP BY kind` | no rows |
-| R7.4 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | identical |
+| R7.4 | `SELECT name FROM schema_migrations ORDER BY name` diffed against `baseline-migrations.txt` | exactly two added rows: `0061_rm_worker_wallet_backfill_grant.sql`, `0063_swarm_judge_model_default.sql` (75 total) | diff |
 | R7.5 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/postflight.ts --emit-receipt=P8.postflight-prod` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | all checks ok |
 | R7.6 | `bun run verify:live --tier readonly --emit-receipt=P8.verify-prod` | exit 0; a WARN is not a pass |
 | R7.7 | Browser pass on `https://robotmoney.network`, same page list as R4.6 | renders |
@@ -201,9 +204,11 @@ echo "CI=[$CI]"                                   # must be empty
 SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-archive-rollback.log
 ```
 
-- No migration ran, so no database restore is needed for a code rollback.
-- R6.2's grants and R6.5's judge model are forward fixes for defects present on
-  v0.5.0 too; leave them in place unless they are the cause.
+- v0.5.0 boots on the migrated database: `migrate()` skips recorded rows it has
+  no file for, and `0061`/`0063` only add a grant and fill a config value.
+  No restore is needed for a code rollback.
+- Leave `0061`'s grants and `0063`'s judge model in place: they fix defects
+  v0.5.0 has too. Restore R3's backup only if a migration itself is the cause.
 - After rollback, run R7.1–R7.3 against the rollback boot.
 - Do not use `rollout-procedure.md`'s `bun smoke -- --external-pg` rollback:
   `--external-pg` is not a known flag in v0.5.0.
@@ -220,10 +225,8 @@ SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-a
 
 1. `prod:gate` — `twin:gate`'s checks against production (R7, R8). Without it,
    R7/R8 are hand-run SQL, which is how v0.5.0's gaps survived.
-2. `rm_worker` grants in `provision-db-role-taxonomy.sh` (D2).
-3. A judge-model operator command (D1).
-4. `backend/scripts/upgrades/0.5.0-to-0.5.1/` — `release.ts` (empty migration
-   list), `steps.ts`, `preflight.ts` (R2), `postflight.ts` (R7.4–R7.5),
+2. `backend/scripts/upgrades/0.5.0-to-0.5.1/` — `release.ts` (this release's
+   three migrations; the prior list is v0.5.0's plus the out-of-band `0062`), `steps.ts`, `preflight.ts` (R2), `postflight.ts` (R7.4–R7.5),
    `restore-check.ts`, and a step for R4.4 so `runbook.ts` can report status.
-5. Fix `rollout-procedure.md`'s rollback command (`--external-pg`) and its
+3. Fix `rollout-procedure.md`'s rollback command (`--external-pg`) and its
    `BOOT_STATUS=$?` guidance for a driver that never exits on success.

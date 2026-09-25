@@ -1292,7 +1292,9 @@ test("the judge switch refuses nonsense and is readable back", async () => {
   const set = await admin.setJudgeConfigAdmin({ mode: "shadow", minTakes: 4 });
   expect(set.ok).toBe(true);
   const read = await admin.getJudgeConfigAdmin();
-  expect((read as any).judge).toMatchObject({ mode: "shadow", minTakes: 4, model: null });
+  // The model is untouched by this patch: it is migration 0063's default (the
+  // CI/driver model), no longer NULL.
+  expect((read as any).judge).toMatchObject({ mode: "shadow", minTakes: 4, model: "opencode/deepseek-v4-flash" });
   // The REFUSED write leaves no audit row — only the one that took effect.
   const audits = (await sql`SELECT action, scope FROM audit_log WHERE action = 'judge_config'`) as any[];
   expect(audits.length).toBe(1);

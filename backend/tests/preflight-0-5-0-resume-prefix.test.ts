@@ -38,13 +38,28 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
 // part of this release — 0001-0044, not just PRIOR_RELEASE_MIGRATIONS' six.
 // Seeding only the six made all 38 earlier files read as unexpected-pending.
 let BASELINE: string[] = [];
+// The v0.5.0 candidate's migration files: what is on disk minus v0.5.1's.
+let V050_FILES: string[] = [];
+
+// v0.5.1's migrations. They are on disk now but were never part of a v0.4.0
+// database, so the v0.4.0 baseline must leave them out exactly as it leaves out
+// v0.5.0's own. (0062 was applied to production out of band during the 0.5.0
+// cycle and is carried by v0.5.1; see docs/runbooks/v0-5-1-rollout.md D6.)
+const LATER_RELEASE_MIGRATIONS: readonly string[] = [
+  "0061_rm_worker_wallet_backfill_grant.sql",
+  "0062_rm_readonly_sequence_select.sql",
+  "0063_swarm_judge_model_default.sql",
+];
 
 let admin: ReturnType<typeof postgres>;
 const made: string[] = [];
 
 beforeAll(async () => {
   const onDisk = (await readdir(MIGRATIONS_DIR)).filter((n) => n.endsWith(".sql")).sort();
-  BASELINE = onDisk.filter((n) => !RELEASE_MIGRATIONS.includes(n as (typeof RELEASE_MIGRATIONS)[number]));
+  V050_FILES = onDisk.filter((n) => !LATER_RELEASE_MIGRATIONS.includes(n));
+  BASELINE = onDisk.filter(
+    (n) => !RELEASE_MIGRATIONS.includes(n as (typeof RELEASE_MIGRATIONS)[number]) && !LATER_RELEASE_MIGRATIONS.includes(n),
+  );
   admin = postgres(ADMIN_URL, { max: 1, onnotice: () => {} });
 });
 afterAll(async () => {
@@ -73,7 +88,7 @@ async function fixture(label: string, appliedMigrations: readonly string[], opts
   for (const t of shouldExist) await db.unsafe(`CREATE TABLE ${t} (id int)`);
 
   const checker = createChecker("");
-  await runChecks(db, checker, { roleReadiness: false });
+  await runChecks(db, checker, { roleReadiness: false, migrationFiles: V050_FILES });
   await (db as unknown as ReturnType<typeof postgres>).end();
   return checker.results;
 }

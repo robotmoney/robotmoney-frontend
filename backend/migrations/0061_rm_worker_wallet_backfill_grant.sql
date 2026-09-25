@@ -1,0 +1,31 @@
+-- Restore rm_worker write access to the wallet-backfill driver's own tables
+-- (staging 2026-09-15: "permission denied for table wallet_backfill_state" /
+-- "...chain_day_blocks", worker-swarm Postgres logs).
+--
+-- WHY THIS BROKE. Migrations 0033/0044/0045 created chain_day_blocks,
+-- wallet_backfill_state and chain_address_floors back when 0016's ALTER
+-- DEFAULT PRIVILEGES gave rm_worker DML on every table by default, so they
+-- never needed their own GRANT. Migration 0054 then replaced that
+-- broad/default grant with an explicit current-table allow-list ("Future
+-- tables start inaccessible to rm_worker") and enumerated every table the
+-- worker wrote at the time — but missed these three, because 0054 audited
+-- src/worker/** call sites and the wallet-backfill repair driver
+-- (src/ops/wallet-backfill.ts, invoked from src/worker/handlers/repair.ts)
+-- was the one write path that didn't get carried over into the list.
+--
+-- THE WRITE PATH. worker/handlers/repair.ts imports `sql` from
+-- src/db/worker-client.ts (WORKER_DATABASE_URL / rm_worker) — never
+-- src/db/client.ts — and passes it straight into planWalletBackfill(),
+-- dayBlockCache() and addressFloorCache() in src/ops/wallet-backfill.ts. So,
+-- unlike the analytics/telemetry/judge tables (0016/0018/0040/0042), which are
+-- deliberately written only through the authenticated API process and
+-- rightly excluded from rm_worker, this really is the restricted worker
+-- connection that is supposed to write these three tables. The fix is the
+-- missing grant, not a different connection.
+--
+-- Matches 0054's own narrow style: SELECT is already covered by 0054's
+-- `GRANT SELECT ON ALL TABLES`; only the missing INSERT/UPDATE/DELETE is
+-- added here, for exactly these three tables and no others.
+GRANT INSERT, UPDATE, DELETE ON
+  chain_day_blocks, wallet_backfill_state, chain_address_floors
+TO rm_worker;
