@@ -491,12 +491,24 @@ export function registerRegimeView(Alpine) {
       const r = cell.rho;
       const n = cell.n != null ? ` Across ${Number(cell.n).toLocaleString("en-US")} days.` : "";
       const head = `${row} vs ${name}, ${when}: ${this.rhoText(cell)}.`;
-      if (Math.abs(r) < 0.15) return `${head} Under 0.15 either way: no relation beyond noise.${n}`;
-      const hi = `a high ${row.toLowerCase()} reading`;
+      // How far chance alone reaches: overlapping windows leave about n / h
+      // separate stretches, and ±2 / √(that) is roughly where chance runs out.
+      const days = h === "now" ? null : parseInt(h, 10);
+      const stretches = days && cell.n ? Math.max(1, Math.round(cell.n / days)) : null;
+      const chance = stretches ? `Chance alone reaches ±${(2 / Math.sqrt(stretches)).toFixed(2)} here (${stretches} separate stretches).` : "";
+      if (Math.abs(r) < 0.15) return `${head} Under 0.15 either way: treated as noise.${chance ? " " + chance : n}`;
+      const hi = `high ${row.toLowerCase()} readings`;
       const says = h === "now"
         ? (r > 0 ? `The index has run high when ${name} is high.` : `The index has run high when ${name} is low.`)
-        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} has come before stronger ${name} returns.` : `${hi[0].toUpperCase() + hi.slice(1)} has come before weaker ${name} returns.`);
-      return `${head} ${says}${n}`;
+        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} came before stronger ${name} returns.` : `${hi[0].toUpperCase() + hi.slice(1)} came before weaker ${name} returns.`);
+      return h === "now" ? `${head} ${says} Two trending levels move together easily.` : `${head} ${says} ${chance}`;
+    },
+    // An indicator with no weight and no history to draw is a placeholder:
+    // its 50th is a default, not a reading (new DEX pools, which accumulates
+    // its own history forward).
+    isPlaceholder(ind) {
+      const pts = Array.isArray(ind?.sparkline) ? ind.sparkline.filter((v) => typeof v === "number").length : 0;
+      return ind?.panel_weight === 0 && pts < 2;
     },
     corrCell(idx, asset, h) { return h === "now" ? this.conCell(idx, asset) : this.fwdCell(idx, asset + "_" + h); },
     // The cell's signed bar: from the centre line, right for a positive ρ and
@@ -607,7 +619,7 @@ export function registerRegimeView(Alpine) {
     // the bands behind them stay day by day.
     bandBg(state) { return REGIME_BAND_BG[state] || "transparent"; },
     historySeries() {
-      const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
+      const hasFactor = this.history.some((h) => (h.factorPercentile ?? h.factor_percentile) != null);
       return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: STRATEGY_STYLE[key].color }));
     },
     toggleSeries(key) { this.series[key] = !this.series[key]; },
@@ -643,13 +655,22 @@ export function registerRegimeView(Alpine) {
     _hist() {
       const h = this.history;
       const [from, to] = this._win("hist");
-      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${from}|${to}`;
+      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${from}|${to}|${this.historyPct()}`;
       if (HIST_MEMO.key === key) return HIST_MEMO.m;
       const all = this._allDays();
       const days = all.slice(from, to + 1);
       const byDate = new Map(h.map((r) => [r.date, r]));
       const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
-      const read = { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
+      // Each line is a percentile of its own last three years: the scale the
+      // regime is read on (the composite's cuts) and the one Market context
+      // draws. The index levels themselves are in each row's tip up top.
+      // A history without percentiles (an older snapshot, the eq fixture)
+      // draws the index levels instead, on their own 0 to 1 axis.
+      const usePct = this.historyPct();
+      const pct = (r, k) => r[k + "Percentile"] ?? r[k + "_percentile"];
+      const read = usePct
+        ? { composite: (r) => pct(r, "composite"), macro: (r) => pct(r, "macro"), onchain: (r) => pct(r, "onchain"), factor: (r) => pct(r, "factor") }
+        : { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
       const values = {};
       for (const k of Object.keys(read)) values[k] = idx.map((i) => { const r = byDate.get(days[i]); const v = r ? read[k](r) : null; return v == null ? null : +v; });
       const extras = this.latest?.extras || {};
@@ -660,6 +681,13 @@ export function registerRegimeView(Alpine) {
       return m;
     },
     historyWeekly() { return this._hist().weekly; },
+    // Percentiles when the history carries them for most days.
+    historyPct() {
+      const h = this.history;
+      if (!h.length) return false;
+      return h.filter((r) => (r.compositePercentile ?? r.composite_percentile) != null).length >= h.length / 2;
+    },
+    _histFmt(v) { return this.historyPct() ? this.ordinalPct(v) : (+v).toFixed(2); },
     historyDays() { return this._hist().n; },
     // The lines drawn now: each index that is on, then any price overlay that
     // is on. A price overlay has its own log scale, fitted to the range.
@@ -682,25 +710,31 @@ export function registerRegimeView(Alpine) {
       const lines = this._histLines();
       // Each line is placed by its own scale and drawn on a unit one.
       return lineChartSvg({
-        n: m.n, y: (v) => v, grid: [0.25, 0.5, 0.75],
+        n: m.n, y: (v) => v, grid: this.historyPct() ? [+this.bucketPct("risk_off") / 100, 0.5, +this.bucketPct("risk_on") / 100] : [0.25, 0.5, 0.75],
         series: lines.map((l) => ({ token: l.token, color: l.color, width: l.width, dash: l.dash, muted: !!this.histFocus && this.histFocus !== l.token, points: m.idx.map((i, k) => ({ i, v: l.values[k] == null ? null : l.y(l.values[k]) })) })),
       });
     },
     historyBands() { return this.visible.bands ? this._hist().runs : []; },
-    historyYTicks() { return [1, 0.75, 0.5, 0.25, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2) })); },
+    // The percentile axis, marked at the composite's cuts: below the lower one
+    // reads risk-off, above the upper one risk-on.
+    historyYTicks() {
+      if (!this.historyPct()) return [1, 0.75, 0.5, 0.25, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2), cut: false }));
+      const lo = +this.bucketPct("risk_off") / 100, hi = +this.bucketPct("risk_on") / 100;
+      return [[1, "100"], [hi, this.ordinalPct(hi)], [0.5, "50th"], [lo, this.ordinalPct(lo)], [0, "0"]].map(([v, label]) => ({ key: v, top: (1 - v) * 100, label, cut: v === lo || v === hi }));
+    },
     historyXTicks() { return this._hist().ticks; },
     historyLabel() {
       const m = this._hist();
       if (!m.n) return "";
       const last = this.history[this.history.length - 1];
-      return `The composite and its panel indices, 0 risk-off to 1 risk-on, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}${m.weekly ? ", one reading a week" : ""}. Latest: ${this.regimeLabel(last?.regime)}, composite ${last?.composite == null ? "none" : (+last.composite).toFixed(2)}. Use the arrow keys to step through the readings.`;
+      return `The composite and each panel as a percentile of its last three years, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}${m.weekly ? ", one reading a week" : ""}. Latest: ${this.regimeLabel(last?.regime)}, composite at the ${this.ordinalPct(last?.compositePercentile)} percentile. Use the arrow keys to step through the readings.`;
     },
     // The legend: each line with its latest value; hover focuses it, a click
     // switches it off and on.
     historyLegend() {
       const m = this._hist();
       const lastOf = (arr) => { for (let k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return null; };
-      const rows = this.historySeries().map((s) => { const v = lastOf(m.values[s.key]); return { ...s, on: !!this.series[s.key], value: v == null ? "—" : v.toFixed(2) }; });
+      const rows = this.historySeries().map((s) => { const v = lastOf(m.values[s.key]); return { ...s, on: !!this.series[s.key], value: v == null ? "—" : this._histFmt(v) }; });
       for (const k of ["spx", "eth"]) {
         if (!(this.latest?.extras?.[k] || []).length) continue;
         const v = lastOf(m.values[k]);
@@ -717,7 +751,7 @@ export function registerRegimeView(Alpine) {
       if (k == null || m.idx[k] == null) return null;
       const i = m.idx[k];
       const r = this.history.find((h) => h.date === m.days[i]);
-      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: l.color, value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : (+l.values[k]).toFixed(2) }));
+      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: l.color, value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
       return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
     },
 
@@ -750,7 +784,7 @@ export function registerRegimeView(Alpine) {
       const idx = sampleDays(all.length, 60);
       if (which === "hist") {
         const byDate = new Map(this.history.map((r) => [r.date, r]));
-        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const v = byDate.get(all[i])?.composite; return { i, v: v == null ? null : +v }; }) }] });
+        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const v = byDate.get(all[i])?.compositePercentile; return { i, v: v == null ? null : +v }; }) }] });
       }
       const curve = this.latest?.backtest?.[this.btMarket]?.composite?.equity_curve || [];
       const pos = new Map(all.map((d, i) => [d, i]));
@@ -862,8 +896,8 @@ export function registerRegimeView(Alpine) {
       return [
         { key: "final", label: "$1 became", tip: "What $1 put in at the start was worth at the end, after trading costs." },
         { key: "cagr", label: "CAGR", tip: "Compound annual growth rate: the steady yearly return that ends at the same place." },
-        { key: "in", label: "In-sample", tip: "CAGR from May 2018 to January 2024, the years the indicators and their parameters were chosen on." },
-        { key: "out", label: "Out-of-sample", tip: "CAGR from February 2024 on, which the method never saw while it was being built." },
+        { key: "in", label: "In-sample", tip: "CAGR before the February 2024 split." },
+        { key: "out", label: "Out-of-sample", tip: "CAGR from February 2024 on. The method was built later, so this is not a true holdout." },
         { key: "sharpe", label: "Sharpe", tip: "Return per unit of volatility, a year at a time. Higher means more return for the same ups and downs." },
         { key: "dd", label: "Max DD", tip: "Maximum drawdown: the largest fall from a peak to the low after it." , end: true },
         { key: "trades", label: "Trades", tip: "How many times the strategy changed what it holds. The baselines never trade.", end: true },

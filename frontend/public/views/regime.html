@@ -119,12 +119,14 @@
                       <b class="sig__mid"></b>
                       <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
                       <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                            <!-- The reading beside its dot, so it reads without a hover; it
+                                 turns to the dot's left near the top end. -->
+                            <span class="sig__v" :class="r.pct > 0.82 ? 'is-end' : ''" :style="`left:${r.at}`" x-text="ordinal(r.pct)"></span>
                       <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
                         <b x-text="signalTip(r)"></b>
                         <span x-text="r.about"></span>
                       </span>
                     </span>
-                    <span class="sig__v" x-text="ordinal(r.pct)"></span>
                   </div>
                 </template>
               </div>
@@ -153,7 +155,7 @@
             <figure class="rr-area rv__fig" :data-days="historyDays()">
               <div class="rr-area__frame">
                 <div class="rr-area__y" aria-hidden="true">
-                  <template x-for="t in historyYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                  <template x-for="t in historyYTicks()" :key="t.key"><span :class="{ 'is-cut': t.cut }" :style="`top:${t.top}%`" x-text="t.label"></span></template>
                 </div>
                 <div class="rr-area__plot" tabindex="0" role="img" :aria-label="historyLabel()"
                      @pointermove="historyMove($event)" @pointerdown="historyMove($event)" @pointerleave="histAt = null" @keydown="historyKey($event)" @blur="histAt = null">
@@ -269,7 +271,7 @@
                         <td class="rv__num" x-text="fmtLast(ind)"></td>
                         <!-- The percentile as the Market context prints it, its
                              lean as a round dot (the dot that ends the line). -->
-                        <td class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text rv__cellbtn" type="button"><span class="rv__lean"><i :style="leanDot(ind.signed_percentile)" aria-hidden="true"></i><span x-text="ind.signed_percentile == null ? '—' : ordinalPct(ind.signed_percentile)"></span></span></button><span class="rm-tip__bub" role="tooltip" x-text="leanTip(ind.signed_percentile)"></span></span></td>
+                        <td class="rv__num"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text rv__cellbtn" type="button"><span class="rv__lean"><i x-show="!isPlaceholder(ind)" :style="leanDot(ind.signed_percentile)" aria-hidden="true"></i><span x-text="isPlaceholder(ind) || ind.signed_percentile == null ? '—' : ordinalPct(ind.signed_percentile)"></span></span></button><span class="rm-tip__bub" role="tooltip" x-text="isPlaceholder(ind) ? 'Not enough history yet, so it carries no weight.' : leanTip(ind.signed_percentile)"></span></span></td>
                         <td class="rv__num rv__muted"><span class="rm-tip rm-tip--label rm-tip--end"><button class="rm-tip__btn rm-tip__btn--text rv__cellbtn" type="button" x-text="fmtWeight(ind.panel_weight)"></button><span class="rm-tip__bub" role="tooltip" x-text="weightTip(ind)"></span></span></td>
                       </tr>
                     </template>
@@ -363,8 +365,8 @@
                    since, which the method never saw while it was being built. -->
               <div class="rr-meta rv__bt-facts">
                 <span class="rr-meta__i">Cost <b>10 bps per rebalance</b></span>
-                <span class="rr-meta__i">In-sample<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What in-sample means">i</button><span class="rm-tip__bub" role="tooltip">The years the indicators and settings were chosen on. A strategy should look good here; it was fitted to them.</span></span> <b x-text="`${btWindow(bt.key).start} to ${btWindow(bt.key).inEnd}`"></b></span>
-                <span class="rr-meta__i">Out-of-sample<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="What out-of-sample means">i</button><span class="rm-tip__bub" role="tooltip">The years since, which the method did not see while it was built. The test of whether it holds up.</span></span> <b x-text="`${btWindow(bt.key).outStart} to ${btWindow(bt.key).end}`"></b></span>
+                <span class="rr-meta__i">In-sample<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What in-sample means">i</button><span class="rm-tip__bub" role="tooltip">Before Feb 2024. A date split, not a true holdout: the indicators and settings were chosen later, with this whole period in view.</span></span> <b x-text="`${btWindow(bt.key).start} to ${btWindow(bt.key).inEnd}`"></b></span>
+                <span class="rr-meta__i">Out-of-sample<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="What out-of-sample means">i</button><span class="rm-tip__bub" role="tooltip">From Feb 2024. The method was built after this too, so it is a softer test than a true holdout.</span></span> <b x-text="`${btWindow(bt.key).outStart} to ${btWindow(bt.key).end}`"></b></span>
               </div>
               <template x-if="btEmptyTitle(bt.key)">
                 <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="btEmptyTitle(bt.key)"></p><p class="rm-nodata__d" x-show="btEmptyDetail(bt.key)" x-text="btEmptyDetail(bt.key)"></p></div>
@@ -511,7 +513,7 @@
           <tbody>
             <tr><th scope="row">Macro <small>8 indicators</small></th><td>Upstream causes: monetary policy, credit conditions and the labor market.</td><td>10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold</td><td>FRED and Yahoo</td><td>Yes, half</td></tr>
             <tr><th scope="row">On-chain <small>10 indicators</small></th><td>Crypto-native flows and network health.</td><td>DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h</td><td>DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal</td><td>Yes, half</td></tr>
-            <tr><th scope="row">Equity factor <small>8 indicators</small></th><td>Price-setters who have already digested the upstream inputs and are committing capital. Sign-stable signals of equity risk appetite, style and valuation.</td><td>High-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE</td><td>Yahoo Finance and a mirror of the Shiller spreadsheet</td><td>No, tracked beside it for context</td></tr>
+            <tr><th scope="row">Equity factor <small>8 indicators</small></th><td>Price-setters who have already digested the upstream inputs and are committing capital. Sign-stable signals of equity risk appetite, style and valuation.</td><td>High-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE</td><td>Yahoo Finance and a mirror of the Shiller spreadsheet</td><td>No, tracked beside it for context; the conservative and aggressive backtests do use it</td></tr>
           </tbody>
         </table>
       </div>

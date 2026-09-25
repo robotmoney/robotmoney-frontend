@@ -389,10 +389,33 @@ test("each predictive-power figure carries its reading in words", async ({ page 
   expect(await tips.count()).toBeGreaterThan(10);
   const texts = await tips.allTextContents();
   for (const t of texts) expect(t).toMatch(/: (no reading|[−+]?\d\.\d\d)\./);
-  expect(texts.some((t) => t.includes("no relation beyond noise"))).toBe(true);
+  expect(texts.some((t) => t.includes("treated as noise"))).toBe(true);
+  // A forward figure says how far chance alone reaches over its horizon.
+  expect(texts.some((t) => /Chance alone reaches ±0\.\d\d here/.test(t))).toBe(true);
   // The notes read open under the table, every one of them.
   await expect(page.locator("#corr-notes")).toBeVisible();
   await expect(page.locator("#corr-notes")).toContainText("Effective independent observations");
+});
+
+// With percentiles on its history (as production serves them), the chart
+// reads on the regime's own scale: each line a percentile, the axis marked at
+// the composite's cuts.
+test("the regime history draws percentiles, marked at the risk cuts, when the history carries them", async ({ page }) => {
+  await stubEnvironment(page);
+  const dto = loadRegimeStub();
+  for (const r of dto.history) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = r as any;
+    row.compositePercentile = row.composite; row.macroPercentile = row.macroIndex; row.onchainPercentile = row.onchainIndex; row.factorPercentile = row.factorIndex;
+  }
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const y = page.locator("#history-sec .rr-area__y span");
+  await expect(y).toHaveText(["100", "67th", "50th", "33rd", "0"]);
+  await expect(page.locator("#history-sec .rr-area__y .is-cut")).toHaveCount(2);
+  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d+(st|nd|rd|th)$/);
 });
 
 // A link to a panel opens its tab: session pages link their market context

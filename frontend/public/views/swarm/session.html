@@ -427,6 +427,9 @@
                             <b class="sig__mid"></b>
                             <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
                             <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                            <!-- The reading beside its dot, so it reads without a hover; it
+                                 turns to the dot's left near the top end. -->
+                            <span class="sig__v" :class="r.pct > 0.82 ? 'is-end' : ''" :style="`left:${r.at}`" x-text="ordinal(r.pct)"></span>
                             <!-- What the dot is, on hover of its row: the percentile
                                  says where it sits, this says what it reads. -->
                             <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
@@ -434,7 +437,6 @@
                               <span x-text="r.about"></span>
                             </span>
                           </span>
-                          <span class="sig__v" x-text="ordinal(r.pct)"></span>
                         </div>
                       </template>
                     </div>

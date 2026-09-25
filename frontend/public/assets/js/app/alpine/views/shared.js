@@ -114,8 +114,8 @@ const RULES = [
   ["macro", "Macro", "Follows the macro panel's reading alone."],
   ["onchain", "On-chain", "Follows the on-chain panel's reading alone."],
   ["factor", "Equity factor", "Follows the equity factor panel's reading alone."],
-  ["conservative", "Conservative", "Combines every panel: risk-off if any panel reads risk-off, risk-on only when all read risk-on, neutral otherwise."],
-  ["aggressive", "Aggressive", "Combines every panel by vote, +1 for each risk-on and −1 for each risk-off: above 0 is risk-on, below 0 risk-off, 0 neutral."],
+  ["conservative", "Conservative", "Combines all three panels, equity factor included: risk-off if any reads risk-off, risk-on only when all read risk-on, else neutral."],
+  ["aggressive", "Aggressive", "Combines all three panels, equity factor included, by vote: +1 per risk-on, −1 per risk-off; above 0 is risk-on, below 0 risk-off, 0 neutral."],
 ];
 const CASH = ["stables_only", "All stables", "Holds cash throughout, earning the 3-month T-bill (DTB3) yield."];
 export const BACKTESTS = [
