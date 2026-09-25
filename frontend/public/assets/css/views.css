@@ -229,6 +229,7 @@
 .rv__bands { position: absolute; inset: 0; pointer-events: none; }
 .rv__bands i { position: absolute; top: 0; bottom: 0; display: block; }
 .rv__fig .rr-area__tip { min-width: 13rem; }
+.rv__fig .rr-area__y .is-cut { color: var(--color-text-soft); }
 .rv__tip-reg { display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-sans); color: var(--color-text-soft); }
 .rv__tip-reg i { width: 7px; height: 7px; border-radius: 50%; }
 /* The legend: each line a button (hover focuses it, a click switches it) with
@@ -1008,7 +1009,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* SIGNAL: dots on one percentile axis. A position, not an amount, so never a
    bar from zero. The lead dot is the composite; hollow is context. */
 .sig { display: grid; gap: 0.5rem; }
-.sig__scale, .sig__row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) 2.8rem;
+.sig__scale, .sig__row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) 0.75rem;
   gap: 0.75rem; align-items: center; }
 .sig__ticks { position: relative; height: 1rem; }
 .sig__ticks b { position: absolute; bottom: 0; transform: translateX(-50%); font-family: var(--font-mono);
@@ -1039,8 +1040,13 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .sig__tip span { display: block; margin-top: 0.25rem; color: var(--color-text-soft); }
 .sig__tip.is-end { transform: translateX(calc(-100% + 0.5rem)); }
 .sig__row:hover .sig__tip { opacity: 1; visibility: visible; transition-delay: 0s; }
-.sig__v { font-family: var(--font-mono); font-size: 0.72rem; text-align: right; color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums; }
+/* The reading, beside its dot: to the right, or to the left near the top of
+   the scale, so it never leaves the track. */
+.sig__v { position: absolute; top: 50%; transform: translate(0.7rem, -50%); font-family: var(--font-mono); font-size: 0.72rem;
+  color: var(--color-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.sig__v.is-end { transform: translate(calc(-100% - 0.7rem), -50%); }
+.sig__row.is-lead .sig__v { transform: translate(0.85rem, -50%); }
+.sig__row.is-lead .sig__v.is-end { transform: translate(calc(-100% - 0.85rem), -50%); }
 .sig__row.is-lead .sig__l, .sig__row.is-lead .sig__v { color: var(--color-text); }
 .sig__row.is-lead .sig__dot { width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--color-void); }
 .sig__row.is-context { margin-top: 0.45rem; }
