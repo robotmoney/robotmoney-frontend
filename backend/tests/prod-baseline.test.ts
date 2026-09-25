@@ -32,8 +32,8 @@ import { randomBytes } from "node:crypto";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
-import { readManifest } from "../src/db/schema-manifest.ts";
-import { bootstrapBlankDatabase, loadSnapshot } from "../src/db/schema-snapshot.ts";
+import { hashManifest, readManifest } from "../src/db/schema-manifest.ts";
+import { bootstrapBlankDatabase, loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
 import { runMigrate } from "../scripts/migrate-run.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 
@@ -67,10 +67,23 @@ afterAll(async () => {
   await sql.unsafe(`ALTER ROLE rm_owner ${ownerCanLogin ? "LOGIN" : "NOLOGIN"} PASSWORD NULL`);
 });
 
+/**
+ * The snapshot as a hand-run psql would have left it: the same schema, with a
+ * ledger that never RECORDED `unrecorded`. Its manifest names the same short
+ * list so the bootstrap's own ledger-equals-manifest check holds; withDatabase
+ * removes that manifest anyway (production before §9.1 step 2 has none).
+ */
+function withUnrecorded(snapshot: Snapshot, unrecorded: string): Snapshot {
+  const filenames = snapshot.filenames.filter((f) => f !== unrecorded);
+  const manifest = { ...snapshot.manifest, filenames, contentHash: hashManifest(snapshot.manifest.declaration, filenames) };
+  return { ...snapshot, filenames, manifest };
+}
+
 /** A database of its own: blank-and-bootstrapped from the snapshot, or a clone of the migration-built template. */
 async function withDatabase(
   shape: "snapshot" | "migrations",
   body: (dbs: { admin: postgres.Sql<{}>; owner: postgres.Sql<{}>; name: string }) => Promise<void>,
+  options: { unrecorded?: string } = {},
 ): Promise<void> {
   const name = `rm_baseline_${shape}_${randomBytes(4).toString("hex")}`;
   const maintenance = connect("postgres");
@@ -88,7 +101,8 @@ async function withDatabase(
       await admin.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
       const bootstrapper = connect(name, OWNER);
       try {
-        await bootstrapBlankDatabase(bootstrapper, await loadSnapshot());
+        const snapshot = await loadSnapshot();
+        await bootstrapBlankDatabase(bootstrapper, options.unrecorded ? withUnrecorded(snapshot, options.unrecorded) : snapshot);
       } finally {
         await bootstrapper.end({ timeout: 5 });
       }
@@ -172,16 +186,9 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
     // Production's ledger: scripts/ops/provision-db-role-taxonomy.sh applied
     // 0053 and 0062 through psql without recording them. The runner would
     // otherwise "apply" 0053 again as a pending file, onto a schema that has it.
+    // The ledger is BUILT without the row, never stripped of it: schema_migrations
+    // is append-only, and a test takes a fresh database rather than erase history.
     await withDatabase("snapshot", async ({ admin, owner, name }) => {
-      // schema_migrations is append-only (an ENABLE ALWAYS statement trigger);
-      // only the superuser fixture handle, disabling it for one transaction, can
-      // remove the row — a hand-run psql is exactly how production got this way.
-      await admin.begin(async (tx) => {
-        await tx.unsafe("ALTER TABLE schema_migrations DISABLE TRIGGER USER");
-        await tx.unsafe("DELETE FROM schema_migrations WHERE name = '0053_database_role_taxonomy.sql'");
-        await tx.unsafe("ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only");
-        await tx.unsafe("ALTER TABLE schema_migrations ENABLE ALWAYS TRIGGER schema_migrations_append_only_row");
-      });
       const before = await ledger(admin);
       expect(before).not.toContain("0053_database_role_taxonomy.sql");
 
@@ -190,6 +197,6 @@ describe("§9.1 step 2 — the first manifest is published only over a live sche
       );
       expect(await ledger(admin)).toEqual(before);
       expect(await readManifest(admin)).toBeNull();
-    });
+    }, { unrecorded: "0053_database_role_taxonomy.sql" });
   });
 });
