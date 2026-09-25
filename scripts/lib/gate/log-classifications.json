@@ -114,6 +114,24 @@
     "reason": "A token price read failing; the metric degrades to null, never a fabricated price."
   },
   {
+    "id": "external-judge-attempt-timeout",
+    "match": "\\(swarm\\.judge\\) failed, retry in <n>s: judge produced no judgement \\(model_timeout",
+    "class": "external",
+    "reason": "One judge attempt timed out at the model provider and the job is retrying; a judge job that exhausts its retries logs '— DEAD', which stays fatal."
+  },
+  {
+    "id": "external-member-take-rejected",
+    "match": "member-session-client failed: model take's",
+    "class": "external",
+    "reason": "A member's model returned a take that failed validation (e.g. a WEIGHTS clause missing a canonical bucket); by design the member is rendered absent, never defaulted, and attendance is graded separately."
+  },
+  {
+    "id": "fragment-member-container-exit",
+    "match": "session container exited <n> without a verified submission",
+    "class": "fragment",
+    "reason": "The driver's summary line for any failed member; the cause is logged on its own line and classified there (402, a closed window, a rejected take)."
+  },
+  {
     "id": "known-db-read-only",
     "match": "cannot execute (UPDATE|INSERT|DELETE|SELECT FOR UPDATE) in a read-only transaction|a DELETE was refused, but NOT by the guard .* read-only transaction",
     "class": "known-issue",
