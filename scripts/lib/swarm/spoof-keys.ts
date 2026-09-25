@@ -508,8 +508,13 @@ export interface SpoofRebindDeps {
    * bearer or the reverse.
    */
   issueMemberToken(memberId: string, bearer: string, generationId: string): Promise<void>;
-  /** The generation id the database currently records, or `null`. */
-  readInstalledGeneration(): Promise<string | null>;
+  /**
+   * The generation id the database currently records for `generation`'s
+   * members: the id every one of their active keys carries, or `null` when
+   * they do not all carry one and the same id (migration 0087
+   * `spoof_generation_id`, written only by the rebind's INSERT).
+   */
+  readInstalledGeneration(generation: SpoofGeneration): Promise<string | null>;
 }
 
 /**
@@ -532,7 +537,7 @@ export async function rebindSpoofedKeys(
   generation: SpoofGeneration,
   deps: SpoofRebindDeps,
 ): Promise<void> {
-  const installed = await deps.readInstalledGeneration();
+  const installed = await deps.readInstalledGeneration(generation);
   // A rerun after a crash between (2) and (4): the database is already there,
   // so this step is a no-op and the caller proceeds to (3) and (4).
   if (installed === generation.generationId) return;
@@ -618,7 +623,7 @@ export async function spoofKeys(options: SpoofKeysOptions): Promise<SpoofKeysOut
 
   // (2) One fenced transaction, keyed by member id — skipped when the database
   // already reports this generation.
-  const installed = await options.db.readInstalledGeneration();
+  const installed = await options.db.readInstalledGeneration(generation);
   const resumed = installed === generation.generationId;
   if (!resumed) await rebindSpoofedKeys(generation, options.db);
 

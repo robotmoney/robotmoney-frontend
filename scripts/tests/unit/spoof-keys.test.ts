@@ -167,7 +167,7 @@ function fakeDb(initialInstalled: string | null = null) {
       calls.push(`token:${memberId}`);
       tokens.push({ memberId, bearer, generationId });
     },
-    async readInstalledGeneration(): Promise<string | null> {
+    async readInstalledGeneration(_generation: SpoofGeneration): Promise<string | null> {
       calls.push("readInstalled");
       return installed;
     },
