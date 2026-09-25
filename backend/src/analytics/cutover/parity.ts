@@ -360,12 +360,19 @@ export async function checkDomainParity(domain: ParityDomain, db: DbHandle = sql
 // (migration 0060) — so a re-check after fixing a mismatch is a fresh,
 // separately-timestamped data point, never an edit of the failed one.
 export async function recordParityObservation(result: ParityResult, db: DbHandle = sql): Promise<string> {
+  // rawKey() joins indicator and date with a NUL so no pair can forge another
+  // in memory — but Postgres jsonb refuses \u0000 ("unsupported Unicode escape
+  // sequence"), so every raw_indicator_history observation WITH a mismatch
+  // failed to insert, and analytics.parity_sweep retried until it was dead
+  // (production, 2026-09-23/25). The evidence carries the visible U+241F
+  // SYMBOL FOR UNIT SEPARATOR instead; the in-memory key is unchanged.
+  const mismatches = result.mismatches.map((m) => ({ ...m, naturalKey: m.naturalKey.replaceAll("\u0000", "\u241F") }));
   const [row] = (await db`
     INSERT INTO analytics_parity_observations
       (domain, legacy_row_count, ledger_row_count, legacy_checksum, ledger_checksum, matched, detail)
     VALUES (${result.domain}, ${result.legacyRowCount}, ${result.ledgerRowCount},
             ${result.legacyChecksum}, ${result.ledgerChecksum}, ${result.matched},
-            ${db.json(({ mismatches: result.mismatches } as unknown) as never)})
+            ${db.json(({ mismatches } as unknown) as never)})
     RETURNING id
   `) as unknown as { id: string }[];
   return String(row!.id);
