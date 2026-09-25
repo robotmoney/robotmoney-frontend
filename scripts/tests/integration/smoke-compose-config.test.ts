@@ -606,12 +606,19 @@ describe("smoke-specific behavior is selected by explicit orchestration", () => 
 
     const smokeMain = await Bun.file(join(repoRoot, "scripts/lib/smoke-main.ts")).text();
     expect(smokeMain.match(/await stack\.up\(/g) ?? []).toHaveLength(1);
-    expect(smokeMain).toContain("migrateEnv: scenario.migrateEnv");
+    // The smoke no longer migrates in a container: its database half runs
+    // first, on the host (`prepareDatabase`), and `--migrate` is the migrate
+    // run as rm_owner under the target lock — so the stack's legacy
+    // in-container migrate step is off and no migrate env reaches it.
+    expect(smokeMain).toContain("    prepareDatabase,\n    migrate: false,");
+    expect(smokeMain).not.toContain("migrateEnv: scenario.migrateEnv");
+    expect(smokeMain).toContain('await prepare("migrate")');
     expect(smokeMain).not.toContain("migrateScriptArgs");
     expect(smokeMain).not.toContain("--seed-smoke-schedules");
     // No local mode implies --migrate or --seed (spec §4.3, §5): both are the
     // operator's explicit flags on every data path.
-    expect(smokeMain).toContain("migrate: migrates,");
+    expect(smokeMain).toContain("if (migrates && !committedSteps.has(\"prepare:migrate\"))");
+    expect(smokeMain).toContain("if (seeds && !committedSteps.has(\"prepare:seed\"))");
     expect(smokeMain).toContain("const migrates = requestsMigrate(process.argv);");
     expect(smokeMain).toContain("const seeds = shouldSeed(process.argv);");
     expect(smokeMain).toContain("initialize: seeds ? initializeScenario : undefined");
@@ -1064,7 +1071,9 @@ describe("compose never reads the project directory's .env (criterion 122)", () 
   const PLANTED = "planted-from-dotenv";
   function renderWithPlantedDotenv(withFlag: boolean): string {
     const dir = mkdtempSync(join(tmpdir(), "rm-compose-dotenv-"));
-    writeFileSync(join(dir, ".env"), `SWARM_JUDGE_FAULT_INJECTION=${PLANTED}\n`);
+    // WEBAUTHN_RP_ID: a value docker-compose.yml interpolates into `api` (the
+    // judge fault-injection lever this case used is retired, D55 (3)).
+    writeFileSync(join(dir, ".env"), `WEBAUTHN_RP_ID=${PLANTED}\n`);
     const r = Bun.spawnSync(
       [
         "docker", "compose",
