@@ -23,7 +23,10 @@
 //     and while a generation exists a plain boot's roster takes those
 //     members' key and bearer from it rather than from `RM_CREDENTIALS`.
 //   - THE ORDER IS (1) write generation → (2) fenced rebind by MEMBER ID →
-//     (3) stop old-generation participants → (4) start them. The generation is
+//     (3) stop old-generation participants → (4) start them. (1) and (2) are
+//     `spoofKeys`; (3) and (4) are the boot's own reconciliation
+//     (planParticipants with the generation, then applyParticipantPlan), driven
+//     here over a recording Docker. The generation is
 //     written BEFORE the rebind: a generation written after a crashed rebind
 //     would leave the database holding keys no file records, and those members
 //     would be permanently unusable.
@@ -32,8 +35,11 @@
 //     "interrupted rebind then rerun; crash after rebind commit before
 //     container replacement recovers."
 //
-// Cost class `unit` (docs/architecture.md §3 L1): a temp state directory and
-// injected database/container dependencies — no Postgres, no Docker, no clock.
+// Cost class `unit` (docs/architecture.md §3 L1): a temp state directory, an
+// injected database, and a recording stand-in for Docker — no Postgres, no
+// daemon, no clock. The real database and daemon are
+// scripts/tests/integration/spoof-keys-recovery.test.ts and
+// backend/tests/spoof-rebind.test.ts.
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -211,7 +217,7 @@ function reconcile(names: readonly string[], live: readonly RunningParticipant[]
       composeFiles: ["docker-compose.yml"],
       run: (args) => {
         if (args[0] === "rm") for (const c of args.slice(2)) calls.push(`stop:${live.find((p) => p.containerName === c)?.name}`);
-        if (args[0] === "compose") for (const svc of args.slice(args.indexOf("--build") + 1)) calls.push(`start:${generationOf.get(svc)}`);
+        if (args[0] === "compose") for (const svc of args.slice(args.indexOf("--no-deps") + 1)) calls.push(`start:${generationOf.get(svc)}`);
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     },
@@ -1172,6 +1178,15 @@ describe("spoofKeysRequest — `--spoof-keys` is explicit on argv or it is not r
 
   test("`--spoof-keys=a,b` names exactly those members", () => {
     expect(spoofKeysRequest(["bun", "smoke", "--spoof-keys=athena, robot-money"])).toEqual({ explicit: true, names: ["athena", "robot-money"] });
+  });
+
+  test("the boot's argv allowlist accepts both spellings and refuses an empty list", async () => {
+    const { validateArgv } = await import("../../lib/smoke-db-mode.ts");
+    expect(validateArgv(["bun", "smoke", "--local", "dump", "--spoof-keys"])).toEqual([]);
+    expect(validateArgv(["bun", "smoke", "--local", "dump", "--spoof-keys=athena,robot-money"])).toEqual([]);
+    expect(validateArgv(["bun", "smoke", "--spoof-keys="]).join(" ")).toContain("--spoof-keys= requires a value");
+    // Bare means bare: the next token is never swallowed as its value.
+    expect(validateArgv(["bun", "smoke", "--spoof-keys", "athena"]).join(" ")).toContain(`unexpected argument "athena"`);
   });
 
   test("no flag is no request — never implied by a mode or inherited", () => {

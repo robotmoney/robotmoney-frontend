@@ -11,9 +11,11 @@
 // containers: one take", and the spoof-keys generation sweep of §6.4 step (3)
 // — have to be drivable with a FABRICATED running set and no Docker daemon.
 // Every case below is exactly that: plain records in, a plan out, no clock,
-// no filesystem, no socket. The one exception is the closing ratchet, which
-// reads source to keep boot code on `planParticipants`: the composition that
-// never maps an unconfigured path to the empty roster.
+// no filesystem, no socket. Two blocks are the exception: the ratchet, which
+// reads source to keep boot code on `planParticipants` (the composition that
+// never maps an unconfigured path to the empty roster), and the boot-entry
+// block at the end, which runs `bun scripts/smoke.ts` itself against a
+// recording Docker stand-in on PATH — no daemon, nothing started.
 //
 // Cost class `unit` (docs/architecture.md §3 L1). Parsing, loading and the
 // refusal taxonomy live in credential-file.test.ts.

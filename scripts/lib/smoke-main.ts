@@ -104,7 +104,7 @@ import { CredentialFileRefusal, loadCredentialFile, planParticipants, resolveCre
 import { runSpoofRebind, SpoofKeysRefusal, spoofKeysRequest } from "./swarm/spoof-keys.ts";
 import { applyParticipantPlan, fetchMemberRoles, listRunningParticipants, renderParticipantServices, writeParticipantFiles, type DockerRun } from "./participant-compose.ts";
 import { ZEN_API_BASE_URL } from "./opencode-key.ts";
-import { ZEN_PREFIX } from "./model-registry.ts";
+import { resolveAgentModel, ZEN_PREFIX } from "./model-registry.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -1152,9 +1152,9 @@ let participantsReconciled: ParticipantsReconciled | undefined;
  * the plan stop-then-start. A refusal (a role that disagrees with the
  * database, a file gone since the plan) starts and stops nothing.
  */
-async function reconcileParticipants(): Promise<ParticipantsReconciled> {
+async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconciled> {
   const running = listRunningParticipants(project, dockerRunIn(process.env));
-  const roles = credentialResolution.configured ? await fetchMemberRoles(hostBackendUrl(apiPort), operatorToken()) : new Map<string, { role: string }>();
+  const roles = credentialResolution.configured ? await fetchMemberRoles(apiUrl, operatorToken()) : new Map<string, { role: string }>();
   const planned = planParticipants(credentialResolution, running, loadCredentialFile, {
     spoofState: { stateRoot: statesRoot, instance: instance.name },
     memberRole: (memberId) => roles.get(memberId),
@@ -1164,7 +1164,8 @@ async function reconcileParticipants(): Promise<ParticipantsReconciled> {
   const apiImage = runningServices().api ?? "";
   if (desired.length > 0 && apiImage === "") throw new Error("participants: the api container is not running, so there is no image to start them from");
   // The one model every participant calls, from the single selection signal.
-  const model = desired.length > 0 ? resolveModelConfig(process.env, { standingStack: staticPortMode }).model : "";
+  // No host key is asked for here: each participant spends its OWN model key.
+  const model = desired.length > 0 ? resolveAgentModel(process.env) : "";
   const envDir = join(paths.dir, "participants");
   const overlay = join(paths.overlaysDir, "participants.json");
   const rendered = renderParticipantServices(desired, {
@@ -1623,7 +1624,7 @@ async function main(): Promise<void> {
       // database's roles are checked against it and with the instance's spoof
       // generation taking precedence for the members it names.
       await begin("participants", null);
-      participantsReconciled = await reconcileParticipants();
+      participantsReconciled = await reconcileParticipants(hostBackendUrl(stack.publishedPort("api", 8787)));
       await commit({ participantsStarted: participantsReconciled.started, participantsStopped: participantsReconciled.stopped });
       await begin("readiness", null);
     }

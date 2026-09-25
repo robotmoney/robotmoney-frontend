@@ -116,7 +116,7 @@ describe("judge coverage runs through the participant judge (smoke spec §6.2; D
   test("the boot's participants phase starts the credential file's judges, through the one roster composition", () => {
     const code = codeOnly(smokeMainSrc);
     expect(code).toContain('await begin("participants", null);');
-    expect(code).toContain("participantsReconciled = await reconcileParticipants();");
+    expect(code).toContain("participantsReconciled = await reconcileParticipants(hostBackendUrl(stack.publishedPort(\"api\", 8787)));");
     expect(code).toMatch(/const desired = \[\.\.\.planned\.start, \.\.\.planned\.keep\];/);
     expect(code).toMatch(/renderParticipantServices\(desired,/);
   });
