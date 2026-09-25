@@ -369,14 +369,12 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "scripts/lib/rollout-receipt",
     "scripts/migrate-run",
     "scripts/prod-bootstrap",
-    "scripts/scan-low-order-keys",
     "scripts/schema-current",
     "scripts/smoke-twin-capture",
     "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation",
     "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal",
     "scripts/upgrades/0.5.0-to-0.5.1/postflight",
     "scripts/upgrades/0.5.0-to-0.5.1/preflight",
-    "scripts/v0-seed-bootstrap",
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -644,11 +642,19 @@ describe("declarations — what the converted modules declare, read without depe
 
   /** Module id → how many `registerQuery(` calls its source makes, and whether
    *  each is at module level. */
+  /** Every `.ts` file under src/ and scripts/, as `src/...` / `scripts/...`
+   *  paths relative to backend/. Operator CLIs register too (#1026 W3). */
+  function backendModuleFiles(): string[] {
+    return (["src", "scripts"] as const).flatMap((root) =>
+      (readdirSync(join(SRC, "..", root), { recursive: true, encoding: "utf8" }) as string[]).map((rel) => join(root, rel)),
+    );
+  }
+
   function declaringModules(): Map<string, { calls: number; nested: number[] }> {
     const found = new Map<string, { calls: number; nested: number[] }>();
-    for (const rel of readdirSync(SRC, { recursive: true, encoding: "utf8" }) as string[]) {
-      if (!rel.endsWith(".ts") || rel === join("db", "registry.ts")) continue;
-      const text = readFileSync(join(SRC, rel), "utf8");
+    for (const rel of backendModuleFiles()) {
+      if (!rel.endsWith(".ts") || rel === join("src", "db", "registry.ts")) continue;
+      const text = readFileSync(join(SRC, "..", rel), "utf8");
       if (!text.includes("registerQuery(")) continue;
       const source = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true);
       const entry = { calls: 0, nested: [] as number[] };
@@ -661,7 +667,7 @@ describe("declarations — what the converted modules declare, read without depe
         ts.forEachChild(node, (child) => visit(child, inner));
       };
       visit(source, 0);
-      if (entry.calls > 0) found.set(`src/${rel.replace(/\.ts$/, "")}`, entry);
+      if (entry.calls > 0) found.set(rel.replace(/\.ts$/, ""), entry);
     }
     return found;
   }
