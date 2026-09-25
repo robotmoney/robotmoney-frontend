@@ -56,7 +56,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "./lib/env-role.ts";
 import { instanceFlag, instancePaths, readStackState, resolveInstance, stateRoot as resolveStateRoot, type InstancePaths } from "./lib/smoke-state.ts";
 import { readServiceToken } from "./lib/smoke-secret.ts";
-import { loadCredentialFile, resolveCredentialPath, rosterEntries, writeCredentialBearer } from "./lib/swarm/credential-file.ts";
+import { loadCredentialFile, resolveCredentialPath, writeCredentialBearer, type CredentialEntry, type ParticipantKind } from "./lib/swarm/credential-file.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
 import type { HeldTargetLock, LockHolder, TargetState } from "../backend/src/db/target-lock.ts";
 import type { SetIdentityOptions, SetIdentityResult } from "../backend/scripts/set-identity.ts";
@@ -193,7 +193,10 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
   // database write, the operator's service token for the admin API.
   let ownerUrl: string | undefined;
   let operatorToken: string | undefined;
-  let roster: ReturnType<typeof rosterEntries> = [];
+  // Every seated member the file names, agents then judges, each by name. Read
+  // straight off the validated file: rebinding is not participant
+  // reconciliation (planParticipants owns that), so it builds no roster plan.
+  let roster: { name: string; kind: ParticipantKind; credential: CredentialEntry }[] = [];
   let credentialPath: string | undefined;
   let apiUrl: string | undefined;
   if (command === "rebind-members") {
@@ -206,7 +209,11 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
     if (!resolution.configured) refuse("no credential file is configured: set RM_CREDENTIALS in ~/.env or pass --credentials <path> (§6.1).");
     credentialPath = (resolution as { path: string }).path;
     try {
-      roster = rosterEntries(loadCredentialFile(credentialPath));
+      const file = loadCredentialFile(credentialPath);
+      roster = [
+        ...Object.keys(file.agents).sort().map((name) => ({ name, kind: "agent" as const, credential: file.agents[name]! })),
+        ...Object.keys(file.judges).sort().map((name) => ({ name, kind: "judge" as const, credential: file.judges[name]! })),
+      ];
     } catch (error) {
       refuse(`${error instanceof Error ? error.message : String(error)}.`);
     }
