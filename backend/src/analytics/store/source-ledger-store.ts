@@ -1,5 +1,37 @@
 import { sql, jsonValue } from "../../db/client.ts";
-import type { SourceAcquisitionEvidence } from "../source-ledger.ts";
+import type { SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
+import { withinTolerance } from "../source-tolerance.ts";
+
+// Issue #1035: what one re-observation adds to the ledger, given the head it is
+// compared against. `null` means NOTHING — no row at all.
+//
+// WHY A RE-OBSERVATION WRITES NO ROW. Every fetch re-reads a series' whole
+// history, and this writer used to append a row per point per fetch: 'unchanged'
+// when the value matched exactly, 'revision' when it differed by float32 noise.
+// That was two thirds of the production ledger within four days of cutover, and
+// none of it was information — the acquisition itself (source_acquisitions,
+// source_fetches, the exact payload bytes) already proves the fetch happened and
+// what it returned. So a value within its source's tolerance (source-tolerance.ts,
+// decision D56) of the head, carrying the same provenance label, leaves the head
+// as it is.
+//
+// A label change on a value within tolerance is still recorded, as 'unchanged',
+// carrying the HEAD's value and the new label: raw_indicator_history rewrites
+// only its `source` in that case (store/raw-history-store.ts applies the same
+// rule), and the two must move together or cutover/parity.ts reports a
+// mismatch. The value of record changes only when a change exceeds tolerance;
+// the bytes actually fetched are kept in source_payloads either way.
+type RevisionKind = "initial" | "unchanged" | "revision";
+
+function classify(
+  prior: { value: number; provenance: string | null } | undefined,
+  value: SourceValueEvidence,
+): RevisionKind | null {
+  if (prior === undefined) return "initial";
+  const same = withinTolerance(value.sourceKey, prior.value, value.value);
+  if (same && prior.provenance === (value.provenance ?? null)) return null;
+  return same ? "unchanged" : "revision";
+}
 
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
@@ -120,23 +152,25 @@ export async function saveSourceAcquisition(
       // cannot be used here.
       for (const value of evidence.values) {
         const [prior] = await tx`
-          SELECT id, value
+          SELECT id, value, provenance
           FROM source_value_versions
           WHERE source_key = ${value.sourceKey}
             AND market_date IS NOT DISTINCT FROM ${value.marketDate}::date
             AND market_instant IS NOT DISTINCT FROM ${value.marketInstant}::timestamptz
           ORDER BY knowledge_time DESC, id DESC
           LIMIT 1`;
-        const revisionKind = prior === undefined
-          ? "initial"
-          : Number(prior.value) === value.value ? "unchanged" : "revision";
+        const revisionKind = classify(
+          prior === undefined ? undefined : { value: Number(prior.value), provenance: prior.provenance ?? null },
+          value,
+        );
+        if (revisionKind === null) continue;
         await tx`
           INSERT INTO source_value_versions
             (acquisition_id, source_key, market_date, market_instant, value,
              prior_version_id, revision_kind, provenance)
           VALUES
             (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
-             ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
+             ${value.marketInstant ?? null}::timestamptz, ${revisionKind === "unchanged" ? Number(prior!.value) : value.value}, ${prior?.id ?? null},
              ${revisionKind}, ${value.provenance ?? null})`;
       }
     } else if (evidence.values.length > 0) {
@@ -158,7 +192,7 @@ export async function saveSourceAcquisition(
       // A row has exactly one representation (CHECK in migration 0057), so
       // splitting on it gives plain equality plus an IS NULL, both of which
       // `source_value_versions_lookup_idx` can search.
-      const priorByIdx = new Map<number, { id: number; value: number } | undefined>();
+      const priorByIdx = new Map<number, { id: number; value: number; provenance: string | null } | undefined>();
       const dated: { idx: number; v: SourceAcquisitionEvidence["values"][number] }[] = [];
       const instants: { idx: number; v: SourceAcquisitionEvidence["values"][number] }[] = [];
       evidence.values.forEach((v, i) => {
@@ -167,11 +201,11 @@ export async function saveSourceAcquisition(
 
       if (dated.length > 0) {
         const rows = await tx`
-          SELECT k.idx, svv.id, svv.value
+          SELECT k.idx, svv.id, svv.value, svv.provenance
           FROM unnest(${dated.map((d) => d.v.sourceKey)}::text[], ${dated.map((d) => d.v.marketDate)}::date[], ${dated.map((d) => d.idx)}::int[])
             AS k(source_key, market_date, idx)
           LEFT JOIN LATERAL (
-            SELECT id, value
+            SELECT id, value, provenance
             FROM source_value_versions v
             WHERE v.source_key = k.source_key
               AND v.market_date = k.market_date
@@ -179,15 +213,15 @@ export async function saveSourceAcquisition(
             ORDER BY v.knowledge_time DESC, v.id DESC
             LIMIT 1
           ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value) });
+        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: r.provenance ?? null });
       }
       if (instants.length > 0) {
         const rows = await tx`
-          SELECT k.idx, svv.id, svv.value
+          SELECT k.idx, svv.id, svv.value, svv.provenance
           FROM unnest(${instants.map((d) => d.v.sourceKey)}::text[], ${instants.map((d) => d.v.marketInstant)}::timestamptz[], ${instants.map((d) => d.idx)}::int[])
             AS k(source_key, market_instant, idx)
           LEFT JOIN LATERAL (
-            SELECT id, value
+            SELECT id, value, provenance
             FROM source_value_versions v
             WHERE v.source_key = k.source_key
               AND v.market_instant = k.market_instant
@@ -195,24 +229,23 @@ export async function saveSourceAcquisition(
             ORDER BY v.knowledge_time DESC, v.id DESC
             LIMIT 1
           ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value) });
+        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: r.provenance ?? null });
       }
 
-      const rows = evidence.values.map((value, i) => {
+      const rows = evidence.values.flatMap((value, i) => {
         const prior = priorByIdx.get(i + 1); // WITH ORDINALITY is 1-based
-        const revisionKind = prior === undefined
-          ? "initial"
-          : Number(prior.value) === value.value ? "unchanged" : "revision";
-        return {
+        const revisionKind = classify(prior, value);
+        if (revisionKind === null) return [];
+        return [{
           acquisition_id: evidence.id,
           source_key: value.sourceKey,
           market_date: value.marketDate ?? null,
           market_instant: value.marketInstant ?? null,
-          value: value.value,
+          value: revisionKind === "unchanged" ? prior!.value : value.value,
           prior_version_id: prior?.id ?? null,
           revision_kind: revisionKind,
           provenance: value.provenance ?? null,
-        };
+        }];
       });
       // postgres.js binds one parameter per cell in the array insert. Keep
       // each statement comfortably below PostgreSQL's 65,535-parameter limit:

@@ -21,7 +21,7 @@ import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { catchUpMissedIndicatorDays, CATCH_UP_PROVENANCE } from "../src/producer/index.ts";
-import { checkRawIndicatorHistoryParity } from "../src/analytics/cutover/parity.ts";
+import { checkRawIndicatorHistoryParity, recordParityObservation } from "../src/analytics/cutover/parity.ts";
 import { evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
 import { runCutoverGateCli } from "../scripts/analytics-ledger-cutover-gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
@@ -581,6 +581,43 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     const parity = await checkRawIndicatorHistoryParity();
     expect(parity.mismatches, JSON.stringify(parity.mismatches)).toEqual([]);
     expect(parity.matched).toBe(true);
+  });
+});
+
+// Issue #1035 AC4: the ledger writer and the raw-history writer apply ONE
+// tolerance rule (analytics/source-tolerance.ts), so a sub-tolerance refetch —
+// which now leaves BOTH sides alone — keeps them in parity. Were only one side
+// tolerance-aware, the ledger head and the compatibility row would disagree by
+// exactly the float noise, and parity (which rounds at an absolute 1e-9) would
+// record a permanent matched:false for a value in the thousands.
+describe("issue #1035 AC4: parity stays matched after a sub-tolerance refetch", () => {
+  test("a Yahoo refetch a relative 1e-7 off leaves both models on the head value, and parity records matched:true", async () => {
+    prodAuth();
+    const indicator = "IWF_IWD"; // a Yahoo ratio: D56 tolerance 1e-6
+    const date = "2024-10-01";
+    const value = 4523.68017578125;
+    await submitRawHistoryPoint(indicator, date, value, "live");
+    const first = await checkRawIndicatorHistoryParity();
+    expect(first.mismatches, JSON.stringify(first.mismatches)).toEqual([]);
+
+    const refetched = value * (1 + 1e-7);
+    expect(Math.abs(refetched - value)).toBeGreaterThan(1e-9); // parity's own rounding would NOT hide it
+    await submitRawHistoryPoint(indicator, date, refetched, "live");
+
+    const [legacy] = (await sql`
+      SELECT value FROM raw_indicator_history WHERE indicator = ${indicator} AND date = ${date}`) as unknown as { value: number }[];
+    expect(Number(legacy!.value)).toBe(value);
+    const versions = (await sql`
+      SELECT value FROM source_value_versions WHERE source_key = ${`raw_indicator_history:${indicator}`}`) as unknown as { value: number }[];
+    expect(versions.map((v) => Number(v.value))).toEqual([value]);
+
+    const parity = await checkRawIndicatorHistoryParity();
+    await recordParityObservation(parity);
+    expect(parity.mismatches, JSON.stringify(parity.mismatches)).toEqual([]);
+    const [observation] = (await sql`
+      SELECT matched FROM analytics_parity_observations
+      WHERE domain = 'raw_indicator_history' ORDER BY id DESC LIMIT 1`) as unknown as { matched: boolean }[];
+    expect(observation!.matched).toBe(true);
   });
 });
 

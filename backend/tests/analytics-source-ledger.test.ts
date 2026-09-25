@@ -130,7 +130,7 @@ test("cache hits remain independent immutable fetch evidence with checksum-addre
   }
 });
 
-test("unchanged and revised observations retain every version in one deterministic prior-version chain", async () => {
+test("a re-observation adds no version and a revision adds one, in one deterministic prior-version chain", async () => {
   for (const value of [10, 10, 11]) {
     await captureSourceAcquisition({ provider: "fixture", sourceKey: "series:revision", parserVersion: "fixture:1", cacheIdentity: String(value) }, sink,
       async () => [{ date: "2024-01-01", value }]);
@@ -138,10 +138,100 @@ test("unchanged and revised observations retain every version in one determinist
   const rows = await sql`
     SELECT id, prior_version_id, revision_kind, value FROM source_value_versions
     WHERE source_key='series:revision' ORDER BY id`;
-  expect(rows.map((r) => r.revision_kind)).toEqual(["initial", "unchanged", "revision"]);
+  // The second acquisition of 10 is evidence that a fetch happened (its
+  // acquisition, fetches and payload are all kept) but not a new version.
+  expect(rows.map((r) => r.revision_kind)).toEqual(["initial", "revision"]);
+  expect(rows.map((r) => Number(r.value))).toEqual([10, 11]);
   expect(rows[0]!.prior_version_id).toBeNull();
   expect(String(rows[1]!.prior_version_id)).toBe(String(rows[0]!.id));
-  expect(String(rows[2]!.prior_version_id)).toBe(String(rows[1]!.id));
+  const [{ acquisitions }] = await sql`
+    SELECT count(*)::int AS acquisitions FROM source_acquisitions WHERE cache_identity IN ('10', '11')`;
+  expect(acquisitions).toBe(3);
+});
+
+// ── Issue #1035: re-observations and float noise add no versions ────────────
+// A Yahoo-derived key, because that is the one D56 gives a non-zero tolerance
+// (analytics/source-tolerance.ts); an exact key is covered by the case above.
+const NOISY_KEY = "backtest:ETH-USD"; // no other case in this file writes it
+const HISTORY = Array.from({ length: 40 }, (_, i) => ({
+  date: new Date(Date.UTC(2023, 0, i + 1)).toISOString().slice(0, 10),
+  value: 18.719999313354492 + i,
+}));
+
+async function acquireNoisy(points: { date: string; value: number }[], provenance: string = "live"): Promise<void> {
+  await saveSourceAcquisition({
+    id: randomUUID(),
+    provider: "yahoo",
+    parserVersion: "yahoo:1",
+    cacheIdentity: `noise-${randomUUID()}`,
+    requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }],
+    fetches: [],
+    values: points.map((p) => ({ sourceKey: NOISY_KEY, marketDate: p.date, marketInstant: null, value: p.value, provenance })),
+  });
+}
+
+async function noisyVersions(): Promise<{ id: string; market_date: string; value: number; revision_kind: string; provenance: string | null }[]> {
+  return (await sql`
+    SELECT id::text AS id, market_date::text AS market_date, value, revision_kind, provenance
+    FROM source_value_versions WHERE source_key = ${NOISY_KEY} ORDER BY id`) as never;
+}
+
+test("issue #1035 AC1: an acquisition whose values all equal the ledger head adds zero source_value_versions rows", async () => {
+  await acquireNoisy(HISTORY);
+  const [{ total: before }] = await sql`SELECT count(*)::int AS total FROM source_value_versions`;
+  expect((await noisyVersions()).length).toBe(HISTORY.length);
+
+  // The whole history re-fetched, twice — what every production fetch did.
+  await acquireNoisy(HISTORY);
+  await acquireNoisy(HISTORY);
+
+  const [{ total: after }] = await sql`SELECT count(*)::int AS total FROM source_value_versions`;
+  expect(after - before).toBe(0);
+  expect((await noisyVersions()).every((v) => v.revision_kind === "initial")).toBe(true);
+  // The re-fetches themselves are still on the record.
+  const [{ n }] = await sql`
+    SELECT count(*)::int AS n FROM source_acquisitions WHERE cache_identity LIKE 'noise-%'`;
+  expect(n).toBe(3);
+});
+
+test("issue #1035 AC2: a value within the source's tolerance adds no revision; one outside it adds exactly one", async () => {
+  const date = "2023-06-01";
+  const base = 4523.68017578125;
+  await acquireNoisy([{ date, value: base }]);
+
+  // Float32 jitter: a relative 1e-7 off the head, well inside D56's 1e-6.
+  const jitter = base * (1 + 1e-7);
+  expect(jitter).not.toBe(base);
+  await acquireNoisy([{ date, value: jitter }]);
+  let versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => v.revision_kind)).toEqual(["initial"]);
+  expect(Number(versions[0]!.value)).toBe(base);
+
+  // A real revision: a relative 1e-5, ten times the tolerance.
+  const revised = base * (1 + 1e-5);
+  await acquireNoisy([{ date, value: revised }]);
+  versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => v.revision_kind)).toEqual(["initial", "revision"]);
+  expect(Number(versions[1]!.value)).toBe(revised);
+
+  // The tolerance is measured against the NEW head, so re-fetching the
+  // revised value (with its own jitter) adds nothing further.
+  await acquireNoisy([{ date, value: revised * (1 - 1e-7) }]);
+  versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions).toHaveLength(2);
+});
+
+test("issue #1035: a relabel within tolerance is one 'unchanged' version carrying the head value, the same rule raw history applies", async () => {
+  const date = "2023-07-01";
+  const base = 31.5;
+  await acquireNoisy([{ date, value: base }], "seed");
+  await acquireNoisy([{ date, value: base * (1 + 1e-7) }], "live");
+  const versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => [v.revision_kind, Number(v.value), v.provenance])).toEqual([
+    ["initial", base, "seed"],
+    ["unchanged", base, "live"],
+  ]);
 });
 
 test("concurrent revisions serialize into a single chain without a duplicate successor or lost acquisition", async () => {
