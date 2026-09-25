@@ -529,16 +529,27 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(20);
   });
 
-  test("every backend/scripts module issuing a raw statement is on the dated scripts backlog or shipped-release history", () => {
-    const allowed = new Set([...SCRIPTS_RAW_SQL_ALLOWLIST, ...HISTORICAL_RELEASE_TOOLING.keys()]);
-    const found = rawStatementModules(SCRIPTS);
-    // Non-vacuous: the scan reads scripts/ and sees the statements it records.
-    expect(found.size).toBeGreaterThan(0);
-    const offenders = [...found]
+  /** The scripts gate itself: every backend/scripts module issuing a raw
+   *  statement that neither `backlog` nor `history` admits, one line each.
+   *  The gate test below and its red control run THIS function, so the red
+   *  control proves the gate, not a copy of it. */
+  function scriptsGateOffenders(
+    backlog: readonly string[],
+    history: ReadonlyMap<string, string>,
+    found: ReadonlyMap<string, RawStatement[]> = rawStatementModules(SCRIPTS),
+  ): string[] {
+    const allowed = new Set([...backlog, ...history.keys()]);
+    return [...found]
       .filter(([moduleId]) => !allowed.has(moduleId))
       .map(([moduleId, statements]) => `${moduleId}: ${statements.map((st) => `${st.line} ${st.tag}`).join(", ")}`)
       .sort();
-    expect(offenders).toEqual([]);
+  }
+
+  test("every backend/scripts module issuing a raw statement is on the dated scripts backlog or shipped-release history", () => {
+    const found = rawStatementModules(SCRIPTS);
+    // Non-vacuous: the scan reads scripts/ and sees the statements it records.
+    expect(found.size).toBeGreaterThan(0);
+    expect(scriptsGateOffenders(SCRIPTS_RAW_SQL_ALLOWLIST, HISTORICAL_RELEASE_TOOLING, found)).toEqual([]);
   });
 
   test("the scripts backlog only shrinks — a converted script must leave it", () => {
@@ -584,14 +595,26 @@ describe("structural enforcement — a raw sql call outside the interface is det
 
   test("RED CONTROL: an unreleased upgrade's raw statements are not excused by the history set", () => {
     // The v0.5.1 tooling has no release tag, so the only thing admitting its
-    // raw statements is the dated backlog. Were it dropped from there, the gate
-    // above would name it.
-    const unreleased = [...rawStatementModules(SCRIPTS).keys()].filter((m) => m.startsWith("scripts/upgrades/0.5.0-to-0.5.1/"));
+    // raw statements is the dated backlog. This runs the gate itself
+    // (scriptsGateOffenders) with each v0.5.1 module dropped from the backlog
+    // in turn, and requires the gate to name exactly that module — so a gate
+    // that stopped reading the backlog, or that let the history set excuse an
+    // unreleased upgrade, fails here.
+    const found = rawStatementModules(SCRIPTS);
+    const unreleased = [...found.keys()].filter((m) => m.startsWith("scripts/upgrades/0.5.0-to-0.5.1/"));
     expect(unreleased.length).toBeGreaterThan(0);
     for (const moduleId of unreleased) {
       expect(HISTORICAL_RELEASE_TOOLING.has(moduleId), moduleId).toBe(false);
-      expect(SCRIPTS_RAW_SQL_ALLOWLIST, moduleId).toContain(moduleId);
+      const without = SCRIPTS_RAW_SQL_ALLOWLIST.filter((m) => m !== moduleId);
+      expect(without.length, moduleId).toBe(SCRIPTS_RAW_SQL_ALLOWLIST.length - 1);
+      const offenders = scriptsGateOffenders(without, HISTORICAL_RELEASE_TOOLING, found);
+      expect(offenders.map((line) => line.slice(0, line.indexOf(":"))), moduleId).toEqual([moduleId]);
     }
+    // And the history set really is consulted: with every shipped module
+    // dropped from it, the gate names each one.
+    const shipped = [...HISTORICAL_RELEASE_TOOLING.keys()].sort();
+    const withoutHistory = scriptsGateOffenders(SCRIPTS_RAW_SQL_ALLOWLIST, new Map(), found);
+    expect(withoutHistory.map((line) => line.slice(0, line.indexOf(":")))).toEqual(shipped);
   });
 
   test("the infrastructure set is exactly the named db layer — an addition fails here", () => {
