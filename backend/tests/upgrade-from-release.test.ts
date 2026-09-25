@@ -6,27 +6,27 @@
 // WHICH RELEASES, AND WHERE THEIR SCHEMA COMES FROM
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// SUPPORTED_RELEASES is v0.5.0 alone: it is the release production runs
-// (`releases-0.5.x` carries the same 72 migration files; v0.5.1's 0062 was
-// never tagged), and an upgrade path from anything older is one no database
-// will take. Adding a release is one fixture directory and one entry below
-// ONLY for a release built by v0.5.0's runner loop (`applyAsReleaseRunner`),
-// which records no compat declaration. A release whose own runner recorded
-// compat (anything shipped with 0064's runMigrate) also needs that runner
-// modelled here, or its ledger rows above the baseline read NULL. What depends
-// on whether the release predates 0063 — the refusal, the bridge, the "compat
-// is NULL" boot refusal — is gated on it (`predatesIdentity`), not assumed.
+// SUPPORTED_RELEASES (backend/src/db/supported-releases.ts) is v0.5.0 alone
+// (D55 (8)): it is the release production runs (`releases-0.5.x` carries the
+// same 72 migration files; v0.5.1's 0062 was never tagged), and an upgrade path
+// from anything older is one no database will take. That module pins each
+// release's filename list; the first test below fails when it disagrees with
+// the fixture's release.json. Adding a release is a new decision, one fixture
+// directory and one entry there ONLY for a release built by v0.5.0's runner
+// loop (`applyAsReleaseRunner`), which records no compat declaration. A release
+// whose own runner recorded compat (anything shipped with 0064's runMigrate)
+// also needs that runner modelled here, or its ledger rows above the baseline
+// read NULL. What depends on whether the release predates 0063 — the first
+// production migrate's exception, the "compat is NULL" boot refusal — is gated
+// on it (`predatesIdentity`), not assumed.
 //
-// A release's schema is rebuilt from its OWN migration bytes, recorded in
-// tests/fixtures/releases/<tag>/release.json as a sha256 per file, taken from
-// the tag. A file whose bytes on this branch still match is read from
-// backend/migrations/; a file that was edited after the tag is kept verbatim
-// under the fixture's migrations/ directory — v0.5.0's
-// 0053_database_role_taxonomy.sql is one (it said NOLOGIN for rm_owner, the
-// branch says LOGIN). The first test below fails if a file drifts from the
-// recorded hash without a verbatim copy, so the release schema cannot silently
-// become "whatever the branch says the release was". No test here needs git:
-// CI's checkout is shallow and carries no tags.
+// A release's schema is rebuilt from its OWN migration bytes by its own runner
+// loop (tests/fixtures/releases/release-fixture.ts): a sha256 per file, taken
+// from the tag, and a verbatim copy of any file the branch edited after the
+// tag — v0.5.0's 0053_database_role_taxonomy.sql is one (it said NOLOGIN for
+// rm_owner, the branch says LOGIN). The first test below fails if a file drifts
+// from the recorded hash without a verbatim copy, so the release schema cannot
+// silently become "whatever the branch says the release was".
 //
 // NO RELEASE TAG CARRIES A SNAPSHOT. backend/schema/ first appears on this
 // branch, so spec §8.4's "snapshot N + migrations = snapshot N+1" has no
@@ -36,36 +36,27 @@
 // blank + all migrations equals the snapshot, so the two together tie the
 // release to the snapshot through the migrations.
 //
-// The release is built the way the release built itself: v0.5.0's runner
-// (backend/src/db/migrate.ts at the tag) applies each file in its own
-// transaction and switches to `SET LOCAL ROLE rm_owner` from 0054 on.
-//
 // ─────────────────────────────────────────────────────────────────────────────
-// THE BRIDGE, AND WHY IT IS HERE (a reported gap, not a convenience)
+// THE UPGRADE IS THE OPERATOR'S: THE FIRST PRODUCTION MIGRATE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// `runMigrate` (backend/scripts/migrate-run.ts) cannot start from any shipped
-// release. Its gates (`checkMigrateGates`) refuse a database with no
-// `deployment_identity` row for every caller, and v0.5.0 predates 0063, which
-// creates that table — so neither the §4.2 restore procedure ("ends by writing
-// `rehearsal` through `rm_owner`") nor §9.1 step 4 has anything to write into
-// until a migration runs, and nothing but `runMigrate` may run one. The
-// operator caller additionally refuses a database with no manifest
-// (`assertBaselineForOperator`), and v0.5.0 predates 0064. The first test in
-// the upgrade block pins that refusal, because it is the state an operator
-// meets today.
+// v0.5.0 predates 0063, so its database has no `deployment_identity` table and
+// no row to enroll it. The upgrade runs exactly as production's will (spec
+// §9.1, D55 (5)): `bun run migrate` as a PROCESS under a terminal, RM_ENV=prod,
+// the rm_owner password typed at the masked prompt, an explicit `y` — the one
+// run §4.3 allows without the row, because the ledger equals v0.5.0's filename
+// list exactly. It applies EVERY pending file, including the pre-compat ones at
+// or below 0063 (their compat stays NULL, D53 decision 3), reconciles grants,
+// compares the live schema with the snapshot (§9.1 step 2) and publishes the
+// first manifest. Nothing is applied around the command. The refusals that
+// guard that exception are first-production-migrate.test.ts's subject; the one
+// pinned here is that no other caller reaches a release: `--migrate` and a run
+// with no typed confirmation refuse it before applying anything.
 //
-// So the pending files at or below the pre-compat baseline (0063, D53 decision
-// 3 — `COMPAT_HEADER_BASELINE`) are applied by the release-era runner loop, the
-// same loop `bun smoke --migrate` still reaches through the legacy runner.
-// Then the database is enrolled `rehearsal` through rm_owner exactly as §4.2's
-// restore procedure says, and `runMigrate` does the rest: every file above the
-// baseline, each with its compat declaration recorded, then reconciliation and
-// the manifest. Everything asserted about data below is asserted AFTER that
-// real run.
+// Everything asserted about data below is asserted AFTER that real run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
@@ -76,51 +67,44 @@ import {
 } from "../src/db/preflight.ts";
 import { COMPAT_HEADER_BASELINE, migrationNumber, parsePendingHeader } from "../src/db/schema-compat.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
+import { SUPPORTED_RELEASES } from "../src/db/supported-releases.ts";
 import { runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
+import {
+  HEAD_FILES,
+  MIGRATIONS_DIR,
+  applyAsReleaseRunner,
+  loadRelease,
+  migrateAtTerminal,
+  releaseBytes,
+  releaseSteps,
+  restoreLogins,
+  restoreRoles,
+  revokeLoginDefaults,
+  saveRoles,
+  type ReleaseFixture,
+  type SavedRole,
+} from "./fixtures/releases/release-fixture.ts";
 import { withTargetLock } from "./support/target-lock.ts";
 import { describeCatalogDiff, diffCatalogs, normalizedCatalog } from "./support/catalog-normalize.ts";
 
-const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
-const FIXTURES_DIR = join(import.meta.dir, "fixtures", "releases");
-const HEAD_FILES = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-
-/** The releases an upgrade must succeed from. See the header for why only one. */
-const SUPPORTED_RELEASES = ["v0.5.0"] as const;
-
-interface ReleaseFixture {
-  readonly tag: string;
-  readonly commit: string;
-  /** What the release itself seeded and could queue — read from the tag, not
-   *  from the migrations under test (see release.json's `source`). */
-  readonly swarm: {
-    readonly source: string;
-    readonly scheduleKinds: readonly string[];
-    readonly jobKinds: readonly string[];
-  };
-  readonly migrations: readonly { readonly file: string; readonly sha256: string }[];
-}
-
-function loadRelease(tag: string): ReleaseFixture {
-  return JSON.parse(readFileSync(join(FIXTURES_DIR, tag, "release.json"), "utf8")) as ReleaseFixture;
-}
-
-/** The release's own bytes for one file: the verbatim copy when the branch
- *  edited it after the tag, otherwise the branch's file. */
-function releaseBytes(tag: string, file: string): Buffer {
-  const pinned = join(FIXTURES_DIR, tag, "migrations", file);
-  return readFileSync(existsSync(pinned) ? pinned : join(MIGRATIONS_DIR, file));
-}
-
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
-function urlFor(database: string): string {
+const LOGIN = new URL(config.databaseUrl).username;
+const OWNER_PASSWORD = randomBytes(18).toString("base64url");
+const READONLY_PASSWORD = randomBytes(12).toString("hex");
+
+function urlFor(database: string, role?: { name: string; password: string }): string {
   const url = new URL(config.databaseUrl);
   url.pathname = `/${database}`;
+  if (role) {
+    url.username = role.name;
+    url.password = encodeURIComponent(role.password);
+  }
   return url.toString();
 }
 
-function connect(database: string): postgres.Sql<{}> {
-  return postgres(urlFor(database), { max: 1, onnotice: () => {} });
+function connect(database: string, role?: { name: string; password: string }): postgres.Sql<{}> {
+  return postgres(urlFor(database, role), { max: 1, onnotice: () => {} });
 }
 
 const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
@@ -131,37 +115,21 @@ const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
 };
 
 /**
- * The real migrate run as a tool performs it: the session IS rm_owner for the
- * whole run (`current_user = rm_owner`, which the run requires), under the §2
- * target lock. Both databases here were built by this harness's superuser
- * login, whose 0016 default privileges no snapshot declares (production's
- * bootstrap login is doadmin, a listed provider role), so those are removed
- * first — identically on both sides — for the first manifest's §9.1 step 2
- * baseline to pass for the reason production's would.
+ * The migrate run as a tool performs it, for the REFERENCE database (blank +
+ * all migrations, which is the snapshot's state, enrolled `rehearsal` as §4.2's
+ * restore procedure writes it) and for the refusals: the session IS rm_owner
+ * for the whole run (`current_user = rm_owner`), under the §2 target lock, with
+ * the harness login's two default ACLs removed first (release-fixture.ts
+ * `revokeLoginDefaults`) so a first manifest's §9.1 step 2 baseline passes for
+ * the reason production's would.
  */
 async function migrateAsOwner(db: postgres.Sql<{}>, database: string, options = MIGRATE_OPTIONS): ReturnType<typeof runMigrate> {
-  const login = new URL(config.databaseUrl).username;
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
-  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+  await revokeLoginDefaults(db, LOGIN);
   await db.unsafe("SET ROLE rm_owner");
   try {
     return await withTargetLock(urlFor(database), (lock) => runMigrate(db, { ...options, lock }));
   } finally {
     await db.unsafe("RESET ROLE");
-  }
-}
-
-/** v0.5.0's runner loop (backend/src/db/migrate.ts at the tag): one
- *  transaction per file, `SET LOCAL ROLE rm_owner` from 0054 on, a ledger row
- *  per file. Used to BUILD the release, and for the bridge described above. */
-async function applyAsReleaseRunner(db: postgres.Sql<{}>, files: readonly { file: string; ddl: string }[]): Promise<void> {
-  await db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const { file, ddl } of files) {
-    await db.begin(async (tx) => {
-      if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
-      await tx.unsafe(ddl);
-      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-    });
   }
 }
 
@@ -171,26 +139,13 @@ async function rows(query: PromiseLike<readonly postgres.Row[]>): Promise<postgr
   return [...(await query)];
 }
 
-async function enrollRehearsal(db: postgres.Sql<{}>): Promise<void> {
+async function enroll(db: postgres.Sql<{}>, kind: "rehearsal" | "production"): Promise<void> {
   await db.begin(async (tx) => {
     await tx.unsafe("SET LOCAL ROLE rm_owner");
-    await tx.unsafe("INSERT INTO deployment_identity (kind) VALUES ('rehearsal')");
+    await tx.unsafe(`INSERT INTO deployment_identity (kind) VALUES ('${kind}')`);
   });
 }
 
-// Role attributes are CLUSTER-wide. v0.5.0's 0053 says `ALTER ROLE rm_owner
-// NOLOGIN`, and later files in this suite log in as rm_owner or read its LOGIN
-// attribute as evidence of what the branch's 0053 did. So the attributes are
-// recorded before the release is built and put back exactly afterwards.
-type RoleAttributes = { rolname: string; rolcanlogin: boolean };
-async function roleAttributes(db: postgres.Sql<{}>): Promise<RoleAttributes[]> {
-  return (await db`
-    SELECT rolname, rolcanlogin FROM pg_roles
-    WHERE rolname IN ('rm_owner', 'rm_app', 'rm_worker', 'rm_readonly') ORDER BY rolname`) as unknown as RoleAttributes[];
-}
-async function restoreRoleAttributes(db: postgres.Sql<{}>, saved: readonly RoleAttributes[]): Promise<void> {
-  for (const role of saved) await db.unsafe(`ALTER ROLE ${role.rolname} ${role.rolcanlogin ? "LOGIN" : "NOLOGIN"}`);
-}
 
 // ───────────────────────────────────────────────────────────────────────────
 // The release's populated data
@@ -267,7 +222,18 @@ INSERT INTO swarm_waitlist (email, email_norm, notified_at) VALUES ('Wait@Exampl
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("the release fixtures are the releases' own bytes", () => {
-  for (const tag of SUPPORTED_RELEASES) {
+  test("SUPPORTED_RELEASES is v0.5.0 alone (D55 (8)), and each entry has a fixture", () => {
+    expect(SUPPORTED_RELEASES.map((r) => r.tag)).toEqual(["v0.5.0"]);
+  });
+
+  for (const { tag, migrations } of SUPPORTED_RELEASES) {
+    test(`${tag}: SUPPORTED_RELEASES pins exactly the filename list the tag recorded`, () => {
+      // The first production migrate matches a ledger against this list (§9.1,
+      // D55 (5)); a list that drifted from the release's own record would let
+      // a ledger the release never wrote through, or refuse the one it did.
+      expect([...migrations]).toEqual(loadRelease(tag).migrations.map((m) => m.file));
+    });
+
     test(`${tag}: every file hashes to what the tag recorded`, () => {
       const release = loadRelease(tag);
       expect(release.tag).toBe(tag);
@@ -307,12 +273,13 @@ const REFERENCE_DB = `rm_upgrade_reference_${suffix}`;
 
 let admin: postgres.Sql<{}>;
 let reference: postgres.Sql<{}>;
-let savedRoles: RoleAttributes[] = [];
+let savedRoles: SavedRole[] = [];
 const created: string[] = [];
+const homes: string[] = [];
 
 beforeAll(async () => {
   admin = connect("postgres");
-  savedRoles = await roleAttributes(admin);
+  savedRoles = await saveRoles(admin);
 
   // Blank + all migrations, given the real migrate run — the target every
   // upgrade must land on, and the side schema-equivalence.test.ts compares to
@@ -320,29 +287,29 @@ beforeAll(async () => {
   await admin.unsafe(`CREATE DATABASE ${REFERENCE_DB} TEMPLATE "${process.env.RM_TEST_TEMPLATE_DB}"`);
   created.push(REFERENCE_DB);
   reference = connect(REFERENCE_DB);
-  await enrollRehearsal(reference);
+  await enroll(reference, "rehearsal");
   await migrateAsOwner(reference, REFERENCE_DB);
 }, 120_000);
 
 afterAll(async () => {
   await reference?.end({ timeout: 5 });
   try {
-    await restoreRoleAttributes(admin, savedRoles);
+    await restoreRoles(admin, savedRoles);
     for (const name of created) await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   } finally {
     await admin.end({ timeout: 5 });
+    for (const home of homes) rmSync(home, { recursive: true, force: true });
   }
 });
 
-for (const tag of SUPPORTED_RELEASES) {
+for (const { tag } of SUPPORTED_RELEASES) {
   describe(`upgrade from ${tag}, populated`, () => {
     const name = `rm_upgrade_${tag.replace(/\W/g, "_")}_${suffix}`;
     let db: postgres.Sql<{}>;
     let release: ReleaseFixture;
-    let pendingAtOrBelowBaseline: string[] = [];
     let appliedByRun: readonly string[] = [];
-    /** True when the release predates 0063 — it has no deployment_identity,
-     *  so runMigrate refuses it and the bridge must run first. */
+    /** True when the release predates 0063 — it has no deployment_identity
+     *  table, so its upgrade is the first production migrate of §9.1. */
     let predatesIdentity = false;
 
     beforeAll(async () => {
@@ -351,70 +318,85 @@ for (const tag of SUPPORTED_RELEASES) {
       created.push(name);
       db = connect(name);
       try {
-        await applyAsReleaseRunner(
-          db,
-          release.migrations.map(({ file }) => ({ file, ddl: releaseBytes(tag, file).toString("utf8") })),
-        );
+        await applyAsReleaseRunner(db, releaseSteps(release));
       } finally {
         // The release's 0053 re-attributed the cluster's roles; put them back
         // before anything else in this process can observe them.
-        await restoreRoleAttributes(admin, savedRoles);
+        await restoreLogins(admin, savedRoles);
       }
       await db.unsafe(releaseData(release));
-
-      const recorded = new Set(release.migrations.map((m) => m.file));
+      await revokeLoginDefaults(db, LOGIN);
       predatesIdentity = Math.max(...release.migrations.map((m) => migrationNumber(m.file))) < migrationNumber("0063_deployment_identity.sql");
-      pendingAtOrBelowBaseline = HEAD_FILES.filter(
-        (file) => !recorded.has(file) && migrationNumber(file) <= COMPAT_HEADER_BASELINE,
-      );
+
+      // §9.1 step 1 through the provisioning login, and the host's rm_readonly
+      // line: what the operator's `bun run migrate` logs in with.
+      await admin.unsafe(`ALTER ROLE rm_owner LOGIN PASSWORD '${OWNER_PASSWORD}'`);
+      await admin.unsafe(`ALTER ROLE rm_readonly LOGIN PASSWORD '${READONLY_PASSWORD}'`);
     }, 120_000);
 
     afterAll(async () => {
       await db?.end({ timeout: 5 });
     });
 
-    test("runMigrate refuses a release that predates 0063 — it has no deployment_identity to be enrolled in (reported gap)", async () => {
+    test("no caller but the operator's confirmed first production migrate reaches a release that predates 0063", async () => {
       const [table] = (await db`SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present`) as unknown as {
         present: boolean;
       }[];
-      // A release at or past 0063 has the table and meets no such refusal.
       expect(table?.present).toBe(!predatesIdentity);
       if (!predatesIdentity) return;
+      // `--migrate` never has §4.3's exception.
       await expect(migrateAsOwner(db, name)).rejects.toThrow("no deployment_identity row");
-      await expect(migrateAsOwner(db, name, { ...MIGRATE_OPTIONS, caller: "operator", env: "prod", connection: "remote" })).rejects.toThrow(
-        "no deployment_identity row",
-      );
-      // …and it refused before applying anything.
+      // The run reached around the command, with no typed y behind it.
+      const owner = connect(name, { name: "rm_owner", password: OWNER_PASSWORD });
+      try {
+        await expect(
+          withTargetLock(urlFor(name), (lock) =>
+            runMigrate(owner, { caller: "operator", env: "prod", connection: "remote", nonInteractive: false, lock }),
+          ),
+        ).rejects.toThrow("no operator confirmed it");
+      } finally {
+        await owner.end({ timeout: 5 });
+      }
+      // …and each refused before applying anything.
       const ledger = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
       expect(ledger.map((r) => r.name)).toEqual(release.migrations.map((m) => m.file));
     });
 
-    test("bridge (when the release predates 0063), enrol, then the real migrate run reaches the branch's version", async () => {
-      // Every pending file at or below the baseline is pre-compat: parsing its
-      // header must not refuse (D53 decision 3), which is what lets the release
-      // runner loop apply it without a declaration.
-      for (const file of pendingAtOrBelowBaseline) {
-        expect(() => parsePendingHeader(file, readFileSync(join(MIGRATIONS_DIR, file), "utf8"))).not.toThrow();
-      }
-      if (predatesIdentity) expect(pendingAtOrBelowBaseline).toContain("0063_deployment_identity.sql");
-      await applyAsReleaseRunner(
-        db,
-        pendingAtOrBelowBaseline.map((file) => ({ file, ddl: readFileSync(join(MIGRATIONS_DIR, file), "utf8") })),
-      );
-      await enrollRehearsal(db);
+    test("`bun run migrate` — RM_ENV=prod, a typed rm_owner, y — reaches the branch's version in one run", async () => {
+      // A release past 0063 would be enrolled already (§9.1 step 4); only one
+      // that predates the table takes the pre-identity path.
+      if (!predatesIdentity) await enroll(db, "production");
+      const run = await migrateAtTerminal({
+        databaseUrl: new URL(urlFor(name)),
+        readonlyPassword: READONLY_PASSWORD,
+        rmEnv: "prod",
+        steps: [
+          { await: "rm_owner password (not echoed", send: OWNER_PASSWORD },
+          { await: "type y to continue", send: "y" },
+        ],
+      });
+      homes.push(run.home);
+      expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
 
-      const result = await migrateAsOwner(db, name);
-      appliedByRun = result.applied;
+      const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8")) as {
+        applied: string[];
+        preIdentity: { identity: string; release: string; ledger: string[] } | null;
+        manifest: { filenames: string[] };
+      };
+      appliedByRun = receipt.applied;
       const recorded = new Set(release.migrations.map((m) => m.file));
-      expect(result.applied).toEqual(
-        HEAD_FILES.filter((file) => !recorded.has(file) && migrationNumber(file) > COMPAT_HEADER_BASELINE),
+      // Every pending file, the pre-compat ones at or below 0063 included: no
+      // file is applied around the command any more.
+      expect(receipt.applied).toEqual(HEAD_FILES.filter((file) => !recorded.has(file)));
+      expect(receipt.preIdentity).toEqual(
+        predatesIdentity ? { identity: "no table", release: tag, ledger: release.migrations.map((m) => m.file) } : null,
       );
-      expect(result.manifest.filenames).toEqual(HEAD_FILES);
+      expect(receipt.manifest.filenames).toEqual(HEAD_FILES);
 
       const ledger = (await db`SELECT name FROM schema_migrations ORDER BY name`) as unknown as { name: string }[];
       expect(ledger.map((r) => r.name)).toEqual(HEAD_FILES);
       expect((await readManifest(db))?.filenames).toEqual(HEAD_FILES);
-    });
+    }, 180_000);
 
     test("every file the run applied recorded its own declaration; every pre-compat file stayed NULL", async () => {
       expect(appliedByRun.length).toBeGreaterThan(0);
@@ -426,17 +408,28 @@ for (const tag of SUPPORTED_RELEASES) {
       }[];
       for (const row of rows) {
         const header = parsePendingHeader(row.name, readFileSync(join(MIGRATIONS_DIR, row.name), "utf8"));
-        if (appliedByRun.includes(row.name)) {
+        // A file above the pre-compat baseline always carries a header
+        // (parsePendingHeader throws when one does not), and runs after 0064
+        // added the columns, so the run records it. At or below the baseline
+        // (D53 decision 3) the run applied it before those columns existed —
+        // or the release did — and the row stays NULL, declared or not.
+        const declared = appliedByRun.includes(row.name) && migrationNumber(row.name) > COMPAT_HEADER_BASELINE;
+        if (declared) {
           expect({ name: row.name, compat: row.compat, version: row.metadata_version }).toEqual({
             name: row.name,
             compat: header!.compat,
             version: header!.metadataVersion,
           });
         } else {
-          expect({ name: row.name, compat: row.compat }).toEqual({ name: row.name, compat: null });
+          expect({ name: row.name, compat: row.compat, version: row.metadata_version }).toEqual({
+            name: row.name,
+            compat: null,
+            version: null,
+          });
         }
       }
     });
+
 
     test("the upgraded schema equals blank + all migrations, object for object — comments included", async () => {
       const diff = diffCatalogs(await normalizedCatalog(db), await normalizedCatalog(reference));

@@ -87,6 +87,37 @@
 // creates `rm_owner` LOGIN on a fresh cluster; an EXISTING database recorded
 // 0053 when it said NOLOGIN, so there spec §9.1 step 1 is a one-time `doadmin`
 // step, and the refusal says which of the two situations it is in.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ONE RUN WITHOUT AN IDENTITY ROW
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// §4.3's one exception, D55 (5): production runs v0.5.0, which predates the
+// `deployment_identity` table (0063), so the first `bun run migrate` there
+// meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
+// ledger's filename list equals one SUPPORTED_RELEASES entry's list exactly
+// (../src/db/supported-releases.ts), `rm_owner` is typed at the terminal, and
+// the operator answers an explicit `y`. `readPreIdentityState` decides the
+// first two; the typed password and the `y` are the remote path of
+// `migrateCommand`, and the state the operator said `y` to is handed to
+// `runMigrate`, which re-reads it on the owner connection and refuses unless it
+// is the same one. The receipt records it. The run itself applies 0063, so the
+// ledger no longer equals the release's afterwards and the exception is never
+// available again on that database.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE JOURNAL
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// §2: "Connection loss. Detected at every phase boundary; the tool journals the
+// phase and exits non-zero." The spec names smoke's journal (§1.3) and no place
+// for a standalone migrate's, so `bun run migrate` keeps its own beside its
+// receipt (./migrate-journal.ts), one file per run, written before each phase
+// and closed on EVERY exit — success, refusal, lock loss, a crash, a signal —
+// so a losing migrate leaves the phase it lost in. `migrateCommand` journals
+// its own phases and hands `runMigrate` the hook for the run's.
+// `bun smoke --migrate` passes none: the smoke parent journals its `migrate`
+// preparation itself.
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +143,8 @@ import {
   type SchemaManifest,
 } from "../src/db/schema-manifest.ts";
 import { loadSnapshot, type Snapshot } from "../src/db/schema-snapshot.ts";
+import { describeUnmatchedLedger, matchSupportedRelease } from "../src/db/supported-releases.ts";
+import type { MigrateJournal } from "./migrate-journal.ts";
 import {
   acquireTargetLock,
   assertStillHeld,
@@ -162,6 +195,33 @@ export interface MigrateRunOptions extends MigrateGateOptions {
   /** Skip every prompt and refuse rather than ask. An unattended run that
    *  would have blocked on a terminal must fail fast. */
   readonly nonInteractive: boolean;
+  /**
+   * The pre-identity state (§9.1, D55 (5)) the operator confirmed with a typed
+   * `rm_owner` and an explicit `y`, or absent. The run re-reads the state on the
+   * owner connection: a database that qualifies for the exception runs only
+   * when this is the very state it reads, and a database that no longer
+   * qualifies refuses when this is set.
+   */
+  readonly confirmedPreIdentity?: PreIdentityState;
+  /** Called as each phase begins, before the lock is proven for it: the
+   *  journal's before-write. */
+  readonly onPhase?: (phase: string) => void;
+}
+
+/**
+ * What the first production migrate recorded about the database before it
+ * existed as an enrolled target (§9.1: "Its receipt records the pre-identity
+ * state: that no identity row existed, the supported release the ledger
+ * matched, and that ledger's filename list").
+ */
+export interface PreIdentityState {
+  /** Which absence: v0.5.0 has no table at all; a database past 0063 may have
+   *  the table and no row. */
+  readonly identity: "no table" | "no row";
+  /** The SUPPORTED_RELEASES tag whose filename list the ledger equals. */
+  readonly release: string;
+  /** The ledger's filename list, in filename order. */
+  readonly ledger: readonly string[];
 }
 
 /**
@@ -203,6 +263,9 @@ export interface MigrateRunResult {
   /** True when this run published the database's FIRST manifest, after the
    *  §9.1 step 2 baseline compared the live schema with the snapshot. */
   readonly baselined: boolean;
+  /** The state this run started from when it was the first production migrate
+   *  (§9.1, D55 (5)); `null` for every other run. */
+  readonly preIdentity: PreIdentityState | null;
 }
 
 /**
@@ -231,7 +294,10 @@ export interface MigrateRunResult {
  *      one fenced transaction.
  *
  * Refusals: the lock cannot be proven held at a boundary; the session is not
- * `rm_owner`; a gate refuses; the database is blank (no ledger — that is the
+ * `rm_owner`; a gate refuses; a database that qualifies for the first
+ * production migrate (§9.1, D55 (5)) without `confirmedPreIdentity` naming the
+ * state it reads, or a `confirmedPreIdentity` on a database that no longer
+ * qualifies; the database is blank (no ledger — that is the
  * snapshot's bootstrap, §8.1, never a replay); `resumePlan` refused; a pending
  * migration above the pre-compat baseline (0063, D53) has no parseable compat
  * header; the first manifest's baseline found a gap or a difference (named,
@@ -252,7 +318,7 @@ export async function runMigrate(
 
   // 1. THE LOCK AND THE CREDENTIAL, proven before anything is read for a
   //    decision.
-  await assertStillHeld(options.lock, "migrate: start");
+  await boundary(options, "migrate: start");
   await assertOwnerIsSession(db);
 
   // 2. RE-RUN THE GATES on the owner connection. §2: "After acquiring, the tool
@@ -263,6 +329,8 @@ export async function runMigrate(
   if (refusals.length > 0) {
     throw new Error(`Refusing the migrate run: ${refusals.map((r) => r.message).join(" ")}`);
   }
+  const preIdentity = await readPreIdentityState(db, options);
+  assertPreIdentityConfirmed(preIdentity, options.confirmedPreIdentity);
   await assertNotBlank(db);
 
   // 3. RESUME. The append-only trigger inventory is checked first: it is the
@@ -282,7 +350,7 @@ export async function runMigrate(
   // 4. BASELINE GAP, before anything is applied: see assertBaselineGap. The
   //    FINAL filename list (ledger plus pending) is held to the snapshot's here
   //    too, so the one refusal left after the apply loop is the catalog's.
-  if (firstManifest) await assertBaselineGap(db, snapshot, plan.pending);
+  if (firstManifest) await assertBaselineGap(db, snapshot, plan.pending, preIdentity);
 
   // 5. HEADERS, ALL OF THEM, BEFORE THE FIRST COMMIT. §8.2: every migration
   //    "declares itself `additive` or `breaking` in a header the runner
@@ -298,7 +366,7 @@ export async function runMigrate(
   //    so the row and the DDL commit together (§8.2).
   const applied: string[] = [];
   for (const { file, ddl, header } of pending) {
-    await assertStillHeld(options.lock, `migrate: apply ${file}`);
+    await boundary(options, `migrate: apply ${file}`);
     await withFenceOn(db, `migrate ${file}`, async (tx) => {
       await tx.unsafe(ddl);
       await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
@@ -311,7 +379,7 @@ export async function runMigrate(
   // 7. RECONCILE AND PUBLISH, in ONE fenced transaction, so "manifest
   //    published" means "grants reconciled" (§8.3) — and, for a first
   //    manifest, "the live schema was compared with the snapshot" (§9.1).
-  await assertStillHeld(options.lock, "migrate: reconcile and publish");
+  await boundary(options, "migrate: reconcile and publish");
   const { manifest, grantsRepaired } = await withFenceOn(db, "migrate reconcile", async (tx) => {
     const before = await relationAcls(tx);
     await tx.unsafe(snapshot.grantsSql);
@@ -336,7 +404,45 @@ export async function runMigrate(
     grantsRepaired,
     manifest,
     baselined: firstManifest,
+    preIdentity,
   };
+}
+
+/** A phase boundary (§2): journal the phase as begun, then prove the lock for
+ *  it. The before-write comes first so a phase the lock cannot be proven for is
+ *  the phase the journal names. */
+async function boundary(options: MigrateRunOptions, phase: string): Promise<void> {
+  options.onPhase?.(phase);
+  await assertStillHeld(options.lock, phase);
+}
+
+/**
+ * The first production migrate runs only on the state the operator confirmed
+ * (§9.1, D55 (5)). The caller's gates read the pre-identity state before the
+ * password was typed and the `y` was given; this run reads it again on the
+ * owner connection. Refused: a qualifying database with no confirmation handed
+ * in (every caller but `migrateCommand`'s remote path), a confirmation of a
+ * different state (the ledger moved while the operator typed), and a
+ * confirmation handed to a database that no longer qualifies.
+ */
+function assertPreIdentityConfirmed(observed: PreIdentityState | null, confirmed: PreIdentityState | undefined): void {
+  if (observed === null && confirmed === undefined) return;
+  if (observed !== null && confirmed !== undefined && samePreIdentity(observed, confirmed)) return;
+  const seen = observed === null ? "does not qualify for it now" : `now reads ${describePreIdentity(observed)}`;
+  const said = confirmed === undefined ? "no operator confirmed it" : `the operator confirmed ${describePreIdentity(confirmed)}`;
+  throw new Error(
+    "Refusing the migrate run: the first production migrate (spec §9.1, D55 (5)) runs once, with no " +
+      "deployment_identity row, only on the state an operator confirmed with a typed rm_owner password and an " +
+      `explicit y. This database ${seen}, and ${said}. Nothing was applied.`,
+  );
+}
+
+function samePreIdentity(a: PreIdentityState, b: PreIdentityState): boolean {
+  return a.identity === b.identity && a.release === b.release && a.ledger.join("\n") === b.ledger.join("\n");
+}
+
+function describePreIdentity(state: PreIdentityState): string {
+  return `${state.identity} and a ledger equal to ${state.release}'s ${state.ledger.length} files`;
 }
 
 /**
@@ -370,26 +476,40 @@ export async function runMigrate(
  * (ledger ahead of manifest), which check 3a refuses to boot and a rerun
  * re-compares once a migration repairs the difference (§9.1 step 2).
  * prod-baseline.test.ts pins that outcome.
+ *
+ * ONE LEDGER IS NOT A PREFIX AND STILL NOT A GAP: the one a supported release
+ * wrote (`preIdentity`, D55 (5)). v0.5.0's list lacks five files that sort
+ * between files it has (0056_swarm_judge_requires_model.sql and four more up to
+ * 0061_rm_worker_wallet_backfill_grant.sql): the branch numbered them after
+ * the tag was cut. A ledger EQUAL to a release's list is not one psql wrote
+ * out of band — it is that release, whole — so every embodied file it does not
+ * record is a file the release never shipped, and it is pending like any other.
  */
-async function assertBaselineGap(db: ReadDb, snapshot: Snapshot, pending: readonly string[]): Promise<void> {
+async function assertBaselineGap(
+  db: ReadDb,
+  snapshot: Snapshot,
+  pending: readonly string[],
+  preIdentity: PreIdentityState | null,
+): Promise<void> {
   const ledger = (
     (await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
   ).map((row) => row.name);
   const embodied = new Set(snapshot.filenames);
   const recorded = new Set(ledger);
   const last = ledger.at(-1);
+  const outOfBand = (name: string): boolean => preIdentity === null && last !== undefined && name < last;
   const problems = [
     ...ledger
       .filter((name) => !embodied.has(name))
       .map((name) => `the ledger records ${name}, which the snapshot does not embody`),
     ...snapshot.filenames
-      .filter((name) => !recorded.has(name) && last !== undefined && name < last)
+      .filter((name) => !recorded.has(name) && outOfBand(name))
       .map((name) => `the snapshot embodies ${name}, which the ledger does not record although later files are recorded`),
     ...pending
       .filter((name) => !embodied.has(name))
       .map((name) => `the pending ${name} is not embodied by the snapshot`),
     ...snapshot.filenames
-      .filter((name) => !recorded.has(name) && !pending.includes(name) && !(last !== undefined && name < last))
+      .filter((name) => !recorded.has(name) && !pending.includes(name) && !outOfBand(name))
       .map((name) => `the snapshot embodies ${name}, which is neither recorded nor pending`),
   ];
   if (problems.length === 0) return;
@@ -660,6 +780,9 @@ async function ownerIsNologin(targetUrl: string): Promise<boolean> {
 export async function confirmRemoteTarget(
   options: Pick<MigrateGateOptions, "connection"> & { readonly nonInteractive: boolean },
   redactedTarget: string,
+  /** Extra warning lines printed before the question — the first production
+   *  migrate names the pre-identity state the `y` confirms. */
+  notice: readonly string[] = [],
 ): Promise<void> {
   if (options.connection === "local") return;
 
@@ -674,6 +797,7 @@ export async function confirmRemoteTarget(
   process.stdout.write(
     `[migrate] WARNING: this will apply pending migrations to the REMOTE target ${redactedTarget} as rm_owner.\n` +
       "[migrate] deployment_identity is an accidental-target safeguard, not proof the data is disposable.\n" +
+      notice.map((line) => `[migrate] ${line}\n`).join("") +
       "[migrate] type y to continue, anything else to stop: ",
   );
   const answer = (await readLine()).replace(/[\r\n]+$/, "");
@@ -719,6 +843,12 @@ export interface MigrateRefusal {
  * names it and nothing else: a stage policy "never touches production data",
  * typed owner password or not.
  *
+ * §4.3's ONE EXCEPTION: an operator run under RM_ENV=prod against a remote
+ * database with no identity row, or no table, whose ledger equals one
+ * SUPPORTED_RELEASES entry exactly, is not refused here
+ * (`readPreIdentityState`). A missing row that fails any of those guards
+ * refuses as `identity_missing`, and the refusal names the guard it failed.
+ *
  * Serves spec §10 W2 "`RM_ENV=stage` + typed owner password against
  * `deployment_identity = production` refuses."
  */
@@ -740,7 +870,16 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
     });
     return refusals;
   }
-  const kind = identity.value;
+  // The matrix reads an absent table as it always has, as unreadable: no
+  // evidence of either kind.
+  const kind = identity.value === "no table" ? "unreadable" : identity.value;
+
+  // §4.3's one exception (§9.1, D55 (5)): the first production migrate. When
+  // it applies, the identity half of the matrix has nothing to judge — there
+  // is no row — and every other guard of the exception is either checked here
+  // (RM_ENV=prod, the exact ledger) or is the remote path of `migrateCommand`
+  // (the typed owner, the `y`), which `runMigrate` holds it to.
+  if (await readPreIdentityState(db, options)) return refusals;
 
   // §8.5: `--migrate` is a stage/test/CI convenience.
   if (options.caller === "smoke_flag" && rmEnv === "prod") {
@@ -777,7 +916,11 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
           ? "this database has no deployment_identity row, so it is not enrolled as anything, and absence of " +
             "evidence is not evidence of rehearsal (spec §4.2). "
           : "";
-      push({ reason, message: `Refusing: ${lead}${verdict.reason}` });
+      const exception =
+        reason === "identity_missing" && identity.value !== "unreadable" && options.caller === "operator"
+          ? ` ${await describeWhyNoPreIdentityException(db, options)}`
+          : "";
+      push({ reason, message: `Refusing: ${lead}${verdict.reason}${exception}` });
     }
   }
 
@@ -797,14 +940,59 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   return refusals;
 }
 
+/**
+ * The first production migrate's state, when this run qualifies for §4.3's one
+ * exception (§9.1, D55 (5)), else `null`.
+ *
+ * Qualifies: the operator caller (`bun run migrate`), RM_ENV=prod, a remote
+ * connection, no `deployment_identity` row or no table at all, and a ledger
+ * whose filename list equals one SUPPORTED_RELEASES entry's exactly. The typed
+ * owner and the `y` are not decided here: they are what `migrateCommand` asks
+ * for next, and `runMigrate` refuses a qualifying database without them.
+ */
+export async function readPreIdentityState(db: ReadDb, options: MigrateGateOptions): Promise<PreIdentityState | null> {
+  if (options.caller !== "operator" || options.env !== "prod" || options.connection !== "remote") return null;
+  const identity = await readDeploymentIdentity(db);
+  if (identity.kind !== "read" || (identity.value !== null && identity.value !== "no table")) return null;
+  const ledger = await ledgerOf(db);
+  const release = matchSupportedRelease(ledger);
+  if (release === null) return null;
+  return { identity: identity.value === null ? "no row" : "no table", release: release.tag, ledger };
+}
+
+/** For an operator run refused for a missing row: which guard of the one
+ *  exception it failed, so the refusal says what would have to be true. */
+async function describeWhyNoPreIdentityException(db: ReadDb, options: MigrateGateOptions): Promise<string> {
+  const lead = "The one run allowed without the row, the first production migrate (spec §9.1, D55 (5)), needs";
+  if (options.env !== "prod") return `${lead} RM_ENV=prod, and this run is RM_ENV=${options.env ?? "(unset)"}.`;
+  if (options.connection !== "remote") return `${lead} a remote production target.`;
+  return (
+    `${lead} a ledger exactly equal to one supported release's filename list, and this one matches none — ` +
+    `${describeUnmatchedLedger(await ledgerOf(db))}. A partly migrated or hand-edited ledger is repaired first.`
+  );
+}
+
+/** The ledger's filenames in filename order; `[]` when there is no ledger. */
+async function ledgerOf(db: ReadDb): Promise<string[]> {
+  const [exists] = (await db.unsafe(
+    "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present",
+  )) as unknown as { present: boolean }[];
+  if (exists?.present !== true) return [];
+  return ((await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]).map(
+    (row) => row.name,
+  );
+}
+
 type IdentityRead =
-  | { readonly kind: "read"; readonly value: "production" | "rehearsal" | null | "unreadable" }
+  | { readonly kind: "read"; readonly value: "production" | "rehearsal" | null | "unreadable" | "no table" }
   | { readonly kind: "ambiguous"; readonly count: number };
 
 /**
- * Read the one-row table. An absent table is "unreadable" (never evidence of
- * either kind); a table with no row is `null`. The value is read from whichever
- * column carries it: §4.2 names it `kind` (migration 0063); a database enrolled
+ * Read the one-row table. An absent table is `no table`, which the matrix reads
+ * as unreadable (never evidence of either kind) and only §9.1's first
+ * production migrate reads as its own case; a table with no row is `null`. The
+ * value is read from whichever column carries it: §4.2 names it `kind`
+ * (migration 0063); a database enrolled
  * before that migration carries it in `identity`. Refusing to read the row
  * because of the column's name would turn an enrolled production database into
  * an un-enrolled one, which is the one misreading with a catastrophic direction.
@@ -813,7 +1001,7 @@ async function readDeploymentIdentity(db: ReadDb): Promise<IdentityRead> {
   const [exists] = (await db.unsafe(
     "SELECT to_regclass('public.deployment_identity') IS NOT NULL AS present",
   )) as unknown as { present: boolean }[];
-  if (exists?.present !== true) return { kind: "read", value: "unreadable" };
+  if (exists?.present !== true) return { kind: "read", value: "no table" };
 
   const columns = (await db.unsafe(`
     SELECT column_name FROM information_schema.columns
@@ -877,6 +1065,9 @@ export async function writeMigrateReceipt(
     resumedAndVerified: result.resumedAndVerified,
     grantsRepaired: result.grantsRepaired,
     baselined: result.baselined,
+    // §9.1: the first production migrate's receipt "records the pre-identity
+    // state"; every other run's says there was none.
+    preIdentity: result.preIdentity,
     manifest: {
       formatVersion: result.manifest.formatVersion,
       contentHash: result.manifest.contentHash,
@@ -909,11 +1100,21 @@ export class MigrateRefused extends Error {}
  *      parent's lock (`bun smoke`). §2: after create/restore, "before the first
  *      read used for a decision".
  *   3. The gates, read under the lock, BEFORE the owner password is requested,
- *      so a refused run never has a password typed into it.
+ *      so a refused run never has a password typed into it. The first
+ *      production migrate's pre-identity state is read here too.
  *   4. The owner password: typed (remote) or smoke's generated one (local).
- *   5. `confirmRemoteTarget`: warn, then an explicit `y`.
- *   6. `runMigrate` as `rm_owner`, under the lock.
+ *   5. `confirmRemoteTarget`: warn — naming the pre-identity state when there
+ *      is one — then an explicit `y`.
+ *   6. `runMigrate` as `rm_owner`, under the lock, holding it to the state the
+ *      `y` confirmed.
  *   7. The receipt. The lock is released on every exit path.
+ *
+ * With a `journal`, every step is a journaled phase (§2), begun before the lock
+ * is proven for it, and the run closes the journal on its way out: `succeeded`
+ * with the receipt, or `refused` / `failed` naming the phase it stopped in. The
+ * lock is proven at every boundary after it is held, so a lock connection that
+ * died while the operator typed is found at the next phase, and that phase does
+ * not start.
  *
  * Refusals throw {@link MigrateRefused}: a held lock past the timeout (naming
  * the holder and its plan id), a revalidation mismatch, a gate, a prompt.
@@ -931,20 +1132,32 @@ export async function migrateCommand(input: {
     | { readonly acquire: { readonly holder: Omit<LockHolder, "acquiredAt">; readonly timeoutMs: number } }
     | { readonly heldByParent: (reader: postgresTypes.Sql<{}>) => HeldTargetLock };
   readonly receiptPath: string;
+  /** The run's journal (`bun run migrate`); absent under `bun smoke --migrate`,
+   *  whose parent journals the preparation. */
+  readonly journal?: MigrateJournal;
   readonly seams?: MigrateRunSeams;
   readonly log: (message: string) => void;
 }): Promise<{ readonly result: MigrateRunResult; readonly receipt: string }> {
   const startedAt = new Date();
   const target = redactedTarget(input.readerUrl);
+  const journal = input.journal;
+  journal?.setTarget(target);
   const reader = postgres(input.readerUrl, { max: 1, onnotice: () => {} });
   let owner: postgresTypes.Sql<{}> | null = null;
   let release: (() => Promise<void>) | null = null;
+  let lock: HeldTargetLock | null = null;
+  /** Begin a phase: journal it, then — once there is a lock — prove it. */
+  const phase = async (name: string): Promise<void> => {
+    journal?.begin(name);
+    if (lock !== null) await assertStillHeld(lock, name);
+  };
   try {
-    let lock: HeldTargetLock;
     if ("acquire" in input.lock) {
       // 1–2. The plan, then the lock over a DIRECT connection (refusePoolerUrl
       // runs inside acquireTargetLock) and revalidation against the plan.
+      await phase("plan");
       const expected = await readTargetState(reader);
+      await phase("lock");
       const acquired = await acquireTargetLock({
         databaseUrl: input.readerUrl,
         holder: input.lock.acquire.holder,
@@ -960,17 +1173,27 @@ export async function migrateCommand(input: {
       };
       lock = held;
     } else {
+      await phase("lock");
       lock = input.lock.heldByParent(reader);
     }
-    await assertStillHeld(lock, "migrate: gates");
-    input.log(`target ${target} under ${describeHolderText(lock.holder)}`);
+    const heldLock = lock;
+    await phase("gates");
+    input.log(`target ${target} under ${describeHolderText(heldLock.holder)}`);
 
     // 3. The gates, under the lock, before any password exists.
     const gateOptions: MigrateGateOptions = { caller: input.caller, env: input.env, connection: input.connection };
     const refusals = await checkMigrateGates(reader, gateOptions);
     if (refusals.length > 0) throw new MigrateRefused(refusals.map((r) => r.message).join("\n"));
+    const preIdentity = await readPreIdentityState(reader, gateOptions);
+    if (preIdentity) {
+      input.log(
+        `first production migrate (spec §9.1, D55 (5)): deployment_identity has ${preIdentity.identity}, and the ` +
+          `ledger equals ${preIdentity.release}'s ${preIdentity.ledger.length} files`,
+      );
+    }
 
     // 4–5. The owner credential for this one run, then the explicit y.
+    await phase("owner");
     input.log(`RM_ENV=${input.env ?? "(unset)"}, ${input.connection} target ${target}`);
     const password = await promptOwnerPassword(
       { ...gateOptions, nonInteractive: input.nonInteractive, localOwnerPassword: input.localOwnerPassword },
@@ -978,25 +1201,54 @@ export async function migrateCommand(input: {
     ).catch((error: unknown) => {
       throw new MigrateRefused((error as Error).message);
     });
-    await confirmRemoteTarget({ connection: input.connection, nonInteractive: input.nonInteractive }, target).catch(
-      (error: unknown) => {
-        throw new MigrateRefused((error as Error).message);
-      },
-    );
+    await phase("confirm");
+    const notice = preIdentity
+      ? [
+          `this is the FIRST PRODUCTION MIGRATE: deployment_identity has ${preIdentity.identity}, and the ledger ` +
+            `equals ${preIdentity.release}'s ${preIdentity.ledger.length} files (spec §9.1, D55 (5)).`,
+          "It runs once. Every later run of every tool requires the identity row.",
+        ]
+      : [];
+    await confirmRemoteTarget(
+      { connection: input.connection, nonInteractive: input.nonInteractive },
+      target,
+      notice,
+    ).catch((error: unknown) => {
+      throw new MigrateRefused((error as Error).message);
+    });
     owner = postgres(urlAsRole(input.readerUrl, "rm_owner", password), { max: 1, onnotice: () => {} });
 
-    // 6. The run, as rm_owner, under the lock.
-    const result = await runMigrate(owner, { ...gateOptions, lock, nonInteractive: input.nonInteractive }, input.seams);
+    // 6. The run, as rm_owner, under the lock, on the state the y confirmed.
+    const result = await runMigrate(
+      owner,
+      {
+        ...gateOptions,
+        lock: heldLock,
+        nonInteractive: input.nonInteractive,
+        ...(preIdentity ? { confirmedPreIdentity: preIdentity } : {}),
+        onPhase: (name) => journal?.begin(name),
+      },
+      input.seams,
+    );
 
     // 7. The receipt.
+    await phase("receipt");
     const receipt = await writeMigrateReceipt(input.receiptPath, result, {
       caller: input.caller,
       env: input.env,
       target,
       startedAt,
-      lock: describeHolderText(lock.holder),
+      lock: describeHolderText(heldLock.holder),
     });
+    journal?.close("succeeded", null, receipt);
     return { result, receipt };
+  } catch (error) {
+    // §2: the losing run journals the phase it stopped in, then the caller
+    // exits non-zero.
+    const message = error instanceof Error ? error.message : String(error);
+    const refused = error instanceof MigrateRefused || message.startsWith("Refusing");
+    journal?.close(refused ? "refused" : "failed", message);
+    throw error;
   } finally {
     await owner?.end({ timeout: 5 }).catch(() => undefined);
     await release?.().catch(() => undefined);
