@@ -30,7 +30,17 @@
 // digest as a suffix rather than overwriting a directory a running server may
 // be serving from.
 //
-// Stable API: wave 4's `bun smoke:web` imports placeSite and currentSite.
+//   web/previous      a relative symlink naming the site `current` named before
+//                     its last switch, so `bun smoke:web --rollback` can return
+//
+// Every switch records `previous` first and then swaps `current`, whichever
+// tool made it (`bun smoke` through placeSite, `bun smoke:web` through
+// installSite + switchSite). An interruption between the two renames leaves
+// `previous` equal to `current`, which a rollback refuses rather than guesses.
+//
+// Stable API: `bun smoke` (scripts/stack/stack.ts) calls placeSite; `bun
+// smoke:web` (scripts/lib/website-release.ts) calls installSite, switchSite,
+// currentSite and previousSite.
 
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -41,6 +51,9 @@ export const WEB_DIR_NAME = "web";
 
 /** The symlink, inside the web directory, that names the served site. */
 export const CURRENT_SITE_LINK = "current";
+
+/** The symlink, inside the web directory, that names the site served before the last switch. */
+export const PREVIOUS_SITE_LINK = "previous";
 
 /** The assembled site's content manifest (scripts/lib/static-manifest.ts STATIC_MANIFEST_FILENAME). */
 const MANIFEST_FILE = ".rm-static-manifest.json";
@@ -95,14 +108,13 @@ function contentDigest(siteDir: string): string | null {
 }
 
 /**
- * The site `current` names, or `null` when no site has been placed.
- *
- * Refuses when `current` exists but is not a symlink, or points outside the web
- * directory: either would mean something other than this module wrote it, and
- * nginx would be serving an unknown tree.
+ * The site directory a link in the web directory names, or `null` when the
+ * link is absent. Refuses a link that is not a symlink, or that points outside
+ * the web directory: either would mean something other than this module wrote
+ * it, and nginx would be serving an unknown tree.
  */
-export function currentSite(webDir: string): string | null {
-  const link = join(webDir, CURRENT_SITE_LINK);
+function readSiteLink(webDir: string, name: string): string | null {
+  const link = join(webDir, name);
   let stat;
   try {
     stat = lstatSync(link);
@@ -110,34 +122,77 @@ export function currentSite(webDir: string): string | null {
     return null;
   }
   if (!stat.isSymbolicLink()) {
-    throw new Error(`Refusing: ${link} exists but is not a symlink; only placeSite() may write it.`);
+    throw new Error(`Refusing: ${link} exists but is not a symlink; only this module (scripts/lib/smoke-site.ts) may write it.`);
   }
   const target = readlinkSync(link);
-  if (target.includes("/") || target === "." || target === "..") {
+  if (target.includes("/") || target === "." || target === ".." || target.startsWith(".")) {
     throw new Error(`Refusing: ${link} points at ${target}, not at a site directory beside it.`);
   }
   return target;
 }
 
+/** Point `name` at `siteId` by writing a temporary symlink and renaming it over the old one. */
+function writeSiteLink(webDir: string, name: string, siteId: string): void {
+  const temporary = join(webDir, `.${name}-${randomBytes(4).toString("hex")}`);
+  symlinkSync(siteId, temporary);
+  try {
+    renameSync(temporary, join(webDir, name));
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 /**
- * Place an assembled site in the instance's web directory and make it current.
+ * The site `current` names, or `null` when no site has been placed.
  *
- * Copies `staticDir` to `web/<siteId>/` unless that exact site (same id, same
- * content digest) is already there, then swaps `current` to it when `current`
- * is absent or names another site. Both steps are write-to-temporary then
- * rename, so a concurrent reader never sees a partial state.
- *
- * Refuses: a `staticDir` with no identity ({@link siteIdOf}) or no content
- * digest; a `current` that {@link currentSite} refuses.
+ * Refuses when `current` exists but is not a symlink, or points outside the web
+ * directory ({@link readSiteLink}).
  */
-export function placeSite(webDir: string, staticDir: string): PlacedSite {
+export function currentSite(webDir: string): string | null {
+  return readSiteLink(webDir, CURRENT_SITE_LINK);
+}
+
+/**
+ * The site `current` named before its last switch, or `null` when it has
+ * never switched away from a site. Same refusals as {@link currentSite}.
+ */
+export function previousSite(webDir: string): string | null {
+  return readSiteLink(webDir, PREVIOUS_SITE_LINK);
+}
+
+/** What {@link installSite} did. */
+export interface InstalledSite {
+  /** The id the site was installed under. */
+  readonly siteId: string;
+  /** Absolute path of `web/<siteId>/`. */
+  readonly dir: string;
+  /** True when this call put the site in place; false when that exact site was already there. */
+  readonly copied: boolean;
+}
+
+/**
+ * Put an assembled site into the web directory as `web/<siteId>/`, without
+ * making it current.
+ *
+ * The id is {@link siteIdOf}'s `<version>-<commit>`, suffixed with the content
+ * digest when that directory already holds different bytes (a dirty tree). A
+ * site already installed with the same digest is left as it is.
+ *
+ * `move: true` renames `staticDir` into place instead of copying it, and
+ * removes it when the same site was already installed: for a build directory
+ * the caller assembled inside `webDir` itself, where rename(2) is atomic.
+ *
+ * Refuses: a `staticDir` with no identity or no content digest; a
+ * `web/<siteId>/` that holds a different site (never overwritten).
+ */
+export function installSite(webDir: string, staticDir: string, opts: { readonly move?: boolean } = {}): InstalledSite {
   mkdirSync(webDir, { recursive: true, mode: 0o755 });
   const base = siteIdOf(staticDir);
   const digest = contentDigest(staticDir);
   if (digest === null) {
     throw new Error(`Refusing: ${join(staticDir, MANIFEST_FILE)} is missing, so a placed site could not be told apart from a different one.`);
   }
-  const previous = currentSite(webDir);
 
   let siteId = base;
   if (existsSync(join(webDir, base)) && contentDigest(join(webDir, base)) !== digest) {
@@ -146,31 +201,79 @@ export function placeSite(webDir: string, staticDir: string): PlacedSite {
   }
   const dir = join(webDir, siteId);
 
-  let copied = false;
-  if (!existsSync(dir)) {
-    const staging = join(webDir, `.staging-${siteId}-${randomBytes(4).toString("hex")}`);
-    try {
-      cpSync(staticDir, staging, { recursive: true });
-      renameSync(staging, dir);
-    } finally {
-      rmSync(staging, { recursive: true, force: true });
+  if (existsSync(dir)) {
+    if (contentDigest(dir) !== digest) {
+      throw new Error(`Refusing: ${dir} already holds a different site; site directories are never overwritten.`);
     }
-    copied = true;
-  } else if (contentDigest(dir) !== digest) {
-    throw new Error(`Refusing: ${dir} already holds a different site; site directories are never overwritten.`);
+    if (opts.move === true) rmSync(staticDir, { recursive: true, force: true });
+    return { siteId, dir, copied: false };
   }
+  if (opts.move === true) {
+    renameSync(staticDir, dir);
+    return { siteId, dir, copied: true };
+  }
+  const staging = join(webDir, `.staging-${siteId}-${randomBytes(4).toString("hex")}`);
+  try {
+    cpSync(staticDir, staging, { recursive: true });
+    renameSync(staging, dir);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  return { siteId, dir, copied: true };
+}
 
-  let swapped = false;
-  if (previous !== siteId) {
-    const temporary = join(webDir, `.current-${randomBytes(4).toString("hex")}`);
-    symlinkSync(siteId, temporary);
-    try {
-      renameSync(temporary, join(webDir, CURRENT_SITE_LINK));
-    } catch (error) {
-      rmSync(temporary, { force: true });
-      throw error;
-    }
-    swapped = true;
+/** What {@link switchSite} did. */
+export interface SiteSwitch {
+  /** True when `current` changed. */
+  readonly swapped: boolean;
+  /** The site `current` named before this call, or `null` when there was none. */
+  readonly previous: string | null;
+}
+
+/**
+ * Make an installed site current.
+ *
+ * When `current` already names `siteId` nothing changes. Otherwise the site
+ * `current` named (if any) is recorded as `previous` first, and then `current`
+ * is swapped. Both are temporary-symlink-then-rename, so a reader never sees a
+ * missing or partial link.
+ *
+ * Refuses: a `siteId` with no installed directory; a `current` or `previous`
+ * that {@link readSiteLink} refuses.
+ */
+export function switchSite(webDir: string, siteId: string): SiteSwitch {
+  if (siteId.includes("/") || siteId.startsWith(".") || siteId === CURRENT_SITE_LINK || siteId === PREVIOUS_SITE_LINK) {
+    throw new Error(`Refusing: ${siteId} is not a site id.`);
   }
-  return { siteId, dir, copied, swapped, previous };
+  let isDir = false;
+  try {
+    isDir = lstatSync(join(webDir, siteId)).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) {
+    throw new Error(`Refusing: ${join(webDir, siteId)} is not an installed site directory, so it cannot become current.`);
+  }
+  const previous = currentSite(webDir);
+  previousSite(webDir); // refuse a foreign `previous` before overwriting it
+  if (previous === siteId) return { swapped: false, previous };
+  if (previous !== null) writeSiteLink(webDir, PREVIOUS_SITE_LINK, previous);
+  writeSiteLink(webDir, CURRENT_SITE_LINK, siteId);
+  return { swapped: true, previous };
+}
+
+/**
+ * Place an assembled site in the instance's web directory and make it current:
+ * {@link installSite} (a copy) then {@link switchSite}. What `bun smoke` does
+ * at every boot.
+ *
+ * Refuses: a `staticDir` with no identity ({@link siteIdOf}) or no content
+ * digest; a `current` that {@link currentSite} refuses.
+ */
+export function placeSite(webDir: string, staticDir: string): PlacedSite {
+  // Refuse a foreign `current` before copying anything in.
+  currentSite(webDir);
+  const installed = installSite(webDir, staticDir);
+  const switched = switchSite(webDir, installed.siteId);
+  return { ...installed, ...switched };
 }
