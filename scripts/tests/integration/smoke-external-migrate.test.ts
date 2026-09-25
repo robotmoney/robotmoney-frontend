@@ -9,15 +9,21 @@
 //
 // Every case runs the real `bun --no-env-file scripts/smoke.ts` process — the
 // command an operator types — against a "remote" database provisioned the way
-// §9.1 leaves production (scripts/tests/integration/remote-db-harness.ts), with
+// §9.1 leaves production (./remote-db-harness.ts), with
 // a `~/.env` holding only the §3 keys. The interactive cases run under
 // `script(1)`, so the boot and the preparation it starts see a real terminal;
 // nothing is piped into a prompt that a terminal would not also deliver.
 //
+// It lives in the INTEGRATION tier: every case needs Docker (the remote
+// database is a container of its own) and the `y` case runs a boot up to image
+// assembly. The unit tier removes the docker binary before any test step
+// (.github/workflows/unit.yml), so nothing here may sit under tests/unit.
+//
 // What each case proves, and where the refusal lands:
 //   - RM_ENV=prod refuses before anything connects — no prompt at all;
-//   - a production enrollment, and an absent one, refuse at the plan's read —
-//     no prompt;
+//   - a production enrollment, and an absent one, refuse under the target
+//     lock, on the matrix's locked read (spec §7, criterion 34) — the `lock`
+//     preparation journaled failed, no prompt;
 //   - on a rehearsal target without a terminal, the prompt refuses rather than
 //     read a password from anywhere;
 //   - on a terminal the prompt names rm_owner, the warning prints, and `n`, an
@@ -31,7 +37,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { instancePaths } from "../../lib/smoke-state.ts";
 import { readJournal } from "../../lib/smoke-journal.ts";
-import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "../integration/remote-db-harness.ts";
+import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
 
 let db: RemoteDb;
 
@@ -48,10 +54,17 @@ function bootArgv(op: Operator, name: string): string[] {
 }
 
 /** A boot with no terminal: every refusal below must come before any prompt. */
-function runPlain(name: string, rmEnv: string): { code: number; out: string } {
+function runPlain(name: string, rmEnv: string): { code: number; out: string; op: Operator } {
   const op = db.operator(name);
   const r = Bun.spawnSync(bootArgv(op, name), { cwd: repoRoot, env: { ...op.env, RM_ENV: rmEnv }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
+  return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}`, op };
+}
+
+/** The matrix refused under the target lock: `lock` failed, nothing after it began. */
+function expectRefusedAtTheLock(op: Operator, name: string, out: string): void {
+  const last = readJournal(instancePaths(op.root, instanceOf(name)))!.phases.at(-1)!;
+  expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
+  expect(out).not.toContain("phase: prepare (migrate)");
 }
 
 function ledger(): string[] {
@@ -79,22 +92,23 @@ describe("`bun smoke --migrate` on a remote database — refusals before any pro
     expect(out).not.toContain("phase:");
   }, 60_000);
 
-  test("a PRODUCTION enrollment refuses at the plan's read, before any prompt — stage never touches production data", () => {
+  test("a PRODUCTION enrollment refuses under the target lock, before any prompt — stage never touches production data", () => {
     db.setIdentity("production");
-    const { code, out } = runPlain("production", "stage");
+    const { code, out, op } = runPlain("production", "stage");
     expect(code).not.toBe(0);
     expect(out).toContain("RM_ENV=stage against a remote target whose deployment_identity is production");
     expect(out).not.toContain("rm_owner password");
-    expect(out).not.toContain("phase:");
-  }, 60_000);
+    expectRefusedAtTheLock(op, "production", out);
+  }, 120_000);
 
   test("an ABSENT enrollment refuses the same way — absence of evidence is not evidence of rehearsal", () => {
     db.setIdentity(null);
-    const { code, out } = runPlain("absent", "stage");
+    const { code, out, op } = runPlain("absent", "stage");
     expect(code).not.toBe(0);
     expect(out).toContain("deployment_identity is no identity row");
     expect(out).not.toContain("rm_owner password");
-  }, 60_000);
+    expectRefusedAtTheLock(op, "absent", out);
+  }, 120_000);
 
   test("a rehearsal target with no terminal refuses at the prompt rather than read a password from anywhere", () => {
     db.setIdentity("rehearsal");
@@ -174,4 +188,40 @@ describe("`bun smoke --migrate` on a remote REHEARSAL, on a terminal: prompt, wa
       if (statSync(path).isFile()) expect({ file, leaked: readFileSync(path, "utf8").includes(db.passwords.rm_owner) }).toEqual({ file, leaked: false });
     }
   }, 600_000);
+});
+
+// Criterion 52 in a real process, and the seed step's "gates before the
+// password": `--seed` refuses a POPULATED database, and on a remote target it
+// refuses before it ever asks for rm_owner. Last in the file: the case
+// populates the shared remote database, and nothing after it needs it blank.
+describe("`bun smoke --seed` on a remote rehearsal: the populated-database gate runs before the owner prompt (§5, criterion 52)", () => {
+  function runSeed(name: string): { code: number; out: string; op: Operator } {
+    const op = db.operator(name);
+    const argv = bootArgv(op, name).map((a) => (a === "--migrate" ? "--seed" : a));
+    const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}`, op };
+  }
+
+  test("red control: on the still-BLANK rehearsal the gate passes, and the step gets as far as the prompt (which, with no terminal, refuses)", () => {
+    db.setIdentity("rehearsal");
+    const { code, out } = runSeed("seed_blank");
+    expect(code).not.toBe(0);
+    expect(out).toContain("phase: prepare (seed)");
+    expect(out).not.toContain("the database is populated");
+    expect(out).toMatch(/non-interactive|stdin is not a terminal/);
+  }, 120_000);
+
+  test("on a POPULATED rehearsal `--seed` refuses by name, before any prompt, with the seed step journaled failed", () => {
+    db.setIdentity("rehearsal");
+    // A row no blank bootstrap writes, put there the way live use would.
+    db.superuser("INSERT INTO jobs (kind, payload) VALUES ('wallet.sample_balances', '{}'::jsonb);");
+    const { code, out, op } = runSeed("seed_populated");
+    expect(code).not.toBe(0);
+    expect(out).toContain("Refusing --seed: the database is populated");
+    expect(out).toContain("jobs (");
+    expect(out).not.toContain("rm_owner password");
+    expect(out).not.toMatch(/non-interactive|stdin is not a terminal/);
+    const last = readJournal(instancePaths(op.root, instanceOf("seed_populated")))!.phases.at(-1)!;
+    expect([last.phase, last.step, last.status]).toEqual(["prepare", "seed", "failed"]);
+  }, 120_000);
 });

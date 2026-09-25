@@ -17,7 +17,7 @@
 // shell hand-off of a migration credential. The smoke-side refusals a remote
 // `--migrate` meets — prod, a non-rehearsal identity, a non-terminal, anything
 // but an explicit `y` — are migrate-run.ts's, exercised at the smoke entry point
-// by scripts/tests/unit/smoke-external-migrate.test.ts.
+// by scripts/tests/integration/smoke-external-migrate.test.ts.
 
 /**
  * Read one line from the terminal with the input masked. The one prompt a

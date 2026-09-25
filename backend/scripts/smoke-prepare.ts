@@ -175,8 +175,14 @@ async function main(): Promise<PrepareResult> {
 
       case "seed": {
         const { confirmRemoteTarget, promptOwnerPassword, redactedTarget, urlAsRole } = await import("./migrate-run.ts");
-        const { seedDemo } = await import("../src/db/seed.ts");
+        const { assertSeedable, seedDemo } = await import("../src/db/seed.ts");
         const gate = { caller: "smoke_flag" as const, env: request.rmEnv, connection: request.connection };
+        // GATES BEFORE THE PASSWORD, as the migrate path holds them: the
+        // rehearsal-only gate and the populated-database check run first,
+        // read-only, over the rm_readonly reader while the boot holds the lock,
+        // so a seed that will be refused never asks for rm_owner or a y. They
+        // run again inside the fence (seedDemo), where they decide.
+        await assertSeedable(reader, { rmEnv: request.rmEnv ?? undefined, explicitlyRequested: true });
         const password = await promptOwnerPassword(
           { ...gate, nonInteractive: request.nonInteractive, localOwnerPassword: request.connection === "local" ? ownerPassword(request) : undefined },
           readerUrl,

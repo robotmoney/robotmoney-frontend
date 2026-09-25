@@ -1,5 +1,5 @@
 // A "remote" database for tests that drive a real `bun smoke` against one —
-// shared by scripts/tests/unit/smoke-external-migrate.test.ts and
+// shared by scripts/tests/integration/smoke-external-migrate.test.ts and
 // scripts/tests/integration/smoke-stage-vs-production-identity.test.ts.
 //
 // A Postgres container of the test's own, published on the Docker BRIDGE

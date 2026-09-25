@@ -20,7 +20,12 @@
 // file grades the PROGRAM: each row is the command an operator types, against a
 // database whose enrollment is really that row's, and the proof is what the
 // process did — refused before which step, or reached the target lock with the
-// posture the row names. An allowed boot is stopped with SIGINT once its `lock`
+// posture the row names. Spec §7's order binds every row that depends on the
+// target's answer: the plan reads the enrollment only as its expectation, and
+// the matrix judges it after the target lock is held (criterion 34), so such a
+// row refuses with its `lock` preparation journaled failed and nothing after
+// it run. Only the rows that need no answer (unset, other) refuse before any
+// step. An allowed boot is stopped with SIGINT once its `lock`
 // preparation (acquisition, revalidation and the matrix on the locked read) has
 // committed; everything after that is other files' business.
 //
@@ -45,6 +50,8 @@ import {
   type RunningBoot,
 } from "./smoke-boot-harness.ts";
 import { onTerminal, repoRoot, startRemoteDb, type Operator, type RemoteDb } from "./remote-db-harness.ts";
+import { instancePaths } from "../../lib/smoke-state.ts";
+import { readJournal } from "../../lib/smoke-journal.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Remote rows
@@ -58,6 +65,21 @@ afterAll(() => db?.close());
 
 function remoteArgv(op: Operator, instance: string | null, extra: readonly string[] = [], lockTimeoutSeconds = 10): string[] {
   return ["bun", "--no-env-file", "scripts/smoke.ts", ...(instance ? ["--instance", instance] : []), "--credentials", op.roster, "--lock-timeout", String(lockTimeoutSeconds), ...extra];
+}
+
+/**
+ * A row that depends on the target's answer refuses UNDER the target lock: the
+ * journal's last record is the `lock` preparation, failed, and no step after it
+ * began — no image assembled, no container started, no owner prompt.
+ */
+function expectRefusedAtTheLock(op: Operator, instance: string, out: string): void {
+  const journal = readJournal(instancePaths(op.root, instance));
+  expect(journal).not.toBeNull();
+  const last = journal!.phases.at(-1)!;
+  expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
+  expect(out).toContain("target lock held");
+  expect(out).not.toContain("phase: prepare (assemble)");
+  expect(out).not.toContain("rm_owner password");
 }
 
 /** Run to completion; for the refusing rows. */
@@ -119,12 +141,17 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
   }, 300_000);
 
   for (const kind of ["rehearsal", null] as const) {
-    test(`prod × remote × ${kind ?? "no row"}: refused at the plan's read, before any step`, () => {
+    test(`prod × remote × ${kind ?? "no row"}: refused by the matrix on the locked read, before anything after the lock`, () => {
       db.setIdentity(kind);
-      const r = remoteRefusal(db.operator(`prod_${kind ?? "none"}`), { RM_ENV: "prod" }, null);
+      const op = db.operator(`prod_${kind ?? "none"}`);
+      // A production-policy boot demands a funded model before the plan
+      // (AC-MODEL-01); the placeholder is never spent.
+      const r = remoteRefusal(op, { RM_ENV: "prod", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent" }, null);
       expect(r.code).not.toBe(0);
       expect(r.out).toContain("prod policy requires an identity of production");
-      expect(r.out).not.toContain("phase:");
+      // The plan records what it read, and does not dress an absent row up as rehearsal.
+      expect(r.out).toContain(`RM_ENV=prod, deployment_identity ${kind ?? "absent"}`);
+      expectRefusedAtTheLock(op, "rm_prod", r.out);
     }, 120_000);
   }
 
@@ -136,16 +163,22 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     expect(r.out).toContain("RM_ENV=stage, deployment_identity rehearsal");
     expect(r.out).toContain("target lock held");
     expect(r.code).toBe(130);
+    // Criterion 34 on the REMOTE path, from the journal the boot wrote: the
+    // plan, the instance's own files, then the target lock (acquire,
+    // revalidate, matrix) — and only then anything that acts on the target.
+    const steps = readJournal(instancePaths(op.root, "rm_it_matrix_stage"))!.phases.map((p) => `${p.phase}:${p.step ?? ""}`);
+    expect(steps.slice(0, 3)).toEqual(["plan:", "prepare:instance", "prepare:lock"]);
   }, 300_000);
 
   for (const kind of ["production", null] as const) {
-    test(`stage × remote × ${kind ?? "no row"}: a PLAIN stage boot refuses before any step — stage never touches production data`, () => {
+    test(`stage × remote × ${kind ?? "no row"}: a PLAIN stage boot refuses at the lock — stage never touches production data`, () => {
       db.setIdentity(kind);
-      const r = remoteRefusal(db.operator(`stage_${kind ?? "none"}`), { RM_ENV: "stage" }, "rm_it_matrix_plain");
+      const op = db.operator(`stage_${kind ?? "none"}`);
+      const r = remoteRefusal(op, { RM_ENV: "stage" }, "rm_it_matrix_plain");
       expect(r.code).not.toBe(0);
       expect(r.out).toContain(`RM_ENV=stage against a remote target whose deployment_identity is ${kind ?? "no identity row"}`);
       expect(r.out).toContain("stage policy (incl. --allow-insecure) never touches production data");
-      expect(r.out).not.toContain("phase:");
+      expectRefusedAtTheLock(op, "rm_it_matrix_plain", r.out);
     }, 120_000);
   }
 
@@ -160,8 +193,7 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
       const code = await boot.exited();
       expect(code).not.toBe(0);
       expect(boot.screen()).toContain("whose deployment_identity is production");
-      expect(boot.screen()).not.toContain("rm_owner password");
-      expect(boot.screen()).not.toContain("phase:");
+      expectRefusedAtTheLock(op, "rm_it_matrix_typed", boot.screen());
     } finally {
       boot.kill();
     }
@@ -300,11 +332,25 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
     expect(current.output()).toContain("target lock held");
   }, BOOT_TIMEOUT_MS);
 
+  test("criterion 52 in a real process: `--local volume --seed` on the reattached volume refuses before any step — a reattached volume is not a blank database", async () => {
+    expect(h).toBeDefined();
+    const before = journalNow(h!)!.phases.length;
+    current = spawnBoot(h!, ["--credentials", h!.emptyRoster, "--seed"], { local: "volume", migrate: false });
+    const code = await current.exited;
+    expect(code).not.toBe(0);
+    expect(current.output()).toContain("--seed cannot be used with --local volume");
+    // Refused at the arguments: no phase began, the instance's journal is untouched.
+    expect(current.output()).not.toContain("phase:");
+    expect(journalNow(h!)!.phases.length).toBe(before);
+  }, BOOT_TIMEOUT_MS);
+
   for (const kind of ["production", null] as const) {
     test(`stage × --local volume × ${kind ?? "no row"}: refuses at the lock — a reattached volume gets no weaker policy than a remote`, async () => {
       expect(h).toBeDefined();
       // Re-enrolled through the container's superuser, the way a wrong restore
-      // or a hand edit would leave it.
+      // or a hand edit would leave it. This is the row's INPUT, on this file's
+      // own Postgres; nothing is put back afterwards (these are the file's last
+      // rows), so no case depends on a reset.
       bootQuery(h!.project, kind === null ? "DELETE FROM deployment_identity" : `UPDATE deployment_identity SET kind = '${kind}'`);
       current = spawnBoot(h!, [], { local: "volume", migrate: false });
       const code = await current.exited;
@@ -314,8 +360,6 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       expect([last.phase, last.step, last.status]).toEqual(["prepare", "lock", "failed"]);
       // Nothing past the lock ran: no application service was started.
       expect(current.output()).not.toContain("phase: prepare (assemble)");
-      // Put the enrollment back for the next row.
-      bootQuery(h!.project, "DELETE FROM deployment_identity; INSERT INTO deployment_identity (kind) VALUES ('rehearsal')");
     }, BOOT_TIMEOUT_MS);
   }
 });

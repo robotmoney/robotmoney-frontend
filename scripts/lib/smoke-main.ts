@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -448,8 +448,10 @@ const DB_NAME = DEFAULT_STACK_DATABASE.name;
 // identity read, preparation and preflight all run here, never in a container
 // (which could not reach a database on this host's own loopback). The plan
 // hashes the target's deployment_identity kind (§1.2), so it is read now, over
-// rm_readonly; that read is the plan's expectation, and the target lock
-// revalidates it (§2) before anything is decided on it.
+// rm_readonly. That read is the plan's EXPECTATION and nothing else: no
+// decision is taken on it (criterion 34, §2 "before the first read used for a
+// decision"). The §4.3 matrix runs once, after the target lock, on the locked
+// read (prepareDatabase); the lock's revalidation holds this read to it (§2).
 const remote = dataPath.kind === "external"
   ? (() => {
       const readerUrl = urlForRole(homeEnv, "rm_readonly");
@@ -464,10 +466,6 @@ const remote = dataPath.kind === "external"
 const remoteState: TargetState | undefined = remote
   ? await hostReadTargetState(remote.readerUrl).catch((err: unknown) => fatal(`the remote database could not be read (${err instanceof Error ? err.message : String(err)}).`))
   : undefined;
-if (remoteState) {
-  const verdict = resolveDeploymentPolicy({ rmEnv: declaredRmEnv, connection, identity: remoteState.identity === "missing" ? null : remoteState.identity });
-  if (!verdict.allow) fatal(verdict.reason);
-}
 // Base compose files (what smoke:down/smoke:status rebuild from — they stop/inspect
 // by project and never need the generated overlays). The --static-port overlay
 // belongs to the BASE list: it is the one file that names a host port, so
@@ -630,8 +628,9 @@ function planTarget(): PlanTarget {
     return {
       kind: "remote",
       rmEnv: policy,
-      // The matrix above refused every kind this policy cannot run against.
-      identity: remoteState!.identity === "production" ? "production" : "rehearsal",
+      // The kind the plan was built against, as read — `absent` when the target
+      // is not enrolled. Never a verdict: the matrix judges the locked read.
+      identity: remoteState!.identity === "missing" ? "absent" : remoteState!.identity,
       host: url.hostname,
       port: url.port === "" ? 5432 : Number(url.port),
       dbname: decodeURIComponent(url.pathname.replace(/^\//, "")),
@@ -759,6 +758,8 @@ function makeStackConfig(): StackConfig {
     credentials,
     environment: stackEnvironment,
     rmEnv: stackRmEnv,
+    // §4.4: never allow-insecure under RM_ENV=prod (refuseWeakeningFlagsOnProd).
+    allowInsecure: stackAllowInsecureFor(policy),
     imagesOverride,
     instance: { name: instance.name, stateDir: paths.dir },
     // NO MODEL KEY. The judge is a participant and takes its key from
@@ -1112,21 +1113,27 @@ async function main(): Promise<void> {
   };
 
   // §1.3: resume only under the same plan id; supersede on a different one;
-  // refuse when another operation moved the world. The schema is compared now
-  // when the database can be asked, else the moment it can (recheckSchema).
+  // refuse when another operation moved the world. The world is READ only
+  // under the target lock (§2, §7, criterion 34): at open the decision is taken
+  // on the journal alone — its own ledger and manifest stand in for the
+  // database's — and the schema half of the resume check is made the moment
+  // the lock is held (holdSchemaToJournal), against a read on the lock's own
+  // connection, every time a journal is resumed.
   const onDisk = readJournal(paths);
   const resumable = onDisk !== null && onDisk.closedAt === null && onDisk.planId === planId ? onDisk : null;
   const journalExpects = resumable ? projectExpectations(resumable) : null;
-  const schemaAtOpen = await observeSchema();
   lastExpectations = {
-    ledger: schemaAtOpen?.ledger ?? journalExpects?.ledger ?? [],
-    manifestHash: schemaAtOpen ? schemaAtOpen.manifestHash : (journalExpects?.manifestHash ?? null),
+    ledger: journalExpects?.ledger ?? [],
+    manifestHash: journalExpects?.manifestHash ?? null,
     identity: plan.target.identity,
     participants: [],
     services: runningServices(),
     spoofGeneration: null,
   };
-  let recheckSchema = schemaAtOpen === null && journalExpects !== null ? journalExpects : null;
+  /** What the resumed journal expects of the schema, held to the locked read. */
+  let recheckSchema = journalExpects;
+  /** Set when THIS run restored the dump: the restore, not the old journal, defines the schema. */
+  let restoredThisRun = false;
   const decision = decideResume(onDisk, planId, lastExpectations);
   if (decision.kind === "refuse") fatal(`the journal for instance ${instance.name} refuses this run: ${decision.reason}`);
   if (decision.kind === "supersede") log(decision.report);
@@ -1156,19 +1163,19 @@ async function main(): Promise<void> {
     await journal!.commitPhase({ ...EMPTY_OUTCOME, ...outcome });
     openRecord = undefined;
   };
-  // A resumed run that could not see the schema at open holds it to the
-  // journal the moment it can. What it is held to is the journal AS IT NOW
-  // STANDS, never the expectations captured at open, which this run's own
-  // migrate would then contradict.
+  // A resumed run holds the schema to its journal under the target lock, on
+  // the lock's own connection. What it is held to is the journal as it stood
+  // at open (the resume was decided on it), except when this run restored the
+  // dump itself: then the restored copy is this run's own journaled work, and
+  // the journal AS IT NOW STANDS (its records begun after the restore) is the
+  // expectation.
   const holdSchemaToJournal = async (): Promise<void> => {
     if (!recheckSchema) return;
-    const schema = await observeSchema();
-    if (!schema) {
-      throw new Error(`refusing to resume plan ${planId}: the database could not be asked about its schema, so the journal's expectations cannot be checked`);
-    }
-    const current = readJournal(paths);
+    if (!targetLock) throw new Error("holdSchemaToJournal runs only under the target lock");
+    const locked = await readTargetState(targetLock.connection);
+    const current = restoredThisRun ? readJournal(paths) : null;
     const expected = (current !== null ? projectExpectations(current) : null) ?? recheckSchema;
-    const mismatch = expectationMismatch(expected, schema);
+    const mismatch = expectationMismatch(expected, { ledger: [...locked.ledger], manifestHash: locked.manifestHash });
     recheckSchema = null;
     if (mismatch) throw new Error(`refusing to resume plan ${planId}: ${mismatch}, and no journaled outcome accounts for the difference`);
   };
@@ -1223,6 +1230,7 @@ async function main(): Promise<void> {
       const twin = await bringUpTwin({ backupDir: requestedDataPath.backupDir, project, log: (m) => log(m) });
       dataPath = twin.dataPath;
       smokeTwinContainer = twin.container;
+      restoredThisRun = true;
       runSecrets.push(...urlPassword(twin.dataPath.kind === "smoke-twin" ? twin.dataPath.url : undefined));
       console.warn(bannerFor(dataPath));
       // The restore superuser does what doadmin does, and no more: the four

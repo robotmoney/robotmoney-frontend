@@ -278,7 +278,11 @@ export function assertPlanRedacted(plan: DeploymentPlan, options: RedactionOptio
     refuseField("plan.target.kind", "is neither remote nor local");
   }
   if (target.rmEnv !== "prod" && target.rmEnv !== "stage") refuseField("plan.target.rmEnv", "is not prod or stage");
-  if (target.identity !== "production" && target.identity !== "rehearsal") {
+  // `absent` is a REMOTE plan's honest record of an unenrolled target (the
+  // lock's matrix refuses it); a local plan's identity is the one smoke writes
+  // or requires, so it is never absent.
+  const kinds = target.kind === "remote" ? ["production", "rehearsal", "absent"] : ["production", "rehearsal"];
+  if (!kinds.includes(target.identity)) {
     refuseField("plan.target.identity", "is not a deployment_identity kind");
   }
 
@@ -374,11 +378,20 @@ export const DEPLOYMENT_PHASES: readonly DeploymentPhase[] = [
  * one is the §5 mode and the volume smoke owns. Either carries the `RM_ENV`
  * policy and the `deployment_identity` kind the plan was built against.
  */
+/** A `deployment_identity` kind as a plan records it; `absent` means no enrollment row. */
+export type PlanIdentity = "production" | "rehearsal" | "absent";
+
 export type PlanTarget =
   | {
       readonly kind: "remote";
       readonly rmEnv: "prod" | "stage";
-      readonly identity: "production" | "rehearsal";
+      /**
+       * Read before the target lock, as the plan's expectation (§1.2);
+       * `absent` when the target is not enrolled. The §4.3 matrix is judged
+       * on the locked read, never on this field, so an `absent` plan is one
+       * the lock will refuse.
+       */
+      readonly identity: PlanIdentity;
       /** A bare hostname: no scheme, no userinfo, no port, no path. */
       readonly host: string;
       readonly port: number;
@@ -602,8 +615,8 @@ export interface StateExpectations {
   readonly ledger: readonly string[];
   /** Content hash of the schema manifest (§8.3) at phase start. */
   readonly manifestHash: string | null;
-  /** `deployment_identity.kind` at phase start. */
-  readonly identity: "production" | "rehearsal";
+  /** `deployment_identity.kind` at phase start (the plan's, `absent` when unenrolled). */
+  readonly identity: PlanIdentity;
   /** Running participant containers, by name, at phase start. */
   readonly participants: readonly string[];
   /** Running application services and the image digest each was on. */
