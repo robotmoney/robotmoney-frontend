@@ -114,6 +114,8 @@ const COMMENTS_SNAPSHOT_N_LACKS: readonly string[] = [
   "pg_class public.swarm_sessions.judging_duration_seconds",
   "pg_class public.swarm_sessions.judging_outcome",
   "pg_class public.swarm_sessions.successor_session_id",
+  "pg_class public.swarm_stream_events",
+  "pg_class public.swarm_stream_events.seq",
   "pg_class public.swarm_subjects.epoch_anchor",
   "pg_class public.swarm_subjects.epoch_duration_seconds",
   "pg_class public.swarm_subjects.judging_duration_seconds",
@@ -262,7 +264,7 @@ describe("snapshot N + migrations = snapshot N+1 (spec §8.4)", () => {
     const target = join(dir, "0084_admin_revocation_tombstones.sql");
     const original = readFileSync(target, "utf8");
     const planted = original
-      .replace("ALTER TABLE admin_passkey ADD COLUMN revoked_at timestamptz;\n", "")
+      .replace("ALTER TABLE admin_passkey ADD COLUMN IF NOT EXISTS revoked_at timestamptz;\n", "")
       .replace(/COMMENT ON COLUMN admin_passkey\.revoked_at IS\n[^\n]*\n/, "");
     expect(planted).not.toBe(original);
     await Bun.write(target, planted);

@@ -31,8 +31,8 @@
 -- ordinary table, re-asserted on every migrate run), and a new column inherits
 -- the table's privileges. No DELETE is granted anywhere.
 
-ALTER TABLE admin_session ADD COLUMN revoked_at timestamptz;
-ALTER TABLE admin_passkey ADD COLUMN revoked_at timestamptz;
+ALTER TABLE admin_session ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
+ALTER TABLE admin_passkey ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
 
 COMMENT ON COLUMN admin_session.revoked_at IS
   'When this session was revoked (D55 (6)): set in the revoking transaction instead of deleting the row. Every session read filters revoked_at IS NULL, so a revoked session is refused on the next request. NULL = live.';

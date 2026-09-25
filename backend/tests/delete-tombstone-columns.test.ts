@@ -56,7 +56,7 @@ beforeAll(async () => {
   migrated = await dbs.migrated(`rm_tomb_migrated_${suffix}`);
 
   // Snapshot N predates every tombstone column: write one row per table there,
-  // then run the real migrate, which applies 0079 onward.
+  // then run the real migrate, which applies 0084 onward.
   const name = `rm_tomb_advanced_${suffix}`;
   advanced = await dbs.atSnapshotN(name);
   await advanced.unsafe(`

@@ -26,7 +26,7 @@
 -- GRANTS: none. rm_app already holds UPDATE on the table (the ordinary sweep in
 -- backend/schema/grants.sql). No DELETE is granted anywhere.
 
-ALTER TABLE admin_webauthn_challenge ADD COLUMN consumed_at timestamptz;
+ALTER TABLE admin_webauthn_challenge ADD COLUMN IF NOT EXISTS consumed_at timestamptz;
 
 COMMENT ON COLUMN admin_webauthn_challenge.consumed_at IS
   'When this challenge was consumed (D55 (6)): set by the single-use conditional UPDATE instead of deleting the row. A consumed or expired challenge is never accepted again. NULL = unconsumed.';

@@ -99,6 +99,13 @@ const ALLOWED: Record<string, string> = {
   // against it. Installing the guard is not using it — the file deletes no row.
   "backend/tests/schema-snapshot.test.ts": "its fixture declaration installs the guard's triggers",
 
+  // And once more: snapshot N for spec §8.4's "snapshot N + migrations =
+  // snapshot N+1" (tests/snapshot-advance.test.ts) is a byte-for-byte,
+  // sha256-pinned copy of an earlier backend/schema/snapshot.sql, so it carries
+  // the same trigger declarations for the same reason. It deletes no row.
+  "backend/tests/fixtures/snapshots/0083_clear_forged_member_operator/schema/snapshot.sql":
+    "pinned copy of an earlier snapshot declaration; installs the guard's triggers",
+
   // Migration 0059 cleans up fabricated snapshots on framework subjects (issue #960).
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",

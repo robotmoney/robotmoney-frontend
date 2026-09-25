@@ -35,14 +35,28 @@
 -- NULL. The CHECK accepts every existing row and refuses only an empty string,
 -- which no writer produces (a generation id is `gen-` plus hex).
 --
+-- IDEMPOTENT, like 0084-0086: re-applied to a schema that already carries the
+-- column (a snapshot-built database whose ledger lacks this row, §9.1 step 2)
+-- it changes nothing.
+--
 -- GRANTS: none. The rebind INSERTs through the role that already inserts key
 -- rows (rm_app holds SELECT, INSERT, UPDATE; 0065 revoked DELETE and TRUNCATE
 -- and grants.sql re-asserts that). A new column inherits the table's
 -- privileges.
 
-ALTER TABLE swarm_member_keys ADD COLUMN spoof_generation_id text;
-ALTER TABLE swarm_member_keys ADD CONSTRAINT swarm_member_keys_spoof_generation_id_check
-  CHECK (spoof_generation_id IS NULL OR spoof_generation_id <> '');
+ALTER TABLE swarm_member_keys ADD COLUMN IF NOT EXISTS spoof_generation_id text;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.swarm_member_keys'::regclass
+      AND conname = 'swarm_member_keys_spoof_generation_id_check'
+  ) THEN
+    ALTER TABLE swarm_member_keys ADD CONSTRAINT swarm_member_keys_spoof_generation_id_check
+      CHECK (spoof_generation_id IS NULL OR spoof_generation_id <> '');
+  END IF;
+END
+$$;
 
 COMMENT ON COLUMN swarm_member_keys.spoof_generation_id IS
   'The --spoof-keys generation that installed this key (smoke spec §6.4), written by the rebind''s INSERT and never updated. A rerun finds the database at a generation when every spoofed member''s active key carries its id. NULL = not a spoofed key.';

@@ -158,7 +158,7 @@ describe("swarm_member_keys.spoof_generation_id (spec §6.4)", () => {
     });
   });
 
-  test("an empty generation id is refused, and the table's append-only guard still refuses a DELETE", async () => {
+  test("an empty generation id is refused, and the table's append-only guard is still armed", async () => {
     const [key] = (await migrated`SELECT member_id FROM swarm_member_keys LIMIT 1`) as unknown as { member_id: string }[];
     const member = key?.member_id ?? PRE_MEMBER;
     const empty = await sqlState(() =>
@@ -167,10 +167,19 @@ describe("swarm_member_keys.spoof_generation_id (spec §6.4)", () => {
       ),
     );
     expect(empty).toBe("23514");
-    // rm_owner holds DELETE; the 0050 trigger is what refuses it.
-    const deleted = await sqlState(() =>
-      asRole(migrated, "rm_owner", (tx) => tx`DELETE FROM swarm_member_keys WHERE spoof_generation_id IS NOT NULL`),
-    );
-    expect(deleted).toBe("0A000");
+    // 0050's statement- and row-level guard triggers, still present and firing
+    // always, on every path. That they refuse a removal is
+    // tests/append-only-enforcement.test.ts's proof; this one pins that adding
+    // the column left them in place.
+    for (const db of [fresh, migrated, advanced]) {
+      const triggers = (await db`
+        SELECT tgname, tgenabled::text AS enabled FROM pg_trigger
+        WHERE tgrelid = 'public.swarm_member_keys'::regclass AND NOT tgisinternal
+        ORDER BY tgname`) as unknown as { tgname: string; enabled: string }[];
+      expect(triggers).toEqual([
+        { tgname: "swarm_member_keys_append_only", enabled: "A" },
+        { tgname: "swarm_member_keys_append_only_row", enabled: "A" },
+      ]);
+    }
   });
 });

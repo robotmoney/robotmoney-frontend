@@ -44,12 +44,12 @@
 -- anywhere; the DELETE rm_worker holds today is revoked with the code change in
 -- wave 5.
 
-ALTER TABLE wallet_balance_samples ADD COLUMN superseded_at timestamptz;
-ALTER TABLE wallet_sleeve_samples ADD COLUMN superseded_at timestamptz;
+ALTER TABLE wallet_balance_samples ADD COLUMN IF NOT EXISTS superseded_at timestamptz;
+ALTER TABLE wallet_sleeve_samples ADD COLUMN IF NOT EXISTS superseded_at timestamptz;
 
-CREATE UNIQUE INDEX wallet_balance_samples_live_key
+CREATE UNIQUE INDEX IF NOT EXISTS wallet_balance_samples_live_key
   ON wallet_balance_samples (sample_date, symbol) WHERE superseded_at IS NULL;
-CREATE UNIQUE INDEX wallet_sleeve_samples_live_key
+CREATE UNIQUE INDEX IF NOT EXISTS wallet_sleeve_samples_live_key
   ON wallet_sleeve_samples (sample_date, wallet_address, symbol) WHERE superseded_at IS NULL;
 
 COMMENT ON COLUMN wallet_balance_samples.superseded_at IS

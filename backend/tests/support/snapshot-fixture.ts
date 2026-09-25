@@ -24,7 +24,7 @@ const MIGRATIONS = join(import.meta.dir, "..", "..", "migrations");
 
 /** Snapshot N: the fixture directory. Its layout is backend/'s (`schema/...`),
  *  so `loadSnapshot(FIXTURE_N)` reads it like the real one. */
-export const FIXTURE_N = join(import.meta.dir, "..", "fixtures", "snapshots", "0078_automation_token_holders");
+export const FIXTURE_N = join(import.meta.dir, "..", "fixtures", "snapshots", "0083_clear_forged_member_operator");
 
 /** Snapshot N's filename list, as its own metadata records it. */
 export function fixtureFilenames(): string[] {
