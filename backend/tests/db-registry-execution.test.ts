@@ -88,7 +88,7 @@ const PROBE_PENDING_CEILING = 11;
  * as sites are added. Lower it only in the change that deletes a registering
  * module, saying which.
  */
-const EXECUTED_FLOOR = 29;
+const EXECUTED_FLOOR = 194;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static enumeration: what the source says is registered.

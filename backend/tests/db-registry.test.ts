@@ -309,7 +309,11 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // `src/worker/runtime`, which had been admitted only because the regex
   // matched "`sql` is a live binding" inside a comment. The ten modules the
   // old detector missed were converted rather than added; the list did not
-  // grow to admit them. 50 entries remain.
+  // grow to admit them. 50 entries remained.
+  //
+  // 2026-09-25 (#1026 W3): thirty modules moved onto the registry, each with
+  // a probe tests/db-registry-execution.test.ts runs as its declared role. 20
+  // entries remain; what keeps each one here is reported with the change.
   //
   // NEVER ADD A LINE HERE. An addition would be a new violation of §7.1 being
   // written down instead of fixed, which is the one thing a ratchet exists to
@@ -521,7 +525,8 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(stale).toEqual([]);
     expect(new Set(RAW_SQL_ALLOWLIST).size).toBe(RAW_SQL_ALLOWLIST.length);
     // The recorded size. A longer list is an addition, whatever it is called.
-    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(50);
+    // 50 when recorded; 20 after #1026 W3 moved thirty modules onto the registry.
+    expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(20);
   });
 
   test("every backend/scripts module issuing a raw statement is on the dated scripts backlog or shipped-release history", () => {
@@ -542,8 +547,9 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(new Set(SCRIPTS_RAW_SQL_ALLOWLIST).size).toBe(SCRIPTS_RAW_SQL_ALLOWLIST.length);
     expect(SCRIPTS_RAW_SQL_ALLOWLIST.every((m) => m.startsWith("scripts/"))).toBe(true);
     // The recorded size. A longer list is an addition, whatever it is called.
-    // 28 when recorded; 15 once the shipped-release tooling moved to its own set.
-    expect(SCRIPTS_RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(15);
+    // 28 when recorded; 15 once the shipped-release tooling moved to its own
+    // set; 13 once scan-low-order-keys and v0-seed-bootstrap registered.
+    expect(SCRIPTS_RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(13);
   });
 
   test("the shipped-release tooling set is exactly the thirteen recorded modules, and never grows", () => {
@@ -718,6 +724,39 @@ describe("declarations — what the converted modules declare, read without depe
     "src/db/seed",
     "src/projects/activity-log-projections",
     "src/swarm/handle",
+    // #1026 W3.
+    "scripts/scan-low-order-keys",
+    "scripts/v0-seed-bootstrap",
+    "src/admin/audit",
+    "src/admin/overview",
+    "src/analytics/cutover/gate",
+    "src/analytics/cutover/ledger-current",
+    "src/analytics/cutover/parity",
+    "src/analytics/cutover/read-mode",
+    "src/analytics/report/projections",
+    "src/analytics/store/raw-history-store",
+    "src/analytics/store/research-store",
+    "src/analytics/store/telemetry-store",
+    "src/api/routes/swarm/waitlist",
+    "src/chain/buyback-logs",
+    "src/projects/agent-detail-projections",
+    "src/projects/agents-projections",
+    "src/projects/coins-vaults-wallets-projections",
+    "src/projects/dossier-projections",
+    "src/projects/entities-projections",
+    "src/projects/leaderboard-projections",
+    "src/projects/list2-projections",
+    "src/projects/profile-projections",
+    "src/projects/projections",
+    "src/swarm/judge-replay",
+    "src/swarm/judgements",
+    "src/swarm/receipt-gap",
+    "src/worker/handlers/repair",
+    "src/worker/handlers/vault",
+    "src/worker/handlers/wallet",
+    "src/worker/loop",
+    "src/worker/reaper",
+    "src/worker/scheduler",
   ];
 
   test("every registerQuery call is at module level, so importing a module enumerates all of it", () => {
