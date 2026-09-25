@@ -1,17 +1,24 @@
-// Integration coverage for the `prod-bootstrap` orchestrator (migrate ->
-// v0-seed:bootstrap -> edgar-seed:bootstrap), against the SAME ephemeral
-// Postgres the rest of the suite uses. The underlying steps (migrate(),
+// Integration coverage for the `prod-bootstrap` orchestrator (schema-current
+// -> seed -> v0-seed:bootstrap -> edgar-seed:bootstrap), against the SAME
+// ephemeral Postgres the rest of the suite uses. The underlying steps (seed(),
 // runV0SeedBootstrap(), bootstrapEdgarSeed()) are already covered by their
 // own test files — this file exercises the orchestration logic that is
 // UNIQUE to prod-bootstrap.ts and not exercised anywhere else: every step
-// always runs (no fail-fast), the v0-seed drift outcome stays a non-failing
-// warning (adopted production data wins), the edgar step's unreachable-vs-genuine-
-// failure classification (skip vs. hard fail) is correct in both directions,
-// and — the only place this is reachable — the step ORDERING a public
-// deployment produces, where migrate() seats the live roster before the
-// archive backfill reads swarm_members (issue #540, last test in this file).
+// always runs (no fail-fast) past the two read-only prechecks, a database with
+// a pending migration halts before any write and names `bun run migrate` (the
+// orchestrator no longer migrates — the legacy lock-free runner is not
+// reachable from it), the v0-seed drift outcome stays a non-failing warning
+// (adopted production data wins), the edgar step reads its token only from
+// ANALYTICS_TOKEN_FILE and its unreachable-vs-genuine-failure classification
+// (skip vs. hard fail) is correct in both directions, and — the only place
+// this is reachable — the step ORDERING a public deployment produces, where
+// the seed step seats the live roster before the archive backfill reads
+// swarm_members (issue #540, last test in this file).
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { runProdBootstrap, type StepReport } from "../scripts/prod-bootstrap.ts";
 import { loadV0Archive } from "../src/swarm/v0-archive.ts";
@@ -53,12 +60,15 @@ beforeAll(async () => {
 });
 
 const origAnalyticsToken = process.env.ANALYTICS_TOKEN;
+const origAnalyticsTokenFile = process.env.ANALYTICS_TOKEN_FILE;
 const origAnalyticsApiUrl = process.env.ANALYTICS_API_URL;
 const origSeedRoster = process.env.SWARM_SEED_ROSTER;
 
 function restoreEnv(): void {
   if (origAnalyticsToken === undefined) delete process.env.ANALYTICS_TOKEN;
   else process.env.ANALYTICS_TOKEN = origAnalyticsToken;
+  if (origAnalyticsTokenFile === undefined) delete process.env.ANALYTICS_TOKEN_FILE;
+  else process.env.ANALYTICS_TOKEN_FILE = origAnalyticsTokenFile;
   if (origAnalyticsApiUrl === undefined) delete process.env.ANALYTICS_API_URL;
   else process.env.ANALYTICS_API_URL = origAnalyticsApiUrl;
   if (origSeedRoster === undefined) delete process.env.SWARM_SEED_ROSTER;
@@ -67,6 +77,25 @@ function restoreEnv(): void {
 
 beforeEach(restoreEnv);
 afterEach(restoreEnv);
+
+// A test that drives the whole orchestrator twice (two archive imports) takes
+// about five seconds, which bun's default per-test budget of 5s turned into a
+// timeout on a loaded host. The budget is time, not an assertion.
+const TWO_RUNS_TIMEOUT_MS = 30_000;
+
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** The analytics producer's token file, as the host provisions it (§3). */
+function tokenFile(token: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "rm-pb-token-"));
+  tempDirs.push(dir);
+  const path = join(dir, "token");
+  writeFileSync(path, `${token}\n`, { mode: 0o600 });
+  return path;
+}
 
 function reportFor(reports: StepReport[], name: string): StepReport {
   const r = reports.find((r) => r.name === name);
@@ -85,16 +114,19 @@ async function freePort(): Promise<number> {
   });
 }
 
-test("cold DB: every step runs, v0-seed inserts the archive's full manifest counts, edgar cleanly skips without ANALYTICS_TOKEN, nothing failing", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+test("cold DB: every step runs, v0-seed inserts the archive's full manifest counts, edgar cleanly skips without ANALYTICS_TOKEN_FILE, nothing failing", async () => {
+  delete process.env.ANALYTICS_TOKEN_FILE;
 
   const reports = await runProdBootstrap();
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
-    "migrations",
-    // Runs AFTER migrations, because migrate() is what installs the guard it
-    // verifies (issue #684). Probing before would report "not applied" on every
-    // cold boot and prove nothing.
+    // Read-only: the database is already at this build's schema, which only
+    // `bun run migrate` moves (spec §8.5). This orchestrator never migrates.
+    "schema-current",
+    "seed",
+    // Runs AFTER schema-current, because migration 0032 is what installs the
+    // guard it verifies (issue #684). Probing an unmigrated database would
+    // report "not applied" and prove nothing.
     "append-only-guard",
     // Issue #979 AC6: a distinct trigger-family guard, run right after the
     // append-only one it sits beside.
@@ -110,9 +142,10 @@ test("cold DB: every step runs, v0-seed inserts the archive's full manifest coun
   expect(namespace.status).toBe("success");
   expect(namespace.failing).toBe(false);
 
-  const migrations = reportFor(reports, "migrations");
-  expect(migrations.status).toBe("success");
-  expect(migrations.failing).toBe(false);
+  const current = reportFor(reports, "schema-current");
+  expect(current.status).toBe("success");
+  expect(current.failing).toBe(false);
+  expect(reportFor(reports, "seed").failing).toBe(false);
 
   // The guard step PROBES — it attempts a delete on every protected table and
   // requires migration 0032's own refusal message — so a success here is
@@ -131,7 +164,7 @@ test("cold DB: every step runs, v0-seed inserts the archive's full manifest coun
   const edgar = reportFor(reports, "edgar-seed:bootstrap");
   expect(edgar.status).toBe("skipped");
   expect(edgar.failing).toBe(false);
-  expect(edgar.summary).toBe("skipped: ANALYTICS_TOKEN not set");
+  expect(edgar.summary).toBe("skipped: ANALYTICS_TOKEN_FILE not set");
 
   const provenance = reportFor(reports, "seed-provenance:verify");
   expect(provenance.status).toBe("success");
@@ -145,7 +178,7 @@ test("cold DB: every step runs, v0-seed inserts the archive's full manifest coun
 });
 
 test("seed-provenance:verify cleans a calendar-invalid source='seed' row a pre-#630 database left behind", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+  delete process.env.ANALYTICS_TOKEN_FILE;
   // ICSA is the weekly_saturday series (D6); a Monday row is calendar-invalid
   // — the same fixture floor-seed-calendar-guard.test.ts uses.
   await sql`INSERT INTO raw_indicator_history (indicator, date, value, source)
@@ -165,7 +198,7 @@ test("seed-provenance:verify cleans a calendar-invalid source='seed' row a pre-#
 });
 
 test("idempotent: a second full run inserts nothing further and still reports nothing failing", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+  delete process.env.ANALYTICS_TOKEN_FILE;
 
   const first = await runProdBootstrap();
   expect(reportFor(first, "v0-seed:bootstrap").summary).toBe(expectedV0Summary);
@@ -173,10 +206,10 @@ test("idempotent: a second full run inserts nothing further and still reports no
   const second = await runProdBootstrap();
   expect(reportFor(second, "v0-seed:bootstrap").summary).toBe("0 members, 0 subjects, 0 sessions, 0 takes, 0 snapshots, 0 briefs inserted, 0 drift");
   expect(second.some((r) => r.failing)).toBe(false);
-});
+}, TWO_RUNS_TIMEOUT_MS);
 
 test("drift on an adopted database: reported as a warning, existing rows win, the run is NOT failing", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+  delete process.env.ANALYTICS_TOKEN_FILE;
 
   await runProdBootstrap();
   await sql`UPDATE swarm_members SET tagline = 'MUTATED for prod-bootstrap orchestration test' WHERE handle = 'athena'`;
@@ -185,10 +218,13 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   // No fail-fast: migrations and the edgar step still ran even though v0-seed drifted.
   expect(reports.map((r) => r.name)).toEqual([
     "handle-namespace",
-    "migrations",
-    // Runs AFTER migrations, because migrate() is what installs the guard it
-    // verifies (issue #684). Probing before would report "not applied" on every
-    // cold boot and prove nothing.
+    // Read-only: the database is already at this build's schema, which only
+    // `bun run migrate` moves (spec §8.5). This orchestrator never migrates.
+    "schema-current",
+    "seed",
+    // Runs AFTER schema-current, because migration 0032 is what installs the
+    // guard it verifies (issue #684). Probing an unmigrated database would
+    // report "not applied" and prove nothing.
     "append-only-guard",
     // Issue #979 AC6: a distinct trigger-family guard, run right after the
     // append-only one it sits beside.
@@ -212,7 +248,7 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   // still holds all of them; only the drift count reflects the mutation.
   expect(v0seed.summary).toBe("0 members, 0 subjects, 0 sessions, 0 takes, 0 snapshots, 0 briefs inserted, 1 drift");
 
-  expect(reportFor(reports, "migrations").failing).toBe(false);
+  expect(reportFor(reports, "schema-current").failing).toBe(false);
   expect(reportFor(reports, "edgar-seed:bootstrap").failing).toBe(false);
 
   // The overall run-level signal: a drifted adopt run exits 0.
@@ -221,10 +257,10 @@ test("drift on an adopted database: reported as a warning, existing rows win, th
   // Never silently overwritten.
   const [{ tagline }] = await sql<{ tagline: string }[]>`SELECT tagline FROM swarm_members WHERE handle = 'athena'`;
   expect(tagline).toBe("MUTATED for prod-bootstrap orchestration test");
-});
+}, TWO_RUNS_TIMEOUT_MS);
 
 test("edgar step: an unreachable API is classified as SKIPPED, not FAILED (never blocks a DB-only bootstrap)", async () => {
-  process.env.ANALYTICS_TOKEN = "tok_prod_bootstrap_test";
+  process.env.ANALYTICS_TOKEN_FILE = tokenFile("tok_prod_bootstrap_test");
   // A port nothing is listening on (bound then immediately released) —
   // connecting to it fails fast with a real "unreachable" error.
   const deadPort = await freePort();
@@ -239,7 +275,7 @@ test("edgar step: an unreachable API is classified as SKIPPED, not FAILED (never
 });
 
 test("edgar step: a REACHABLE API that rejects the credential is classified as FAILED, not silently skipped", async () => {
-  process.env.ANALYTICS_TOKEN = "tok_wrong_prod_bootstrap_test";
+  process.env.ANALYTICS_TOKEN_FILE = tokenFile("tok_wrong_prod_bootstrap_test");
   const server = Bun.serve({
     port: 0, hostname: "127.0.0.1",
     fetch() {
@@ -262,6 +298,74 @@ test("edgar step: a REACHABLE API that rejects the credential is classified as F
   }
 });
 
+test("edgar step: a token in the ENVIRONMENT is not read — only the file ANALYTICS_TOKEN_FILE names", async () => {
+  // Red control for the token source: the retired variable, set to a value a
+  // reachable API would see, must not reach the API at all.
+  process.env.ANALYTICS_TOKEN = "tok_env_must_not_be_read";
+  delete process.env.ANALYTICS_TOKEN_FILE;
+  let calls = 0;
+  const server = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    fetch() {
+      calls += 1;
+      return new Response("unauthorized", { status: 401 });
+    },
+  });
+  process.env.ANALYTICS_API_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const reports = await runProdBootstrap();
+    const edgar = reportFor(reports, "edgar-seed:bootstrap");
+    expect({ status: edgar.status, summary: edgar.summary }).toEqual({
+      status: "skipped",
+      summary: "skipped: ANALYTICS_TOKEN_FILE not set",
+    });
+    expect(calls).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+// ── Step 1: schema-current — this orchestrator never migrates ───────────────
+//
+// It used to call the legacy lock-free runner (src/db/migrate.ts): a migration
+// applied with no §2 target lock, no fence, no manifest and no receipt. The one
+// migrate path is `bun run migrate` (spec §8.5). A pending migration is now a
+// halt before any write, and the pending file stays unapplied — the runtime
+// proof that the legacy runner is not reached.
+
+test("a pending migration halts the run before ANY write, naming it and `bun run migrate`, and is never applied", async () => {
+  delete process.env.ANALYTICS_TOKEN_FILE;
+  const migrations = join(import.meta.dir, "..", "migrations");
+  const dir = mkdtempSync(join(tmpdir(), "rm-pb-migrations-"));
+  tempDirs.push(dir);
+  for (const file of readdirSync(migrations)) {
+    if (file.endsWith(".sql")) symlinkSync(join(migrations, file), join(dir, file));
+  }
+  writeFileSync(join(dir, "0999_pb_pending_probe.sql"), "CREATE TABLE rm_pb_pending_probe (id integer);\n");
+
+  const reports = await runProdBootstrap({ migrationsDir: dir });
+  expect(reports.map((r) => r.name)).toEqual(["handle-namespace", "schema-current"]);
+  const current = reportFor(reports, "schema-current");
+  expect(current.status).toBe("failed");
+  expect(current.failing).toBe(true);
+  expect(current.summary).toContain("bun run migrate");
+
+  const [probe] = await sql<{ reg: string | null }[]>`SELECT to_regclass('public.rm_pb_pending_probe')::text AS reg`;
+  expect(probe?.reg).toBeNull();
+  const [recorded] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM schema_migrations WHERE name = '0999_pb_pending_probe.sql'`;
+  expect(recorded?.n).toBe(0);
+  // Nothing was seeded either: the archive members are absent.
+  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM swarm_members WHERE handle = ANY(${MEMBER_HANDLES})`;
+  expect(n).toBe(0);
+});
+
+test("prod-bootstrap imports no migration runner", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "scripts", "prod-bootstrap.ts"), "utf8");
+  expect(source).not.toMatch(/from\s+["'][^"']*db\/migrate(\.ts)?["']/);
+  expect(source).not.toMatch(/migrate-run(\.ts)?["']/);
+});
+
 // ── Step 0: the handle/id namespace precheck (issue #602) ───────────────────
 //
 // prod-bootstrap.ts is the OTHER production path this orchestrator has to
@@ -271,7 +375,7 @@ test("edgar step: a REACHABLE API that rejects the credential is classified as F
 // fail-fast is correct, so the assertion is that the later steps did NOT run.
 
 test("a restored namespace violation halts the run before ANY write, with both members named", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+  delete process.env.ANALYTICS_TOKEN_FILE;
   const holder = "pb-holder";
   const shadowed = "pb-shadowed";
 
@@ -319,10 +423,13 @@ test("a restored namespace violation halts the run before ANY write, with both m
   expect(reportFor(repaired, "handle-namespace").status).toBe("success");
   expect(repaired.map((r) => r.name)).toEqual([
     "handle-namespace",
-    "migrations",
-    // Runs AFTER migrations, because migrate() is what installs the guard it
-    // verifies (issue #684). Probing before would report "not applied" on every
-    // cold boot and prove nothing.
+    // Read-only: the database is already at this build's schema, which only
+    // `bun run migrate` moves (spec §8.5). This orchestrator never migrates.
+    "schema-current",
+    "seed",
+    // Runs AFTER schema-current, because migration 0032 is what installs the
+    // guard it verifies (issue #684). Probing an unmigrated database would
+    // report "not applied" and prove nothing.
     "append-only-guard",
     // Issue #979 AC6: a distinct trigger-family guard, run right after the
     // append-only one it sits beside.
@@ -337,12 +444,12 @@ test("a restored namespace violation halts the run before ANY write, with both m
   const [{ tgenabled }] = await sql<{ tgenabled: string }[]>`
     SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;
   expect(tgenabled).toBe("A");
-});
+}, TWO_RUNS_TIMEOUT_MS);
 
 // ── The public-deployment shape: SWARM_SEED_ROSTER=1 (issue #540) ───────────
 //
 // This is the run that used to exit non-zero for no operator-visible reason.
-// Step 1's migrate() calls seed(), which — on a public deployment, where the
+// The seed step calls seed(), which — on a public deployment, where the
 // gate is on — seats athena and robotmoney from the committed manifests
 // BEFORE step 2's archive backfill ever looks at swarm_members. The two
 // writers then disagreed on those rows (the jsonb avatar column's `.path`,
@@ -353,8 +460,8 @@ test("a restored namespace violation halts the run before ANY write, with both m
 // The whole run is driven here, through the real orchestrator, with the real
 // gate set: this is the ordering `bun run prod-bootstrap` produces itself, and
 // it is the one no unit-level test of either writer can reach.
-test("SWARM_SEED_ROSTER=1: the roster is seated by step 1, and step 2 still reports 0 drift with nothing failing", async () => {
-  delete process.env.ANALYTICS_TOKEN;
+test("SWARM_SEED_ROSTER=1: the roster is seated by the seed step, and step 2 still reports 0 drift with nothing failing", async () => {
+  delete process.env.ANALYTICS_TOKEN_FILE;
   process.env.SWARM_SEED_ROSTER = "1";
 
   const reports = await runProdBootstrap();
@@ -387,4 +494,4 @@ test("SWARM_SEED_ROSTER=1: the roster is seated by step 1, and step 2 still repo
   const second = await runProdBootstrap();
   expect(reportFor(second, "v0-seed:bootstrap").summary).toContain("0 drift");
   expect(second.some((r) => r.failing)).toBe(false);
-});
+}, TWO_RUNS_TIMEOUT_MS);

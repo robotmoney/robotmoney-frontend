@@ -4,15 +4,27 @@
 // dependency order, and renders live per-step status with plain ANSI escape
 // codes (no new terminal-UI dependency).
 //
-// Steps (fixed, not a generic pluggable framework — there are exactly five):
+// Steps (fixed, not a generic pluggable framework):
 //   0. handle-namespace     — src/db/handle-namespace.ts's
-//                              checkHandleNamespace(). Read-only, and the ONE
-//                              step that halts the run: see the fail-fast note
-//                              below.
-//   1. migrations           — src/db/migrate.ts's migrate(). MUST run first:
-//                              the v0 seed step depends on migration 0026
-//                              (swarm_sessions.legacy_takes) having been
-//                              applied.
+//                              checkHandleNamespace(). Read-only, and one of
+//                              the two steps that halt the run: see the
+//                              fail-fast note below.
+//   1. schema-current       — read-only: every migration file this build
+//                              carries is recorded in the ledger. This
+//                              orchestrator does NOT migrate. The one migrate
+//                              path is `bun run migrate` (scripts/migrate.ts),
+//                              which runs under the §2 target lock, prompts for
+//                              rm_owner, receipts and journals (spec §8.5);
+//                              this script used to call the legacy lock-free
+//                              runner (src/db/migrate.ts) instead, which let a
+//                              migration land with no lock, no fence, no
+//                              manifest and no receipt. A database with pending
+//                              migrations halts here, naming them and the
+//                              command that applies them.
+//   1b. seed                — src/db/seed.ts's seed(): the canonical rows the
+//                              later steps read (job_schedules, and the
+//                              SWARM_SEED_ROSTER seats the v0 backfill
+//                              reconciles).
 //   2. v0-seed:bootstrap    — scripts/v0-seed-bootstrap.ts's
 //                              runV0SeedBootstrap(). Direct-SQL, returns a
 //                              structured V0BootstrapResult (members/subjects/
@@ -20,11 +32,14 @@
 //   3. edgar-seed:bootstrap — src/analytics/edgar-seed-loader.ts's
 //                              bootstrapEdgarSeed(). Goes through the live
 //                              authenticated analytics HTTP API, NOT direct
-//                              SQL. Degrades to SKIPPED (never FAILED) when
-//                              ANALYTICS_TOKEN is unset or the API is
-//                              unreachable — that is the expected shape of a
-//                              DB-only bootstrap context (e.g. a migration
-//                              job with no api process running).
+//                              SQL, with the analytics producer's token read
+//                              from the file ANALYTICS_TOKEN_FILE names — the
+//                              same file the producer reads; a token in the
+//                              environment is not read. Degrades to SKIPPED
+//                              (never FAILED) when ANALYTICS_TOKEN_FILE is unset
+//                              or the API is unreachable — that is the expected
+//                              shape of a DB-only bootstrap context (no api
+//                              process running).
 //   4. seed-provenance:verify — scripts/seed-provenance-verify.ts's
 //                              runSeedProvenanceVerify(clean=true). Direct-SQL,
 //                              like v0-seed. Deletes any persisted
@@ -41,10 +56,12 @@
 // Every step is attempted even if an earlier one failed (no fail-fast) — same
 // "attempt everything, decide the outcome at the end" principle
 // runV0SeedBootstrap() itself already follows for its own three entity kinds.
-// The ONE exception is step 0, the handle/id namespace precheck: it exists
-// precisely to keep this orchestrator from writing on top of a public reference
-// that addresses two members, so continuing past its refusal would defeat it.
-// It is marked `haltOnFailure` and nothing else is, deliberately.
+// The two exceptions are read-only prechecks that exist to keep this
+// orchestrator from writing at all: step 0, the handle/id namespace precheck
+// (continuing past it would write on top of a public reference that addresses
+// two members), and step 1, schema-current (every later step writes rows shaped
+// by migrations the database has not applied yet). They are marked
+// `haltOnFailure` and nothing else is, deliberately.
 // The final exit code is non-zero only if a step actually FAILED — decided
 // after every step has run. v0-seed DRIFT is deliberately NOT failing here:
 // this orchestrator is the boot path, and a boot may be adopting a working
@@ -55,10 +72,12 @@
 // exit-nonzero-on-drift convention — THAT invocation is an explicit integrity
 // check, this one is initialization.
 //
-// Usage: DATABASE_URL=... [ANALYTICS_API_URL=... ANALYTICS_TOKEN=...] \
+// Usage: DATABASE_URL=... [ANALYTICS_API_URL=... ANALYTICS_TOKEN_FILE=...] \
 //   bun run scripts/prod-bootstrap.ts
-// (wired as `bun run prod-bootstrap` in package.json)
-import { migrate } from "../src/db/migrate.ts";
+// (wired as `bun run prod-bootstrap` in package.json), after `bun run migrate`.
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { seed } from "../src/db/seed.ts";
 import { sql, closeDb } from "../src/db/client.ts";
 import { checkHandleNamespace, handleNamespaceRefusalLines } from "../src/db/handle-namespace.ts";
@@ -67,8 +86,9 @@ import { analyticsLedgerGuardRefusalLines, checkAnalyticsLedgerGuard } from "../
 import { runV0SeedBootstrap } from "./v0-seed-bootstrap.ts";
 import { bootstrapEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import { resolveAnalyticsApiConfig } from "../src/analytics/api-client.ts";
-import { envSecret } from "../src/lib/env-secret.ts";
 import { runSeedProvenanceVerify } from "./seed-provenance-verify.ts";
+
+const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 type StepStatus = "success" | "failed" | "warning" | "skipped";
 
@@ -93,16 +113,15 @@ interface Step {
 
 // ── Step 0: handle/id namespace precheck ────────────────────────────────────
 //
-// Read-only, and it runs before migrate() so the refusal precedes this
-// orchestrator's first write. Migration 0031's trigger cannot answer this: a
+// Read-only, and it runs first so the refusal precedes this orchestrator's
+// first write. Migration 0031's trigger cannot answer this: a
 // restore loads rows before the trigger exists, and 0031's install-time DO
 // block never re-runs once the file is in schema_migrations. See
 // src/db/handle-namespace.ts.
 
 async function runHandleNamespaceStep(): Promise<StepResult> {
-  // 30s, matching migrate()'s waitForDb — the budget this step displaces. The
-  // api's guard uses a much shorter one because it is holding up serving; this
-  // is a batch job whose next step would have waited that long anyway.
+  // 30s: the api's guard uses a much shorter budget because it is holding up
+  // serving; this is a batch job with nothing waiting on it but its operator.
   //
   // It is a WALL-CLOCK budget, not a retry budget: each attempt races the time
   // remaining, so a database that accepts the connection and then blocks (a
@@ -129,7 +148,13 @@ async function runHandleNamespaceStep(): Promise<StepResult> {
   return { status: "success", summary: "no handle/id namespace violations" };
 }
 
-// ── Step 1: migrations ──────────────────────────────────────────────────────
+// ── Step 1: schema-current, then seed ───────────────────────────────────────
+//
+// The database must already be at this build's schema. Migrating is not this
+// orchestrator's job: spec §8.5 makes a production upgrade "an operator
+// intervention: `bun run migrate`, prompting for `rm_owner`, planned per
+// release, receipted", and §2 puts every migration under the target lock and
+// its fence. So this step only reads the ledger and names what is missing.
 
 async function getAppliedMigrations(): Promise<Set<string>> {
   try {
@@ -141,32 +166,43 @@ async function getAppliedMigrations(): Promise<Set<string>> {
   }
 }
 
-async function runMigrationsStep(): Promise<StepResult> {
-  const before = await getAppliedMigrations();
-  await migrate();
-  // migrate() no longer seeds — this step keeps migrate+seed together so a
-  // standalone bootstrap seats the canonical rows (job_schedules, and the
-  // SWARM_SEED_ROSTER seats the v0 backfill reconciles) before the later steps
-  // look at them. `--already-migrated` skips this whole step for a caller that
-  // has already migrated and seeded elsewhere in its own lifecycle — smoke no
-  // longer calls this script at all (the archive-adopt pipeline retired from
-  // smoke's scenario machinery), so today that is a manual invocation only.
+async function runSchemaCurrentStep(migrationsDir: string): Promise<StepResult> {
+  const onDisk = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
+  const applied = await getAppliedMigrations();
+  const pending = onDisk.filter((file) => !applied.has(file));
+  if (pending.length > 0) {
+    console.error(
+      `[prod-bootstrap] ${pending.length} migration(s) this build carries are not applied: ${pending.join(", ")}. ` +
+        "Run `bun run migrate` first (spec §8.5) — it holds the target lock, prompts for rm_owner and writes a " +
+        "receipt. Nothing has been written; the remaining steps are not attempted.",
+    );
+    return {
+      status: "failed",
+      summary: `${pending.length} pending migration(s) — run \`bun run migrate\` first`,
+      failing: true,
+    };
+  }
+  return { status: "success", summary: `all ${onDisk.length} migrations applied` };
+}
+
+// Seeds the canonical rows (job_schedules, and the SWARM_SEED_ROSTER seats the
+// v0 backfill reconciles) before the later steps look at them.
+// `--already-migrated` skips this step and the one above for a caller that has
+// already migrated and seeded elsewhere in its own lifecycle — smoke no longer
+// calls this script at all (the archive-adopt pipeline retired from smoke's
+// scenario machinery), so today that is a manual invocation only.
+async function runSeedStep(): Promise<StepResult> {
   await seed();
-  const after = await getAppliedMigrations();
-  const newly = [...after].filter((n) => !before.has(n));
-  return {
-    status: "success",
-    summary: `${newly.length} new migration(s) applied (${after.size} total), then seeded`,
-  };
+  return { status: "success", summary: "seeded" };
 }
 
 // ── Step 1b: append-only guard check ─────────────────────────────────────────
 //
-// AFTER migrations, not before, and that is the whole difference from the
-// namespace precheck above: migrate() is what INSTALLS this guard, so a check
-// run first would report "not applied" on every first boot and prove nothing.
-// Run after, it answers the question that matters on a restored database —
-// migration 0032 is recorded as applied, so is it actually refusing deletion?
+// AFTER schema-current, not before: migration 0032 is what INSTALLS this guard,
+// so a check run on an unmigrated database would report "not applied" and
+// prove nothing. Run once the ledger is known to be current, it answers the
+// question that matters on a restored database — migration 0032 is recorded as
+// applied, so is it actually refusing deletion?
 //
 // It probes (`DELETE ... WHERE false`, which matches nothing in either outcome)
 // rather than counting triggers, because `CREATE OR REPLACE FUNCTION
@@ -193,11 +229,11 @@ async function runAppendOnlyGuardStep(): Promise<StepResult> {
     return { status: "failed", summary: `database not queryable: ${result.detail}`, failing: true };
   }
   if (result.status === "not_applied") {
-    // migrate() ran immediately before this and did not install 0032. That is
-    // only possible if the file is missing from this build.
+    // schema-current found every file this build carries recorded, and 0032 is
+    // not. That is only possible if the file is missing from this build.
     return {
       status: "failed",
-      summary: `${"0032_append_only_history.sql"} is still not recorded after migrate() — the migration is missing from this build`,
+      summary: `${"0032_append_only_history.sql"} is not recorded although no migration is pending — the migration is missing from this build`,
       failing: true,
     };
   }
@@ -307,13 +343,26 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
+// The analytics producer's token, from the file ANALYTICS_TOKEN_FILE names
+// (spec §3's per-instance service-token files): the same file the producer
+// reads. A token in the environment is not read — the plain ANALYTICS_TOKEN
+// variable is retired, and a secret in the environment is readable by every
+// child of this process.
+async function analyticsProducerToken(): Promise<string | null> {
+  const file = process.env.ANALYTICS_TOKEN_FILE?.trim();
+  if (!file) return null;
+  const token = (await readFile(file, "utf8")).trim();
+  if (!token) throw new Error(`ANALYTICS_TOKEN_FILE (${file}) is empty`);
+  return token;
+}
+
 async function runEdgarSeedStep(): Promise<StepResult> {
-  const token = envSecret("ANALYTICS_TOKEN");
+  const token = await analyticsProducerToken();
   if (!token) {
-    return { status: "skipped", summary: "skipped: ANALYTICS_TOKEN not set" };
+    return { status: "skipped", summary: "skipped: ANALYTICS_TOKEN_FILE not set" };
   }
 
-  const cfg = resolveAnalyticsApiConfig();
+  const cfg = { ...resolveAnalyticsApiConfig({ ANALYTICS_API_URL: process.env.ANALYTICS_API_URL, API_PORT: process.env.API_PORT }), token };
   try {
     const result = await withTimeout(
       bootstrapEdgarSeed(cfg),
@@ -367,8 +416,13 @@ const initializationSteps: Step[] = [
 ];
 
 export interface ProdBootstrapOptions {
-  /** The caller already ran migrate() in its stack lifecycle. */
+  /** The caller already migrated and seeded in its own lifecycle: skip the
+   *  schema-current check and the seed. */
   alreadyMigrated?: boolean;
+  /** Where the build's migration files are read from, for schema-current.
+   *  Defaults to backend/migrations/; a test points it at the real files plus
+   *  a planted one to meet a pending migration. */
+  migrationsDir?: string;
 }
 
 // The precheck leads BOTH shapes, including the already-migrated one: a caller
@@ -380,9 +434,15 @@ const NAMESPACE_STEP: Step = {
 };
 
 function stepsFor(options: ProdBootstrapOptions): Step[] {
+  const migrationsDir = options.migrationsDir ?? MIGRATIONS_DIR;
   return options.alreadyMigrated
     ? [NAMESPACE_STEP, ...initializationSteps]
-    : [NAMESPACE_STEP, { name: "migrations", run: runMigrationsStep }, ...initializationSteps];
+    : [
+        NAMESPACE_STEP,
+        { name: "schema-current", run: () => runSchemaCurrentStep(migrationsDir), haltOnFailure: true },
+        { name: "seed", run: runSeedStep },
+        ...initializationSteps,
+      ];
 }
 
 // ── Status rendering (plain ANSI, no new dependency) ────────────────────────
