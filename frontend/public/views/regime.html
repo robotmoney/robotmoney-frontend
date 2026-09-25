@@ -475,7 +475,7 @@
                     <template x-for="row in backtestRows(bt)" :key="row.key">
                       <tr :class="{ 'rv__bt-baseline': row.baseline }">
                         <th scope="row"><span x-text="row.label"></span><small x-text="row.desc"></small></th>
-                        <td class="rv__num" x-text="money(row.s.final_value)"></td>
+                        <td class="rv__num" x-text="fmtMultiple(row.s.final_value)"></td>
                         <td class="rv__num" :style="`color:${deltaColor(row.s.cagr)}`" x-text="fmtPctSigned(row.s.cagr)"></td>
                         <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_in_sample)}`" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
                         <td class="rv__num" :style="`color:${deltaColor(row.s.cagr_out_sample)}`" x-text="fmtPctSigned(row.s.cagr_out_sample)"></td>
