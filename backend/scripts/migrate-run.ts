@@ -92,7 +92,7 @@
 // THE ONE RUN WITHOUT AN IDENTITY ROW
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// §4.3's one exception, D55 (5): production runs v0.5.0 plus one out-of-band
+// The first of §4.3's three named exceptions, D55 (5): production runs v0.5.0 plus one out-of-band
 // file (its observed ledger, ../src/db/supported-releases.ts), which predates
 // the `deployment_identity` table (0063), so the first `bun run migrate` there
 // meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
@@ -101,16 +101,31 @@
 // first two; the typed password and the `y` are the remote path of
 // `migrateCommand`, and the state the operator said `y` to is handed to
 // `runMigrate`, which re-reads it on the owner connection and refuses unless it
-// is the same one. The receipt records it. The run itself applies 0063, so the
-// ledger no longer equals the release's afterwards and the exception is never
-// available again on that database.
+// is the same one. The receipt records it.
 //
-// NOT YET THE DECIDED ORDER. D55 (9) (2026-09-25) makes this pass apply 0063
-// first, commit the identity row in 0063's transaction, and only then apply the
-// rest, so an interruption after 0063 resumes through the normal path
-// (smoke-production-spec.md §9.1). Today the pass applies every pending file in
-// filename order and writes no row. A later package on issue #1026 implements
-// the new order.
+// IDENTITY FIRST (D55 (9), §9.1). The pass applies `0063_deployment_identity`
+// BEFORE any other pending file, out of filename order, and 0063's DDL, its
+// ledger row and the `production` row commit in ONE fenced transaction
+// (`applyIdentityFirst`, which re-reads the pre-identity state under the fence
+// and refuses unless it is the confirmed one). Only then do the remaining
+// pending files take the normal path, in filename order, one transaction
+// each. So no committed state ever holds 0063 without the row: a run killed
+// before that transaction commits leaves the baseline ledger and no table,
+// and the rerun takes the pass again; a run killed after it leaves the row,
+// and the rerun is an ordinary run. Either way the exception is never
+// available again once 0063 has committed.
+//
+// THE NORMAL PATH ACCEPTS THE STATE A PASS LEAVES. Production's baseline lacks
+// six files that sort below 0063 (0056_swarm_judge_requires_model.sql to
+// 0062_rm_worker_analytics_ledger_read_grant.sql). A first-manifest run
+// otherwise refuses a pending file below a recorded one as an out-of-band gap
+// (`assertBaselineGap`). It accepts them in exactly one state
+// (`readIdentityPassRemainder`): an identity row exists, 0063 is recorded, and
+// the ledger rows applied before 0063 equal one supported baseline, with every
+// other row applied after it. Every other out-of-order state still refuses,
+// and out-of-order 0063 itself happens only in the passes (this one and the
+// `--local dump` preparation, backend/scripts/smoke-prepare.ts), never in the
+// apply loop.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE JOURNAL
@@ -131,6 +146,12 @@ import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { hiddenPrompt } from "../../scripts/lib/smoke-external-migrate.ts";
+import {
+  enrollAsProduction,
+  enrollAsRehearsal,
+  transactionIdentityStore,
+  type DeploymentIdentityRow,
+} from "../../scripts/lib/smoke-identity.ts";
 import { requireRehearsalTarget, resolveDeploymentPolicy, resolveRmEnv } from "../src/deploy-policy.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import {
@@ -169,6 +190,11 @@ export type MigrateDb = postgresTypes.Sql<{}>;
 type ReadDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+
+/** The migration that creates `deployment_identity` (§4.2). The only file any
+ *  path applies out of filename order, and only in the identity-first passes
+ *  of §4.3 (D55 (9)). */
+export const IDENTITY_MIGRATION = "0063_deployment_identity.sql";
 
 /** Which of the two callers of §8.5 is running. They differ only in what they
  *  refuse, never in what the run does. */
@@ -273,6 +299,13 @@ export interface MigrateRunResult {
   /** The state this run started from when it was the first production migrate
    *  (§9.1, D55 (5)); `null` for every other run. */
   readonly preIdentity: PreIdentityState | null;
+  /** The `production` row the identity-first pass committed in 0063's
+   *  transaction (D55 (9)); `null` for every other run. */
+  readonly identityWritten: DeploymentIdentityRow | null;
+  /** When this run resumed after an identity-first pass (the normal path
+   *  accepting the state a pass leaves, §9.1): the baseline the rows applied
+   *  before 0063 equal. `null` otherwise. */
+  readonly resumedAfterIdentityPass: string | null;
 }
 
 /**
@@ -291,11 +324,15 @@ export interface MigrateRunResult {
  *      each migration's expected post-state, and names the first unapplied
  *      step. Nothing is replayed and no drift is accepted (§8.3).
  *   4. Baseline gap — on a database with no manifest, the ledger must be a
- *      prefix of the snapshot's filename list (§9.1 step 2).
+ *      prefix of the snapshot's filename list (§9.1 step 2), except in the two
+ *      states an identity-first pass starts from and leaves (D55 (9)).
  *   5. Headers — every pending file's §8.2 header is parsed before the first
  *      commit, so a missing declaration refuses with nothing applied.
- *   6. Apply — each pending migration in its own fenced transaction, with
- *      `recordMigrationCompat()` writing `compat`/`metadata_version` inside it.
+ *   6. Apply — on the first production migrate, `applyIdentityFirst` first:
+ *      0063's DDL, its ledger row and `production` in one fenced transaction.
+ *      Then each other pending migration in its own fenced transaction, in
+ *      filename order, with `recordMigrationCompat()` writing
+ *      `compat`/`metadata_version` inside it.
  *   7. Reconcile and publish — the snapshot's grants part, the baseline
  *      comparison when this is the first manifest, then `writeManifest()`, in
  *      one fenced transaction.
@@ -308,9 +345,15 @@ export interface MigrateRunResult {
  * snapshot's bootstrap, §8.1, never a replay); `resumePlan` refused; a pending
  * migration above the pre-compat baseline (0063, D53) has no parseable compat
  * header; the first manifest's baseline found a gap or a difference (named,
- * nothing published).
+ * nothing published); the identity-first pass found its state moved under its
+ * fence (nothing applied).
  *
- * Serves spec §10 W2 "Migrate fails between commits and during grant
+ * Serves spec §10 W2 "Identity first: the production pass applies 0063 and
+ * commits its DDL, its ledger row and `production` in the same transaction,
+ * before any other migration", "The normal path applies a pending file below a
+ * recorded 0063 only when the identity row exists and the rest of the ledger
+ * equals the baseline plus 0063, plus files applied after it; every other
+ * out-of-order state refuses", "Migrate fails between commits and during grant
  * reconciliation; rerun reaches a verified final state", "Production baseline:
  * a live schema that differs from the snapshot blocks the first manifest
  * publication", and W1 "Kill the lock connection mid-migration, start a second
@@ -353,11 +396,20 @@ export async function runMigrate(
   // planted file alone meets the repository's own snapshot, which embodies
   // backend/migrations/.
   const snapshot = await loadSnapshot(seams.snapshotDir, seams.snapshotDir ? migrationsDir : undefined);
+  // The state an identity-first pass leaves (D55 (9)), read only when this run
+  // is not the pass itself.
+  const afterPass = preIdentity === null ? await readIdentityPassRemainder(db) : null;
+  if (preIdentity !== null && !plan.pending.includes(IDENTITY_MIGRATION)) {
+    throw new Error(
+      `Refusing the migrate run: the first production migrate applies ${IDENTITY_MIGRATION} first (spec §9.1, ` +
+        "D55 (9)), and it is not pending on this database. Nothing was applied.",
+    );
+  }
 
   // 4. BASELINE GAP, before anything is applied: see assertBaselineGap. The
   //    FINAL filename list (ledger plus pending) is held to the snapshot's here
   //    too, so the one refusal left after the apply loop is the catalog's.
-  if (firstManifest) await assertBaselineGap(db, snapshot, plan.pending, preIdentity);
+  if (firstManifest) await assertBaselineGap(db, snapshot, plan.pending, preIdentity !== null || afterPass !== null);
 
   // 5. HEADERS, ALL OF THEM, BEFORE THE FIRST COMMIT. §8.2: every migration
   //    "declares itself `additive` or `breaking` in a header the runner
@@ -369,10 +421,33 @@ export async function runMigrate(
     pending.push({ file, ddl, header: parsePendingHeader(file, ddl) });
   }
 
-  // 6. APPLY, one fenced transaction each, each recording its own declaration
-  //    so the row and the DDL commit together (§8.2).
+  // 6. APPLY. The first production migrate's identity-first pass comes first
+  //    (D55 (9)): 0063, its ledger row and `production`, in ONE fenced
+  //    transaction, before any other pending file. The pass re-reads the
+  //    pre-identity state under its fence and refuses unless it is the one
+  //    the operator confirmed.
   const applied: string[] = [];
+  let identityWritten: DeploymentIdentityRow | null = null;
+  if (preIdentity !== null) {
+    await boundary(options, `migrate: identity-first ${IDENTITY_MIGRATION}`);
+    const pass = await applyIdentityFirst(db, {
+      kind: "production",
+      rmEnv: options.env,
+      remote: options.connection === "remote",
+      expected: preIdentity,
+      note: `bun run migrate: the first production migrate from ${preIdentity.release} (spec §9.1, D55 (5), (9))`,
+      migrationsDir,
+    });
+    identityWritten = pass.row;
+    applied.push(IDENTITY_MIGRATION);
+    if (seams.afterCommit) await seams.afterCommit(IDENTITY_MIGRATION);
+  }
+
+  //    Then every other pending file, one fenced transaction each, in filename
+  //    order, each recording its own declaration so the row and the DDL
+  //    commit together (§8.2).
   for (const { file, ddl, header } of pending) {
+    if (preIdentity !== null && file === IDENTITY_MIGRATION) continue;
     await boundary(options, `migrate: apply ${file}`);
     await withFenceOn(db, `migrate ${file}`, async (tx) => {
       await tx.unsafe(ddl);
@@ -412,6 +487,8 @@ export async function runMigrate(
     manifest,
     baselined: firstManifest,
     preIdentity,
+    identityWritten,
+    resumedAfterIdentityPass: afterPass?.release ?? null,
   };
 }
 
@@ -484,20 +561,27 @@ function describePreIdentity(state: PreIdentityState): string {
  * re-compares once a migration repairs the difference (§9.1 step 2).
  * prod-baseline.test.ts pins that outcome.
  *
- * ONE LEDGER IS NOT A PREFIX AND STILL NOT A GAP: the one a supported baseline
- * names (`preIdentity`, D55 (5)). Production's observed list (v0.5.0 plus
- * 0062_rm_readonly_sequence_select.sql) lacks six files that sort between
+ * TWO STATES ARE NOT PREFIXES AND STILL NOT A GAP (`outOfOrderAccepted`),
+ * both an identity-first pass's (D55 (9)). Production's observed list (v0.5.0
+ * plus 0062_rm_readonly_sequence_select.sql) lacks six files that sort between
  * files it has (0056_swarm_judge_requires_model.sql and five more up to
  * 0062_rm_worker_analytics_ledger_read_grant.sql): the branch numbered them
- * after the tag was cut. A ledger EQUAL to a baseline's list is that
- * baseline, whole, so every embodied file it does not record is a file it
- * never ran, and it is pending like any other.
+ * after the tag was cut.
+ *   - A ledger EQUAL to a baseline's list (`preIdentity`, D55 (5)) is that
+ *     baseline, whole, so every embodied file it does not record is a file it
+ *     never ran, and it is pending like any other.
+ *   - The state a pass leaves (`readIdentityPassRemainder`): an identity row,
+ *     0063 recorded, the rows applied before it equal to a baseline and every
+ *     other row applied after it. The unrecorded lower files are the ones the
+ *     baseline never ran, still pending.
+ * Every other ledger with an embodied file missing below a recorded one
+ * refuses.
  */
 async function assertBaselineGap(
   db: ReadDb,
   snapshot: Snapshot,
   pending: readonly string[],
-  preIdentity: PreIdentityState | null,
+  outOfOrderAccepted: boolean,
 ): Promise<void> {
   const ledger = (
     (await db.unsafe("SELECT name FROM schema_migrations ORDER BY name")) as unknown as { name: string }[]
@@ -505,7 +589,7 @@ async function assertBaselineGap(
   const embodied = new Set(snapshot.filenames);
   const recorded = new Set(ledger);
   const last = ledger.at(-1);
-  const outOfBand = (name: string): boolean => preIdentity === null && last !== undefined && name < last;
+  const outOfBand = (name: string): boolean => !outOfOrderAccepted && last !== undefined && name < last;
   const problems = [
     ...ledger
       .filter((name) => !embodied.has(name))
@@ -851,7 +935,7 @@ export interface MigrateRefusal {
  * names it and nothing else: a stage policy "never touches production data",
  * typed owner password or not.
  *
- * §4.3's ONE EXCEPTION: an operator run under RM_ENV=prod against a remote
+ * §4.3's FIRST NAMED EXCEPTION: an operator run under RM_ENV=prod against a remote
  * database with no identity row, or no table, whose ledger equals one
  * SUPPORTED_RELEASES entry exactly, is not refused here
  * (`readPreIdentityState`). A missing row that fails any of those guards
@@ -882,7 +966,7 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   // evidence of either kind.
   const kind = identity.value === "no table" ? "unreadable" : identity.value;
 
-  // §4.3's one exception (§9.1, D55 (5)): the first production migrate. When
+  // §4.3's first named exception (§9.1, D55 (5)): the first production migrate. When
   // it applies, the identity half of the matrix has nothing to judge — there
   // is no row — and every other guard of the exception is either checked here
   // (RM_ENV=prod, the exact ledger) or is the remote path of `migrateCommand`
@@ -960,12 +1044,178 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
  */
 export async function readPreIdentityState(db: ReadDb, options: MigrateGateOptions): Promise<PreIdentityState | null> {
   if (options.caller !== "operator" || options.env !== "prod" || options.connection !== "remote") return null;
+  return readPreIdentityLedger(db);
+}
+
+/**
+ * The database half of every identity-first pass's precondition (§4.3's three
+ * named exceptions, D55 (9)): no `deployment_identity` row, or no table, and a
+ * ledger whose filename list equals one SUPPORTED_RELEASES entry's exactly.
+ * `null` when either does not hold. Who may take a pass on that state — the
+ * policy, the connection, the credential, the confirmation — is each pass's
+ * own guard, never this function's.
+ */
+export async function readPreIdentityLedger(db: ReadDb): Promise<PreIdentityState | null> {
   const identity = await readDeploymentIdentity(db);
   if (identity.kind !== "read" || (identity.value !== null && identity.value !== "no table")) return null;
   const ledger = await ledgerOf(db);
   const release = matchSupportedRelease(ledger);
   if (release === null) return null;
   return { identity: identity.value === null ? "no row" : "no table", release: release.name, ledger };
+}
+
+/** Whether `deployment_identity` exists at all — the question that sends a
+ *  restored dump down the identity-first pass (D55 (10)). */
+export async function identityTableExists(db: ReadDb): Promise<boolean> {
+  const identity = await readDeploymentIdentity(db);
+  return identity.kind !== "read" || identity.value !== "no table";
+}
+
+/** Why a database with no identity row does not qualify for an identity-first
+ *  pass: its ledger against every supported baseline, or its row. */
+export async function describeUnmatchedPreIdentity(db: ReadDb): Promise<string> {
+  const identity = await readDeploymentIdentity(db);
+  if (identity.kind === "read" && identity.value !== null && identity.value !== "no table") {
+    return `deployment_identity reads ${identity.value}`;
+  }
+  return (
+    "its ledger matches no supported baseline exactly (D55 (8)) — " +
+    `${describeUnmatchedLedger(await ledgerOf(db))}. A dump with any other pre-identity ledger refuses`
+  );
+}
+
+/** One identity-first pass (§4.3, D55 (9)): who is taking it and what it writes. */
+export interface IdentityFirstPass {
+  /** `production` for the first production migrate; `rehearsal` for the
+   *  `--local dump` preparation. */
+  readonly kind: "production" | "rehearsal";
+  /** The policy the pass runs under. The production write refuses anything
+   *  but `prod` (enrollAsProduction); the rehearsal write refuses `prod`
+   *  (enrollAsRehearsal). */
+  readonly rmEnv: "prod" | "stage" | null;
+  /** Whether the pass's connection is a remote one. The rehearsal write
+   *  refuses a remote connection, and no acknowledgement is ever passed for
+   *  it (D55 (9): "whatever `RM_ENV`, password or acknowledgement says"). */
+  readonly remote: boolean;
+  /** The state the pass was admitted on. The pass re-reads it under its fence
+   *  and refuses unless it is the same one. */
+  readonly expected: PreIdentityState;
+  /** What the identity row's note records. */
+  readonly note: string;
+  /** Where 0063 is read from. Defaults to backend/migrations/. */
+  readonly migrationsDir?: string;
+}
+
+/** What an identity-first pass committed. */
+export interface IdentityFirstResult {
+  /** The pre-identity state the pass read under its fence. */
+  readonly preIdentity: PreIdentityState;
+  /** The row it wrote in 0063's transaction. */
+  readonly row: DeploymentIdentityRow;
+}
+
+/**
+ * The identity-first pass: 0063's DDL, its `schema_migrations` row and the
+ * identity row, in ONE fenced transaction (§2, §4.3, D55 (9)).
+ *
+ * Inputs: an `rm_owner` pool and the pass. Output: what it committed.
+ *
+ * Every step runs inside the fence's transaction, in this order: the
+ * pre-identity state is re-read (no row or no table, a ledger exactly equal to
+ * a supported baseline, and equal to `expected`); 0063's DDL; its ledger row
+ * with its declaration when it carries one; the identity row, written through
+ * `transactionIdentityStore` with the pass's remote flag by
+ * `enrollAsProduction` or `enrollAsRehearsal`, whose own guards then hold on
+ * this path too. Any refusal or failure rolls the whole transaction back, so
+ * the database is left exactly as it was: a baseline ledger, no table, no row.
+ * A commit leaves 0063 recorded WITH its row. No committed state holds one
+ * without the other.
+ *
+ * Refusals: the state under the fence is not a pre-identity baseline, or not
+ * the expected one; the table exists while 0063 is unrecorded (created out of
+ * band); the identity write's own guards (production: RM_ENV=prod; rehearsal:
+ * not prod, and never a remote connection).
+ *
+ * Callers: `runMigrate`'s first production migrate (`production`) and
+ * backend/scripts/smoke-prepare.ts's `--local dump` enroll step (`rehearsal`).
+ * Each proves its own pass's guards before calling it. The remote twin pass
+ * (D55 (10)) is not built.
+ */
+export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass): Promise<IdentityFirstResult> {
+  const migrationsDir = pass.migrationsDir ?? MIGRATIONS_DIR;
+  const ddl = await readFile(join(migrationsDir, IDENTITY_MIGRATION), "utf8");
+  const header = parsePendingHeader(IDENTITY_MIGRATION, ddl);
+  return withFenceOn(db, `migrate ${IDENTITY_MIGRATION} identity-first`, async (tx) => {
+    const state = await readPreIdentityLedger(tx);
+    if (state === null || !samePreIdentity(state, pass.expected)) {
+      throw new Error(
+        `Refusing the identity-first pass (spec §4.3, D55 (9)): it was admitted on ${describePreIdentity(pass.expected)}, ` +
+          `and under the fence this database ${state === null ? "no longer qualifies" : `reads ${describePreIdentity(state)}`}. ` +
+          "Nothing was applied.",
+      );
+    }
+    if (state.identity === "no row" && !state.ledger.includes(IDENTITY_MIGRATION)) {
+      throw new Error(
+        `Refusing the identity-first pass: deployment_identity exists and the ledger does not record ${IDENTITY_MIGRATION}, ` +
+          "so the table was created out of band. Repair the ledger first. Nothing was applied.",
+      );
+    }
+    if (!state.ledger.includes(IDENTITY_MIGRATION)) {
+      await tx.unsafe(ddl);
+      await tx`INSERT INTO schema_migrations (name) VALUES (${IDENTITY_MIGRATION})`;
+      if (header !== null) await recordDeclaration(tx, header);
+    }
+    const store = transactionIdentityStore(tx, { remote: pass.remote });
+    const row =
+      pass.kind === "production"
+        ? await enrollAsProduction(store, { rmEnv: pass.rmEnv ?? undefined, confirmed: true, note: pass.note })
+        : await enrollAsRehearsal(store, { note: pass.note, remoteAcknowledged: false });
+    if (row.kind !== pass.kind) {
+      throw new Error(`Refusing the identity-first pass: the row reads ${row.kind} after writing ${pass.kind}. Nothing was applied.`);
+    }
+    return { preIdentity: state, row };
+  });
+}
+
+/** The state an identity-first pass left, as the normal path reads it. */
+export interface IdentityPassRemainder {
+  /** The SUPPORTED_RELEASES baseline the rows applied before 0063 equal. */
+  readonly release: string;
+  /** The rows applied after 0063, in filename order. */
+  readonly appliedAfter: readonly string[];
+}
+
+/**
+ * Whether this database is in the state an identity-first pass leaves (§9.1:
+ * "The normal path may apply a pending file that sorts below a recorded 0063
+ * only when the identity row exists and the rest of the ledger equals the
+ * baseline plus 0063, plus any files applied after it"), else `null`.
+ *
+ * Holds exactly when: the identity row exists (`production` or `rehearsal`);
+ * 0063 is recorded; every other ledger row was applied strictly before or
+ * strictly after it (the pass commits 0063 in a transaction of its own, so a
+ * row sharing its `applied_at` came from somewhere else — a snapshot bootstrap
+ * writes every row in one transaction); and the rows applied before it equal
+ * one supported baseline exactly. The comparison runs in SQL, on the
+ * microsecond timestamps the ledger stores.
+ */
+export async function readIdentityPassRemainder(db: ReadDb): Promise<IdentityPassRemainder | null> {
+  const identity = await readDeploymentIdentity(db);
+  if (identity.kind !== "read" || (identity.value !== "production" && identity.value !== "rehearsal")) return null;
+  const rows = (await db.unsafe(
+    `SELECT m.name,
+            CASE WHEN m.applied_at < p.applied_at THEN 'before'
+                 WHEN m.applied_at > p.applied_at THEN 'after'
+                 ELSE 'same' END AS side
+       FROM schema_migrations m, (SELECT applied_at FROM schema_migrations WHERE name = $1) p
+      WHERE m.name <> $1
+      ORDER BY m.name`,
+    [IDENTITY_MIGRATION],
+  )) as unknown as { name: string; side: "before" | "after" | "same" }[];
+  if (rows.length === 0 || rows.some((row) => row.side === "same")) return null;
+  const release = matchSupportedRelease(rows.filter((row) => row.side === "before").map((row) => row.name));
+  if (release === null) return null;
+  return { release: release.name, appliedAfter: rows.filter((row) => row.side === "after").map((row) => row.name) };
 }
 
 /** For an operator run refused for a missing row: which guard of the one
@@ -1076,6 +1326,10 @@ export async function writeMigrateReceipt(
     // §9.1: the first production migrate's receipt "records the pre-identity
     // state"; every other run's says there was none.
     preIdentity: result.preIdentity,
+    // D55 (9): the row the pass committed in 0063's transaction, and — on the
+    // run that resumed after a pass — the baseline it resumed from.
+    identityWritten: result.identityWritten,
+    resumedAfterIdentityPass: result.resumedAfterIdentityPass,
     manifest: {
       formatVersion: result.manifest.formatVersion,
       contentHash: result.manifest.contentHash,

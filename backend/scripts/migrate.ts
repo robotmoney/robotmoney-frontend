@@ -38,10 +38,13 @@
 // the run, `receipt`. A run that lost its lock connection mid-run says which
 // phase could not start; a run killed by a signal says it was interrupted.
 //
-// THE FIRST PRODUCTION MIGRATE (§9.1, D55 (5)) is this command, unchanged: under
-// RM_ENV=prod, against a database with no identity row whose ledger equals a
-// supported release's, the gates let it through, the confirmation names that
-// state, and the receipt records it.
+// THE FIRST PRODUCTION MIGRATE (§9.1, D55 (5), (9)) is this command, unchanged:
+// under RM_ENV=prod, against a database with no identity row whose ledger
+// equals a supported release's, the gates let it through, the confirmation
+// names that state, the run applies 0063 first with `production` in its
+// transaction (migrate-run.ts applyIdentityFirst), and the receipt records the
+// pre-identity state and the row. A run killed after that transaction reruns
+// as an ordinary `bun run migrate`.
 import { hostname } from "node:os";
 import { dirname, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
@@ -167,8 +170,14 @@ try {
   }
   log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
   if (result.baselined) log("first manifest: the live schema matched the snapshot (spec §9.1 step 2)");
-  if (result.preIdentity) {
-    log(`first production migrate from ${result.preIdentity.release}: write deployment_identity = production next (spec §9.1 step 4)`);
+  if (result.preIdentity && result.identityWritten) {
+    log(
+      `first production migrate from ${result.preIdentity.release}: ${result.applied[0]} and deployment_identity = ` +
+        `${result.identityWritten.kind} committed first, in one transaction (spec §9.1 step 4, D55 (9))`,
+    );
+  }
+  if (result.resumedAfterIdentityPass) {
+    log(`resumed after the identity-first pass: the rows before 0063 equal ${result.resumedAfterIdentityPass} (spec §9.1)`);
   }
   log(`manifest ${result.manifest.contentHash} published`);
   log(`receipt ${receipt}`);

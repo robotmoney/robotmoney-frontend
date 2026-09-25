@@ -13,10 +13,11 @@
 // Every gate is driven through the real runProdInit with its effects injected:
 // no database, no Docker, no network (this file runs in the unit tier with
 // Docker unreachable, criterion 151). Each refusal asserts that NOTHING was
-// touched — no lock, no write, no receipt. The fenced database writes behind
-// the injected effects are proven against a real database in
-// backend/tests/automation-token-provision.test.ts (provision-tokens) and
-// backend/tests/target-lock.test.ts (the identity write in the fence).
+// touched — no lock, no write, no receipt. The real effects behind the
+// injection — set-identity's fenced read, provision-tokens' fenced writes and
+// token files, rebind-members' rotate-key calls — run as real processes against
+// a real database and a real api in
+// scripts/tests/integration/prod-init-runtime.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,7 +76,11 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
     },
     setIdentity: async (options) => {
       calls.push(`setIdentity:${options.rmEnv}:${options.confirmed}`);
-      return { before: "absent", row: { kind: "production", writtenAt: "2026-09-25T00:00:00.000Z", writtenBy: "rm_owner", note: options.note } };
+      return {
+        before: "production",
+        row: { kind: "production", writtenAt: "2026-09-25T00:00:00.000Z", writtenBy: "rm_owner", note: "bun run migrate: the first production migrate" },
+        written: false,
+      };
     },
     provisionTokens: async (options) => {
       calls.push(`provisionTokens:${options.instance}`);
@@ -141,6 +146,13 @@ describe("every command refuses before anything changes", () => {
 
   test("set-identity refuses a rehearsal database; the others refuse a target not enrolled production", async () => {
     await refused(["set-identity"], fake({ identity: "rehearsal" }), /enrolled `rehearsal`/);
+    // D55 (9): the first production migrate writes `production` with the
+    // table, so set-identity never writes a missing row. It refuses before any
+    // prompt, naming the migrate. (Red control for the pre-D55 (9) command,
+    // which accepted a table with no row and wrote `production` into it.)
+    const missing = fake({ identity: "missing" });
+    await refused(["set-identity"], missing, /reads `missing`.*writes `production` in the transaction that creates deployment_identity.*bun run migrate/);
+    expect(missing.calls).toEqual(["readTarget"]);
     await refused(["provision-tokens"], fake({ identity: "missing" }), /enrolled `production`; it reads `missing`/);
     await refused(["rebind-members"], fake({ identity: "rehearsal" }), /enrolled `production`/);
   });
@@ -187,14 +199,14 @@ describe("each command writes inside the lock and records a receipt, never a sec
     return JSON.parse(text);
   }
 
-  test("set-identity: typed owner, y, lock, the fenced write, release, receipt — in that order", async () => {
-    const rec = fake({ identity: "missing" });
+  test("set-identity: typed owner, y, lock, the fenced read, release, receipt — in that order, reporting the row unchanged", async () => {
+    const rec = fake({ identity: "production" });
     const receipt = await runProdInit(["set-identity"], rec.deps);
     expect(rec.calls).toEqual(["readTarget", "promptSecret", "promptLine", "acquireLock:prod-init:set-identity", "setIdentity:prod:true", "release"]);
     expect(receipt.outcome).toBe("completed");
-    expect(receipt.identityBefore).toBe("missing");
+    expect(receipt.identityBefore).toBe("production");
     expect(receipt.instance).toBe("rm_prod");
-    expect(receipt.detail).toMatchObject({ before: "absent", after: "production" });
+    expect(receipt.detail).toMatchObject({ before: "production", after: "production", written: false });
     const onDisk = receiptOf(rec, "set-identity");
     expect(onDisk).toMatchObject({ command: "set-identity", outcome: "completed", target: "rm_readonly@db.example.internal:25060/defaultdb" });
   });
