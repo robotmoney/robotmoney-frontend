@@ -16,9 +16,9 @@
 //                a restart fails after a release, and is listed in a baseline
 //   read-only    the database answers writable (a managed cluster flips to
 //                read-only as its disk fills)
-//   capacity     database size against --db-capacity-gb (the plan's disk, from
-//                the provider console); >70% warns, >80% fails; growth since the
-//                previous report projects the days until 90%: <30 warns, <7 fails
+//   capacity     REPORT-ONLY: database size, against --db-capacity-gb when
+//                given, and growth since the previous report; a tight disk or a
+//                steep projection warns, never fails (storage is managed outside)
 //   judge        a judge in shadow/enforce must have a model
 //   jobs         dead jobs in the window, each last_error classified with the
 //                same rules as the logs; after a release any dead job fails
@@ -123,11 +123,13 @@ export function evaluateCapacity(
   now: string,
 ): CapacityVerdict {
   const detail = [`database size ${(sizeBytes / GB).toFixed(2)} GB`];
-  if (!capacityGb) return { status: "FAIL", detail: ["--db-capacity-gb not given: the disk's fullness was not checked", ...detail] };
+  if (!capacityGb) return { status: "WARN", detail: ["--db-capacity-gb not given: size reported, fullness not graded", ...detail] };
   const cap = capacityGb * GB;
   const used = sizeBytes / cap;
   detail.push(`${(used * 100).toFixed(1)}% of the stated ${capacityGb} GB (database files only; WAL and temp files add to it)`);
-  let status: CheckRecord["status"] = used > 0.8 ? "FAIL" : used > 0.7 ? "WARN" : "PASS";
+  // Report-only (owner, 2026-09-25: storage is managed outside this gate): a
+  // tight disk or a steep projection is a WARN in the report, never a FAIL.
+  let status: CheckRecord["status"] = used > 0.7 ? "WARN" : "PASS";
   if (previous) {
     const days = (Date.parse(now) - Date.parse(previous.at)) / 86_400_000;
     if (days > 0.01) {
@@ -136,8 +138,7 @@ export function evaluateCapacity(
       if (perDay > 0) {
         const toNinety = (0.9 * cap - sizeBytes) / perDay;
         detail.push(`${toNinety.toFixed(1)} day(s) until 90% at that rate`);
-        if (toNinety < 7) status = "FAIL";
-        else if (toNinety < 30 && status === "PASS") status = "WARN";
+        if (toNinety < 30) status = "WARN";
       }
     }
   } else detail.push("no previous report to measure growth against");
@@ -203,7 +204,7 @@ async function main(): Promise<number> {
   const reportDir = args.report ? dirname(args.report) : join(process.env.HOME ?? "/root", "prod-gate-reports");
   const previous = latestPrevious(reportDir);
   const cap = evaluateCapacity(sizeBytes, args.capacityGb, previous, now);
-  add("capacity", "The database disk has room, and is not on course to fill within a week", cap.status, cap.detail);
+  add("capacity", "Database size and growth (report-only)", cap.status, cap.detail);
   const [judgeRow] = dbQuery<{ mode: string; model: string | null }>(api, "SELECT mode, model FROM swarm_judge_config WHERE id = 1");
   const judge = evaluateJudgeConfig(judgeRow);
   add("judge", "The judge has a model whenever it is switched on", judge.status, judge.detail);

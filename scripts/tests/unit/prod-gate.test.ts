@@ -5,25 +5,26 @@ import { evaluateCapacity, evaluateJudgeConfig, parseProdGateArgs } from "../../
 
 const GB = 1024 ** 3;
 
-describe("evaluateCapacity", () => {
-  test("no stated capacity is a failure, not a pass", () => {
-    expect(evaluateCapacity(8 * GB, undefined, null, "2026-09-25T17:00:00Z").status).toBe("FAIL");
+describe("evaluateCapacity (report-only)", () => {
+  test("no stated capacity still reports the size, as a warning", () => {
+    const v = evaluateCapacity(8 * GB, undefined, null, "2026-09-25T17:00:00Z");
+    expect(v.status).toBe("WARN");
+    expect(v.detail.join("\n")).toContain("8.00 GB");
   });
 
-  test("over 80% of the disk fails; over 70% warns", () => {
-    expect(evaluateCapacity(8.5 * GB, 10, null, "2026-09-25T17:00:00Z").status).toBe("FAIL");
-    expect(evaluateCapacity(7.5 * GB, 10, null, "2026-09-25T17:00:00Z").status).toBe("WARN");
-    expect(evaluateCapacity(5 * GB, 10, null, "2026-09-25T17:00:00Z").status).toBe("PASS");
+  test("a tight disk warns and never fails", () => {
+    expect(evaluateCapacity(8.5 * GB, 10, null, "2026-09-25T17:00:00Z").status).toBe("WARN");
+    expect(evaluateCapacity(5 * GB, 30, null, "2026-09-25T17:00:00Z").status).toBe("PASS");
   });
 
-  test("production's 2026-09-25 growth (6.5 → 8.2 GB in ~8 h) fails on the projection alone, well below 70%", () => {
-    const v = evaluateCapacity(8.2 * GB, 25, { sizeBytes: 6.5 * GB, at: "2026-09-25T09:00:00Z" }, "2026-09-25T17:00:00Z");
-    expect(v.status).toBe("FAIL");
+  test("steep growth is reported with its projection, as a warning", () => {
+    const v = evaluateCapacity(8.2 * GB, 30, { sizeBytes: 6.5 * GB, at: "2026-09-25T09:00:00Z" }, "2026-09-25T17:00:00Z");
+    expect(v.status).toBe("WARN");
     expect(v.detail.join("\n")).toContain("GB/day");
   });
 
   test("slow growth on a roomy disk passes", () => {
-    expect(evaluateCapacity(2 * GB, 25, { sizeBytes: 1.99 * GB, at: "2026-09-24T17:00:00Z" }, "2026-09-25T17:00:00Z").status).toBe("PASS");
+    expect(evaluateCapacity(2 * GB, 30, { sizeBytes: 1.99 * GB, at: "2026-09-24T17:00:00Z" }, "2026-09-25T17:00:00Z").status).toBe("PASS");
   });
 });
 
