@@ -28,14 +28,17 @@ import {
   DEMO_FIRST_SESSION_MAX_MS,
   describeCron,
   formatCadenceDuration,
+  nextSchedulerWakeAt,
   plannedRunAt,
   planSubjectSchedules,
   productionConstantMismatches,
   PRODUCTION_CADENCE_INTENT,
   renderCadenceLine,
   resolveSmokeCadence,
+  resolveMemberConcurrency,
   resolveSmokeCadenceForBoot,
   stageCadenceApplies,
+  subjectsToStart,
   swarmStaggerMsFor,
   swarmWindowMinutes,
   TWIN_WINDOW_MS,
@@ -175,11 +178,25 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
     const label = stage ? "stage" : "fast";
     const cadence = resolveSmokeCadence({ stage });
 
-    test(`[${label}] EVERY subject's first session is within ${DEMO_FIRST_SESSION_MAX_MS} ms of boot`, () => {
-      const plans = planSubjectSchedules(DEMO_SUBJECT_COUNT, cadence, NOW);
-      expect(plans.length).toBe(DEMO_SUBJECT_COUNT);
-      for (const p of plans) {
-        expect(p.firstAt - NOW).toBeGreaterThanOrEqual(0);
+    // BOTH scenarios. This used to check only the two-subject simulation smoke,
+    // and the four-subject production-shaped boot planned its fourth subject's
+    // first session at 180 s under the fast profile's old 60 s stagger — hidden
+    // while sessions ran one at a time (the fourth subject waited out three
+    // whole sessions anyway), a real bound violation once they run concurrently.
+    for (const count of [DEMO_SUBJECT_COUNT, SMOKE_SUBJECT_COUNT]) {
+      test(`[${label}] EVERY one of ${count} subjects' first session is within ${DEMO_FIRST_SESSION_MAX_MS} ms of boot`, () => {
+        const plans = planSubjectSchedules(count, cadence, NOW);
+        expect(plans.length).toBe(count);
+        for (const p of plans) {
+          expect(p.firstAt - NOW).toBeGreaterThanOrEqual(0);
+          expect(p.firstAt - NOW).toBeLessThanOrEqual(DEMO_FIRST_SESSION_MAX_MS);
+        }
+      });
+    }
+
+    test(`[${label}] a twin's (fast, 6-minute) timetable also brings all four subjects up in bound`, () => {
+      const twin = resolveSmokeCadenceForBoot({ stage: false, twin: true, env: {} });
+      for (const p of planSubjectSchedules(SMOKE_SUBJECT_COUNT, twin, NOW)) {
         expect(p.firstAt - NOW).toBeLessThanOrEqual(DEMO_FIRST_SESSION_MAX_MS);
       }
     });
@@ -218,10 +235,17 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
     });
   }
 
-  test("[fast] reproduces today's timetable exactly — 0/120/240 s and 60/180/300 s", () => {
+  test("[fast] the steady-state grid is unchanged — 0/120/240 s and (40)/60/180/300 s", () => {
+    // Only the second subject's BRING-UP session moved (60 s -> 40 s, the
+    // four-subject promptness fix); every steady-state slot is where it was.
     const plans = planSubjectSchedules(2, resolveSmokeCadence({ stage: false }), NOW);
     expect([0, 1, 2, 3].map((n) => plannedRunAt(plans[0], n) - NOW)).toEqual([0, 120_000, 240_000, 360_000]);
-    expect([0, 1, 2, 3].map((n) => plannedRunAt(plans[1], n) - NOW)).toEqual([60_000, 180_000, 300_000, 420_000]);
+    expect([0, 1, 2, 3].map((n) => plannedRunAt(plans[1], n) - NOW)).toEqual([40_000, 60_000, 180_000, 300_000]);
+  });
+
+  test("[fast] four subjects come up 40 s apart: 0/40/80/120 s", () => {
+    const plans = planSubjectSchedules(SMOKE_SUBJECT_COUNT, resolveSmokeCadence({ stage: false }), NOW);
+    expect(plans.map((p) => p.firstAt - NOW)).toEqual([0, 40_000, 80_000, 120_000]);
   });
 
   test("[stage] bring-up is prompt, then a session every 3 h: 0s, 30s, 3h, 6h, 9h", () => {
@@ -525,9 +549,17 @@ describe("assertProductionConstants — the boot refuses to lie about its own ca
       swarmIntervalMs: 21_600_000,
       swarmWindowMs: 21_600_000,
       swarmSchedulesEnabled: "0",
+      // Production's behaviour before concurrency became a cadence value:
+      // one session at a time, four member containers, one swarm worker.
+      maxConcurrentSessions: 1,
+      memberConcurrency: 4,
+      swarmWorkers: 1,
     });
     expect(realistic.swarmIntervalMs).toBe(PRODUCTION_CADENCE_INTENT.swarmIntervalMs);
     expect(realistic.swarmWindowMs).toBe(PRODUCTION_CADENCE_INTENT.swarmWindowMs);
+    expect(realistic.maxConcurrentSessions).toBe(PRODUCTION_CADENCE_INTENT.maxConcurrentSessions);
+    expect(realistic.memberConcurrency).toBe(PRODUCTION_CADENCE_INTENT.memberConcurrency);
+    expect(realistic.swarmWorkers).toBe(PRODUCTION_CADENCE_INTENT.swarmWorkers);
   });
 
   test("resolveSmokeCadenceForBoot resolves AND proves, in one step nobody can half-perform", () => {
@@ -594,5 +626,217 @@ describe("a twin's submission window (2026-09-25: a slow brief step ate the 2-mi
   test("CI's fast profile and the realistic profile are unchanged", () => {
     expect(resolveSmokeCadenceForBoot({ stage: false, env: {} }).swarmWindowMs).toBe(120_000);
     expect(resolveSmokeCadenceForBoot({ stage: true, twin: true, env: { SWARM_SCHEDULES_ENABLED: "0" } }).swarmWindowMs).toBe(6 * 3_600_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONCURRENCY IS A CADENCE VALUE (2026-09-25). One driver code path; the only
+// thing a profile chooses is how many sessions, member containers and swarm
+// workers. Production pins today's values.
+// ---------------------------------------------------------------------------
+describe("concurrency fields — values, not branches", () => {
+  test("realistic (production) keeps one session, four members, one swarm worker", () => {
+    const c = resolveSmokeCadence({ stage: true });
+    expect([c.maxConcurrentSessions, c.memberConcurrency, c.swarmWorkers]).toEqual([1, 4, 1]);
+  });
+
+  test("fast runs every smoke/twin subject at once, a whole roster per wave, a lane per session", () => {
+    const c = resolveSmokeCadence({ stage: false });
+    expect(c.maxConcurrentSessions).toBe(SMOKE_SUBJECT_COUNT);
+    expect(c.memberConcurrency).toBe(8);
+    expect(c.swarmWorkers).toBe(4);
+  });
+
+  test("a twin inherits the fast concurrency (it only widens the window)", () => {
+    const twin = resolveSmokeCadenceForBoot({ stage: false, twin: true, env: {} });
+    const fast = resolveSmokeCadence({ stage: false });
+    expect([twin.maxConcurrentSessions, twin.memberConcurrency, twin.swarmWorkers])
+      .toEqual([fast.maxConcurrentSessions, fast.memberConcurrency, fast.swarmWorkers]);
+  });
+
+  test("every profile has at least one swarm worker per concurrent session", () => {
+    for (const stage of [false, true]) {
+      const c = resolveSmokeCadence({ stage });
+      expect(c.swarmWorkers).toBeGreaterThanOrEqual(c.maxConcurrentSessions);
+    }
+  });
+
+  test("SWARM_MAX_CONCURRENCY still overrides, parsed exactly as the old inline default was", () => {
+    const realistic = resolveSmokeCadence({ stage: true });
+    const fast = resolveSmokeCadence({ stage: false });
+    expect(resolveMemberConcurrency(realistic, {})).toBe(4); // == the old `?? 4`
+    expect(resolveMemberConcurrency(fast, {})).toBe(8);
+    expect(resolveMemberConcurrency(fast, { SWARM_MAX_CONCURRENCY: "2" })).toBe(2);
+    expect(resolveMemberConcurrency(realistic, { SWARM_MAX_CONCURRENCY: "6" })).toBe(6);
+    // Number("") === 0, which mapSettledWithConcurrency reads as unbounded —
+    // the same value the old `Number(process.env.SWARM_MAX_CONCURRENCY ?? 4)` gave.
+    expect(resolveMemberConcurrency(fast, { SWARM_MAX_CONCURRENCY: "" })).toBe(0);
+  });
+});
+
+describe("assertProductionConstants — concurrency cannot ride into production", () => {
+  const realistic = resolveSmokeCadence({ stage: true });
+  const fast = resolveSmokeCadence({ stage: false });
+  const env = { SWARM_SCHEDULES_ENABLED: "0" };
+
+  for (const [field, value] of [["maxConcurrentSessions", 4], ["memberConcurrency", 8], ["swarmWorkers", 4]] as const) {
+    test(`a production boot with ${field}=${value} is REFUSED`, () => {
+      // swarmWorkers raised alongside so the lane rule is not what fires.
+      const drifted = { ...realistic, swarmWorkers: Math.max(realistic.swarmWorkers, value), [field]: value };
+      const problems = productionConstantMismatches(drifted, env, { production: true });
+      expect(problems.join(" ")).toContain(`${field} is ${value}, production intends ${PRODUCTION_CADENCE_INTENT[field]}`);
+      expect(() => assertProductionConstants(drifted, env, { production: true })).toThrow(/REFUSING TO BOOT/);
+    });
+  }
+
+  test("the realistic profile itself passes; a fast profile's concurrency is not production's", () => {
+    expect(productionConstantMismatches(realistic, env, { production: true })).toEqual([]);
+    const problems = productionConstantMismatches(fast, env, { production: true }).join(" ");
+    expect(problems).toContain("maxConcurrentSessions is 4");
+    expect(problems).toContain("swarmWorkers is 4");
+  });
+
+  test("fewer swarm workers than concurrent sessions is fatal in EITHER branch", () => {
+    for (const [cadence, production] of [[fast, false], [realistic, true]] as const) {
+      const starved = { ...cadence, maxConcurrentSessions: 2, swarmWorkers: 1 };
+      expect(productionConstantMismatches(starved, env, { production }).join(" "))
+        .toContain("swarmWorkers (1) is below maxConcurrentSessions (2)");
+    }
+  });
+
+  test("a zero, fractional or negative count is fatal in EITHER branch", () => {
+    for (const bad of [0, 1.5, -1]) {
+      for (const [cadence, production] of [[fast, false], [realistic, true]] as const) {
+        const broken = { ...cadence, memberConcurrency: bad };
+        expect(productionConstantMismatches(broken, env, { production }).join(" "))
+          .toContain(`memberConcurrency is ${bad}; it must be a whole number of at least 1`);
+      }
+    }
+  });
+
+  test("a non-production fast boot with its concurrency passes", () => {
+    expect(productionConstantMismatches(fast, {}, { production: false })).toEqual([]);
+    expect(() => resolveSmokeCadenceForBoot({ stage: false, twin: true, env: {} })).not.toThrow();
+  });
+});
+
+describe("subjectsToStart — the driver's scheduling decision, pure", () => {
+  const S = (nextAt: number, running = false) => ({ nextAt, running });
+
+  test("cap 1 starts only the earliest-due subject, ties to the lower index (the old reduce)", () => {
+    expect(subjectsToStart([S(30), S(10), S(10), S(20)], 100, 1)).toEqual([1]);
+  });
+
+  test("cap 1 starts nothing while a session is in flight, however overdue the rest are", () => {
+    expect(subjectsToStart([S(0, true), S(0), S(0)], 1_000, 1)).toEqual([]);
+  });
+
+  test("cap 4 starts every due subject at once, earliest first", () => {
+    expect(subjectsToStart([S(30), S(10), S(20), S(0)], 100, 4)).toEqual([3, 1, 2, 0]);
+  });
+
+  test("a subject that is not yet due is never started early", () => {
+    expect(subjectsToStart([S(0), S(500), S(50)], 100, 4)).toEqual([0, 2]);
+  });
+
+  test("a subject already running is never started a second time", () => {
+    expect(subjectsToStart([S(0, true), S(0)], 100, 4)).toEqual([1]);
+    expect(subjectsToStart([S(0, true)], 100, 4)).toEqual([]);
+  });
+
+  test("the cap counts sessions already in flight", () => {
+    expect(subjectsToStart([S(0, true), S(0, true), S(0), S(5)], 100, 3)).toEqual([2]);
+  });
+
+  test("nextSchedulerWakeAt: earliest idle nextAt, or Infinity when the cap is full", () => {
+    expect(nextSchedulerWakeAt([S(300), S(100, true), S(200)], 2)).toBe(200);
+    expect(nextSchedulerWakeAt([S(300), S(100, true)], 1)).toBe(Infinity);
+    expect(nextSchedulerWakeAt([S(0, true)], 4)).toBe(Infinity);
+  });
+
+  type Cadence = ReturnType<typeof resolveSmokeCadence>;
+
+  // Discrete-event replay of the driver against the planner, so the claims
+  // above are made about the WHOLE loop and not one call. Each session lasts
+  // `durMs`; on completion the subject is re-planned at max(plannedRunAt, now)
+  // exactly as smoke-main.ts does.
+  function replay(cap: number, count: number, cadence: Cadence, durMs: number, until: number) {
+    const plans = planSubjectSchedules(count, cadence, 0);
+    const subs = plans.map((p) => ({ plan: p, nextAt: p.firstAt, runs: 0, endsAt: -1 }));
+    const starts: { subject: number; at: number }[] = [];
+    let now = 0;
+    let maxInFlight = 0;
+    while (now <= until) {
+      for (const s of subs) {
+        if (s.endsAt >= 0 && s.endsAt <= now) {
+          s.endsAt = -1;
+          s.runs++;
+          s.nextAt = Math.max(plannedRunAt(s.plan, s.runs), now);
+        }
+      }
+      const view = subs.map((s) => ({ nextAt: s.nextAt, running: s.endsAt >= 0 }));
+      for (const i of subjectsToStart(view, now, cap)) {
+        subs[i].endsAt = now + durMs;
+        starts.push({ subject: i, at: now });
+      }
+      maxInFlight = Math.max(maxInFlight, subs.filter((s) => s.endsAt >= 0).length);
+      const after = subs.map((s) => ({ nextAt: s.nextAt, running: s.endsAt >= 0 }));
+      const wake = Math.min(
+        nextSchedulerWakeAt(after, cap),
+        ...subs.filter((s) => s.endsAt >= 0).map((s) => s.endsAt),
+      );
+      if (!Number.isFinite(wake)) break;
+      now = Math.max(now + 1, wake);
+    }
+    return { starts, maxInFlight };
+  }
+
+  // The OLD loop, in shape: pick the earliest (reduce, first wins a tie), wait
+  // until its slot, run it to completion, re-plan it.
+  function oldSequential(count: number, cadence: Cadence, durMs: number, until: number) {
+    const plans = planSubjectSchedules(count, cadence, 0);
+    const subs = plans.map((p) => ({ plan: p, nextAt: p.firstAt, runs: 0 }));
+    const starts: { subject: number; at: number }[] = [];
+    let now = 0;
+    for (;;) {
+      const due = subs.reduce((a, b) => (b.nextAt < a.nextAt ? b : a));
+      if (due.nextAt > now) now = due.nextAt;
+      if (now > until) return starts;
+      starts.push({ subject: subs.indexOf(due), at: now });
+      now += durMs;
+      due.runs++;
+      due.nextAt = Math.max(plannedRunAt(due.plan, due.runs), now);
+    }
+  }
+
+  test("cap 1 reproduces the old sequential loop's order AND timing, on both profiles", () => {
+    for (const stage of [false, true]) {
+      const cadence = resolveSmokeCadence({ stage });
+      for (const count of [DEMO_SUBJECT_COUNT, SMOKE_SUBJECT_COUNT]) {
+        for (const dur of [30_000, cadence.swarmWindowMs + 150_000]) { // short, and window + close/judge/publish
+          const until = cadence.swarmIntervalMs * 6;
+          const { starts, maxInFlight } = replay(1, count, cadence, dur, until);
+          expect(maxInFlight).toBe(1);
+          expect(starts).toEqual(oldSequential(count, cadence, dur, until));
+        }
+      }
+    }
+  });
+
+  test("cap 4 on a twin: four sessions in flight, and each subject re-convenes the moment it publishes", () => {
+    const twin = resolveSmokeCadenceForBoot({ stage: false, twin: true, env: {} });
+    const dur = twin.swarmWindowMs + 150_000;
+    const { starts, maxInFlight } = replay(twin.maxConcurrentSessions, SMOKE_SUBJECT_COUNT, twin, dur, 60 * 60_000);
+    expect(maxInFlight).toBe(SMOKE_SUBJECT_COUNT);
+    for (let i = 0; i < SMOKE_SUBJECT_COUNT; i++) {
+      const mine = starts.filter((s) => s.subject === i).map((s) => s.at);
+      expect(mine.length).toBeGreaterThan(1);
+      // No subject ever overlaps itself, and there is no idle gap between its
+      // sessions: the next one starts exactly when the last one ends.
+      for (let k = 1; k < mine.length; k++) expect(mine[k] - mine[k - 1]).toBe(dur);
+    }
+    // Every subject has published once by the bring-up stagger plus one session.
+    const lastFirstStart = Math.max(...[0, 1, 2, 3].map((i) => starts.find((s) => s.subject === i)!.at));
+    expect(lastFirstStart).toBeLessThanOrEqual(DEMO_FIRST_SESSION_MAX_MS);
   });
 });
