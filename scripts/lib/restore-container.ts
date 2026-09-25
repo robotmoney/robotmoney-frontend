@@ -105,7 +105,66 @@ function generateLocalPassword(): string {
 // doadmin_group, avn_* GUCs), which a vanilla postgres image cannot replicate
 // and which nothing here checks anyway. Allowlist rather than fight it line
 // by line.
-const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
+const RESTORE_ROLES = ["rm_readonly", "rm_worker", "rm_owner", "rm_app"] as const;
+
+/**
+ * The roles that predate the 0053 taxonomy — what the opt-in bootstrap shaping
+ * below grants its stand-in login, modelling the primary BEFORE 0053 ran.
+ */
+const PRE_TAXONOMY_ROLES = ["rm_readonly", "rm_worker"] as const;
+
+/**
+ * SQL that gives a restored twin production's POST-0053 ownership: `rm_owner`
+ * owns `public` and every non-extension relation and function in it.
+ *
+ * WHY. pg_restore runs `--no-owner`, so everything lands owned by the container
+ * superuser. Before v0.5.1 no twin ever had a pending migration (production had
+ * recorded them all), so nothing noticed. v0.5.1 ships 0061/0063, and every
+ * migration from 0054 on runs under `SET LOCAL ROLE rm_owner` (src/db/migrate.ts):
+ * the 2026-09-25 rehearsal died on `role "rm_owner" does not exist`, and with the
+ * role but not the ownership, `GRANT` as rm_owner fails on tables it does not own.
+ * Production's own shape is rm_owner owning everything, so the twin gets that.
+ *
+ * PURE: exported so a unit test can pin it without a database.
+ */
+export function postTaxonomyOwnershipSql(owner = "rm_owner"): string {
+  return `
+    DO $own$
+    DECLARE r record;
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${owner}') THEN
+        RAISE NOTICE 'no ${owner} in the restored globals: a pre-0053 twin, ownership left as restored';
+        RETURN;
+      END IF;
+      EXECUTE 'ALTER SCHEMA public OWNER TO ${owner}';
+      FOR r IN
+        SELECT c.relkind, c.oid::regclass AS object_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r','p','S','v','m','f')
+          AND (c.relkind <> 'S' OR NOT EXISTS (
+            SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype IN ('a','i')))
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER %s %s OWNER TO ${owner}',
+          CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW'
+                         WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE'
+                         ELSE 'TABLE' END, r.object_name);
+      END LOOP;
+      FOR r IN
+        SELECT p.oid::regprocedure AS object_name
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER ROUTINE %s OWNER TO ${owner}', r.object_name);
+      END LOOP;
+    END
+    $own$;`;
+}
 
 /**
  * The smoke-twin's stand-in for the production primary's bootstrap login.
@@ -175,7 +234,7 @@ export function shapeTwinToProductionPrivileges(
   const ddl = `
     DROP ROLE IF EXISTS ${TWIN_BOOTSTRAP_ROLE};
     CREATE ROLE ${TWIN_BOOTSTRAP_ROLE} ${TWIN_BOOTSTRAP_ATTRS} PASSWORD '${password}';
-    ${RESTORE_ROLES.map((r) => `GRANT ${r} TO ${TWIN_BOOTSTRAP_ROLE} WITH ADMIN OPTION;`).join("\n    ")}
+    ${PRE_TAXONOMY_ROLES.map((r) => `GRANT ${r} TO ${TWIN_BOOTSTRAP_ROLE} WITH ADMIN OPTION;`).join("\n    ")}
     ALTER SCHEMA public OWNER TO ${TWIN_BOOTSTRAP_ROLE};
     DO $shape$
     DECLARE r record;
@@ -420,6 +479,13 @@ export async function restoreBackupIntoContainer(
   const restoreExit = await pgRestore.exited;
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
+
+  log("giving rm_owner production's ownership of public (post-0053 shape)");
+  const own = Bun.spawnSync(
+    ["psql", ...connArgs, `--dbname=${LOCAL_DB}`, "--set", "ON_ERROR_STOP=on", "-c", postTaxonomyOwnershipSql()],
+    { stdout: "pipe", stderr: "pipe", env },
+  );
+  if (own.exitCode !== 0) return { error: `ownership reshaping failed: ${own.stderr.toString().trim()}`, container };
 
   return {
     container,
