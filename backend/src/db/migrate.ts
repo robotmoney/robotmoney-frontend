@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type postgresTypes from "postgres";
 import { sql, closeDb, setDatabase } from "./client.ts";
 import { seed, seedSmokeJobSchedules } from "./seed.ts";
+import { rebuildVintageManifests } from "../analytics/store/run-ledger-store.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -52,15 +53,7 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
   const appliedNow: string[] = [];
   for (const file of files) {
     if (applied.has(file)) continue;
-    const ddl = await readFile(join(migrationsDir, file), "utf8");
-    await sql.begin(async (tx) => {
-      // 0053 creates rm_owner and transfers existing objects.  Every later
-      // migration runs as that non-login owner through a short-lived bootstrap
-      // connection that has been granted SET ROLE capability.
-      if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
-      await tx.unsafe(ddl);
-      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-    });
+    await applyMigrationFile(sql, file);
     console.log(`migrated: ${file}`);
     appliedNow.push(file);
   }
@@ -73,6 +66,38 @@ export async function migrate(options: { seedSmokeSchedules?: boolean } = {}): P
   await seed();
   if (options.seedSmokeSchedules) await seedSmokeJobSchedules();
 }
+
+// Apply one migration file: its SQL, then any TypeScript step it needs, then
+// its schema_migrations row — all in ONE transaction, so a failure anywhere
+// leaves no trace of the file at all. Exported so a migration-replay test
+// applies a file exactly as a deploy does, rather than a copy of this loop.
+export async function applyMigrationFile(db: postgresTypes.Sql<{}>, file: string): Promise<void> {
+  const ddl = await readFile(join(migrationsDir, file), "utf8");
+  await db.begin(async (tx) => {
+    // 0053 creates rm_owner and transfers existing objects.  Every later
+    // migration runs as that non-login owner through a short-lived bootstrap
+    // connection that has been granted SET ROLE capability.
+    if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
+    await tx.unsafe(ddl);
+    await IN_TRANSACTION_AFTER_MIGRATION[file]?.(tx);
+    await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+  });
+}
+
+// Work a migration needs that SQL cannot do well, run by the runner right
+// after that file's SQL, INSIDE the same transaction and as the same role
+// (rm_owner). It runs once, only in the run that applies the file, and a throw
+// rolls the file back with it. Keep this list short: each entry is a step a
+// reader of the .sql file cannot see there, so the file must say it exists.
+//
+// 0080 (issue #1050): after the SQL re-points every vintage to the rows the
+// fixed ledger writer would have written, each vintage's manifest and
+// manifest_digest are recomputed with the same canonical-JSON SHA-256 every
+// freeze uses (analytics/run-ledger.ts buildVintageManifest). Reproducing that
+// in plpgsql would mean matching JavaScript's number formatting byte for byte.
+export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgresTypes.TransactionSql<{}>) => Promise<unknown>>> = {
+  "0080_analytics_ledger_compaction.sql": rebuildVintageManifests,
+};
 
 // Tables a migration rewrote heavily enough that its DELETEs left most of the
 // table as dead tuples. A DELETE frees nothing on disk: the space is only

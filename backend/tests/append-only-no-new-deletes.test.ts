@@ -77,11 +77,18 @@ const ALLOWED: Record<string, string> = {
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",
 
-  // Migration 0080 compacts analytics_overwrite_events rows that recorded only
-  // sub-tolerance float noise (issue #1035), guards re-armed in-transaction and
-  // proved armed by tests/analytics-ledger-compaction-migration.test.ts.
+  // Migration 0080 removes the analytics_overwrite_events rows the fixed raw
+  // writer would never have recorded (issues #1035, #1050), guards re-armed
+  // in-transaction and proved armed by
+  // tests/analytics-ledger-compaction-migration.test.ts and
+  // tests/analytics-ledger-vintage-repair.test.ts.
   "backend/migrations/0080_analytics_ledger_compaction.sql":
-    "removes noise-only overwrite evidence under decision D56 (issue #1035)",
+    "removes overwrite evidence the fixed writer would not have recorded, under decision D56 (issues #1035, #1050)",
+  // 0080 as PR 1046 merged it, before #1050 extended it: the "0080 alone"
+  // baseline tests/analytics-ledger-vintage-repair.test.ts measures the repair
+  // against, applied only to a throwaway database of that test's own.
+  "backend/tests/fixtures/ledger/0080_analytics_ledger_compaction.as-merged-1046.sql":
+    "frozen copy of 0080 before #1050, applied only to a throwaway test database",
 
   // The runtime check. Its probe statement is built by interpolation, so it
   // carries no literal table name — but the list of protected tables lives here

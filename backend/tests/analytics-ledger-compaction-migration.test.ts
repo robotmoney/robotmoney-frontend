@@ -1,8 +1,13 @@
 // Issue #1035 AC6/AC7: migration 0080 compacts the analytics ledger the old
 // writers left behind — re-observation and float-noise source_value_versions
 // rows, one-row-per-member vintage copies, and noise-only overwrite evidence —
-// while every existing vintage replays to the same members and manifest digest,
-// every series head stays put, and every immutability guard is armed again.
+// and every immutability guard is armed again. Since issue #1050 it also
+// re-points every existing vintage to the rows the fixed writer would have
+// written and recomputes its digest, so each vintage keeps its member count and
+// replays to its (recomputed) manifest digest, and every series keeps one head
+// under the same label and within tolerance of the same value.
+// tests/analytics-ledger-vintage-repair.test.ts proves the result equals what
+// the fixed writers alone would have produced.
 //
 // WHY ITS OWN DATABASE. The suite's template (tests/preload.ts) has 0080
 // applied already, and on an empty ledger, so there is no pre-migration state
@@ -22,7 +27,7 @@ import { loadFrozenVintage, loadHistoricalSourceValues } from "../src/analytics/
 import { ledgerCurrentRawIndicatorHistory } from "../src/analytics/cutover/ledger-current.ts";
 import { checkAnalyticsLedgerGuard } from "../src/db/analytics-ledger-guard.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
-import { reclaimAfterMigrations } from "../src/db/migrate.ts";
+import { applyMigrationFile, reclaimAfterMigrations } from "../src/db/migrate.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0080_analytics_ledger_compaction.sql";
@@ -37,14 +42,10 @@ let db: Db;
 let dbName: string;
 
 async function applyMigration(file: string): Promise<void> {
-  const ddl = await readFile(join(migrationsDir, file), "utf8");
-  // Byte-for-byte the runner's loop (src/db/migrate.ts): one transaction per
-  // file, as rm_owner from 0054 on, recorded under its full basename.
-  await db.begin(async (tx) => {
-    if (file >= "0054_rm_worker_allowlist.sql") await tx.unsafe("SET LOCAL ROLE rm_owner");
-    await tx.unsafe(ddl);
-    await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
-  });
+  // The runner's own per-file step (src/db/migrate.ts): one transaction per
+  // file, as rm_owner from 0054 on, including any TypeScript step the file
+  // needs (0080's vintage manifest rebuild), recorded under its full basename.
+  await applyMigrationFile(db, file);
 }
 
 // ── The pre-#1035 writers, reproduced ───────────────────────────────────────
@@ -300,12 +301,14 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     }
   });
 
-  test("every seeded vintage resolves to the same members and replays to its stored manifest_digest", async () => {
+  test("every seeded vintage keeps its member count and replays to its recomputed manifest_digest", async () => {
     expect(vintageIds).toHaveLength(2);
     for (const id of vintageIds) {
       const loaded = await loadFrozenVintage(id, db);
       expect(loaded).not.toBeNull();
-      expect(loaded!.members.map((m) => m.versionId).sort()).toEqual(before.vintageMembers[id]!);
+      // Re-pointed (issue #1050): one member per coordinate, as before.
+      expect(loaded!.members).toHaveLength(before.vintageMembers[id]!.length);
+      expect(loaded!.memberCount).toBe(before.vintageMembers[id]!.length);
       const { manifest } = buildVintageManifest(
         loaded!.members, loaded!.methodologyVersionId, loaded!.buildIdentity,
         loaded!.knowledgeTimeCutoff, loaded!.marketTimeCutoff,
@@ -314,28 +317,47 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     }
   });
 
-  test("ledgerCurrentRawIndicatorHistory returns the same heads, and every series head is the same row", async () => {
+  test("every series keeps one head, under the same label, with the same value within tolerance", async () => {
+    // Since issue #1050 a head that was only a re-observation is dropped like
+    // any other, so the head can be an EARLIER row: same coordinate, same
+    // label, a value within the source's tolerance.
     const after = await snapshot(async () => []);
-    expect(after.rawHeads).toEqual(before.rawHeads);
-    expect(after.allHeads).toEqual(before.allHeads);
+    const shape = (heads: unknown) =>
+      (heads as { source_key: string; market_date: string; provenance: string | null; value: number }[])
+        .map((h) => ({ key: `${h.source_key}|${h.market_date}`, provenance: h.provenance, value: Number(h.value) }))
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.value - b.value));
+    const b = shape(before.allHeads);
+    const a = shape(after.allHeads);
+    expect(a.map((h) => [h.key, h.provenance])).toEqual(b.map((h) => [h.key, h.provenance]));
+    for (let i = 0; i < a.length; i++) {
+      const rel = Math.abs(a[i]!.value - b[i]!.value) / Math.max(Math.abs(a[i]!.value), Math.abs(b[i]!.value));
+      expect(rel).toBeLessThanOrEqual(a[i]!.key.startsWith(FRED_KEY) ? 0 : 1e-6);
+    }
+    const raw = (heads: unknown) =>
+      (heads as { indicator: string; date: string; value: number; source: string | null }[])
+        .map((h) => [h.indicator, h.date, h.source, Math.round(h.value * 1e6)]);
+    expect(raw(after.rawHeads)).toEqual(raw(before.rawHeads));
   });
 
-  test("each chain keeps exactly what the new writer would have written, plus what a vintage references, re-linked into one chain", async () => {
-    // A Yahoo date with no real revision: the baseline; g0, which moved the
-    // label from NULL to 'live'; g1 (v1 references it); g4 (v2 references it);
-    // g7 (the head). g2/g3/g5/g6 were jitter within 1e-6, or re-observations,
-    // of the version kept before them.
+  test("each chain keeps exactly what the fixed writer would have written, re-linked into one chain", async () => {
+    // A Yahoo date with no real revision: the baseline, and g0, which moved the
+    // label from NULL to 'live'. Everything after it (g1..g7) was a
+    // re-observation, or jitter within 1e-6, of that head under the same label,
+    // so the fixed writer wrote none of it — vintage references and the old
+    // head included (issue #1050).
     const plain = await chainOf(YAHOO_KEY, DATES[20]!);
-    expect(plain.map((v) => v.kind)).toEqual(["legacy_baseline", "unchanged", "unchanged", "revision", "unchanged"]);
+    expect(plain.map((v) => v.kind)).toEqual(["legacy_baseline", "unchanged"]);
     expect(plain.every((v) => Number(v.value) === base(YAHOO_KEY, 20))).toBe(true);
-    // A relabelled date: g6's 'seed' label is new information, so it stays.
+    // A relabelled date: g6's 'seed' label is new information, so it stays; its
+    // g7 repeat does not.
     const relabelled = await chainOf(YAHOO_KEY, DATES[8]!);
-    expect(relabelled.map((v) => v.provenance)).toEqual([null, "live", "live", "live", "seed", "seed"]);
+    expect(relabelled.map((v) => v.provenance)).toEqual([null, "live", "seed"]);
     // An EXACT key keeps its jitter: under D56 a FRED change is always real.
-    // Only g3 (a re-observation of g2) and g5/g6 (of g4) go.
+    // g2's jitter and g4's return to base are revisions; every repeat goes.
     const exact = await chainOf(FRED_KEY, DATES[20]!);
     const b = base(FRED_KEY, 20);
-    expect(exact.map((v) => Number(v.value))).toEqual([b, b, b, noisy(b), b, b]);
+    expect(exact.map((v) => Number(v.value))).toEqual([b, b, noisy(b), b]);
+    expect(exact.map((v) => v.kind)).toEqual(["legacy_baseline", "unchanged", "revision", "revision"]);
     for (const chain of [plain, relabelled, exact]) {
       expect(chain[0]!.prior).toBeNull();
       for (let i = 1; i < chain.length; i++) expect(chain[i]!.prior).toBe(chain[i - 1]!.id);
@@ -413,12 +435,12 @@ function assertMemberResolutionPlan(plan: PlanNode): void {
 }
 
 describe("issue #1035 review: member runs resolve by primary-key equality, never a range join", () => {
-  test("0080's membership fingerprint query", async () => {
+  test("0080's membership count query", async () => {
     await db.unsafe("ANALYZE");
     const sql = await readFile(join(migrationsDir, MIGRATION), "utf8");
-    const match = /SELECT COALESCE\(jsonb_object_agg\(vintage_id, jsonb_build_array\(n, s\)\), '\{\}'::jsonb\) INTO members_after\n([\s\S]*?\) m);/.exec(sql);
+    const match = /INSERT INTO ledger_repair_member_counts \(vintage_id, members\)\n([\s\S]*?GROUP BY vm\.vintage_id);/.exec(sql);
     expect(match).not.toBeNull();
-    const query = `SELECT COALESCE(jsonb_object_agg(vintage_id, jsonb_build_array(n, s)), '{}'::jsonb)\n${match![1]}`;
+    const query = match![1]!;
     assertMemberResolutionPlan(await planOf(query));
     assertMemberResolutionPlan(await planOf(query, [], true));
   });
