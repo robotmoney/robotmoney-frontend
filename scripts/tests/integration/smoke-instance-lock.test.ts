@@ -36,14 +36,18 @@ let holder: RunningBoot | undefined;
 /**
  * The journal of a boot that is STILL WRITING it.
  *
- * Smoke rewrites its journal in place (scripts/lib/smoke-journal.ts
- * `writeDurably`: open-truncate, then write), so a read can land between the
- * truncate and the write and parse nothing — `journalNow` then answers `null`.
- * This file once failed in the full integration run on exactly that: a `!` on a
- * read taken while the holder was mid-write. Every read here that races a live
- * writer goes through this instead, which re-reads until a read parses. The
- * next complete write is microseconds away, so it spins on the file rather
- * than sleeping for a guessed interval.
+ * THIS SPIN WORKS AROUND A PRODUCT DEFECT; IT DOES NOT FIX ONE. Smoke rewrites
+ * its live journal in place (scripts/lib/smoke-journal.ts `writeDurably`:
+ * `writeFileSync` with flag `w`, which truncates and then writes), so any
+ * concurrent reader can land between the truncate and the write and read an
+ * empty or partial file. For `bun smoke:status` or a resume that is a
+ * "Refusing: the journal ... is malformed" (`readVersioned`); here
+ * `journalNow` answers `null`. This file once failed in the full integration
+ * run on exactly that. The fix belongs in smoke-journal.ts: stage the file and
+ * rename it over the live one, as backend/scripts/migrate-journal.ts `persist`
+ * already does. Once that write is atomic, delete this function and read with
+ * `journalNow(...)!` again, so a torn read fails this test instead of being
+ * retried away.
  */
 function settledJournal(harness: BootHarness): Journal {
   const deadline = Date.now() + 10_000;
@@ -238,13 +242,30 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     const planId = settledJournal(x).planId;
 
     // 1. Contention, two hostnames for one database: the boot used 127.0.0.1.
+    //    The migrate receipts and journals into the instance's own state
+    //    directory, so its journal is read below.
+    const journalsBefore = migrateRecords("migrate-journal-");
     const started = Date.now();
-    const waited = runMigrate(migrateEnv("localhost"), 3);
+    const waited = runMigrate({ ...migrateEnv("localhost"), RM_SMOKE_STATE_ROOT: x.root }, 3);
     expect(waited.code).not.toBe(0);
     expect(Date.now() - started).toBeGreaterThanOrEqual(3_000);
     expect(waited.out).toContain(`held by smoke (instance ${x.instance}) under plan ${planId.slice(0, 12)}`);
     expect(waited.out).toMatch(/waited \d+ms and gave up/);
     expect(waited.out).not.toContain("rm_owner password");
+    // Migrate as the loser of contention journals its phase (§2): one new
+    // journal, closed `refused` in `lock`, naming smoke and its plan id, with
+    // no receipt.
+    const lostJournals = migrateRecords("migrate-journal-").filter((name) => !journalsBefore.includes(name));
+    expect(lostJournals.length).toBe(1);
+    const lost = JSON.parse(readFileSync(join(x.paths.dir, lostJournals[0]!), "utf8")) as MigrateJournalFile;
+    expect(lost.outcome).toBe("refused");
+    expect(lost.receipt).toBeNull();
+    expect(lost.phases.map((r) => [r.phase, r.status])).toEqual([
+      ["config", "committed"],
+      ["plan", "committed"],
+      ["lock", "refused"],
+    ]);
+    expect(lost.phases.at(-1)?.reason).toContain(`held by smoke (instance ${x.instance}) under plan ${planId.slice(0, 12)}`);
 
     // 2. Connection loss mid-phase: the smoke's own lock connection is killed.
     const backend = smokeLockBackend();
@@ -352,7 +373,19 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     return readdirSync(x!.paths.dir).filter((name) => name.startsWith(prefix)).sort();
   }
 
-  test("4 — migrate as the loser: its lock connection dies while it waits at the `y`; it journals the phase that could not start, exits non-zero, and the next run recovers", async () => {
+  // WHAT TEST 4 PROVES AND WHAT IT DOES NOT. It kills migrate's lock connection
+  // while the operator process waits at its `y`, on a database with nothing
+  // pending, so the loss is found at `migrate: start`, before any mutation, and
+  // the rerun has nothing to resume: its `applied` and `resumedAndVerified` are
+  // both empty, and this test asserts that rather than implying more. A loss
+  // BETWEEN TWO COMMITS, and a rerun that resumes the committed file from the
+  // §8.3 in-progress state, is proved in process only
+  // (backend/tests/migrate-run.test.ts, "the lock connection killed between two
+  // commits"): the operator process reads the repository's own
+  // backend/migrations, and this file has no pending migration to give it
+  // without a migrations-directory override on a production mutation tool,
+  // which it will not add for a test.
+  test("4 — migrate as the loser: its lock connection dies while it waits at the `y`; it journals the phase that could not start, exits non-zero, and a rerun completes (nothing was pending, so nothing is resumed)", async () => {
     expect(x).toBeDefined();
     const ownerPassword = (JSON.parse(readFileSync(x!.paths.rolePasswordsFile, "utf8")) as Record<string, string>).rm_owner!;
     const manifestBefore = bootQuery(x!.project, "SELECT content_hash FROM schema_manifest");
@@ -399,7 +432,9 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     expect(bootQuery(x!.project, "SELECT string_agg(name, ',' ORDER BY name) FROM schema_migrations")).toBe(ledgerBefore);
     expect(bootQuery(x!.project, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted")).toBe("0");
 
-    // The next run recovers: the whole sequence, to a receipt and a published manifest.
+    // The next run completes: the whole sequence, to a receipt and a published
+    // manifest. Nothing was pending and nothing committed before the loss, so
+    // it applies nothing and resumes nothing (see the note above the test).
     const next = migrateOnTerminal();
     try {
       await next.waitFor("rm_owner password (not echoed");
@@ -414,7 +449,12 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     expect(receipts.length).toBe(1);
     const recovered = migrateRecords("migrate-journal-").filter((name) => !journalsBefore.includes(name) && !journals.includes(name));
     expect((JSON.parse(readFileSync(join(x!.paths.dir, recovered[0]!), "utf8")) as MigrateJournalFile).outcome).toBe("succeeded");
-    const receipt = JSON.parse(readFileSync(join(x!.paths.dir, receipts[0]!), "utf8")) as { manifest: { contentHash: string } };
+    const receipt = JSON.parse(readFileSync(join(x!.paths.dir, receipts[0]!), "utf8")) as {
+      applied: string[];
+      resumedAndVerified: string[];
+      manifest: { contentHash: string };
+    };
+    expect({ applied: receipt.applied, resumedAndVerified: receipt.resumedAndVerified }).toEqual({ applied: [], resumedAndVerified: [] });
     expect(bootQuery(x!.project, "SELECT content_hash FROM schema_manifest")).toBe(receipt.manifest.contentHash);
   }, BOOT_TIMEOUT_MS);
 });
