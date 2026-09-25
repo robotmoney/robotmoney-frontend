@@ -102,7 +102,7 @@ export function registerRegimeView(Alpine) {
     // History-chart overlay toggles. composite/macro/on-chain/factor are ALWAYS
     // drawn (no per-series toggle, matching the source HistoryChart); only the
     // regime bands + the S&P 500 / ETH price overlays toggle.
-    visible: { spx: false, eth: false, bands: true },
+    visible: { spx: false, eth: false, bands: true, btBands: true },
     // Each index line on the history chart, on or off from its chip.
     series: { composite: true, macro: true, onchain: true, factor: true },
     range: "1y",
@@ -871,7 +871,7 @@ export function registerRegimeView(Alpine) {
         series: m.lines.filter((l) => !this.btHidden[key + ":" + l.token]).map((l) => ({ token: l.token, color: l.color, width: l.baseline ? 1 : 1.5, dash: l.dash, muted: !!this.btFocus && this.btFocus !== l.token, points: m.idx.map((i, k) => ({ i, v: l.values[k] })) })),
       });
     },
-    btBands(key) { return this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).runs : []; },
+    btBands(key) { return this.visible.btBands && this.btMarket === key && !this.btEmptyTitle(key) ? this._bt(key).runs : []; },
     btYTicks(key) {
       if (this.btMarket !== key || this.btEmptyTitle(key)) return [];
       const m = this._bt(key);

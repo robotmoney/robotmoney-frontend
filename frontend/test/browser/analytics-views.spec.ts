@@ -195,11 +195,12 @@ test("regime panel rows link out to the glossary, the prose and the upstream sou
   const name = row.locator("a.rv__ind-name");
   await expect(name).toHaveAttribute("href", "/regime/indicators#T10Y2Y");
   await expect(name).toContainText("10y–2y yield curve");
-  // One link over name + glyph, not two to the same place.
-  await expect(row.locator(".rv__ind-tipwrap a")).toHaveCount(1);
+  // The name is the one link; the (i) beside it is the tip, not a second link.
+  await expect(row.locator(".rv__ind-head a")).toHaveCount(1);
+  await expect(row.locator(".rv__ind-head .rm-tip__btn")).toHaveCount(1);
 
   // The tooltip leads with what the indicator IS, then its orientation.
-  const tip = row.locator(".rv__tip");
+  const tip = row.locator(".rv__ind-head .rm-tip__bub");
   await expect(tip).toContainText("10-year and 2-year US Treasury yields");
   await expect(tip).toContainText("Sign +1");
 
@@ -339,9 +340,9 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   // The axis says the span by its form: months across a year.
   await expect(page.locator("#history-sec .rr-area__x span").first()).toHaveText(/^[A-Z][a-z]{2}( '\d\d)?$/);
 
-  await page.getByRole("button", { name: "Regime bands" }).click();
+  await page.locator("#history-sec").getByRole("button", { name: "Regime bands" }).click();
   expect((await state()).bands).toBe(0);
-  await page.getByRole("button", { name: "Regime bands" }).click();
+  await page.locator("#history-sec").getByRole("button", { name: "Regime bands" }).click();
   expect((await state()).bands).toBeGreaterThan(0);
 
   const macro = page.locator("#history-sec .rv__lg", { hasText: "Macro" });
