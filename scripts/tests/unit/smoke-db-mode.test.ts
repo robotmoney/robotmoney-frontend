@@ -23,7 +23,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   bannerFor,
-  bootPreflightPlan,
+  LOCK_TIMEOUT_DEFAULT_SECONDS,
+  LOCK_TIMEOUT_FLAG,
+  lockTimeoutMs,
   cadenceOverride,
   keptDataDescription,
   dataPathOverlayYaml,
@@ -447,46 +449,44 @@ describe("remote-database refusals never name the retired --db flag (criterion 4
   });
 });
 
-describe("bootPreflightPlan — schema currency on every path that skips migrate (criterion 28)", () => {
-  const plan = (dp: ResolvedDataPath | Parameters<typeof usesComposePostgres>[0], ...flags: string[]) =>
-    bootPreflightPlan({
-      composePostgres: usesComposePostgres(dp),
-      seeds: shouldSeed(argv(...flags)),
-      migrates: requestsMigrate(argv(...flags)),
-    });
-  const DUMP: ResolvedDataPath = { kind: "smoke-twin", url: "postgres://u:p@172.17.0.1:5555/d", redactedUrl: "x", container: "c", volume: "v", stamp: "s" };
+// SCHEMA CURRENCY ON EVERY PATH (criterion 28) is no longer a per-path
+// decision here. bootPreflightPlan() chose between two container one-shots
+// (schema-current.ts, db-preflight.ts's classification) by path; both are
+// superseded and gone. Every boot now runs the FULL §7 preflight after its
+// preparation (backend/scripts/smoke-prepare.ts `preflight`), whose check 3
+// asks of any database whether its schema matches its manifest (3a) and whether
+// the booting code supports it (3b) — on every path, `--migrate` or not — and
+// `--seed`'s populated-database refusal is the seed gate
+// (backend/tests/seed-gate.test.ts). The runtime proof is the preflight results
+// a real boot writes to its receipt (scripts/tests/integration/smoke-lifecycle).
 
-  test("a dump without --migrate checks schema currency (it is on production's older schema)", () => {
-    expect(plan(DUMP).schemaCurrent).toBe(true);
+describe("--lock-timeout — the bounded wait behind another target-lock holder (spec §2, criterion 36)", () => {
+  test("absent: the default, in milliseconds", () => {
+    expect(lockTimeoutMs(argv())).toBe(LOCK_TIMEOUT_DEFAULT_SECONDS * 1000);
   });
 
-  test("a reattached volume without --migrate checks schema currency", () => {
-    expect(plan({ kind: "ephemeral", reattach: { volume: "v" } }).schemaCurrent).toBe(true);
+  test("seconds, in either spelling", () => {
+    expect(lockTimeoutMs(argv(LOCK_TIMEOUT_FLAG, "5"))).toBe(5000);
+    expect(lockTimeoutMs(argv(`${LOCK_TIMEOUT_FLAG}=0.5`))).toBe(500);
   });
 
-  test("the remote database without --migrate checks schema currency", () => {
-    expect(plan({ kind: "external" } as ResolvedDataPath).schemaCurrent).toBe(true);
-  });
-
-  test("a blank database without --migrate checks too: it has no schema yet", () => {
-    expect(plan({ kind: "ephemeral" }).schemaCurrent).toBe(true);
-  });
-
-  test("red control: --migrate on any path drops the check (migrate() makes it current itself)", () => {
-    for (const dp of [DUMP, { kind: "ephemeral" as const }, { kind: "ephemeral" as const, reattach: { volume: "v" } }]) {
-      expect(plan(dp, MIGRATE_FLAG).schemaCurrent).toBe(false);
+  test("a value that is not a number of seconds refuses rather than waiting forever", () => {
+    for (const bad of ["forever", "1m", "5s"]) {
+      expect(() => lockTimeoutMs(argv(LOCK_TIMEOUT_FLAG, bad))).toThrow(`takes a number of seconds, got "${bad}"`);
     }
+    // A negative number or a missing value never reaches the parser: the argv
+    // allowlist refuses both (a value may not start with `--`, and `=` needs one).
+    expect(validateArgv(argv(`${LOCK_TIMEOUT_FLAG}=`))).not.toEqual([]);
+    expect(validateArgv(argv(LOCK_TIMEOUT_FLAG))).not.toEqual([]);
   });
 
-  test("classify guards --seed on a database this boot did not create, and nothing else", () => {
-    expect(plan({ kind: "external" } as ResolvedDataPath, SEED_FLAG).classify).toBe(true);
-    expect(plan({ kind: "external" } as ResolvedDataPath).classify).toBe(false);
-    expect(plan({ kind: "ephemeral" }, SEED_FLAG, MIGRATE_FLAG).classify).toBe(false);
+  test("it is an accepted flag, so the argv allowlist lets it through", () => {
+    expect(validateArgv(argv("--local", "blank", LOCK_TIMEOUT_FLAG, "5"))).toEqual([]);
   });
+});
 
-  test("the CI boot (--local blank --migrate --seed) runs no preflight step", () => {
-    expect(plan({ kind: "ephemeral" }, "--local", "blank", MIGRATE_FLAG, SEED_FLAG)).toEqual({ classify: false, schemaCurrent: false });
-  });
+describe("localModeOf — the mode a refusal speaks about", () => {
+  const DUMP: ResolvedDataPath = { kind: "smoke-twin", url: "postgres://u:p@172.17.0.1:5555/d", redactedUrl: "x", container: "c", volume: "v", stamp: "s" };
 
   test("localModeOf names the mode a refusal should speak about", () => {
     expect(localModeOf(DUMP)).toBe("dump");

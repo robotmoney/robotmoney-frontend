@@ -19,7 +19,16 @@
 //                 receipt afterwards; the boot itself, on a TTY, draws nothing;
 //   criterion 29  `smoke:status` reads the receipt back with the plan id,
 //                 schema identity and preflight results the run wrote;
-//   (25, stack half) `bun smoke` exits 0 at readiness and the stack outlives it.
+//   (25, stack half) `bun smoke` exits 0 at readiness and the stack outlives it;
+//   criterion 34  create, then the target lock, then the first decision read:
+//                 the journal's preparation records say so, in that order;
+//   criteria 76, 70  the blank bootstrap left `deployment_identity = rehearsal`,
+//                 written by rm_owner, and rm_owner holds no CREATEROLE after
+//                 the bootstrap and the migrate run;
+//   (44, smoke half) the receipt's preflight is the full §7 registry, all seven
+//                 checks, run by the boot and passed;
+//   (28, roles)   the api runs as rm_app and the pipeline worker as rm_worker;
+//                 no container holds the local superuser.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +36,7 @@ import { assertPlanRedacted, DEPLOYMENT_PHASES, readReceipt, type DeploymentPlan
 import { instancePaths } from "../../lib/smoke-state.ts";
 import {
   bootArgs,
+  bootQuery,
   BOOT_TIMEOUT_MS,
   containerEnv,
   harness,
@@ -164,6 +174,62 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     // The preparation this run journaled, each separately (§1.3).
     const steps = records.filter((r) => r.phase === "prepare").map((r) => r.step);
     for (const step of ["instance", "assemble", "site", "images", "database", "migrate"]) expect(steps).toContain(step);
+  });
+
+  test("criterion 34: create, then the target lock, then every decision — the journal's preparation order", () => {
+    // Spec §7: "database create/restore (local) → target lock (§2) → identity
+    // matrix (§4.3) → authorized preparation → preflight → containers"; §2:
+    // acquisition "After any local database is created or restored, before the
+    // first read used for a decision". The `lock` record holds both the
+    // acquisition (with its revalidation) and the matrix on the locked read;
+    // nothing that decides anything — the bootstrap, the migrate run's gates,
+    // preflight — is journaled before it.
+    const records = journalNow(h)!.phases;
+    const steps = records.filter((r) => r.phase === "prepare").map((r) => r.step);
+    const at = (step: string) => steps.indexOf(step);
+    expect(at("database")).toBeGreaterThan(at("instance"));
+    expect(at("lock")).toBe(at("database") + 1);
+    expect(at("bootstrap")).toBe(at("lock") + 1);
+    expect(at("migrate")).toBe(at("bootstrap") + 1);
+    // …and every preparation precedes preflight, which precedes replacement.
+    const phases = records.map((r) => r.phase);
+    expect(phases.lastIndexOf("prepare")).toBeLessThan(phases.indexOf("preflight"));
+    expect(phases.indexOf("preflight")).toBeLessThan(phases.indexOf("replace"));
+    // The boot said which lock it held, and whose plan.
+    expect(boot.output()).toMatch(/target lock held \(smoke, plan [0-9a-f]{12}, backend pid \d+\)/);
+  });
+
+  test("criteria 76 + 70: the blank bootstrap enrolled the database as rehearsal through rm_owner, and rm_owner holds no CREATEROLE", () => {
+    expect(bootQuery(h.project, "SELECT kind || '|' || written_by FROM deployment_identity")).toBe("rehearsal|rm_owner");
+    // rm_owner LOGIN, never superuser, never CREATEROLE — after the bootstrap
+    // AND the migrate run this boot performed as rm_owner.
+    expect(bootQuery(h.project, "SELECT rolcanlogin || '|' || rolsuper || '|' || rolcreaterole FROM pg_roles WHERE rolname = 'rm_owner'")).toBe("true|false|false");
+    // The ledger and the manifest were written by the bootstrap and republished by the run.
+    expect(Number(bootQuery(h.project, "SELECT count(*) FROM schema_migrations"))).toBeGreaterThan(90);
+    expect(bootQuery(h.project, "SELECT count(*) FROM schema_manifest")).toBe("1");
+  });
+
+  test("the api runs as rm_app and the pipeline worker as rm_worker — no container holds the local superuser", () => {
+    const user = (url: string | undefined) => (url ? decodeURIComponent(new URL(url).username) : "(unset)");
+    expect(user(containerEnv(h.project, "api", "DATABASE_URL"))).toBe("rm_app");
+    expect(user(containerEnv(h.project, "worker-analytics", "DATABASE_URL"))).toBe("rm_worker");
+    expect(user(containerEnv(h.project, "worker-analytics", "WORKER_DATABASE_URL"))).toBe("rm_worker");
+    for (const service of ["api", "worker-analytics", "worker-research", "system-scheduler", "analytics-producer", "website-server"]) {
+      for (const key of ["DATABASE_URL", "WORKER_DATABASE_URL", "MIGRATE_DATABASE_URL"]) {
+        const value = containerEnv(h.project, service, key);
+        if (value) expect({ service, key, user: user(value) }).not.toEqual({ service, key, user: "robotmoney" });
+      }
+    }
+  });
+
+  test("(44, smoke half) the receipt's preflight is the full §7 registry — all seven checks, each passed", () => {
+    const receipt = readReceipt(h.paths)!;
+    const checks = receipt.preflight.map((c) => c.check);
+    expect([...checks].sort()).toEqual(
+      ["env_credentials", "env_identity", "privileges", "roles_authenticate", "schema_compatibility", "schema_integrity", "subject_scheduling"].sort(),
+    );
+    for (const check of receipt.preflight) expect({ check: check.check, pass: check.pass }).toEqual({ check: check.check, pass: true });
+    expect(boot.output()).toContain("phase: preflight");
   });
 
   test("criterion 14: the printed plan holds no role password, owner password, service token or participant key", () => {

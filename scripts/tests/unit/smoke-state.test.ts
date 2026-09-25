@@ -212,6 +212,38 @@ describe("stateRoot — §1.1, never inside the repository working tree", () => 
   test("an unresolvable HOME with no override refuses, naming HOME", () => {
     expect(() => stateRoot({})).toThrow("HOME");
   });
+
+  test("criterion 40: an absolute RM_SMOKE_STATE_ROOT inside this checkout refuses, naming the work tree", () => {
+    // `<checkout>/.agents/state` — the exact fallback the compose file used to
+    // mount — is absolute, so the relative-path rule alone let it through.
+    const repoRoot = join(import.meta.dir, "..", "..", "..");
+    const inside = join(repoRoot, ".agents", "state");
+    expect(() => stateRoot({ RM_SMOKE_STATE_ROOT: inside, HOME: "/home/operator" })).toThrow("inside the git work tree");
+    expect(() => stateRoot({ RM_SMOKE_STATE_ROOT: inside, HOME: "/home/operator" })).toThrow("(spec §1.1)");
+    // A path that does not exist yet is judged by its deepest existing ancestor.
+    expect(() =>
+      stateRoot({ RM_SMOKE_STATE_ROOT: join(repoRoot, "not-created", "yet", "state"), HOME: "/home/operator" }),
+    ).toThrow(/inside the git work tree/);
+  });
+
+  test("criterion 40: a linked worktree counts — its `.git` is a FILE, and it is still a checkout", () => {
+    const fake = mkdtempSync(join(tmpdir(), "rm-fake-worktree-"));
+    writeFileSync(join(fake, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+    try {
+      expect(() => stateRoot({ RM_SMOKE_STATE_ROOT: join(fake, "state") })).toThrow(`inside the git work tree ${fake}`);
+    } finally {
+      rmSync(fake, { recursive: true, force: true });
+    }
+  });
+
+  test("red control: an absolute override outside every checkout is accepted as given", () => {
+    const outside = mkdtempSync(join(tmpdir(), "rm-state-outside-"));
+    try {
+      expect(stateRoot({ RM_SMOKE_STATE_ROOT: join(outside, "state") })).toBe(join(outside, "state"));
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("instancePaths — the per-instance layout every W1 module agrees on", () => {
@@ -715,7 +747,7 @@ describe("two instances on one host: each command acts only on the named one (cr
   function run(root: string, script: string, args: string[]): { code: number; out: string } {
     const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", script), ...args], {
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "smoke", AGENT_MODEL: "free" },
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, DOCKER_HOST: DEAD_DOCKER, RM_ENV: "stage", AGENT_MODEL: "free" },
       stdout: "pipe",
       stderr: "pipe",
     });

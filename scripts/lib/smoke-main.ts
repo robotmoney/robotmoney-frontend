@@ -2,13 +2,18 @@ import { existsSync, openSync, readFileSync, writeFileSync, writeSync } from "no
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveSmokeEnv } from "./smoke-env.ts";
-import { DB_PREFLIGHT_STEP, dbPreflightArgv, loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
-import { homeEnvFilePath } from "./env-role.ts";
-import { bannerFor, bootPreflightPlan, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { refuseIfSchemaBehind, resolveExternalMigrationOptIn, SCHEMA_CURRENT_ARGV } from "./smoke-external-migrate.ts";
-import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv } from "./smoke-compose-env.ts";
-import { resolveBackupFiles, twinMigrationCredential } from "./restore-container.ts";
-import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinVolumeName } from "./smoke-twin.ts";
+import { hostname } from "node:os";
+import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
+import { homeEnvFilePath, urlForRole } from "./env-role.ts";
+import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { dropShellMigrationCredential, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { resolveBackupFiles } from "./restore-container.ts";
+import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
+import { requireRehearsalTarget } from "./smoke-identity.ts";
+import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, operatorTerminal, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
+import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
+import type { GeneratedRolePasswords } from "./smoke-state.ts";
+import { assertSmokeTwinIsTarget, bringUpTwin, smokeTwinLeftRunningHint, smokeTwinResumeHint, smokeTwinTeardownNarration, smokeTwinUrlFromContainer, smokeTwinVolumeName } from "./smoke-twin.ts";
 import { teardownContainer } from "./restore-container.ts";
 import { listSmokeVolumes, makeDockerRunner, purgeSmokeEvalContainers, removeSmokeVolumes } from "./smoke-volumes.ts";
 import { provisionSmokeAnalyticsToken, removeSmokeAnalyticsToken } from "./smoke-secret.ts";
@@ -24,7 +29,6 @@ import {
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
 import type { RmEnv } from "../../backend/src/acceptance-path.ts";
-import { resolveStackRmEnvOrExit } from "./smoke-compose-env.ts";
 import { decideImagesOverride } from "./smoke-images-override.ts";
 import { preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { adoptRestoredRoster, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
@@ -170,9 +174,10 @@ for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[smoke] $
 // to be forwarded, which pointed the worker lanes at a `postgres` host a twin boot
 // does not have — see smoke-compose-env.ts.
 for (const warning of shadowingStackEnvWarnings(process.env)) console.warn(`[smoke] ${warning}`);
-// And the migration credential: only this process may set it, for one migrate
-// run (below). An exported one is dropped HERE, before twinMigrationCredential()
-// or the remote prompt assigns the real one, and before extraComposeEnv reads it.
+// And a migration credential: nothing in this boot reads one from the
+// environment (the migrate run logs in as rm_owner with the generated or the
+// typed password, on the host). An exported one is dropped HERE, before
+// anything could read it or hand it on.
 {
   const dropped = dropShellMigrationCredential(process.env);
   if (dropped) console.warn(`[smoke] ${dropped}`);
@@ -197,9 +202,6 @@ if (staticPortMode) {
 // up` so the operator gets the actionable version: name the holder, refuse to
 // boot, exit non-zero. A diagnostic, not an allocation.
 async function stagePreflight(): Promise<void> {
-  // FIRST, before the port: a stage boot on a development RM_ENV comes up green,
-  // serves the tunnel, and produces sessions that are not evidence (D13).
-  resolveStackRmEnvOrExit(true);
   try {
     await assertStageWebPortFree();
   } catch (err) {
@@ -251,11 +253,45 @@ try {
   fatal(err);
 }
 
-// The backend RM_ENV and the pinned port are refused BEFORE the instance is
-// resolved: resolution may persist a fresh instance name, and a refused boot
-// leaves the host exactly as it found it.
+// --- The §4.1 policy and the §4.3 matrix, before the instance -----------------
+// Refused BEFORE the instance is resolved: resolution may persist a fresh
+// instance name, and a refused boot leaves the host exactly as it found it.
+//
+// RM_ENV comes from the process, else — for the remote database — from `~/.env`
+// (§3 lists it there; args override env). A local mode reads no `~/.env` at all
+// (§3: it ignores every remote connection value). The matrix is ONE function,
+// backend/src/deploy-policy.ts, the same one `bun run migrate` and preflight
+// check 5 call. Every row that does not depend on the target's answer refuses
+// HERE — unset against a remote, `prod` against a local mode, any other value —
+// judged with the one identity that row could allow. The rows that do depend on
+// it run again, on the target's own answer, once the target lock is held.
+const homeEnv: Record<string, string> = requestedDataPath.kind === "external" ? (loadEnvFile(homeEnvFilePath()) ?? {}) : {};
+const declaredRmEnv = process.env.RM_ENV ?? homeEnv.RM_ENV;
+const connection = targetConnection(requestedDataPath);
+const parsedPolicy = resolveRmEnv({ RM_ENV: declaredRmEnv });
+const earlyVerdict = resolveDeploymentPolicy({
+  rmEnv: declaredRmEnv,
+  connection,
+  identity: parsedPolicy.ok && parsedPolicy.env === "prod" ? "production" : "rehearsal",
+});
+if (!earlyVerdict.allow) fatal(earlyVerdict.reason);
+for (const warning of earlyVerdict.warnings) console.warn(`[smoke] ${warning}`);
+const policy = earlyVerdict.env;
+// §4.3, §8.5: `--migrate` and `--seed` are rehearsal-only and refuse on
+// RM_ENV=prod, whatever the database says — so that refusal needs no database
+// and comes before anything connects, and long before any owner prompt.
+for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate"], [shouldSeed(process.argv), "seed"]] as const) {
+  const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, rmEnv: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
+  if (gate && !gate.allow) fatal(gate.reason);
+}
 if (staticPortMode) await stagePreflight();
-const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
+// The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
+const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
+// …and this process's own, so every host-side reader of RM_ENV (the inference
+// preflight below, the drivers this boot starts) judges the boot by the policy
+// the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a
+// `~/.env` RM_ENV counts as set — never by the raw shell value (D13).
+process.env.RM_ENV = stackRmEnv;
 
 // --- Which deployment instance this run acts on (spec §1.1) -----------------
 // `--instance <name>`; then the CI job's identity; then the name a previous
@@ -268,12 +304,8 @@ const stackRmEnv: RmEnv = resolveStackRmEnvOrExit(staticPortMode);
 // RM_SMOKE_STATE_ROOT), never in the checkout: `git clean` or a worktree switch
 // must not be able to lose or leak the record of what was done to a database.
 //
-// The RM_ENV POLICY (§4.1: prod | stage) is `stage` for every boot this file
-// can make today. The backend's own RM_ENV (ephemeral | smoke | prod, below)
-// is a different axis: `--static-port` runs the backend as `prod` on the stage
-// host. §4.3's policy × identity matrix, and with it the production instance
-// `rm_prod`, arrive with the identity check (#1026, W1 criterion 13).
-const policy = "stage" as const;
+// The instance follows the POLICY resolved above: `prod` is the production
+// instance `rm_prod` (resolveInstance refuses any other name under it).
 const statesRoot = (() => {
   try {
     return stateRoot(process.env);
@@ -388,13 +420,52 @@ if (!composePostgres && dataPath.kind === "external") console.warn(bannerFor(dat
 // carried on the database config, which is what makes internalDatabaseUrl()
 // hand containers that URL and what makes scripts/stack drop the postgres
 // service (stack.ts keys off `Boolean(cfg.database.url)`).
-const databaseFor = (dp: ResolvedDataPath) =>
-  dp.kind === "ephemeral" ? DEFAULT_STACK_DATABASE : { ...DEFAULT_STACK_DATABASE, url: dp.url };
+//
+// The containers get the RUNTIME roles and nothing else (§3, §7.3): `api`
+// rm_app, the pipeline worker rm_worker. A local mode's are the instance's
+// generated passwords (set by the `instance` preparation, or read back), the
+// remote database's are `~/.env`'s. The local superuser is never handed to one.
+let rolePasswords: GeneratedRolePasswords | undefined;
+function containerRoleUrls(dp: ResolvedDataPath): { app: string; worker: string } {
+  if (dp.kind === "external") return { app: dp.url, worker: remote!.workerUrl };
+  if (!rolePasswords) throw new Error("the instance's role passwords are not loaded yet");
+  const target: HostTarget = dp.kind === "smoke-twin"
+    ? { host: new URL(dp.url).hostname, port: Number(new URL(dp.url).port), database: decodeURIComponent(new URL(dp.url).pathname.slice(1)), sslmode: "disable" }
+    : { host: "postgres", port: 5432, database: DEFAULT_STACK_DATABASE.name, sslmode: "disable" };
+  return { app: roleUrl(target, "rm_app", rolePasswords.rm_app), worker: roleUrl(target, "rm_worker", rolePasswords.rm_worker) };
+}
+const databaseFor = (dp: ResolvedDataPath) => {
+  const roleUrls = containerRoleUrls(dp);
+  return dp.kind === "ephemeral" ? { ...DEFAULT_STACK_DATABASE, roleUrls } : { ...DEFAULT_STACK_DATABASE, url: roleUrls.app, roleUrls };
+};
 const DB_USER = DEFAULT_STACK_DATABASE.user;
 const DB_PASSWORD = DEFAULT_STACK_DATABASE.password;
 const DB_NAME = DEFAULT_STACK_DATABASE.name;
 
-if (dataPath.kind === "external") await resolveExternalMigrationOptIn(requestsMigrate(process.argv), homeEnvFilePath());
+// --- The remote database: how the HOST reaches it, and the plan's read ----------
+// §3: `~/.env` holds the connection values and the three runtime role
+// passwords. The host reaches the target with them — the target lock, the
+// identity read, preparation and preflight all run here, never in a container
+// (which could not reach a database on this host's own loopback). The plan
+// hashes the target's deployment_identity kind (§1.2), so it is read now, over
+// rm_readonly. That read is the plan's EXPECTATION and nothing else: no
+// decision is taken on it (criterion 34, §2 "before the first read used for a
+// decision"). The §4.3 matrix runs once, after the target lock, on the locked
+// read (prepareDatabase); the lock's revalidation holds this read to it (§2).
+const remote = dataPath.kind === "external"
+  ? (() => {
+      const readerUrl = urlForRole(homeEnv, "rm_readonly");
+      const workerUrl = urlForRole(homeEnv, "rm_worker");
+      if (!readerUrl || !workerUrl) {
+        return fatal(`the remote database needs rm_readonly and rm_worker lines in ${homeEnvFilePath()} (spec §3), beside the connection values and rm_app.`);
+      }
+      const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: homeEnv.database!, sslmode: homeEnv.sslmode ?? "require" };
+      return { readerUrl, workerUrl, target };
+    })()
+  : undefined;
+const remoteState: TargetState | undefined = remote
+  ? await hostReadTargetState(remote.readerUrl).catch((err: unknown) => fatal(`the remote database could not be read (${err instanceof Error ? err.message : String(err)}).`))
+  : undefined;
 // Base compose files (what smoke:down/smoke:status rebuild from — they stop/inspect
 // by project and never need the generated overlays). The --static-port overlay
 // belongs to the BASE list: it is the one file that names a host port, so
@@ -524,9 +595,11 @@ function urlPassword(url: string | undefined): string[] {
  * Every secret value this run holds, for the by-value redaction check at every
  * plan choke point (computePlanId, renderPlan, openJournal, writeReceipt). The
  * shape heuristic alone misses a shapeless secret, which is why the VALUES are
- * passed. Role passwords: the instance's saved set (§5), a remote URL's, a
- * restored dump's (added once it is restored). The owner password: a typed
- * `--migrate` credential, and the saved `rm_owner`. Service tokens: admin,
+ * passed. Role passwords: the instance's saved set (§5, rm_owner's included),
+ * the remote database's three from `~/.env`, a restored dump's superuser
+ * (added once it is restored). A TYPED owner password never enters this
+ * process at all: the preparation child that prompts for it uses it and exits
+ * (backend/scripts/smoke-prepare.ts). Service tokens: admin,
  * automation, analytics. Participant keys: every credential-file entry's key,
  * bearer and model key.
  */
@@ -535,7 +608,8 @@ const runSecrets: string[] = [
   automationToken,
   analyticsToken,
   ...urlPassword(dataPath.kind === "external" ? dataPath.url : undefined),
-  ...urlPassword(process.env.MIGRATE_DATABASE_URL),
+  ...urlPassword(remote?.readerUrl),
+  ...urlPassword(remote?.workerUrl),
   ...(() => {
     if (!existsSync(paths.rolePasswordsFile)) return [];
     try {
@@ -554,7 +628,9 @@ function planTarget(): PlanTarget {
     return {
       kind: "remote",
       rmEnv: policy,
-      identity: "rehearsal",
+      // The kind the plan was built against, as read — `absent` when the target
+      // is not enrolled. Never a verdict: the matrix judges the locked read.
+      identity: remoteState!.identity === "missing" ? "absent" : remoteState!.identity,
       host: url.hostname,
       port: url.port === "" ? 5432 : Number(url.port),
       dbname: decodeURIComponent(url.pathname.replace(/^\//, "")),
@@ -562,7 +638,10 @@ function planTarget(): PlanTarget {
   }
   const mode = localModeOf(dataPath) ?? "blank";
   const volume = dataPath.kind === "smoke-twin" ? dataPath.volume : (reattachedVolume ?? instanceVolume);
-  return { kind: "local", rmEnv: policy, identity: "rehearsal", mode, volume };
+  // §4.3 refuses `prod` with any local mode (above), so a local plan is `stage`,
+  // and its identity is the one it requires: written by smoke as rehearsal for
+  // `blank` and `dump`, already rehearsal for `volume` (checked under the lock).
+  return { kind: "local", rmEnv: "stage", identity: "rehearsal", mode, volume };
 }
 
 const plan: DeploymentPlan = (() => {
@@ -679,6 +758,8 @@ function makeStackConfig(): StackConfig {
     credentials,
     environment: stackEnvironment,
     rmEnv: stackRmEnv,
+    // §4.4: never allow-insecure under RM_ENV=prod (refuseWeakeningFlagsOnProd).
+    allowInsecure: stackAllowInsecureFor(policy),
     imagesOverride,
     instance: { name: instance.name, stateDir: paths.dir },
     // NO MODEL KEY. The judge is a participant and takes its key from
@@ -708,7 +789,9 @@ function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
     env: dockerEnv,
     stdout: outFd,
     stderr: errFd,
-  });
+    // Its own process group, as every stack child (scripts/stack/stack.ts).
+    detached: true,
+  } as Parameters<typeof Bun.spawnSync>[1]);
   if (check && r.exitCode !== 0) {
     throw new Error(`docker compose ${args.join(" ")} failed (exit ${r.exitCode})`);
   }
@@ -933,24 +1016,25 @@ const LEDGER_SQL = "SELECT name FROM schema_migrations ORDER BY name";
 const MANIFEST_SQL = "SELECT content_hash FROM schema_manifest";
 /**
  * The migration ledger and manifest hash, or `null` when the database cannot be
- * asked right now (its container is not running yet, or a remote server does
- * not answer). Always a `psql` SUBPROCESS, never a client in this process: in
- * this instance's postgres (or the restored dump's) container, and for a
- * remote target in a throwaway container of the stack's own Postgres image.
- * That container gets the password on its STDIN, which a shell reads into
- * PGPASSWORD before it execs psql: so the password is in no argv and in no
- * container config. (`docker run -e PGPASSWORD` would copy the client's value
- * into the container's Config.Env, where `docker inspect` shows it for as long
- * as the container exists.)
+ * asked right now. Once the target lock is held, over the lock's own direct
+ * connection (a read, never a mutation). Before it: for the remote database, a
+ * short-lived HOST connection as rm_readonly (a host tool reaches a database on
+ * this host's own loopback; a `docker run psql` could not, wave-2 open problem
+ * 6); for a Postgres this boot owns, `psql` inside its container, as the local
+ * superuser that created it, read-only.
  */
-function observeSchema(): { ledger: string[]; manifestHash: string | null } | null {
-  const run = (argv: string[], stdin?: string) =>
-    Bun.spawnSync(argv, {
-      stdout: "pipe",
-      stderr: "pipe",
-      ...(stdin !== undefined ? { stdin: Buffer.from(`${stdin}\n`), env: dockerClientHostEnv(process.env) } : {}),
-    });
-  const read = (query: (sql: string) => ReturnType<typeof run>) => {
+async function observeSchema(): Promise<{ ledger: string[]; manifestHash: string | null } | null> {
+  if (targetLock) {
+    const state = await readTargetState(targetLock.connection).catch(() => null);
+    return state ? { ledger: [...state.ledger], manifestHash: state.manifestHash } : null;
+  }
+  if (remote) {
+    const state = await hostReadTargetState(remote.readerUrl).catch(() => null);
+    return state ? { ledger: [...state.ledger], manifestHash: state.manifestHash } : null;
+  }
+  const run = (argv: string[]) => Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+  const inContainer = (container: string, user: string, db: string) => {
+    const query = (q: string) => run(["docker", "exec", container, "psql", "-U", user, "-d", db, "-tAq", "-c", q]);
     const ledger = query(LEDGER_SQL);
     if (ledger.exitCode !== 0 && !/does not exist/.test(ledger.stderr.toString())) return null;
     const manifest = query(MANIFEST_SQL);
@@ -959,26 +1043,15 @@ function observeSchema(): { ledger: string[]; manifestHash: string | null } | nu
       manifestHash: manifest.exitCode === 0 ? manifest.stdout.toString().trim() || null : null,
     };
   };
-  const inContainer = (container: string, user: string, db: string) =>
-    read((sql) => run(["docker", "exec", container, "psql", "-U", user, "-d", db, "-tAq", "-c", sql]));
   if (composePostgres) {
     const pg = serviceContainer("postgres");
     return pg ? inContainer(pg, DB_USER, DB_NAME) : null;
   }
-  if (dataPath.kind === "smoke-twin") {
-    if (!dataPath.url) return null;
+  if (dataPath.kind === "smoke-twin" && dataPath.url) {
     const url = new URL(dataPath.url);
     return inContainer(dataPath.container, decodeURIComponent(url.username), decodeURIComponent(url.pathname.slice(1)));
   }
-  if (dataPath.kind !== "external") return null;
-  const url = new URL(dataPath.url);
-  return read((sql) =>
-    run(
-      ["docker", "run", "--rm", "-i", POSTGRES_IMAGE, "sh", "-c", 'IFS= read -r PGPASSWORD && export PGPASSWORD && exec psql "$@"', "psql",
-        "-h", url.hostname, "-p", url.port || "5432", "-U", decodeURIComponent(url.username), "-d", decodeURIComponent(url.pathname.slice(1)),
-        "-tAq", "-c", sql],
-      decodeURIComponent(url.password),
-    ));
+  return null;
 }
 
 // --- Orchestration --------------------------------------------------------
@@ -998,6 +1071,15 @@ let journal: JournalWriter | undefined;
 /** The journal record this run has begun and not yet ended, if any. */
 let openRecord: { phase: DeploymentPhase; step: string | null } | undefined;
 let lock: DeploymentLock | undefined;
+/** The §2 target lock, held from the `lock` preparation to the end of the run. */
+let targetLock: TargetLock | undefined;
+
+/** Release the target lock explicitly (§2: "It is released explicitly on exit"); bounded, never throws. */
+async function releaseTargetLock(): Promise<void> {
+  const held = targetLock;
+  targetLock = undefined;
+  if (held) await Promise.race([held.release(), sleep(5_000)]).catch(() => undefined);
+}
 
 async function main(): Promise<void> {
   // ── §1.2: print the plan, take the deployment lock, open the journal ──────
@@ -1011,16 +1093,18 @@ async function main(): Promise<void> {
   process.on("exit", () => lock?.release());
   // Ctrl-C / SIGTERM stop at the NEXT PHASE BOUNDARY (§1.4): the watch only
   // records the request, the boundaries below honour it, and nothing is torn
-  // down. A second signal does not escalate.
+  // down. A second signal does not escalate. The docker children run in their
+  // own process group (scripts/stack/stack.ts), so a terminal's Ctrl-C reaches
+  // this process and not the step it is waiting on.
   const interrupt = watchForInterrupt();
 
   let lastExpectations: StateExpectations | undefined;
-  const observe = (): StateExpectations => {
-    const schema = observeSchema();
+  const observe = async (): Promise<StateExpectations> => {
+    const schema = await observeSchema();
     lastExpectations = {
       ledger: schema?.ledger ?? lastExpectations?.ledger ?? [],
       manifestHash: schema ? schema.manifestHash : (lastExpectations?.manifestHash ?? null),
-      identity: "rehearsal",
+      identity: plan.target.identity,
       participants: [],
       services: runningServices(),
       spoofGeneration: null,
@@ -1029,21 +1113,27 @@ async function main(): Promise<void> {
   };
 
   // §1.3: resume only under the same plan id; supersede on a different one;
-  // refuse when another operation moved the world. The schema is compared now
-  // when the database can be asked, else the moment it can (recheckSchema).
+  // refuse when another operation moved the world. The world is READ only
+  // under the target lock (§2, §7, criterion 34): at open the decision is taken
+  // on the journal alone — its own ledger and manifest stand in for the
+  // database's — and the schema half of the resume check is made the moment
+  // the lock is held (holdSchemaToJournal), against a read on the lock's own
+  // connection, every time a journal is resumed.
   const onDisk = readJournal(paths);
   const resumable = onDisk !== null && onDisk.closedAt === null && onDisk.planId === planId ? onDisk : null;
   const journalExpects = resumable ? projectExpectations(resumable) : null;
-  const schemaAtOpen = observeSchema();
   lastExpectations = {
-    ledger: schemaAtOpen?.ledger ?? journalExpects?.ledger ?? [],
-    manifestHash: schemaAtOpen ? schemaAtOpen.manifestHash : (journalExpects?.manifestHash ?? null),
-    identity: "rehearsal",
+    ledger: journalExpects?.ledger ?? [],
+    manifestHash: journalExpects?.manifestHash ?? null,
+    identity: plan.target.identity,
     participants: [],
     services: runningServices(),
     spoofGeneration: null,
   };
-  let recheckSchema = schemaAtOpen === null && journalExpects !== null ? journalExpects : null;
+  /** What the resumed journal expects of the schema, held to the locked read. */
+  let recheckSchema = journalExpects;
+  /** Set when THIS run restored the dump: the restore, not the old journal, defines the schema. */
+  let restoredThisRun = false;
   const decision = decideResume(onDisk, planId, lastExpectations);
   if (decision.kind === "refuse") fatal(`the journal for instance ${instance.name} refuses this run: ${decision.reason}`);
   if (decision.kind === "supersede") log(decision.report);
@@ -1055,67 +1145,58 @@ async function main(): Promise<void> {
 
   const begin = async (phase: DeploymentPhase, step: string | null): Promise<void> => {
     if (interrupt.requested()) {
-      await journal!.beginPhase(phase, step, observe());
+      await journal!.beginPhase(phase, step, await observe());
       await journal!.endPhase("interrupted", `stopped by SIGINT/SIGTERM at the boundary before ${phase}${step ? ` (${step})` : ""}; nothing of it ran`);
       throw new StoppedAtBoundary(`stopped at the boundary before ${phase}${step ? ` (${step})` : ""}`);
     }
-    await journal!.beginPhase(phase, step, observe());
+    await journal!.beginPhase(phase, step, await observe());
     openRecord = { phase, step };
     log(`phase: ${phase}${step ? ` (${step})` : ""}`);
+    // §2, Connection loss: "Detected at every phase boundary; the tool journals
+    // the phase and exits non-zero. No phase proceeds on a lock the tool cannot
+    // prove it still holds." Proven by a round trip, never a flag; a failure
+    // here is journaled against the phase that was about to run.
+    if (targetLock) await assertStillHeld(targetLock, `${phase}${step ? ` (${step})` : ""}`);
   };
   const commit = async (outcome: Partial<PhaseOutcome> = {}): Promise<void> => {
     if (!openRecord) return;
     await journal!.commitPhase({ ...EMPTY_OUTCOME, ...outcome });
     openRecord = undefined;
   };
-  // The schema as soon as it can be asked, waiting out a database that is
-  // still initializing (its entrypoint's temporary server answers health
-  // checks before the database exists). Null only if it never answers.
-  const observeSchemaSettled = async (): Promise<ReturnType<typeof observeSchema>> => {
-    const deadline = Date.now() + 30_000;
-    for (;;) {
-      const schema = observeSchema();
-      if (schema !== null || Date.now() >= deadline) return schema;
-      await sleep(1_000);
-    }
-  };
-  // A resumed run that could not see the schema at open holds it to the
-  // journal the moment it can. What it is held to is the journal AS IT NOW
-  // STANDS: the interrupted run's records plus every outcome this run has
-  // committed since (its own migrations included), never the expectations
-  // captured at open, which this run's own migrate would then contradict.
-  // Before a migration (`mustObserve`), a database that cannot be asked is a
-  // refusal: migrating an unverified schema is what the check exists to stop.
-  const holdSchemaToJournal = async (opts: { mustObserve?: boolean } = {}): Promise<ReturnType<typeof observeSchema>> => {
-    const schema = opts.mustObserve ? await observeSchemaSettled() : observeSchema();
-    if (!recheckSchema) return schema;
-    if (!schema) {
-      if (opts.mustObserve) {
-        throw new Error(`refusing to resume plan ${planId}: the database could not be asked about its schema before migrating, so the journal's expectations cannot be checked`);
-      }
-      return schema;
-    }
-    const current = readJournal(paths);
+  // A resumed run holds the schema to its journal under the target lock, on
+  // the lock's own connection. What it is held to is the journal as it stood
+  // at open (the resume was decided on it), except when this run restored the
+  // dump itself: then the restored copy is this run's own journaled work, and
+  // the journal AS IT NOW STANDS (its records begun after the restore) is the
+  // expectation.
+  const holdSchemaToJournal = async (): Promise<void> => {
+    if (!recheckSchema) return;
+    if (!targetLock) throw new Error("holdSchemaToJournal runs only under the target lock");
+    const locked = await readTargetState(targetLock.connection);
+    const current = restoredThisRun ? readJournal(paths) : null;
     const expected = (current !== null ? projectExpectations(current) : null) ?? recheckSchema;
-    const mismatch = expectationMismatch(expected, schema);
+    const mismatch = expectationMismatch(expected, { ledger: [...locked.ledger], manifestHash: locked.manifestHash });
     recheckSchema = null;
     if (mismatch) throw new Error(`refusing to resume plan ${planId}: ${mismatch}, and no journaled outcome accounts for the difference`);
-    return schema;
   };
 
   await begin("plan", decision.kind === "resume" ? "resume" : null);
   await commit();
 
   // ── Preparation that precedes the stack ───────────────────────────────────
-  // The instance's generated files: the analytics bearer (§3: a file in the
-  // instance's state directory, per holder) and the compose overlays.
+  // The instance's generated files: the four role passwords of a Postgres this
+  // boot owns (§5), the analytics bearer (§3: a file in the instance's state
+  // directory, per holder) and the compose overlays.
   await begin("prepare", "instance");
   // The stack record FIRST, before any compose call or container: the compose
   // project is fixed by the instance, and `smoke:status` / `smoke:down` find a
-  // stack only through this record. A boot stopped, killed or failed at any
-  // later point must leave a record naming the project whose containers it
-  // may have started. Readiness rewrites it with the ports Docker assigned.
+  // stack only through this record.
   writeStateFile();
+  const mode = localModeOf(requestedDataPath);
+  if (mode !== null) {
+    rolePasswords = instanceRolePasswords(paths, mode);
+    runSecrets.push(...Object.values(rolePasswords));
+  }
   provisionSmokeAnalyticsToken(paths, analyticsToken);
   if (dataPathOverlay && dataPath.kind !== "smoke-twin") writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
   if (reattachOverlay && reattachedVolume) {
@@ -1125,27 +1206,50 @@ async function main(): Promise<void> {
   await commit();
 
   if (requestedDataPath.kind === "smoke-twin") {
-    // §7: database create/restore after the plan and the deployment lock.
-    await begin("prepare", "restore");
-    const twin = await bringUpTwin({ backupDir: requestedDataPath.backupDir, project, log: (m) => log(m) });
-    dataPath = twin.dataPath;
-    smokeTwinContainer = twin.container;
-    runSecrets.push(...urlPassword(twin.dataPath.kind === "smoke-twin" ? twin.dataPath.url : undefined));
-    console.warn(bannerFor(dataPath));
-    // Sets MIGRATE_DATABASE_URL for a rehearsal boot only; see restore-container.ts.
-    if (dataPath.kind === "smoke-twin") twinMigrationCredential(dataPath.url, (m) => log(m));
-    runSecrets.push(...urlPassword(process.env.MIGRATE_DATABASE_URL));
-    if (dataPathOverlay) writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
-    // The restored copy's container belongs in the record too, so smoke:down
-    // can remove it even if the boot stops before readiness.
-    writeStateFile();
-    await commit();
+    // §7: database create/restore after the plan and the deployment lock. A
+    // rerun of the SAME plan whose restore already committed reattaches the
+    // restored copy it recorded and never restores into it again.
+    const recorded = committedSteps.has("prepare:restore") ? readStackState(paths)?.smokeTwinContainer : undefined;
+    const reattachUrl = recorded ? smokeTwinUrlFromContainer(recorded) : null;
+    if (committedSteps.has("prepare:restore") && (!recorded || !reattachUrl)) {
+      throw new Error(
+        `--local dump: this plan's restore already committed, and its container ${recorded ?? "(unrecorded)"} is gone. ` +
+          "Restoring again would replace the copy this journal describes; stop it with `bun smoke:down`, reclaim it " +
+          "with `bun smoke:clean`, and boot a fresh plan.",
+      );
+    }
+    if (reattachUrl && recorded) {
+      const url = new URL(reattachUrl);
+      dataPath = { ...(dataPath as Extract<ResolvedDataPath, { kind: "smoke-twin" }>), url: reattachUrl, redactedUrl: redactPostgresUrl(reattachUrl), container: recorded, volume: readStackState(paths)?.smokeTwinVolume ?? "" };
+      smokeTwinContainer = recorded;
+      runSecrets.push(...urlPassword(url.toString()));
+      if (dataPathOverlay) writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
+      log(`--local dump: reattached the restored copy ${recorded} this plan committed; nothing is restored again`);
+    } else {
+      await begin("prepare", "restore");
+      const twin = await bringUpTwin({ backupDir: requestedDataPath.backupDir, project, log: (m) => log(m) });
+      dataPath = twin.dataPath;
+      smokeTwinContainer = twin.container;
+      restoredThisRun = true;
+      runSecrets.push(...urlPassword(twin.dataPath.kind === "smoke-twin" ? twin.dataPath.url : undefined));
+      console.warn(bannerFor(dataPath));
+      // The restore superuser does what doadmin does, and no more: the four
+      // roles, and every application object handed to rm_owner (§3, §7.3).
+      const twinUrl = new URL(twin.dataPath.url);
+      const twinDb = decodeURIComponent(twinUrl.pathname.slice(1));
+      const owned = await superuserSqlSettled(twin.container, decodeURIComponent(twinUrl.username), twinDb, dumpOwnershipSql(rolePasswords!, twinDb));
+      if (owned !== null) throw new Error(`--local dump: the restored copy's roles and ownership could not be set: ${owned}`);
+      if (dataPathOverlay) writeFileSync(dataPathOverlay, dataPathOverlayYaml(dataPath));
+      writeStateFile();
+      await commit();
+    }
   }
 
   // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
-  // build → postgres + wait → migrate → services → /health, in ONE shared
-  // implementation. The smoke contributes the `full` profile, its migrate
-  // flags, the narration, and — through beforeStep — its phase boundaries.
+  // database → assemble → site → build → preflight → services → /health, in ONE
+  // shared implementation. The smoke contributes the `full` profile, the
+  // database half (prepareDatabase), the narration, and — through beforeStep —
+  // its phase boundaries.
   const onStackEvent = (e: StackEvent): void => {
     if (e.phase === "log") return void log(e.message);
     const { phase, status } = e;
@@ -1154,10 +1258,6 @@ async function main(): Promise<void> {
     } else if (phase === "postgres") {
       const n = postgresPhaseNarration(!composePostgres, status, e.detail);
       if (n.log) log(n.log);
-    } else if (phase === "migrate") {
-      // A skipped migrate still emits start/done, carrying the reason as detail.
-      if (e.detail) { if (status === "start") log(`migrate: ${e.detail}`); }
-      else log(status === "start" ? "running migrations…" : "migrations done");
     } else if (phase === "services") {
       // system-scheduler is started here too, but it is NOT a worker lane
       // (issue #1026): it claims no jobs and holds no database credential.
@@ -1170,55 +1270,103 @@ async function main(): Promise<void> {
   };
 
   const stack: Stack = createStack(makeStackConfig(), {
-    // The smoke is an operator tool, so its documented compose knobs still apply
-    // — they arrive as extraComposeEnv, never as an ambient inherit: only
-    // allowlisted docker-client plumbing survives out of `hostEnv`.
     hostEnv: process.env,
     io: { stdout: outFd, stderr: errFd },
     hooks: { onEvent: onStackEvent },
   });
   downStack = () => stack.down();
-  // Prove the containers will dial the TWIN, not whatever repo-root .env holds.
-  // See smoke-twin.ts: a rehearsal that silently ran against production is the
-  // worst outcome this repo has.
-  if (dataPath.kind === "smoke-twin") assertSmokeTwinIsTarget(stack.spawnEnv, dataPath.url);
+  if (dataPath.kind === "smoke-twin") assertSmokeTwinIsTarget(stack.spawnEnv, containerRoleUrls(dataPath).app);
 
   // NO MODE IMPLIES --seed OR --migrate (spec §4.3, §5, §8.5). Each runs only
   // when the operator asked for it, on every data path.
   const seeds = shouldSeed(process.argv);
   const migrates = requestsMigrate(process.argv);
-  if (!seeds) console.warn(`[smoke] no --seed: no simulation init. Schema currency is still checked.`);
-  // Which read-only checks run between postgres and migrate(): the decision and
-  // its reasoning are bootPreflightPlan() in smoke-db-mode.ts. Schema currency
-  // runs on EVERY path that skips migrate, local ones included.
-  const preflightPlan = bootPreflightPlan({ composePostgres, seeds, migrates });
-  // What this boot's read-only checks found, for the receipt (§1.4).
+  if (!seeds) console.warn(`[smoke] no --seed: no demo data. The full preflight still checks the schema.`);
+  // What this boot's preflight found, for the receipt (§1.4).
   const preflightResults: { check: string; pass: boolean; detail: string }[] = [];
 
-  async function classifyDatabase(): Promise<void> {
-    log(`${DB_PREFLIGHT_STEP}…`);
-    if (preflightPlan.classify) {
-      await stack.composeAsync(dbPreflightArgv("simulation"), "external database preflight", { stdout: outFd, stderr: errFd });
-      log("db classified: empty bootstraps, populated is adopted (idempotent seed) — mode in log");
-      preflightResults.push({ check: "db-classify", pass: true, detail: "the remote database was classified before any write" });
-    }
-    if (preflightPlan.schemaCurrent) refuseStaleSchema();
-  }
+  // ── The database half (spec §7): create → target lock → matrix → preparation ──
+  // How the HOST reaches the target, and the step request each preparation gets.
+  let hostTarget: HostTarget | undefined = remote?.target;
+  const holder = { tool: "smoke", planId, instance: instance.name, host: hostname(), pid: process.pid };
+  const step = (action: PrepareStep["action"], note?: string): PrepareStep => ({
+    action,
+    rmEnv: parsedPolicy.ok && parsedPolicy.source === "explicit" ? policy : null,
+    connection: remote ? "remote" : "local",
+    target: hostTarget!,
+    credentials: remote ? { source: "home-env", file: homeEnvFilePath() } : { source: "instance", stateRoot: statesRoot, instance: instance.name },
+    lock: { backendPid: targetLock!.backendPid, holder: targetLock!.holder },
+    stateDir: paths.dir,
+    // §5: "No terminal prompt exists in local modes"; a remote run prompts only on a terminal.
+    nonInteractive: !operatorTerminal(),
+    ...(note ? { note } : {}),
+  });
+  const prepare = async (action: PrepareStep["action"], note?: string): Promise<Record<string, unknown>> => {
+    const outcome = await runPrepareStep(repoRoot, step(action, note), prepareChildEnv(process.env));
+    if (!outcome.ok) throw new Error(`${action}: ${outcome.error}`);
+    return outcome.detail;
+  };
 
-  // refuseIfSchemaBehind()'s own message is about the remote path (a doadmin
-  // prompt). A local mode migrates with its own container's credential, so it
-  // gets its own remedy rather than a prompt it will never see.
-  function refuseStaleSchema(): void {
-    const mode = localModeOf(dataPath);
-    try {
-      refuseIfSchemaBehind(stack.compose, log);
-    } catch (err) {
-      if (mode === null) throw err;
-      throw new Error(
-        `${LOCAL_FLAG} ${mode}: --migrate was not passed and the schema is not current (named above). ` +
-          `No mode implies --migrate (spec §4.3, §5), and serving this boot would run current code on a stale schema. ` +
-          `Re-run with --migrate; a local mode needs no password.`,
-      );
+  async function prepareDatabase(): Promise<void> {
+    // CREATE (a local mode): the Postgres this boot owns, and — for a blank
+    // one, once — the four roles and the database, by the local superuser, the
+    // way doadmin provisions a fresh cluster (§7.3). Nothing is read for a
+    // decision yet.
+    if (composePostgres) {
+      await begin("prepare", "database");
+      await stack.composeAsync(["up", "-d", "postgres"], "start postgres", { stdout: outFd, stderr: errFd });
+      await stack.waitForPostgres();
+      if (mode === "blank" && !committedSteps.has("prepare:database")) {
+        const created = await superuserSqlSettled(serviceContainer("postgres")!, DB_USER, DB_NAME, localSuperuserSql(rolePasswords!, DB_NAME));
+        if (created !== null) throw new Error(`--local blank: the local superuser could not create the roles and the database: ${created}`);
+      }
+      hostTarget = { host: "127.0.0.1", port: stack.publishedPort("postgres", 5432), database: DB_NAME, sslmode: "disable" };
+      await commit();
+    } else if (dataPath.kind === "smoke-twin") {
+      const url = new URL(dataPath.url);
+      hostTarget = { host: url.hostname, port: Number(url.port), database: decodeURIComponent(url.pathname.slice(1)), sslmode: "disable" };
+    }
+
+    // THE TARGET LOCK (§2): after create/restore, before the first read used
+    // for a decision; one constant key, over a direct connection, waiting at
+    // most --lock-timeout behind another holder and then refusing, naming it.
+    // Having acquired it, the target is re-read and held to the plan.
+    await begin("prepare", "lock");
+    const lockUrl = remote ? remote.readerUrl : roleUrl(hostTarget!, "rm_readonly", rolePasswords!.rm_readonly);
+    const expected = remoteState ?? (await hostReadTargetState(lockUrl));
+    const acquired = await acquireTargetLock({ databaseUrl: lockUrl, holder, timeoutMs: lockTimeoutMs(process.argv), expected });
+    if (!acquired.acquired) throw new Error(acquired.reason);
+    targetLock = acquired.lock;
+    log(`target lock held (${targetLock.holder.tool}, plan ${planId.slice(0, 12)}, backend pid ${targetLock.backendPid})`);
+
+    // THE MATRIX (§4.3), on the target's own answer, read under the lock.
+    const locked = await readTargetState(targetLock.connection);
+    const verdict = resolveDeploymentPolicy({ rmEnv: declaredRmEnv, connection, identity: locked.identity === "missing" ? null : locked.identity });
+    if (!verdict.allow) throw new Error(verdict.reason);
+    await holdSchemaToJournal();
+    await commit();
+
+    // AUTHORIZED PREPARATION, each step rm_owner, each fenced, each journaled
+    // alone and never redone by a rerun of the same plan (§1.3).
+    if (mode === "blank" && !committedSteps.has("prepare:bootstrap")) {
+      await begin("prepare", "bootstrap");
+      const detail = await prepare("bootstrap");
+      await commit({ manifestPublished: String(detail.manifest) });
+    }
+    if (mode === "dump" && !committedSteps.has("prepare:enroll")) {
+      await begin("prepare", "enroll");
+      await prepare("enroll", `--local dump ${(dataPath as Extract<ResolvedDataPath, { kind: "smoke-twin" }>).stamp}`);
+      await commit();
+    }
+    if (migrates && !committedSteps.has("prepare:migrate")) {
+      await begin("prepare", "migrate");
+      const detail = await prepare("migrate");
+      await commit({ migrationsApplied: (detail.applied as string[]) ?? [], manifestPublished: String(detail.manifest) });
+    }
+    if (seeds && !committedSteps.has("prepare:seed")) {
+      await begin("prepare", "seed");
+      await prepare("seed");
+      await commit();
     }
   }
 
@@ -1236,62 +1384,43 @@ async function main(): Promise<void> {
     log("simulation analytics initialized (archive omitted)");
   }
 
-  let ledgerBeforeMigrate: string[] = [];
   // The phase boundaries, hung on the stack's own steps. Each ends the open
   // record, honours a pending Ctrl-C, and begins the next one.
-  const beforeStep = async (step: StackStep): Promise<void> => {
-    if (step === "assemble") {
+  const beforeStep = async (stackStep: StackStep): Promise<void> => {
+    if (stackStep === "assemble") {
+      await commit();
       await begin("prepare", "assemble");
-    } else if (step === "site") {
+    } else if (stackStep === "site") {
       // W7: the assembled `_static` becomes this instance's current site
       // (stack.ts places it; scripts/lib/smoke-site.ts). A switch of `current`
       // changes what a running website-server serves, so it is journaled.
       await commit();
       await begin("prepare", "site");
-    } else if (step === "build") {
+    } else if (stackStep === "build") {
       await commit();
       await begin("prepare", "images");
-    } else if (step === "postgres") {
+    } else if (stackStep === "postgres") {
       await commit();
-      if (composePostgres) await begin("prepare", "database");
-    } else if (step === "preflight") {
+    } else if (stackStep === "services") {
       await commit();
-      await holdSchemaToJournal();
-      await begin("prepare", "gate");
-    } else if (step === "migrate") {
-      await commit();
-      // Settled, and when migrating REQUIRED: both the resume check and the
-      // "before" ledger this migrate's outcome is computed against need the
-      // schema as it really is, not a still-initializing database's silence.
-      ledgerBeforeMigrate = (await holdSchemaToJournal({ mustObserve: migrates }))?.ledger ?? [];
-      await begin("prepare", "migrate");
-    } else if (step === "services") {
-      const ledgerNow = observeSchema()?.ledger ?? ledgerBeforeMigrate;
-      await commit(openRecord?.step === "migrate" ? { migrationsApplied: ledgerNow.filter((m) => !ledgerBeforeMigrate.includes(m)) } : {});
-      await holdSchemaToJournal();
-      // `--seed`'s demo job_schedules: preparation, written before any service
-      // that reads them starts. Not redone by a rerun that already committed it.
-      if (seeds && !committedSteps.has("prepare:seed")) {
-        await begin("prepare", "seed");
-        log("simulation seed (job_schedules)…");
-        await stack.composeAsync(
-          ["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/seed.ts", "--smoke-schedules"],
-          "seed job_schedules",
-          { stdout: outFd, stderr: errFd },
-        );
-        await commit();
-      }
-      // Preflight (§7) after preparation and before any application service is
-      // replaced: the checks this boot runs read-only against the prepared
-      // database. The full §7 registry (checks 1-6) is #1026 W2 work.
+      // PREFLIGHT (§7): checks 1-6, read-only, after every preparation and
+      // before any application service is replaced, from the host as
+      // rm_readonly under the target lock. Its report is the receipt's; any
+      // refusal stops the boot here.
       await begin("preflight", null);
-      const current = stack.compose([...SCHEMA_CURRENT_ARGV], { stdout: "pipe", stderr: "pipe" });
-      const detail = (current.stdout + current.stderr).trim().split("\n").at(-1) ?? "";
-      preflightResults.push({ check: "schema-current", pass: current.exitCode === 0, detail: detail || `exit ${current.exitCode}` });
-      if (current.exitCode !== 0) throw new Error(`preflight: the schema is not current after preparation (${detail})`);
+      const detail = await prepare("preflight");
+      const report = detail.report as { passed: boolean; results: { check: string; findings: { severity: string; message: string }[] }[] };
+      for (const result of report.results) {
+        const refusals = result.findings.filter((f) => f.severity === "refuse");
+        const detailText = result.findings.map((f) => `${f.severity}: ${f.message}`).join(" | ") || "no finding";
+        preflightResults.push({ check: result.check, pass: refusals.length === 0, detail: detailText });
+      }
+      if (!report.passed) {
+        throw new Error(`preflight refused the boot: ${preflightResults.filter((r) => !r.pass).map((r) => `${r.check} (${r.detail})`).join("; ")}`);
+      }
       await commit();
       await begin("replace", null);
-    } else if (step === "health") {
+    } else if (stackStep === "health") {
       // Every service `compose up` just brought to its planned image, recreated
       // or kept, and the digest each now runs.
       await commit({ servicesReplaced: runningServices() });
@@ -1307,9 +1436,10 @@ async function main(): Promise<void> {
   };
 
   applyHostPorts(await stack.up({
-    migrateEnv: scenario.migrateEnv,
-    migrate: migrates,
-    preflight: preflightPlan.classify || preflightPlan.schemaCurrent ? classifyDatabase : undefined,
+    // The database half runs first and migrates by itself (the host-side
+    // migrate run); the stack's legacy in-container migrate step never runs.
+    prepareDatabase,
+    migrate: false,
     initialize: seeds ? initializeScenario : undefined, deferredServices: ["analytics-producer"],
     beforeStep,
   }));
@@ -1333,7 +1463,7 @@ async function main(): Promise<void> {
   }
 
   const images = runningServices();
-  const schema = observeSchema();
+  const schema = await observeSchema();
   // Readiness started the deferred analytics-producer; that is its replacement.
   await commit({ servicesReplaced: Object.fromEntries(Object.entries(images).filter(([service]) => service === "analytics-producer")) });
   await writeReceipt(paths, {
@@ -1371,6 +1501,8 @@ async function main(): Promise<void> {
   console.log("");
   log(`READY — Site ${backendUrl}/  ·  instance ${instance.name}`);
   interrupt.dispose();
+  // §2: "It is released explicitly on exit."
+  await releaseTargetLock();
   process.exit(0);
 }
 
@@ -1551,6 +1683,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
     console.log("\n[smoke] CI smoke — scenario assertions passed");
   }
   console.log("\n[smoke] CI scenario complete — shared cleanup through Stack.down…");
+  await releaseTargetLock();
   cleanup();
   cleanCiVolume();
   process.exit(0);
@@ -1564,6 +1697,8 @@ function failureDetail(): readonly string[] {
 
 main().catch(async (err) => {
   const em = err instanceof Error ? err.message : String(err);
+  // Journal first (below), then let go of the target lock: every exit path
+  // releases it explicitly (§2), and a refused or stopped run must not hold it.
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] ${err instanceof StoppedAtBoundary ? "stopped" : "startup failed"}: ${em}\n`); } catch {} }
 
   // The journal was closed (or replaced) underneath this run — `smoke:down`
@@ -1581,6 +1716,7 @@ main().catch(async (err) => {
   // a successful one, and a caller must not read it as one.
   if (err instanceof StoppedAtBoundary) {
     console.error(`[smoke] ${em}. Nothing was torn down; the journal records where the run stopped.`);
+    await releaseTargetLock();
     try { writeStateFile(); } catch { /* best effort */ }
     printResumeHint();
     process.exit(130);
@@ -1591,6 +1727,7 @@ main().catch(async (err) => {
   if (journal && openRecord) {
     try { await journal.endPhase("failed", em); } catch { /* the error below is the one to report */ }
   }
+  await releaseTargetLock();
 
   // CI tears the stack down, which also stops the writers, and must exit
   // non-zero for the job to fail.

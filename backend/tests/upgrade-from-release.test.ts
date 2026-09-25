@@ -76,7 +76,8 @@ import {
 } from "../src/db/preflight.ts";
 import { COMPAT_HEADER_BASELINE, migrationNumber, parsePendingHeader } from "../src/db/schema-compat.ts";
 import { readManifest } from "../src/db/schema-manifest.ts";
-import { runMigrate, type MigrateRunOptions } from "../scripts/migrate-run.ts";
+import { runMigrate, type MigrateGateOptions } from "../scripts/migrate-run.ts";
+import { withTargetLock } from "./support/target-lock.ts";
 import { describeCatalogDiff, diffCatalogs, normalizedCatalog } from "./support/catalog-normalize.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
@@ -122,14 +123,33 @@ function connect(database: string): postgres.Sql<{}> {
   return postgres(urlFor(database), { max: 1, onnotice: () => {} });
 }
 
-const MIGRATE_OPTIONS: MigrateRunOptions = {
+const MIGRATE_OPTIONS: MigrateGateOptions & { nonInteractive: boolean } = {
   caller: "smoke_flag",
   env: "stage",
   connection: "local",
-  lockKey: 7726322199513612n,
-  sessionLockHeld: false,
   nonInteractive: true,
 };
+
+/**
+ * The real migrate run as a tool performs it: the session IS rm_owner for the
+ * whole run (`current_user = rm_owner`, which the run requires), under the §2
+ * target lock. Both databases here were built by this harness's superuser
+ * login, whose 0016 default privileges no snapshot declares (production's
+ * bootstrap login is doadmin, a listed provider role), so those are removed
+ * first — identically on both sides — for the first manifest's §9.1 step 2
+ * baseline to pass for the reason production's would.
+ */
+async function migrateAsOwner(db: postgres.Sql<{}>, database: string, options = MIGRATE_OPTIONS): ReturnType<typeof runMigrate> {
+  const login = new URL(config.databaseUrl).username;
+  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker`);
+  await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE "${login}" IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker`);
+  await db.unsafe("SET ROLE rm_owner");
+  try {
+    return await withTargetLock(urlFor(database), (lock) => runMigrate(db, { ...options, lock }));
+  } finally {
+    await db.unsafe("RESET ROLE");
+  }
+}
 
 /** v0.5.0's runner loop (backend/src/db/migrate.ts at the tag): one
  *  transaction per file, `SET LOCAL ROLE rm_owner` from 0054 on, a ledger row
@@ -294,7 +314,7 @@ beforeAll(async () => {
   created.push(REFERENCE_DB);
   reference = connect(REFERENCE_DB);
   await enrollRehearsal(reference);
-  await runMigrate(reference, MIGRATE_OPTIONS);
+  await migrateAsOwner(reference, REFERENCE_DB);
 }, 120_000);
 
 afterAll(async () => {
@@ -353,8 +373,8 @@ for (const tag of SUPPORTED_RELEASES) {
       // A release at or past 0063 has the table and meets no such refusal.
       expect(table?.present).toBe(!predatesIdentity);
       if (!predatesIdentity) return;
-      await expect(runMigrate(db, MIGRATE_OPTIONS)).rejects.toThrow("no deployment_identity row");
-      await expect(runMigrate(db, { ...MIGRATE_OPTIONS, caller: "operator", env: "prod", connection: "remote" })).rejects.toThrow(
+      await expect(migrateAsOwner(db, name)).rejects.toThrow("no deployment_identity row");
+      await expect(migrateAsOwner(db, name, { ...MIGRATE_OPTIONS, caller: "operator", env: "prod", connection: "remote" })).rejects.toThrow(
         "no deployment_identity row",
       );
       // …and it refused before applying anything.
@@ -376,7 +396,7 @@ for (const tag of SUPPORTED_RELEASES) {
       );
       await enrollRehearsal(db);
 
-      const result = await runMigrate(db, MIGRATE_OPTIONS);
+      const result = await migrateAsOwner(db, name);
       appliedByRun = result.applied;
       const recorded = new Set(release.migrations.map((m) => m.file));
       expect(result.applied).toEqual(
@@ -558,23 +578,12 @@ for (const tag of SUPPORTED_RELEASES) {
       // THE HARNESS LOGIN STANDS IN FOR THE PROVIDER'S ADMIN. Migration
       // 0016:37-38 sets default privileges FOR the login that runs it. In
       // production that login is doadmin, which the installed manifest's
-      // provider exclusion list covers, so 3a has nothing to say. Here the
-      // release-era files ran as this harness's login, which the list does not
-      // name, so exactly those two default ACLs are extras — the same two
-      // entries schema-equivalence.test.ts records as cause E. They are pinned
-      // by name, and any other refusal still fails. The list is never widened
-      // for a test.
-      const login = new URL(config.databaseUrl).username;
-      const manifest = await readManifest(db);
-      const providerRoles = (JSON.parse(manifest!.declaration.text) as { exclusions: { roles: string[] } }).exclusions.roles;
-      const harnessOnly = providerRoles.includes(login)
-        ? []
-        : ["sequences", "tables"].map(
-            (on) =>
-              `default privileges for ${login} in schema public on ${on} is in the live catalog but not declared by the ` +
-              `installed manifest, and the provider exclusion list does not cover it (owner ${login})`,
-          );
-      expect(findings.filter((f) => f.severity === "refuse").map((f) => f.message).sort()).toEqual(harnessOnly.sort());
+      // provider exclusion list covers, so 3a has nothing to say. The first
+      // manifest is now published only after the §9.1 step 2 baseline
+      // (migrate-run.ts), so `migrateAsOwner` removed this harness login's two
+      // default ACLs first — the production shape — and 3a has nothing to say
+      // here either. Any refusal fails, by name.
+      expect(findings.filter((f) => f.severity === "refuse").map((f) => f.message)).toEqual([]);
     });
 
     test("code at every N from the last breaking file onward boots against the additive tail (check 3b)", async () => {

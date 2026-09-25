@@ -151,7 +151,11 @@ export interface Snapshot {
  * Input: the directory holding them (defaulting to `backend/schema/`), so a
  * test can point at a fixture instead of the repo's real snapshot — the same
  * affordance `checkSchemaCurrent(dir)` in backend/scripts/schema-current.ts
- * already provides for the migrations directory.
+ * already provides for the migrations directory. And the migrations directory
+ * the filename list is cross-checked against, defaulting to
+ * `backend/migrations/`: the migrate run's `migrationsDir`/`snapshotDir` seams
+ * (backend/scripts/migrate-run.ts) pass a fixture pair together, so a test can
+ * publish the manifest of a synthesized migration through the real runner.
  *
  * Output: a `Snapshot`.
  *
@@ -169,7 +173,7 @@ export interface Snapshot {
  *
  * Serves spec §10 W2 "Snapshot bootstrap then `--migrate`".
  */
-export async function loadSnapshot(dir?: string): Promise<Snapshot> {
+export async function loadSnapshot(dir?: string, migrationsDir: string = MIGRATIONS_DIR): Promise<Snapshot> {
   const base = dir ?? BACKEND_ROOT;
 
   const [declarationSql, bootstrapDataSql, grantsSql, metadataText] = await Promise.all([
@@ -198,7 +202,7 @@ export async function loadSnapshot(dir?: string): Promise<Snapshot> {
     );
   }
 
-  await assertFilenamesMatchMigrations(metadata.filenames);
+  await assertFilenamesMatchMigrations(metadata.filenames, migrationsDir);
 
   return {
     declarationSql,
@@ -295,8 +299,8 @@ function parseMetadata(text: string): SnapshotMetadata {
  * "your snapshot names a migration that is not here" send the reader to
  * different files.
  */
-async function assertFilenamesMatchMigrations(filenames: readonly string[]): Promise<void> {
-  const onDisk = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+async function assertFilenamesMatchMigrations(filenames: readonly string[], migrationsDir: string): Promise<void> {
+  const onDisk = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
   const named = new Set(filenames);
   const present = new Set(onDisk);
 
@@ -560,6 +564,99 @@ async function isBlank(db: SnapshotDb): Promise<boolean> {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`) as unknown as { count: number }[];
   return (row?.count ?? 0) === 0;
+}
+
+/**
+ * Relations a boot's own PREPARATION writes, which therefore never make a
+ * database "populated": the ledger and the manifest (§8.1-§8.3), the
+ * enrollment (§4.2) and the service-token store (§3, provisioned by the same
+ * preparation that writes the enrollment). None of them is data.
+ */
+export const PREPARATION_TABLES: readonly string[] = Object.freeze([
+  "schema_migrations",
+  "schema_manifest",
+  "deployment_identity",
+  "automation_tokens",
+]);
+
+/** One table that holds rows a blank bootstrap did not put there. */
+export interface PopulatedTable {
+  readonly table: string;
+  /** The exact row count, `count(*)`, never a statistics estimate. */
+  readonly rows: number;
+  /** How many of those rows the snapshot's bootstrap data inserts (0 for any other table). */
+  readonly bootstrapRows: number;
+}
+
+/** Rows the bootstrap data inserts, per table: one `INSERT INTO public.<table>` line is one row. */
+export function bootstrapRowCounts(bootstrapDataSql: string): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const match of bootstrapDataSql.matchAll(/^INSERT INTO public\.([A-Za-z_][A-Za-z0-9_]*)\b/gm)) {
+    counts.set(match[1]!, (counts.get(match[1]!) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Is this database POPULATED — does it hold rows a blank bootstrap did not write?
+ *
+ * The question `--seed` must ask (spec §5: it "creates demo data on a blank
+ * database ... refuses a populated database"). ROWS, not tables: a snapshot-
+ * bootstrapped database has every table and is still blank, and a restored or
+ * reattached one can have every table and real data. So every BASE TABLE in
+ * `public` is counted exactly (`count(*)`, not `pg_stat_user_tables`'s
+ * estimate, which reads zero until autovacuum has run), and a table is
+ * populated when it holds more rows than the snapshot's bootstrap data inserts
+ * into it (none, for every table the bootstrap data does not name). The tables
+ * preparation itself writes ({@link PREPARATION_TABLES}) are not counted.
+ *
+ * Output: every populated table with its count, sorted by name; empty means
+ * blank. Read through `pg_class`, not `information_schema`, for the reason
+ * `isBlank` gives: the view is privilege-filtered and would read a table the
+ * role cannot see as absent. The counts need SELECT on every table, which the
+ * owner (`rm_owner`, who runs the seed) holds.
+ */
+export async function populatedTables(db: SnapshotDb, snapshot: Pick<Snapshot, "bootstrapDataSql">): Promise<PopulatedTable[]> {
+  const expected = bootstrapRowCounts(snapshot.bootstrapDataSql);
+  const skip = new Set(PREPARATION_TABLES);
+  const tables = (await db`
+    SELECT c.relname AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+    ORDER BY c.relname`) as unknown as { name: string }[];
+  const populated: PopulatedTable[] = [];
+  for (const { name } of tables) {
+    if (skip.has(name)) continue;
+    const [row] = (await db.unsafe(
+      `SELECT count(*)::bigint AS rows FROM public.${quoteIdent(name)}`,
+    )) as unknown as { rows: string | number | bigint }[];
+    const rows = Number(row?.rows ?? 0);
+    const bootstrapRows = expected.get(name) ?? 0;
+    if (rows > bootstrapRows) populated.push({ table: name, rows, bootstrapRows });
+  }
+  return populated;
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+/**
+ * The enrollment as §4.3's matrix and the rehearsal-only gate consume it: the
+ * kind, `null` for no row, `"unreadable"` for an absent table, an unreadable
+ * one, or a value that is neither kind. Never evidence of rehearsal by default.
+ */
+export async function readIdentityKind(db: SnapshotDb): Promise<"production" | "rehearsal" | null | "unreadable"> {
+  let value: string | null;
+  try {
+    if ((await identityColumn(db)) === null) return "unreadable";
+    value = await readDeploymentIdentity(db);
+  } catch {
+    return "unreadable";
+  }
+  if (value === null) return null;
+  return value === "production" || value === "rehearsal" ? value : "unreadable";
 }
 
 async function effectiveRole(db: SnapshotDb): Promise<string> {

@@ -2,6 +2,7 @@
 // RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
 import { envSecret } from "./lib/env-secret.ts";
+import { RM_ENV_VALUES } from "./acceptance-path.ts";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -614,7 +615,12 @@ export function resolveSwarmPublicBaseUrl(
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is
 // allowed only in the "ephemeral" (CI/throwaway) env or with RM_ALLOW_INSECURE=1.
-const VALID_ENVS = ["ephemeral", "smoke", "prod"] as const;
+//
+// `stage` is the §4.1 deployment policy for stage, test and CI; `bun smoke` and
+// `bun run migrate` start backend code under it (smoke-production-spec.md §4,
+// #1026 criterion 13). It is "outside prod" exactly as `smoke` is. The list is
+// backend/src/acceptance-path.ts's RM_ENV_VALUES, so the two cannot disagree.
+const VALID_ENVS = RM_ENV_VALUES;
 const RM_ENV = process.env.RM_ENV ?? "prod";
 if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
   throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);

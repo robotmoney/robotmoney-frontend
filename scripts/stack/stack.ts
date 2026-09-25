@@ -61,6 +61,7 @@ export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" |
  * caller may act at, not narration.
  */
 export type StackStep =
+  | "database"
   | "assemble"
   | "site"
   | "build"
@@ -118,6 +119,20 @@ export interface StackUpOptions {
    * stage of bring-up.
    */
   preflight?: () => Promise<void>;
+  /**
+   * The DATABASE half of a deployment, run FIRST — before assembly, the image
+   * build or any application service — when given. `bun smoke` passes its
+   * spec §7 sequence here: database create/restore (a local mode starts its
+   * own `postgres` service through `compose`), the §2 target lock, the §4.3
+   * identity matrix, then the authorized preparation (bootstrap, enrollment,
+   * `--migrate`, `--seed`). None of it needs an application image, and an
+   * operator typing a remote rm_owner password should not wait on a build to
+   * be asked for it. A throw aborts the bring-up with nothing built. Not a
+   * StackPhase: the event sequence is pinned by
+   * scripts/tests/unit/stack-lifecycle-order.test.ts, and the caller journals
+   * its own steps.
+   */
+  prepareDatabase?: () => Promise<void>;
   /** Scenario-specific initialization after services start but before the
    * stack is declared ready. Migration remains owned by this method exactly once. */
   initialize?: () => Promise<void>;
@@ -279,6 +294,13 @@ export function createStack(
   // `docker` from cfg.repoRoot with the allowlisted spawnEnv and a closed
   // stdin. A caller that passes nothing gets exactly the behaviour this module
   // has always had.
+  // EVERY CHILD IN ITS OWN PROCESS GROUP (`detached`: a new session). A
+  // terminal's Ctrl-C is delivered to the whole foreground process group; with
+  // the build, `compose up` and the static assembly in it, a second Ctrl-C
+  // killed the step mid-flight and the journal recorded it `failed` (wave-2
+  // open problem 10). Detached, only the orchestrator receives the signal, and
+  // `bun smoke` stops at the next phase boundary with the step complete (spec
+  // §1.4). stdout and stderr are still the caller's; stdin is never read.
   const runtime: StackRuntime = opts.runtime ?? {
     runSync(argv, io) {
       const r = Bun.spawnSync(argv, {
@@ -287,7 +309,8 @@ export function createStack(
         stdin: "ignore",
         stdout: (io.stdout ?? "pipe") as "pipe",
         stderr: (io.stderr ?? "pipe") as "pipe",
-      });
+        detached: true,
+      } as Parameters<typeof Bun.spawnSync>[1]);
       return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
     },
     async run(argv, io, cwd) {
@@ -297,6 +320,7 @@ export function createStack(
         stdin: "ignore",
         stdout: (io.stdout ?? "pipe") as "pipe",
         stderr: (io.stderr ?? "pipe") as "pipe",
+        detached: true,
       });
       return (await proc.exited) ?? -1;
     },
@@ -528,6 +552,10 @@ export function createStack(
     const boundary = async (step: StackStep): Promise<void> => {
       if (upOpts.beforeStep) await upOpts.beforeStep(step);
     };
+    if (upOpts.prepareDatabase) {
+      await boundary("database");
+      await upOpts.prepareDatabase();
+    }
     await boundary("assemble");
     await assembleStaticDir();
     if (cfg.instance) {

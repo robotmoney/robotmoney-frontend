@@ -2,38 +2,44 @@
 //
 // "In production an upgrade is an operator intervention: `bun run migrate`,
 // prompting for `rm_owner`, planned per release, receipted. It is never part of
-// the boot." This file is that command's argv, `~/.env` and terminal handling.
-// The run itself, its gates and its receipt live in ./migrate-run.ts.
+// the boot." This file is that command's argv, `~/.env` and exit handling. The
+// sequence itself — plan, target lock, gates, owner prompt, `y`, run, receipt —
+// is `migrateCommand` in ./migrate-run.ts, the same function `bun smoke
+// --migrate` runs (backend/scripts/smoke-prepare.ts).
 //
-// THE SEQUENCE, in this order and no other:
-//   1. Read the target from `$HOME/.env` (host, port, database, sslmode) and
-//      the policy from RM_ENV. Refuse a `~/.env` that holds `rm_owner` or
-//      `doadmin`: §3 keeps both out of that file, and a host that stores an
-//      owner password has no reason left to type one.
-//   2. `checkMigrateGates`, read through `rm_readonly` — BEFORE the owner
-//      password is requested, so a refused run never has a password typed
-//      into it.
-//   3. `promptOwnerPassword`: masked, verified by a real login, never written
-//      anywhere and never placed in the environment (§3).
-//   4. Connect AS `rm_owner`. Never `doadmin`: §3 makes `doadmin` cluster
-//      provisioning only, and the migration login is `rm_owner` (D47).
-//   5. `confirmRemoteTarget`: warn, then an explicit `y`.
-//   6. `runMigrate`: fence, apply, reconcile, publish (§8.3).
-//   7. `writeMigrateReceipt`: into the instance's state directory, or the
-//      path `--receipt` names.
+// THE TARGET LOCK (§2, D52). This command takes the ONE session lock every tool
+// takes — TARGET_LOCK_KEY, over a direct connection (a transaction-mode pooler
+// is refused before anything connects), from acquisition to exit — so it
+// contends with a running `bun smoke` whatever hostname either of them used:
+// Postgres scopes an advisory lock to the database, not to the address. While
+// another tool holds it this command waits `--lock-timeout` seconds, then exits
+// non-zero naming the holder (its tool, plan id, instance, host and pid). Having
+// acquired it, it re-reads `deployment_identity`, the ledger and the manifest
+// and refuses if any moved while it waited. The lock is released explicitly on
+// exit, on SIGINT and on SIGTERM.
 //
-// usage: bun run migrate [--instance <name>] [--receipt <path>]
+// `~/.env` holds the connection values and the three runtime role passwords
+// (§3). This command reads the target and connects as `rm_readonly` for the
+// lock, the plan and the gates; it refuses a file that holds `rm_owner` or
+// `doadmin` — a host that stores an owner password has no reason left to type
+// one — and then logs in as `rm_owner` with the password typed at the terminal.
+//
+// usage: bun run migrate [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
 //
 // `--instance` defaults to the production instance under RM_ENV=prod. Any other
 // policy must name where the receipt goes, because a receipt written to a
 // guessed instance is a record in the wrong place.
+import { hostname } from "node:os";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
-import { resolveRmEnv } from "../../scripts/lib/smoke-env-policy.ts";
+import { resolveRmEnv } from "../src/deploy-policy.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
 
 const NAME = "migrate";
 const err = (m: string) => console.error(`[${NAME}] ${m}`);
 const log = (m: string) => console.log(`[${NAME}] ${m}`);
+
+/** How long the command waits behind another holder of the target lock by default. */
+const DEFAULT_LOCK_TIMEOUT_SECONDS = 60;
 
 function refuse(message: string): never {
   err(message);
@@ -50,14 +56,14 @@ function flag(name: string): string | undefined {
 
 const receiptFlag = flag("--receipt");
 const instanceFlag = flag("--instance");
+const lockTimeoutSeconds = Number(flag("--lock-timeout") ?? DEFAULT_LOCK_TIMEOUT_SECONDS);
+if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lock-timeout needs a number of seconds");
 
 const envPath = homeEnvFilePath();
 const env = loadEnvFile(envPath);
 if (!env) refuse(`no readable $HOME/.env (${envPath}).`);
 
-// §3: "It must not contain `rm_owner`, `doadmin`, a superuser token ...". The
-// old runner read the migration login's password from this file when it was
-// there; this one refuses the file instead, before it connects to anything.
+// §3: "It must not contain `rm_owner`, `doadmin`, a superuser token ...".
 const forbidden = ["rm_owner", "doadmin"].filter((key) => env[key] !== undefined);
 if (forbidden.length > 0) {
   refuse(
@@ -66,7 +72,9 @@ if (forbidden.length > 0) {
   );
 }
 
-// Args override env (§3), so the process's RM_ENV wins over the file's.
+// Args override env (§3), so the process's RM_ENV wins over the file's. The
+// value is judged by the §4.3 matrix itself (the gates, below); here it is only
+// parsed, so a typo refuses before anything connects.
 const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env.RM_ENV });
 if (!policy.ok) refuse(policy.reason);
 const rmEnv = policy.source === "unset" ? null : policy.env;
@@ -83,89 +91,54 @@ if (receiptFlag === undefined) {
   receiptDir = instancePaths(stateRoot(process.env), instance).dir;
 }
 
-// The gates read `deployment_identity` through the least-privileged role that
-// can: §3 puts `rm_readonly` in `~/.env` and 0063 grants it SELECT there.
+// The lock, the plan and the gates go through the least-privileged role that
+// can read `deployment_identity`: §3 puts `rm_readonly` in `~/.env` and 0063
+// grants it SELECT there. It can take a session advisory lock; it can do no DDL.
 const readonlyUrl = urlForRole(env, "rm_readonly");
 if (!readonlyUrl) {
   refuse(`$HOME/.env cannot assemble an rm_readonly connection (host, port, database, sslmode and an rm_readonly line).`);
 }
-const target = (() => {
-  const u = new URL(readonlyUrl);
-  return `${u.hostname}:${u.port || "5432"}${u.pathname}`;
-})();
 
-// backend/src/config.ts validates at IMPORT, and the run's modules import it.
-// It requires DATABASE_URL: this process's is the rm_readonly target above, a
-// runtime credential that can do no DDL, and it is what the owner-login check
-// reads `pg_roles` through. Its RM_ENV list still carries the retired `smoke`
-// spelling where the spec says `stage` (scripts/lib/smoke-env-policy.ts
-// documents the gap), so a `stage` policy is presented to it as `smoke`. The
-// gates below read `rmEnv`, never config.env.
+// backend/src/config.ts validates at IMPORT, and the run's modules import it
+// (append-only-guard.ts → db/client.ts). It requires DATABASE_URL: this
+// process's is the rm_readonly target above, a runtime credential that can do
+// no DDL. It accepts RM_ENV=stage (#1026) as the policy this command runs
+// under, so nothing is re-presented to it under another name.
 process.env.DATABASE_URL = readonlyUrl;
-if (process.env.RM_ENV === "stage") process.env.RM_ENV = "smoke";
 
-const postgres = (await import("postgres")).default;
-const { TARGET_LOCK_KEY } = await import("../src/db/target-lock.ts");
-const {
-  checkMigrateGates,
-  confirmRemoteTarget,
-  migrateReceiptPath,
-  promptOwnerPassword,
-  runMigrate,
-  writeMigrateReceipt,
-} = await import("./migrate-run.ts");
+// The run's modules are imported only now: nothing above may depend on them,
+// and a refusal above must not have paid for loading them.
+const { MigrateRefused, migrateCommand, migrateReceiptPath } = await import("./migrate-run.ts");
 const receiptPath = receiptFlag ?? migrateReceiptPath(receiptDir ?? "", startedAt);
 
-const reader = postgres(readonlyUrl, { max: 1, onnotice: () => {} });
-let owner: ReturnType<typeof postgres> | null = null;
 try {
-  const options = {
-    caller: "operator" as const,
+  const { result, receipt } = await migrateCommand({
+    caller: "operator",
     env: rmEnv,
     // `bun run migrate` never targets a Postgres smoke owns: that is
     // `bun smoke --migrate`, which uses smoke's generated password (§8.5).
-    connection: "remote" as const,
-    // D52 §2: ONE constant key for every tool and every database, so this
-    // run contends with smoke's session lock and every other fenced mutation.
-    lockKey: TARGET_LOCK_KEY,
-    sessionLockHeld: false,
+    connection: "remote",
+    readerUrl: readonlyUrl,
     nonInteractive: !process.stdin.isTTY,
-  };
-
-  const refusals = await checkMigrateGates(reader, options);
-  if (refusals.length > 0) {
-    for (const refusal of refusals) err(refusal.message);
-    process.exitCode = 1;
-  } else {
-    log(`target ${target}, RM_ENV=${rmEnv ?? "(unset)"}`);
-    const password = await promptOwnerPassword(options);
-    const ownerUrl = new URL(readonlyUrl);
-    ownerUrl.username = "rm_owner";
-    ownerUrl.password = encodeURIComponent(password);
-    owner = postgres(ownerUrl.toString(), { max: 1, onnotice: () => {} });
-    await confirmRemoteTarget(options, target);
-
-    const result = await runMigrate(owner, options);
-    const written = await writeMigrateReceipt(receiptPath, result, {
-      caller: options.caller,
-      env: options.env,
-      target,
-      startedAt,
-    });
-    log(`applied ${result.applied.length} migration(s)${result.applied.length ? `: ${result.applied.join(", ")}` : ""}`);
-    if (result.resumedAndVerified.length > 0) {
-      log(`resumed and verified ${result.resumedAndVerified.length} committed migration(s)`);
-    }
-    log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
-    log(`manifest ${result.manifest.contentHash} published`);
-    log(`receipt ${written}`);
+    lock: {
+      acquire: {
+        holder: { tool: NAME, planId: null, instance: instanceFlag ?? null, host: hostname(), pid: process.pid },
+        timeoutMs: lockTimeoutSeconds * 1000,
+      },
+    },
+    receiptPath,
+    log,
+  });
+  log(`applied ${result.applied.length} migration(s)${result.applied.length ? `: ${result.applied.join(", ")}` : ""}`);
+  if (result.resumedAndVerified.length > 0) {
+    log(`resumed and verified ${result.resumedAndVerified.length} committed migration(s)`);
   }
+  log(`grants repaired on ${result.grantsRepaired.length} relation(s)`);
+  if (result.baselined) log("first manifest: the live schema matched the snapshot (spec §9.1 step 2)");
+  log(`manifest ${result.manifest.contentHash} published`);
+  log(`receipt ${receipt}`);
+  process.exit(0);
 } catch (e) {
-  err(e instanceof Error ? e.message : String(e));
-  process.exitCode = 1;
-} finally {
-  await reader.end({ timeout: 5 });
-  await owner?.end({ timeout: 5 });
-  const { closeDb } = await import("../src/db/client.ts");
-  await closeDb();
+  err(e instanceof MigrateRefused ? e.message : `failed: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
 }

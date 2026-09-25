@@ -6,8 +6,9 @@
 // instance or another test's. The boot runs exactly as an operator runs it —
 // `bun --no-env-file scripts/smoke.ts --local blank --migrate --instance <name>`
 // — with a hermetic environment: no CI and no GitHub Actions identity (either
-// would change the instance and project resolution under test), a development
-// RM_ENV and a keyless model (no local path calls a model; the inference
+// would change the instance and project resolution under test), the `stage`
+// policy (spec §4.1; the §4.3 matrix refuses the retired `smoke` value) and a
+// keyless model (no local path calls a model; the inference
 // preflight still resolves one), and an explicit empty roster unless a test
 // plants one. Docker and bun keep the real HOME so builds hit the host's caches.
 //
@@ -46,7 +47,7 @@ export interface BootHarness {
 export function harness(prefix: string, opts: { root?: string } = {}): BootHarness {
   const root = opts.root ?? mkdtempSync(join(tmpdir(), `rm-${prefix}-`));
   const instance = `rm_it_${prefix.replace(/[^a-z0-9]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, RM_ENV: "smoke", AGENT_MODEL: "free" };
+  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, RM_ENV: "stage", AGENT_MODEL: "free" };
   for (const key of ["PATH", "HOME", "TMPDIR", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT", "BUN_INSTALL", "BUN_INSTALL_CACHE_DIR"]) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
@@ -83,10 +84,32 @@ export function bootArgs(h: BootHarness, extra: readonly string[] = [], local = 
  * terminal — the case criterion 26 is about. Without, `proc.pid` is the smoke
  * process itself, which is what the lock and signal tests need.
  */
-export function spawnBoot(h: BootHarness, extra: readonly string[] = [], opts: { tty?: boolean; local?: string } = {}): RunningBoot {
-  const argv = bootArgs(h, extra.length > 0 ? extra : ["--credentials", h.emptyRoster], opts.local);
+export function spawnBoot(
+  h: BootHarness,
+  extra: readonly string[] = [],
+  opts: { tty?: boolean; local?: string; ownProcessGroup?: boolean; env?: Record<string, string | undefined>; migrate?: boolean } = {},
+): RunningBoot {
+  const base = bootArgs(h, extra.length > 0 ? extra : ["--credentials", h.emptyRoster], opts.local);
+  // `migrate: false` drops the `--migrate` bootArgs always passes.
+  const argv = opts.migrate === false ? base.filter((a) => a !== "--migrate") : base;
+  // `env`: per-boot overrides of the harness environment; `undefined` removes a key.
+  const env: Record<string, string> = { ...h.env };
+  for (const [key, value] of Object.entries(opts.env ?? {})) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const cmd = opts.tty ? ["script", "-qfec", argv.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" "), "/dev/null"] : argv;
-  const proc = Bun.spawn(cmd, { cwd: repoRoot, env: h.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  // `ownProcessGroup`: the boot leads a process group of its own (pgid = its
+  // pid), so a test can signal the WHOLE group — what a terminal's Ctrl-C does —
+  // without signalling the test runner, which otherwise shares its group.
+  const proc = Bun.spawn(cmd, {
+    cwd: repoRoot,
+    env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    detached: opts.ownProcessGroup === true,
+  });
   let text = "";
   const pump = async (stream: ReadableStream<Uint8Array>) => {
     const decoder = new TextDecoder();
@@ -176,6 +199,25 @@ export function containerEnv(project: string, service: string, key: string): str
   const env = Bun.spawnSync(["docker", "inspect", "--format", "{{json .Config.Env}}", id], { stdout: "pipe" }).stdout.toString();
   const entry = (JSON.parse(env || "[]") as string[]).find((e) => e.startsWith(`${key}=`));
   return entry?.slice(key.length + 1);
+}
+
+/**
+ * One read-only query against a boot's own `postgres` container, as the local
+ * superuser that created it — the test's window onto what the boot left in the
+ * database (the enrollment row, the roles' attributes). `null` when the
+ * container is not running.
+ */
+export function bootQuery(project: string, sql: string): string | null {
+  const id = Bun.spawnSync(
+    ["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", "label=com.docker.compose.service=postgres"],
+    { stdout: "pipe" },
+  ).stdout.toString().trim().split("\n")[0];
+  if (!id) return null;
+  const r = Bun.spawnSync(["docker", "exec", id, "psql", "-X", "-U", "robotmoney", "-d", "robotmoney", "-Atc", sql], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return r.exitCode === 0 ? r.stdout.toString().trim() : null;
 }
 
 /** Every path under `dir`, relative, sorted; `[]` when it does not exist. */

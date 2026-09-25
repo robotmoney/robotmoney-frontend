@@ -101,16 +101,6 @@ async function spawn(
   return proc.exited;
 }
 
-/** First `key=`/`key =` value in a dotenv-shaped file, or null. */
-function readEnvKey(file: string, key: string): string | null {
-  if (!existsSync(file)) return null;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (m && m[1] === key) return m[2]!.trim().replace(/^["']|["']$/g, "") || null;
-  }
-  return null;
-}
-
 /** The ONE credential file every smoke-twin/rollout command reads: $HOME/.env
  *  (the same file .env.example describes — discrete DO tokens plus one role
  *  line per role; the staging host's copy carries only rm_readonly). */
@@ -126,16 +116,14 @@ export const READONLY_ENV_FILE = homeEnvFilePath();
  * that model choice is not neutral for swarm authorship (some families refuse
  * the persona task outright), so a green `free` run does not predict production.
  *
- * $HOME/.env IS THE ONLY FILE CONSULTED (issue #699) — the single credential
- * file for the whole twin/rollout family. It is never a repo-root file: the
- * checkout carries only .env.example. A staging host's $HOME/.env holds the
- * replica's discrete tokens + the rm_readonly password line (+ OPENCODE_API_KEY),
- * never the writer credential, so "which key did that run use?" has exactly one
- * answer.
- *
- * The process environment still wins, because that is how CI and a one-off shell
- * override supply it; it is not a file and cannot be the writer credential by
- * accident.
+ * FROM THE PROCESS ENVIRONMENT, AND NOWHERE ELSE. It used to be read from
+ * $HOME/.env as a fallback. Spec §3 (as amended by D52) makes that file hold
+ * EXACTLY the connection values, the three runtime role passwords, RM_ENV and
+ * RM_CREDENTIALS — "It must not contain ... a model key" — and preflight check 4
+ * refuses any other key there on prod. A model key belongs to the participant
+ * that spends it (its credential.json entry); the operator running a one-off
+ * rehearsal supplies this one to this command, in the shell that runs it (CI:
+ * the repository secret), and the file never learns it.
  *
  * The key is passed to the boot in its ENVIRONMENT, never written to a file.
  * That does not violate the flags-not-env-vars rule, which is scoped to
@@ -147,13 +135,11 @@ export function resolveZenKey(
 ): { key: string; source: string } | { error: string } {
   const fromEnv = env.OPENCODE_API_KEY?.trim();
   if (fromEnv) return { key: fromEnv, source: "process environment" };
-  const found = readEnvKey(READONLY_ENV_FILE, "OPENCODE_API_KEY");
-  if (found) return { key: found, source: READONLY_ENV_FILE };
   return {
     error:
-      `OPENCODE_API_KEY is not set. This command reads it from ${READONLY_ENV_FILE} (or the process ` +
-      `environment) — the single credential file for this family, never a repo-root .env. ` +
-      `Add OPENCODE_API_KEY to ${READONLY_ENV_FILE} and re-run. ` +
+      "OPENCODE_API_KEY is not set in this command's environment. Export it in the shell that runs the " +
+      `rehearsal; it is never read from ${READONLY_ENV_FILE}, which holds only the §3 keys (spec §3, preflight ` +
+      "check 4), nor from a repo-root .env. " +
       "Do NOT work around this with AGENT_MODEL=free: that rehearses a different model than production, " +
       "and model choice materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
   };

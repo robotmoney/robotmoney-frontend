@@ -1,77 +1,35 @@
-// Interactive, fail-closed doadmin credential for an opt-in `--db external
-// --migrate` boot (scripts/lib/smoke-db-mode.ts's MIGRATE_FLAG).
+// The masked terminal prompt for the `rm_owner` password — the one credential
+// §3 types rather than stores: "**`rm_owner` is `LOGIN`.** Its password is typed
+// at the terminal for the one run that needs it and never stored."
 //
-// WHY INTERACTIVE, NEVER STORED. The adopted deployment contract in
-// docs/technical/smoke-production-spec.md §3 makes doadmin cluster-provisioning
-// only: it must never live in an env var, a file, or a container. This module
-// documents the legacy runner and is not the adopted production migration
-// mechanism. `--db external` alone never needs it — migrate() is skipped
-// entirely, and the boot runs on rm_app exactly as every other external step
-// already does. `--migrate` is the one deliberate exception: an operator who
-// wants THIS run to catch the target database up types the doadmin password at
-// the terminal for that one run. It never touches $HOME/.env or any file, is set
-// as MIGRATE_DATABASE_URL on this process only (the same passthrough
-// restore-container.ts's twinMigrationCredential() uses to reach the migrate
-// container), and the caller clears it the moment migrate() returns.
+// Its callers are backend/scripts/migrate-run.ts's promptOwnerPassword, which
+// `bun run migrate` and a remote `bun smoke --migrate` both reach, and a remote
+// `bun smoke --seed` (backend/scripts/smoke-prepare.ts). A local mode never
+// prompts (§5: "No terminal prompt exists in local modes"): it uses the owner
+// password smoke generated for the instance.
 //
-// FAIL CLOSED, not fail-open. Three refusals, none of them a fallback:
-//   - stdin is not a terminal: --migrate cannot be scripted or piped into.
-//   - $HOME/.env is missing the connection tokens --db external already needed.
-//   - the typed password does not authenticate — checked with a single fast
-//     probe, not backend/src/db/migrate.ts's waitForDb(), which is built to ride
-//     out postgres STARTING UP and would otherwise burn 30s on a wrong password
-//     before failing.
-// Every one of these throws; none of them falls back to rm_app or lets the boot
-// proceed as if --migrate had not been passed.
-//
-// THE ABSENT-FLAG SIDE OF THE SAME DECISION. Skipping migrate() is only safe
-// when the schema is already current — refuseIfSchemaBehind() runs
-// backend/scripts/schema-current.ts (read-only, as rm_app, no elevated
-// privilege) and refuses the boot outright if it is not, rather than warning
-// and serving a stale schema anyway.
-import { loadEnvFile } from "./env-role.ts";
-
-const DOADMIN_ROLE = "doadmin";
-const MIGRATE_FLAG_LABEL = "--migrate";
-
-/** The one-shot container that answers "is the schema current?", read-only. */
-export const SCHEMA_CURRENT_ARGV: readonly string[] = Object.freeze([
-  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/schema-current.ts",
-]);
+// WHAT THIS MODULE NO LONGER DOES. It used to prompt for `doadmin` on a remote
+// `--migrate` and hand that login to a one-shot migrate container as
+// MIGRATE_DATABASE_URL, to run the legacy runner. §3 makes `doadmin` cluster
+// provisioning only, and the migration login is `rm_owner` (D47): that path is
+// gone, with the legacy runner's container, the refuseIfSchemaBehind one-shot
+// it guarded (preflight check 3 asks the same question of every path) and the
+// shell hand-off of a migration credential. The smoke-side refusals a remote
+// `--migrate` meets — prod, a non-rehearsal identity, a non-terminal, anything
+// but an explicit `y` — are migrate-run.ts's, exercised at the smoke entry point
+// by scripts/tests/integration/smoke-external-migrate.test.ts.
 
 /**
- * Refuse an `--db external` boot that is about to skip migrate() (no
- * `--migrate` passed) if the schema is not current. Called only in that
- * absent-flag case — when `--migrate` is passed, migrate() brings the schema
- * current itself, and this check would just be redundant.
- */
-export function refuseIfSchemaBehind(
-  compose: (argv: string[], io?: { stdout?: "pipe"; stderr?: "pipe" }) => { exitCode: number; stdout: string; stderr: string },
-  log: (m: string) => void,
-): void {
-  const r = compose([...SCHEMA_CURRENT_ARGV], { stdout: "pipe", stderr: "pipe" });
-  const output = (r.stdout + r.stderr).trim();
-  if (output) log(output);
-  if (r.exitCode === 0) return;
-  throw new Error(
-    `${MIGRATE_FLAG_LABEL} was not passed and the schema is not current (schema-current exit ${r.exitCode}). ` +
-      `Serving this boot would run against a stale schema instead of refusing to. Pass ${MIGRATE_FLAG_LABEL} ` +
-      `to catch it up — you will be asked for the doadmin password — or confirm the migration(s) named above ` +
-      `are expected to stay pending before retrying.`,
-  );
-}
-
-/**
- * Read one line from the terminal with the input masked. smoke-main.ts owns no
- * shared readline.Interface today, and this prompt is the only one a boot ever
- * needs, so it drives process.stdin directly rather than pulling one in.
+ * Read one line from the terminal with the input masked. The one prompt a
+ * migrate run or a remote `--seed` ever needs (the rm_owner password), so it
+ * drives process.stdin directly rather than pulling in a readline.Interface.
  * Mirrors scripts/gitops-credentials.ts's `hidden()`.
  */
 export async function hiddenPrompt(question: string): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error(
-      `${MIGRATE_FLAG_LABEL}: stdin is not a terminal. An operator must type the ${DOADMIN_ROLE} password ` +
-        `interactively — it is never read from an environment variable, a file, or a pipe.`,
+      `${question}: stdin is not a terminal. An operator must type the rm_owner password interactively — ` +
+        "it is never read from an environment variable, a file, or a pipe (spec §3).",
     );
   }
   const stdin = process.stdin;
@@ -118,110 +76,4 @@ export async function hiddenPrompt(question: string): Promise<string> {
   } finally {
     stdin.pause();
   }
-}
-
-/**
- * Verify a connection URL actually authenticates, fast. A single `SELECT 1`
- * through psql, not backend/src/db/migrate.ts's waitForDb() — that loop exists
- * to ride out postgres's temp-server startup phase, not to fail fast on a wrong
- * password, and would otherwise cost this refusal 30 seconds. Never logs the
- * URL itself: only the redacted detail below and psql's own stderr, which
- * postgres never echoes the password into.
- *
- * The connection travels to psql as PG* environment variables, never as the
- * URL positional argument — an argv password sits in `ps`/`/proc/<pid>/cmdline`
- * and in execve-level audit logs for as long as the process runs, which is
- * exactly the exposure this whole interactive-prompt design exists to avoid.
- */
-function verifyAuthenticates(url: string): void {
-  const parsed = new URL(url);
-  const probe = Bun.spawnSync(["psql", "-X", "-Atc", "SELECT 1"], {
-    env: {
-      ...process.env,
-      PGHOST: parsed.hostname,
-      PGPORT: parsed.port || "5432",
-      PGUSER: decodeURIComponent(parsed.username),
-      PGPASSWORD: decodeURIComponent(parsed.password),
-      PGDATABASE: parsed.pathname.replace(/^\//, ""),
-      PGSSLMODE: parsed.searchParams.get("sslmode") ?? "require",
-    },
-    stderr: "pipe",
-  });
-  if (probe.exitCode !== 0) {
-    const detail = new TextDecoder().decode(probe.stderr).trim();
-    throw new Error(`${MIGRATE_FLAG_LABEL}: ${DOADMIN_ROLE} did not authenticate: ${detail || `psql exited ${probe.exitCode}`}`);
-  }
-}
-
-/**
- * Decide and act on this boot's `--migrate` opt-in — called from smoke-main.ts
- * while process.env is still mutable, ahead of the extraComposeEnv snapshot
- * buildComposeEnv() takes (scripts/stack/config.ts). Absent, up() already
- * skips migrate() for external by default; this only has to say so. Present,
- * a refusal here must stop the boot outright — never fall back to rm_app.
- */
-export async function resolveExternalMigrationOptIn(
-  migrateRequested: boolean,
-  envFilePath: string,
-  log: (m: string) => void = (m) => console.log(`[smoke] ${m}`),
-): Promise<void> {
-  if (!migrateRequested) {
-    console.warn(
-      `[smoke] --db external without ${MIGRATE_FLAG_LABEL}: this boot will not run migrations. It proceeds on ` +
-        `rm_app only if the schema is already current — refuseIfSchemaBehind() checks that during preflight and ` +
-        `refuses the boot otherwise. Pass ${MIGRATE_FLAG_LABEL} to catch it up (you will be asked for the doadmin password).`,
-    );
-    return;
-  }
-  try {
-    await externalMigrationCredential(envFilePath, log);
-  } catch (err) {
-    console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
-}
-
-/**
- * Prompt for the doadmin password and assemble the one-shot migration URL from
- * it plus `$HOME/.env`'s discrete connection tokens (host/port/database/
- * sslmode — the same tokens --db external already reads; never a password —
- * see scripts/lib/env-role.ts). Verifies it authenticates, then sets
- * MIGRATE_DATABASE_URL on this process so it reaches the migrate container
- * exactly the way restore-container.ts's twinMigrationCredential() does.
- *
- * The caller MUST clear process.env.MIGRATE_DATABASE_URL once migrate()
- * returns — this function only sets it, since the boot continues running
- * (serving traffic) long after the one migration this credential is for.
- *
- * Throws — never falls back to rm_app or a skipped migration — on a missing
- * `.env`, a non-interactive terminal, or a password that does not
- * authenticate.
- */
-export async function externalMigrationCredential(
-  envFilePath: string,
-  log: (m: string) => void,
-): Promise<void> {
-  const env = loadEnvFile(envFilePath);
-  if (!env?.host || !env?.database) {
-    throw new Error(
-      `${MIGRATE_FLAG_LABEL}: ${envFilePath} is missing the host/database connection tokens ` +
-        `${"--db external"} already needed to boot.`,
-    );
-  }
-  const password = await hiddenPrompt(`${DOADMIN_ROLE} password`);
-  if (!password) throw new Error(`${MIGRATE_FLAG_LABEL}: no password entered.`);
-  const port = env.port ?? "5432";
-  const sslmode = env.sslmode ?? "require";
-  const u = new URL(`postgres://${env.host}`);
-  u.port = port;
-  u.username = encodeURIComponent(DOADMIN_ROLE);
-  u.password = encodeURIComponent(password);
-  u.pathname = `/${env.database}`;
-  u.searchParams.set("sslmode", sslmode);
-  const url = u.toString();
-
-  log(`verifying ${DOADMIN_ROLE}@${env.host}:${port}/${env.database} authenticates…`);
-  verifyAuthenticates(url);
-  log(`${DOADMIN_ROLE} authenticated — this run's migration will use it, never rm_app`);
-  process.env.MIGRATE_DATABASE_URL = url;
 }

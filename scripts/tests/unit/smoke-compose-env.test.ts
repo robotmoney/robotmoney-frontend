@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { shadowingStackEnvWarnings, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
+import { shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { refuseCheckoutEnvFile } from "../../smoke.ts";
 import {
@@ -40,13 +40,60 @@ describe("smokePassthroughEnv", () => {
     expect(smokePassthroughEnv(env)).toEqual({});
   });
 
-  test("still forwards MIGRATE_DATABASE_URL, which the rehearsal sets on itself", () => {
-    // restore-container.ts assigns process.env.MIGRATE_DATABASE_URL from the
-    // shaped twin; the passthrough is how it reaches compose. Unlike
-    // WORKER_DATABASE_URL it is produced by this boot, not inherited from a
-    // deployment's `.env`.
+  test("never forwards a migration credential either: no container runs a migration any more", () => {
+    // `bun smoke --migrate` runs the migrate run on the HOST as rm_owner, under
+    // the boot's target lock (backend/scripts/smoke-prepare.ts). The one-shot
+    // migrate container that read MIGRATE_DATABASE_URL — and the twin
+    // bootstrap login restore-container.ts used to hand it — is gone, so a
+    // value, set by anything, reaches no container.
     const url = "postgres://rm_bootstrap:pw@172.17.0.1:32817/rm_restore_check";
-    expect(smokePassthroughEnv({ MIGRATE_DATABASE_URL: url })).toEqual({ MIGRATE_DATABASE_URL: url });
+    expect(smokePassthroughEnv({ MIGRATE_DATABASE_URL: url })).toEqual({});
+  });
+
+  test("the worker's credential is the stack's own: buildComposeEnv emits rm_worker from StackDatabase.roleUrls", () => {
+    const cfg: StackConfig = {
+      repoRoot: "/repo",
+      project: "rm_smoke_stack_roles",
+      profile: "core",
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: {
+        ...DEFAULT_STACK_DATABASE,
+        roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney", worker: "postgres://rm_worker:w@postgres:5432/robotmoney" },
+      },
+      credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
+      environment: { class: "local", hash: "0123456789" },
+      rmEnv: "stage",
+      extraComposeEnv: smokePassthroughEnv({ WORKER_DATABASE_URL: "postgres://rm_worker:shell@elsewhere:5432/x" }),
+    };
+    const env = buildComposeEnv(cfg);
+    expect(env.DATABASE_URL).toBe("postgres://rm_app:a@postgres:5432/robotmoney");
+    expect(env.WORKER_DATABASE_URL).toBe("postgres://rm_worker:w@postgres:5432/robotmoney");
+    // Red control: without roleUrls both fall back to the one legacy login a
+    // consumer that has not moved onto the taxonomy states explicitly.
+    const legacy = buildComposeEnv({ ...cfg, database: DEFAULT_STACK_DATABASE });
+    expect(legacy.WORKER_DATABASE_URL).toBe(legacy.DATABASE_URL);
+    expect(legacy.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
+  });
+
+  test("§4.4: a boot under RM_ENV=prod hands api NO allow-insecure; a stage boot keeps it (criterion 46's weakening-flag half)", () => {
+    const cfg: StackConfig = {
+      repoRoot: "/repo",
+      project: "rm_smoke_stack_insecure",
+      profile: "core",
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: DEFAULT_STACK_DATABASE,
+      credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c" },
+      environment: { class: "local", hash: "0123456789" },
+      rmEnv: "prod",
+    };
+    expect(stackAllowInsecureFor("prod")).toBe(false);
+    expect(stackAllowInsecureFor("stage")).toBe(true);
+    expect(buildComposeEnv({ ...cfg, allowInsecure: stackAllowInsecureFor("prod") }).RM_ALLOW_INSECURE).toBe("");
+    expect(buildComposeEnv({ ...cfg, rmEnv: "stage", allowInsecure: stackAllowInsecureFor("stage") }).RM_ALLOW_INSECURE).toBe("1");
+    // Red control: a consumer that decides nothing keeps the overlay's old pin.
+    expect(buildComposeEnv(cfg).RM_ALLOW_INSECURE).toBe("1");
+    // And no one smuggles it back in through the extras map.
+    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/StackConfig field/);
   });
 
   test("ignores a name that is not on the allowlist", () => {
@@ -284,7 +331,7 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
   test("smoke:twin as package.json runs it: the boot never sees the planted SMOKE_PROJECT", () => {
     const r = run(["--no-env-file", twin, "--reuse"]);
     expect(r.out).toContain("equivalent: bun smoke --local dump --migrate");
-    expect(r.out).toContain('invalid RM_ENV "bogus"');
+    expect(r.out).toContain('RM_ENV="bogus" is not a policy value');
     expect(r.out).not.toContain("SMOKE_PROJECT is retired");
     expect(r.code).toBe(1);
   }, 30_000);

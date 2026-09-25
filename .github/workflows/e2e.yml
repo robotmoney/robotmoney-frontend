@@ -378,11 +378,23 @@ jobs:
         # §5), so this job asks for both — its own fresh local stack, migrated,
         # with demo data, never production. `--no-env-file`: the boot refuses an
         # environment bun filled from the checkout's `.env`.
+        #
+        # UNATTENDED (spec §10 W2 "Unattended CI boot `--local blank --migrate
+        # --seed`"): RM_ENV=stage is the policy (§4.1: stage, test and CI share
+        # it), stdin is closed, and a local mode has no terminal prompt (§5:
+        # the owner password is the one smoke generated). A boot that asked for
+        # rm_owner or a y/n here would be waiting on nobody, so the transcript
+        # is checked for either prompt and the step fails if one appeared.
         run: |
           set -o pipefail
-          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          bun --no-env-file scripts/smoke.ts --local blank --migrate --seed < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+          if grep -Eq "rm_owner password|type y to continue" "$RUNNER_TEMP/e2e-smoke.log"; then
+            echo "::error::the unattended CI boot printed an interactive prompt (spec §5: no terminal prompt exists in local modes)"
+            exit 1
+          fi
         env:
           CI: "true"
+          RM_ENV: stage
           # Swarm takes are always live-authored through opencode. A missing
           # credential, CLI, or model response fails this required gate loudly;
           # there is no deterministic memo fallback.

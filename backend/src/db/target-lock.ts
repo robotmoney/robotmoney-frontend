@@ -1,9 +1,14 @@
 // The target-lock protocol — smoke-production-spec.md §2, in full.
 //
 // STATUS. Implemented and proved against a live Postgres by
-// backend/tests/target-lock.test.ts. It is a library: the tools in §2's caller
-// list are moved onto it by later #1026 work, and until each is, that tool
-// takes no target lock of its own.
+// backend/tests/target-lock.test.ts. Its callers today: `bun run migrate`
+// (backend/scripts/migrate.ts, through migrate-run.ts's migrateCommand) and
+// `bun smoke` (scripts/lib/smoke-main.ts), which both acquire the ONE session
+// lock through acquireTargetLock, and every mutation either performs — the
+// migrate run, the blank bootstrap, the identity write, the seed — runs through
+// withMutationFence / withFenceOn. scripts/tests/integration/smoke-instance-lock
+// .test.ts proves the two tools contend as processes. `--spoof-keys` and the
+// §9.1 production-initialization commands do not exist yet.
 //
 // ── The invariant, quoted verbatim from spec §2 ─────────────────────────────
 //
@@ -161,9 +166,9 @@ export type TargetLockKey = bigint & { readonly __brand: "TargetLockKey" };
  * header's "One constant key"). Postgres scopes an advisory lock to the
  * database it was taken in, so this one value already means "this database".
  *
- * The number is the literal `backend/tests/migrate-run.test.ts` has always
- * passed as its lock key, so the migrate runner moving onto this constant
- * changes no value that runner's tests already pin. It is non-negative, which
+ * The migrate run takes no key of its own any more: it runs under the session
+ * lock its caller acquired with this key, and fences each transaction with this
+ * key's `int8` form (backend/scripts/migrate-run.ts). It is non-negative, which
  * is what makes the catalog's classid/objid split reassemble to exactly it.
  */
 export const TARGET_LOCK_KEY = 7726322199513601n as TargetLockKey;
@@ -362,7 +367,26 @@ export interface LockHolder {
  * would be decided by pool pressure rather than by the run. The pool in
  * `db/client.ts` is therefore never the right place to take this.
  */
-export interface TargetLock {
+/**
+ * A session target lock some tool holds, as far as a phase boundary needs to
+ * know: whose it is, and a way to ASK THE SERVER whether it is still held.
+ *
+ * Two shapes satisfy it. The {@link TargetLock} a tool acquired itself, and an
+ * {@link observeTargetLock} view of a lock another PROCESS of the same run holds
+ * — `bun smoke` holds the lock in its own process and runs each preparation
+ * (the migrate run, the blank bootstrap) in a child, and the child proves at its
+ * own boundaries that its parent's lock is still there. Neither shape ever
+ * answers from a local flag.
+ */
+export interface HeldTargetLock {
+  readonly key: TargetLockKey;
+  readonly holder: LockHolder;
+  /** The backend pid of the dedicated connection the session lock lives on. */
+  readonly backendPid: number;
+  stillHeld(): Promise<boolean>;
+}
+
+export interface TargetLock extends HeldTargetLock {
   readonly key: TargetLockKey;
   readonly holder: LockHolder;
   /**
@@ -395,12 +419,13 @@ export interface TargetLock {
  * connection is gone. A question that cannot be answered is answered `false`:
  * §2 gives "not held", "connection dead" and "cannot tell" the same verdict.
  */
-function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>): TargetLock {
+function makeLock(holder: LockHolder, client: postgresTypes.Sql<{}>, backendPid: number): TargetLock {
   const key = TARGET_LOCK_KEY;
   let released = false;
   return {
     key,
     holder,
+    backendPid,
     connection: client,
     async stillHeld(): Promise<boolean> {
       try {
@@ -537,7 +562,7 @@ export async function acquireTargetLock(options: {
       await sleep(Math.min(50, remaining));
     }
 
-    const lock = makeLock({ ...options.holder, acquiredAt: new Date().toISOString() }, client);
+    const lock = makeLock({ ...options.holder, acquiredAt: new Date().toISOString() }, client, first?.pid ?? -1);
     // The lock was taken by one statement; prove the NEXT statement's session
     // holds it. A pooler that moved us between the two fails here even when
     // the probe above was lucky.
@@ -679,6 +704,22 @@ export async function readTargetState(conn: DbHandle): Promise<TargetState> {
   if (!ledger.ok) throw new Error(`the migration ledger could not be read: ${ledger.error}`);
   if (!manifest.ok) throw new Error(`the schema manifest could not be read: ${manifest.error}`);
   return { identity: identity.value, ledger: ledger.value, manifestHash: manifest.value };
+}
+
+/**
+ * {@link readTargetState} over a short-lived connection of its own — what a
+ * tool reads BEFORE it holds the lock: the plan's expectation, which
+ * {@link acquireTargetLock} then revalidates. `bun smoke` reads a remote
+ * target this way from the host (it hashes the target's kind into its plan,
+ * spec §1.2), and scripts/ cannot construct a `postgres` client of its own.
+ */
+export async function readTargetStateAt(databaseUrl: string): Promise<TargetState> {
+  const reader = postgres(databaseUrl, { max: 1, onnotice: () => {}, connect_timeout: 10 });
+  try {
+    return await readTargetState(reader);
+  } finally {
+    await reader.end({ timeout: 5 }).catch(() => undefined);
+  }
 }
 
 /** A short, stable name for a ledger list, so two lists can be compared by eye in a refusal. */
@@ -850,35 +891,90 @@ export async function withMutationFence<T>(
   body: (tx: DbHandle) => Promise<T>,
 ): Promise<T> {
   refusePoolerUrl(options.databaseUrl);
-  const key = TARGET_LOCK_KEY;
   const client = dedicatedClient(options.databaseUrl, `rm-tl-fence:${options.label}`.slice(0, APP_NAME_MAX));
   try {
-    const result = await client.begin(async (tx) => {
-      // FIRST statement in the transaction, and the blocking form: a competitor
-      // waits for the in-flight mutation to end rather than concluding it ended.
-      await tx`SELECT pg_advisory_xact_lock(${key.toString()}::bigint)`;
-      const value = await body(tx);
-      // The fence is released by commit and by nothing else, so if it is gone
-      // here the body ended this transaction itself and whatever it did after
-      // that ran unfenced.
-      const rows = await tx<{ count: string }[]>`
-        SELECT count(*)::text AS count FROM pg_locks
-         WHERE locktype = 'advisory' AND granted
-           AND pid = pg_backend_pid()
-           AND objsubid = ${OBJSUBID_FENCE}
-           AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
-      if (Number(rows[0]?.count ?? "0") === 0) {
-        throw new Error(
-          `the mutation fence for ${options.label} was lost before commit: the body committed or rolled back its own ` +
-            "transaction, and work that escapes this transaction is unfenced work.",
-        );
-      }
-      return value;
-    });
-    return result as T;
+    return await withFenceOn(client, options.label, body);
   } finally {
     await client.end({ timeout: 5 });
   }
+}
+
+/**
+ * {@link withMutationFence} on a pool the CALLER holds, for a mutation whose
+ * connection is already open under the credential it needs — the migrate run
+ * holds one `rm_owner` pool for all of its transactions (§8.3: "one transaction
+ * each"), and opening a dedicated client per migration would mean re-presenting
+ * a typed owner password per file.
+ *
+ * The same four requirements hold: BEGIN, `pg_advisory_xact_lock` as the first
+ * statement, on the connection performing the mutation (`pool.begin` runs the
+ * whole transaction on one of the pool's connections), the blocking form, and
+ * no release but commit or abort.
+ */
+export async function withFenceOn<T>(
+  pool: postgresTypes.Sql<{}>,
+  label: string,
+  body: (tx: DbHandle) => Promise<T>,
+): Promise<T> {
+  const key = TARGET_LOCK_KEY;
+  const result = await pool.begin(async (tx) => {
+    // FIRST statement in the transaction, and the blocking form: a competitor
+    // waits for the in-flight mutation to end rather than concluding it ended.
+    await tx`SELECT pg_advisory_xact_lock(${key.toString()}::bigint)`;
+    const value = await body(tx);
+    // The fence is released by commit and by nothing else, so if it is gone
+    // here the body ended this transaction itself and whatever it did after
+    // that ran unfenced.
+    const rows = await tx<{ count: string }[]>`
+      SELECT count(*)::text AS count FROM pg_locks
+       WHERE locktype = 'advisory' AND granted
+         AND pid = pg_backend_pid()
+         AND objsubid = ${OBJSUBID_FENCE}
+         AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
+    if (Number(rows[0]?.count ?? "0") === 0) {
+      throw new Error(
+        `the mutation fence for ${label} was lost before commit: the body committed or rolled back its own ` +
+          "transaction, and work that escapes this transaction is unfenced work.",
+      );
+    }
+    return value;
+  });
+  return result as T;
+}
+
+/**
+ * A view of a session target lock ANOTHER process holds, provable from here.
+ *
+ * `bun smoke` holds the lock on its own dedicated connection for the whole run
+ * (§2) and performs each preparation in a child process; the child must not
+ * take the session lock again (it would wait on its own parent) and must not
+ * run on trust either. It is handed the parent's lock backend pid and asks the
+ * server, through its own connection `conn`, whether THAT backend still holds
+ * the session lock on THIS database. A parent that died, lost its connection or
+ * released the lock fails the proof exactly as {@link TargetLock.stillHeld}
+ * would.
+ */
+export function observeTargetLock(conn: DbHandle, backendPid: number, holder: LockHolder): HeldTargetLock {
+  const key = TARGET_LOCK_KEY;
+  return {
+    key,
+    holder,
+    backendPid,
+    async stillHeld(): Promise<boolean> {
+      try {
+        const rows = await conn<{ count: string }[]>`
+          SELECT count(*)::text AS count FROM pg_locks
+           WHERE locktype = 'advisory' AND granted
+             AND pid = ${backendPid}
+             AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+             AND objsubid = ${OBJSUBID_SESSION}
+             AND ((classid::bigint << 32) | objid::bigint) = ${key.toString()}::bigint`;
+        return Number(rows[0]?.count ?? "0") > 0;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -906,7 +1002,7 @@ export async function withMutationFence<T>(
  * Serves spec §10 W1: "Standalone `bun run migrate` and `bun smoke` contend on
  * the target lock, including connection loss mid-phase."
  */
-export async function assertStillHeld(lock: TargetLock, phase: string): Promise<void> {
+export async function assertStillHeld(lock: HeldTargetLock, phase: string): Promise<void> {
   if (await lock.stillHeld()) return;
   throw new Error(
     `target lock ${lock.key} cannot be proven held, so the phase "${phase}" does not start. ` +

@@ -82,7 +82,12 @@ services:
       robotmoney.env: ${RM_STACK_ENV_CLASS}
       robotmoney.env.hash: ${RM_STACK_ENV_HASH}
     environment:
-      RM_ALLOW_INSECURE: "1"
+      # Decided per boot, never pinned here: scripts/stack/config.ts
+      # buildComposeEnv() emits it from StackConfig.allowInsecure, and the smoke
+      # boot sets that from its policy (stackAllowInsecureFor) — `1` on stage,
+      # empty under RM_ENV=prod (§4.4 refuses --allow-insecure on prod). A bare
+      # `docker compose` with nothing set resolves empty: secure by default.
+      RM_ALLOW_INSECURE: ${RM_ALLOW_INSECURE:-}
       # Data-path knobs (issue #50, made unconditional by issue #147 — the
       # DEMO_HERMETIC hermetic opt-in and the base-rpc-stub service were
       # removed entirely; every boot, local or CI, is production-parity LIVE).

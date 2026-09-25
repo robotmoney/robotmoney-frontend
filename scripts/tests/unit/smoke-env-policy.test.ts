@@ -381,17 +381,22 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     WORKER_DATABASE_URL: `postgres://rm_worker:s3cret@${REMOTE_HOST}:25060/defaultdb`,
     MIGRATE_DATABASE_URL: `postgres://rm_owner:s3cret@${REMOTE_HOST}:25060/defaultdb`,
   });
-  // smoke-main.ts's own shape for an ephemeral data path: the baked-in local
-  // credentials, no URL, so internalDatabaseUrl() names the `postgres` service.
+  // smoke-main.ts's own shape for a blank local mode: the runtime roles'
+  // URLs on the compose `postgres` service, with the instance's generated
+  // passwords (StackDatabase.roleUrls).
+  const LOCAL_ROLES = {
+    app: "postgres://rm_app:generated-app@postgres:5432/robotmoney?sslmode=disable",
+    worker: "postgres://rm_worker:generated-worker@postgres:5432/robotmoney?sslmode=disable",
+  };
   const cfg = (env: Record<string, string | undefined>): StackConfig => ({
     repoRoot: "/repo",
     project: "rm_smoke_stack_c32",
     profile: "full",
     composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
-    database: DEFAULT_STACK_DATABASE,
+    database: { ...DEFAULT_STACK_DATABASE, roleUrls: LOCAL_ROLES },
     credentials: { adminToken: "a", automationToken: "b", analyticsToken: "c", analyticsTokenFile: "/tmp/tok" },
     environment: { class: "local", hash: "c32c32c32c" },
-    rmEnv: "smoke",
+    rmEnv: "stage",
     extraComposeEnv: { ...smokePassthroughEnv(env) },
   });
 
@@ -400,30 +405,33 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     const warning = dropShellMigrationCredential(env);
     expect(warning).toContain("MIGRATE_DATABASE_URL");
     const spawn = buildSpawnEnv(cfg(env), env);
-    expect(spawn.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
+    expect(spawn.DATABASE_URL).toBe(LOCAL_ROLES.app);
+    expect(spawn.WORKER_DATABASE_URL).toBe(LOCAL_ROLES.worker);
     expect(spawn).not.toHaveProperty("MIGRATE_DATABASE_URL");
     expect(Object.entries(spawn).filter(([, v]) => v.includes(REMOTE_HOST))).toEqual([]);
   });
 
-  test("red control: without the drop, the shell's MIGRATE_DATABASE_URL reaches the migrate run", () => {
+  test("even WITHOUT the drop, no shell database URL reaches compose: none is on the allowlist any more", () => {
+    // Red control for the test above in its new shape: the drop is kept (so a
+    // shell value cannot reach anything the boot might read), but the stack no
+    // longer forwards a migration credential or a worker URL from the shell at
+    // all — the migrate run is the host's, and the worker's URL the stack's.
     const env = shell();
     const spawn = buildSpawnEnv(cfg(env), env);
-    expect(spawn.MIGRATE_DATABASE_URL).toContain(REMOTE_HOST);
+    expect(spawn).not.toHaveProperty("MIGRATE_DATABASE_URL");
+    expect(Object.entries(spawn).filter(([, v]) => v.includes(REMOTE_HOST))).toEqual([]);
   });
 
-  test("the credential the boot sets for itself AFTER the drop still passes through", () => {
-    const env = shell();
-    dropShellMigrationCredential(env);
-    env.MIGRATE_DATABASE_URL = "postgres://twin_bootstrap:x@172.17.0.1:5555/robotmoney";
-    expect(buildSpawnEnv(cfg(env), env).MIGRATE_DATABASE_URL).toBe(env.MIGRATE_DATABASE_URL);
-  });
-
-  test("smoke-main.ts drops it before anything assigns or reads it", () => {
+  test("smoke-main.ts drops the shell's migration credential before anything reads the environment for compose", () => {
     const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
     const drop = src.indexOf("dropShellMigrationCredential(process.env)");
     expect(drop).toBeGreaterThan(0);
-    for (const later of ["twinMigrationCredential(dataPath.url", "resolveExternalMigrationOptIn(", "smokePassthroughEnv(process.env)"]) {
+    for (const later of ["smokePassthroughEnv(process.env)", "runPrepareStep("]) {
       expect({ later, after: src.indexOf(later) > drop }).toEqual({ later, after: true });
+    }
+    // The retired hand-offs are gone, not merely reordered.
+    for (const retired of ["twinMigrationCredential(", "resolveExternalMigrationOptIn(", "process.env.MIGRATE_DATABASE_URL ="]) {
+      expect({ retired, present: src.includes(retired) }).toEqual({ retired, present: false });
     }
   });
 });

@@ -15,6 +15,8 @@
 //   run 4  an untracked source file is added to a build context: the plan id
 //          changes (criterion 38, D52's source identity), and the rerun
 //          supersedes the journal instead of resuming it.
+//   run 5  a terminal's Ctrl-C, twice, to the boot's whole process group: the
+//          running step completes, and the stop lands at the next boundary.
 //
 // `smoke:status` is read between the runs, from its own process, so the report
 // an operator gets after each interruption is asserted too.
@@ -173,5 +175,33 @@ describe("SIGINT at a phase boundary, and resume under the same plan id (criteri
     // Red control: with the probe gone the sources are back, and so is the id.
     const restored = await planOf("run 4c (volume, probe removed)");
     expect(restored.id).toBe(unchanged.id);
+  }, BOOT_TIMEOUT_MS);
+
+  test("run 5 — a terminal's Ctrl-C reaches the whole PROCESS GROUP, twice: the running step still completes, and the stop is journaled at the next boundary", async () => {
+    // What a terminal does: SIGINT to every process in the foreground group.
+    // The boot leads its own group here (pgid = its pid) so the test runner is
+    // not in it. Before #1026 w3 the step's docker/bun children were in that
+    // group too, so a second Ctrl-C killed the step mid-flight and it was
+    // journaled `failed` (wave-2 open problem 10). They now run in groups of
+    // their own (scripts/stack/stack.ts `detached`), and the preparation child
+    // ignores SIGINT itself, so only the boot hears it — and honours it at the
+    // next boundary, as §1.4 says.
+    current = spawnBoot(h!, [], { local: "volume", ownProcessGroup: true });
+    await waitFor(() => {
+      const j = journalNow(h!);
+      return j !== null && j.phases.some((r) => r.phase === "prepare" && r.step === "assemble" && r.status === "started");
+    }, BOOT_TIMEOUT_MS - 120_000, "run 5 to begin assembling", current);
+    const pgid = current.proc.pid;
+    process.kill(-pgid, "SIGINT");
+    await Bun.sleep(300);
+    process.kill(-pgid, "SIGINT");
+    const code = await current.exited;
+    expect({ code, tail: code === 130 ? "" : current.output().slice(-3000) }).toEqual({ code: 130, tail: "" });
+    const phases = journalNow(h!)!.phases;
+    const last = phases.at(-1)!;
+    expect(last.status).toBe("interrupted");
+    // The step that was running when the signals arrived was NOT killed by them.
+    expect(phases.at(-2)!.status).toBe("committed");
+    expect(phases.filter((r) => r.status === "failed")).toEqual([]);
   }, BOOT_TIMEOUT_MS);
 });

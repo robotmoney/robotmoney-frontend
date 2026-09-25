@@ -62,9 +62,11 @@ export const CADENCE_FLAG = "--cadence";
  * Run the migrate step this once.
  *
  * NEVER IMPLIED by any `--local` mode (spec §4.3, §8.5): a boot migrates a
- * database only when it was told to. On the remote database smoke-main.ts
- * prompts for the owner password at the terminal, never from an env var or
- * `.env`; see scripts/lib/smoke-external-migrate.ts.
+ * database only when it was told to. It runs the migrate run of §8.3 as
+ * rm_owner under the boot's target lock (backend/scripts/smoke-prepare.ts →
+ * migrate-run.ts migrateCommand): a local mode uses the owner password smoke
+ * generated; on the remote database the rm_owner password is typed at the
+ * terminal, never read from an env var or `.env`.
  */
 export const MIGRATE_FLAG = "--migrate";
 
@@ -75,6 +77,11 @@ export const MIGRATE_FLAG = "--migrate";
  * populated by construction and refuse it at parse time.
  */
 export const SEED_FLAG = "--seed";
+
+/** How long `bun smoke` waits behind another holder of the target lock (§2). */
+export const LOCK_TIMEOUT_FLAG = "--lock-timeout";
+export const LOCK_TIMEOUT_DEFAULT_SECONDS = 60;
+
 
 /**
  * Flags spec §1 retires "with no alias", plus two spellings that only ever
@@ -237,7 +244,26 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   Object.freeze({ flag: "--instance", arity: 1 as const }),
   // Spec §6.1: the credential file (the roster); overrides RM_CREDENTIALS.
   Object.freeze({ flag: "--credentials", arity: 1 as const }),
+  // Spec §2: "A tool that finds the lock held waits with a timeout, then
+  // refuses naming the holder." Seconds; LOCK_TIMEOUT_DEFAULT_SECONDS when absent.
+  Object.freeze({ flag: LOCK_TIMEOUT_FLAG, arity: 1 as const }),
 ]);
+
+
+/**
+ * The target-lock wait this argv asks for, in milliseconds. THROWS on a value
+ * that is not a non-negative number of seconds: an unparseable timeout silently
+ * becoming "wait forever" is the hang §2's bounded wait exists to prevent.
+ */
+export function lockTimeoutMs(argv: readonly string[]): number {
+  const raw = valueOf(argv, LOCK_TIMEOUT_FLAG);
+  if (raw === undefined) return LOCK_TIMEOUT_DEFAULT_SECONDS * 1000;
+  const seconds = Number(raw);
+  if (!/^\d+(\.\d+)?$/.test(raw) || !Number.isFinite(seconds)) {
+    throw new Error(`${LOCK_TIMEOUT_FLAG} takes a number of seconds, got "${raw}".`);
+  }
+  return Math.round(seconds * 1000);
+}
 
 /** Levenshtein, bounded; only ever asked about short flag values. */
 function editDistance(a: string, b: string): number {
@@ -426,37 +452,6 @@ export function requestsSeed(argv: readonly string[]): boolean {
  */
 export function shouldSeed(argv: readonly string[]): boolean {
   return requestsSeed(argv);
-}
-
-/** What the boot's read-only preflight runs, between postgres and migrate(). */
-export interface BootPreflightPlan {
-  /** scripts/db-preflight.ts: classifies a database `--seed` is about to write. */
-  classify: boolean;
-  /** backend/scripts/schema-current.ts: refuses a schema this code is ahead of. */
-  schemaCurrent: boolean;
-}
-
-/**
- * Decide the boot's preflight from the data path and the two mutation flags.
- *
- * SCHEMA CURRENCY ON EVERY PATH THAT SKIPS MIGRATE. No mode implies `--migrate`
- * (spec §4.3, §5), so a boot without it runs on whatever schema the database
- * already holds. Spec §7 check 3 asks, "against any database", whether the
- * booting code supports that schema, and refuses if not. A restored dump is on
- * production's schema from when it was taken, and a reattached volume is on
- * whatever the last boot left: both are usually behind this checkout. Keying
- * the check on the remote path alone (as it once was) let a stale dump boot
- * current code on an old schema, with no refusal. A blank database has no
- * schema at all until the snapshot bootstrap lands, so it refuses too.
- *
- * The classify step is unchanged: it guards `--seed`, and only a database this
- * boot did not create itself needs classifying.
- */
-export function bootPreflightPlan(opts: { composePostgres: boolean; seeds: boolean; migrates: boolean }): BootPreflightPlan {
-  return {
-    classify: opts.seeds && !opts.composePostgres,
-    schemaCurrent: !opts.migrates,
-  };
 }
 
 /** The `--local` mode a resolved data path came from, or null for the remote database. */

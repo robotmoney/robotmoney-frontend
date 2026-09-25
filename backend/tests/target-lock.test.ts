@@ -793,6 +793,88 @@ describe("withMutationFence — §2, the fence is taken on the MUTATING connecti
   }, 20000);
 });
 
+describe("the seed and the identity write are fenced mutations — a competitor's fence holds each until it commits (criterion 35)", () => {
+  // Spec §2: "Every mutation (migration, grant reconciliation, seed, key rebind,
+  // token provisioning, identity write) runs in a transaction that first takes
+  // `pg_advisory_xact_lock` on the same key". `bun smoke` performs both of these
+  // exactly as below (backend/scripts/smoke-prepare.ts): the identity write
+  // through smoke-identity.ts's enrollAsRehearsal over the fence's own
+  // transaction, the seed through seed.ts over the same kind of transaction.
+  // A competitor holds the fence in the middle of a slow mutation; each must
+  // start only after the competitor COMMITS.
+  //
+  // Each case writes into a database of its OWN, copied from the suite's
+  // template and dropped after (never the file's shared database, and never a
+  // DELETE to reset it). Advisory locks are per database, so the competitor
+  // fences on the same copy.
+  async function withTemplateCopy<T>(body: (url: string) => Promise<T>): Promise<T> {
+    const template = process.env.RM_TEST_TEMPLATE_DB;
+    if (!template) throw new Error("RM_TEST_TEMPLATE_DB is not set (tests/preload.ts sets it)");
+    const name = `rm_tl_fence_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    await sql.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
+    const url = new URL(DATABASE_URL);
+    url.pathname = `/${name}`;
+    try {
+      return await body(url.toString());
+    } finally {
+      await sql.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    }
+  }
+
+  async function competitor(url: string, order: string[]): Promise<void> {
+    await withMutationFence({ databaseUrl: url, label: "competitor" }, async (tx) => {
+      order.push("competitor:start");
+      await tx`SELECT pg_sleep(0.6)`;
+      order.push("competitor:commit");
+    });
+  }
+
+  test("the identity write waits for the competitor's fence, then writes rehearsal inside its own", async () => {
+    const { enrollAsRehearsal, transactionIdentityStore } = await import("../../scripts/lib/smoke-identity.ts");
+    await withTemplateCopy(async (url) => {
+      const reader = postgres(url, { max: 1, onnotice: () => {} });
+      try {
+        // The copy starts unenrolled, so the row read afterwards is this write's.
+        expect(await reader<{ n: number }[]>`SELECT count(*)::int AS n FROM deployment_identity`).toMatchObject([{ n: 0 }]);
+        const order: string[] = [];
+        const held = competitor(url, order);
+        await Bun.sleep(150);
+        const write = withMutationFence({ databaseUrl: url, label: "identity" }, async (tx) => {
+          order.push("identity:start");
+          const row = await enrollAsRehearsal(transactionIdentityStore(tx), { note: "fence test", remoteAcknowledged: false });
+          order.push("identity:wrote");
+          return row;
+        });
+        await held;
+        const row = await write;
+        expect(order).toEqual(["competitor:start", "competitor:commit", "identity:start", "identity:wrote"]);
+        expect(row.kind).toBe("rehearsal");
+        const [stored] = await reader<{ kind: string }[]>`SELECT kind FROM deployment_identity`;
+        expect(stored?.kind).toBe("rehearsal");
+      } finally {
+        await reader.end({ timeout: 5 });
+      }
+    });
+  }, 30_000);
+
+  test("the seed waits for the competitor's fence, then runs every statement inside its own", async () => {
+    const { seed } = await import("../src/db/seed.ts");
+    await withTemplateCopy(async (url) => {
+      const order: string[] = [];
+      const held = competitor(url, order);
+      await Bun.sleep(150);
+      const seeding = withMutationFence({ databaseUrl: url, label: "seed" }, async (tx) => {
+        order.push("seed:start");
+        await seed(tx);
+        order.push("seed:done");
+      });
+      await held;
+      await seeding;
+      expect(order).toEqual(["competitor:start", "competitor:commit", "seed:start", "seed:done"]);
+    });
+  }, 30_000);
+});
+
 describe("assertStillHeld — §2, no phase proceeds on a lock the tool cannot prove it holds [integration tier]", () => {
   test("a held lock passes the phase-boundary proof", async () => {
     const result = await acquire("smoke", "alpha");
