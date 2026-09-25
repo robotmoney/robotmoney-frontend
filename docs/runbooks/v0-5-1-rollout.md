@@ -140,7 +140,7 @@ production host's disk. Stage-2's read-only URL reaches the replica
 | R3.0 | `df -h ~` | free space ≥ 3 × the previous full dump | free GB |
 | R3.1 | `export RM_BACKUP_DIR=~/rm-backup-v051-$(date -u +%Y%m%dT%H%M%SZ)` (outside the checkout; R4.1's wipe removes docker state only, never this directory) | — | path |
 | R3.2 | In tmux: `bun run smoke:capture 2>&1 \| tee ~/r3-capture.log` | exit 0; the log says `pg_is_in_recovery()=true` (the replica); expect 20+ min at 8 GB | stamp, dump size |
-| R3.3 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` (restores into a throwaway local container on stage-2) **[TO BUILD: 0.5.0-to-0.5.1 copy]** | "DUMP SAFE" | receipt |
+| R3.3 | `bun backend/scripts/upgrades/0.5.0-to-0.5.1/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` (restores into a throwaway local container on stage-2) | "DUMP SAFE FOR 0.5.1": v0.5.0 + 0062 recorded, exactly 0061 and 0063 pending, the tables they touch present | receipt |
 | R3.4 | Copy `$RM_BACKUP_DIR` (dump, globals) off stage-2, and the passphrase to a separate place: stage-2 is ephemeral | two copies of the dump exist, neither on the production host | locations |
 | R3.5 | Record the time R3.2 finished. The managed cluster's point-in-time restore is the second way back, and it needs a timestamp from before R6.4's migrations | — | time (UTC) |
 
