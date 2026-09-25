@@ -84,10 +84,11 @@ here with the reason, because R8 will fail on it.
 
 | Step | Command | Pass | Record |
 |---|---|---|---|
+| R1.0 | `git rev-parse origin/releases-0.5.x v0.5.0^{commit}` | both `ec261867…` (the branch was pruned back to v0.5.0 on 2026-09-24, so R1.1 is a fast-forward) | both |
 | R1.1 | `git fetch origin --tags && git switch releases-0.5.x && git merge --ff-only origin/qa/v0.5.1-website-picks && git push origin releases-0.5.x` | fast-forward only | new tip |
 | R1.2 | `RC_SHA=$(git rev-parse HEAD); echo $RC_SHA; git tag --points-at HEAD -l 'v0.5.1-rc.*'` | tag list empty | `RC_SHA` |
 | R1.3 | `git diff --name-only v0.5.0 "$RC_SHA" -- backend/migrations` | **exactly** `0061_rm_worker_wallet_backfill_grant.sql`, `0062_rm_readonly_sequence_select.sql`, `0063_swarm_judge_model_default.sql` | output |
-| R1.4 | `git diff --stat v0.5.0 "$RC_SHA" -- docker-compose.yml` | only the analytics-producer `MIGRATE_DATABASE_URL` removal | diffstat |
+| R1.4 | `git diff --stat v0.5.0 "$RC_SHA" -- docker-compose.yml` | only two changes: the analytics producer loses `MIGRATE_DATABASE_URL`, and the other five `MIGRATE_DATABASE_URL:` lines gain the `:-` empty default | diffstat |
 | R1.5 | `bun install --force && bun install --force --cwd backend` | exit 0 | — |
 | R1.6 | `bun run typecheck && (cd backend && bun run typecheck)` | 0 errors | — |
 | R1.7 | `bun run test:unit && bun run --cwd frontend test && bun run --cwd contract test` | 0 fail | pass counts |
@@ -97,7 +98,7 @@ here with the reason, because R8 will fail on it.
 
 ## R2. Production baseline (read-only, on `rm-frontend-prod-1`)
 
-Run **before** anything changes. The point is to know what is broken now, so
+Run **before** anything changes, and **within 24 h of R6**: a baseline older than that describes a different production (the d61cb535 baseline below predates the storage upsize). The point is to know what is broken now, so
 that every problem is either fixed by this release, accepted in writing, or
 blocks the cutover. Production's checkout is still v0.5.0, which has no
 `prod:gate`, so the gate runs from a scratch clone of the release candidate
@@ -113,6 +114,9 @@ a session forced read-only.
 | R2.5 | **Triage.** For every FAIL check, every known-issue group and every unclassified warning in the report, write one row in the rollout report: *fixed by this release* (name the commit or migration; its classification rule must be a `known-issue`, so the post-release gate fails if it is still there), *accepted* (a written reason and a name), or *blocks the cutover*. An **unclassified error** is added to `scripts/lib/gate/log-classifications.json` in a reviewed commit with its class and reason, or it blocks. | no row empty; no blocker open | the triage table |
 | R2.6 | `SELECT name FROM schema_migrations ORDER BY name` | 73 rows ending `0062_rm_readonly_sequence_select.sql` (applied out of band from the abandoned 0.5.x work; see D6); save as `baseline-migrations.txt` | file hash |
 | R2.7 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
+| R2.8 | The migration login can act as the owner: `cd /root/robotmoney-frontend && psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env \| cut -d= -f2-)" -Atc "SELECT pg_has_role(current_user, 'rm_owner', 'MEMBER')"` | `t` (0061 and 0063 run under `SET LOCAL ROLE rm_owner`; the twin proved the SQL, not production's login) | row |
+| R2.9 | The judge's key is present and **funded**. Before 0063 production never called the judge model (a NULL model refuses first), so no production evidence exists that this key can pay for it. `K=$(grep -m1 '^OPENCODE_API_KEY=' /root/robotmoney-frontend/.env \| cut -d= -f2-); curl -s -o /dev/null -w '%{http_code}\n' https://opencode.ai/zen/v1/chat/completions -H "Authorization: Bearer $K" -H 'content-type: application/json' -d '{"model":"deepseek-v4-flash","max_tokens":1,"messages":[{"role":"user","content":"ok"}]}'; unset K` | `200`. A `401` or `402` blocks the cutover: after 0063 every judging would die on it | status code |
+| R2.10 | Host disk for R3: `df -h /root` | free space ≥ 3 × the previous full dump (18 GB free on 2026-09-25) | free GB |
 
 **Baseline record, 2026-09-25, commit d61cb535** (first run, without
 `--db-capacity-gb`): FAIL on 4 checks — capacity not stated (7.98 GB), judge
@@ -131,6 +135,7 @@ Unchanged from v0.5.0 §4.2, and it is a **full** dump — never `--twin-slim`.
 | R3.2 | `bun run smoke:capture` | exit 0; expect ~20 min at 6.5 GB | stamp, dump size |
 | R3.3 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | "DUMP SAFE" | receipt |
 | R3.4 | Copy `$RM_BACKUP_DIR` (dump, globals, passphrase) off the host | two copies exist | locations |
+| R3.5 | Record the time R3.2 finished. The managed cluster's point-in-time restore is the second way back, and it needs a timestamp from before R6.4's migrations | — | time (UTC) |
 
 ## R4. Twin rehearsal (stage-2)
 
@@ -151,6 +156,13 @@ subject, with nothing dead and nothing in the logs.
 | R4.8 | Judge fidelity: on the twin, set `swarm_judge_config.model` to NULL (production's value), run one session, confirm `twin:gate` **fails** with `JudgeUnavailable`; restore the model | the gate catches production's defect | output |
 | R4.9 | Tear the twin down: stop the `smoke:twin` process, then R4.1's wipe | 0 containers. A twin left running spends inference credit on every session: on 2026-09-24 one ran overnight until the account returned HTTP 402 on 1,065 member calls | time |
 
+**What R4 does not prove.** The twin restores a dump, so it never meets a
+session that production opened and the new driver must adopt mid-window
+(`session.ts` adopts a `collecting` session instead of opening a second one,
+issue 570). The 2026-09-25 twin held no open session at all. Production will
+hold one per subject at R6.3, because its window is as long as its interval.
+R6.2a lists them and R8.4 proves each one closes.
+
 R4.8 exists because the v0.5.0 rehearsal could not fail on the defect that
 broke production. A rehearsal gate that has never been seen to fail is not
 evidence.
@@ -162,7 +174,7 @@ R4.8 on the same twin: with `swarm_judge_config.model` set to NULL (production's
 
 | Step | Action | Pass |
 |---|---|---|
-| R5.1 | Owner reviews R1–R4 evidence and the D1–D5 decisions | written "go" with name and time |
+| R5.1 | Owner reviews R1–R4 evidence, the R2.5 triage table and the D1–D6 decisions. The R4.4 report must be for the **same** `RC_SHA` that R5.2 tags; a later commit means R4 again | written "go" with name and time |
 | R5.2 | `git tag -a v0.5.1-rc.N "$RC_SHA" -m 'v0.5.1-rc.N' && git push origin v0.5.1-rc.N` | tag points at `RC_SHA` |
 
 ## R6. Production cutover (`rm-frontend-prod-1`, root)
@@ -174,10 +186,11 @@ driver: while it is down, no session advances.
 | Step | Command | Pass | Record |
 |---|---|---|---|
 | R6.1 | Announce the window; confirm R3 backup (it is the only way back from a migration) and R5 tag | — | time |
-| R6.2 | Confirm the migration credential without printing it: `grep -c '^MIGRATE_DATABASE_URL=.' /root/robotmoney-frontend/.env` | `1` (the R6.4 boot migrates with it) | count |
-| R6.3 | `tmux attach -t 0`; Ctrl-C the running `smoke:archive`; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
-| R6.4 | `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log` | READY printed; `GET /health` 200; production T0 = READY time | T0, first 200 log lines |
-| R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.7 again, and `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; judge = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.7 = all `true` | lines, rows |
+| R6.2 | Confirm both credentials without printing them: `grep -cE '^(MIGRATE_DATABASE_URL\|OPENCODE_API_KEY)=.' /root/robotmoney-frontend/.env` | `2`: the R6.4 boot migrates with the first, and the judge pays with the second (the driver forwards it; compose never reads `.env` itself) | count |
+| R6.2a | The sessions R6.3 will interrupt: `bun run --cwd /root/rm-gate-$RC_SHA prod:gate -- --mode baseline --state-file /root/robotmoney-frontend/.agents/smoke-state.json --report /root/prod-gate-reports/R6-precut-$RC_SHA.md` and copy every session in `scheduled` or `collecting` into the rollout report | every open session listed, with its id and window close | the list |
+| R6.3 | `tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'` to find the pane running `bun` (on 2026-09-25: window `0:1` has two panes); `tmux attach -t 0`; Ctrl-C the running `smoke:archive` in that pane; wait for its teardown; then `cd /root/robotmoney-frontend && bun run smoke:status && docker compose ls` | `rm_prod` gone | output |
+| R6.4 | `git status --porcelain` shows nothing tracked (only `?? .codex/` on 2026-09-25); `git fetch origin --tags && git checkout v0.5.1-rc.N && git rev-parse HEAD` (must equal `RC_SHA`); `bun install --force && bun install --force --cwd backend`; `echo "CI=[$CI]"` (must be empty); then, in tmux: `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 \| tee /root/smoke-archive-v0.5.1.log`. `--no-tui` is required: without it there is no driver log, and R7/R8 cannot grade the driver (the v0.5.0 driver runs with its TUI, so no driver log exists today) | READY printed within 15 min; `GET /health` 200; production T0 = READY time. No READY in 15 min, or a migration error, is a STOP → R9 | T0, first 200 log lines |
+| R6.5 | Migrations applied: `grep -E 'migrated: 00' /root/smoke-archive-v0.5.1.log`; then R2.7 again, and `SELECT mode, model, third_party_enabled FROM swarm_judge_config` | log shows `migrated: 0061_rm_worker_wallet_backfill_grant.sql` and `migrated: 0063_swarm_judge_model_default.sql` and **no** `0062`; judge = `enforce` / `opencode/deepseek-v4-flash` / `false`; R2.7 = all `true`; `docker exec rm_prod-worker-swarm-1 sh -c 'test -n "$OPENCODE_API_KEY" && echo key-set'` prints `key-set` | lines, rows |
 | R6.6 | `bun run --cwd frontend assemble` only if the boot did not already publish the new SPA; `curl -s https://robotmoney.network/version.json` | commit = `RC_SHA` short | output |
 
 ## R7. Immediate postflight (T0 → T0 + 30 min)
@@ -200,14 +213,19 @@ only proof that production closes sessions on v0.5.1.
 
 | Step | When | Check | Pass |
 |---|---|---|---|
-| R8.1 | every 2 h | R7.1 again, `--report /root/prod-gate-reports/R8-<hh>-$RC_SHA.md` | exit 0 each time |
+| R8.1 | every 2 h | R7.1 again, `--report /root/prod-gate-reports/R8-<hh>-$RC_SHA.md`. Run it unattended in a second tmux window: `for h in 2 4 6; do sleep 7200; bun run prod:gate -- <R7.1 args> --report /root/prod-gate-reports/R8-${h}h-$RC_SHA.md; done` | exit 0 each time. A FAIL is read at once, not at T0 + 8 h |
 | R8.2 | T0 + 8 h | R7.1 **without `--defer-sessions`**, `--report /root/prod-gate-reports/R8-final-$RC_SHA.md` | **exit 0**, now including: every subject published ≥1 session convened after T0 with takes ≥ half the analysts, an applied model/enforce judgement and a receipt; the driver log shows `published: … judge=enforce` for every subject and no `judge=none` |
 | R8.3 | T0 + 8 h | every R2.5 triage row marked *fixed by this release* is absent from the R8.2 report's inventory (the gate enforces this for `known-issue` rules; confirm by reading) | all confirmed |
-| R8.4 | T0 + 8 h | the stuck sessions in the R2.4 report are resolved or explained | written |
+| R8.4 | T0 + 8 h | every session R6.2a listed was **adopted** by the new driver and published with a judgement (`judge=enforce`), or is explained in writing; the stuck sessions in the R2.4 report are resolved or explained | per-session line |
 
 ## R9. Rollback
 
-Trigger: any `STOP` in R6–R8 that is not a pure frontend problem.
+Trigger: any `STOP` in R6–R8 that is not a pure frontend problem. Concretely:
+no READY within 15 min of R6.4; a migration error in the boot log; a container
+restarting in a loop; an R7.1 or R8 FAIL whose cause this release introduced
+(a new unclassified error, a dead `swarm.judge` for any reason other than a
+provider outage). A FAIL on a known issue this release does not touch (issue
+1035) is triaged, not rolled back.
 
 ```bash
 # on rm-frontend-prod-1, in tmux session 0
@@ -225,7 +243,8 @@ SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-a
   No restore is needed for a code rollback.
 - Leave `0061`'s grants and `0063`'s judge model in place: they fix defects
   v0.5.0 has too. Restore R3's backup only if a migration itself is the cause.
-- After rollback, run R7.1–R7.3 against the rollback boot.
+- After rollback, run R7.1–R7.3 against the rollback boot, from the scratch clone (`/root/rm-gate-$RC_SHA`), since v0.5.0 has no `prod:gate`.
+- v0.5.0's driver predates the judge fixes in 1.1 item 7, so after a rollback the judge runs, but the driver's own `judge=` lines are not trustworthy. Grade judging from `swarm_session_judgements`, not the driver log.
 - Do not use `rollout-procedure.md`'s `bun smoke -- --external-pg` rollback:
   `--external-pg` is not a known flag in v0.5.0.
 
