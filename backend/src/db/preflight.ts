@@ -1626,8 +1626,9 @@ export interface StartupPreflightOptions {
   /** The role this container holds. The connection string must log in as it. */
   readonly role: ContainerRole;
   /** This process's own connection string — the credential it will serve or
-   *  claim with, and nothing else. Never logged. */
-  readonly databaseUrl: string;
+   *  claim with, and nothing else. Never logged. Absent or empty (the
+   *  variable was never set) is a check 1 refusal, never a fallback. */
+  readonly databaseUrl: string | undefined;
   /** `RM_ENV` as config.ts resolved it. Mapped into the context only: checks
    *  1-3 do not read it (checks 4-6, which do, are not a container's). */
   readonly rmEnv: string;
@@ -1691,6 +1692,15 @@ export async function runStartupPreflight(options: StartupPreflightOptions): Pro
           ),
   });
 
+  if (!options.databaseUrl) {
+    refusals.push({
+      check: 1,
+      message:
+        `this process was started with no ${role} connection string: it holds no credential of its own, and a ` +
+        "container never falls back to another role's (§7.2)",
+    });
+    return done();
+  }
   let url: URL;
   try {
     url = new URL(options.databaseUrl);

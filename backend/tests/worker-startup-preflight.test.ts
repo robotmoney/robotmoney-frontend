@@ -197,14 +197,19 @@ describe("pipeline worker startup preflight — checks 1-3 as rm_worker, no clai
     );
   }, 120_000);
 
-  test("no WORKER_DATABASE_URL: the worker refuses at import and never falls back to DATABASE_URL", async () => {
+  test("no WORKER_DATABASE_URL: the worker refuses by check 1 with the readiness signal and never falls back to DATABASE_URL", async () => {
     // DATABASE_URL here is a WORKING login to the fixture — the harness
     // superuser's. The old fallback would have claimed the job on it.
     const fx = await fixture("wsp_nourl");
     const spawned = spawnWorker("nourl", undefined, { DATABASE_URL: databaseUrl(fx.name) });
     const code = await exitCode(spawned.run);
-    expect(code).not.toBe(0);
-    expect(spawned.run.stderr()).toContain("missing required env var: WORKER_DATABASE_URL");
+    expect(code).toBe(1);
+    // The exact signal readiness reads (criterion 41), not merely a non-zero
+    // exit: an uncaught import-time throw also exits non-zero, with no line.
+    expect(spawned.run.stderr().split("\n").filter((line) => line.startsWith("startup_preflight: "))).toEqual([
+      "startup_preflight: refused check 1: this process was started with no rm_worker connection string: it holds " +
+        "no credential of its own, and a container never falls back to another role's (§7.2)",
+    ]);
     expect(existsSync(spawned.heartbeat)).toBe(false);
     expect(await jobState(fx)).toEqual({ status: "pending", attempts: 0, lockedBy: null, runs: 0 });
   }, 120_000);

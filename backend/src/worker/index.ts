@@ -9,9 +9,7 @@
 // docker-compose.yml).
 import { config, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { runStartupPreflight } from "../db/preflight.ts";
-import { closeDb, workerDatabaseUrl } from "../db/worker-client.ts";
 import { resolveLane } from "./lanes.ts";
-import { startWorker } from "./runtime.ts";
 
 // Empty strategy-vault list → loud warning, never a refusal to boot (issue
 // #642, decision D37). This lane runs the wallet SAMPLER (handlers/wallet.ts),
@@ -34,6 +32,22 @@ const lane = resolveLane(process.env.WORKER_LANE);
 // No RM_ENV exception here: nothing spawns this entrypoint against a harness
 // database. backend/tests/worker-startup-preflight.test.ts spawns this file and
 // proves a refusal claims zero jobs.
+//
+// A MISSING credential is check 1's question too, and gets the same signal.
+// db/worker-client.ts refuses at import when WORKER_DATABASE_URL is unset, and
+// a static import would throw that before this body runs — an uncaught error
+// with neither line, which readiness would read as "still starting". So the
+// variable is tested first, and the modules that build the pool are imported
+// only once it exists. Both are imported BEFORE the preflight runs: check 2
+// judges the registry, and it must hold every query this program registers.
+if (!process.env.WORKER_DATABASE_URL) {
+  const refused = await runStartupPreflight({ role: "rm_worker", databaseUrl: undefined, rmEnv: config.env });
+  for (const line of refused.lines) console.error(line);
+  process.exit(1);
+}
+const { closeDb, workerDatabaseUrl } = await import("../db/worker-client.ts");
+const { startWorker } = await import("./runtime.ts");
+
 const startup = await runStartupPreflight({ role: "rm_worker", databaseUrl: workerDatabaseUrl(), rmEnv: config.env });
 if (!startup.passed) {
   for (const line of startup.lines) console.error(line);

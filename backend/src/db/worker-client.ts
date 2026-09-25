@@ -13,7 +13,9 @@
 // fallback used to apply everywhere but `prod`, which is how a worker came to
 // run on whatever credential DATABASE_URL carried — the api's rm_app login, or
 // an owner — without a word. Unset, this module refuses at import, before any
-// pool exists; worker/index.ts then runs preflight checks 1-3 as rm_worker
+// pool exists. worker/index.ts tests the variable before importing this module,
+// so the worker reports the missing credential as its check 1 refusal line
+// rather than as an uncaught throw, then runs preflight checks 1-3 as rm_worker
 // against this same URL before it claims anything.
 //
 // Source-level boundary: worker/** imports THIS module, never db/client.ts —
