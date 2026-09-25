@@ -354,11 +354,11 @@ describe("structural enforcement — a raw sql call outside the interface is det
   // operator CLIs are inside the rule, not beside it. Until this list was
   // recorded nothing scanned them at all.
   //
-  // Most entries are release upgrade tooling (scripts/upgrades/*) and the
-  // migration runner, which judge or rebuild the database itself; some of those
-  // may belong in an infrastructure set of their own rather than on the
-  // registry. That is a decision for the package that converts them, and it
-  // is recorded here as backlog, not decided by an exemption.
+  // Most entries were release upgrade tooling (scripts/upgrades/*) and the
+  // migration runner, which judge or rebuild the database itself. On
+  // 2026-09-25 (#1026 W3) the tooling of the four SHIPPED upgrades moved to
+  // HISTORICAL_RELEASE_TOOLING below, pinned by equality; what remains here is
+  // live backlog.
   //
   // NEVER ADD A LINE HERE. The only legal edit is a deletion.
   const SCRIPTS_RAW_SQL_ALLOWLIST: readonly string[] = [
@@ -372,25 +372,45 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "scripts/scan-low-order-keys",
     "scripts/schema-current",
     "scripts/smoke-twin-capture",
-    "scripts/upgrades/0.2.1-to-0.2.2/postflight",
-    "scripts/upgrades/0.2.1-to-0.2.2/preflight",
-    "scripts/upgrades/0.2.1-to-0.2.2/restore-check",
-    "scripts/upgrades/0.2.2-to-0.3.0/postflight",
-    "scripts/upgrades/0.2.2-to-0.3.0/preflight",
-    "scripts/upgrades/0.2.2-to-0.3.0/repair-observation",
-    "scripts/upgrades/0.2.2-to-0.3.0/restore-check",
-    "scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal",
-    "scripts/upgrades/0.3.0-to-0.4.0/postflight",
-    "scripts/upgrades/0.3.0-to-0.4.0/preflight",
-    "scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation",
-    "scripts/upgrades/0.4.0-to-0.5.0/postflight",
-    "scripts/upgrades/0.4.0-to-0.5.0/preflight",
     "scripts/upgrades/0.5.0-to-0.5.1/closed-day-allocation",
     "scripts/upgrades/0.5.0-to-0.5.1/functional-rehearsal",
     "scripts/upgrades/0.5.0-to-0.5.1/postflight",
     "scripts/upgrades/0.5.0-to-0.5.1/preflight",
     "scripts/v0-seed-bootstrap",
   ];
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HISTORICAL RELEASE TOOLING — upgrade scripts for releases that SHIPPED.
+  //
+  // Recorded 2026-09-25 (#1026 W3) with 13 entries, all of them moved off the
+  // scripts backlog above. Each one graded, rehearsed or restored the upgrade
+  // to a tagged, shipped release (v0.2.2, v0.3.0, v0.4.0, v0.5.0). They are
+  // the evidence those rollouts ran against, not programs any deployment runs
+  // again: their statements read catalogs and baselines of databases that no
+  // longer exist in that shape, as whatever operator credential ran the
+  // rollout. Rewriting them onto the registry would change the tooling a
+  // shipped release was graded with, for no deployment that will ever run it.
+  //
+  // It is NOT a way around the ratchet. It is pinned by equality below, it can
+  // never grow (a release that ships later gets its tooling registered, not
+  // listed here), and an entry whose file stops issuing raw statements or
+  // disappears must leave. `0.5.0-to-0.5.1` is deliberately absent: v0.5.1
+  // has no release tag, so its tooling is live backlog, not history.
+  const HISTORICAL_RELEASE_TOOLING: ReadonlyMap<string, string> = new Map([
+    ["scripts/upgrades/0.2.1-to-0.2.2/postflight", "graded the shipped v0.2.1 -> v0.2.2 cutover"],
+    ["scripts/upgrades/0.2.1-to-0.2.2/preflight", "gated the shipped v0.2.1 -> v0.2.2 cutover"],
+    ["scripts/upgrades/0.2.1-to-0.2.2/restore-check", "proved the v0.2.1 backup restorable before v0.2.2 shipped"],
+    ["scripts/upgrades/0.2.2-to-0.3.0/postflight", "graded the shipped v0.2.2 -> v0.3.0 cutover"],
+    ["scripts/upgrades/0.2.2-to-0.3.0/preflight", "gated the shipped v0.2.2 -> v0.3.0 cutover"],
+    ["scripts/upgrades/0.2.2-to-0.3.0/repair-observation", "watched repair dispatch on the v0.3.0 rehearsal twin"],
+    ["scripts/upgrades/0.2.2-to-0.3.0/restore-check", "proved the v0.2.2 backup restorable before v0.3.0 shipped"],
+    ["scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal", "rehearsed the shipped v0.3.0 upgrade on a staging twin"],
+    ["scripts/upgrades/0.3.0-to-0.4.0/postflight", "graded the shipped v0.3.0 -> v0.4.0 cutover"],
+    ["scripts/upgrades/0.3.0-to-0.4.0/preflight", "gated the shipped v0.3.0 -> v0.4.0 cutover"],
+    ["scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation", "checked closed-day allocations across the shipped v0.5.0 read-path switch"],
+    ["scripts/upgrades/0.4.0-to-0.5.0/postflight", "graded the shipped v0.4.0 -> v0.5.0 cutover"],
+    ["scripts/upgrades/0.4.0-to-0.5.0/preflight", "gated the shipped v0.4.0 -> v0.5.0 cutover"],
+  ]);
 
   /** Module id → its raw statements, for every module under `root` (src/ by
    *  default, or scripts/) outside
@@ -512,8 +532,8 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(50);
   });
 
-  test("every backend/scripts module issuing a raw statement is on the dated scripts backlog", () => {
-    const allowed = new Set(SCRIPTS_RAW_SQL_ALLOWLIST);
+  test("every backend/scripts module issuing a raw statement is on the dated scripts backlog or shipped-release history", () => {
+    const allowed = new Set([...SCRIPTS_RAW_SQL_ALLOWLIST, ...HISTORICAL_RELEASE_TOOLING.keys()]);
     const found = rawStatementModules(SCRIPTS);
     // Non-vacuous: the scan reads scripts/ and sees the statements it records.
     expect(found.size).toBeGreaterThan(0);
@@ -530,7 +550,50 @@ describe("structural enforcement — a raw sql call outside the interface is det
     expect(new Set(SCRIPTS_RAW_SQL_ALLOWLIST).size).toBe(SCRIPTS_RAW_SQL_ALLOWLIST.length);
     expect(SCRIPTS_RAW_SQL_ALLOWLIST.every((m) => m.startsWith("scripts/"))).toBe(true);
     // The recorded size. A longer list is an addition, whatever it is called.
-    expect(SCRIPTS_RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(28);
+    // 28 when recorded; 15 once the shipped-release tooling moved to its own set.
+    expect(SCRIPTS_RAW_SQL_ALLOWLIST.length).toBeLessThanOrEqual(15);
+  });
+
+  test("the shipped-release tooling set is exactly the thirteen recorded modules, and never grows", () => {
+    // Pinned by value, like INFRA: a new entry is an edit here AND a failing
+    // expectation, never one quiet line.
+    expect([...HISTORICAL_RELEASE_TOOLING.keys()].sort()).toEqual([
+      "scripts/upgrades/0.2.1-to-0.2.2/postflight",
+      "scripts/upgrades/0.2.1-to-0.2.2/preflight",
+      "scripts/upgrades/0.2.1-to-0.2.2/restore-check",
+      "scripts/upgrades/0.2.2-to-0.3.0/postflight",
+      "scripts/upgrades/0.2.2-to-0.3.0/preflight",
+      "scripts/upgrades/0.2.2-to-0.3.0/repair-observation",
+      "scripts/upgrades/0.2.2-to-0.3.0/restore-check",
+      "scripts/upgrades/0.2.2-to-0.3.0/stage-rehearsal",
+      "scripts/upgrades/0.3.0-to-0.4.0/postflight",
+      "scripts/upgrades/0.3.0-to-0.4.0/preflight",
+      "scripts/upgrades/0.4.0-to-0.5.0/closed-day-allocation",
+      "scripts/upgrades/0.4.0-to-0.5.0/postflight",
+      "scripts/upgrades/0.4.0-to-0.5.0/preflight",
+    ]);
+    // Every entry is a shipped release's upgrade directory, carries its reason,
+    // still issues raw statements (else it leaves), and is on no other list.
+    const stillRaw = rawStatementModules(SCRIPTS);
+    const backlog = new Set(SCRIPTS_RAW_SQL_ALLOWLIST);
+    for (const [moduleId, reason] of HISTORICAL_RELEASE_TOOLING) {
+      expect(/^scripts\/upgrades\/(0\.2\.1-to-0\.2\.2|0\.2\.2-to-0\.3\.0|0\.3\.0-to-0\.4\.0|0\.4\.0-to-0\.5\.0)\//.test(moduleId), moduleId).toBe(true);
+      expect(reason.length, moduleId).toBeGreaterThan(10);
+      expect(stillRaw.has(moduleId), moduleId).toBe(true);
+      expect(backlog.has(moduleId), moduleId).toBe(false);
+    }
+  });
+
+  test("RED CONTROL: an unreleased upgrade's raw statements are not excused by the history set", () => {
+    // The v0.5.1 tooling has no release tag, so the only thing admitting its
+    // raw statements is the dated backlog. Were it dropped from there, the gate
+    // above would name it.
+    const unreleased = [...rawStatementModules(SCRIPTS).keys()].filter((m) => m.startsWith("scripts/upgrades/0.5.0-to-0.5.1/"));
+    expect(unreleased.length).toBeGreaterThan(0);
+    for (const moduleId of unreleased) {
+      expect(HISTORICAL_RELEASE_TOOLING.has(moduleId), moduleId).toBe(false);
+      expect(SCRIPTS_RAW_SQL_ALLOWLIST, moduleId).toContain(moduleId);
+    }
   });
 
   test("the infrastructure set is exactly the named db layer — an addition fails here", () => {
