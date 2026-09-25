@@ -7,11 +7,13 @@
 // check 3. Issue #1026, W2.
 //
 // Every check is implemented and exercised against a real Postgres by
-// backend/tests/db-preflight-checks.test.ts. NO RUNTIME CALLER YET: smoke, `api`
-// and the worker lanes do not call `runPreflight` until #1026's wiring wave
-// lands (criterion 44). Until then backend/scripts/db-preflight.ts and
-// backend/scripts/schema-current.ts keep running exactly as they do today, and
-// this module is meant to absorb both (plan row W2.4).
+// backend/tests/db-preflight-checks.test.ts. Its runtime callers are §7.2's:
+// smoke's preparation step runs `runPreflight("full")`
+// (backend/scripts/smoke-prepare.ts), and `api` (backend/src/api/index.ts) and
+// the pipeline worker (backend/src/worker/index.ts) run `runStartupPreflight`
+// below — checks 1-3 against their own credential — before they listen or
+// claim. backend/tests/container-startup-preflight.test.ts and
+// worker-startup-preflight.test.ts spawn those entrypoints to prove it.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHERE IT SITS
@@ -77,6 +79,7 @@ import type { RmRole, TablePrivilege } from "./registry.ts";
 import { MANIFEST_TABLE, compareCatalog, detectManifestState, parseDeclaration, readManifest } from "./schema-manifest.ts";
 import type { SchemaManifest } from "./schema-manifest.ts";
 import { checkCompatibility } from "./schema-compat.ts";
+import { loadSnapshot } from "./schema-snapshot.ts";
 import { resolveDeploymentPolicy } from "../deploy-policy.ts";
 
 export type PreflightDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
@@ -519,7 +522,7 @@ function denylistMessage(violation: DenylistViolation): string {
       if (violation.object !== null && isGrantOnlyProtected(violation.object)) {
         return (
           `${violation.role} holds DELETE/TRUNCATE on ${violation.object}, which D53 (2) keeps revoked from the ` +
-          "runtime roles: only rm_owner prunes it, past the oldest servable cursor"
+          `runtime roles: ${GRANT_ONLY_REASON[violation.object] ?? "only rm_owner removes its rows"}`
         );
       }
       return (
@@ -535,13 +538,31 @@ function denylistMessage(violation: DenylistViolation): string {
  * DELETE/TRUNCATE triggers so rm_owner can prune rows older than the oldest
  * servable cursor (D52 retention), and it leaves `APPEND_ONLY_TABLES` — but
  * "DELETE/TRUNCATE stay revoked from rm_app and rm_worker".
+ * `swarm_stream_head` is that log's counter row (migration 0081): a runtime
+ * role that could remove it could stop every transition that writes an event.
+ *
+ * The same list as backend/schema/grants.sql's `runtime_delete_revoked`, which
+ * re-revokes both on every reconciliation; check 2 is what refuses a database
+ * where a grant re-widened either one since. db-preflight-checks.test.ts pins
+ * the two lists together.
  *
  * Listed here, independently of ./append-only-guard.ts, on purpose: if check 2
  * derived its protected set from `APPEND_ONLY_TABLES` alone, taking the table
  * out of that list would silently stop check 2 refusing a runtime-role DELETE
  * grant on it. A table leaves this list only by a decision that says so.
  */
-export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze(["swarm_stream_events"]);
+export const RUNTIME_DELETE_REVOKED_TABLES: readonly string[] = Object.freeze([
+  "swarm_stream_events",
+  "swarm_stream_head",
+]);
+
+/** Why each grant-only table keeps DELETE/TRUNCATE revoked, for the refusal. */
+const GRANT_ONLY_REASON: Readonly<Record<string, string>> = Object.freeze({
+  swarm_stream_events: "only rm_owner prunes it, past the oldest servable cursor",
+  swarm_stream_head:
+    "it is swarm_stream_events' counter row, and a runtime role that removed it would stop every transition " +
+    "that writes an event",
+});
 
 /** Every table the `append_only_write` rule protects: the append-only set, the
  *  immutable ledger families (D53 (6)) and the grant-only tables (D53 (2)),
@@ -1518,26 +1539,35 @@ export async function runPreflight(
   context: PreflightContext,
   scope: PreflightScope,
   tokens: ReadonlyMap<RmRole, string>,
+  observe: (check: PreflightCheckId) => void = () => {},
 ): Promise<PreflightReport> {
   // "Unreachable" is never reported as "check failed". The probe runs first and
   // its error propagates, so a database nobody can query throws here instead of
   // being rendered as six refusals an operator would try to fix.
   await db`SELECT 1`;
 
+  // `observe` is told which check is about to run, so a caller that bounds the
+  // whole run by a wall clock (`runStartupPreflight`) can name the check still
+  // running when the budget ran out. It changes nothing else.
+  const run = (check: PreflightCheckId, body: () => Promise<PreflightCheckResult>) => {
+    observe(check);
+    return body();
+  };
+
   const results: PreflightCheckResult[] = [
-    await checkRoleTokens(db, context, tokens),
-    await checkPrivileges(db, context),
-    await checkSchemaIntegrity(db, context),
-    await checkSchemaCompatibility(db, context),
+    await run("roles_authenticate", () => checkRoleTokens(db, context, tokens)),
+    await run("privileges", () => checkPrivileges(db, context)),
+    await run("schema_integrity", () => checkSchemaIntegrity(db, context)),
+    await run("schema_compatibility", () => checkSchemaCompatibility(db, context)),
   ];
 
   // Checks 4-6 are the operator's environment, which a container is not
   // positioned to judge (§7.2). Every check runs before anything is decided:
   // a database failing 2, 3 and 5 says so in one boot.
   if (scope === "full") {
-    results.push(await checkEnvCredentials(context));
-    results.push(await checkEnvIdentity(db, context));
-    results.push(await checkSubjectScheduling(db, context));
+    results.push(await run("env_credentials", () => checkEnvCredentials(context)));
+    results.push(await run("env_identity", () => checkEnvIdentity(db, context)));
+    results.push(await run("subject_scheduling", () => checkSubjectScheduling(db, context)));
   }
 
   const passed = !results.some((result) => result.findings.some((finding) => finding.severity === "refuse"));
@@ -1564,4 +1594,189 @@ export function preflightReportLines(report: PreflightReport): string[] {
     }
   }
   return lines;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Container startup (§7.2's second caller)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The one role each database-holding container holds (§7.2): `api` is
+ *  `rm_app`, the pipeline worker is `rm_worker`. */
+export type ContainerRole = "rm_app" | "rm_worker";
+
+/** Spec §7's own numbering, which the startup log line carries. 3a and 3b are
+ *  the two questions of check 3, so both are `3`. */
+export const PREFLIGHT_CHECK_NUMBER: Readonly<Record<PreflightCheckId, number>> = Object.freeze({
+  roles_authenticate: 1,
+  privileges: 2,
+  schema_integrity: 3,
+  schema_compatibility: 3,
+  env_credentials: 4,
+  env_identity: 5,
+  subject_scheduling: 6,
+});
+
+/** How long a startup preflight may take before it is itself a refusal. It
+ *  sits between the process and its port (or its first claim), so it is
+ *  bounded like the boot guards are: a database that blocks is refused, and
+ *  Docker's restart policy retries a process that EXITS, never one that hangs. */
+export const STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS = 30_000;
+
+export interface StartupPreflightOptions {
+  /** The role this container holds. The connection string must log in as it. */
+  readonly role: ContainerRole;
+  /** This process's own connection string — the credential it will serve or
+   *  claim with, and nothing else. Never logged. */
+  readonly databaseUrl: string;
+  /** `RM_ENV` as config.ts resolved it. Mapped into the context only: checks
+   *  1-3 do not read it (checks 4-6, which do, are not a container's). */
+  readonly rmEnv: string;
+  /** Wall-clock bound on the whole run. Default
+   *  `STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS`. */
+  readonly budgetMs?: number;
+}
+
+export interface StartupPreflightOutcome {
+  readonly passed: boolean;
+  /** Exactly `startup_preflight: passed`, or one
+   *  `startup_preflight: refused check <n>: <reason>` per refusal. This is the
+   *  signal a stack's readiness reads from the container log, so its shape is
+   *  fixed: one line each, no credential in any of them. */
+  readonly lines: readonly string[];
+}
+
+/**
+ * Checks 1-3 at container startup, against the container's own credential —
+ * spec §7.2: "`api`, and the pipeline worker running the vault, wallet, buyback
+ * and project jobs as `rm_worker` — run checks 1–3 at startup against their own
+ * credential, log, and refuse to serve or claim work on failure."
+ *
+ * Inputs: the role, the process's connection string, `RM_ENV`, and an optional
+ * budget. Output: whether it passed, and the log lines. It does not log and
+ * does not exit — the entrypoint does both, because only the entrypoint knows
+ * what "refuse" means for it (no listener, no claim).
+ *
+ * WHAT IT RUNS: `runPreflight(pool, context, "container", {role → password})`
+ * on a pool of its own, built from `databaseUrl` — a top-level `postgres()`
+ * pool, because check 1 reads the server's address from the pool's own options
+ * (`probeTarget`). Its context names one role, the container's, so check 2 asks
+ * only about that role, against the registrations this process has made: the
+ * entrypoint's imports have all run by the time it calls this, so the registry
+ * is exactly the program about to use the credential. `codeFilenames` is this
+ * image's snapshot list, for check 3b.
+ *
+ * Refusals, each named by its §7 check number:
+ *   - 1: the connection string logs in as a user other than `role` — a
+ *     container holding another role's credential is the fallback §7.2 ends;
+ *     the password does not authenticate; the database cannot be reached at
+ *     all (the pool's own first query is check 1's question).
+ *   - 2 / 3: every refusal `runPreflight` reports, one line each.
+ *   - 3: this image's own snapshot cannot be read, so 3b has nothing to judge
+ *     the ledger against (refused before connecting).
+ *   - the check still running when the budget ran out.
+ *
+ * Read-only, like everything in this module; the pool is closed before it
+ * returns.
+ */
+export async function runStartupPreflight(options: StartupPreflightOptions): Promise<StartupPreflightOutcome> {
+  const { role } = options;
+  const refusals: { check: number; message: string }[] = [];
+  const done = (): StartupPreflightOutcome => ({
+    passed: refusals.length === 0,
+    lines:
+      refusals.length === 0
+        ? ["startup_preflight: passed"]
+        : refusals.map(
+            ({ check, message }) => `startup_preflight: refused check ${check}: ${message.replace(/\s*\n\s*/g, " ")}`,
+          ),
+  });
+
+  let url: URL;
+  try {
+    url = new URL(options.databaseUrl);
+  } catch {
+    refusals.push({ check: 1, message: `${role}'s connection string does not parse, so there is no credential to test` });
+    return done();
+  }
+  const user = decodeURIComponent(url.username);
+  if (user !== role) {
+    refusals.push({
+      check: 1,
+      message:
+        `this process logs in as "${user}", not ${role}: a container runs on its own role's credential and ` +
+        "never falls back to another (§7.2)",
+    });
+  }
+
+  let codeFilenames: readonly string[];
+  try {
+    codeFilenames = (await loadSnapshot()).filenames;
+  } catch (error) {
+    refusals.push({
+      check: 3,
+      message: `this image's schema snapshot cannot be read, so the ledger has nothing to be judged against: ${(error as Error).message}`,
+    });
+    return done();
+  }
+
+  const context: PreflightContext = {
+    // §4.1: `stage` covers stage, test and CI. Neither this nor `connection`
+    // nor `envFilePath` is read by checks 1-3 — they feed checks 4-6, which
+    // are the operator's environment and not a container's to judge.
+    env: options.rmEnv === "prod" ? "prod" : "stage",
+    connection: "remote",
+    roles: [role],
+    codeFilenames,
+    envFilePath: homeEnvPath(),
+  };
+
+  const pool = postgres(options.databaseUrl, {
+    max: 1,
+    onnotice: () => {},
+    connect_timeout: 10,
+    // Server-side bounds on every statement, so one blocked catalog read is a
+    // refusal inside the budget rather than a stall that eats all of it.
+    connection: { statement_timeout: 10_000, lock_timeout: 5_000, application_name: `startup_preflight_${role}` },
+  });
+  const budgetMs = options.budgetMs ?? STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS;
+  let running: PreflightCheckId = "roles_authenticate";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      runPreflight(pool, context, "container", new Map([[role, decodeURIComponent(url.password)]]), (check) => {
+        running = check;
+      }).then((report) => ({ report })),
+      new Promise<{ report: null }>((resolve) => {
+        timer = setTimeout(() => resolve({ report: null }), budgetMs);
+      }),
+    ]);
+    if (outcome.report === null) {
+      refusals.push({
+        check: PREFLIGHT_CHECK_NUMBER[running],
+        message:
+          `preflight did not finish within ${budgetMs}ms (${running} was running): a database that blocks is ` +
+          "refused, not waited on",
+      });
+    } else {
+      for (const result of outcome.report.results) {
+        for (const finding of result.findings) {
+          if (finding.severity !== "refuse") continue;
+          refusals.push({ check: PREFLIGHT_CHECK_NUMBER[finding.check], message: finding.message });
+        }
+      }
+    }
+  } catch (error) {
+    // `runPreflight` throws only when the database cannot be queried at all.
+    // As this process's own credential, that is check 1's question: the role
+    // this container serves with does not get a working connection.
+    const code = (error as { code?: string }).code;
+    refusals.push({
+      check: PREFLIGHT_CHECK_NUMBER[running],
+      message: `the database cannot be queried as ${user}: ${code ? `${code} ` : ""}${(error as Error).message}`,
+    });
+  } finally {
+    clearTimeout(timer);
+    await pool.end({ timeout: 1 }).catch(() => undefined);
+  }
+  return done();
 }

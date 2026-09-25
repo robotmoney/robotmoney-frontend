@@ -11,6 +11,7 @@ import { readStaticIdentity } from "../ops/static-identity.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
 import { apiVersionResponse } from "../ops/api-version.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
+import { runStartupPreflight } from "../db/preflight.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -98,6 +99,35 @@ await assertAppendOnlyGuardArmed();
 // family from migration 0032's rm_append_only_guard() above and must be
 // checked independently — see backend/src/db/analytics-ledger-guard.ts.
 await assertAnalyticsLedgerGuardArmed();
+
+// PREFLIGHT CHECKS 1-3 AGAINST THIS PROCESS'S OWN CREDENTIAL (spec §7.2,
+// #1026 criterion 44). `api` holds rm_app and nothing else, and it refuses to
+// serve a database whose rm_app password does not authenticate (1), whose
+// rm_app grants miss what this program's registered queries need or hold
+// anything from the denylist (2), or whose schema has drifted from the manifest
+// stored in it, is mid-migration, or is at a version this image does not
+// support (3). Last before Bun.serve on purpose: every import above has run, so
+// check 2 judges the registry of exactly the program about to serve, and a
+// refusal binds no port. Bounded (STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS), because
+// it sits between the process and its port and a hung boot is never restarted.
+//
+// The one exception is RM_ENV=ephemeral, the in-process test harness's env: it
+// logs the same refusal lines and serves. No stack reaches it — the §4.3 policy
+// (deploy-policy.ts) refuses `ephemeral`, and every compose file hands the api
+// `prod` or `stage` (acceptance-path.ts resolveStackRmEnv) — and the harness
+// spawns this entrypoint against superuser-built databases for tests whose
+// subject is something else (tests/preload.ts states why the harness is not
+// §7.3-isomorphic). Under every env a stack can run, a refusal exits 1.
+// backend/tests/container-startup-preflight.test.ts spawns this file as rm_app
+// and proves each refusal leaves no listener.
+{
+  const startup = await runStartupPreflight({ role: "rm_app", databaseUrl: config.databaseUrl, rmEnv: config.env });
+  for (const line of startup.lines) (startup.passed ? console.log : console.error)(line);
+  if (!startup.passed) {
+    if (config.env !== "ephemeral") process.exit(1);
+    console.error("startup_preflight: serving anyway: RM_ENV=ephemeral is the test harness's env, never a stack's");
+  }
+}
 
 const server = Bun.serve({
   port: config.apiPort,

@@ -2,9 +2,10 @@
 // database may be served.
 //
 // These tests are the specification for src/db/preflight.ts and exercise every
-// check it implements (issue #1026, W2). Nothing calls `runPreflight` at
-// runtime yet; wiring it into smoke, `api` and the worker lanes is a later
-// wave, so a green run here proves the checks, not that a boot runs them.
+// check it implements (issue #1026, W2). A green run here proves the checks,
+// not that a boot runs them: that is proved by spawning the real entrypoints —
+// tests/container-startup-preflight.test.ts (`api`, as rm_app) and
+// tests/worker-startup-preflight.test.ts (the pipeline worker, as rm_worker).
 //
 // THEY RUN AGAINST THE REAL EPHEMERAL POSTGRES (tests/preload.ts), in a
 // database cloned for this file alone, because §7.3's whole point is that "CI
@@ -28,6 +29,7 @@ import { APPEND_ONLY_TABLES, LEDGER_IMMUTABLE_FAMILIES } from "../src/db/append-
 import { sql } from "../src/db/client.ts";
 import {
   ENV_FILE_ALLOWED_KEYS,
+  PREFLIGHT_CHECK_NUMBER,
   RUNTIME_DELETE_REVOKED_TABLES,
   checkEnvCredentials,
   checkEnvIdentity,
@@ -43,6 +45,7 @@ import {
   preflightReportLines,
   protectedFromDeletion,
   runPreflight,
+  runStartupPreflight,
   type PreflightContext,
   type PreflightDb,
   type PreflightFinding,
@@ -851,6 +854,47 @@ describe("check 2 fails before the append-only grant transition and passes after
       .filter((f) => f.message.includes("swarm_stream_events"))
       .map((f) => /^(rm_\w+) holds DELETE\/TRUNCATE on /.exec(f.message)?.[1]);
     expect(named.sort()).toEqual(["rm_app", "rm_worker"]);
+  });
+
+  test("check 2's grant-only list is exactly grants.sql's runtime_delete_revoked — the two cannot drift apart", () => {
+    // grants.sql re-revokes DELETE/TRUNCATE on these on every reconciliation;
+    // check 2 is what refuses a database where a grant re-widened one since.
+    // A table in one list and not the other is either revoked with nothing
+    // refusing its return, or refused with nothing revoking it.
+    const grants = readFileSync(join(import.meta.dir, "..", "schema", "grants.sql"), "utf8");
+    expect([...RUNTIME_DELETE_REVOKED_TABLES].sort()).toEqual(declaredArray(grants, "runtime_delete_revoked").sort());
+  });
+
+  test("check 2 refuses a runtime-role DELETE or TRUNCATE grant on swarm_stream_head, the event log's counter row", async () => {
+    // Routed from wave 3: grants.sql lists the counter row in
+    // runtime_delete_revoked, and check 2 did not — so a hand-widened DELETE on
+    // it passed preflight. It is in neither APPEND_ONLY_TABLES nor a ledger
+    // family, so only RUNTIME_DELETE_REVOKED_TABLES can protect it.
+    expect(RUNTIME_DELETE_REVOKED_TABLES).toContain("swarm_stream_head");
+    expect(protectedFromDeletion()).toContain("swarm_stream_head");
+    expect(APPEND_ONLY_TABLES as readonly string[]).not.toContain("swarm_stream_head");
+
+    // The control: the clean clone does not already say it (0081 grants rm_app
+    // SELECT, UPDATE and rm_worker SELECT only).
+    expect(
+      (await findDenylistViolations(sql, WRITERS)).filter((v) => v.object === "swarm_stream_head"),
+    ).toEqual([]);
+
+    await sql.unsafe("GRANT DELETE ON swarm_stream_head TO rm_app");
+    await sql.unsafe("GRANT TRUNCATE ON swarm_stream_head TO rm_worker");
+    const result = await checkPrivileges(sql, context({ roles: WRITERS }));
+    const lines = refusals(result.findings)
+      .filter((f) => f.message.includes("swarm_stream_head"))
+      .map((f) => f.message)
+      .sort();
+    expect(lines).toEqual(
+      ["rm_app", "rm_worker"].map(
+        (role) =>
+          `${role} holds DELETE/TRUNCATE on swarm_stream_head, which D53 (2) keeps revoked from the runtime roles: ` +
+          "it is swarm_stream_events' counter row, and a runtime role that removed it would stop every transition " +
+          "that writes an event",
+      ),
+    );
   });
 });
 
@@ -1725,6 +1769,39 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
       "schema_integrity",
       "schema_compatibility",
     ]);
+  });
+
+  test("the observer is told each check before it runs, in order — what the startup budget names on a timeout", async () => {
+    const seen: string[] = [];
+    const own = new Map<RmRole, string>([["rm_app", PASSWORDS.rm_app]]);
+    await runPreflight(sql, context({ roles: ["rm_app"] }), "container", own, (check) => seen.push(check));
+    expect(seen).toEqual(["roles_authenticate", "privileges", "schema_integrity", "schema_compatibility"]);
+  });
+
+  test("runStartupPreflight is bounded: a run that outlives its budget is a refusal naming the running check", async () => {
+    // The container caller sits between a process and its port, and Docker
+    // restarts a process that exits, never one that hangs.
+    const url = new URL(config.databaseUrl);
+    url.username = "rm_app";
+    url.password = PASSWORDS.rm_app;
+    const outcome = await runStartupPreflight({ role: "rm_app", databaseUrl: url.toString(), rmEnv: "stage", budgetMs: 1 });
+    expect(outcome.passed).toBe(false);
+    expect(outcome.lines).toEqual([
+      "startup_preflight: refused check 1: preflight did not finish within 1ms (roles_authenticate was running): " +
+        "a database that blocks is refused, not waited on",
+    ]);
+  });
+
+  test("PREFLIGHT_CHECK_NUMBER is spec §7's numbering, with 3a and 3b both check 3", () => {
+    expect(PREFLIGHT_CHECK_NUMBER).toEqual({
+      roles_authenticate: 1,
+      privileges: 2,
+      schema_integrity: 3,
+      schema_compatibility: 3,
+      env_credentials: 4,
+      env_identity: 5,
+      subject_scheduling: 6,
+    });
   });
 
   test("runs every check before deciding — a database failing 2, 3 and 5 says so in one boot", async () => {
