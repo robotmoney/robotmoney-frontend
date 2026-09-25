@@ -35,6 +35,8 @@ interface MemberRow {
   handle?: string;
   name: string;
   status: string;
+  /** 'judge' members file no takes, so the seating invariant excludes them. */
+  role?: string;
 }
 
 interface SessionRow {
@@ -110,7 +112,7 @@ export const twinRosterLeg: VerifyLeg = {
     const { checker } = ctx;
 
     const membersBody = await ctx.json<{ members?: MemberRow[] }>(ROUTES.swarm.members);
-    const active = (membersBody.members ?? []).filter((m) => m.status === "active");
+    const active = (membersBody.members ?? []).filter((m) => m.status === "active" && m.role !== "judge");
     if (!active.length) {
       checker.record(
         "twin-roster:active-members",

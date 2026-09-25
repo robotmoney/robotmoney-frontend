@@ -302,7 +302,7 @@ async function main(): Promise<number> {
   log(`project ${state.project}, twin db ${state.smokeTwinContainer}, T0 ${t0}`);
 
   const subjects = SMOKE_SUBJECTS.map((s) => s.id);
-  const active = Number(psql(state.smokeTwinContainer, "SELECT count(*) FROM swarm_members WHERE status = 'active'")[0]?.[0] ?? 0);
+  const active = Number(psql(state.smokeTwinContainer, "SELECT count(*) FROM swarm_members WHERE status = 'active' AND role = 'member'")[0]?.[0] ?? 0);
   let verdict = evaluateSessions(sessionRows(state.smokeTwinContainer, t0), subjects, active, parsed);
   const deadline = Date.now() + parsed.waitMin * 60_000;
   while (verdict.failures.length > 0 && Date.now() < deadline) {
@@ -324,7 +324,7 @@ async function main(): Promise<number> {
   } else {
     log("warn: no --driver-log — the log-side session/judge check did not run (the runbook requires it)");
   }
-  log(`sessions: ${[...verdict.publishedBySubject].map(([s, n]) => `${s}=${n} published`).join(", ")} (active roster ${active})`);
+  log(`sessions: ${[...verdict.publishedBySubject].map(([s, n]) => `${s}=${n} published`).join(", ")} (active analysts ${active}; judges file no takes)`);
 
   for (const [kind, n] of psql(state.smokeTwinContainer, `SELECT kind, count(*) FROM jobs WHERE status = 'dead' AND created_at >= '${t0}'::timestamptz GROUP BY kind`)) {
     failures.push(`jobs: ${n} dead '${kind}' job(s) since T0`);

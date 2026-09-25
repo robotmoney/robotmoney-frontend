@@ -423,6 +423,12 @@ export interface RosterMember {
   name: string;
   lens: string | null;
   status: string;
+  /**
+   * 'member' (an analyst) or 'judge'. A judge-role member is refused a take
+   * (`judge_role_cannot_submit_takes`, domain.ts), so a driver must never seat
+   * one: the 2026-09-25 twin seated Themis and logged it absent every session.
+   */
+  role: string;
 }
 
 /** The full roster (every status), or null when it cannot be read. */
@@ -431,7 +437,7 @@ export async function rosterMembers(targetUrl: string = backendUrl(), automation
     const r = await fetch(`${targetUrl}${ROUTES.swarm.admin.members}`, { headers: getAutomationHeaders(automationToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${r.status}`);
     const body = await responseJson(r) as {
-      members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string }[];
+      members?: { id?: string; handle?: string; name?: string; lens?: string | null; status?: string; role?: string }[];
     };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
     return body.members
@@ -442,6 +448,7 @@ export async function rosterMembers(targetUrl: string = backendUrl(), automation
         name: String(m.name),
         lens: m.lens ?? null,
         status: String(m.status ?? ""),
+        role: String(m.role ?? "member"),
       }));
   } catch (err) {
     console.error(`[e2e] rosterMembers: ${err instanceof Error ? err.message : err}`);

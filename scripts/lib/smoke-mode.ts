@@ -224,13 +224,14 @@ export function simulatedSigners(members: readonly { name: string }[]): string[]
  * once covers all of them.
  */
 export function unseatedActiveCharacters(
-  roster: readonly { name: string; status: string }[],
+  roster: readonly { name: string; status: string; role?: string }[],
   seated: readonly { name: string }[],
 ): string[] {
   const covered = new Set(seated.map((m) => m.name.trim().toLowerCase()));
   const missing = new Map<string, string>();
   for (const m of roster) {
     if (m.status !== "active") continue;
+    if (m.role === "judge") continue; // a judge is never seated, so never "unseated"
     const key = m.name.trim().toLowerCase();
     if (covered.has(key) || missing.has(key)) continue;
     missing.set(key, m.name);

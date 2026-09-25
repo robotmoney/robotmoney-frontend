@@ -389,3 +389,26 @@ describe("unseatedActiveCharacters (the twin's coverage invariant)", () => {
     expect(unseatedActiveCharacters(roster, [{ name: " athena " }, { name: "DUALMINT" }])).toEqual([]);
   });
 });
+
+describe("judge-role members are never seats (2026-09-25 twin: Themis refused judge_role_cannot_submit_takes every session)", () => {
+  test("planAdoptions skips an active judge", () => {
+    const roster = [
+      { id: "a", handle: "athena", name: "Athena", status: "active", role: "member" },
+      { id: "t", handle: "themis", name: "Themis", status: "active", role: "judge" },
+    ];
+    const plan = planAdoptions(roster, new Set(), () => true);
+    expect(plan.adopt.map((m) => m.handle)).toEqual(["athena"]);
+  });
+
+  test("a row with no role is an analyst, as before the role column", () => {
+    expect(planAdoptions([{ id: "a", name: "Athena", status: "active" }], new Set(), () => true).adopt).toHaveLength(1);
+  });
+
+  test("an unseated judge is not an unseated character", () => {
+    const roster = [
+      { name: "Athena", status: "active", role: "member" },
+      { name: "Themis", status: "active", role: "judge" },
+    ];
+    expect(unseatedActiveCharacters(roster, [{ name: "Athena" }])).toEqual([]);
+  });
+});
