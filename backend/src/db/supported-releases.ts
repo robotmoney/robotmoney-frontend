@@ -25,7 +25,10 @@
 // all 72 files of the v0.5.0 tag plus `0062_rm_readonly_sequence_select.sql`,
 // applied 2026-09-22 03:35 UTC. That file is in neither v0.5.0 nor the current
 // releases-0.5.x: it came from the archived 0.5.x line (commit 61fab107, last
-// changed by c3a68812; tag `archive/releases-0.5.x-2026-09-24`). The owner
+// changed by c3a68812; tag `archive/releases-0.5.x-2026-09-24`). Production
+// ran c3a68812's SQL, not 61fab107's (verified on the replica: the
+// rm_readonly_test role is gone and rm_worker holds the INSERT/UPDATE grants
+// only c3a68812 adds), so tests replay the archive tag's bytes. The owner
 // ruled that observed set the ground truth (2026-09-25), so the one supported
 // baseline is that exact set, named for its provenance. A pure v0.5.0 ledger is
 // NOT supported: no database holds it (production, and every rehearsal dump
@@ -139,7 +142,7 @@ export const SUPPORTED_RELEASES: readonly SupportedRelease[] = [
     outOfBand: ["0062_rm_readonly_sequence_select.sql"],
     provenance:
       "production schema_migrations read 2026-09-25 as rm_readonly on the read-only replica: the 72 files of " +
-      "v0.5.0 plus 0062_rm_readonly_sequence_select.sql (archived 0.5.x line, 61fab107/c3a68812), applied " +
+      "v0.5.0 plus 0062_rm_readonly_sequence_select.sql (archived 0.5.x line, c3a68812 SQL), applied " +
       "2026-09-22 03:35 UTC",
     migrations: [...V0_5_0_MIGRATIONS, "0062_rm_readonly_sequence_select.sql"],
   },

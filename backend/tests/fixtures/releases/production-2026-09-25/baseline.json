@@ -6,7 +6,7 @@
     {
       "file": "0062_rm_readonly_sequence_select.sql",
       "sha256": "fa483194653f60974223796e4440c3658aaef87890af7b3e50d40bbe0b2c9ee8",
-      "source": "archive/releases-0.5.x-2026-09-24 at c3a68812 (file added by 61fab107); the SQL applied on 2026-09-22 is not recorded by the ledger, and this is the archived line tip",
+      "source": "archive/releases-0.5.x-2026-09-24 at c3a68812 (file added by 61fab107, whose SQL lacks the rm_readonly_test drop and the rm_worker INSERT/UPDATE grants). Production ran the c3a68812 SQL, verified 2026-09-25 as rm_readonly on the prod replica: rm_readonly_test does not exist, and rm_worker holds INSERT and UPDATE on asset_prices, asset_price_floors and chain_address_floors, which v0.5.0 never grants. The branch copy (550f3288) differs from these bytes in comments only.",
       "appliedAt": "2026-09-22T03:35Z"
     }
   ],

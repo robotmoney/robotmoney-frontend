@@ -219,6 +219,35 @@ describe("the fixtures are the §10 gate's cases", () => {
   });
 });
 
+describe("the baseline is production's state, not only its ledger", () => {
+  // Production ran c3a68812's SQL for 0062_rm_readonly_sequence_select.sql,
+  // verified on the replica 2026-09-25: rm_worker holds INSERT and UPDATE on
+  // the three sampler tables, which v0.5.0 never grants. The fixture replays
+  // the archive tag's bytes, so `exact` must show the same grants and `less`
+  // (v0.5.0 alone) must not; a replay of 61fab107's bytes would fail here.
+  const SAMPLER_TABLES = ["asset_prices", "asset_price_floors", "chain_address_floors"];
+  async function workerWrites(database: string): Promise<boolean[]> {
+    return withDb(database, async (db) =>
+      Promise.all(
+        SAMPLER_TABLES.map(async (table) => {
+          const [row] = (await db`
+            SELECT has_table_privilege('rm_worker', ${`public.${table}`}, 'INSERT')
+               AND has_table_privilege('rm_worker', ${`public.${table}`}, 'UPDATE') AS ok`) as unknown as { ok: boolean }[];
+          return row?.ok === true;
+        }),
+      ),
+    );
+  }
+
+  test("exact: rm_worker may INSERT and UPDATE the three sampler tables, as on production", async () => {
+    expect(await workerWrites(DB.exact)).toEqual([true, true, true]);
+  });
+
+  test("red control — less, v0.5.0 alone: it may not", async () => {
+    expect(await workerWrites(DB.less)).toEqual([false, false, false]);
+  });
+});
+
 describe("§10 W2 — First production migrate", () => {
   test("RM_ENV=stage refuses at the gates, before any password is asked for, and changes nothing", async () => {
     const before = await fingerprint(DB.exact);
