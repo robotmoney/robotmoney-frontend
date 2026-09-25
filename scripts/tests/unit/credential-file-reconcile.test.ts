@@ -18,8 +18,10 @@
 // Cost class `unit` (docs/architecture.md §3 L1). Parsing, loading and the
 // refusal taxonomy live in credential-file.test.ts.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { resolveStackEnvironment, stackProjectName } from "../../stack/naming.ts";
 import {
   CredentialFileRefusal,
   planParticipants,
@@ -400,10 +402,9 @@ describe("planParticipants — resolution → load → reconcile, with unconfigu
     // (`cf.reconcileRoster(...)`) still names it, so both are caught. Every
     // production tree is walked: scripts/, backend/ and website-server/.
     //
-    // This is a SOURCE ratchet. It does not prove a boot calls
-    // `planParticipants`; that proof needs the boot entry itself to be driven
-    // (issue #1026 wave 2/5, smoke-main.ts), and criterion 137 stays PARTIAL
-    // until it is.
+    // This is a SOURCE ratchet. The proof that the boot really calls
+    // `planParticipants`, and refuses through it, drives the boot entry itself:
+    // see "the boot entry refuses an unconfigured roster" at the end of this file.
     const repo = join(import.meta.dir, "..", "..", "..");
     const forbidden = /\b(reconcileRoster|rosterEntries)\b/;
     const offenders: string[] = [];
@@ -456,5 +457,122 @@ describe("reconcileRoster — pure: same inputs, same plan, inputs unmodified", 
     reconcileRoster(roster, live);
     expect(JSON.stringify(roster)).toBe(rosterBefore);
     expect(JSON.stringify(live)).toBe(liveBefore);
+  });
+});
+
+// ── THE REAL BOOT CALLER (criterion 137) ───────────────────────────────────
+// The bug is a CALLER mapping an unconfigured roster to "stop everyone", and
+// the pure cases above cannot see a caller. So the boot entry itself is driven:
+// `bun scripts/smoke.ts --local blank` on a host whose `~/.env` names no
+// RM_CREDENTIALS and with no `--credentials`, while two participant containers
+// of the instance's project are running. Docker is a recording stand-in on
+// PATH: it reports those two containers for the participant query, refuses
+// every other command, and logs every call — so "nothing was stopped" is read
+// off the log rather than inferred.
+//
+// RED CONTROL: the same boot, from a copy of smoke-main.ts whose plan-time
+// call is the buggy mapping — `configured ? planParticipants(...) : { stop:
+// running }` — does NOT refuse: it goes on to plan a deployment over the
+// running participants, and the assertion above would be red.
+describe("the boot entry refuses an unconfigured roster while participants run, naming them (criterion 137)", () => {
+  const repo = join(import.meta.dir, "..", "..", "..");
+  const SMOKE_MAIN = join(repo, "scripts", "lib", "smoke-main.ts");
+  const PLAN_TIME_CALL = "planParticipants(credentialResolution, participantsNow() ?? [], loadCredentialFile, {";
+
+  function fakeHost(instance: string) {
+    const root = mkdtempSync(join(tmpdir(), "rm-reconcile-boot-"));
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin);
+    mkdirSync(home);
+    const log = join(root, "docker.log");
+    const project = stackProjectName("stack", resolveStackEnvironment({}, { seed: instance }));
+    writeFileSync(
+      join(bin, "docker"),
+      [
+        "#!/bin/sh",
+        `echo "$*" >> "${log}"`,
+        'case "$*" in',
+        `  *"label=robotmoney.participant=1"*) printf '${project}-participant-agent-athena-1\\tagent\\tathena\\t\\n${project}-participant-judge-themis-1\\tjudge\\tthemis\\t\\n'; exit 0 ;;`,
+        '  "ps "*) exit 0 ;;',
+        "esac",
+        'echo "fake docker refuses: $*" >&2',
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "docker"), 0o755);
+    const env: Record<string, string> = {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      RM_SMOKE_STATE_ROOT: join(root, "state"),
+      RM_ENV: "stage",
+      AGENT_MODEL: "free",
+    };
+    return { root, log, env, project, calls: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []) };
+  }
+
+  test("an unconfigured path with participants running refuses, names both, and touches no container", () => {
+    const instance = `rm_it_cfr_${Math.random().toString(16).slice(2, 8)}`;
+    const host = fakeHost(instance);
+    try {
+      const r = Bun.spawnSync(["bun", "--no-env-file", "scripts/smoke.ts", "--local", "blank", "--instance", instance], {
+        cwd: repo,
+        env: host.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 60_000,
+      });
+      const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+      expect(r.exitCode).toBe(1);
+      expect(out).toContain("no credential file is configured while these participants are running and were left untouched");
+      expect(out).toContain(`agent:athena (${host.project}-participant-agent-athena-1)`);
+      expect(out).toContain(`judge:themis (${host.project}-participant-judge-themis-1)`);
+      // It stopped at the plan: no phase began, and Docker was only ASKED.
+      expect(out).not.toContain("phase: plan");
+      expect(host.calls().length).toBeGreaterThan(0);
+      expect(host.calls().filter((c) => !c.startsWith("ps "))).toEqual([]);
+    } finally {
+      rmSync(host.root, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("RED CONTROL: a boot that maps an unconfigured roster to `{ stop: running }` does not refuse, and proceeds", () => {
+    const source = readFileSync(SMOKE_MAIN, "utf8");
+    expect(source.split(PLAN_TIME_CALL)).toHaveLength(2);
+    const buggy = source.replace(
+      PLAN_TIME_CALL,
+      "(credentialResolution.configured ? planParticipants : (_r: unknown, running: unknown) => ({ start: [], keep: [], stop: running }))(credentialResolution, participantsNow() ?? [], loadCredentialFile, {",
+    );
+    const copy = join(repo, "scripts", "lib", `.redcontrol-smoke-main-${Math.random().toString(16).slice(2, 10)}.ts`);
+    const instance = `rm_it_cfr_${Math.random().toString(16).slice(2, 8)}`;
+    const host = fakeHost(instance);
+    writeFileSync(copy, buggy);
+    try {
+      const r = Bun.spawnSync(["bun", "--no-env-file", copy, "--local", "blank", "--instance", instance], {
+        cwd: repo,
+        env: host.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 60_000,
+      });
+      const out = `${r.stdout.toString()}${r.stderr.toString()}`;
+      // The refusal the real boot gives is absent: the buggy caller read "no
+      // configuration" as a plan, and the boot went on to deploy.
+      expect(out).not.toContain("were left untouched");
+      expect(out).toContain("phase: plan");
+      expect(host.calls().some((c) => c.startsWith("compose "))).toBe(true);
+    } finally {
+      rmSync(copy, { force: true });
+      rmSync(host.root, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("smoke-main's two planParticipants calls are the only roster composition it makes", () => {
+    const code = readFileSync(SMOKE_MAIN, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
+    // Plan time (the refusal above) and the participants phase (with roles).
+    expect((code.match(/\bplanParticipants\(/g) ?? []).length).toBe(2);
+    expect(code).toContain(PLAN_TIME_CALL);
+    expect(code).toMatch(/planParticipants\(credentialResolution, running, loadCredentialFile, \{[\s\S]{0,200}memberRole:/);
   });
 });
