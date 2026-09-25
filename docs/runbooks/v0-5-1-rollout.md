@@ -116,7 +116,7 @@ a session forced read-only.
 | R2.7 | `SELECT has_table_privilege('rm_worker', t, 'INSERT') FROM unnest(array['wallet_backfill_state','chain_day_blocks','chain_address_floors']) t` | today: false (D2) | row |
 | R2.8 | The migration login can act as the owner: `cd /root/robotmoney-frontend && psql "$(grep -m1 '^MIGRATE_DATABASE_URL=' .env \| cut -d= -f2-)" -Atc "SELECT pg_has_role(current_user, 'rm_owner', 'MEMBER')"` | `t` (0061 and 0063 run under `SET LOCAL ROLE rm_owner`; the twin proved the SQL, not production's login) | row |
 | R2.9 | The judge's key is present and **funded**. Before 0063 production never called the judge model (a NULL model refuses first), so no production evidence exists that this key can pay for it. `K=$(grep -m1 '^OPENCODE_API_KEY=' /root/robotmoney-frontend/.env \| cut -d= -f2-); curl -s -o /dev/null -w '%{http_code}\n' https://opencode.ai/zen/v1/chat/completions -H "Authorization: Bearer $K" -H 'content-type: application/json' -d '{"model":"deepseek-v4-flash","max_tokens":1,"messages":[{"role":"user","content":"ok"}]}'; unset K` | `200`. A `401` or `402` blocks the cutover: after 0063 every judging would die on it | status code |
-| R2.10 | Host disk for R3: `df -h /root` | free space ≥ 3 × the previous full dump (18 GB free on 2026-09-25) | free GB |
+| R2.10 | *(moved to R3.0: backups run on stage-2, not on this host)* | — | — |
 
 **Baseline record, 2026-09-25, commit d61cb535** (first run, without
 `--db-capacity-gb`): FAIL on 4 checks — capacity not stated (7.98 GB), judge
@@ -125,16 +125,23 @@ a session forced read-only.
 The container check warned on restarts; the log inventory held 195 distinct
 messages across 6 sources, none unclassified.
 
-## R3. Backup
+## R3. Backup (on stage-2, never on the production host)
 
-Unchanged from v0.5.0 §4.2, and it is a **full** dump — never `--twin-slim`.
+A **full** dump, never `--twin-slim`, taken on `rm-frontend-stage-2` against
+production's **read replica**. Backup and restore never run on
+`rm-frontend-prod-1` (owner, 2026-09-25): on that host the read-only URL
+reaches the PRIMARY, so a capture there is a 20+ minute heavy read on the live
+primary (the capture refuses it without `--allow-primary`), and it spends the
+production host's disk. Stage-2's read-only URL reaches the replica
+(`pg_is_in_recovery() = true`), the same path every twin capture uses.
 
-| Step | Command | Pass | Record |
+| Step | Command (on `rm-frontend-stage-2`, `~/robotmoney-frontend` at `RC_SHA`) | Pass | Record |
 |---|---|---|---|
-| R3.1 | `export RM_BACKUP_DIR=/root/rm-backup-v051-$(date -u +%Y%m%dT%H%M%SZ)` (outside the checkout) | — | path |
-| R3.2 | `bun run smoke:capture` | exit 0; expect ~20 min at 6.5 GB | stamp, dump size |
-| R3.3 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` **[TO BUILD: 0.5.0-to-0.5.1 copy]** | "DUMP SAFE" | receipt |
-| R3.4 | Copy `$RM_BACKUP_DIR` (dump, globals, passphrase) off the host | two copies exist | locations |
+| R3.0 | `df -h ~` | free space ≥ 3 × the previous full dump | free GB |
+| R3.1 | `export RM_BACKUP_DIR=~/rm-backup-v051-$(date -u +%Y%m%dT%H%M%SZ)` (outside the checkout; R4.1's wipe removes docker state only, never this directory) | — | path |
+| R3.2 | In tmux: `bun run smoke:capture 2>&1 \| tee ~/r3-capture.log` | exit 0; the log says `pg_is_in_recovery()=true` (the replica); expect 20+ min at 8 GB | stamp, dump size |
+| R3.3 | `bun backend/scripts/upgrades/0.4.0-to-0.5.0/restore-check.ts "$RM_BACKUP_DIR" --emit-receipt` (restores into a throwaway local container on stage-2) **[TO BUILD: 0.5.0-to-0.5.1 copy]** | "DUMP SAFE" | receipt |
+| R3.4 | Copy `$RM_BACKUP_DIR` (dump, globals) off stage-2, and the passphrase to a separate place: stage-2 is ephemeral | two copies of the dump exist, neither on the production host | locations |
 | R3.5 | Record the time R3.2 finished. The managed cluster's point-in-time restore is the second way back, and it needs a timestamp from before R6.4's migrations | — | time (UTC) |
 
 ## R4. Twin rehearsal (stage-2)
@@ -249,7 +256,7 @@ SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui 2>&1 | tee /root/smoke-a
   no file for, and `0061`/`0063` only add a grant and fill a config value.
   No restore is needed for a code rollback.
 - Leave `0061`'s grants and `0063`'s judge model in place: they fix defects
-  v0.5.0 has too. Restore R3's backup only if a migration itself is the cause.
+  v0.5.0 has too. Restore R3's backup only if a migration itself is the cause, and run that restore from stage-2 against the managed cluster, never from the production host.
 - After rollback, run R7.1–R7.3 against the rollback boot, from the scratch clone (`/root/rm-gate-$RC_SHA`), since v0.5.0 has no `prod:gate`.
 - v0.5.0's driver predates the judge fixes in 1.1 item 7, so after a rollback the judge runs, but the driver's own `judge=` lines are not trustworthy. Grade judging from `swarm_session_judgements`, not the driver log.
 - Do not use `rollout-procedure.md`'s `bun smoke -- --external-pg` rollback:
